@@ -148,6 +148,8 @@ const samePaths = (report, expected) =>
   isDeepStrictEqual(sorted(report.files.map((file) => file.path)), sorted(expected));
 
 export function compareLane(plan, evidence, { repo, trusted, node, job, source }) {
+  const selectedSteps = job?.steps?.filter((step) => step.name === "Test selected files") ?? [];
+  const selected = selectedSteps.length === 1 && selectedSteps[0].conclusion === "success";
   const result = {
     node,
     status: "unknown",
@@ -156,6 +158,7 @@ export function compareLane(plan, evidence, { repo, trusted, node, job, source }
     omittedFailures: [],
     intentionalSkips: [],
     checks: [],
+    execution: selected ? "selected" : "full",
   };
   const add = (reason) => result.reasons.push(reason);
   if (!job) add("missing_job");
@@ -180,9 +183,22 @@ export function compareLane(plan, evidence, { repo, trusted, node, job, source }
   const required = [
     "Build",
     "Retry admission acceptance (CLI and ACP)",
-    node === 24 ? "Test with coverage" : "Test",
+    node === 24 ? "Test with coverage" : selected ? "Test selected files" : "Test",
     "Smoke test the compiled build",
   ];
+  if (selected) {
+    required.push("Plan test execution");
+    const fullSteps = job.steps.filter((step) => step.name === "Test");
+    if (
+      node !== 22 ||
+      source.event !== "pull_request" ||
+      plan.wouldRun.tier !== "targeted" ||
+      !plan.graphs.every((entry) => entry.complete) ||
+      fullSteps.length !== 1 ||
+      fullSteps[0].conclusion !== "skipped"
+    )
+      add("unproven_or_ambiguous_reduced_execution");
+  }
   if (node === 24) required.push("Typecheck", "Design tokens are current", "Format", "Lint");
   for (const name of required) {
     const steps = job?.steps?.filter((step) => step.name === name) ?? [];
@@ -203,13 +219,15 @@ export function compareLane(plan, evidence, { repo, trusted, node, job, source }
     add("missing_suite_report");
     return result;
   }
-  if (!samePaths(suite, plan.graphs[1].discoveredVitestFiles)) add("full_discovery_mismatch");
+  if (!samePaths(suite, selected ? plan.wouldRun.vitestFiles : plan.graphs[1].discoveredVitestFiles))
+    add(selected ? "selected_discovery_mismatch" : "full_discovery_mismatch");
   if (!suite.success) add("failed_suite");
   for (const file of suite.files) {
     if (!filePassed(file)) {
       const policy = INTENTIONAL_SKIPS.find((skip) => skip.path === file.path);
       let allowed = false;
       if (
+        !selected &&
         policy &&
         file.status === "passed" &&
         file.failed === 0 &&
@@ -232,11 +250,20 @@ export function compareLane(plan, evidence, { repo, trusted, node, job, source }
       result.omittedFailures.push(file.path);
   }
   if (result.omittedFailures.length) add("failure_in_omitted_file");
-  if (!result.reasons.length) result.status = "compared";
+  if (!result.reasons.length) result.status = selected ? "selected_verified" : "compared";
   return result;
 }
 
 export function compareFullEvidence(plan, lanes, input) {
+  const compared = [22, 24].map((node) =>
+    compareLane(plan, lanes[node]?.evidence, { ...input, node, job: lanes[node]?.job }),
+  );
+  // A reduced Node 22 result is never mislabeled as a full Node 22 baseline.
+  // Its live comparison is accepted only alongside genuine same-candidate Node 24 full evidence.
+  if (compared[0].execution === "selected" && compared[1].status !== "compared") {
+    if (compared[0].status !== "cancelled") compared[0].status = "unknown";
+    compared[0].reasons.push("same_candidate_full_baseline_not_proven");
+  }
   return {
     artifact: "orca-ci-shadow-comparison",
     schemaVersion: 1,
@@ -250,7 +277,7 @@ export function compareFullEvidence(plan, lanes, input) {
       selected: plan.wouldRun.vitestFiles.length,
       discovered: plan.graphs[1].discoveredVitestFiles.length,
     },
-    lanes: [22, 24].map((node) => compareLane(plan, lanes[node]?.evidence, { ...input, node, job: lanes[node]?.job })),
+    lanes: compared,
     // CI never runs these browser/native lanes. Do not infer their verdicts from Vitest.
     separateRunners: plan.wouldRun.runners.map((runner) => ({
       id: runner.id,

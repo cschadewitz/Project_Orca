@@ -1,11 +1,70 @@
 # SHA-bound shadow selection (#509)
 
-This is an independent advisory implementation of [#509](https://github.com/cschadewitz/Project_Orca/issues/509).
-It computes **would-run** plans; the existing full CI checks remain authoritative.
-CI now records existing full execution and a separate advisory workflow compares it.
-Required checks, test timeouts, worker limits, production fixtures, runtime,
+This implements [#509](https://github.com/cschadewitz/Project_Orca/issues/509).
+The reviewed selector now reduces eligible PR tests on Node 22; Node 24 still runs
+the complete suite with unchanged coverage thresholds on the same candidate.
+A separate read-only workflow compares the actual execution evidence.
+Required check names, test timeouts, worker limits, production fixtures, runtime,
 release and deployment behavior remain unchanged. The separate [#510](https://github.com/cschadewitz/Project_Orca/issues/510)
 fixture optimization owns its production fixture changes.
+
+## Enforced PR execution
+
+Casey explicitly authorized activation after #520's first genuine live comparison
+at main `983b824adba26b0d26cfca747e5c303d03a397c6`. The enablement branch starts at
+verified main `65606fbce827cba914a67b999b1a47c0aab2797a`.
+
+- Only `pull_request` Node 22 jobs with a completely recomputed **targeted** plan
+  may run `Test selected files`. Eligibility remains the two exact time-formatting
+  leaves below and the existing positive literal/structure/capability invariants.
+  The selected set is the entire app Vitest domain plus union-graph consumers and
+  directly modified tests. This is a real reduced invocation, not a full-mode flag.
+- Node 24 always runs full coverage. Main pushes, critical/mixed/unknown changes,
+  stale inventory/source, changed discovery, ambiguous identities and selector
+  errors retain full testing. The original prose classifier/job skips are retained;
+  an advisory docs plan cannot skip an admitted runtime job.
+- Exact event base/head/candidate SHAs are required. A PR candidate must have
+  exactly the ordered parents `[base, head]`, and checkout HEAD must equal candidate.
+  The checkout has full history and retains no Git credentials. No PR code runs in
+  the privileged `workflow_run` consumer: candidate source is immutable Git data.
+- Build, production-required environment, bounded workers, CLI/ACP retry acceptance
+  with no skips, and compiled smoke stay mandatory on both Nodes. Whole-repository
+  statics and every global/app coverage ratchet stay unchanged on Node 24.
+- Immediately before selected execution, the plan is recomputed and fully validated,
+  tracked source must match candidate, and any old result is removed. Vitest gets
+  argument-array paths, without a shell. A green process is insufficient: fresh
+  JSON must contain exactly all selected files, with passing nonempty assertions and
+  no failure, skip or todo. Missing, duplicate or additional files fail the job.
+
+The old frozen inventory no longer matched current main and made all real proposals
+full. This PR explicitly refreshes the whole inventory certificate after its final
+workflow/reporting changes; it does not declare an unknown graph complete. Its own
+old-base implementation change takes full. Subsequent same-certificate literal-only
+PRs can reduce. Future non-exempt inventory drift deliberately restores full until
+a separately reviewed certificate refresh; broad runtime/test-only eligibility is
+not enabled. The graph's completeness claim still covers only the named island.
+
+The advisory consumer reads the source job API to distinguish full `Test` from
+`Test selected files`. A reduced Node 22 report is **selected_verified**, never a
+full Node 22 baseline; acceptance also requires Node 24 **compared** against full
+discovery for exactly the same run/attempt/base/head/candidate. The artifact's legacy
+`ci-full-evidence-*` name/schema does not imply full execution: `execution` in the
+comparison explicitly states `selected` or `full`. The three reviewed intentional
+full-suite skips remain exact-name/hash and unchanged-blob checks. Selected execution
+allows none. Browser/native lanes remain unknown, outside this CI workflow.
+
+To adopt the new workflow on an existing PR, merge or rebase the merged enablement
+main into its head, then push normally. That `synchronize` event creates a new run
+with the new workflow and exact new merge candidate. Rerunning an old run reuses its
+old workflow; base movement alone also leaves head-to-candidate workflow/selector
+changes that force full. No synthetic PR or manual dispatch is needed. Unrelated
+runtime PRs still take full. The parent owns cancellation, merge and controlled
+resumption; this implementation does not dispatch or poll CI.
+
+Rollback: change the Node 22 full `Test` condition back to `matrix.node != 24` and
+remove/disable `Test selected files` through an ordinary reviewed workflow PR. Main
+and Node 24 already remain full. No branch protection, host or credential change is
+needed. No measured latency saving or broad activation evidence is claimed.
 
 ## Owned implementation and limits
 
@@ -47,7 +106,7 @@ CI 553 comparison selected full/all 345 on its original `c1eba301` base,
 retained per lane. That historical evidence cannot authorize this newer tuple.
 Fresh full CI and a later live default-branch consumer remain separate gates.
 
-The initial Tier 1 advisory island contains exactly the existing renderer
+The initial Tier 1 island contains exactly the existing renderer
 `src/ui/format-time.ts` and `test/format-time.test.tsx`. Eligibility requires a positive structural invariant: each base/candidate leaf
 must match its reviewed normalized AST fingerprint. Only string, numeric and
 (non-tagged) template text literal values are normalized, and text must remain

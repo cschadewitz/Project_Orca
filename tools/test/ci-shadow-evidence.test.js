@@ -94,6 +94,75 @@ const raw = () => ({
   ],
 });
 
+const selectedJob = () => ({
+  ...job(22),
+  steps: [
+    ...job(22).steps.map((step) => (step.name === "Test" ? { ...step, conclusion: "skipped" } : step)),
+    { name: "Plan test execution", conclusion: "success" },
+    { name: "Test selected files", conclusion: "success" },
+  ],
+});
+const selectedPlan = () => ({
+  ...plan([ordinary]),
+  graphs: [{ complete: true }, { complete: true, discoveredVitestFiles: discovered }],
+});
+const selectedEvidence = () => ({ ...evidence(), suite: { success: true, files: [file(ordinary)] } });
+
+it("authenticates reduced Node 22 separately alongside genuine same-candidate full Node 24", () => {
+  const result = compare(selectedEvidence(), selectedJob(), selectedPlan());
+  expect(result.lanes.map((lane) => lane.status)).toEqual(["selected_verified", "compared"]);
+  expect(result.lanes.map((lane) => lane.execution)).toEqual(["selected", "full"]);
+  expect(result.lanes[0].reasons).toEqual([]);
+  expect(result.lanes[0].intentionalSkips).toEqual([]);
+  expect(result.lanes[1].intentionalSkips).toHaveLength(3);
+});
+
+it.each([
+  "push",
+  "full_plan",
+  "incomplete_graph",
+  "both_steps",
+  "missing_plan_step",
+  "duplicate_selected_step",
+  "extra_file",
+  "skip",
+])("rejects unproven reduced execution: %s", (kind) => {
+  const e = selectedEvidence();
+  const j = selectedJob();
+  const p = selectedPlan();
+  let input = {};
+  if (kind === "push") input = { source: { ...source, event: "push" } };
+  if (kind === "full_plan") p.wouldRun.tier = "full";
+  if (kind === "incomplete_graph") p.graphs[0].complete = false;
+  if (kind === "both_steps") j.steps.find((step) => step.name === "Test").conclusion = "success";
+  if (kind === "missing_plan_step") j.steps = j.steps.filter((step) => step.name !== "Plan test execution");
+  if (kind === "duplicate_selected_step") j.steps.push({ name: "Test selected files", conclusion: "success" });
+  if (kind === "extra_file") e.suite.files.push(file("extra.test.ts"));
+  if (kind === "skip") e.suite.files[0] = { ...file(ordinary), passed: 0, skips: [hash("new skip")] };
+  expect(compare(e, j, p, input).lanes[0].status).toBe("unknown");
+});
+
+it.each(["missing", "failed", "stale", "cancelled"])(
+  "does not accept a selected comparison without full Node 24: %s",
+  (kind) => {
+    const baseline = evidence(24);
+    const baselineJob = job(24);
+    if (kind === "failed") baseline.suite.success = false;
+    if (kind === "stale") baseline.identity.candidate = "0".repeat(40);
+    if (kind === "cancelled") baselineJob.conclusion = "cancelled";
+    const result = compareFullEvidence(
+      selectedPlan(),
+      {
+        22: { evidence: selectedEvidence(), job: selectedJob() },
+        24: { evidence: kind === "missing" ? null : baseline, job: baselineJob },
+      },
+      { repo, trusted: candidate, source },
+    );
+    expect(result.lanes[0].status).toBe("unknown");
+    expect(result.lanes[0].reasons).toContain("same_candidate_full_baseline_not_proven");
+  },
+);
+
 it("normalizes actual Vitest fields and strips messages, titles, metadata and absolute checkout paths", () => {
   const normalized = normalizeVitest(raw(), root);
   expect(normalized.files[0]).toEqual({ ...file(ordinary), skips: [hash("expected skip")] });
@@ -295,6 +364,7 @@ function pipelineHistory() {
     "vitest.config.ts",
     "tools/ci-shadow/record.js",
     "tools/ci-shadow/evidence.js",
+    "tools/ci-shadow/execute.js",
     ordinary,
     ...INTENTIONAL_SKIPS.map((skip) => skip.path),
   ]) {

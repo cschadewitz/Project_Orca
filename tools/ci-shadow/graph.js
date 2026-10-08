@@ -11,6 +11,8 @@ export const TOOL_PATHS = [
   "tools/ci-shadow/graph.js",
   "tools/ci-shadow/selector.js",
   "tools/ci-shadow/cli.js",
+  "tools/ci-shadow/execute.js",
+  "tools/ci-shadow/evidence.js",
   "tools/ci-shadow/plan.schema.v1.json",
 ];
 

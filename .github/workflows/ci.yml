@@ -1,4 +1,5 @@
-# Lint, test and build every PR and every push to main, on each supported Node version.
+# Lint, test and build PRs/main on both supported Nodes. Only proven PRs reduce Node 22;
+# Node 24 retains full coverage and main/unknown/critical changes retain full testing.
 #
 # Docs-only changes skip all of that: the `changes` job diffs the push or PR against its
 # merge base and the `check` matrix only runs when something other than documentation
@@ -30,6 +31,7 @@ jobs:
         with:
           # Three-dot diff below needs the merge base, so the full history.
           fetch-depth: 0
+          persist-credentials: false
 
       # Documentation is `docs/**` except JavaScript, and Markdown outside `templates/`.
       # Executable documentation validators need lint and tests just like other tooling.
@@ -65,7 +67,7 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
-      # These self-hosted runners share resources. Do not overlap the two full suites:
+      # Do not overlap the two jobs or their subprocess-heavy suites:
       # the demo launches 24 scripted ACP children and has a fixed 60s operation bound.
       max-parallel: 1
       matrix:
@@ -74,8 +76,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # Advisory push identity uses HEAD's first parent; no extra code is executed.
-          fetch-depth: 2
+          # Selection recomputes the exact base/head/candidate union from immutable objects.
+          fetch-depth: 0
+          persist-credentials: false
 
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
       # resolve the store path. Version comes from package.json packageManager.
@@ -135,6 +138,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      # Only reviewed, complete PR proposals reduce Node 22. Node 24 and main stay full.
+      - name: Plan test execution
+        id: selection
+        env:
+          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
+          SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          SHADOW_NODE: ${{ matrix.node }}
+        run: |
+          rm -f "$RUNNER_TEMP/ci-selection-plan.json" "$RUNNER_TEMP/ci-selection-plan.json.tmp"
+          node tools/ci-shadow/execute.js plan
 
       # The Node 22 leg proves runtime compatibility through the tests, build and compiled
       # smoke below. TypeScript's result is independent of the Node version running it, so
@@ -205,11 +219,19 @@ jobs:
       # slows the suite down. Thresholds live in vitest.config.ts, so this fails here
       # exactly when it fails locally.
       - name: Test
-        if: matrix.node != 24
+        if: matrix.node != 24 && steps.selection.outputs.mode != 'targeted'
         # Explicit `run` forwards reporter flags to Vitest; pnpm's `test` shortcut
         # otherwise interprets --reporter as a pnpm option before any script args.
         run: pnpm run test --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
         env:
+          ORCA_MCP_REQUIRE_PRODUCTION: "1"
+
+      - name: Test selected files
+        if: matrix.node == 22 && steps.selection.outputs.mode == 'targeted'
+        run: node tools/ci-shadow/execute.js run
+        env:
+          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
+          SHADOW_HEAD: ${{ github.event.pull_request.head.sha }}
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       - name: Test with coverage
@@ -245,6 +267,7 @@ jobs:
       - name: Smoke test the compiled build
         run: node packages/cli/dist/main.js demo
 
+      # Retain actual full/selected suite evidence; job steps authenticate execution mode.
       # Always retain sanitized failure/missing-result evidence. Failure here cannot
       # mask or override any existing step, job, coverage or required-check outcome.
       - name: Record advisory full-suite evidence

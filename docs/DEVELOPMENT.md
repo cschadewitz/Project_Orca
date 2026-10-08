@@ -69,8 +69,12 @@ tests such as the demo while retaining their existing assertions and 60-second b
 PRs and main pushes start CI; its classifier skips runtime jobs for prose-only
 changes. Files ending in `.js`, `.mjs`, `.cjs` or `.jsx` under `docs/` and prompt
 templates count as code; see the [classifier](../.github/workflows/ci.yml).
-The shadow selector is advisory and cannot replace the full checks; #520's reporting
-consumer remains a separate unmerged slice. Desktop packaging, App smoke/type proof
+The reviewed selector reduces Node 22 PR testing only for its proven time-formatting
+island. Node 24 retains the complete coverage suite with unchanged thresholds, and
+main/unknown/critical changes retain full testing. #520's merged read-only reporting
+consumer compares actual selected/full execution against the same candidate; see
+[selection safety and workflow adoption](ci-shadow-selection.md#enforced-pr-execution).
+Desktop packaging, App smoke/type proof
 and native UI projects are manual/reusable workflows, not automatic PR proof. Their
 Linux jobs still include homelab routing; inspect the actual workflow before dispatch.
 The owner requires a fresh CPU/RAM/load check before any new homelab job. This
