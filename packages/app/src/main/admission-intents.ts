@@ -2,6 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import type { LaunchReview, RetainedLaunch } from "../configuration-launch-contract.js";
+import { canonicalGuidedValue, parseGuidedReview } from "./guided-intent-contract.js";
 
 export interface IntentScope {
   target: string;
@@ -13,6 +15,8 @@ export interface IntentRecord extends IntentScope {
   workflowId: string;
   idempotencyKey: string;
   state: "retained" | "abandoned";
+  /** Versioned protected submitted command. Palette v1 records deliberately omit it. */
+  guided?: { version: 1; review: LaunchReview; operationId?: string; admissionId?: string };
 }
 /** Electron safeStorage is injected so tests do not require a desktop keychain. */
 export interface IntentEncryption {
@@ -52,7 +56,10 @@ export class AdmissionIntents {
         if (
           typeof row !== "object" ||
           row === null ||
-          Object.keys(row).sort().join() !== "id,idempotencyKey,principalId,state,target,workflowId,workspaceId" ||
+          ![
+            "id,idempotencyKey,principalId,state,target,workflowId,workspaceId",
+            "guided,id,idempotencyKey,principalId,state,target,workflowId,workspaceId",
+          ].includes(Object.keys(row).sort().join()) ||
           ![row.id, row.idempotencyKey, row.principalId, row.target, row.workflowId, row.workspaceId].every(
             (v) => typeof v === "string" && v.length > 0,
           ) ||
@@ -60,6 +67,20 @@ export class AdmissionIntents {
           ids.has(row.id)
         )
           throw refusal();
+        if (Object.hasOwn(row, "guided")) {
+          const guided = row.guided as IntentRecord["guided"];
+          if (
+            !guided ||
+            guided.version !== 1 ||
+            Object.keys(guided).some((key) => !["version", "review", "operationId", "admissionId"].includes(key)) ||
+            [guided.operationId, guided.admissionId].some(
+              (id) => id !== undefined && (typeof id !== "string" || !id.length),
+            )
+          )
+            throw refusal();
+          const review = parseGuidedReview(guided.review);
+          if (review.workflowId !== row.workflowId || review.target.workspaceId !== row.workspaceId) throw refusal();
+        }
         ids.add(row.id);
       }
       return data as IntentRecord[];
@@ -106,6 +127,8 @@ export class AdmissionIntents {
       throw new Error("Verified run-intent scope is unavailable. No run was submitted.");
     const records = this.read();
     const existing = records.find((r) => sameScope(r, scope) && r.workflowId === workflowId && r.state === "retained");
+    if (existing?.guided)
+      throw new Error("This workflow has a retained guided intent. Recover or explicitly abandon that command first.");
     if (existing) return { ...existing };
     // Never silently turn a known unresolved intent into new work after changing authority/target.
     if (records.some((r) => r.workflowId === workflowId && r.state === "retained"))
@@ -125,8 +148,61 @@ export class AdmissionIntents {
   }
   list(scope: IntentScope): Pick<IntentRecord, "id" | "workflowId">[] {
     return this.read()
-      .filter((r) => sameScope(r, scope) && r.state === "retained")
+      .filter((r) => sameScope(r, scope) && r.state === "retained" && !r.guided)
       .map(({ id, workflowId }) => ({ id, workflowId }));
+  }
+  retainGuided(scope: IntentScope, raw: LaunchReview): IntentRecord {
+    const review = parseGuidedReview(raw);
+    if (scope.workspaceId !== review.target.workspaceId || !scope.target || !scope.principalId) throw refusal();
+    const records = this.read();
+    const held = records.find((r) => r.workflowId === review.workflowId && r.state === "retained");
+    if (held) {
+      if (!sameScope(held, scope))
+        throw new Error("This workflow has a retained intent on another target or principal.");
+      if (!held.guided || canonicalGuidedValue(held.guided.review) !== canonicalGuidedValue(review))
+        throw new Error("The retained command changed. Recover or explicitly abandon it before new work.");
+      return structuredClone(held);
+    }
+    if (records.length >= 1000) throw refusal();
+    const record: IntentRecord = {
+      ...scope,
+      workflowId: review.workflowId,
+      id: randomUUID(),
+      idempotencyKey: randomUUID(),
+      state: "retained",
+      guided: { version: 1, review },
+    };
+    this.write([...records, record]);
+    return structuredClone(record);
+  }
+  guided(scope: IntentScope, id: string): IntentRecord {
+    const record = this.read().find((r) => sameScope(r, scope) && r.id === id && r.state === "retained" && r.guided);
+    if (!record) throw new Error("The retained guided intent is unavailable in this authenticated scope.");
+    return structuredClone(record);
+  }
+  guidedList(scope: IntentScope): RetainedLaunch[] {
+    return this.read()
+      .filter((r) => sameScope(r, scope) && r.state === "retained" && r.guided)
+      .map((r) => ({
+        intentId: r.id,
+        workflowId: r.workflowId,
+        mode: r.guided!.review.command.mode,
+        target: { ...r.guided!.review.target },
+        ...(r.guided!.operationId ? { operationId: r.guided!.operationId } : {}),
+        ...(r.guided!.admissionId ? { admissionId: r.guided!.admissionId } : {}),
+      }));
+  }
+  recordGuidedReceipt(scope: IntentScope, id: string, ids: { operationId?: string; admissionId?: string }): void {
+    const records = this.read();
+    const record = records.find((r) => sameScope(r, scope) && r.id === id && r.state === "retained");
+    if (!record?.guided) throw refusal();
+    for (const key of ["operationId", "admissionId"] as const) {
+      const value = ids[key];
+      if (value === undefined) continue;
+      if (!value || (record.guided[key] && record.guided[key] !== value)) throw refusal();
+      record.guided[key] = value;
+    }
+    this.write(records);
   }
   /** Only after explicit confirmation. Does not cancel or delete the server operation. */
   abandon(scope: IntentScope, id: string): void {
