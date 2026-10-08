@@ -279,6 +279,16 @@ it.each(goldens)("golden: $label", ({ path, status, tier, reason }) => {
   }
 });
 
+it("takes full when the reviewed format-time test is renamed to Markdown and discovery shrinks", () => {
+  reset();
+  command("mv", "packages/app/renderer/test/format-time.test.tsx", "packages/app/renderer/test/format-time.md");
+  const result = plan(save());
+  expect(result.wouldRun.tier).toBe("full");
+  expect(result.graphs[1].discoveredVitestFiles.length).toBe(result.graphs[0].discoveredVitestFiles.length - 1);
+  expect(result.wouldRun.reasonCodes).toContain("discovery_inventory_changed");
+  expect(result.wouldRun.vitestFiles).toEqual(result.graphs[1].discoveredVitestFiles);
+});
+
 it("pins all identities, emits deterministic plans, and recomputes their entire contents", () => {
   reset();
   const path = manifest.islands[0].paths[0];

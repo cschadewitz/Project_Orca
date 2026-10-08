@@ -21,11 +21,10 @@ verified main `65606fbce827cba914a67b999b1a47c0aab2797a`.
   directly modified tests. This is a real reduced invocation, not a full-mode flag.
 - Node 24 always runs full coverage. Main pushes, critical/mixed/unknown changes,
   stale inventory/source, changed discovery, ambiguous identities and selector
-  errors retain full testing. Prose job skips require Markdown outside runtime
-  templates and consumed preparation contracts; JSON, Python, shell and other
-  non-document inputs retain full checks. This prevents the classifier bypassing
-  unknown/consumed full fallback;
-  an advisory docs plan cannot skip an admitted runtime job.
+  errors retain full testing. Every PR/main event admits the check matrix, including
+  Markdown, consumed documentation, unknown inputs, renames and deletions. There is
+  no docs-only bypass: classification cannot discard a rename's old path or assume
+  Markdown has no consumer. Even an advisory docs plan executes full Node 22 tests.
 - Exact event base/head/candidate SHAs are required. A PR candidate must have
   exactly the ordered parents `[base, head]`, and checkout HEAD must equal candidate.
   The checkout has full history and retains no Git credentials. No PR code runs in

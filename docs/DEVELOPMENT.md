@@ -66,10 +66,9 @@ step uses at most two workers (one where Node reports at most two available CPUs
 including the full suite and coverage. This limits contention for subprocess-heavy
 tests such as the demo while retaining their existing assertions and 60-second bounds.
 
-PRs and main pushes start CI; its classifier skips runtime jobs only for Markdown
-outside `templates/` and consumed `docs/preparation/` inputs. JSON fixtures, Python,
-shell, YAML, logs and other non-Markdown docs inputs count as code and retain full
-verification; see the [classifier](../.github/workflows/ci.yml).
+PRs and main pushes always admit the CI check matrix. Markdown can be consumed by
+tests, and renames/deletions can hide code or change discovery, so documentation
+never skips verification; see the [admission step](../.github/workflows/ci.yml).
 The reviewed selector reduces Node 22 PR testing only for its proven time-formatting
 island. Node 24 retains the complete coverage suite with unchanged thresholds, and
 main/unknown/critical changes retain full testing. #520's merged read-only reporting
@@ -407,12 +406,11 @@ CI measures coverage on one Node version (24), writes the per-package table into
 job summary, and uploads `coverage/` as an artifact — including when the thresholds
 fail, which is when the numbers are worth reading.
 
-CI skips the whole typecheck/lint/test/build matrix when a push or PR changes only
-documentation: `docs/**` except files ending in `.js`, `.mjs`, `.cjs` or `.jsx`, and
-any Markdown outside `templates/` (the prompt templates are Markdown but the engine
-loads them, so they count as code). A small `changes` job diffs
-against the merge base and gates the matrix with a job-level `if`, so a docs-only PR still
-shows a green check rather than none — see the comments in `.github/workflows/ci.yml`.
+CI admits the whole matrix for every PR/main event, including all Markdown,
+consumed documentation, unknown inputs, both sides of renames and deletions.
+There is no extension-based or docs-only skip. Only the exact reviewed time-formatting
+island can reduce Node 22 after complete SHA-bound recomputation; Node 24 remains
+full coverage. Missing or ambiguous diff/discovery evidence cannot suppress checks.
 
 Only `.github/workflows/ci.yml` runs automatically before a pull request merges. Desktop
 packaging and App smoke remain available by manual dispatch and as reusable release checks;
