@@ -65,6 +65,9 @@ export interface AdmissionAuthorities {
   direct(): Promise<DirectAdmissionAuthority>;
 }
 export class AdmissionRetryModel {
+  private readonly verifying = new Set<Promise<void>>();
+  private closing: Promise<void> | undefined;
+
   constructor(
     private readonly options: {
       claims: RegisteredRetryClaims;
@@ -153,20 +156,47 @@ export class AdmissionRetryModel {
     authority: DirectAdmissionAuthority,
     executionAuthority?: ExecutionResumeAuthority,
   ): void {
-    setImmediate(() => {
-      void this.options.direct
-        .withRetryAuthority(authority, async () => {
-          const current = await this.options.claims.inspect(operationId, {
-            principalId: authority.actor.principalId,
-            workspaceId: authority.workspaceId,
-            authorize: (command) => authority.authorize(command as DirectAdmissionCommand),
-          });
-          if (current.state !== "resolved" || (current.result as DirectAdmissionResult).state !== "accepted") return;
-          if (!(await neverAttached(this.options.orchestrator, runId))) return;
-          await this.options.execute(runId, executionAuthority);
-        })
-        .catch(() => this.options.executionFailed(runId));
+    if (this.closing) return;
+    // Own the scheduled verification before setImmediate can run. It reads and
+    // synchronizes durable evidence even for an already-started run's replay.
+    const verification = new Promise<void>((resolve, reject) => {
+      setImmediate(() => {
+        if (this.closing) {
+          resolve();
+          return;
+        }
+        void this.options.direct
+          .withRetryAuthority(authority, async () => {
+            const current = await this.options.claims.inspect(operationId, {
+              principalId: authority.actor.principalId,
+              workspaceId: authority.workspaceId,
+              authorize: (command) => authority.authorize(command as DirectAdmissionCommand),
+            });
+            if (current.state !== "resolved" || (current.result as DirectAdmissionResult).state !== "accepted") return;
+            if (this.closing) return;
+            if (!(await neverAttached(this.options.orchestrator, runId))) return;
+            if (this.closing) return;
+            // Execution has its own run lease/lifecycle. Shutdown settles receipt
+            // verification, without waiting for a workflow or cancelling it.
+            void this.options.execute(runId, executionAuthority).catch(() => this.options.executionFailed(runId));
+          })
+          .then(resolve, reject);
+      });
     });
+    this.verifying.add(verification);
+    void verification.then(
+      () => this.verifying.delete(verification),
+      () => {
+        this.verifying.delete(verification);
+        this.options.executionFailed(runId);
+      },
+    );
+  }
+
+  /** Fence automatic attachment and settle its evidence reads, including queued work. */
+  close(): Promise<void> {
+    this.closing ??= Promise.allSettled(this.verifying).then(() => undefined);
+    return this.closing;
   }
 }
 
