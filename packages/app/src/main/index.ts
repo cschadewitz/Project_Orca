@@ -170,6 +170,13 @@ handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) =
 handle("orca:workflows.list", (params: Parameters<DaemonClient["workflowsList"]>[0]) => client().workflowsList(params));
 handle("orca:workflows.get", (params: Parameters<DaemonClient["workflowsGet"]>[0]) => client().workflowsGet(params));
 handle("orca:config.get", (params: Parameters<DaemonClient["configGet"]>[0]) => client().configGet(params));
+handle("orca:config.apply", (params: Parameters<DaemonClient["configApply"]>[0]) => client().configApply(params));
+handle("orca:workflows.validateInputs", (params: Parameters<DaemonClient["workflowsValidateInputs"]>[0]) =>
+  client().workflowsValidateInputs(params),
+);
+handle("orca:operator.preflight", (params: Parameters<DaemonClient["operatorPreflight"]>[0]) =>
+  client().operatorPreflight(params),
+);
 
 // The plan reads (#169). Same channel shape as the run reads; the daemon omits all nine when
 // it serves no plan, so a surface checks `hello.methods` rather than calling and failing.
