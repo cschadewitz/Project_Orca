@@ -76,9 +76,12 @@ function unavailable(state: LiveInputState): OrcaError {
   return new OrcaError("RUN_STATE", `live permission callback is ${state}`, { liveInputState: state });
 }
 
-/** Internal daemon activity gate, with no authority/grant or durable state semantics. */
+/** Internal daemon activity gate. New admission is distinct from existing-work producers; no authority/grant semantics. */
 export interface ExecutionActivity {
-  enter(reason: "execution" | "callback" | "renewal" | "dispatch" | "continuation" | "recovery"): () => void;
+  enter(
+    reason: "execution" | "callback" | "renewal" | "dispatch" | "continuation" | "recovery",
+    newAdmission?: boolean,
+  ): () => void;
 }
 export class LiveHumanInput implements HumanInputPort {
   runtimeActivity?: ExecutionActivity;

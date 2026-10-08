@@ -459,33 +459,38 @@ export class ControlModel {
     attributeStartedRun?: (runId: string) => void | Promise<void>,
     actor?: MutationActor,
   ): Promise<RunsStartResult> {
-    const captured = await this.orc.generations?.captureLaunch({
-      purpose: "workflow",
-      workflowId: params.workflowId,
-      ...(params.workflowVersion ? { workflowVersion: params.workflowVersion } : {}),
-      ...(params.expectedWorkflowRevision ? { expectedWorkflowRevision: params.expectedWorkflowRevision } : {}),
-      ...(params.expectedConfigGeneration ? { expectedConfigGeneration: params.expectedConfigGeneration } : {}),
-    });
-    if (params.expectedConfigGeneration && !captured)
-      throw new OrcaError("NOT_SUPPORTED", "configuration generations are unavailable");
-    const start = captured ? captured.startRun.bind(captured) : this.orc.startRun.bind(this.orc);
-    const runId = await start({
-      ...(actor ? { actor } : {}),
-      workflowId: params.workflowId,
-      vars: params.vars,
-      ...(params.workflowVersion ? { workflowVersion: params.workflowVersion } : {}),
-      ...(params.expectedWorkflowRevision ? { expectedWorkflowRevision: params.expectedWorkflowRevision } : {}),
-      ...(params.requestId ? { requestId: params.requestId } : {}),
-      ...(params.workItemId ? { workItemId: params.workItemId } : {}),
-    });
-    // Persist the exact call/run ownership before execution can emit agent or child events.
-    await attributeStartedRun?.(runId);
-    // A run this daemon has just created cannot be leased by anyone else *yet*, but it can be
-    // by the time `run` reaches `execute`, and the lease can be taken away mid-run (#267).
-    // Either way the engine raises `RUN_LEASED`, and an unmapped one reaches the client as an
-    // INTERNAL fault with no run id on it.
-    await leased(runId, () => this.orc.run(runId));
-    return { runId, run: await this.runView(runId), asOf: this.clock.isoNow() };
+    const release = this.orc.runtimeActivity?.enter("dispatch", true);
+    try {
+      const captured = await this.orc.generations?.captureLaunch({
+        purpose: "workflow",
+        workflowId: params.workflowId,
+        ...(params.workflowVersion ? { workflowVersion: params.workflowVersion } : {}),
+        ...(params.expectedWorkflowRevision ? { expectedWorkflowRevision: params.expectedWorkflowRevision } : {}),
+        ...(params.expectedConfigGeneration ? { expectedConfigGeneration: params.expectedConfigGeneration } : {}),
+      });
+      if (params.expectedConfigGeneration && !captured)
+        throw new OrcaError("NOT_SUPPORTED", "configuration generations are unavailable");
+      const start = captured ? captured.startRun.bind(captured) : this.orc.startRun.bind(this.orc);
+      const runId = await start({
+        ...(actor ? { actor } : {}),
+        workflowId: params.workflowId,
+        vars: params.vars,
+        ...(params.workflowVersion ? { workflowVersion: params.workflowVersion } : {}),
+        ...(params.expectedWorkflowRevision ? { expectedWorkflowRevision: params.expectedWorkflowRevision } : {}),
+        ...(params.requestId ? { requestId: params.requestId } : {}),
+        ...(params.workItemId ? { workItemId: params.workItemId } : {}),
+      });
+      // Persist the exact call/run ownership before execution can emit agent or child events.
+      await attributeStartedRun?.(runId);
+      // A run this daemon has just created cannot be leased by anyone else *yet*, but it can be
+      // by the time `run` reaches `execute`, and the lease can be taken away mid-run (#267).
+      // Either way the engine raises `RUN_LEASED`, and an unmapped one reaches the client as an
+      // INTERNAL fault with no run id on it.
+      await leased(runId, () => this.orc.run(runId));
+      return { runId, run: await this.runView(runId), asOf: this.clock.isoNow() };
+    } finally {
+      release?.();
+    }
   }
 
   /**
