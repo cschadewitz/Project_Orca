@@ -1,4 +1,5 @@
 /** Authenticated direct admission and fixed-kind receipt dispatch. No execution is awaited by admit. */
+import type { RuntimeActivity } from "./runtime-activity.js";
 import { OrcaError, type SubmissionAuthority } from "@orca/core";
 import { readAdmissionExecutionStatus, type Orchestrator, type ExecutionResumeAuthority } from "@orca/engine";
 import type {
@@ -65,11 +66,18 @@ export interface AdmissionAuthorities {
   direct(): Promise<DirectAdmissionAuthority>;
 }
 export class AdmissionRetryModel {
+  get runtimeActivity() {
+    return this.options.runtimeActivity;
+  }
+  get executionOrchestrator() {
+    return this.options.orchestrator;
+  }
   private readonly verifying = new Set<Promise<void>>();
   private closing: Promise<void> | undefined;
 
   constructor(
     private readonly options: {
+      runtimeActivity?: RuntimeActivity | undefined;
       claims: RegisteredRetryClaims;
       requests: RequestSubmissionService;
       direct: DirectAdmissionService;
@@ -157,6 +165,7 @@ export class AdmissionRetryModel {
     executionAuthority?: ExecutionResumeAuthority,
   ): void {
     if (this.closing) return;
+    const release = this.options.runtimeActivity?.enter("dispatch");
     // Own the scheduled verification before setImmediate can run. It reads and
     // synchronizes durable evidence even for an already-started run's replay.
     const verification = new Promise<void>((resolve, reject) => {
@@ -178,12 +187,20 @@ export class AdmissionRetryModel {
             if (this.closing) return;
             // Execution has its own run lease/lifecycle. Shutdown settles receipt
             // verification, without waiting for a workflow or cancelling it.
-            void this.options.execute(runId, executionAuthority).catch(() => this.options.executionFailed(runId));
+            const releaseExecution = this.options.runtimeActivity?.enter("execution");
+            void this.options
+              .execute(runId, executionAuthority)
+              .catch(() => this.options.executionFailed(runId))
+              .finally(() => releaseExecution?.());
           })
           .then(resolve, reject);
       });
     });
     this.verifying.add(verification);
+    void verification.then(
+      () => release?.(),
+      () => release?.(),
+    );
     void verification.then(
       () => this.verifying.delete(verification),
       () => {

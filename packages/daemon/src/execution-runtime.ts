@@ -12,6 +12,7 @@ import type { CredentialStore } from "./auth/credentials.js";
 import type { OwnershipStore } from "./auth/ownership.js";
 import { holds, workflowAllowed } from "./auth/principal.js";
 import { LiveExecutionAuthorities } from "./live-input-authority.js";
+import { RuntimeActivity } from "./runtime-activity.js";
 type ExecutionOrigin = ExecutionResumeOrigin;
 export function daemonExecutionRuntime(options: {
   instanceId: string;
@@ -22,6 +23,9 @@ export function daemonExecutionRuntime(options: {
   revalidateMs?: number;
 }) {
   const port = new LiveHumanInput(options.instanceId);
+  const activity = new RuntimeActivity();
+  port.runtimeActivity = activity;
+  let closed = false;
   const origins = new Map<string, ExecutionOrigin>();
   const renewed = new Map<string, { origin: ExecutionOrigin; authority: ExecutionResumeAuthority }>();
   const renewing = new Set<string>();
@@ -110,97 +114,135 @@ export function daemonExecutionRuntime(options: {
   };
   return {
     port,
+    activity,
+    orchestrator: options.orchestrator,
+    workspaceId: options.workspaceId,
+    matchesAuthentication: (credentials: CredentialStore, ownership: OwnershipStore) =>
+      credentials === options.credentials && ownership === options.ownership,
+    get available() {
+      return !closed && port.available;
+    },
+    get originCount() {
+      return origins.size + renewing.size;
+    },
     /** First attachment is checked with the actor actually bound under the run lease. */
     async authorizeAdmissionExecution(policy: Readonly<AdmissionExecutionPolicy>): Promise<void> {
-      const binding = policy.binding;
-      const origin = origins.get(binding.runId);
-      const exactOrigin = () =>
-        options.workspaceId === binding.workspaceId &&
-        origin !== undefined &&
-        origin.rootId === binding.runId &&
-        origin.workflowId === binding.workflow.id &&
-        origin.request === (binding.kind === "request") &&
-        origin.actor.principalId === binding.actor.principalId &&
-        origin.actor.credentialId === binding.actor.credentialId;
-      const current = () =>
-        exactOrigin() &&
-        authorities.allowsCurrent(
-          binding.runId,
-          (actor) => actor.principalId === binding.actor.principalId && currentPrincipal(origin, actor) !== undefined,
-        );
-      if (!current()) throw resumeRequired();
-      await options.ownership.verify(binding.runId, binding.actor.principalId);
-      if (!current()) throw resumeRequired();
+      if (closed) throw resumeRequired();
+      const release = activity.enter("renewal");
+      try {
+        const binding = policy.binding;
+        const origin = origins.get(binding.runId);
+        const exactOrigin = () =>
+          options.workspaceId === binding.workspaceId &&
+          origin !== undefined &&
+          origin.rootId === binding.runId &&
+          origin.workflowId === binding.workflow.id &&
+          origin.request === (binding.kind === "request") &&
+          origin.actor.principalId === binding.actor.principalId &&
+          origin.actor.credentialId === binding.actor.credentialId;
+        const current = () =>
+          exactOrigin() &&
+          authorities.allowsCurrent(
+            binding.runId,
+            (actor) => actor.principalId === binding.actor.principalId && currentPrincipal(origin, actor) !== undefined,
+          );
+        if (!current()) throw resumeRequired();
+        await options.ownership.verify(binding.runId, binding.actor.principalId);
+        if (!current()) throw resumeRequired();
+      } finally {
+        release();
+      }
     },
     /** Protected revision delivery rechecks the attached execution actor at every boundary. */
     async authorizeExecution(runId: string): Promise<void> {
-      const origin = origins.get(runId);
-      if (
-        !origin ||
-        !authorities.allowsCurrent(runId, (actor) => {
-          const current = currentPrincipal(origin, actor);
-          return (
-            current !== undefined &&
-            holds(current, "runs.read") &&
-            holds(current, "inputs.answer") &&
-            holds(current, "runs.control")
-          );
-        })
-      )
-        throw resumeRequired();
+      if (closed) throw resumeRequired();
+      const release = activity.enter("renewal");
+      try {
+        const origin = origins.get(runId);
+        if (
+          !origin ||
+          !authorities.allowsCurrent(runId, (actor) => {
+            const current = currentPrincipal(origin, actor);
+            return (
+              current !== undefined &&
+              holds(current, "runs.read") &&
+              holds(current, "inputs.answer") &&
+              holds(current, "runs.control")
+            );
+          })
+        )
+          throw resumeRequired();
+      } finally {
+        release();
+      }
     },
     /** Read-only preflight for asynchronous recovery; attachment rechecks before execution. */
     async checkResumeAuthority(runId: string, authority: ExecutionResumeAuthority | undefined): Promise<void> {
-      await resumeBinding(runId, authority);
+      const release = activity.enter("renewal");
+      try {
+        await resumeBinding(runId, authority);
+      } finally {
+        release();
+      }
     },
     async withResumeAuthority(
       runId: string,
       authority: ExecutionResumeAuthority | undefined,
       operation: () => Promise<RunState>,
     ): Promise<RunState> {
-      const binding = await resumeBinding(runId, authority);
-      if (!binding) return operation();
-      const { origin } = binding;
-      // Preflight does not reserve anything. Recheck after its asynchronous return so
-      // concurrent attachments cannot replace each other's verified authority.
-      refuseIfAttached(origin.rootId);
-      const prior = renewed.get(origin.rootId);
-      renewing.add(origin.rootId);
-      renewed.set(origin.rootId, binding);
+      const release = activity.enter("renewal");
       try {
-        const result = await operation();
-        if (["completed", "failed", "cancelled"].includes(result.run.status)) renewed.delete(origin.rootId);
-        return result;
-      } catch (error) {
-        if (renewed.get(origin.rootId) === binding) {
-          if (prior) renewed.set(origin.rootId, prior);
-          else renewed.delete(origin.rootId);
+        const binding = await resumeBinding(runId, authority);
+        if (!binding) return await operation();
+        const { origin } = binding;
+        // Preflight does not reserve anything. Recheck after its asynchronous return so
+        // concurrent attachments cannot replace each other's verified authority.
+        refuseIfAttached(origin.rootId);
+        const prior = renewed.get(origin.rootId);
+        renewing.add(origin.rootId);
+        renewed.set(origin.rootId, binding);
+        try {
+          const result = await operation();
+          if (["completed", "failed", "cancelled"].includes(result.run.status)) renewed.delete(origin.rootId);
+          return result;
+        } catch (error) {
+          if (renewed.get(origin.rootId) === binding) {
+            if (prior) renewed.set(origin.rootId, prior);
+            else renewed.delete(origin.rootId);
+          }
+          throw error;
+        } finally {
+          renewing.delete(origin.rootId);
         }
-        throw error;
       } finally {
-        renewing.delete(origin.rootId);
+        release();
       }
     },
     async prepareExecution(runId: string) {
-      const origin = await originOf(runId);
-      if (!origin) return;
-      const binding = renewed.get(origin.rootId);
-      const actor = binding?.authority.actor ?? origin.actor;
-      // Revocation while awaiting the lease still means explicit execution recovery,
-      // including when a durable gate answer has already been recorded.
-      if (!isCurrent(origin, actor)) throw resumeRequired();
-      if (binding) {
-        if (!sameOrigin(origin, binding.origin)) throw resumeRequired();
-        try {
-          await binding.authority.authorize(origin);
-        } catch (error) {
-          if (!isCurrent(origin, actor)) throw resumeRequired();
-          throw error;
+      const release = activity.enter("renewal");
+      try {
+        const origin = await originOf(runId);
+        if (!origin) return;
+        const binding = renewed.get(origin.rootId);
+        const actor = binding?.authority.actor ?? origin.actor;
+        // Revocation while awaiting the lease still means explicit execution recovery,
+        // including when a durable gate answer has already been recorded.
+        if (!isCurrent(origin, actor)) throw resumeRequired();
+        if (binding) {
+          if (!sameOrigin(origin, binding.origin)) throw resumeRequired();
+          try {
+            await binding.authority.authorize(origin);
+          } catch (error) {
+            if (!isCurrent(origin, actor)) throw resumeRequired();
+            throw error;
+          }
         }
+        if (!isCurrent(origin, actor)) throw resumeRequired();
+        origins.set(runId, origin);
+        authorities.bind(runId, actor);
+      } finally {
+        release();
       }
-      if (!isCurrent(origin, actor)) throw resumeRequired();
-      origins.set(runId, origin);
-      authorities.bind(runId, actor);
     },
     executionSignal: (runId: string) =>
       origins.has(runId) ? authorities.signalFor(runId) : AbortSignal.abort("no verified execution authority"),
@@ -209,6 +251,8 @@ export function daemonExecutionRuntime(options: {
       origins.delete(runId);
     },
     close() {
+      closed = true;
+      activity.close();
       authorities.close();
       port.close();
       origins.clear();

@@ -13,6 +13,7 @@ import {
   PendingRevisionTargetSchema,
   PendingRevisionSummarySchema,
   PendingRevisionsDiscoverySchema,
+  RuntimeMaintenanceTargetSchema,
   type PendingRevisionSummary,
   type PendingRevisionTarget,
 } from "@orca/protocol";
@@ -56,6 +57,7 @@ import {
   type ResponseMessage,
 } from "@orca/protocol";
 import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
+import type { daemonExecutionRuntime } from "./execution-runtime.js";
 import { Maintenance } from "./maintenance.js";
 import { attachSocket } from "./socket.js";
 import { Authorizer, bindPrincipal, principalOf } from "./auth/guard.js";
@@ -75,6 +77,7 @@ import type { ResourceResolver } from "./auth/resources.js";
 import { TransportGate, validateDeployment, type Admission, type DaemonAuthOptions } from "./auth/transport.js";
 
 export interface DaemonOptions extends MethodContext {
+  runtimeIdle?: ReturnType<typeof daemonExecutionRuntime> | undefined;
   /** Opt-in contract seam only. Normal CLI composition does not install a resource collector. */
   hostResourceSource?: HostResourceReadSource;
   /** Installed protected evidence reader; never a callback that attaches execution. */
@@ -228,10 +231,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const identity = opts.identity ?? (opts.workspaceId ? createDaemonIdentity(opts.workspaceId) : undefined);
   if (identity && opts.workspaceId && identity.workspaceId !== opts.workspaceId)
     throw new OrcaError("CONFIG_INVALID", "daemon identity does not match its workspace");
+  const runtimeTarget = RuntimeMaintenanceTargetSchema.safeParse({ ...identity, processId: process.pid });
+  const runtime = auth.mode === "token" && runtimeTarget.success ? opts.runtimeIdle : undefined;
+  const maintenance = new Maintenance(
+    opts.maintenanceToken,
+    opts.admissionFile,
+    runtime && identity ? { activity: runtime.activity, target: { ...identity, processId: process.pid } } : undefined,
+  );
   const ctx: MethodContext = {
     ...(identity ? { identity } : {}),
     processId: process.pid,
-    maintenance: new Maintenance(opts.maintenanceToken, opts.admissionFile),
+    maintenance,
     orcaVersion: opts.orcaVersion,
     storeDir: opts.storeDir,
     capabilities: opts.capabilities,
@@ -249,6 +259,59 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     agents: opts.agents,
     config: opts.config,
   };
+  const boundOrchestrator = runtime?.orchestrator;
+  const boundModels = {
+    requests: ctx.requestSubmissions,
+    admissions: ctx.admissionRetries,
+    continuations: ctx.continuationAdmissions,
+    control: ctx.control,
+  };
+  if (runtime)
+    runtime.activity.bind(
+      () => {
+        const orchestrator = runtime.orchestrator;
+        const requests = ctx.requestSubmissions;
+        const admissions = ctx.admissionRetries;
+        const continuations = ctx.continuationAdmissions;
+        const available =
+          runtime.available &&
+          runtime.orchestrator === boundOrchestrator &&
+          runtime.workspaceId === identity?.workspaceId &&
+          runtime.port.instanceId === identity?.instanceId &&
+          auth.mode === "token" &&
+          runtime.matchesAuthentication(auth.credentials, auth.ownership) &&
+          ctx.source === orchestrator &&
+          ctx.requestSubmissions === boundModels.requests &&
+          ctx.admissionRetries === boundModels.admissions &&
+          ctx.continuationAdmissions === boundModels.continuations &&
+          ctx.control === boundModels.control &&
+          orchestrator.runtimeActivity === runtime.activity &&
+          orchestrator.liveInput === runtime &&
+          ctx.liveInputs === runtime.port &&
+          runtime.port.runtimeActivity === runtime.activity &&
+          !!requests &&
+          requests.runtimeActivity === runtime.activity &&
+          requests.executionOrchestrator === orchestrator &&
+          !!admissions &&
+          admissions.runtimeActivity === runtime.activity &&
+          admissions.executionOrchestrator === orchestrator &&
+          !!continuations &&
+          continuations.runtimeActivity === runtime.activity &&
+          continuations.executionOrchestrator === orchestrator &&
+          continuations.executionRuntime === runtime &&
+          ctx.control?.executionOrchestrator === orchestrator;
+        return {
+          available,
+          active: [
+            ...(orchestrator.attachedExecutionCount ? ["execution" as const] : []),
+            ...(runtime.port.pendingCount ? ["callback" as const] : []),
+            ...(runtime.originCount ? ["renewal" as const] : []),
+            ...(continuations?.taskCount ? ["continuation" as const] : []),
+          ],
+        };
+      },
+      () => maintenance.admissionClosed(),
+    );
   // A daemon without a store serves `hello` alone, and says so in `hello.methods`: a read
   // method it cannot answer is an unknown method, not a method that fails.
   const authorizer = new Authorizer(
@@ -910,6 +973,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const recoverContinuations =
     continuationModel && ctx.submissionWorkspaceId && auth.mode === "token"
       ? async () => {
+          // Timer recovery must not enter behind a runtime admission fence.
+          if (maintenance.admissionClosed()) return;
           await continuationModel.recoverBatch(async (entry) => {
             const credentialId = entry.actor?.credentialId;
             if (!credentialId || entry.workspaceId !== ctx.submissionWorkspaceId) return undefined;
