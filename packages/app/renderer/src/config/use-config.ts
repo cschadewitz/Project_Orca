@@ -2,7 +2,10 @@
  * The Config surface's data: one `config.get` on mount, then `config.changed` for
  * everything after it, and the draft a person is holding in between.
  *
- * Five decisions worth knowing before changing anything here:
+ * Current structured/raw Config writes belong to ConfigurationStudioProvider; this feed
+ * supplies its target-bound reads. The legacy writes below serve the sidecar and previews.
+ *
+ * Five decisions about those legacy writes worth knowing before changing anything here:
  *
  * - **One read, then pushes. Never a poll.** `config.changed` carries the document and its
  *   new `revision` but not the document's contents, so a push that matters is followed by
@@ -29,6 +32,8 @@
  *   (`a11y/announce.ts`).
  */
 import { useUpdateDraft } from "../update-drafts.js";
+import type { EditorTarget } from "../../../src/configuration-launch-contract.js";
+import { currentEditorTarget, sameEditorTarget } from "./configuration-adapter.js";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
@@ -43,7 +48,9 @@ import { useNotifications } from "../notifications-context.js";
 import { patchFrom, type Draft } from "./config-model.js";
 
 export type ConfigState =
-  { phase: "loading" } | { phase: "error"; error: ProtocolError } | { phase: "ready"; data: ConfigGetResult };
+  | { phase: "loading" }
+  | { phase: "error"; error: ProtocolError }
+  | { phase: "ready"; data: ConfigGetResult; target?: EditorTarget };
 
 /** What is unsaved for one document. The two shapes are the two writes `config.set` takes. */
 export type DocumentDraft = { kind: "form"; fields: Draft } | { kind: "raw"; text: string };
@@ -114,8 +121,11 @@ export function useConfigFeed(): ConfigFeed {
 
   useEffect(() => {
     let live = true;
+    const target = currentEditorTarget(window.orca);
     void window.orca.config.get().then((result) => {
       if (!live) return;
+      const currentTarget = currentEditorTarget(window.orca);
+      if ((target || currentTarget) && !sameEditorTarget(target, currentTarget)) return;
       if (!result.ok) {
         setState({ phase: "error", error: result.error });
         return;
@@ -124,12 +134,21 @@ export function useConfigFeed(): ConfigFeed {
         config: result.result.config.revision,
         permissions: result.result.permissions.revision,
       };
-      setState({ phase: "ready", data: result.result });
+      setState({ phase: "ready", data: result.result, ...(target ? { target } : {}) });
     });
     return () => {
       live = false;
     };
   }, [attempt]);
+
+  useEffect(() => {
+    let observed = currentEditorTarget(window.orca);
+    return window.orca.daemonConnection?.subscribe(() => {
+      const target = currentEditorTarget(window.orca);
+      if (target && !sameEditorTarget(target, observed)) reload();
+      observed = target;
+    });
+  }, [reload]);
 
   useEffect(() => {
     /* No `runId` filter: `config.changed` is about a file in the workspace and carries no
