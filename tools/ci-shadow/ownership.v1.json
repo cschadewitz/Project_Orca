@@ -374,6 +374,23 @@
       "^templates/",
       "^examples/",
       "^docs/preparation/"
+    ],
+    "documentationInputs": [
+      {
+        "path": "packages/app/renderer/src/config/structured-form/README.md",
+        "owner": "app",
+        "evidence": "Narrative integration handoff inspected at PR545 a893ee4bb5be0f47a83d75b6084be435bb2148c1; selects whole app domain, never prose-only."
+      },
+      {
+        "path": "packages/app/renderer/src/guided-launch/README.md",
+        "owner": "app",
+        "evidence": "Narrative integration handoff inspected at PR548 3380e2a681fa7343c8c6e9d5701e0405f4d2c61c; selects whole app domain, unresolved shared declarations still force full."
+      },
+      {
+        "path": "packages/engine/test/restoration-acceptance/README.md",
+        "owner": "engine",
+        "evidence": "Narrative fixture handoff inspected at PR547 40ea81433a13d528f9e4bf24e7c88902b9e7512a; selects engine and downstream domains, never prose-only."
+      }
     ]
   }
 }

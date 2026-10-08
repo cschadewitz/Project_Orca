@@ -33,16 +33,19 @@ function pathRisk(path, record, snapshots, manifest) {
       };
     if (manifest.packagePolicy.fullPatterns.some((pattern) => new RegExp(pattern).test(path)))
       reasons.push("shared_security_configuration_or_non_import_input");
-    const releaseFragment = /^changelog\.d\/.+\.(?:added|changed|fixed|store)\.md$/.test(path);
-    const owner = /^packages\/([^/]+)\/(?:src|test|renderer)\/.+\.(?:[cm]?[jt]sx?|css)$/.exec(path)?.[1];
+    const releaseFragment = /^changelog\.d\/[^/]+\.(?:added|changed|fixed|store)\.md$/.test(path);
+    const documentationInput = manifest.packagePolicy.documentationInputs?.find((entry) => entry.path === path);
+    const owner =
+      documentationInput?.owner ??
+      /^packages\/([^/]+)\/(?:src|test|renderer)\/.+\.(?:[cm]?[jt]sx?|css)$/.exec(path)?.[1];
     if (!owner || !snapshots.every((snap) => snap.files.has(`packages/${owner}/package.json`)))
       if (!releaseFragment || !snapshots.every((snap) => snap.files.has("tools/test/changelog.test.js")))
         reasons.push("unknown_or_non_package_source");
     for (const snap of snapshots) {
       const entry = snap.files.get(path);
       if (entry && !["100644", "100755"].includes(entry.mode)) reasons.push("structural_mode_change");
-      // Import edges cannot explain file discovery, subprocess commands, dynamic loading,
-      // environment-driven registries or runtime input readers. Preserve full checks.
+      // Runtime I/O and loaders retain full checks. Test fixtures run their entire owning
+      // domain plus downstream consumers, so ordinary fixture I/O need not select all packages.
       let dependencies = [];
       if (entry?.text) {
         try {
@@ -53,10 +56,11 @@ function pathRisk(path, record, snapshots, manifest) {
       }
       if (
         entry?.text &&
+        !path.includes("/test/") &&
         (dependencies.some((specifier) =>
           /^(?:node:)?(?:fs|child_process|worker_threads|vm)(?:\/|$)/.test(specifier),
         ) ||
-          /\b(?:readFile\w*|readdir\w*|glob\w*|execFile\w*|spawn\w*|require)\s*\(|\bimport\s*\(|\bprocess\s*\.\s*env\b/.test(
+          /\b(?:readFile\w*|readdir\w*|glob\w*|execFile\w*|spawn\w*)\s*\(|\bimport\s*\(|\b(?:process|require)\b/.test(
             entry.text,
           ))
       )
@@ -68,7 +72,13 @@ function pathRisk(path, record, snapshots, manifest) {
       reasons: sorted(
         reasons.length
           ? reasons
-          : [releaseFragment ? "consumed_release_fragment_changelog_tests" : "affected_package_domain_and_consumers"],
+          : [
+              releaseFragment
+                ? "consumed_release_fragment_changelog_tests"
+                : documentationInput
+                  ? "audited_package_documentation_input"
+                  : "affected_package_domain_and_consumers",
+            ],
       ),
     };
   }
@@ -169,7 +179,7 @@ export function createPlan({ repo, base, head, candidate, forceFull = false }, m
     const reachable = consumers(graphs, paths);
     if (
       manifest.packagePolicy &&
-      paths.some((path) => /^changelog\.d\/.+\.(?:added|changed|fixed|store)\.md$/.test(path))
+      paths.some((path) => /^changelog\.d\/[^/]+\.(?:added|changed|fixed|store)\.md$/.test(path))
     )
       reachable.push("file:tools/test/changelog.test.js");
     return {

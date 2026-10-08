@@ -23,11 +23,15 @@ Selector **1.2.0** uses the versioned `packagePolicy` in `ownership.v1.json`:
 - Core, store, protocol and testing infrastructure changes retain full checks.
   Security/credential/auth boundaries, workflow/build/discovery metadata, executable
   templates, examples, preparation contracts, unknown inputs, unresolved imports,
-  dynamic loading, filesystem readers, subprocesses and environment-driven inputs
+  dynamic loading, runtime filesystem readers, subprocesses and environment-driven inputs
   retain full checks. Import aliases for filesystem/process APIs cannot evade the
   non-import trigger. Broad source/test eligibility replaces the literal-only gate;
   the historical frozen whole-repository inventory no longer disables unrelated
-  feature selection merely because code changed.
+  feature selection merely because code changed. Test fixture I/O retains whole owning
+  package/downstream domains; it does not turn a test edit into an all-package run.
+- Three explicitly audited new package README inputs from #545/#548/#547 select
+  their whole app/engine domains, including downstream consumers. They are never
+  admitted as prose-only; unknown package Markdown remains full.
 - Recognized `changelog.d/*.{added,changed,fixed,store}.md` inputs select the actual
   changelog test file; they are consumed inputs, not ordinary prose. Changes to the
   changelog consumer itself remain full. They can accompany affected package changes.

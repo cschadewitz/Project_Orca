@@ -133,6 +133,8 @@ it.each([
   ["packages/engine/src/index.ts", 'import("./index.js");'],
   ["packages/engine/src/index.ts", 'import { readFileSync as load } from "node:fs"; load("README.md");'],
   ["packages/engine/src/index.ts", "process.env.ORCA_FEATURE;"],
+  ["packages/engine/src/index.ts", 'process["env"].ORCA_FEATURE;'],
+  ["packages/engine/src/index.ts", "const load = require; load('external-plugin');"],
   ["packages/engine/src/auth.ts", "export const secret = 2;"],
   ["packages/engine/package.json", '{"name":"@orca/engine","dependencies":{}}'],
   ["docs/daemon-security.md", "changed permission row"],
@@ -153,6 +155,30 @@ it("selects real changelog checks for consumed release fragments and CSS package
   reset();
   write("packages/app/renderer/src/form.css", "/** Form layout. */\n.form { display: block; }\n");
   expect(createPlan(candidate(), manifest).wouldRun.vitestFiles).toEqual(["packages/app/test/domain.test.ts"]);
+});
+
+it("audited new package README inputs retain whole-domain tests, while unknown Markdown stays full", () => {
+  reset();
+  write("packages/app/renderer/src/config/structured-form/README.md", "# Audited integration handoff\n");
+  const plan = createPlan(candidate(), manifest);
+  expect(plan.wouldRun.tier).toBe("targeted");
+  expect(plan.wouldRun.vitestFiles).toEqual(["packages/app/test/domain.test.ts"]);
+  reset();
+  write("packages/app/renderer/src/unknown.md", "# Unknown input\n");
+  expect(createPlan(candidate(), manifest).wouldRun.tier).toBe("full");
+});
+it("test fixture I/O selects its entire domain and downstream consumers without ignoring runtime readers", () => {
+  reset();
+  write(
+    "packages/engine/test/fixture.ts",
+    'import { readFileSync } from "node:fs";\nreadFileSync("synthetic.json");\n',
+  );
+  const plan = createPlan(candidate(), manifest);
+  expect(plan.wouldRun.tier).toBe("targeted");
+  expect(plan.wouldRun.vitestFiles).toEqual([
+    "packages/cli/test/domain.test.ts",
+    "packages/engine/test/domain.test.ts",
+  ]);
 });
 
 it("proposes an explicit prose verdict with no invented full-suite evidence", () => {

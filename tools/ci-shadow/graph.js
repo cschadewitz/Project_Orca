@@ -281,6 +281,17 @@ export function validateManifest(manifest) {
     throw new Error("invalid_package_policy");
   for (const pattern of manifest.packagePolicy?.fullPatterns ?? []) new RegExp(pattern);
   if (
+    manifest.packagePolicy?.documentationInputs?.some(
+      (entry) =>
+        !validPath(entry.path) ||
+        !/^packages\/[^/]+\/.+\.md$/.test(entry.path) ||
+        entry.owner !== entry.path.split("/")[1] ||
+        typeof entry.evidence !== "string" ||
+        !entry.evidence,
+    )
+  )
+    throw new Error("invalid_package_documentation_input");
+  if (
     manifest.schemaVersion !== 1 ||
     manifest.graphVersion !== 1 ||
     !/^[a-f0-9]{64}$/.test(manifest.reviewedInventoryHash) ||
@@ -468,7 +479,8 @@ export function graph(snapshot, manifest) {
   const uniqueEdges = [...new Map(edges.map((edge) => [JSON.stringify(edge), edge])).values()].sort((a, b) =>
     JSON.stringify(a).localeCompare(JSON.stringify(b), "en"),
   );
-  // Static imports are a lower bound. Frozen inventory + domain supersets certify only the named island.
+  // Static imports are a lower bound. Completeness means the declared package policy has
+  // no unresolved inputs; it does not certify arbitrary dynamic behavior or hidden readers.
   return {
     sha: snapshot.sha,
     tree: snapshot.tree,
