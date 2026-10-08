@@ -11,6 +11,10 @@ export const TOOL_PATHS = [
   "tools/ci-shadow/graph.js",
   "tools/ci-shadow/selector.js",
   "tools/ci-shadow/cli.js",
+  "tools/ci-shadow/execute.js",
+  "tools/ci-shadow/evidence.js",
+  "tools/ci-shadow/docs.js",
+  "tools/ci-shadow/ordinary-docs.v1.json",
   "tools/ci-shadow/plan.schema.v1.json",
 ];
 
@@ -268,6 +272,26 @@ export function coveredInventory(files, manifest) {
 
 export function validateManifest(manifest) {
   if (
+    manifest.packagePolicy &&
+    (manifest.packagePolicy.version !== 1 ||
+      !Array.isArray(manifest.packagePolicy.fullPatterns) ||
+      !manifest.packagePolicy.fullPatterns.length ||
+      manifest.packagePolicy.fullPatterns.some((pattern) => typeof pattern !== "string"))
+  )
+    throw new Error("invalid_package_policy");
+  for (const pattern of manifest.packagePolicy?.fullPatterns ?? []) new RegExp(pattern);
+  if (
+    manifest.packagePolicy?.documentationInputs?.some(
+      (entry) =>
+        !validPath(entry.path) ||
+        !/^packages\/[^/]+\/.+\.md$/.test(entry.path) ||
+        entry.owner !== entry.path.split("/")[1] ||
+        typeof entry.evidence !== "string" ||
+        !entry.evidence,
+    )
+  )
+    throw new Error("invalid_package_documentation_input");
+  if (
     manifest.schemaVersion !== 1 ||
     manifest.graphVersion !== 1 ||
     !/^[a-f0-9]{64}$/.test(manifest.reviewedInventoryHash) ||
@@ -448,14 +472,15 @@ export function graph(snapshot, manifest) {
   }
   const inventoryHash = coveredInventory(files, manifest);
   const complete =
-    inventoryHash === manifest.reviewedInventoryHash &&
+    (manifest.packagePolicy || inventoryHash === manifest.reviewedInventoryHash) &&
     tests.length > 0 &&
     gaps.length === 0 &&
     [...files.values()].every((entry) => validPath(entry.path) && ["100644", "100755"].includes(entry.mode));
   const uniqueEdges = [...new Map(edges.map((edge) => [JSON.stringify(edge), edge])).values()].sort((a, b) =>
     JSON.stringify(a).localeCompare(JSON.stringify(b), "en"),
   );
-  // Static imports are a lower bound. Frozen inventory + domain supersets certify only the named island.
+  // Static imports are a lower bound. Completeness means the declared package policy has
+  // no unresolved inputs; it does not certify arbitrary dynamic behavior or hidden readers.
   return {
     sha: snapshot.sha,
     tree: snapshot.tree,

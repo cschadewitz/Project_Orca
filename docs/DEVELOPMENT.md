@@ -66,11 +66,17 @@ step uses at most two workers (one where Node reports at most two available CPUs
 including the full suite and coverage. This limits contention for subprocess-heavy
 tests such as the demo while retaining their existing assertions and 60-second bounds.
 
-PRs and main pushes start CI; its classifier skips runtime jobs for prose-only
-changes. Files ending in `.js`, `.mjs`, `.cjs` or `.jsx` under `docs/` and prompt
-templates count as code; see the [classifier](../.github/workflows/ci.yml).
-The shadow selector is advisory and cannot replace the full checks; #520's reporting
-consumer remains a separate unmerged slice. Desktop packaging, App smoke/type proof
+PRs and main pushes admit both named CI matrix checks. Audited ordinary prose runs
+lightweight text/local-file-link checks; consumed or unknown Markdown, structural changes
+and mixed inputs retain necessary runtime checks. Supported package source/test changes
+select whole affected package domains and downstream consumers on both Node 22 and 24.
+Core/store/protocol/testing, security, configuration, non-import dependency triggers and
+missing graph evidence retain full testing. Every code lane still builds, runs mandatory
+no-skip retry acceptance and compiled smoke, with statics on Node 24.
+Eligible PRs defer global coverage to main; every main push and full/fallback PR retains
+unchanged global/app coverage thresholds. Partial selection is not full-suite/coverage
+proof. See [selection policy and reporting](ci-shadow-selection.md#current-pr-execution).
+Desktop packaging, App smoke/type proof
 and native UI projects are manual/reusable workflows, not automatic PR proof. Their
 Linux jobs still include homelab routing; inspect the actual workflow before dispatch.
 The owner requires a fresh CPU/RAM/load check before any new homelab job. This
@@ -402,12 +408,11 @@ CI measures coverage on one Node version (24), writes the per-package table into
 job summary, and uploads `coverage/` as an artifact — including when the thresholds
 fail, which is when the numbers are worth reading.
 
-CI skips the whole typecheck/lint/test/build matrix when a push or PR changes only
-documentation: `docs/**` except files ending in `.js`, `.mjs`, `.cjs` or `.jsx`, and
-any Markdown outside `templates/` (the prompt templates are Markdown but the engine
-loads them, so they count as code). A small `changes` job diffs
-against the merge base and gates the matrix with a job-level `if`, so a docs-only PR still
-shows a green check rather than none — see the comments in `.github/workflows/ci.yml`.
+CI admits the whole matrix for every PR/main event, including all Markdown,
+consumed documentation, unknown inputs, both sides of renames and deletions.
+There is no extension-based or docs-only skip. Only the exact reviewed time-formatting
+island can reduce Node 22 after complete SHA-bound recomputation; Node 24 remains
+full coverage. Missing or ambiguous diff/discovery evidence cannot suppress checks.
 
 Only `.github/workflows/ci.yml` runs automatically before a pull request merges. Desktop
 packaging and App smoke remain available by manual dispatch and as reusable release checks;

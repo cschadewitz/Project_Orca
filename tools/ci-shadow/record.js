@@ -1,4 +1,4 @@
-/** Publish sanitized real full-suite/retry reports; never change the CI verdict. */
+/** Publish sanitized actual suite/retry reports; the job API distinguishes full and selected execution. */
 import { join } from "node:path";
 import { atomicJSON, normalizeVitest, readJSON, validateIdentity } from "./evidence.js";
 

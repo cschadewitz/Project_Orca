@@ -209,6 +209,7 @@ export async function consume({ repo, out, event, trusted, apiRead = api, artifa
     "vitest.config.ts",
     "tools/ci-shadow/record.js",
     "tools/ci-shadow/evidence.js",
+    "tools/ci-shadow/execute.js",
   ]) {
     if (
       !git(repo, ["rev-parse", `${trusted}:${path}`]).equals(
@@ -286,7 +287,8 @@ export function summary(comparison) {
         (lane) =>
           `Node ${lane.node}: **${lane.status}**; ${lane.intentionalSkips.length} explicitly recorded intentional skips; ${lane.omittedFailures.length} omitted failures.`,
       ),
-      "Browser/native runners: unknown (outside the CI workflow). No targeted execution or rollout verdict.",
+      `Full same-candidate baseline: **${comparison.fullBaseline?.status ?? "unknown"}**.`,
+      "Browser/native runners: unknown (outside the CI workflow). Selected execution is partial on either Node; a full baseline is reported only when actually run on this candidate.",
     ].join("\n\n") + "\n"
   );
 }
