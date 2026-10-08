@@ -1,7 +1,8 @@
 # Installed plugin release evidence v1 (#394)
 
 Implementation baseline: main `db579fb7ac9cfce2e4e6901713088a80602311da`.
-`packages/cli/src/plugin-release.ts` adds an installed-release verifier to the
+`packages/cli/src/plugin-release.ts` adds an installed-release verifier mounted by
+the production `packages/cli/src/bootstrap.ts` loader to the
 existing [plugin restoration contract](plugin-restoration-v1.md).
 
 ## Trust source and remaining deployment decision
@@ -117,30 +118,31 @@ human-input ports, builtin executor mutation and mixed legacy plugins remain
 unsupported. A legacy no-op plugin cannot be added to an opted-in custom composition
 to evade those restrictions.
 
-The verifier is independently implemented and tested in this slice. Automatic
-bootstrap mounting and public CLI exports remain pending coordinated shared-file
-ownership; neither is claimed here. The proposed additive seam is a trusted-only
+The verifier, production bootstrap mounting and public CLI exports are implemented
+in this slice. The additive seam is a trusted-only
 `BootstrapOptions.installedPluginRelease` reference plus optional readonly
 `PluginApi.restorationIdentity` supplied per plugin before `register`. It must never
 fall back to current defaults or an unverified plugin declaration when absent.
 Existing trusted verifier injection stays available; concurrent evidence and custom
 verifier injection should refuse ambiguous policy selection.
 
-The exact [reserved-file patch](../patches/394-installed-plugin-release.patch)
-is based on the implementation baseline above and proposes only
-`packages/engine/src/plugin.ts`, `packages/cli/src/bootstrap.ts` and the CLI barrel.
-It passes `git apply --check` but remains **unapplied and unrun**; its production
-bootstrap/fresh-process tests and final integration review belong to the parent.
-It validates release evidence before plugin import, supplies a frozen per-plugin
+On 8 October 2026 the parent explicitly designated the #394 author as owner of
+`packages/engine/src/plugin.ts`, the CLI bootstrap verifier mounting and required
+CLI exports. This reconciles the historical reserved-file integration rule for
+these changes. The JEV lane is deferred and edits no shared bootstrap files;
+app main/preload and other lanes' files remain outside this slice.
+
+The loader validates release evidence before plugin import, supplies a frozen per-plugin
 identity before registration, routes capture/recovery through the real verifier,
 refuses simultaneous policies, and qualifies bundle import URLs by their verified
 digest to avoid adopting a stale module-cache entry after bytes change.
 
 The existing #396 fresh-process generic fixtures remain relevant. Their installed
-attestation and Actual-Cal evidence limits remain explicit until the new verifier
-is mounted into the production bootstrap and exercised through that path. This
-slice's real-verifier fresh-instance test uses isolated provider-free executors;
-it does not substitute for that final acceptance update. JEV-specific credential
+attestation and Actual-Cal evidence limits remain explicit. This slice exercises
+the mounted verifier through real bootstrap instances and separate fresh Node
+processes with isolated provider-free executors and externally injected fixture
+pins. It does not establish a deployed attestation publisher or substitute for
+final operator acceptance. JEV-specific credential
 metadata/resolution and real provider behavior can be deferred with JEV; generic
 pin verification, protected generation integrity, authority and lease fencing
 cannot be deferred for supported custom-plugin recovery.

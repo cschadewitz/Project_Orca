@@ -152,6 +152,8 @@ export function pluginRestorationRefusal(reason: PluginRestorationReason): OrcaE
 }
 
 export interface PluginApi {
+  /** Trusted installed-release identity for this plugin only; absent installations remain unverified. */
+  readonly restorationIdentity?: Readonly<PluginRestorationIdentity>;
   executors: NodeExecutorRegistry;
   templates: TemplateRegistry;
   workflows: WorkflowRegistry;

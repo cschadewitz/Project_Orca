@@ -43,12 +43,18 @@ Public run provenance never includes descriptor data or these private identities
 implementation. `dependencyIdentity` must name the complete immutable dependency
 closure, such as a reproducible bundle or resolved dependency/lock content digest.
 Changing any of these values refuses historical restoration. Declaration equality
-alone is not proof: trusted composition must supply
+alone is not proof: trusted composition must supply an independently approved
+`BootstrapOptions.installedPluginRelease` pin or
 `BootstrapOptions.verifyPluginRestorationIdentity(candidate)` and verify these
 identities against installed whole-code/dependency release evidence. The candidate
 contains `spec`, `identity` and the local `entry: {url, digest}`. Return `true` only
 after that verification. The loader checks entry bytes additionally, but does
-**not** discover arbitrary transitive imports or ship an installed-release verifier.
+**not** discover arbitrary transitive imports. The constrained
+[installed-release verifier](installed-plugin-release-v1.md) checks independently
+pinned closed-bundle attestations and exact runtime/installed bytes. Bootstrap
+mounts its frozen per-plugin identity as `PluginApi.restorationIdentity` before
+registration; the plugin must still explicitly implement capture/validate/restore.
+No trusted attestation producer or pin-distribution path is invented automatically.
 Without a verifier, behavior-bearing generations remain bootstrap-bound. A verifier
 refusal/exception produces `identity_unverified`, before capture or restoration.
 Entry equality, version epochs and moving package tags cannot establish
@@ -134,9 +140,12 @@ This bounded contract does not claim exactly-once external effects or safe
 automatic replay of interrupted provider calls. #395 owns the JEV adapter; #297
 owns provider ambiguity/result reuse. #396 owns fresh-process and actual Cal
 operator acceptance; fresh-instance unit tests here do not replace that evidence.
-The focused tests use a scripted trusted-verifier boundary. Production installed
-release evidence/verifier wiring and trustworthy JEV credential metadata/resolution
-remain integration requirements, and the shipped JEV default is not enabled here.
+The original focused tests use a scripted trusted-verifier boundary; the installed
+release tests also use the real verifier through production bootstrap and fresh
+Node processes. Deployed trusted attestation production/pin delivery and actual
+operator acceptance remain integration requirements. Casey deferred JEV on
+8 October 2026; its credential metadata/resolution and enabling are outside today's
+beta scope, and the shipped JEV default is not enabled here.
 
 The synthetic plugin in
 [`plugin-restoration-runtime.test.ts`](../../packages/cli/test/plugin-restoration-runtime.test.ts)

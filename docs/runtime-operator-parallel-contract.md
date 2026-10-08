@@ -554,6 +554,12 @@ handoffs are `docs/patches/331-operator-integration.patch`,
 `docs/patches/356-operator-integration.patch` and
 `docs/patches/327-operator-integration.patch`, each written only by its owner.
 
+For the 8 October 2026 generic #394 slice, the parent explicitly assigned its
+author ownership of CLI/runtime bootstrap verifier mounting, the plugin identity
+API and required CLI exports. That assignment reconciles the historical reservation
+for those bounded files; app main/preload and other lanes' ownership remain unchanged.
+The deferred JEV lane does not edit shared bootstrap.
+
 The integrator also owns the continuation files explicitly listed in section C,
 including their store adapter and tests. Feature workers must not edit them.
 
@@ -591,7 +597,7 @@ and changed host/nested callbacks can bind an entire generation to its original
 bootstrap. A supported custom composition requires protected descriptors and
 independent whole-code/dependency verification; see
 [installed release evidence](contracts/installed-plugin-release-v1.md) for the
-bounded non-JEV profile and unresolved producer/bootstrap integration. The standard
+bounded non-JEV profile, mounted verifier and unresolved producer/pin-delivery integration. The standard
 `examples/orca.config.yaml` already selects ordinary `ai-sdlc` with `plugins: []`.
 A deployment derived from the JEV sample must remove both JEV registration and its
 shadow workflow/`itemWorkflow` selection before claiming the non-JEV profile.
