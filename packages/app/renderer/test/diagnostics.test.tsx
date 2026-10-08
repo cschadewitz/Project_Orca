@@ -109,33 +109,53 @@ afterEach(() => {
 });
 
 describe("persistent diagnostics choice", () => {
-  it("remains available while daemon configuration is pending and preserves its preview when that read completes", async () => {
-    const f = fakeBridge({ enabled: true, productionEnabled: true, code: "ready" });
-    const daemon = installBridge();
-    Object.assign(daemon.bridge, { diagnostics: f.bridge });
-    disposals.push(daemon.install());
-    const release = daemon.hold("config.get");
-    const h = harness("darwin");
-    disposals.push(h.dispose);
-    const { Providers } = h;
-    render(
-      <Providers>
-        <ConfigProvider>
-          <ConfigSurface connection="live" />
-        </ConfigProvider>
-      </Providers>,
-    );
-    await screen.findByText("Local diagnostics: On");
-    expect(screen.getByText("Loading the configuration")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Preview current diagnostics" }));
-    const report = await screen.findByRole("region", { name: "Complete exact diagnostic report" });
-    await act(async () => release());
-    await screen.findByRole("region", { name: "Agents" });
-    expect(screen.getByRole("region", { name: "Complete exact diagnostic report" })).toBe(report);
-    expect(report.textContent).toBe(exact);
-    expect(f.bridge.subscribe).toHaveBeenCalledTimes(1);
-    expect(f.bridge.closePreview).not.toHaveBeenCalled();
-  });
+  it.each(["legacy", "studio"])(
+    "remains available while %s configuration is pending and preserves its preview when that read completes",
+    async (route) => {
+      const f = fakeBridge({ enabled: true, productionEnabled: true, code: "ready" });
+      const daemon = installBridge();
+      Object.assign(daemon.bridge, { diagnostics: f.bridge });
+      if (route === "studio")
+        daemon.bridge.daemonConnection = {
+          read: () => ({
+            epoch: 1,
+            url: "http://localhost:7331",
+            source: "bundled",
+            environmentOverride: false,
+            identity: { workspaceId: "workspace", instanceId: "daemon" },
+          }),
+          subscribe: () => () => {},
+          show: () => {},
+          onShow: () => () => {},
+          connect: async () => ({ ok: true }),
+          cancel: () => {},
+          activate: () => {},
+        };
+      disposals.push(daemon.install());
+      const release = daemon.hold("config.get");
+      const h = harness("darwin");
+      disposals.push(h.dispose);
+      const { Providers } = h;
+      render(
+        <Providers>
+          <ConfigProvider>
+            <ConfigSurface connection="live" />
+          </ConfigProvider>
+        </Providers>,
+      );
+      await screen.findByText("Local diagnostics: On");
+      expect(screen.getByText(route === "studio" ? "Read configuration" : "Loading the configuration")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Preview current diagnostics" }));
+      const report = await screen.findByRole("region", { name: "Complete exact diagnostic report" });
+      await act(async () => release());
+      if (route === "studio") await screen.findByText("Structured metadata unavailable");
+      else await screen.findByRole("region", { name: "Agents" });
+      expect(screen.getByRole("region", { name: "Complete exact diagnostic report" })).toBe(report);
+      expect(report.textContent).toBe(exact);
+      expect(f.bridge.subscribe).toHaveBeenCalledTimes(1);
+      expect(f.bridge.closePreview).not.toHaveBeenCalled();
+    },
+  );
   it("starts off with five minutes and no automatic consent, preview, picker or save", async () => {
     const f = fakeBridge();
     mount(f.bridge);
