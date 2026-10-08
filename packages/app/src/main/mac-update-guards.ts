@@ -42,12 +42,18 @@ export class MacUpdateGuards {
       }
       if (prepared.outcome !== "held" || !owned.check() || !this.drafts.valid()) return { outcome: "unknown" };
       let releasing = false;
+      let stopping = false;
       return {
         outcome: "ready",
         lease: {
           target: owned.target,
+          stopOwned: (signal, operationMs) => {
+            if (releasing || !owned.check() || !this.drafts.valid()) return Promise.resolve({ outcome: "unknown" });
+            stopping = true;
+            return owned.stopOwned(signal, operationMs, () => this.drafts.valid(), token);
+          },
           release: async () => {
-            if (releasing || !owned.check()) return "unknown";
+            if (releasing || stopping || !owned.check()) return "unknown";
             releasing = true;
             try {
               const released = await rpc("resume", token);

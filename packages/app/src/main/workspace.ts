@@ -28,6 +28,7 @@ import type { WorkspaceSnapshot, WorkspaceSource } from "../bridge.js";
 import type { DaemonClient } from "../client/daemon-client.js";
 import type { DaemonSubscription } from "../client/subscription.js";
 import type { BundledDaemon, DaemonExit } from "./daemon-process.js";
+import type { MacOwnedStopResult } from "./mac-update-restart.js";
 
 /** Where a workspace to serve comes from, and whether it is read-only. */
 export interface WorkspaceTarget {
@@ -129,6 +130,8 @@ export class Workspace {
   private candidates = new Set<BundledDaemon>();
   private connectionPreparations = new Set<symbol>();
   private macUpdateHold: symbol | undefined;
+  /** Process-local restart fence. No replacement/admission may reopen after a stop attempt. */
+  private macUpdateStopping = false;
 
   /** Capture a locally owned target without sending maintenance or stopping any process.
    * The reservation fences connection changes through authentication and subsequent checks.
@@ -139,7 +142,17 @@ export class Workspace {
         readonly target: Readonly<MacUpdateTarget>;
         check(): boolean;
         release(): void;
-        maintenanceRuntime?: (action: "prepare" | "resume", token: string) => Promise<RuntimeMaintenanceResult>;
+        stopOwned(
+          signal: AbortSignal,
+          operationMs: number,
+          draftsValid: () => boolean,
+          token: string,
+        ): Promise<MacOwnedStopResult>;
+        maintenanceRuntime?: (
+          action: "prepare" | "resume",
+          token: string,
+          signal?: AbortSignal,
+        ) => Promise<RuntimeMaintenanceResult>;
       }
     | undefined
   > {
@@ -170,6 +183,8 @@ export class Workspace {
       expected.instanceId !== identity.instanceId
     )
       return undefined;
+    const processId = daemon.pid;
+    const ownedStop = daemon.stopForMacUpdate;
     const hold = Symbol("mac-update-target");
     this.macUpdateHold = hold;
     const target = Object.freeze({ epoch, workspaceId: identity.workspaceId, instanceId: identity.instanceId });
@@ -181,6 +196,7 @@ export class Workspace {
       !this.parkedDefault &&
       !this.connectionPreparations.size &&
       this.daemon === daemon &&
+      daemon.pid === processId &&
       this.clientNow === client &&
       this.epoch === epoch &&
       this.identity?.workspaceId === target.workspaceId &&
@@ -188,7 +204,7 @@ export class Workspace {
       this.source === "bundled" &&
       !this.target.readOnly;
     const release = () => {
-      if (this.macUpdateHold === hold) this.macUpdateHold = undefined;
+      if (!this.macUpdateStopping && this.macUpdateHold === hold) this.macUpdateHold = undefined;
     };
     let captured = false;
     try {
@@ -199,7 +215,7 @@ export class Workspace {
       const hello = await authenticated.hello("orca-app/mac-update-guard", false);
       if (
         !check() ||
-        hello.processId !== daemon.pid ||
+        hello.processId !== processId ||
         hello.identity?.workspaceId !== target.workspaceId ||
         hello.identity.instanceId !== target.instanceId ||
         !isCompatible(PROTOCOL_VERSION, hello.protocol) ||
@@ -207,33 +223,68 @@ export class Workspace {
       )
         return undefined;
       captured = true;
+      const runtime = async (action: "prepare" | "resume", token: string, signal?: AbortSignal) => {
+        if (!check() || (action === "resume" && this.macUpdateStopping)) throw new Error("Owned update target changed");
+        const result = await authenticated.call(
+          MAINTENANCE_RUNTIME_METHOD,
+          {
+            action,
+            token,
+            target: { workspaceId: target.workspaceId, instanceId: target.instanceId, processId },
+          },
+          RuntimeMaintenanceResultSchema,
+          false,
+          signal,
+          false,
+        );
+        if (
+          !check() ||
+          result.target.workspaceId !== target.workspaceId ||
+          result.target.instanceId !== target.instanceId ||
+          result.target.processId !== processId
+        )
+          throw new Error("Owned runtime proof target changed");
+        return result;
+      };
+      let stop: Promise<MacOwnedStopResult> | undefined;
+      const stopOwned = (
+        signal: AbortSignal,
+        operationMs: number,
+        draftsValid: () => boolean,
+        token: string,
+      ): Promise<MacOwnedStopResult> => {
+        if (stop) return stop;
+        if (!check() || !draftsValid() || !ownedStop || !hello.methods?.includes(MAINTENANCE_RUNTIME_METHOD))
+          return Promise.resolve({ outcome: "refused" });
+        this.macUpdateStopping = true;
+        // Reserve before async callbacks. Close the old reconnect stream; never seek a replacement.
+        stop = Promise.resolve().then(async () => {
+          try {
+            this.stream?.close();
+            this.stream = undefined;
+            return await ownedStop(
+              { workspaceId: target.workspaceId, instanceId: target.instanceId, processId },
+              {
+                check: () => check() && draftsValid(),
+                proof: (_target, bounded) => runtime("prepare", token, bounded),
+              },
+              operationMs,
+              signal,
+            );
+          } catch {
+            return { outcome: "unknown" };
+          }
+        });
+        return stop;
+      };
       return {
         target,
         check,
         release,
+        stopOwned,
         ...(hello.methods?.includes(MAINTENANCE_RUNTIME_METHOD)
           ? {
-              maintenanceRuntime: async (action: "prepare" | "resume", token: string) => {
-                if (!check()) throw new Error("Owned update target changed");
-                const result = await authenticated.call(
-                  MAINTENANCE_RUNTIME_METHOD,
-                  {
-                    action,
-                    token,
-                    target: { workspaceId: target.workspaceId, instanceId: target.instanceId, processId: daemon.pid },
-                  },
-                  RuntimeMaintenanceResultSchema,
-                  false,
-                );
-                if (
-                  !check() ||
-                  result.target.workspaceId !== target.workspaceId ||
-                  result.target.instanceId !== target.instanceId ||
-                  result.target.processId !== daemon.pid
-                )
-                  throw new Error("Owned runtime proof target changed");
-                return result;
-              },
+              maintenanceRuntime: runtime,
             }
           : {}),
       };
@@ -264,11 +315,13 @@ export class Workspace {
   }
 
   assertEpoch(epoch: number): void {
+    if (this.macUpdateStopping) throw new Error("Update restart admission is closed");
     if (epoch !== this.epoch) throw new Error("The daemon changed. This operation belongs to the previous connection.");
   }
 
   /** Every boot boundary also resets scopes: a restored history may have rewound. */
   observeHello(client: DaemonClient, hello: HelloResult): void {
+    if (this.macUpdateStopping) return;
     if (client !== this.clientNow) return;
     const next = hello.identity;
     if (!this.observedHello) {
@@ -434,6 +487,7 @@ export class Workspace {
   }
 
   async cancelUpdate(token: string): Promise<void> {
+    if (this.macUpdateHold) throw new Error("Workspace is busy");
     try {
       if (this.daemon) await this.client.maintenance({ action: "resume", token });
     } finally {
@@ -477,6 +531,7 @@ export class Workspace {
    * when it stops waiting, not the one that was there when it started.
    */
   async ready(): Promise<void> {
+    if (this.macUpdateStopping) throw new Error("Update restart admission is closed");
     while (this.pending) await this.pending;
   }
 
@@ -506,7 +561,7 @@ export class Workspace {
     return this.snapshot;
   }
 
-  /** Stop the daemon this process started and close the stream. Safe to call twice. */
+  /** Ordinary quit cleanup. Never escalates or certifies a reserved updater stop. */
   async close(): Promise<void> {
     this.closed = true;
     await this.pending;
@@ -514,7 +569,7 @@ export class Workspace {
     this.stream = undefined;
     const daemon = this.daemon;
     this.daemon = undefined;
-    await daemon?.stop();
+    if (!this.macUpdateStopping) await daemon?.stop();
     const parked = this.parkedDefault;
     this.parkedDefault = undefined;
     if (parked !== daemon) await parked?.stop();

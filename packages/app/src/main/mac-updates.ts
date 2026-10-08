@@ -6,6 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { DaemonIdentity } from "../daemon-connection.js";
+import type { MacOwnedStopResult } from "./mac-update-restart.js";
 
 /** References the existing #402 manifest bytes; this is not a second artifact manifest.
  * The reviewed compatibility/recovery plans and channel are also part of consent.
@@ -47,6 +48,8 @@ export interface MacDraftLease {
 }
 export interface MacAdmissionLease {
   readonly target: MacUpdateTarget;
+  /** Main-only owned stop evidence. Never authorizes replacement, restore or reopening. */
+  stopOwned?(this: void, signal: AbortSignal, operationMs: number): Promise<MacOwnedStopResult>;
   /** Resume only the exact owned target/token, with positive acknowledgement. */
   release(this: void): Promise<"released" | "unknown">;
 }

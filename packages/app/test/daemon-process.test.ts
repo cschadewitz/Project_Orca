@@ -21,6 +21,8 @@ class FakeChild extends EventEmitter {
   readonly stdout = new EventEmitter();
   readonly stderr = new EventEmitter();
   readonly signals: string[] = [];
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
 
   kill(signal?: NodeJS.Signals): boolean {
     this.signals.push(signal ?? "SIGTERM");
@@ -32,6 +34,8 @@ class FakeChild extends EventEmitter {
   }
 
   exit(code: number | null, signal: NodeJS.Signals | null = null): void {
+    this.exitCode = code;
+    this.signalCode = signal;
     this.emit("exit", code, signal);
   }
 }

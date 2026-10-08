@@ -19,9 +19,7 @@
  * server for hot reload (scripts/dev.js).
  */
 import { z } from "zod";
-import { RecoveryController } from "./diagnostics/recovery-controller.js";
-import { NodeRecoveryDisk } from "./diagnostics/recovery-disk.js";
-import { createProductionNativeAdapter, createSafeStorageKeyAdapter } from "./diagnostics/native-adapter.js";
+import { createDiagnosticsInitializer } from "./diagnostics/initialize.js";
 import type { DiagnosticsResult } from "../diagnostics-contract.js";
 import { AdmissionIntents, AdmissionIntentController } from "./admission-intents.js";
 import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
@@ -59,13 +57,9 @@ const rendererUrl = process.env.ORCA_RENDERER_URL;
 
 // Capture and native recovery remain unavailable until independent/native review.
 // This controller is separate from admission intents, daemon hello and execution keys.
-const diagnostics = new RecoveryController({
-  disk: new NodeRecoveryDisk({
-    root: join(app.getPath("userData"), "diagnostics"),
-    keys: createSafeStorageKeyAdapter(safeStorage),
-    native: createProductionNativeAdapter(),
-  }),
-  clock: { read: () => undefined },
+const diagnosticsInitializer = createDiagnosticsInitializer({
+  root: join(app.getPath("userData"), "diagnostics"),
+  safeStorage,
   chooseDestination: async () => {
     const result = await dialog.showSaveDialog({
       title: "Save diagnostic preview",
@@ -75,6 +69,7 @@ const diagnostics = new RecoveryController({
     return result.canceled ? undefined : result.filePath;
   },
 });
+const diagnostics = diagnosticsInitializer.controller;
 diagnostics.subscribe((status) => {
   for (const win of BrowserWindow.getAllWindows())
     if (!win.isDestroyed()) win.webContents.send("orca:diagnostics.changed", status);
@@ -120,7 +115,7 @@ const diagnosticHandle = (
         diagnosticConsentGeneration++;
         return await run(parsed.data);
       }
-      await diagnostics.initialize();
+      await diagnosticsInitializer.initialize();
       if (
         !currentSender() ||
         epoch !== workspace.connectionTarget.epoch ||
@@ -448,6 +443,7 @@ const workspace = new Workspace({
       // file mode *is* a read-only daemon, because ADR 0008 forbids a second store path
       // in the renderer (#164).
       ...(readOnly ? { args: ["--read-only"] } : {}),
+      onStartupDiagnostic: diagnosticsInitializer.startupObserver,
       onLog: (line) => console.error(`[daemon] ${line}`),
       onExit: (exit) => {
         console.error(`the bundled daemon exited on its own (code ${exit.code}, signal ${exit.signal})`);
@@ -933,7 +929,7 @@ if (!primary) {
   app.quit();
 } else {
   void app.whenReady().then(() => {
-    void diagnostics.initialize();
+    void diagnosticsInitializer.initialize();
     applyTheme(preferences.read().theme);
     /* Registering the scheme is what makes `orca://` reach this app at all. In development
        the executable is Electron itself and the app is an argument to it, which is what
@@ -1007,7 +1003,7 @@ app.on("will-quit", (event) => {
   quitting = true;
   event.preventDefault();
   const deadline = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_DEADLINE_MS).unref?.());
-  void Promise.race([Promise.allSettled([workspace.close(), diagnostics.cleanExit()]), deadline]).finally(() =>
+  void Promise.race([Promise.allSettled([workspace.close(), diagnosticsInitializer.close()]), deadline]).finally(() =>
     setImmediate(() => app.quit()),
   );
 });

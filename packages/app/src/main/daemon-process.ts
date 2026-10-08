@@ -28,6 +28,8 @@ import { createServer } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { DaemonClient } from "../client/daemon-client.js";
 import { LocalDaemonToken } from "../client/auth.js";
+import { MacUpdateOwnedStop, type MacOwnedStopBoundary, type MacOwnedStopResult } from "./mac-update-restart.js";
+import type { RuntimeMaintenanceParams } from "@orca/protocol";
 import { observeStartup, type StartupDiagnosticObserver } from "./diagnostics/startup-producer.js";
 
 /** Where `scripts/build-daemon.js` writes the bundle and electron-builder copies it to. */
@@ -39,7 +41,10 @@ export const BUNDLED_DAEMON_FILE = "orca-daemon.mjs";
 const DEFAULT_HOST = "127.0.0.1";
 
 /** The child processes this module drives, as much of one as it uses. */
-export type DaemonChild = Pick<ChildProcess, "pid" | "stdout" | "stderr" | "kill" | "on" | "once">;
+export type DaemonChild = Pick<
+  ChildProcess,
+  "pid" | "exitCode" | "signalCode" | "stdout" | "stderr" | "kill" | "on" | "once"
+>;
 
 /** `node:child_process`'s `spawn`, narrowed to the one call shape used here. */
 export type SpawnDaemon = (
@@ -64,10 +69,19 @@ export interface BundledDaemon {
   /** The safe startup metadata, never the credential itself. */
   readonly tokenFile?: string;
   /**
-   * Stop it and wait for it to be gone. Idempotent, and never reports the exit it causes
-   * through `onExit` — a daemon that stops because it was asked to is not news.
+   * Ordinary bounded shutdown, with forced escalation. Never reports its own exit
+   * through onExit and never establishes clean updater-stop evidence. An existing
+   * updater attempt is not escalated; its unknown result remains owned.
    */
   stop(): Promise<void>;
+  /** Main-only capability over this exact child. Never escalates or reopens admission. */
+  stopForMacUpdate?: (
+    this: void,
+    target: RuntimeMaintenanceParams["target"],
+    boundary: MacOwnedStopBoundary,
+    operationMs: number,
+    signal: AbortSignal,
+  ) => Promise<MacOwnedStopResult>;
 }
 
 export interface BundledDaemonOptions {
@@ -297,6 +311,8 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
 
   let exit: DaemonExit | undefined;
   let stopping = false;
+  let updateStop: Promise<MacOwnedStopResult> | undefined;
+  let updateTarget: RuntimeMaintenanceParams["target"] | undefined;
   let settled = false;
   let startupObserved = false;
   const observeFailure = (code: Parameters<StartupDiagnosticObserver>[0]) => {
@@ -346,7 +362,30 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
     url,
     pid: child.pid,
     ...(tokenFile ? { tokenFile } : {}),
+    stopForMacUpdate: (target, boundary, operationMs, signal) => {
+      if (updateStop) {
+        if (
+          target.workspaceId !== updateTarget?.workspaceId ||
+          target.instanceId !== updateTarget.instanceId ||
+          target.processId !== updateTarget.processId
+        )
+          return Promise.resolve({ outcome: "unknown" });
+        return updateStop;
+      }
+      if (stopping) return Promise.resolve({ outcome: "refused" });
+      // Reserve before callbacks: ordinary quit must never escalate an updater attempt.
+      stopping = true;
+      updateTarget = Object.freeze({ ...target });
+      return (updateStop = Promise.resolve().then(async () => {
+        try {
+          return await new MacUpdateOwnedStop(child, updateTarget!, boundary, operationMs).stop(signal);
+        } catch {
+          return { outcome: "unknown" };
+        }
+      }));
+    },
     stop: async () => {
+      if (updateStop) return; // Unknown updater stop stays owned; no quit-time SIGKILL.
       if (exit) return;
       stopping = true;
       child.kill("SIGTERM");
