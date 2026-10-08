@@ -49,6 +49,7 @@ export class MacCandidateSession {
   private cleaning: Promise<void> | undefined;
   private uncertain = false;
   private downloadOutcome: "verified" | "failed" | "unknown" | undefined;
+  private retiredOfferId: string | undefined;
 
   constructor(ports?: MacCandidateDownloadPorts) {
     if (
@@ -79,6 +80,7 @@ export class MacCandidateSession {
           // A defer can arrive between the final verification and this continuation.
           if (signal.aborted) {
             await this.discard();
+            if (!this.uncertain) this.downloadOutcome = "failed";
             return "failed";
           }
           return "verified";
@@ -164,11 +166,16 @@ export class MacCandidateSession {
     }
   }
   async approve(offerId: string): Promise<MacUpdateSnapshot> {
-    if (this.uncertain || this.cleaning || this.offering) return this.state;
+    if (this.uncertain || this.cleaning || this.offering || this.retiredOfferId === offerId) return this.state;
     return this.updates.approve(offerId);
   }
   defer(offerId: string): boolean {
     if (!this.updates.defer(offerId)) return false;
+    // The coordinator can reuse verified bytes after defer, but this session discards them.
+    // Retire this entrypoint: a fresh offer resets its cache and rechecks bounded trust before
+    // a new approval downloads/inspects new owned bytes. Do not silently approve another ID.
+    this.retiredOfferId = offerId;
+    if (!this.uncertain) this.downloadOutcome = undefined;
     if (this.owned && !this.cleaning) {
       this.cleaning = this.discard().finally(() => {
         this.cleaning = undefined;

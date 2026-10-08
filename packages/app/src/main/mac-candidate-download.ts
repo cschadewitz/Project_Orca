@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { lstat, realpath, mkdtemp, mkdir, open, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { z } from "zod";
 import {
   MAC_METADATA_LIMIT,
   matchesSealedMacIdentity,
@@ -76,6 +77,22 @@ export interface MacOwnedDownload {
 export type MacDownloadResult =
   { readonly outcome: "verified"; readonly owned: MacOwnedDownload } | { readonly outcome: "failed" | "unknown" };
 class UnknownTrust extends Error {}
+const nativeInspectionSchema = z.union([
+  z.strictObject({ outcome: z.enum(["refused", "unknown"]) }),
+  z.strictObject({
+    outcome: z.literal("verified"),
+    manifestSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    copies: z
+      .array(
+        z.strictObject({
+          format: z.enum(["dmg", "zip"]),
+          identityBytes: z.instanceof(Uint8Array),
+          daemonSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        }),
+      )
+      .length(2),
+  }),
+]);
 
 export function validMacDownloadLimits(limits: MacDownloadLimits): boolean {
   return (
@@ -335,27 +352,34 @@ export async function downloadMacCandidate(
         throw new Error("Candidate checksum inventory mismatch");
       requireLive(bounded);
       await writeFile(join(directory, "SHA256SUMS"), sums, { flag: "wx", mode: 0o600 });
-      let inspection: MacNativeInspection;
+      let rawInspection: unknown;
       try {
-        inspection = await macAbortable(() => ports.trust.inspect(binding, directory!, bounded), bounded);
+        rawInspection = await macAbortable(() => ports.trust.inspect(binding, directory!, bounded), bounded);
       } catch {
         if (bounded.aborted) throw new Error("Candidate operation cancelled");
         throw new UnknownTrust();
       }
+      let inspection: MacNativeInspection;
+      let proofMatches = false;
+      try {
+        // A broken port contract is not an explicit refusal or a well-formed negative proof.
+        // Include throwing result reads in this boundary; only parsed proof mismatches below
+        // are known failures. The owned download may be removed, but unknown trust still seals.
+        inspection = nativeInspectionSchema.parse(rawInspection);
+        if (inspection.outcome === "verified")
+          proofMatches =
+            inspection.manifestSha256 === binding.candidate.manifestSha256 &&
+            new Set(inspection.copies.map((copy) => copy.format)).size === 2 &&
+            inspection.copies.every(
+              (copy) =>
+                copy.daemonSha256 === binding.manifest.identity.daemon.sha256 &&
+                matchesSealedMacIdentity(binding.manifest, copy.identityBytes),
+            );
+      } catch {
+        throw new UnknownTrust();
+      }
       if (inspection.outcome === "unknown") throw new UnknownTrust();
-      if (
-        inspection.outcome !== "verified" ||
-        inspection.manifestSha256 !== binding.candidate.manifestSha256 ||
-        inspection.copies.length !== 2 ||
-        new Set(inspection.copies.map((copy) => copy.format)).size !== 2 ||
-        !inspection.copies.every(
-          (copy) =>
-            ["dmg", "zip"].includes(copy.format) &&
-            copy.daemonSha256 === binding.manifest.identity.daemon.sha256 &&
-            matchesSealedMacIdentity(binding.manifest, copy.identityBytes),
-        )
-      )
-        throw new Error("Candidate native proof refused");
+      if (inspection.outcome !== "verified" || !proofMatches) throw new Error("Candidate native proof refused");
       await catalog();
       requireLive(bounded);
       return { outcome: "verified", owned: Object.freeze({ directory, discard }) };

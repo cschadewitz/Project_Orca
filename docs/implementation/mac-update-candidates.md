@@ -73,7 +73,12 @@ expiry. The injected trust ports are read-only, honor abort, and cannot schedule
 unresolved mutations after their result.
 
 Verified bytes stay in the session's private owned directory. Defer discards only
-that directory and revokes approval; interrupted downloads await cleanup. Known
+that directory, clears the verified status, and retires its approval entrypoint.
+A fresh offer must re-resolve bounded catalog trust; approving its fresh ID then
+downloads and natively inspects newly owned bytes. A disposed offer cannot reuse
+the coordinator's verified cache or silently authorize another ID. This internal
+nonce rule does not choose a production expiry/relaunch/revocation policy.
+Interrupted downloads await cleanup. Known
 refusal/failure and unknown trust/cleanup have separate results. Unknown download
 verification or cleanup seals the session against another offer/approval, even
 though the coordinator's `failed` phase correctly proves that installed app and
@@ -81,6 +86,12 @@ protected state were untouched. `verification` reports that distinction without
 URLs, credentials, native errors or raw metadata. A verified download stops at an
 always-blocked draft adapter; no draft lease, daemon fence or activation is acquired
 by this slice. The accepted draft and owned-admission adapters are not yet wired.
+
+Native-port responses are strictly parsed before proof comparison. Missing or
+unrecognized outcomes, incomplete/malformed proof shapes and throwing result reads
+are unknown trust and seal this session even after known download cleanup. A valid
+explicit refusal or a fully parsed proof with mismatching manifest, identity,
+container or daemon binding remains a known negative.
 
 ## Native engine evidence and remaining decisions
 
@@ -123,7 +134,8 @@ metadata substitution/malformed input, fixture rejection, process-local replay,
 same-version rebuilds, immutable source/plans, duplicate approval, defer/late
 responses, redirect/response target refusal, interrupted/stalled streams, bounds,
 checksum inventory and per-container identity/daemon proof mismatches, catalog
-revocation and unknown trust. Existing coordinator and native-contract fixture
+revocation, disposed-offer reapproval, malformed native results and unknown trust.
+Existing coordinator and native-contract fixture
 suites provide regression checks.
 
 Physical signed Apple Silicon N → N+1, ordinary-exit/relaunch behavior, real native

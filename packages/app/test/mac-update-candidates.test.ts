@@ -358,6 +358,50 @@ describe("main-only candidate binding and consent", () => {
       expect(await readdir(r.root)).toEqual(["unrelated"]);
     });
   });
+  it("retires a disposed offer and requires fresh catalog resolution after revocation", async () => {
+    const r = await rig();
+    const id = await r.offer();
+    await r.session.approve(id);
+    expect(r.session.verification).toBe("verified");
+    const catalogCalls = r.catalog.mock.calls.length;
+    const fetchCalls = r.fetch.mock.calls.length;
+    r.session.defer(id);
+    await vi.waitFor(async () => {
+      expect(await readdir(r.root)).toEqual([]);
+    });
+    expect(r.session.verification).toBeUndefined();
+    r.catalog.mockResolvedValue("refused");
+    expect((await r.session.approve(id)).phase).toBe("deferred");
+    expect(r.catalog).toHaveBeenCalledTimes(catalogCalls);
+    expect(await r.session.offer(r.input, target, signal())).toEqual({ outcome: "refused" });
+    expect(r.catalog).toHaveBeenCalledTimes(catalogCalls + 1);
+    expect(r.fetch).toHaveBeenCalledTimes(fetchCalls);
+    expect(r.inspect).toHaveBeenCalledTimes(1);
+    expect(await readdir(r.root)).toEqual([]);
+  });
+  it("reacquires verified byte ownership only with a fresh offer, approval and native inspection after defer", async () => {
+    const r = await rig();
+    const first = await r.offer();
+    await r.session.approve(first);
+    const [oldDirectory] = await readdir(r.root);
+    r.session.defer(first);
+    await vi.waitFor(async () => {
+      expect(await readdir(r.root)).toEqual([]);
+    });
+    expect(r.session.verification).toBeUndefined();
+    expect((await r.session.approve(first)).phase).toBe("deferred");
+    const second = await r.offer();
+    expect(second).not.toBe(first);
+    expect(await r.session.approve(first)).toEqual({ phase: "available", offerId: second });
+    expect(await r.session.approve(second)).toEqual({ phase: "waiting", blocker: "candidate", offerId: second });
+    expect(r.session.verification).toBe("verified");
+    const [newDirectory] = await readdir(r.root);
+    expect(newDirectory).toBeTruthy();
+    expect(newDirectory).not.toBe(oldDirectory);
+    expect(r.catalog).toHaveBeenCalledTimes(6);
+    expect(r.fetch).toHaveBeenCalledTimes(2 * r.files.size);
+    expect(r.inspect).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("bounded owned download and verification", () => {
@@ -631,6 +675,45 @@ describe("bounded owned download and verification", () => {
     expect(await r.session.offer(r.input, target, signal())).toEqual({ outcome: "unknown" });
     await r.session.approve(id);
     expect(r.inspect).toHaveBeenCalledTimes(1);
+    expect(await readdir(r.root)).toEqual([]);
+  });
+  it.each(["undefined", "null", "unrecognized-outcome", "missing-copies", "malformed-copy", "throwing-outcome"])(
+    "seals malformed native inspection %s as unknown instead of permitting another offer",
+    async (kind) => {
+      const r = await rig();
+      const id = await r.offer();
+      const malformed: unknown =
+        kind === "undefined"
+          ? undefined
+          : kind === "null"
+            ? null
+            : kind === "unrecognized-outcome"
+              ? { outcome: "invalid" }
+              : kind === "missing-copies"
+                ? { outcome: "verified", manifestSha256: r.binding.candidate.manifestSha256 }
+                : kind === "malformed-copy"
+                  ? { outcome: "verified", manifestSha256: r.binding.candidate.manifestSha256, copies: [null, null] }
+                  : {
+                      get outcome() {
+                        throw new Error("Synthetic unreadable native result");
+                      },
+                    };
+      r.inspect.mockResolvedValueOnce(malformed as MacNativeInspection);
+      expect((await r.session.approve(id)).phase).toBe("failed");
+      expect(r.session.verification).toBe("unknown");
+      expect(await r.session.offer(r.input, target, signal())).toEqual({ outcome: "unknown" });
+      await r.session.approve(id);
+      expect(r.inspect).toHaveBeenCalledTimes(1);
+      expect(await readdir(r.root)).toEqual([]);
+    },
+  );
+  it("preserves a valid explicit native refusal as a known negative that permits fresh catalog resolution", async () => {
+    const r = await rig();
+    const id = await r.offer();
+    r.inspect.mockResolvedValueOnce({ outcome: "refused" });
+    expect((await r.session.approve(id)).phase).toBe("failed");
+    expect(r.session.verification).toBe("failed");
+    expect((await r.session.offer(r.input, target, signal())).outcome).toBe("available");
     expect(await readdir(r.root)).toEqual([]);
   });
 });
