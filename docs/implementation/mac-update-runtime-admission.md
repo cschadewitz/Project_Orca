@@ -48,6 +48,21 @@ remain intact. Detached execution has a separate activity lifetime; closing a da
 still does not await or cancel that execution. The activity gate is an idle proof,
 not a protected-state snapshot, process-stop proof, or recovery implementation.
 
+Lease keepers remain in the orchestrator's authoritative registry through their
+already-scheduled heartbeat chain. The store exposes that chain as `renewalSettled`
+after release begins. A last-confirmed-TTL release can return while renewal still
+owns the mutation mutex; that return does not clear runtime activity. The daemon
+reports `blocked/renewal` until actual settlement, including a late filesystem write.
+No additional shutdown wait, timer, TTL, or takeover rule is introduced. A renewal
+that never settles keeps idle acquisition blocked.
+
+The deterministic owned-file regression fails at the original #536 head
+`311d265caf3c56056756bcbb3a354fcf119ec070`: both schedules return `held/active:[]`
+after execution ends while the renewal's mutation lock remains owned. The correction
+checks busy before releasing that same write, then observes changed lease bytes and
+idle only after mutation settlement. Its shutdown variant returns before that
+renewal settles, preserving the bounded release and daemon shutdown contracts.
+
 ## Concrete app admission lease
 
 The app requires a fresh authenticated hello advertising this exact method from its

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { parseOrcaConfig, silentLogger } from "@orca/core";
 import { FileContinuationLocatorStore } from "@orca/store";
-import type { ExecutionResumeAuthority } from "@orca/engine";
+import type { ExecutionResumeAuthority, RunLeaseOptions } from "@orca/engine";
 import { PROTOCOL_VERSION, type ResponseMessage } from "@orca/protocol";
 import { bootstrap } from "../../cli/src/bootstrap.js";
 import { AdmissionRetryModel, neverAttached } from "../src/admission-retry.js";
@@ -35,6 +35,7 @@ export async function runtimeMaintenanceFixture(
     wrongControl?: boolean;
     wrongCredentials?: boolean;
     invalidIdentity?: boolean;
+    lease?: RunLeaseOptions;
   } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "orca-runtime-maintenance-"));
@@ -46,6 +47,7 @@ export async function runtimeMaintenanceFixture(
     configDir: dir,
     config: parseOrcaConfig({ workflows: ["*.yaml"], templates: [], program: { workflow: "flow" } }),
     logger: silentLogger,
+    ...(options.lease ? { lease: options.lease } : {}),
   });
   const credentials = new CredentialStore();
   const owner = await credentials.issue({ principal: "runtime-owner", preset: "owner" });

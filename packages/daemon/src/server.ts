@@ -305,7 +305,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           active: [
             ...(orchestrator.attachedExecutionCount ? ["execution" as const] : []),
             ...(runtime.port.pendingCount ? ["callback" as const] : []),
-            ...(runtime.originCount ? ["renewal" as const] : []),
+            ...(runtime.originCount || orchestrator.leaseActivityCount ? ["renewal" as const] : []),
             ...(continuations?.taskCount ? ["continuation" as const] : []),
           ],
         };

@@ -237,6 +237,10 @@ export class Orchestrator {
   get attachedExecutionCount(): number {
     return this.running.size;
   }
+  private readonly leaseKeepers = new Set<HeldLease>();
+  get leaseActivityCount(): number {
+    return this.leaseKeepers.size;
+  }
   admissionExecution: AdmissionExecutionRuntime | undefined;
   generations: ConfigurationGenerations | undefined;
   generationHumanInput: ((generation: GenerationMaterial) => HumanInputPort) | undefined;
@@ -1373,6 +1377,7 @@ export class Orchestrator {
         rc.abort.abort(`lease on run ${runId} was taken away; another process may now be driving it`);
       },
     });
+    this.leaseKeepers.add(keeper);
     return {
       ...keeper,
       get lease() {
@@ -1381,10 +1386,22 @@ export class Orchestrator {
       get held() {
         return keeper.held;
       },
+      get renewalSettled() {
+        return keeper.renewalSettled;
+      },
       get lost() {
         return lost;
       },
-      release: () => keeper.release(),
+      release: async () => {
+        try {
+          await keeper.release();
+        } finally {
+          // Bounded release may leave a renewal holding the mutation mutex. Retain
+          // its activity until actual settlement without extending shutdown waits.
+          const settled = () => this.leaseKeepers.delete(keeper);
+          void keeper.renewalSettled.then(settled, settled);
+        }
+      },
     };
   }
 
