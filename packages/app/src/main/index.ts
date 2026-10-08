@@ -24,6 +24,8 @@ import { RunsAdmitResultSchema } from "@orca/protocol";
 import { ConnectionTarget, connectionFailure, callInConnection } from "./connection-target.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates } from "./updates.js";
+import { MacUpdateWindows } from "./mac-update-windows.js";
+import { MacUpdateGuards } from "./mac-update-guards.js";
 import { updateDriver } from "./update-driver.js";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,12 +80,20 @@ deepLinks.offer(urlFromArgv(process.argv));
 function handle<P, R>(channel: string, run: (params: P) => Promise<R>): void {
   ipcMain.handle(channel, async (_event, params: P, epoch: number): Promise<BridgeResult<R>> => {
     try {
+      if (macUpdateWindows.active) throw new Error("Update window preparation is in progress");
       if (!channel.startsWith("orca:workspace.")) {
-        return { ok: true, result: await callInConnection(workspace, epoch, () => run(params)) };
+        return {
+          ok: true,
+          result: await callInConnection(workspace, epoch, () => {
+            if (macUpdateWindows.active) throw new Error("Update window preparation is in progress");
+            return run(params);
+          }),
+        };
       }
       workspace.assertEpoch(epoch);
       await workspace.ready();
       workspace.assertEpoch(epoch);
+      if (macUpdateWindows.active) throw new Error("Update window preparation is in progress");
       return { ok: true, result: await run(params) };
     } catch (e) {
       if (e instanceof DaemonClientError) return { ok: false, error: e.error };
@@ -160,6 +170,13 @@ handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) =
 handle("orca:workflows.list", (params: Parameters<DaemonClient["workflowsList"]>[0]) => client().workflowsList(params));
 handle("orca:workflows.get", (params: Parameters<DaemonClient["workflowsGet"]>[0]) => client().workflowsGet(params));
 handle("orca:config.get", (params: Parameters<DaemonClient["configGet"]>[0]) => client().configGet(params));
+handle("orca:config.apply", (params: Parameters<DaemonClient["configApply"]>[0]) => client().configApply(params));
+handle("orca:workflows.validateInputs", (params: Parameters<DaemonClient["workflowsValidateInputs"]>[0]) =>
+  client().workflowsValidateInputs(params),
+);
+handle("orca:operator.preflight", (params: Parameters<DaemonClient["operatorPreflight"]>[0]) =>
+  client().operatorPreflight(params),
+);
 
 // The plan reads (#169). Same channel shape as the run reads; the daemon omits all nine when
 // it serves no plan, so a surface checks `hello.methods` rather than calling and failing.
@@ -381,6 +398,7 @@ const OPEN_STORE_DIALOG = {
  * and must not be rendered as one.
  */
 async function openStore(path?: string): Promise<WorkspaceSnapshot> {
+  if (macUpdateWindows.active) throw new Error("Update window preparation is in progress");
   let chosen = path;
   if (chosen === undefined) {
     const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
@@ -391,16 +409,14 @@ async function openStore(path?: string): Promise<WorkspaceSnapshot> {
     chosen = result.filePaths[0];
     if (chosen === undefined) return workspace.snapshot;
   }
-  if (!(await guardConnectionDrafts())) {
-    send("orca:update.prepare", null);
-    throw new Error("Save or discard pending edits before opening a store");
-  }
+  const release = await guardConnectionDrafts();
+  if (!release) throw new Error("Save or discard pending edits before opening a store");
   try {
     const snapshot = await workspace.open(storeRoot(chosen));
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
     return snapshot;
   } finally {
-    send("orca:update.prepare", null);
+    release();
   }
 }
 
@@ -419,12 +435,32 @@ handle("orca:workspace.connectLive", async () => {
   return workspace.snapshot;
 });
 
-async function guardConnectionDrafts(): Promise<boolean> {
+const macUpdateWindows = new MacUpdateWindows({
+  windows: () => BrowserWindow.getAllWindows(),
+  ipc: ipcMain,
+  createDeferred: createWindow,
+});
+// Internal composition only: no offer/approval/install IPC or Mac driver is enabled.
+export const macUpdateGuards = new MacUpdateGuards(workspace, macUpdateWindows);
+app.on("browser-window-created", (_event, window) => macUpdateWindows.track(window));
+
+async function guardConnectionDrafts(): Promise<(() => void) | undefined> {
+  const relinquish = macUpdateWindows.beginLegacy();
+  if (!relinquish) return undefined;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    try {
+      send("orca:update.prepare", null);
+    } finally {
+      relinquish();
+    }
+  };
   const ids = BrowserWindow.getAllWindows()
     .filter((win) => !win.isDestroyed())
     .map((win) => win.webContents.id);
-  // No renderer means no drafts. Update preparation deliberately has a different rule.
-  if (ids.length === 0) return true;
+  if (ids.length === 0) return release;
   try {
     await prepareDrafts({
       ids,
@@ -439,17 +475,25 @@ async function guardConnectionDrafts(): Promise<boolean> {
         };
       },
     });
-    return true;
+    return release;
   } catch {
-    return false;
+    release();
+    return undefined;
   }
 }
+let connectionDraftRelease: (() => void) | undefined;
 const targets = new ConnectionTarget({
   explicitUrl: process.env.ORCA_DAEMON_URL,
   prepare: (url, source) => workspace.prepareConnection(url, source),
   save: (url) => preferences.saveDaemonUrl(url),
-  guard: guardConnectionDrafts,
-  release: () => send("orca:update.prepare", null),
+  guard: async () => {
+    connectionDraftRelease = await guardConnectionDrafts();
+    return connectionDraftRelease !== undefined;
+  },
+  release: () => {
+    connectionDraftRelease?.();
+    connectionDraftRelease = undefined;
+  },
 });
 ipcMain.on("orca:daemon.read", (event) => {
   event.returnValue = workspace.connectionTarget;
@@ -459,6 +503,7 @@ ipcMain.on("orca:daemon.cancel", () => targets.cancel());
 ipcMain.handle("orca:daemon.connect", async (_event, url: unknown) => {
   if (url !== null && typeof url !== "string") return { ok: false, message: "Invalid daemon URL" };
   try {
+    if (macUpdateWindows.active) throw new Error("Update window preparation is in progress");
     await targets.connect(url);
     return { ok: true };
   } catch (error) {
@@ -467,12 +512,22 @@ ipcMain.handle("orca:daemon.connect", async (_event, url: unknown) => {
 });
 
 /* Updates use their own IPC and never wait on daemon readiness to check/download. */
+let windowsDraftRelease: (() => void) | undefined;
 const updates = new Updates(
   updateDriver(app.isPackaged, process.platform, process.arch),
   app.getVersion(),
   {
-    prepareDrafts: () =>
-      prepareDrafts({
+    prepareDrafts: async () => {
+      const relinquish = macUpdateWindows.beginLegacy();
+      if (!relinquish) throw new Error("Window draft preparation is busy");
+      windowsDraftRelease = () => {
+        try {
+          send("orca:update.prepare", null);
+        } finally {
+          relinquish();
+        }
+      };
+      await prepareDrafts({
         ids: BrowserWindow.getAllWindows().map((win) => win.webContents.id),
         send: (nonce) => send("orca:update.prepare", nonce),
         listen: (callback) => {
@@ -484,11 +539,15 @@ const updates = new Updates(
             ipcMain.off("orca:update.prepared", listener);
           };
         },
-      }),
+      });
+    },
     prepareDaemon: (token) => workspace.prepareUpdate(token),
     stopDaemon: () => workspace.stopForUpdate(),
     resume: (token) => workspace.cancelUpdate(token),
-    releaseDrafts: () => send("orca:update.prepare", null),
+    releaseDrafts: () => {
+      windowsDraftRelease?.();
+      windowsDraftRelease = undefined;
+    },
   },
   (state) => send("orca:update", state),
 );
@@ -497,6 +556,7 @@ ipcMain.on("orca:update.read", (event) => {
 });
 ipcMain.handle("orca:update.act", async (event, action: unknown) => {
   if (
+    macUpdateWindows.active ||
     !BrowserWindow.getAllWindows().some((win) => win.webContents === event.sender) ||
     event.senderFrame !== event.sender.mainFrame ||
     !isUpdateAction(action)
@@ -660,6 +720,7 @@ nativeTheme.on("updated", () => applyTheme(preferences.read().theme));
 /* ---------- window ---------- */
 
 function createWindow(): void {
+  if (!macUpdateWindows.requestCreation()) return;
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -676,6 +737,7 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+  macUpdateWindows.track(win);
   win.once("ready-to-show", () => win.show());
   if (rendererUrl) {
     void win.loadURL(rendererUrl);

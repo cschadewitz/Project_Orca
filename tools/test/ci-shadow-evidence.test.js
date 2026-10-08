@@ -94,6 +94,130 @@ const raw = () => ({
   ],
 });
 
+const selectedJob = (node = 22) => ({
+  ...job(node),
+  steps: [
+    ...job(node).steps.map((step) =>
+      step.name === (node === 24 ? "Test with coverage" : "Test") ? { ...step, conclusion: "skipped" } : step,
+    ),
+    { name: "Plan test execution", conclusion: "success" },
+    { name: "Test selected files", conclusion: "success" },
+  ],
+});
+const selectedPlan = () => ({
+  ...plan([ordinary]),
+  graphs: [{ complete: true }, { complete: true, discoveredVitestFiles: discovered }],
+});
+const selectedEvidence = (node = 22) => ({ ...evidence(node), suite: { success: true, files: [file(ordinary)] } });
+
+it("authenticates reduced Node 22 separately alongside genuine same-candidate full Node 24", () => {
+  const result = compare(selectedEvidence(), selectedJob(), selectedPlan());
+  expect(result.lanes.map((lane) => lane.status)).toEqual(["selected_verified", "compared"]);
+  expect(result.lanes.map((lane) => lane.execution)).toEqual(["selected", "full"]);
+  expect(result.lanes[0].reasons).toEqual([]);
+  expect(result.lanes[0].intentionalSkips).toEqual([]);
+  expect(result.lanes[1].intentionalSkips).toHaveLength(3);
+});
+
+it.each([
+  "push",
+  "full_plan",
+  "incomplete_graph",
+  "both_steps",
+  "missing_plan_step",
+  "duplicate_selected_step",
+  "extra_file",
+  "skip",
+])("rejects unproven reduced execution: %s", (kind) => {
+  const e = selectedEvidence();
+  const j = selectedJob();
+  const p = selectedPlan();
+  let input = {};
+  if (kind === "push") input = { source: { ...source, event: "push" } };
+  if (kind === "full_plan") p.wouldRun.tier = "full";
+  if (kind === "incomplete_graph") p.graphs[0].complete = false;
+  if (kind === "both_steps") j.steps.find((step) => step.name === "Test").conclusion = "success";
+  if (kind === "missing_plan_step") j.steps = j.steps.filter((step) => step.name !== "Plan test execution");
+  if (kind === "duplicate_selected_step") j.steps.push({ name: "Test selected files", conclusion: "success" });
+  if (kind === "extra_file") e.suite.files.push(file("extra.test.ts"));
+  if (kind === "skip") e.suite.files[0] = { ...file(ordinary), passed: 0, skips: [hash("new skip")] };
+  expect(compare(e, j, p, input).lanes[0].status).toBe("unknown");
+});
+
+it.each(["missing", "failed", "stale", "cancelled"])(
+  "verifies selected execution without claiming an absent full baseline: %s",
+  (kind) => {
+    const baseline = evidence(24);
+    const baselineJob = job(24);
+    if (kind === "failed") baseline.suite.success = false;
+    if (kind === "stale") baseline.identity.candidate = "0".repeat(40);
+    if (kind === "cancelled") baselineJob.conclusion = "cancelled";
+    const result = compareFullEvidence(
+      selectedPlan(),
+      {
+        22: { evidence: selectedEvidence(), job: selectedJob() },
+        24: { evidence: kind === "missing" ? null : baseline, job: baselineJob },
+      },
+      { repo, trusted: candidate, source },
+    );
+    expect(result.lanes[0].status).toBe("selected_verified");
+    expect(result.fullBaseline).toMatchObject({ status: "not_run", nodes: [] });
+  },
+);
+
+it("verifies selected Node 24 without claiming full/global coverage or omitted-test equivalence", () => {
+  const result = compareFullEvidence(
+    selectedPlan(),
+    {
+      22: { evidence: selectedEvidence(22), job: selectedJob(22) },
+      24: { evidence: selectedEvidence(24), job: selectedJob(24) },
+    },
+    { repo, trusted: candidate, source },
+  );
+  expect(result.lanes.map((lane) => lane.status)).toEqual(["selected_verified", "selected_verified"]);
+  expect(result.fullBaseline).toMatchObject({ status: "not_run", nodes: [] });
+  const wrongRuntime = selectedEvidence(22);
+  const stale = compareFullEvidence(
+    selectedPlan(),
+    {
+      24: { evidence: wrongRuntime, job: selectedJob(24) },
+    },
+    { repo, trusted: candidate, source },
+  );
+  expect(stale.lanes[1].reasons).toContain("stale_or_malformed_evidence");
+});
+
+it.each([22, 24])("requires explicit successful documentation execution on Node %s", (node) => {
+  const p = { ...plan([]), wouldRun: { ...plan([]).wouldRun, tier: "docs" } };
+  const e = { ...evidence(node), suite: null, retry: null };
+  const j = {
+    conclusion: "success",
+    steps: [
+      { name: "Check ordinary documentation", conclusion: "success" },
+      ...[
+        "Build",
+        "Test",
+        "Test selected files",
+        "Test with coverage",
+        "Retry admission acceptance (CLI and ACP)",
+        "Smoke test the compiled build",
+      ].map((name) => ({ name, conclusion: "skipped" })),
+    ],
+  };
+  const check = () =>
+    compareFullEvidence(p, { [node]: { evidence: e, job: j } }, { repo, trusted: candidate, source }).lanes[
+      node === 22 ? 0 : 1
+    ];
+  expect(check()).toMatchObject({ status: "docs_verified", execution: "docs" });
+  j.steps[0].conclusion = "failure";
+  expect(check().status).toBe("unknown");
+  j.steps[0].conclusion = "skipped";
+  expect(check().status).toBe("unknown");
+  j.steps[0].conclusion = "success";
+  e.suite = evidence(node).suite;
+  expect(check().status).toBe("unknown");
+});
+
 it("normalizes actual Vitest fields and strips messages, titles, metadata and absolute checkout paths", () => {
   const normalized = normalizeVitest(raw(), root);
   expect(normalized.files[0]).toEqual({ ...file(ordinary), skips: [hash("expected skip")] });
@@ -295,6 +419,7 @@ function pipelineHistory() {
     "vitest.config.ts",
     "tools/ci-shadow/record.js",
     "tools/ci-shadow/evidence.js",
+    "tools/ci-shadow/execute.js",
     ordinary,
     ...INTENTIONAL_SKIPS.map((skip) => skip.path),
   ]) {
@@ -507,7 +632,7 @@ it("keeps existing full checks and limits while isolating workflow_run from cand
     'ORCA_RETRY_INTEGRATION: "1"',
     "pnpm install --frozen-lockfile",
     "node packages/cli/dist/main.js demo",
-    "needs.changes.outputs.code == 'true'",
+    "needs.changes.outputs.code != 'false'",
   ])
     expect(ci).toContain(invariant);
   expect(ci.match(/--reporter=default --reporter=json/g)).toHaveLength(3);

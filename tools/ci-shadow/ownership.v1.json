@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "graphVersion": 1,
-  "reviewedCommit": "820db15eaebfb5a3aee22107b0e7baf4dc771281",
-  "reviewedInventoryHash": "56bdea6aee6ade13f38bfd64cb47b2b731f9654c9f3942da278aad20f3898c82",
+  "reviewedCommit": "f7fed3d6e89c5ea342a1fa88ebde15026b2450c9",
+  "reviewedInventoryHash": "f3f0e561ec2bbcf85a904e3d164e410357e3322cb3aa17cf59fe61b3ee9bed06",
   "coverage": "Frozen Git inventory and conservative app-domain consumers cover only the named renderer presentation island. Static import edges outside it are a lower bound, not whole-repository proof.",
   "prosePaths": ["docs/ci-shadow-selection.md"],
   "islands": [
@@ -320,8 +320,7 @@
     "node24:build-before-tests",
     "node24:retry-cli-acp-no-skips",
     "node24:selected-exact-files",
-    "node24:compiled-cli-demo",
-    "same-candidate:authoritative-full-shadow-baseline"
+    "node24:compiled-cli-demo"
   ],
   "fullRiskRules": [
     {
@@ -360,5 +359,38 @@
       "owner": "CI, toolchain, build and test discovery",
       "reason": "build_discovery_or_workflow"
     }
-  ]
+  ],
+  "packagePolicy": {
+    "version": 1,
+    "description": "Pre-beta conservative package-domain selection using union import/workspace/reference consumers; not a proof of arbitrary hidden dependencies. Full fallback for global/unknown/security/non-import changes.",
+    "fullPatterns": [
+      "^packages/(core|store|protocol|testing)/",
+      "^packages/.*/(?:auth|security|credentials|permissions|keychain|tokens)(?:/|\\.)",
+      "^packages/app/src/(main|preload)/",
+      "(?:^|/)(?:package\\.json|pnpm-lock\\.yaml|pnpm-workspace\\.yaml|mise\\.toml)$",
+      "(?:tsconfig|vite|vitest|playwright).*\\.(?:json|ts|js)$",
+      "^\\.github/",
+      "^tools/",
+      "^templates/",
+      "^examples/",
+      "^docs/preparation/"
+    ],
+    "documentationInputs": [
+      {
+        "path": "packages/app/renderer/src/config/structured-form/README.md",
+        "owner": "app",
+        "evidence": "Narrative integration handoff inspected at PR545 a893ee4bb5be0f47a83d75b6084be435bb2148c1; selects whole app domain, never prose-only."
+      },
+      {
+        "path": "packages/app/renderer/src/guided-launch/README.md",
+        "owner": "app",
+        "evidence": "Narrative integration handoff inspected at PR548 3380e2a681fa7343c8c6e9d5701e0405f4d2c61c; selects whole app domain, unresolved shared declarations still force full."
+      },
+      {
+        "path": "packages/engine/test/restoration-acceptance/README.md",
+        "owner": "engine",
+        "evidence": "Narrative fixture handoff inspected at PR547 40ea81433a13d528f9e4bf24e7c88902b9e7512a; selects engine and downstream domains, never prose-only."
+      }
+    ]
+  }
 }
