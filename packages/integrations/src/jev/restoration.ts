@@ -204,27 +204,32 @@ export function createJevEvalRestorationAdapter(
     const provider: JevProvider = {
       async evaluate(request, execution) {
         execution.signal.throwIfAborted();
-        let credential: Awaited<ReturnType<typeof resolveCredential>>;
+        let resolvedApiKey: string | undefined;
+        let bindingMatches: boolean;
         try {
-          credential = await resolveCredential({ ...descriptor.credentialBinding }, execution);
+          const credential = await resolveCredential({ ...descriptor.credentialBinding }, execution);
+          // Resolver results may be cache-backed objects or accessors. Read and validate
+          // them inside the sanitized boundary, then retain only request-scoped primitives.
+          const parsedBinding = bindingSchema.safeParse(credential.binding);
+          bindingMatches = parsedBinding.success && sameBinding(parsedBinding.data, descriptor.credentialBinding);
+          const resolvedKey: unknown = credential.apiKey;
+          resolvedApiKey = typeof resolvedKey === "string" && resolvedKey ? resolvedKey : undefined;
         } catch {
           throw new JevProviderError("JEV credential unavailable or revoked; resolve the recorded binding", false);
         }
         execution.signal.throwIfAborted();
-        if (
-          !bindingSchema.safeParse(credential?.binding).success ||
-          !sameBinding(credential.binding, descriptor.credentialBinding)
-        )
+        if (!bindingMatches)
           throw new JevProviderError("JEV credential binding changed; resolve the recorded provider/account", false);
-        if (typeof credential.apiKey !== "string" || !credential.apiKey)
+        const apiKey = resolvedApiKey;
+        if (apiKey === undefined)
           throw new JevProviderError("JEV credential unavailable or revoked; resolve the recorded binding", false);
         try {
           const response = await new JevHttpProvider({
-            apiKey: credential.apiKey,
+            apiKey,
             baseUrl: descriptor.defaults.baseUrl,
           }).evaluate(request, execution);
           // Refuse an echoed key even in a nominally successful response (e.g. a score legend).
-          if (JSON.stringify(response)?.includes(JSON.stringify(credential.apiKey).slice(1, -1)))
+          if (JSON.stringify(response)?.includes(JSON.stringify(apiKey).slice(1, -1)))
             throw new JevProviderError("JEV response contains credential material", false);
           return response;
         } catch (error) {

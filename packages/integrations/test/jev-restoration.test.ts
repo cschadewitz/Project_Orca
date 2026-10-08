@@ -274,6 +274,108 @@ describe("JEV restoration adapter", () => {
     }
   });
 
+  it.each(["fail", "record"] as const)(
+    "rejects the actually transmitted key after resolver cache rotation (onError: %s)",
+    async (onError) => {
+      const authority = context();
+      const credential = { binding: { ...binding }, apiKey: KEY };
+      authority.resolveCredential = async () => credential;
+      const http = vi.fn<typeof fetch>(async (_url, init) => {
+        expect(init?.headers).toMatchObject({ authorization: `Bearer ${KEY}` });
+        credential.apiKey = "rotated-synthetic-key";
+        return Response.json({
+          model: "jev-1.13.0",
+          answers: {
+            accepted: {
+              type: "score",
+              score: 1,
+              probabilities: { "0": 0, "1": 1 },
+              confidence: 1,
+              legend: { "1": KEY },
+            },
+          },
+        });
+      });
+      vi.stubGlobal("fetch", http);
+      const stores = memoryStores();
+      const yaml = WORKFLOW.replace(
+        "questions: {accepted: {type: noul, instructions: Is it accepted?}}",
+        "questions: {accepted: {type: score, instructions: Grade?, criteria: [low, high]}}",
+      ).replace("    rubric:", `    onError: ${onError}\n    rubric:`);
+      const state = await runtime(
+        unwrap(createJevEvalRestorationAdapter({ env: {} }, authority).restore(descriptor())),
+        yaml,
+        stores,
+      ).startAndRun({ workflowId: "restore" });
+      const bodies = await Promise.all(Object.keys(state.artifacts).map((id) => stores.artifacts.content(id)));
+      expect(
+        JSON.stringify(state) + JSON.stringify(await stores.events.read(state.run.id)) + bodies.join(""),
+      ).not.toContain(KEY);
+      expect(http).toHaveBeenCalledTimes(1);
+      if (onError === "fail") {
+        expect(state.run.status).toBe("failed");
+        expect(state.artifacts).toEqual({});
+      } else {
+        expect(state.run.status).toBe("paused");
+        expect(bodies.join("")).toContain("status: failed");
+      }
+    },
+  );
+
+  it.each(["apiKey", "binding", "provider", "account", "reference"] as const)(
+    "sanitizes throwing credential-result %s getters before error or artifact publication",
+    async (field) => {
+      for (const onError of ["fail", "record"] as const) {
+        const authority = context();
+        const credential = { binding: { ...binding }, apiKey: KEY };
+        Object.defineProperty(field === "apiKey" || field === "binding" ? credential : credential.binding, field, {
+          enumerable: true,
+          get() {
+            throw new Error(KEY);
+          },
+        });
+        authority.resolveCredential = async () => credential;
+        const http = fakeHttp();
+        const stores = memoryStores();
+        const state = await runtime(
+          unwrap(createJevEvalRestorationAdapter({ env: {} }, authority).restore(descriptor())),
+          WORKFLOW.replace("    rubric:", `    onError: ${onError}\n    rubric:`),
+          stores,
+        ).startAndRun({ workflowId: "restore" });
+        expect(http).not.toHaveBeenCalled();
+        const bodies = await Promise.all(Object.keys(state.artifacts).map((id) => stores.artifacts.content(id)));
+        expect(
+          JSON.stringify(state) + JSON.stringify(await stores.events.read(state.run.id)) + bodies.join(""),
+        ).not.toContain(KEY);
+        if (onError === "fail") expect(state.run.status).toBe("failed");
+        else {
+          expect(state.run.status).toBe("paused");
+          expect(bodies.join("")).toContain("status: failed");
+        }
+      }
+    },
+  );
+
+  it("reads a credential accessor once and uses that captured value for the request", async () => {
+    const authority = context();
+    let reads = 0;
+    authority.resolveCredential = async () => ({
+      binding: { ...binding },
+      get apiKey() {
+        reads += 1;
+        return reads === 1 ? KEY : "rotated-synthetic-key";
+      },
+    });
+    const http = fakeHttp();
+    const state = await runtime(
+      unwrap(createJevEvalRestorationAdapter({ env: {} }, authority).restore(descriptor())),
+    ).startAndRun({ workflowId: "restore" });
+    expect(state.run.status).toBe("paused");
+    expect(reads).toBe(1);
+    expect(http.mock.calls[0]?.[1]?.headers).toMatchObject({ authorization: `Bearer ${KEY}` });
+    expect(JSON.stringify(state)).not.toContain(KEY);
+  });
+
   it("reports an interrupted in-flight HTTP evaluation under the existing timeout behavior without adapter replay", async () => {
     const http = vi.fn<typeof fetch>(
       async (_url, init) =>

@@ -68,7 +68,12 @@ same binding together with a transient key. The adapter checks it on every
 evaluation, immediately before HTTP transport. Rotation within the same
 authorized account/reference is allowed; substitution of another account is
 refused. Resolver failures and HTTP errors are sanitized before durable records;
-responses echoing the resolved key are refused too.
+responses echoing the resolved key are refused too. Resolver results may be
+mutable objects or accessors: the adapter validates their fields inside the
+sanitized credential boundary and captures one string key per request. That
+same value is used for authorization and response checks even if the resolver's
+cache rotates while HTTP is pending. Throwing credential/binding getters cannot
+publish their error text.
 
 `restore(descriptor)` returns an isolated `NodeExecutor` or a stable refusal
 reason/remediation. It neither activates it nor accesses credentials. The
