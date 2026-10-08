@@ -24,6 +24,8 @@ import { NodeRecoveryDisk } from "./diagnostics/recovery-disk.js";
 import { createProductionNativeAdapter, createSafeStorageKeyAdapter } from "./diagnostics/native-adapter.js";
 import type { DiagnosticsResult } from "../diagnostics-contract.js";
 import { AdmissionIntents, AdmissionIntentController } from "./admission-intents.js";
+import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
+import type { LaunchReview, PreflightParams } from "../configuration-launch-contract.js";
 import { RunsAdmitResultSchema } from "@orca/protocol";
 import { ConnectionTarget, connectionFailure, callInConnection } from "./connection-target.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
@@ -228,32 +230,64 @@ const intentDiscovery = z.object({
   target: z.object({ workspaceId: z.uuid(), instanceId: z.uuid() }),
   operations: z.array(z.string()),
 });
-const intents = new AdmissionIntentController(
-  new AdmissionIntents(join(app.getPath("userData"), "admission-intents.enc"), safeStorage),
-  async () => {
-    const captured = client();
-    const target = workspace.connectionTarget;
-    const found = await captured.call("operator.discover", {}, intentDiscovery);
-    workspace.assertEpoch(target.epoch);
-    if (
-      !found.operations.includes("runs.admit") ||
-      !target.identity ||
-      found.target.workspaceId !== target.identity.workspaceId ||
-      found.target.instanceId !== target.identity.instanceId
-    )
-      throw new Error(
-        "The authenticated daemon target changed or retry admission is unavailable. Refresh before retrying.",
-      );
-    return {
-      scope: {
-        target: target.source === "bundled" ? `bundled:${workspace.snapshot.path}` : daemonEndpoint(target.url),
-        principalId: found.principalId,
-        workspaceId: found.target.workspaceId,
-      },
-      assertCurrent: () => workspace.assertEpoch(target.epoch),
-      admit: (params) => captured.call("runs.admit", params, RunsAdmitResultSchema),
-    };
-  },
+const intentJournal = new AdmissionIntents(join(app.getPath("userData"), "admission-intents.enc"), safeStorage);
+const intents = new AdmissionIntentController(intentJournal, async () => {
+  const captured = client();
+  const target = workspace.connectionTarget;
+  const found = await captured.call("operator.discover", {}, intentDiscovery);
+  workspace.assertEpoch(target.epoch);
+  if (
+    !found.operations.includes("runs.admit") ||
+    !target.identity ||
+    found.target.workspaceId !== target.identity.workspaceId ||
+    found.target.instanceId !== target.identity.instanceId
+  )
+    throw new Error(
+      "The authenticated daemon target changed or retry admission is unavailable. Refresh before retrying.",
+    );
+  return {
+    scope: {
+      target: target.source === "bundled" ? `bundled:${workspace.snapshot.path}` : daemonEndpoint(target.url),
+      principalId: found.principalId,
+      workspaceId: found.target.workspaceId,
+    },
+    assertCurrent: () => workspace.assertEpoch(target.epoch),
+    admit: (params) => captured.call("runs.admit", params, RunsAdmitResultSchema),
+  };
+});
+const guided = new GuidedLaunchAdapter(intentJournal, () => {
+  const target = workspace.connectionTarget;
+  return {
+    client: client(),
+    target,
+    workspace: workspace.snapshot,
+    assertCurrent: () => workspace.assertEpoch(target.epoch),
+  };
+});
+handle("orca:guidedLaunch.snapshot", () => guided.snapshot());
+handle("orca:guidedLaunch.preflight", (params: PreflightParams) => guided.preflight(params));
+handle("orca:guidedLaunch.submit", (review: LaunchReview) => guided.controller.submit(review));
+handle("orca:guidedLaunch.retained", () => guided.controller.retained());
+handle("orca:guidedLaunch.load", (id: string) => guided.load(id));
+handle("orca:guidedLaunch.resolve", (review: LaunchReview) => guided.resolve(review));
+handle("orca:guidedLaunch.recover", (params: { id: string; action: "inspect" | "reconcile" }) => {
+  if (params.action !== "inspect" && params.action !== "reconcile")
+    throw new Error("Choose an explicit recovery action.");
+  return guided.controller.recover(params.id, params.action);
+});
+handle("orca:guidedLaunch.abandon", (id: string) =>
+  guided.controller.abandon(id, async () => {
+    const result = await dialog.showMessageBox({
+      type: "warning",
+      buttons: ["Keep retained intent", "Abandon intent"],
+      defaultId: 0,
+      cancelId: 0,
+      message: "Abandon this launch intent?",
+      detail:
+        "The original work may already exist or still be running. This does not cancel it. A new launch creates separate work with a new key.",
+    });
+    return result.response === 1;
+  }),
 );
 handle("orca:admissionIntents.start", (workflowId: string) => intents.start(workflowId));
 handle("orca:admissionIntents.list", () => intents.list());

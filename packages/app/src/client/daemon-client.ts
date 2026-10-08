@@ -197,6 +197,18 @@ export class DaemonClient {
     private readonly options: DaemonClientOptions = {},
   ) {}
 
+  /** Main-only capture: all calls in a guarded operation use the credential discovered at its start.
+   * A concurrent ordinary read may refresh the shared source, but cannot change this operation's principal.
+   * Tokens stay in the client closure and are never returned through the renderer bridge.
+   */
+  withCapturedAuthentication(): DaemonClient {
+    const token = this.options.auth?.read();
+    return new DaemonClient(this.url, this.fetchImpl, {
+      ...this.options,
+      ...(this.options.auth ? { auth: { read: () => token, refresh: () => false } } : {}),
+    });
+  }
+
   /** The WebSocket beside the read endpoint, on the same host and port. */
   get socketUrl(): string {
     return socketUrlFor(this.url);

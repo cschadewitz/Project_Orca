@@ -319,6 +319,34 @@ export class GuidedLaunchController {
   async recover(): Promise<void> {
     if (!this.pending && this.state.intent === undefined && this.state.unresolvedReview !== undefined) {
       const review = this.state.unresolvedReview;
+      if (this.ports.resolveIntent !== undefined) {
+        if (
+          !sameScope(review.target, this.state.context.target) ||
+          !sameLaunchTarget(this.state.draftTarget, this.state.context.target) ||
+          this.state.context.unavailableReason
+        ) {
+          this.block("Review the original authorized target before recovering the exact protected launch.");
+          return;
+        }
+        this.pending = true;
+        const fence = this.fence;
+        this.update({
+          phase: "recovering",
+          message: "Looking up the exact protected launch, without submitting new work.",
+        });
+        try {
+          await this.receive(async () => {
+            const intent = await this.ports.resolveIntent!(review);
+            if (fence !== this.fence) throw new LaunchPortFailure("stale");
+            if (!intent) throw new LaunchPortFailure("unavailable");
+            this.update({ intent, unresolvedReview: undefined });
+            return this.ports.recover(intent);
+          }, fence);
+        } finally {
+          this.pending = false;
+        }
+        return;
+      }
       if (!sameLaunchTarget(review.target, this.state.context.target) || this.ports.launch === undefined) {
         this.block(
           "The protected intent handle is unavailable after target/configuration movement. Inspect retained work through the original main-owned connection; do not submit new work.",

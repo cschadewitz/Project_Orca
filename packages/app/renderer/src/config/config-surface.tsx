@@ -67,14 +67,23 @@ export interface ConfigSurfaceProps {
    * element that is not in the document yet.
    */
   open?: ConfigDocument;
+  launch?: ReactNode;
+  onLaunch?: () => void;
 }
 
 type View = "form" | "raw";
 
-export function ConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Element {
+export function ConfigSurface({ connection, open, launch, onLaunch }: ConfigSurfaceProps): JSX.Element {
   const feed = useConfig();
   if (window.orca.daemonConnection || (feed.state.phase === "ready" && feed.state.data.formSchema !== undefined))
-    return <ConfigurationStudioSurface connection={connection} {...(open ? { open } : {})} />;
+    return (
+      <ConfigurationStudioSurface
+        connection={connection}
+        {...(launch ? { launch } : {})}
+        {...(onLaunch ? { onLaunch } : {})}
+        {...(open ? { open } : {})}
+      />
+    );
   return <LegacyConfigSurface connection={connection} {...(open ? { open } : {})} />;
 }
 

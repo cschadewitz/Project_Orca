@@ -1,5 +1,5 @@
 /** Actual Config route over the shared feed and merged #333 controls; Save and Apply stay separate. */
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 import type { ConfigDocument } from "@orca/protocol";
 import type { ConnectionState } from "@orca/design";
 import { useSurfaceDensity } from "../appearance-context.js";
@@ -22,9 +22,13 @@ import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
 export function ConfigurationStudioSurface({
   connection,
   open,
+  launch,
+  onLaunch,
 }: {
   connection: ConnectionState;
   open?: ConfigDocument;
+  launch?: ReactNode;
+  onLaunch?: () => void;
 }): JSX.Element {
   useSurfaceDensity();
   const feed = useConfig();
@@ -53,7 +57,7 @@ export function ConfigurationStudioSurface({
   save.current = () => {
     void studio?.save(policyConfirmed);
   };
-  const canSave = studio?.review !== undefined && !studio.busy && studio.reason("save") === undefined;
+  const canSave = !launch && studio?.review !== undefined && !studio.busy && studio.reason("save") === undefined;
   useEffect(() => {
     if (!canSave) return;
     return keyboard.register({
@@ -79,23 +83,31 @@ export function ConfigurationStudioSurface({
         crumbs={[{ type: "config", id: data?.config.path ?? "config", label: "Configuration", current: true }]}
         actions={
           <div className="orca-seg" role="group" aria-label="View">
-            {(["form", "raw"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={`orca-seg__btn ${textClass("label")}`}
-                aria-pressed={(studio?.mode ?? "form") === mode}
-                onClick={() => switchMode(mode)}
-              >
-                {mode === "form" ? "Form" : "Raw"}
-              </button>
-            ))}
+            {onLaunch && !launch && (
+              <Button onClick={onLaunch} data-launch-entry>
+                Launch work
+              </Button>
+            )}
+            {!launch &&
+              (["form", "raw"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`orca-seg__btn ${textClass("label")}`}
+                  aria-pressed={(studio?.mode ?? "form") === mode}
+                  onClick={() => switchMode(mode)}
+                >
+                  {mode === "form" ? "Form" : "Raw"}
+                </button>
+              ))}
           </div>
         }
       />
       <div className="orca-config__body">
         <DiagnosticsSection key="diagnostics" />
-        {!data ? (
+        {launch ? (
+          launch
+        ) : !data ? (
           feed.state.phase === "error" ? (
             <StateView
               kind="error"

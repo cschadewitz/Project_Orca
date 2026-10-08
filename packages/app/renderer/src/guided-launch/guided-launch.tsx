@@ -1,5 +1,5 @@
 /** Guided launch workspace composed from shared primitives and injected protected admission ports. */
-import { useState, useSyncExternalStore, type JSX, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type JSX, type ReactNode } from "react";
 import type { WorkflowInputDeclarationView } from "@orca/protocol";
 import { Button, Card, ConfigField, Menu, Text } from "../ui/index.js";
 import type { GuidedLaunchController } from "./controller.js";
@@ -97,6 +97,9 @@ function InputField({
 
 export interface GuidedLaunchProps {
   controller: GuidedLaunchController;
+  requirePermissionReview?: boolean;
+  protectedDraftsAvailable?: boolean;
+  restoreAvailable?: boolean;
   /** Shared selection owner supplies only supported, authorized Request override controls. */
   requestOverrides?: (draft: LaunchDraft, edit: (draft: LaunchDraft) => void, locked: boolean) => ReactNode;
   overrideChoices?: RequestOverrideChoices;
@@ -107,6 +110,9 @@ export interface GuidedLaunchProps {
 }
 export function GuidedLaunch({
   controller,
+  requirePermissionReview = false,
+  protectedDraftsAvailable = true,
+  restoreAvailable = true,
   requestOverrides,
   overrideChoices,
   onConfiguration,
@@ -115,6 +121,8 @@ export function GuidedLaunch({
 }: GuidedLaunchProps): JSX.Element {
   const state = useSyncExternalStore(controller.subscribe, controller.read);
   const { draft, context, review } = state;
+  const [permissionConfirmed, confirmPermission] = useState(false);
+  useEffect(() => confirmPermission(false), [review]);
   const workflow = context.workflows.find((w) => w.id === draft.workflowId);
   const selectedRoot = context.roots.find((root) => root.id === draft.rootId);
   const locked =
@@ -288,6 +296,22 @@ export function GuidedLaunch({
           ))}
         </Card>
       )}
+      {requirePermissionReview && review && (
+        <ConfigField label="Permission review" path="permission-review">
+          {(control) => (
+            <label>
+              <input
+                {...control}
+                type="checkbox"
+                checked={permissionConfirmed}
+                onChange={(event) => confirmPermission(event.target.checked)}
+              />
+              I reviewed the configured permission policy. This work may execute commands in the prepared checkout;
+              permission requests still require their own confirmation.
+            </label>
+          )}
+        </ConfigField>
+      )}
       <Text style="body">{state.message}</Text>
       {state.errors.map((issue, index) => (
         <Text key={index} style="caption">
@@ -322,8 +346,10 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.submit();
           }}
-          disabled={state.busy || state.phase !== "review" || invalid}
-          disabledReason="Validate and review the exact command before launching."
+          disabled={
+            state.busy || state.phase !== "review" || invalid || (requirePermissionReview && !permissionConfirmed)
+          }
+          disabledReason="Validate the exact command and review its permission policy before launching."
         >
           Launch
         </Button>
@@ -351,8 +377,12 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.saveDraft();
           }}
-          disabled={state.busy}
-          disabledReason="A launch operation or protected read is pending."
+          disabled={state.busy || !protectedDraftsAvailable}
+          disabledReason={
+            protectedDraftsAvailable
+              ? "A launch operation or protected read is pending."
+              : "Protected unsent draft storage is unavailable. This session retains your draft."
+          }
         >
           Save protected draft
         </Button>
@@ -360,8 +390,12 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.restore();
           }}
-          disabled={state.busy}
-          disabledReason="A launch operation or protected read is pending."
+          disabled={state.busy || !restoreAvailable}
+          disabledReason={
+            restoreAvailable
+              ? "A launch operation or protected read is pending."
+              : "Choose the exact retained launch to restore."
+          }
         >
           Restore protected launch
         </Button>
@@ -369,8 +403,12 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.loadDraft();
           }}
-          disabled={state.busy}
-          disabledReason="A launch operation or protected read is pending."
+          disabled={state.busy || !protectedDraftsAvailable}
+          disabledReason={
+            protectedDraftsAvailable
+              ? "A launch operation or protected read is pending."
+              : "Protected unsent draft storage is unavailable. This session retains your draft."
+          }
         >
           Restore protected draft
         </Button>

@@ -41,6 +41,12 @@ it("strips Electron events from onShow and preserves explicit epoch fencing", as
   bridge.daemonConnection!.activate(1);
   await bridge.runs.list();
   expect(invoke).toHaveBeenLastCalledWith("orca:runs.list", {}, 1);
+  await bridge.guidedLaunch!.recover({ id: "opaque-main-handle", action: "inspect" });
+  expect(invoke).toHaveBeenLastCalledWith(
+    "orca:guidedLaunch.recover",
+    { id: "opaque-main-handle", action: "inspect" },
+    1,
+  );
   const notification = vi.fn();
   bridge.notifications.subscribe(notification);
   events.emit("orca:notification", {}, { method: "old" }, 0);
@@ -51,4 +57,6 @@ it("strips Electron events from onShow and preserves explicit epoch fencing", as
   events.emit("orca:daemon.target", {}, { epoch: 2 });
   await bridge.runs.list();
   expect(invoke).toHaveBeenLastCalledWith("orca:runs.list", {}, 1);
+  await bridge.guidedLaunch!.snapshot();
+  expect(invoke).toHaveBeenLastCalledWith("orca:guidedLaunch.snapshot", undefined, 1);
 });
