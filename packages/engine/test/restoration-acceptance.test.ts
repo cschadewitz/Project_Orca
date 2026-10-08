@@ -25,6 +25,7 @@ import {
   baselineSha,
   candidatePins,
   implementationPins,
+  fixtureReviewStatus,
   pendingAcceptance,
   exercisedAcceptance,
   unverifiedExternalClaims,
@@ -374,7 +375,8 @@ describe("#396 provisional contract bindings: acceptance remains INCOMPLETE", ()
   );
   it("records exact combined pins and separates executed coverage from review and external evidence", () => {
     expect(baselineSha).toMatch(/^[a-f0-9]{40}$/);
-    expect(implementationPins).toEqual({ substrate394: null, jev395: null });
+    expect(implementationPins).toEqual(candidatePins);
+    expect(fixtureReviewStatus).toBe("root-minimal-review-pending");
     expect(candidatePins).toEqual({
       substrate394: "3054319b37ae61ba22b62ba2f519dc50bf3c0ebc",
       jev395: "879bedcf701f4eaad2e8da47bac8feb2444c2d9d",

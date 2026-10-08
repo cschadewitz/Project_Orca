@@ -2,11 +2,14 @@
 
 **Final acceptance remains incomplete.** Provider-free restart assertions now consume
 corrected runtime #546 `3054319b37ae61ba22b62ba2f519dc50bf3c0ebc` and adapter #543
-`879bedcf701f4eaad2e8da47bac8feb2444c2d9d`, combined with main
-`10834758e49a5e84b9ac06e3bca85f87be923dac`. Original fixture baseline was
+`879bedcf701f4eaad2e8da47bac8feb2444c2d9d`, first combined with evidence baseline
+`10834758e49a5e84b9ac06e3bca85f87be923dac`. Publication integrates main
+`93aa9d1352bb25a24e9fb84940674c3e5dcd78f9`, which contains merged #542/#543/#546.
+Runtime and JEV source bytes match the tested dependency heads exactly; the 80-case
+evidence is reused without a broad repeated suite. Original fixture baseline was
 `65606fbce827cba914a67b999b1a47c0aab2797a`; local extension `76718433` is preserved.
-Candidate source pins are separate from independent review pins: root minimal review
-of this bounded fixture change and its exact corrected dependencies remains pending.
+Implementation pins record the merged dependencies. Root minimal review of this
+bounded fixture change remains pending, separately from dependency integration.
 
 **One Vitest TODO remains:** parent-owned Actual-Cal private-route inspection and
 explicit permitted resume. Two external claims are explicitly unverified rather than
@@ -30,8 +33,8 @@ git diff --check
 ```
 
 `matrix.ts` records 14 exercised capability/refusal obligations, the one live TODO,
-and the two external unknowns. Root owns review clearance, publication and final
-acceptance. No CI was polled, dispatched or triggered by this local correction.
+and the two external unknowns. Root owns review clearance and final acceptance. Local checks dispatch or rerun no
+CI workflows; the authorized normal publication push may start ordinary PR checks.
 
 ## Owned footprint and execution boundary
 
@@ -92,8 +95,8 @@ not authentication on Cal's actual private MCP connection. UI reconnect, referen
 clients and subprocess fixtures cannot replace the separate live proof.
 
 Actual user data restores, live agents/providers, credentials, host changes, deployment
-and Actual-Cal private-route inspection/resume are **UNRUN**. Review pin fields remain
-null until root supplies exact-head clearance. They are not executable-test TODOs.
+and Actual-Cal private-route inspection/resume are **UNRUN**. The fixture review status remains pending until root completes its minimal review.
+It is separate from the one executable-test TODO.
 
 ## Local evidence and author review
 
@@ -119,6 +122,6 @@ The existing baseline cases were not broadly rerun on this combined head.
 Author self-review checks the six-path footprint, capability detection on an unbound
 baseline, original protected-record preservation, per-process ownership and cleanup,
 canonical bounds versus the intentionally permissive synthetic validator, and accurate
-external unknowns. Fixtures use no competing restoration or retry API. Publication
-remains held while dependencies are in flight; root performs the remaining minimal
-review and controls remote publication/CI.
+external unknowns. Fixtures use no competing restoration or retry API. Root authorized one normal push to existing draft #547 after dependency integration.
+No manual CI rerun or merge is performed by this owner; root controls the remaining
+minimal review and integration.

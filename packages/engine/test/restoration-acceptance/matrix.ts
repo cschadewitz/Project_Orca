@@ -1,12 +1,14 @@
 /** #396 acceptance ledger. Pending rows are obligations, never simulated implementation proof. */
 export const originalBaselineSha = "65606fbce827cba914a67b999b1a47c0aab2797a";
-export const baselineSha = "10834758e49a5e84b9ac06e3bca85f87be923dac";
+export const evidenceBaselineSha = "10834758e49a5e84b9ac06e3bca85f87be923dac";
+export const baselineSha = "93aa9d1352bb25a24e9fb84940674c3e5dcd78f9";
 export const candidatePins = {
   substrate394: "3054319b37ae61ba22b62ba2f519dc50bf3c0ebc",
   jev395: "879bedcf701f4eaad2e8da47bac8feb2444c2d9d",
 } as const;
-/** Null means independent exact-head review remains unresolved. */
-export const implementationPins = { substrate394: null, jev395: null } as const;
+/** Root has merged these exact dependencies; fixture review remains separate. */
+export const implementationPins = candidatePins;
+export const fixtureReviewStatus = "root-minimal-review-pending";
 /** Exact published contract references; root supplies independent review clearance separately. */
 export const provisionalContract = {
   substrateComment: "https://github.com/cschadewitz/Project_Orca/issues/394#issuecomment-6051433591",
