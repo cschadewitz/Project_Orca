@@ -569,10 +569,15 @@ including their store adapter and tests. Feature workers must not edit them.
 4. Integrated authorized MCP implementation + approved #391/#392 route -> #393
    actual-Cal operator evidence, which can satisfy #327's existing acceptance
 5. Usable MCP preview -> separately frozen
-   [#394](https://github.com/cschadewitz/Project_Orca/issues/394) plugin restoration
-   contract/runtime -> [#395](https://github.com/cschadewitz/Project_Orca/issues/395)
-   JEV opt-in -> [#396](https://github.com/cschadewitz/Project_Orca/issues/396)
-   fresh-process/actual-Cal restoration verification before release readiness
+   [#394](https://github.com/cschadewitz/Project_Orca/issues/394) generic plugin restoration
+   contract/runtime -> [#396](https://github.com/cschadewitz/Project_Orca/issues/396)
+   fresh-process/actual-Cal verification of the supported non-JEV composition before
+   limited beta release readiness. Casey approved deferring
+   [#395](https://github.com/cschadewitz/Project_Orca/issues/395) JEV opt-in on
+   8 October 2026; JEV stays disabled in today's beta. Its provider/account binding,
+   current-use credential resolver and installed dependency proof remain deferred
+   acceptance requirements, not passed evidence or blockers of generic recovery.
+   This decision does not waive generic recovery/security or Actual-Cal acceptance.
 
 The existing #329/#330/#332/#237/#328 foundations remain prerequisites where their
 issues specify them. #356 is not a hard blocker for a truthful limited MCP
@@ -580,15 +585,22 @@ preview. #394–#396 are **not the immediate parallel implementation batch** and
 do not block the first harmless MCP reads. Outbound MCP/skills, generic recovery
 UX, new storage backends and public plugin distribution are outside this batch.
 
-Current custom-plugin limitations remain visible: behavior-bearing custom
-executors, signal extractors, custom workspace providers and changed host/nested
-callbacks can bind an entire generation to its original bootstrap. The shipped
-JEV example is affected. Cross-bootstrap restoration fails before provisioning;
+Current custom-plugin limitations remain visible: custom executors without a
+fully verified opt-in composition, signal extractors, custom workspace providers
+and changed host/nested callbacks can bind an entire generation to its original
+bootstrap. A supported custom composition requires protected descriptors and
+independent whole-code/dependency verification; see
+[installed release evidence](contracts/installed-plugin-release-v1.md) for the
+bounded non-JEV profile and unresolved producer/bootstrap integration. The standard
+`examples/orca.config.yaml` already selects ordinary `ai-sdlc` with `plugins: []`.
+A deployment derived from the JEV sample must remove both JEV registration and its
+shadow workflow/`itemWorkflow` selection before claiming the non-JEV profile.
+Unsupported cross-bootstrap restoration fails before provisioning;
 same-bootstrap operation, supported built-ins and eligible unchanged no-op or
 declarative-only plugins are different cases. Matching entry bytes are not proof
 of transitive dependency/closure equivalence. UI reconnect to a surviving daemon
 is not engine restoration. No adapter may bypass this refusal, recreate historical
-callbacks from current settings or claim #394's capabilities already exist.
+callbacks from current settings or claim unverified installation/acceptance evidence.
 
 ## Source alignment and later work
 

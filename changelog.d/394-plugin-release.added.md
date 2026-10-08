@@ -1,0 +1,1 @@
+Added a bounded installed-plugin release verifier for independently pinned closed-bundle evidence, with exact composition, runtime, identity and byte checks. Automatic bootstrap mounting and deployed attestation delivery remain pending; unsupported plugins continue to refuse restoration.
