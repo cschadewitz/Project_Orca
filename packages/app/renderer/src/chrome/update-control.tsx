@@ -1,5 +1,5 @@
 /** Header update action, also discoverable through the keyboard command registry. */
-import { useCallback, useEffect, useLayoutEffect, useState, type JSX } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, useRef, type JSX } from "react";
 import type { UpdateAction } from "../../../src/update-contract.js";
 import { useKeyboard } from "../keyboard-context.js";
 import { useAnnounce } from "../a11y/announce-context.js";
@@ -9,13 +9,21 @@ export function UpdateControl(): JSX.Element | null {
   const [state, setState] = useState(() => window.orca.updates.read());
   const keyboard = useKeyboard();
   const announce = useAnnounce();
+  const priorInert = useRef<boolean | undefined>(undefined);
   useEffect(() => window.orca.updates.subscribe(setState), []);
   useLayoutEffect(
     () =>
       window.orca.updates.prepare((locked) => {
         const root = document.querySelector<HTMLElement>(".orca-window");
-        if (root) root.inert = locked;
-        return !hasUpdateDrafts();
+        if (!root) return false;
+        if (locked) {
+          if (priorInert.current === undefined) priorInert.current = Boolean(root.inert);
+          root.inert = true;
+          return !priorInert.current && !hasUpdateDrafts();
+        }
+        if (priorInert.current !== undefined) root.inert = priorInert.current;
+        priorInert.current = undefined;
+        return true;
       }),
     [],
   );
