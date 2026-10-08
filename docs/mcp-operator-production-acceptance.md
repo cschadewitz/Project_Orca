@@ -16,6 +16,18 @@ are dated preparation evidence. They no longer describe the installation state o
 current main. The [evidence map](runtime-operator-integration.md#current-main-evidence-map)
 separates code, compiled tests and deployed observations.
 
+The [7 October actual-Cal handoff](preparation/private-mcp-access/actual-cal-matrix.md)
+maps the remaining #327/#393 cases to exact bounded invocations, current authority/tool
+gaps, capacity prerequisites and separate #392 owner lifecycle gates. Its new standalone
+P01 suite covers compiled MCP invalid-input/stale-guard refusal before durable intent for
+Request and direct admission, followed by corrected same-key acceptance. P01 is additional
+reference-client evidence; it does not change the historical 60-case counts below or
+complete actual-Cal acceptance. After a fresh build, run it explicitly with:
+
+```sh
+ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-preflight.test.ts --maxWorkers=1
+```
+
 ## Execution
 
 Use Node >=22 and the repository's pinned pnpm. Install the frozen lockfile, then
@@ -378,3 +390,34 @@ checks, authority classification, unsafe-boundary rejection, journal verificatio
 single decision and single execution remain in force. The #443 PR records bounded
 Node 22/24 baseline samples and validation against its final commit; passing random
 samples alone are not evidence that a race is fixed.
+
+### Pre-lease continuation contention correction (#499)
+
+The accepted base is `f799be0700044320d53a0dd606e4397b07a25053`.
+Deterministic shared-runtime barriers hold the winner inside summary loading,
+after its local running slot is reserved and before durable execution lease
+acquisition. Both same-model and separate-model retained-key responses schedule
+reconciliation. On the unchanged runtime, each loses with `RUN_LEASED` but
+publishes a second `blocked` marker while the winner remains at the barrier.
+Both strict regression cases fail there; cleanup releases the winner and drains
+execution. This reproduces #499's mechanism, not the uncaptured extra Linux CI
+event's exact state or interleaving.
+
+Pre-attachment `RUN_LEASED` now refuses the competing attempt without publishing
+a receipt transition. The original accepted intent remains inspectable while
+the winner attaches; the public journal remains exactly
+`accepted / accepted / settled` with one correlated decision, one attachment,
+one execution and one completion. Fresh terminal intent is refused without a
+new event. This rule also covers an actual file-lease refusal whose incumbent
+releases before error handling: acquiring a publication fence afterward does
+not make that refusal a failure of the shared intent. Separate interpreter/store
+instances still refuse execution against a real active lease.
+
+The regressions use real file stores, registered retry claims, protected journals,
+generation restoration and the interpreter, with the existing injected scheduler
+and labelled authority-wrapper fixture. They release every barrier and drain both
+models during cleanup. Existing authority/revocation, exact-boundary, generation,
+journal verification, and #448 post-completion/publication-refusal tests remain
+in force. Production L03's strict checks and read-only observation are unchanged.
+The PR records the final SHA and Node 22/24 build/check/test results. These tests
+do not establish actual-Cal, deployed-host or Windows acceptance.

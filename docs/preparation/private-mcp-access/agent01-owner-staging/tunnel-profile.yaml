@@ -1,0 +1,17 @@
+# Separate opt-in to retain agent-01's existing private launcher unchanged.
+# Fresh authenticated discovery is required before every post-restart mutation.
+config_version: 1
+control_plane:
+  base_url: https://api.openai.com
+  tunnel_id: tunnel_6ac0b657e5d88191a442de4978b38ea9
+  api_key: file:/home/casey/.orca-codex-work/supervision/tunnel-runtime.key
+  poll_channels: [main]
+health:
+  listen_addr: 127.0.0.1:33872
+log:
+  level: info
+  format: struct-text
+mcp:
+  commands:
+    - channel: main
+      command: /home/casey/.local/share/mise/installs/node/24.21.0/bin/node /home/casey/.orca-codex-work/mcp-client.cjs

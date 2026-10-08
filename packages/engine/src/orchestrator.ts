@@ -89,7 +89,7 @@ import {
 import { PlanService } from "./plan/service.js";
 import { recoverReleasedWorkItem } from "./program/work-items.js";
 import { RunContext } from "./run-context.js";
-import type { LiveHumanInput, ExecutionResumeAuthority } from "./live-input.js";
+import type { LiveHumanInput, ExecutionResumeAuthority, ExecutionActivity } from "./live-input.js";
 import { protectExecutionInputs } from "./execution-inputs.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 
@@ -233,6 +233,14 @@ function canonicalJson(value: unknown): string {
 }
 
 export class Orchestrator {
+  runtimeActivity?: ExecutionActivity;
+  get attachedExecutionCount(): number {
+    return this.running.size;
+  }
+  private readonly leaseKeepers = new Set<HeldLease>();
+  get leaseActivityCount(): number {
+    return this.leaseKeepers.size;
+  }
   admissionExecution: AdmissionExecutionRuntime | undefined;
   generations: ConfigurationGenerations | undefined;
   generationHumanInput: ((generation: GenerationMaterial) => HumanInputPort) | undefined;
@@ -475,6 +483,7 @@ export class Orchestrator {
   private runAttachment(runId: string, recovery: boolean): Promise<RunState> {
     const inflight = this.running.get(runId);
     if (inflight) return inflight;
+    const release = this.runtimeActivity?.enter("execution");
     const p = this.executeLeased(runId, recovery)
       .then(async () => {
         const projected = this.live.get(runId)?.publicState() ?? (await this.getState(runId));
@@ -484,6 +493,7 @@ export class Orchestrator {
       .finally(() => {
         this.running.delete(runId);
         this.live.delete(runId);
+        release?.();
       });
     this.running.set(runId, p);
     return p;
@@ -782,6 +792,7 @@ export class Orchestrator {
   ): Promise<{ runId: string; completion: Promise<RunState> }> {
     // Reserve synchronously, including against ordinary run() on this instance.
     if (this.running.has(runId)) throw new OrcaError("RUN_LEASED", "execution is already attached");
+    const release = this.runtimeActivity?.enter("execution");
     let acknowledge!: () => void;
     let refuse!: (error: unknown) => void;
     const attached = new Promise<void>((resolve, reject) => {
@@ -797,6 +808,7 @@ export class Orchestrator {
       .finally(() => {
         this.running.delete(runId);
         this.live.delete(runId);
+        release?.();
       });
     this.running.set(runId, completion);
     // Before acknowledgement the caller has no completion handle. After it, a
@@ -1365,6 +1377,7 @@ export class Orchestrator {
         rc.abort.abort(`lease on run ${runId} was taken away; another process may now be driving it`);
       },
     });
+    this.leaseKeepers.add(keeper);
     return {
       ...keeper,
       get lease() {
@@ -1373,10 +1386,22 @@ export class Orchestrator {
       get held() {
         return keeper.held;
       },
+      get renewalSettled() {
+        return keeper.renewalSettled;
+      },
       get lost() {
         return lost;
       },
-      release: () => keeper.release(),
+      release: async () => {
+        try {
+          await keeper.release();
+        } finally {
+          // Bounded release may leave a renewal holding the mutation mutex. Retain
+          // its activity until actual settlement without extending shutdown waits.
+          const settled = () => this.leaseKeepers.delete(keeper);
+          void keeper.renewalSettled.then(settled, settled);
+        }
+      },
     };
   }
 
@@ -1550,7 +1575,7 @@ export class Orchestrator {
   }
 
   private async executeStep(rc: RunContext, step: StepRun, node: NodeDef): Promise<StepOutcome> {
-    const executor = this.executors.get(node.type);
+    const executor = (this.contextGenerations.get(rc)?.executors ?? this.executors).get(node.type);
     if (!executor)
       return {
         kind: "failed",

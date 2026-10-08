@@ -1,0 +1,14 @@
+.orca-guided-launch {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow-y: auto;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+.orca-guided-launch__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

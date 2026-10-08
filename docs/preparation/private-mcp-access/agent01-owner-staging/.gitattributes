@@ -1,0 +1,5 @@
+# These downloadable bytes are checked by SHA-256 before owner execution.
+*.py text eol=lf
+*.service text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf

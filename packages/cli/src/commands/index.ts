@@ -832,6 +832,7 @@ export const commands: Record<string, Command> = {
       if (liveRuntime) {
         executionBinding.current = liveRuntime;
         app.orchestrator.liveInput = liveRuntime;
+        app.orchestrator.runtimeActivity = liveRuntime.activity;
         app.orchestrator.admissionExecution = {
           authorize: (policy) => liveRuntime.authorizeAdmissionExecution(policy),
         };
@@ -839,6 +840,8 @@ export const commands: Record<string, Command> = {
       const requestSubmissions =
         !readOnly && authDir && app.program.submissions
           ? new RequestSubmissionModel({
+              runtimeActivity: liveRuntime?.activity,
+              orchestrator: app.orchestrator,
               service: app.program.submissions,
               shouldDispatch: (id) => neverAttached(app.orchestrator, id),
               checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
@@ -854,6 +857,7 @@ export const commands: Record<string, Command> = {
       const admissionRetries =
         !readOnly && authDir && app.retryClaims && app.directAdmissions && app.program.submissions
           ? new AdmissionRetryModel({
+              runtimeActivity: liveRuntime?.activity,
               claims: app.retryClaims,
               direct: app.directAdmissions,
               requests: app.program.submissions,
@@ -869,6 +873,7 @@ export const commands: Record<string, Command> = {
       const continuationAdmissions =
         !readOnly && liveRuntime && app.retryClaims && app.retryClaimStore
           ? new ContinuationAdmissionModel({
+              runtimeActivity: liveRuntime.activity,
               claims: app.retryClaims,
               orchestrator: app.orchestrator,
               locators: new FileContinuationLocatorStore({
@@ -891,6 +896,7 @@ export const commands: Record<string, Command> = {
           : undefined;
       if (revisionServices && app.retryClaims) revisionServices.register(app.retryClaims);
       const daemon = await startDaemon({
+        runtimeIdle: liveRuntime,
         admissionExecutionSource: async (runId) => {
           const status = await readAdmissionExecutionStatus(app.orchestrator.stores, runId);
           switch (status.state) {

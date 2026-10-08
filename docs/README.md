@@ -1,21 +1,78 @@
 # Documentation index
 
+Start here to understand ORCA without installing it or supplying credentials.
+Current source is described in the [capability ledger](ROADMAP.md); the
+[7 October 2026 reconciliation](reviews/2026-10-07-living-docs.md) pins its evidence
+and records coverage and separately owned follow-ups. Documentation and source
+access invite developer insight; they do not require code changes or host access.
+
+## Orientation and contributing
+
 | Document | Read it when you want to… |
 | --- | --- |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | understand the layers, the interpreter, the agent hand‑off and where ORCA sits relative to Kepler / T3 Code |
-| [DATA-MODEL.md](DATA-MODEL.md) | know every entity, event type and the expression/template context |
-| [PLANNING.md](PLANNING.md) | understand the long‑term plan: dependencies across requests, the risk matrix, decision matrices, the scheduler and `orca plan` |
-| [WORKFLOWS.md](WORKFLOWS.md) | write or change a workflow (node types, routing, completion policies, templates) |
-| [INTEGRATIONS.md](INTEGRATIONS.md) | run ORCA inside Kepler, use agents over SSH, or read where the T3 Code groundwork stands |
-| [REAL-AGENT-TEST.md](REAL-AGENT-TEST.md) | set ORCA up against a real coding agent on one machine and drive it from Kepler |
-| [session-logs/](session-logs/) | read the raw event logs of selected real-agent sessions and runs, kept for reference |
-| [EXTENSIBILITY.md](EXTENSIBILITY.md) | add node types, transports, hosts, stores, human channels via plugins |
-| [ROADMAP.md](ROADMAP.md) | compare implemented capabilities with planned ship groups and dependencies |
-| [UPDATING.md](UPDATING.md) | update the desktop app and daemon with admission and compatibility checks |
-| [Historical review](../Current_State/README.md) | read the preserved 2026-09-29 snapshot and its dated reconciliation |
-| [Protocol reference](../packages/protocol/README.md) | inspect the current wire contract and version history |
-| [adr/](adr/) | the architectural decision records, including daemon boundaries and permission sidecars |
-| [DEVELOPMENT.md](DEVELOPMENT.md) | build, test, and review the code base |
-| [CONTRIBUTING.md](../CONTRIBUTING.md) | plan issues, reuse existing work, group coherent outcomes and make dependencies explicit |
-| [SwiftUI read-only pilot preparation](preparation/swiftui-readonly-pilot/README.md) | review iPhone screens, portable synthetic contracts, device prerequisites and the milestone 24 spike handoff |
-| [RELEASING.md](RELEASING.md) | cut a release: the versioning policy, what counts as breaking, and the milestone‑driven flow |
+| [Architecture](ARCHITECTURE.md) | understand engine, persistence, ACP/MCP directions, daemon and desktop boundaries |
+| [Current capabilities and roadmap](ROADMAP.md) | distinguish implemented foundations from M10 operator, M21 configuration/launch and M22 native beta acceptance |
+| [Development](DEVELOPMENT.md) | set up source tools, understand command effects and choose scoped checks |
+| [Contributing](../CONTRIBUTING.md) / [agent guidance](../AGENTS.md) | review repository conventions and plan outcomes without duplicating shipped work |
+| [Data model](DATA-MODEL.md) | understand domain entities, events and expression/template context; feature docs below extend the overview |
+| [Planning](PLANNING.md) | understand cross-request dependencies, risk/decision matrices, scheduling and the five Plan modes |
+| [Workflow authoring](WORKFLOWS.md) / [typed inputs](workflow-inputs.md) | define nodes, completion, templates and validated launch inputs |
+| [Extensibility](EXTENSIBILITY.md) / [builtin validation](builtin-node-validation.md) | implement plugin seams and understand bootstrap/restoration constraints |
+| [Design](design/README.md) / [binding UI rules](design/RULES.md) | inspect the current design system and surface conventions; editor proposals are identified as future work |
+| [ADRs](adr/) | read settled architectural decisions with their historical context |
+
+## Runtime, clients and safe operation
+
+| Document | Read it when you want to… |
+| --- | --- |
+| [Protocol reference](../packages/protocol/README.md) | inspect protocol 2.0, discovery, version history and current wire boundaries |
+| [Daemon security](daemon-security.md) / [connections](daemon-connection.md) | understand token/grant/resource checks and app target/draft isolation |
+| [Configuration generations](configuration-generations.md) | distinguish saving from activation and restore exact admitted choices |
+| [Request submission](request-submission.md) / [retry receipts](admission-retry.md) | separate Request/direct launch, acceptance, execution attachment and lost-response retry |
+| [Live input](live-input-continuity.md) / [human revisions](revision-input.md) | understand owner-local callbacks, durable gates and protected correction delivery |
+| [Protected execution storage](protected-execution-storage.md) / [replay errors](protected-replay-error-contract.md) | inspect privacy, complete backup/key boundaries and fail-closed error behavior |
+| [Owned root worktrees](root-worktree-isolation.md) | understand opt-in local Linux isolation and retained-evidence recovery limits |
+| [Integrations](INTEGRATIONS.md) | separate inbound MCP, ACP/Kepler, downstream servers, SSH and JEV; T3 Code transport is groundwork |
+| [MCP operator](mcp-operator.md) / [production acceptance](mcp-operator-production-acceptance.md) | inspect supported tools and reference-client evidence versus actual-Cal acceptance |
+| [Operator integration](runtime-operator-integration.md) | read the current source evidence map and dated integration/native checkpoints |
+| [Private MCP preparation](preparation/private-mcp-access/handoff.md) | review deployment/bridge contracts; use dated owner evidence before treating old recipes as current instructions |
+| [Host resources](host-resources.md) / [access-policy proposal](host-resource-access-policy.md) | understand bounded advisory measurement and unmounted production telemetry/grant limits |
+| [Independent maintenance MCP](maintenance-mcp.md) | inspect the read-only refusal-only preparation; it does not activate host controls |
+| [Updating](UPDATING.md) / [releasing](RELEASING.md) | inspect Windows/Debian mechanisms, candidate compatibility and Mac signing/upgrade gaps; these contain operator recipes, not an invitation to run them |
+| [CI shadow selection](ci-shadow-selection.md) | understand advisory selection, full-check authority and uncompleted rollout/release parity |
+| [Performance evidence](performance/persistence-baseline/README.md), [credential admin](performance/mcp-credential-admin/README.md), [retry worker](performance/admission-retry-worker/README.md) | inspect exact synthetic workload pins and measurement limits |
+
+## Preparation and research
+
+These are contracts, fixtures or research; a completed preparation issue is not
+installed/native/product acceptance. Current preparation packets and active implementation PRs are linked in the
+[roadmap](ROADMAP.md#current-priorities-and-acceptance); their merge does not establish
+product or platform acceptance.
+
+| Document | Purpose and boundary |
+| --- | --- |
+| [Native Mac delivery](preparation/native-mac-delivery/current-state.md) / [native testing](preparation/native-mac-testing/implementation-handoff.md) | dated source audits, signing prerequisites and candidate/physical acceptance handoffs |
+| [First-job sample](../examples/beta-first-job/README.md) / [offline acceptance](preparation/beta-first-job/acceptance.md) | harmless scripted fixture and refusal checks; no paid provider or physical beta proof |
+| [Cal first-job experience](preparation/cal-first-job-experience/README.md) | accepted experience specification, not a completed guided app launch |
+| [Configuration/launch implementation packet](preparation/configuration-launch-implementation/README.md) | merged reconciled preparation; accepted interface/runtime freeze and guided UI remain separate |
+| [Beta feedback](preparation/beta-feedback/README.md) | tester/report/triage preparation; physical walkthrough remains separate |
+| [Manual diagnostics contract](preparation/manual-diagnostics-contract/README.md) | original typed privacy/export fixtures; later #469 decisions and disabled #470 work are mapped in the roadmap |
+| [Diagnostics decisions](preparation/manual-diagnostics-implementation/README.md) | merged decision reconciliation; actual consent, native/privacy/producers and production acceptance remain open |
+| [Beta update/recovery](preparation/beta-update-support/README.md) | merged approved-update contract, not a Mac updater engine or native N-to-N+1 proof |
+| [Owner service evidence](preparation/private-mcp-access/agent01-owner-staging/README.md) | historical cutover/worker/post-SSH observations; command recipes are preserved audit records |
+| [Trusted prepared roots](preparation/trusted-prepared-roots/README.md) | offline copier/asset contract and fixtures, not an activated controller |
+| [ACP command conformance](preparation/acp-command-conformance/README.md) | synthetic approval contracts and remaining real-adapter/client tests |
+| [Tool-call safety](research/tool-call-safety/README.md) | proposed implicit policy/approval layer and assurance limits |
+| [Apple Watch research](preparation/apple-watch-approvals/README.md) / [iOS research](preparation/ios-companion/README.md) | proposed mobile scope/security/framework tradeoffs |
+| [SwiftUI read-only pilot](preparation/swiftui-readonly-pilot/README.md) | portable synthetic contracts and device/spike prerequisites |
+
+## Historical evidence
+
+The [frozen Current_State review](../Current_State/README.md) describes its
+2026-09-29 implementation baseline; the [1 October addendum](../Current_State/addenda/2026-10-01-main-reconciliation.md)
+records its later reconciliation. Its 186 baseline checksums and evidence remain intact.
+[Real-agent setup/runs](REAL-AGENT-TEST.md) and [session logs](session-logs/README.md)
+record September observations, not current host/provider status. The v0.5.2 checklists,
+`runtime-*-parallel-contract.md`, dated integration checkpoints and `patches/` preserve
+handoffs. Use their pins and the current feature references above; do not reapply settled
+patches, reopen product choices or substitute historical CI for a newer candidate.

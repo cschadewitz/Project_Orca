@@ -1,4 +1,157 @@
 /** Detect behavior-bearing plugin registrations before declaring a bootstrap restart-restorable. */
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { readFile } from "node:fs/promises";
+import {
+  builtinExecutors,
+  readPluginRestorationData,
+  PluginRestorationIdentitySchema,
+  PluginRestorationRecordsSchema,
+  pluginRestorationRefusal,
+  type OrcaPlugin,
+  type PluginRestorationData,
+  type PluginRestorationRecord,
+  type NodeExecutorRegistry,
+  type PluginRestorationIdentityVerifier,
+} from "@orca/engine";
+
+export interface LoadedRestorationPlugin {
+  spec: string;
+  plugin: OrcaPlugin;
+  /** Resolved local entry bytes are an additional check, not a dependency identity. */
+  entry?: { url: string; digest: string };
+  executors: string[];
+}
+
+/** v1 requires every plugin in a behavior-bearing generation to opt in. Mixed legacy composition stays bound. */
+export async function capturePluginRestoration(
+  plugins: readonly LoadedRestorationPlugin[],
+  unsupported: boolean,
+  verifyIdentity?: PluginRestorationIdentityVerifier,
+): Promise<PluginRestorationRecord[] | undefined> {
+  if (
+    !plugins.length ||
+    unsupported ||
+    !verifyIdentity ||
+    plugins.some(({ plugin, entry }) => !plugin.restoration || !entry)
+  )
+    return undefined;
+  const identities = new Set<string>();
+  const records: PluginRestorationRecord[] = [];
+  for (const loaded of plugins) {
+    const contract = loaded.plugin.restoration!;
+    const identity = PluginRestorationIdentitySchema.safeParse(contract.identity);
+    if (!identity.success || identities.has(identity.data.id)) throw pluginRestorationRefusal("invalid_descriptor");
+    identities.add(identity.data.id);
+    try {
+      if (
+        (await verifyIdentity({ spec: loaded.spec, identity: { ...identity.data }, entry: { ...loaded.entry! } })) !==
+        true
+      )
+        throw pluginRestorationRefusal("identity_unverified");
+    } catch {
+      throw pluginRestorationRefusal("identity_unverified");
+    }
+    let data: PluginRestorationData;
+    try {
+      data = readPluginRestorationData(await contract.capture());
+      if (contract.validate(data) !== true) throw pluginRestorationRefusal("invalid_descriptor");
+    } catch {
+      throw pluginRestorationRefusal("invalid_descriptor");
+    }
+    records.push({
+      contractVersion: 1,
+      spec: loaded.spec,
+      entryDigest: loaded.entry!.digest,
+      identity: identity.data,
+      data,
+      executors: loaded.executors,
+    });
+  }
+  const parsed = PluginRestorationRecordsSchema.safeParse(records);
+  if (!parsed.success) throw pluginRestorationRefusal("invalid_descriptor");
+  return parsed.data;
+}
+
+/** Validate the entire composition before invoking a single restoration factory. No plugin import/installation here. */
+export async function restorePluginExecutors(
+  raw: unknown,
+  plugins: readonly LoadedRestorationPlugin[],
+  verifyIdentity?: PluginRestorationIdentityVerifier,
+): Promise<NodeExecutorRegistry> {
+  const parsed = PluginRestorationRecordsSchema.safeParse(raw);
+  if (!parsed.success) throw pluginRestorationRefusal("invalid_descriptor");
+  const records = parsed.data;
+  if (records.length !== plugins.length) throw pluginRestorationRefusal("unavailable_plugin");
+  const identities = new Set<string>();
+  const types = new Set<string>();
+  for (const [index, record] of records.entries()) {
+    const loaded = plugins[index]!;
+    const contract = loaded.plugin.restoration;
+    if (loaded.spec !== record.spec || !contract || !loaded.entry) throw pluginRestorationRefusal("unavailable_plugin");
+    if (identities.has(record.identity.id)) throw pluginRestorationRefusal("invalid_descriptor");
+    identities.add(record.identity.id);
+    if (!isDeepStrictEqual(contract.identity, record.identity) || loaded.entry.digest !== record.entryDigest)
+      throw pluginRestorationRefusal("incompatible_identity");
+    const bytes = await readFile(new URL(loaded.entry.url)).catch(() => undefined);
+    if (!bytes || createHash("sha256").update(bytes).digest("hex") !== record.entryDigest)
+      throw pluginRestorationRefusal("incompatible_identity");
+    try {
+      if (
+        !verifyIdentity ||
+        (await verifyIdentity({ spec: loaded.spec, identity: { ...record.identity }, entry: { ...loaded.entry } })) !==
+          true
+      )
+        throw pluginRestorationRefusal("identity_unverified");
+    } catch {
+      throw pluginRestorationRefusal("identity_unverified");
+    }
+    try {
+      if (contract.validate(readPluginRestorationData(record.data)) !== true)
+        throw pluginRestorationRefusal("invalid_descriptor");
+    } catch {
+      throw pluginRestorationRefusal("invalid_descriptor");
+    }
+    for (const type of record.executors) {
+      if (types.has(type)) throw pluginRestorationRefusal("invalid_descriptor");
+      types.add(type);
+    }
+  }
+  const candidate = builtinExecutors();
+  for (const type of candidate.types()) candidate.register({ ...candidate.get(type)! });
+  for (const [index, record] of records.entries()) {
+    const registered = new Set<string>();
+    let accepting = true;
+    const api = Object.freeze({
+      executors: Object.freeze({
+        register: (executor: Parameters<NodeExecutorRegistry["register"]>[0]) => {
+          if (!accepting || !record.executors.includes(executor.type) || registered.has(executor.type))
+            throw pluginRestorationRefusal("unsupported_registration");
+          registered.add(executor.type);
+          candidate.register(executor);
+          return api.executors;
+        },
+      }),
+    });
+    try {
+      await plugins[index]!.plugin.restoration!.restore(readPluginRestorationData(record.data), api);
+      if (registered.size !== record.executors.length) throw pluginRestorationRefusal("reconstruction_failed");
+    } catch {
+      throw pluginRestorationRefusal("reconstruction_failed");
+    } finally {
+      accepting = false;
+    }
+  }
+  // Factories cannot retain a writable registration surface after candidate validation.
+  Object.defineProperty(candidate, "register", {
+    value: () => {
+      throw pluginRestorationRefusal("unsupported_registration");
+    },
+  });
+  Object.freeze(candidate);
+  return candidate;
+}
+
 interface ObjectState {
   object: object;
   prototype: object | null;

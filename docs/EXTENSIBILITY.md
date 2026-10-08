@@ -5,6 +5,14 @@ Every extension point is an interface in `@orca/engine` / `@orca/agents` / `@orc
 and most can be reached from a **plugin**: an ES module whose default export is an
 `OrcaPlugin` (`packages/engine/src/plugin.ts`), listed under `plugins:` in `orca.config.yaml`.
 
+Current generation capture does not make arbitrary plugin closures reproducible.
+Behavior-bearing custom executors, workspace providers, signal extractors or host
+callbacks bind that generation to its bootstrap lifetime. Historical restoration
+after process restart fails closed without an explicit restoration contract;
+the JEV example is in this category. No-op/declarative-only plugins have a narrower
+verified restoration path. Read [configuration generations](configuration-generations.md#reloadability)
+before changing or restarting a deployment with admitted plugin-backed work (#394–#396).
+
 ```ts
 // plugins/jira.ts
 import { definePlugin, completed } from "@orca/engine";

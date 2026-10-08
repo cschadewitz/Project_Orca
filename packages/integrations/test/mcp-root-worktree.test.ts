@@ -4,6 +4,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { ProductionFixture, accepted, refused } from "./mcp-operator-production-fixture.js";
+import { ReplayDiagnostics } from "./mcp-replay-diagnostics.js";
 
 let fixture: ProductionFixture | undefined;
 afterEach(async () => {
@@ -64,12 +65,31 @@ it("a six-grant owned-only MCP client admits isolated direct roots without plan 
     },
     "AUTH_FORBIDDEN",
   );
-  await f.stop();
-  await f.boot();
-  const restarted = await f.connect("stdio", issued.token);
-  const replay = accepted(
-    await f.mutation(restarted, "operator.admitRun", { ...first.params, target: restarted.target }),
-  );
-  expect(replay).toEqual({ ...first.receipt, replayed: true });
-  expect((await readdir(receiptDir)).filter((name) => name.endsWith(".json"))).toHaveLength(2);
+  const diagnostics = new ReplayDiagnostics();
+  const previousDaemon = f.daemon;
+  try {
+    await diagnostics.measure("stop", () => f.stop());
+    await diagnostics.measure("boot", () => f.boot());
+    const restarted = await diagnostics.measure("connect", () =>
+      f.connect("stdio", issued.token, f.endpoint, diagnostics.capture),
+    );
+    const replay = accepted(
+      await diagnostics.measure("replay", () =>
+        f.mutation(restarted, "operator.admitRun", { ...first.params, target: restarted.target }),
+      ),
+    );
+    expect(replay).toEqual({ ...first.receipt, replayed: true });
+    expect((await readdir(receiptDir)).filter((name) => name.endsWith(".json"))).toHaveLength(2);
+  } catch (error) {
+    console.error(
+      "MCP admission restart failure",
+      JSON.stringify(
+        await diagnostics
+          .evidence(f, previousDaemon, first.receipt.operationId, first.runId)
+          .then((evidence) => ({ ...evidence, fixtureWaits: f.progress.snapshot() }))
+          .catch(() => ({ unavailable: true })),
+      ),
+    );
+    throw error;
+  }
 });

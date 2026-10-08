@@ -1,4 +1,22 @@
-# Integrations: Kepler, T3 Code, SSH agents, JEV
+# Integrations: MCP operator, Kepler, T3 Code, SSH agents, JEV
+
+## Inbound MCP and downstream capabilities
+
+The [MCP operator](mcp-operator.md) is implemented on current main over authenticated
+daemon reads, preflight and conditionally mounted production mutations. Stdio and
+Streamable HTTP use the shared admission/retry/continuation services; an approved
+TLS listener/bridge remains necessary for remote HTTP. Read the
+[reference acceptance](mcp-operator-production-acceptance.md) separately from
+[#393 actual-Cal acceptance](https://github.com/cschadewitz/Project_Orca/issues/393).
+Observed live discovery does not prove every Request/control/recovery/gate path,
+current-main deployment or arbitrary run access.
+
+`agents[].mcpServers` delivers configured servers downstream to ACP agents. Generic
+scoped MCP/skills resolution, secret references and per-session delivery verification
+(#335–#337) remain separate work. [ACP command conformance](preparation/acp-command-conformance/README.md)
+is preparation and synthetic evidence, not a live provider/client approval pass.
+Protocol **2.0** clients and daemons must upgrade together; a root version of 0.6.0
+does not identify the deployed source commit.
 
 ORCA is deliberately **standalone**: it is an ACP *client* to the coding agents
 below it and an ACP *agent* to the tools above it. That lets it work inside or

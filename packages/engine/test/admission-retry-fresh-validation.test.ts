@@ -397,7 +397,18 @@ describe.each(["direct", "request"] as const)("fresh %s admission", (kind) => {
   it("serializes compatible callers through separate file claim stores and publishes once", async () => {
     const f = await admissionFixture();
     const other = f.services();
-    const [first, second] = await Promise.all([f.submit(kind), other.submit(kind)]);
+    let [first, second] = await Promise.all([f.submit(kind), other.submit(kind)]);
+    expect(first.operationId).toBe(second.operationId);
+    // A contender may exhaust the bounded lock wait before the owner publishes.
+    // Once both calls finish, the same key must converge without another admission.
+    if (first.state === "in-progress") {
+      expect(first.recovery).toBe("inspect-or-retry");
+      first = await f.submit(kind);
+    }
+    if (second.state === "in-progress") {
+      expect(second.recovery).toBe("inspect-or-retry");
+      second = await other.submit(kind);
+    }
     expect(first).toMatchObject({ state: "resolved", result: { state: "accepted" } });
     expect(second).toMatchObject({ state: "resolved", operationId: first.operationId });
     if (first.state !== "resolved" || second.state !== "resolved") throw new Error("admissions did not resolve");
@@ -409,6 +420,63 @@ describe.each(["direct", "request"] as const)("fresh %s admission", (kind) => {
     expect(f.capture).toHaveBeenCalledTimes(2);
     expect(f.run).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "bounds a held-owner contender and rechecks authority on same-key retry (revoked=%s)",
+    async (revoked) => {
+      const f = await admissionFixture();
+      const other = f.services();
+      let entered!: () => void;
+      let release!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // Fresh validation succeeds. Hold prepare under the operation lock until the
+      // contender exhausts the fixture's unchanged two-second acquisition budget.
+      f.capture.mockImplementationOnce(f.generations.captureLaunch).mockImplementationOnce(async (selection) => {
+        entered();
+        await held;
+        return f.generations.captureLaunch(selection);
+      });
+      const owner = f.submit(kind);
+      let contender: Awaited<ReturnType<typeof other.submit>>;
+      try {
+        await Promise.race([
+          ready,
+          owner.then(() => {
+            throw new Error("Owner completed before entering the prepare barrier");
+          }),
+        ]);
+        contender = await other.submit(kind);
+        expect(contender).toMatchObject({ state: "in-progress", recovery: "inspect-or-retry" });
+      } finally {
+        release();
+        await owner;
+      }
+      const first = await owner;
+      expect(first).toMatchObject({ state: "resolved", replayed: false, result: { state: "accepted" } });
+      expect(contender.operationId).toBe(first.operationId);
+      const record = await f.store.read(first.operationId);
+      if (revoked) {
+        const refusal = new OrcaError("RUN_STATE", "Authority revoked after contention");
+        vi.mocked(f.authority.authorize).mockRejectedValueOnce(refusal);
+        f.directAuthority.authorize.mockRejectedValueOnce(refusal);
+        await expect(other.submit(kind)).rejects.toBe(refusal);
+      } else {
+        expect(await other.submit(kind)).toEqual({ ...first, replayed: true });
+      }
+      expect(await f.store.read(first.operationId)).toEqual(record);
+      expect(await f.store.batch()).toEqual([first.operationId]);
+      expect(await f.orc.listRuns()).toHaveLength(1);
+      expect(await f.stores.requests.list()).toHaveLength(kind === "request" ? 1 : 0);
+      expect(f.start).toHaveBeenCalledTimes(1);
+      expect(f.capture).toHaveBeenCalledTimes(2);
+      expect(f.run).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains explicit uncertainty when prepare revalidation fails after publication", async () => {
     const f = await admissionFixture();

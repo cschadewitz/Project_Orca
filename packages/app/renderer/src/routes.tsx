@@ -15,6 +15,7 @@ import { StateView } from "./ui/index.js";
 
 const Preview = import.meta.env.DEV ? lazy(() => import("./preview/preview.js")) : undefined;
 const TypeProof = import.meta.env.DEV ? lazy(() => import("./preview/type-proof.js")) : undefined;
+const ResourcesPreview = import.meta.env.DEV ? lazy(() => import("./preview/resources.js")) : undefined;
 
 const subscribe = (onChange: () => void): (() => void) => {
   window.addEventListener("hashchange", onChange);
@@ -25,6 +26,13 @@ const route = (): string => window.location.hash;
 export function Routes(): JSX.Element {
   const hash = useSyncExternalStore(subscribe, route, route);
 
+  if (ResourcesPreview !== undefined && hash === "#resources") {
+    return (
+      <Suspense fallback={<StateView kind="loading" title="Loading resource fixtures" />}>
+        <ResourcesPreview />
+      </Suspense>
+    );
+  }
   if (Preview !== undefined && hash === "#preview") {
     return (
       <Suspense fallback={<StateView kind="loading" title="Loading the primitive preview" />}>

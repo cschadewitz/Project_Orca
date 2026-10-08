@@ -1,57 +1,132 @@
-/** Exercise the actual CI classifier without touching Git history or running its check matrix. */
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { createRequire } from "node:module";
+/** Exercise the actual positive docs classifier over immutable Git histories, including both rename paths. */
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { expect, it } from "vitest";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { beforeAll, afterAll, expect, it } from "vitest";
+import { docsOnly, DOCS_PATH, loadDocs } from "../ci-shadow/docs.js";
+import { checkDocumentation } from "../ci-shadow/check-docs.js";
+import { git } from "../ci-shadow/git.js";
 
-const coreRequire = createRequire(new URL("../../packages/core/package.json", import.meta.url));
-const { parse } = coreRequire("yaml");
-const workflow = parse(readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8"));
-const script = workflow.jobs.changes.steps.find((step) => step.id === "classify").run;
-const fakeGit = `git() {
-  if [ "$1" = cat-file ]; then
-    [ "$BASE_AVAILABLE" = true ]
-  elif [ "$1" = diff ]; then
-    printf '%s\\n' "$CHANGED_PATHS"
-  else
-    return 2
-  fi
-}
-`;
+const root = fileURLToPath(new URL("../../", import.meta.url));
+let repo;
+let base;
+const command = (...args) => git(repo, args).toString().trim();
+const write = (path, content) => {
+  mkdirSync(dirname(join(repo, path)), { recursive: true });
+  writeFileSync(join(repo, path), content);
+};
+const save = () => {
+  command("add", "-A");
+  command("commit", "-qm", "classification fixture");
+  return command("rev-parse", "HEAD");
+};
+const reset = () => {
+  command("checkout", "--detach", base);
+  command("clean", "-fdq");
+};
+const input = () => {
+  const head = save();
+  return { repo, base, head, candidate: head };
+};
+beforeAll(() => {
+  repo = mkdtempSync(join(tmpdir(), "orca-ci-docs-"));
+  command("init", "-q");
+  command("config", "user.name", "CI fixture");
+  command("config", "user.email", "ci@example.invalid");
+  for (const path of [DOCS_PATH, "tools/ci-shadow/docs.js", "tools/ci-shadow/git.js"])
+    write(path, readFileSync(join(root, path)));
+  for (const path of [
+    "README.md",
+    "docs/DEVELOPMENT.md",
+    "docs/daemon-security.md",
+    "changelog.d/README.md",
+    "packages/engine/test/example.test.ts",
+    "packages/engine/src/reader.ts",
+  ])
+    write(path, path.endsWith(".md") ? "# Existing prose\n" : "/** Existing source. */\n");
+  base = save();
+});
+afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
+it.each(["README.md", "docs/DEVELOPMENT.md", "changelog.d/README.md"])(
+  "avoids both expensive runtime suites for audited ordinary %s",
+  (path) => {
+    reset();
+    write(
+      path,
+      "# Corrected prose\n[Existing doc](docs/DEVELOPMENT.md)\n".replace(
+        "(docs/",
+        path.includes("/") ? "(../docs/" : "(docs/",
+      ),
+    );
+    const change = input();
+    expect(docsOnly(change)).toBe(true);
+    expect(checkDocumentation(change)).toContain(path);
+  },
+);
 it.each([
-  ["documentation validator", "docs/preparation/owned-root-candidate-49efcc7/validate-documentation.mjs", true],
-  ["proposal validator", "docs/preparation/owned-root-candidate-49efcc7/validate-proposal.mjs", true],
-  ["plain JavaScript in docs", "docs/example.js", true],
-  ["CommonJS in docs", "docs/example.cjs", true],
-  ["JSX in docs", "docs/example.jsx", true],
-  ["mixed documentation and code", "docs/guide.md\ndocs/example.mjs", true],
-  ["prose and evidence only", "README.md\ndocs/guide.md\ndocs/build.log\ndocs/proposal.yaml", false],
-  ["Markdown about JavaScript", "docs/example.js.md", false],
-  ["runtime prompt template", "templates/task.md", true],
-  ["TypeScript source", "packages/core/src/index.ts", true],
-  ["unknown base", "docs/guide.md", true, false],
-])("classifies %s", (_label, paths, expected, baseAvailable = true) => {
-  const directory = mkdtempSync(join(tmpdir(), "orca-ci-classification-"));
-  const output = join(directory, "output.txt");
-  try {
-    execFileSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", fakeGit + script], {
-      env: {
-        ...process.env,
-        BASH_ENV: "",
-        ENV: "",
-        BASE: "fixture-base",
-        HEAD: "fixture-head",
-        BASE_AVAILABLE: String(baseAvailable),
-        CHANGED_PATHS: paths,
-        GITHUB_OUTPUT: output.replaceAll("\\", "/"),
-      },
-      timeout: 10000,
-    });
-    expect(readFileSync(output, "utf8").trim()).toBe(`code=${expected}`);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
+  "docs/daemon-security.md",
+  "docs/unknown.md",
+  "docs/preparation/contract.md",
+  "docs/preparation/validator.mjs",
+  "templates/task.md",
+  "changelog.d/99-added.added.md",
+  "tools/ci-shadow/docs.js",
+  DOCS_PATH,
+  "packages/engine/src/reader.ts",
+  "packages/engine/src/new-reader.ts",
+  ".github/workflows/ci.yml",
+])("retains runtime checks for consumed/unknown/consumer/classifier input %s", (path) => {
+  reset();
+  write(path, "changed\n");
+  expect(docsOnly(input())).toBe(false);
+});
+it("does not turn a mixed docs/code change into docs-only", () => {
+  reset();
+  write("README.md", "Updated\n");
+  write("packages/engine/src/reader.ts", "changed\n");
+  expect(docsOnly(input())).toBe(false);
+});
+it.each(["README.md", "docs/daemon-security.md", "packages/engine/test/example.test.ts"])(
+  "keeps deleted %s full",
+  (path) => {
+    reset();
+    command("rm", path);
+    expect(docsOnly(input())).toBe(false);
+  },
+);
+it.each([
+  ["packages/engine/test/example.test.ts", "docs/new-test.md"],
+  ["packages/engine/test/example.test.ts", "README.md"],
+  ["docs/daemon-security.md", "docs/new-security.md"],
+  ["README.md", "docs/new-readme.md"],
+])("keeps both rename paths from %s to %s full", (from, to) => {
+  reset();
+  command("mv", "-f", from, to);
+  expect(docsOnly(input())).toBe(false);
+});
+it("rejects new inventoried destinations, unknown bases and mode changes", () => {
+  reset();
+  write("docs/ARCHITECTURE.md", "New file\n");
+  expect(docsOnly(input())).toBe(false);
+  reset();
+  chmodSync(join(repo, "README.md"), 0o755);
+  expect(docsOnly(input())).toBe(false);
+  expect(() => docsOnly({ repo, base: "0".repeat(40), head: base, candidate: base })).toThrow();
+});
+it.each(["# Broken\n[Missing](no-such-file.md)\n", "# Broken\n```ts\n", "# Trailing  \n", "# CRLF\r\n"])(
+  "blocks malformed prose or local links",
+  (text) => {
+    reset();
+    write("README.md", text);
+    expect(() => checkDocumentation(input())).toThrow();
+  },
+);
+it("positive inventory excludes all known consumed prose scopes rather than accepting arbitrary Markdown", () => {
+  const paths = loadDocs().paths;
+  expect(paths.length).toBeGreaterThan(50);
+  expect(paths).toContain("changelog.d/README.md");
+  expect(paths).not.toContain("docs/daemon-security.md");
+  expect(paths.some((path) => path.startsWith("docs/preparation/") || path.startsWith("templates/"))).toBe(false);
 });

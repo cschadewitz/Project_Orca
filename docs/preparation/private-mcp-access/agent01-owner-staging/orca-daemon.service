@@ -1,0 +1,26 @@
+[Unit]
+Description=Authenticated ORCA daemon for private MCP
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=5min
+StartLimitBurst=6
+
+[Service]
+Type=simple
+WorkingDirectory=/home/casey/.orca-codex-work
+# Clear the manager environment before Node or tunnel-client can read it.
+# Optional proxy/CA assignments must be literal reviewed values; see the runbook.
+ExecStart=/usr/bin/env -i HOME=/home/casey PATH=/home/casey/.local/share/mise/installs/node/24.21.0/bin:/usr/bin:/bin LANG=C TMPDIR=/srv/dev/orca-temp-cal /home/casey/.local/share/mise/installs/node/24.21.0/bin/node /home/casey/.local/share/orca-runtime/49efcc7236ac127c952bb1f7a50fc6ef72f7df84/packages/cli/dist/main.js --config /home/casey/.orca-codex-work/orca.yaml serve --host 127.0.0.1 --port 33871
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+KillMode=control-group
+SendSIGKILL=yes
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+# GET http://127.0.0.1:33871/health is local liveness only.
+
+[Install]
+WantedBy=default.target

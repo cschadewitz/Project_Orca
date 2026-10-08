@@ -1,0 +1,17 @@
+# Separate opt-in to retain agent-01's existing private launcher unchanged.
+# Fresh authenticated discovery is required before every post-restart mutation.
+config_version: 1
+control_plane:
+  base_url: https://api.openai.com
+  tunnel_id: @TUNNEL_ID@
+  api_key: file:@CONTROL_PLANE_KEY_FILE@
+  poll_channels: [main]
+health:
+  listen_addr: 127.0.0.1:@TUNNEL_HEALTH_PORT@
+log:
+  level: info
+  format: struct-text
+mcp:
+  commands:
+    - channel: main
+      command: @NODE@ @LIVE_LAUNCHER@

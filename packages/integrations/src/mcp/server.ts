@@ -6,6 +6,7 @@ import {
   ProtocolFault,
   OperatorPageParamsSchema,
   OPERATOR_MAX_RESULT_BYTES,
+  HOST_RESOURCE_LIMITS,
   type OperatorDiscovery,
   type OperatorCollection,
 } from "@orca/protocol";
@@ -18,6 +19,12 @@ interface ToolEntry {
   collection?: OperatorCollection;
 }
 export const OPERATOR_TOOLS: readonly ToolEntry[] = [
+  {
+    name: "get_daemon_resources",
+    operation: "hostResources",
+    description:
+      "Read advisory resources of the authenticated daemon machine and separately authorized caller-visible workstreams. Missing or stale metrics are unknown, never zero or a safe-to-launch guarantee. No remote host or refresh selectors.",
+  },
   {
     name: "discover_orca",
     operation: "discover",
@@ -203,8 +210,19 @@ export function createOperatorServer(backend: AuthenticatedOperatorBackend): Ser
         return errorResult("RUN_STATE", "Connection changed; inspect the original operation before retrying");
       if (!allowed(tool, latest) || JSON.stringify(latest.scope) !== JSON.stringify(discovery.scope))
         return errorResult("AUTH_FORBIDDEN", "Operator authority changed during the call");
+      if (
+        tool.operation === "hostResources" &&
+        Buffer.byteLength(JSON.stringify(result)) > HOST_RESOURCE_LIMITS.snapshotBytes
+      )
+        return errorResult("PROTOCOL_MESSAGE", "Invalid or oversized resource observation");
       const safe = MCP_OPERATIONS[tool.operation].output.safeParse(result);
       if (!safe.success) return errorResult("PROTOCOL_MESSAGE", "Backend returned an invalid operator result");
+      if (
+        tool.operation === "hostResources" &&
+        "daemonInstanceId" in safe.data &&
+        safe.data.daemonInstanceId !== discovery.target.instanceId
+      )
+        return errorResult("RUN_STATE", "Resource target changed; discover again");
       const output: CallToolResult = {
         content: [{ type: "text", text: JSON.stringify(safe.data) }],
         structuredContent: safe.data,

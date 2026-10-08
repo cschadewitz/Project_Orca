@@ -28,7 +28,9 @@ import {
   type ResponseMessage,
 } from "@orca/protocol";
 import type { IssueOptions } from "../../daemon/src/auth/credentials.js";
+import { FixtureProgress, rpcStage, toolStage } from "./fixture-progress.js";
 import { continuationDiagnostics } from "./continuation-diagnostics.js";
+import { transportObserverSource } from "./mcp-replay-diagnostics.js";
 
 export const aliases = {
   "operator.submitRequest": "submit_request",
@@ -69,7 +71,11 @@ export interface Peer {
   endpoint: string;
 }
 
+const peerProgress = new WeakMap<Client, FixtureProgress>();
+
 export class ProductionFixture {
+  readonly progress = new FixtureProgress();
+  private failurePublished = false;
   readonly cleanup: (() => Promise<unknown>)[] = [];
   readonly processes: { child: ChildProcessWithoutNullStreams; output: () => string }[] = [];
   readonly tokenSecrets: string[] = [];
@@ -79,7 +85,7 @@ export class ProductionFixture {
   token = "";
   daemon!: ChildProcessWithoutNullStreams;
 
-  static async create() {
+  static async create(onAcquired?: (fixture: ProductionFixture) => void) {
     for (const file of [
       cli,
       join(root, "packages/integrations/dist/mcp/transport.js"),
@@ -94,14 +100,27 @@ export class ProductionFixture {
     const f = new ProductionFixture();
     f.dir = await mkdtemp(join(tmpdir(), "orca-mcp-production-"));
     try {
+      onAcquired?.(f);
       await f.prepare();
       await f.boot();
       // Persistent non-bootstrap identity survives another daemon's bootstrap rotation.
       f.token = (await f.issue({ principal: "acceptance-owner", preset: "owner" })).token;
       return f;
     } catch (error) {
+      f.reportFailure();
       await f.close();
       throw error;
+    }
+  }
+
+  /** Setup and test hooks share one guarded, failure-only publication before cleanup. */
+  reportFailure(): void {
+    if (this.failurePublished) return;
+    this.failurePublished = true;
+    try {
+      console.error("Production fixture wait failure", JSON.stringify(this.progress.snapshot()));
+    } catch {
+      // Diagnostic publication cannot replace the original failure or skip cleanup.
     }
   }
 
@@ -213,7 +232,10 @@ export class ProductionFixture {
     return { child, output: () => output };
   }
 
-  async stop(child = this.daemon, signal: NodeJS.Signals = "SIGTERM") {
+  stop(child = this.daemon, signal: NodeJS.Signals = "SIGTERM") {
+    return this.progress.measure("daemon.stop", () => this.stopProcess(child, signal));
+  }
+  private async stopProcess(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals) {
     if (child.exitCode !== null || child.signalCode !== null) return;
     const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
     child.kill(signal);
@@ -225,8 +247,19 @@ export class ProductionFixture {
     }
   }
 
-  async boot() {
-    const proc = this.process([cli, "serve", "--config", join(this.dir, "orca.config.yaml"), "--port", "0"]);
+  boot(testPreload?: string) {
+    return this.progress.measure("daemon.boot", () => this.bootDaemon(testPreload));
+  }
+  private async bootDaemon(testPreload?: string) {
+    const proc = this.process([
+      ...(testPreload ? ["--import", `data:text/javascript,${encodeURIComponent(testPreload)}`] : []),
+      cli,
+      "serve",
+      "--config",
+      join(this.dir, "orca.config.yaml"),
+      "--port",
+      "0",
+    ]);
     await until(
       async () => {
         if (proc.child.exitCode !== null)
@@ -245,8 +278,13 @@ export class ProductionFixture {
   }
 
   /** Admin operations affect only this fixture's synthetic auth directory, in another compiled process. */
-  private async admin(action: "issue" | "revoke", value: unknown): Promise<unknown> {
-    const code = `import { openAuthDirectory } from ${JSON.stringify(moduleUrl("packages/daemon/dist/index.js"))};
+  private admin(action: "issue" | "revoke", value: unknown): Promise<unknown> {
+    return this.progress.measure(action === "issue" ? "credential.issue" : "credential.revoke", () =>
+      this.administer(action, value),
+    );
+  }
+  private async administer(action: "issue" | "revoke", value: unknown): Promise<unknown> {
+    const code = `import { openAuthDirectory } from ${JSON.stringify(moduleUrl("packages/daemon/dist/auth/bootstrap.js"))};
       let text = ''; for await (const chunk of process.stdin) text += chunk;
       const {action, value, dir} = JSON.parse(text); const auth = openAuthDirectory(dir);
       const result = action === 'issue' ? await auth.credentials.issue(value) : await auth.credentials.revoke(value);
@@ -272,6 +310,9 @@ export class ProductionFixture {
   }
 
   async rpc(method: string, params: unknown, token = this.token, endpoint = this.endpoint): Promise<ResponseMessage> {
+    return this.progress.measure(rpcStage(method), () => this.sendRpc(method, params, token, endpoint));
+  }
+  private async sendRpc(method: string, params: unknown, token: string, endpoint: string): Promise<ResponseMessage> {
     const id = randomUUID();
     const response = await fetch(`${endpoint}/rpc`, {
       method: "POST",
@@ -311,47 +352,73 @@ export class ProductionFixture {
     return async (method: string, params: unknown): Promise<ResponseMessage> => {
       if (ws.readyState !== WebSocket.OPEN) throw new Error("Socket closed");
       const id = randomUUID();
-      return new Promise((resolve, reject) => {
-        const finish = () => {
-          clearTimeout(timer);
-          ws.removeEventListener("message", listener);
-          ws.removeEventListener("close", closed);
-        };
-        const closed = () => {
-          finish();
-          reject(new Error("Socket closed"));
-        };
-        const listener = (event: MessageEvent) => {
-          const parsed = ResponseMessageSchema.safeParse(JSON.parse(String(event.data)));
-          if (parsed.success && parsed.data.id === id) {
-            finish();
-            resolve(parsed.data);
-          }
-        };
-        const timer = setTimeout(() => {
-          finish();
-          reject(new Error(`Socket request timed out: ${method}`));
-        }, 5000);
-        ws.addEventListener("message", listener);
-        ws.addEventListener("close", closed);
-        ws.send(JSON.stringify({ kind: "request", id, method, params }));
-      });
+      return this.progress.measure(
+        rpcStage(method),
+        () =>
+          new Promise<ResponseMessage>((resolve, reject) => {
+            const finish = () => {
+              clearTimeout(timer);
+              ws.removeEventListener("message", listener);
+              ws.removeEventListener("close", closed);
+            };
+            const closed = () => {
+              finish();
+              reject(new Error("Socket closed"));
+            };
+            const listener = (event: MessageEvent) => {
+              const parsed = ResponseMessageSchema.safeParse(JSON.parse(String(event.data)));
+              if (parsed.success && parsed.data.id === id) {
+                finish();
+                resolve(parsed.data);
+              }
+            };
+            const timer = setTimeout(() => {
+              finish();
+              reject(new Error(`Socket request timed out: ${method}`));
+            }, 5000);
+            ws.addEventListener("message", listener);
+            ws.addEventListener("close", closed);
+            ws.send(JSON.stringify({ kind: "request", id, method, params }));
+          }),
+      );
     };
   }
 
-  async connect(transport: Transport, token = this.token, endpoint = this.endpoint): Promise<Peer> {
+  async connect(
+    transport: Transport,
+    token = this.token,
+    endpoint = this.endpoint,
+    observeTransport?: (chunk: Buffer) => void,
+  ): Promise<Peer> {
+    return this.progress.measure("mcp.connect", () => this.openPeer(transport, token, endpoint, observeTransport));
+  }
+  private async openPeer(
+    transport: Transport,
+    token: string,
+    endpoint: string,
+    observeTransport?: (chunk: Buffer) => void,
+  ): Promise<Peer> {
     const client = new Client({ name: "orca-production-acceptance", version: "1" });
+    peerProgress.set(client, this.progress);
     this.cleanup.push(() => client.close());
     if (transport === "stdio") {
       const wire = new StdioClientTransport({
         command: process.execPath,
-        args: [cli, "mcp", "--endpoint", endpoint],
+        args: [
+          ...(observeTransport
+            ? ["--import", `data:text/javascript,${encodeURIComponent(transportObserverSource)}`]
+            : []),
+          cli,
+          "mcp",
+          "--endpoint",
+          endpoint,
+        ],
         cwd: this.dir,
         env: { ...environment(), ORCA_MCP_TOKEN: token },
         stderr: "pipe",
       });
       // Consume stderr, but never allow an SDK error to print a token.
-      wire.stderr?.on("data", () => undefined);
+      wire.stderr?.on("data", observeTransport ?? (() => undefined));
       await client.connect(wire);
     } else {
       // An isolated loopback private bridge supplies the fixed HTTPS origin; no TLS bypass,
@@ -488,7 +555,10 @@ export class ProductionFixture {
   }
 
   /** Wait for publication milestones before asserting a settled MCP projection. Errors propagate. */
-  async readyInput(peer: Peer, runId: string) {
+  readyInput(peer: Peer, runId: string) {
+    return this.progress.measure("wait.input", () => this.observeInput(peer, runId));
+  }
+  private async observeInput(peer: Peer, runId: string) {
     const requested = await until(
       async () => {
         const events = await this.observedEvents(peer, runId);
@@ -545,7 +615,10 @@ export class ProductionFixture {
     return requested;
   }
 
-  async readyStatus(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
+  readyStatus(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
+    return this.progress.measure(`wait.${status}`, () => this.observeStatus(peer, runId, status));
+  }
+  private async observeStatus(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
     const type = { waiting: "run.paused", succeeded: "run.completed", cancelled: "run.cancelled" }[status];
     const events = await until(
       () => this.observedEvents(peer, runId),
@@ -601,7 +674,10 @@ export class ProductionFixture {
     }
   }
 
-  async boundary(peer: Peer, runId: string) {
+  boundary(peer: Peer, runId: string) {
+    return this.progress.measure("wait.boundary", () => this.observeBoundary(peer, runId));
+  }
+  private async observeBoundary(peer: Peer, runId: string) {
     await this.readyStatus(peer, runId, "waiting");
     const page = await until(
       () => this.page(peer, "runs", { runId }),
@@ -611,7 +687,10 @@ export class ProductionFixture {
     return page.items[0]!.expectedBoundary!;
   }
 
-  async status(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
+  status(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
+    return this.progress.measure(`wait.${status}`, () => this.observeProjectionStatus(peer, runId, status));
+  }
+  private async observeProjectionStatus(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
     await this.readyStatus(peer, runId, status);
     return until(
       () => this.page(peer, "runs", { runId }),
@@ -748,7 +827,13 @@ export class ProductionFixture {
   }
 }
 
-export async function tool(client: Client, name: string, args: object): Promise<unknown> {
+export function tool(client: Client, name: string, args: object): Promise<unknown> {
+  const progress = peerProgress.get(client);
+  return progress
+    ? progress.measure(toolStage(name), () => callTool(client, name, args))
+    : callTool(client, name, args);
+}
+async function callTool(client: Client, name: string, args: object): Promise<unknown> {
   const result = await client.callTool({ name, arguments: { ...args } });
   expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(OPERATOR_MAX_RESULT_BYTES);
   if (result.isError) throw new Error(`MCP refused ${name}: ${JSON.stringify(result.content)}`);
