@@ -16,7 +16,25 @@ import {
   readMacManifest,
   sha256,
 } from "./mac-candidate-manifest.js";
-import { MacUpdates, type MacUpdateCandidate, type MacUpdateSnapshot, type MacUpdateTarget } from "./mac-updates.js";
+import {
+  MacUpdates,
+  type MacUpdateCandidate,
+  type MacUpdateSnapshot,
+  type MacUpdateTarget,
+  type MacUpdatePorts,
+} from "./mac-updates.js";
+
+/** Read-only preparation checkpoint, never native activation or recovery eligibility. */
+export interface MacCandidatePrepared {
+  readonly binding: MacCandidateBinding;
+  readonly directory: string;
+  readonly target: Readonly<MacUpdateTarget>;
+  readonly scope: "preparation-only";
+}
+export interface MacCandidatePreparation extends Pick<MacUpdatePorts, "prepareDrafts" | "prepareAdmission"> {
+  /** Only explicit untouched refusal allows guard cleanup. No positive readiness/installation result. */
+  checkPrepared(this: void, prepared: MacCandidatePrepared): Promise<"refused" | "unknown">;
+}
 
 export interface MacCandidateOffer {
   readonly manifestBytes: Uint8Array;
@@ -37,7 +55,8 @@ function sameCandidate(a: MacUpdateCandidate, b: MacUpdateCandidate): boolean {
 }
 /** Construct only in trusted main code, after policy/delivery ownership is approved. No production
  * constructor call, renderer IPC, persisted approval, catalog polling, native updater or installation.
- * Even a verified download stops at the disabled draft guard. Unknown verification/cleanup seals this
+ * Without trusted preparation ports a verified download stops at the disabled draft guard.
+ * Preparation cannot authorize native installation. Unknown verification/cleanup seals this
  * session; the existing coordinator's failed phase proves only that installed app/state were untouched.
  */
 export class MacCandidateSession {
@@ -50,8 +69,20 @@ export class MacCandidateSession {
   private uncertain = false;
   private downloadOutcome: "verified" | "failed" | "unknown" | undefined;
   private retiredOfferId: string | undefined;
+  private operation: Promise<MacUpdateSnapshot> | undefined;
 
-  constructor(ports?: MacCandidateDownloadPorts) {
+  constructor(ports?: MacCandidateDownloadPorts, preparation?: MacCandidatePreparation) {
+    const guards =
+      preparation &&
+      typeof preparation.prepareDrafts === "function" &&
+      typeof preparation.prepareAdmission === "function" &&
+      typeof preparation.checkPrepared === "function"
+        ? Object.freeze({
+            prepareDrafts: preparation.prepareDrafts,
+            prepareAdmission: preparation.prepareAdmission,
+            checkPrepared: preparation.checkPrepared,
+          })
+        : undefined;
     if (
       ports &&
       typeof ports.root === "string" &&
@@ -87,9 +118,24 @@ export class MacCandidateSession {
         }
         return "failed";
       },
-      prepareDrafts: () => Promise.resolve({ outcome: "blocked", blocker: "candidate" }),
-      prepareAdmission: () => Promise.resolve({ outcome: "blocked", blocker: "identity" }),
-      revalidate: () => Promise.resolve("refused"),
+      prepareDrafts: guards?.prepareDrafts ?? (() => Promise.resolve({ outcome: "blocked", blocker: "candidate" })),
+      prepareAdmission:
+        guards?.prepareAdmission ?? (() => Promise.resolve({ outcome: "blocked", blocker: "identity" })),
+      revalidate: async (candidate, target) => {
+        if (!guards) return "refused";
+        if (this.uncertain || !this.binding || !this.owned || !sameCandidate(candidate, this.binding.value.candidate))
+          return "unknown";
+        const result = await guards.checkPrepared(
+          Object.freeze({
+            binding: this.binding.value,
+            directory: this.owned.directory,
+            target,
+            scope: "preparation-only" as const,
+          }),
+        );
+        // Malformed/positive adapter output is never complete-state/native readiness.
+        return result === "refused" ? "refused" : "unknown";
+      },
       activate: () => Promise.resolve("refused"),
     });
   }
@@ -100,13 +146,19 @@ export class MacCandidateSession {
   get verification(): "verified" | "failed" | "unknown" | undefined {
     return this.downloadOutcome;
   }
+  /** Observe current preparation and owned cleanup settlement, never grant readiness. */
+  async settled(): Promise<MacUpdateSnapshot> {
+    await this.operation;
+    await this.cleaning;
+    return this.state;
+  }
   async offer(
     input: MacCandidateOffer,
     target: MacUpdateTarget,
     signal: AbortSignal,
   ): Promise<MacCandidateOfferResult> {
     if (this.uncertain) return { outcome: "unknown" };
-    if (this.offering || this.cleaning || !["idle", "deferred", "failed"].includes(this.state.phase))
+    if (this.offering || this.cleaning || this.operation || !["idle", "deferred", "failed"].includes(this.state.phase))
       return { outcome: "busy" };
     if (!this.ports || !validMacDownloadLimits(this.ports.limits)) return { outcome: "refused" };
     this.offering = true;
@@ -166,8 +218,32 @@ export class MacCandidateSession {
     }
   }
   async approve(offerId: string): Promise<MacUpdateSnapshot> {
-    if (this.uncertain || this.cleaning || this.offering || this.retiredOfferId === offerId) return this.state;
-    return this.updates.approve(offerId);
+    if (this.uncertain || this.cleaning || this.offering || this.operation || this.retiredOfferId === offerId)
+      return this.state;
+    return this.observe(async () => {
+      if (this.uncertain || this.cleaning || this.retiredOfferId === offerId) return this.state;
+      return this.updates.approve(offerId);
+    });
+  }
+  /** Supported activity notification only; never polling or implicit approval. */
+  async reconsider(): Promise<MacUpdateSnapshot> {
+    if (this.uncertain || this.cleaning || this.offering || this.retiredOfferId === this.state.offerId)
+      return this.state;
+    if (this.operation) return this.updates.reconsider();
+    return this.observe(async () => {
+      if (this.uncertain || this.cleaning || this.retiredOfferId === this.state.offerId) return this.state;
+      return this.updates.reconsider();
+    });
+  }
+  private observe(operation: () => Promise<MacUpdateSnapshot>): Promise<MacUpdateSnapshot> {
+    // Reserve before an adapter can synchronously call back into defer/reconsider.
+    const result = Promise.resolve().then(operation);
+    this.operation = result;
+    void result.then((state) => {
+      if (state.phase === "recovery-required") this.uncertain = true;
+      if (this.operation === result) this.operation = undefined;
+    });
+    return result;
   }
   defer(offerId: string): boolean {
     if (!this.updates.defer(offerId)) return false;
@@ -176,8 +252,17 @@ export class MacCandidateSession {
     // a new approval downloads/inspects new owned bytes. Do not silently approve another ID.
     this.retiredOfferId = offerId;
     if (!this.uncertain) this.downloadOutcome = undefined;
-    if (this.owned && !this.cleaning) {
-      this.cleaning = this.discard().finally(() => {
+    if ((this.owned || this.operation) && !this.cleaning) {
+      const operation = this.operation;
+      this.cleaning = (async () => {
+        await operation;
+        // Do not erase candidate evidence while remote/window ownership is uncertain.
+        if (this.state.phase === "recovery-required") {
+          this.uncertain = true;
+          return;
+        }
+        await this.discard();
+      })().finally(() => {
         this.cleaning = undefined;
       });
     }
