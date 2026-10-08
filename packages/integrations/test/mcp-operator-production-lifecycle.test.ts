@@ -25,11 +25,24 @@ import {
 } from "./mcp-operator-production-fixture.js";
 
 let f: ProductionFixture;
+let fixtureReady = false;
+let fixtureSetup: Promise<ProductionFixture>;
 beforeEach(async () => {
-  f = await ProductionFixture.create();
+  fixtureReady = false;
+  fixtureSetup = ProductionFixture.create((acquired) => {
+    f = acquired;
+    fixtureReady = true;
+  });
+  f = await fixtureSetup;
 });
-afterEach(async () => {
-  await f?.close();
+afterEach(async (ctx) => {
+  if (fixtureReady && ctx.task.result?.state === "fail") f.reportFailure();
+  // Setup owns cleanup on rejection. A hook timeout must retain that owner and
+  // its root until setup settles, rather than racing late acquired work.
+  await fixtureSetup?.then(
+    (fixture) => fixture.close(),
+    () => undefined,
+  );
 });
 
 describe.each(transports)("compiled production lifecycle via %s", (transport) => {
