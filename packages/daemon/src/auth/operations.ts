@@ -156,6 +156,7 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   unsubscribe: { permission: null, resource: "subscription" },
 
   maintenance: { permission: "daemon.maintenance", resource: "none", audit: "mutation" },
+  "maintenance.runtime": { permission: "daemon.maintenance", resource: "none", audit: "mutation" },
 };
 
 /**

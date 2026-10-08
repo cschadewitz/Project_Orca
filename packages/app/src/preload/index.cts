@@ -45,6 +45,59 @@ let targetEpoch = (ipcRenderer.sendSync("orca:daemon.read") as DaemonTargetSnaps
 const call = <T,>(channel: string, params?: unknown): Promise<BridgeResult<T>> =>
   ipcRenderer.invoke(channel, params, targetEpoch) as Promise<BridgeResult<T>>;
 
+/** Ownership survives renderer subscription replacement within this document. */
+let updateGuardListener: ((locked: boolean) => boolean) | undefined;
+let legacyDraftNonce: string | undefined;
+let macDraftOwner: { nonce: string; generation: number; phase: "prepare" | "release" } | undefined;
+let macReleased: { nonce: string; generation: number } | undefined;
+function forwardMacDraft(_event: unknown, value: unknown): void {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("nonce" in value) ||
+    typeof value.nonce !== "string" ||
+    !value.nonce ||
+    !("generation" in value) ||
+    typeof value.generation !== "number" ||
+    !Number.isSafeInteger(value.generation) ||
+    value.generation < 0 ||
+    !("phase" in value) ||
+    (value.phase !== "prepare" && value.phase !== "release")
+  )
+    return;
+  const message: { nonce: string; generation: number; phase: "prepare" | "release" } = {
+    nonce: value.nonce,
+    generation: value.generation,
+    phase: value.phase,
+  };
+  let ready = false;
+  const matches = (owner: { nonce: string; generation: number } | undefined) =>
+    owner?.nonce === message.nonce && owner.generation === message.generation;
+  if (message.phase === "prepare") {
+    if (!legacyDraftNonce && (!macDraftOwner || matches(macDraftOwner)) && !matches(macReleased)) {
+      macDraftOwner = message;
+      try {
+        ready = updateGuardListener?.(true) === true;
+      } catch {
+        /* Keep the freeze owned. */
+      }
+    }
+  } else if (matches(macDraftOwner)) {
+    macDraftOwner = message;
+    try {
+      ready = updateGuardListener?.(false) === true;
+    } catch {
+      /* No positive unlock. */
+    }
+    if (ready) {
+      macReleased = message;
+      macDraftOwner = undefined;
+    }
+  } else if (!macDraftOwner && matches(macReleased)) ready = true;
+  ipcRenderer.send("orca:macUpdate.prepared", { ...message, ready });
+}
+ipcRenderer.on("orca:macUpdate.prepare", forwardMacDraft);
+
 const bridge: OrcaBridge = {
   admissionIntents: {
     start: (workflowId) => call("orca:admissionIntents.start", workflowId),
@@ -87,13 +140,22 @@ const bridge: OrcaBridge = {
       };
     },
     prepare: (listener) => {
+      updateGuardListener = listener;
       const forward = (_event: unknown, nonce: string | null) => {
+        if (macDraftOwner) {
+          if (nonce) ipcRenderer.send("orca:update.prepared", { nonce, ready: false });
+          return;
+        }
+        if (nonce !== null && typeof nonce !== "string") return;
+        legacyDraftNonce = nonce ?? undefined;
         const ready = listener(nonce !== null);
         if (nonce) ipcRenderer.send("orca:update.prepared", { nonce, ready });
       };
       ipcRenderer.on("orca:update.prepare", forward);
+      if (macDraftOwner) forwardMacDraft(undefined, macDraftOwner);
       return () => {
         ipcRenderer.off("orca:update.prepare", forward);
+        if (updateGuardListener === listener) updateGuardListener = undefined;
       };
     },
   },
