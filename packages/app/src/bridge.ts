@@ -15,6 +15,7 @@
  * it states what is waiting, and the main process has no verdict to give back.
  */
 import type { DiagnosticsBridge } from "./diagnostics-contract.js";
+import type { FirstRunBridge } from "./first-run-contract.js";
 import type { DaemonConnectionBridge } from "./daemon-connection.js";
 import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
 import type { MacUpdateCommand, MacUpdateView } from "./mac-update-contract.js";
@@ -209,6 +210,7 @@ export interface AlertActivation {
 
 import type { GuidedLaunchSnapshot, ProtectedGuidedLaunch } from "./guided-launch-bridge.js";
 export interface OrcaBridge {
+  firstRun?: FirstRunBridge;
   macUpdates?: {
     read(): MacUpdateView;
     act(command: MacUpdateCommand): Promise<BridgeResult<MacUpdateView>>;

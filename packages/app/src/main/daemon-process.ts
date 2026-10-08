@@ -66,6 +66,8 @@ export interface BundledDaemon {
   /** What to hand `DaemonClient`: `http://host:port`. */
   readonly url: string;
   readonly pid: number | undefined;
+  /** Direct-child terminal evidence. Ordinary stop timeout alone is not this evidence. */
+  readonly exited?: boolean;
   /** The safe startup metadata, never the credential itself. */
   readonly tokenFile?: string;
   /**
@@ -361,6 +363,9 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
   return {
     url,
     pid: child.pid,
+    get exited() {
+      return child.exitCode !== null || child.signalCode !== null;
+    },
     ...(tokenFile ? { tokenFile } : {}),
     stopForMacUpdate: (target, boundary, operationMs, signal) => {
       if (updateStop) {

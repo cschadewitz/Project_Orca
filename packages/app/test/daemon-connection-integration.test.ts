@@ -1,6 +1,7 @@
 /** Applied-patch regression: invoke the real main IPC handlers with Electron at the boundary. */
 import { EventEmitter } from "node:events";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
@@ -13,6 +14,7 @@ import type { DaemonTargetSnapshot } from "../src/daemon-connection.js";
 
 const shell = vi.hoisted(() => ({
   userData: "",
+  home: "",
   workspace: undefined as Workspace | undefined,
   handlers: new Map<string, (...args: unknown[]) => Promise<unknown>>(),
   rendererEvents: new Map<string, () => void>(),
@@ -84,7 +86,7 @@ vi.mock("electron", async () => {
       decryptStringAsync: shell.keyUnwrap,
     },
     app: {
-      getPath: (name: string) => (name === "userData" ? shell.userData : "/launch-workspace"),
+      getPath: (name: string) => (name === "userData" ? shell.userData : shell.home || "/launch-workspace"),
       requestSingleInstanceLock: () => true,
       getVersion: () => "0.6.0",
       setBadgeCount: shell.badge,
@@ -151,6 +153,7 @@ beforeEach(() => {
   shell.handlers.clear();
   shell.rendererEvents.clear();
   shell.workspace = undefined;
+  shell.home = "";
   shell.ready = true;
   shell.hasWindow = true;
   shell.nativeEnabled = true;
@@ -486,6 +489,7 @@ it.each(["env", "bundled", "store"] as const)(
     directory = await mkdtemp(join(tmpdir(), "orca-alert-epoch-"));
     shell.userData = directory;
     vi.stubEnv("ORCA_DAEMON_URL", source === "env" ? "http://localhost:9999" : "");
+    vi.stubEnv("ORCA_WORKSPACE", "/launch-workspace");
     vi.spyOn(DaemonClient.prototype, "subscribe").mockReturnValue({ close: vi.fn() } as unknown as DaemonSubscription);
     await import("../src/main/index.js");
     const workspace = shell.workspace!;
@@ -613,3 +617,84 @@ it("composes the Mac window lease with main IPC while installation stays unavail
   expect(shell.nativeEnabled).toBe(true);
   expect(main.macUpdateGuards.draftsValid()).toBe(false);
 });
+
+it.skipIf(typeof process.getuid !== "function")(
+  "mounts first-run selection/preparation before hello and rejects paths, stale frames, epochs and pending drafts",
+  async () => {
+    directory = await mkdtemp(join(tmpdir(), "orca-main-first-run-ipc-"));
+    shell.userData = directory;
+    shell.home = join(directory, "home");
+    const project = join(directory, "project"),
+      selected = join(directory, "selected");
+    for (const path of [shell.home, project, selected]) await mkdir(path);
+    execFileSync("git", ["init", "-b", "prepared", project], { stdio: "pipe" });
+    execFileSync(
+      "git",
+      [
+        "-C",
+        project,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--allow-empty",
+        "--no-gpg-sign",
+        "-m",
+        "synthetic",
+      ],
+      { stdio: "pipe" },
+    );
+    const main = await import("../src/main/index.js");
+    const { DaemonClient } = await import("../src/client/daemon-client.js");
+    const probe = vi.spyOn(DaemonClient.prototype, "hello");
+    const sender = shell.webContents!;
+    const event = { sender, senderFrame: sender.mainFrame };
+    const epoch = shell.workspace!.connectionTarget.epoch;
+    const invoke = (method: string, input?: unknown, caller = event, callerEpoch = epoch) =>
+      shell.handlers.get(`orca:workspace.firstRun.${method}`)!(caller, input, callerEpoch);
+    expect(await invoke("status")).toMatchObject({ ok: true, result: { state: "selection-required" } });
+    expect(probe).not.toHaveBeenCalled();
+    expect(await invoke("choose", { path: project })).toMatchObject({ ok: false });
+    expect(await invoke("status", undefined, { sender, senderFrame: {} })).toMatchObject({ ok: false });
+    expect(await invoke("status", undefined, event, epoch + 1)).toMatchObject({ ok: false });
+    shell.openDialog
+      .mockResolvedValueOnce({ canceled: false, filePaths: [project] })
+      .mockResolvedValueOnce({ canceled: false, filePaths: [selected] });
+    const review = (await invoke("choose")) as BridgeResult<{ state: "review"; review: { id: string } }>;
+    expect(review).toMatchObject({ ok: true, result: { state: "review" } });
+    if (!review.ok) throw new Error("Expected review");
+    expect(await readdir(selected)).toEqual([]);
+    expect(await invoke("prepare", review.result.review.id)).toMatchObject({ ok: true, result: { state: "prepared" } });
+    expect(await invoke("prepare", review.result.review.id)).toMatchObject({ ok: false });
+    shell.ready = false;
+    expect(await invoke("connect")).toMatchObject({ ok: false });
+    expect(shell.stop).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
+    shell.ready = true;
+    // The exact caller frame is rechecked after an outstanding native picker.
+    let complete!: (value: { canceled: boolean; filePaths: string[] }) => void;
+    shell.openDialog.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const choosing = invoke("choose");
+    await vi.waitFor(() => expect(complete).toBeTypeOf("function"));
+    expect(await main.macUpdateGuards.prepareDrafts()).toMatchObject({ outcome: "blocked" });
+    expect(shell.nativeEnabled).toBe(true);
+    const update = await main.macUpdateGuards.prepareAdmission(
+      {
+        ...{ workspaceId: "11111111-1111-4111-8111-111111111111", instanceId: "22222222-2222-4222-8222-222222222222" },
+        epoch,
+      },
+      "synthetic",
+    );
+    expect(update.outcome).toBe("blocked");
+    sender.mainFrame = {};
+    complete({ canceled: false, filePaths: [project] });
+    expect(await choosing).toMatchObject({ ok: false });
+    expect(await readdir(selected)).toEqual(["first-run", "orca.config.yaml"]);
+  },
+);

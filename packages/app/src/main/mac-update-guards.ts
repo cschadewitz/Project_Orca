@@ -8,10 +8,12 @@ export class MacUpdateGuards {
   constructor(
     private readonly workspace: Workspace,
     windows: DraftWindowBoundary,
+    private readonly setupBusy: () => boolean = () => false,
   ) {
     this.drafts = new NonceDraftGuard(windows);
   }
   prepareDrafts(): Promise<MacPreparation<MacDraftLease>> {
+    if (this.setupBusy()) return Promise.resolve({ outcome: "blocked", blocker: "window-unavailable" });
     return this.drafts.prepare();
   }
   draftsValid(): boolean {

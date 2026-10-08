@@ -108,7 +108,9 @@ int main(int argc, char **argv) {
     close(ready[0]); close(hold[1]);
     handle *writer=root_at(path); assert(!run(writer,NULL,"acquire","","").error);
     assert(write(ready[1],"x",1)==1); close(ready[1]);
-    char signal; (void)read(hold[0],&signal,1);
+    char signal; ssize_t received;
+    do { received=read(hold[0],&signal,1); } while(received<0 && errno==EINTR);
+    assert(received==0); close(hold[0]);
     _exit(0);
   }
   close(ready[1]); close(hold[0]);

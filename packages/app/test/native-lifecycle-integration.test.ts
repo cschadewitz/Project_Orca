@@ -138,6 +138,7 @@ it("stops the exact Workspace child cleanly once and keeps calls, reconnect, dra
   await expect(f.workspace.connect()).rejects.toThrow("busy");
   await expect(f.workspace.connectLive()).rejects.toThrow("progress");
   await expect(f.workspace.prepareConnection(null)).rejects.toThrow("busy");
+  await expect(f.workspace.prepareFirstRunConnection(f.workspace.snapshot.path)).rejects.toThrow("busy");
   await expect(f.workspace.cancelUpdate("unrelated")).rejects.toThrow("busy");
   expect(f.start).toHaveBeenCalledOnce();
   expect(f.frozen()).toBe(true);

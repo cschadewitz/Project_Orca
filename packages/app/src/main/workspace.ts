@@ -1,6 +1,6 @@
 /**
  * Owns the app's daemon clients, streams and bundled processes. Startup and read-only
- * store opening retain the existing fallback behavior; ConnectionTarget stages live URL
+ * store opening fail closed without an explicit target; ConnectionTarget stages live URL
  * replacements through prepareConnection without detaching the current stream.
  *
  * ready() gates startup/file-mode transitions. Resource IPC also validates the caller's
@@ -46,6 +46,7 @@ export interface WorkspaceDeps {
     entry: string;
     cwd: string;
     readOnly: boolean;
+    configPath?: string;
     onExit: (exit: DaemonExit) => void;
   }) => Promise<BundledDaemon>;
   /** Build the read client for a daemon URL. */
@@ -75,17 +76,13 @@ export interface WorkspaceDeps {
    * beside it would only confuse which store is on screen.
    */
   explicitUrl?: string | undefined;
-  /** The default URL to look for when nothing is bundled and nothing was said. */
+  /** A development endpoint used only with an explicitly supplied workspace. */
   savedUrl?: string | undefined;
   onTarget?: (target: DaemonTargetSnapshot) => void;
   defaultUrl: string;
-  /**
-   * The workspace the bundled daemon serves by default: `ORCA_WORKSPACE`, or the user's
-   * home directory. Home is a placeholder with a known shape — `orca serve` reads `~/.orca`
-   * and answers an empty run list rather than failing — and **Open a store…** is the way
-   * off it.
-   */
-  defaultPath: () => string;
+  /** Explicit environment workspace only. No home-directory bootstrap. */
+  defaultPath: () => string | undefined;
+  setupBusy?: () => boolean;
 }
 
 /**
@@ -122,6 +119,7 @@ export class Workspace {
   private updating = false;
   private epoch = 0;
   private identity: HelloResult["identity"];
+  private verifiedHello: HelloResult | undefined;
   private observedHello = false;
   private source: DaemonTargetSnapshot["source"] = "development";
   private savedUrl: string | undefined;
@@ -132,6 +130,11 @@ export class Workspace {
   private macUpdateHold: symbol | undefined;
   /** Process-local restart fence. No replacement/admission may reopen after a stop attempt. */
   private macUpdateStopping = false;
+  private firstRunHold: symbol | undefined;
+  private firstRunOwners = new WeakMap<
+    BundledDaemon,
+    { path: string; identity: NonNullable<HelloResult["identity"]> }
+  >();
 
   /** Capture a locally owned target without sending maintenance or stopping any process.
    * The reservation fences connection changes through authentication and subsequent checks.
@@ -165,6 +168,8 @@ export class Workspace {
       this.updating ||
       this.macUpdateHold ||
       this.pending ||
+      this.firstRunHold ||
+      this.deps.setupBusy?.() ||
       this.connectionPreparations.size ||
       this.candidates.size ||
       this.parkedDefault ||
@@ -323,6 +328,7 @@ export class Workspace {
   observeHello(client: DaemonClient, hello: HelloResult): void {
     if (this.macUpdateStopping) return;
     if (client !== this.clientNow) return;
+    this.verifiedHello = hello;
     const next = hello.identity;
     if (!this.observedHello) {
       // The switch already fenced the old target. Its first verified identity enriches
@@ -344,9 +350,194 @@ export class Workspace {
     }
   }
 
+  /** Receipt verification belongs to FirstRunSetup; this checks the exact live child and identity. */
+  currentFirstRun(path: string): boolean {
+    const owner = this.daemon && this.firstRunOwners.get(this.daemon);
+    return Boolean(
+      !this.closed &&
+      !this.macUpdateStopping &&
+      owner &&
+      this.identity &&
+      this.verifiedHello &&
+      isCompatible(PROTOCOL_VERSION, this.verifiedHello.protocol) &&
+      this.verifiedHello.processId === this.daemon?.pid &&
+      this.verifiedHello.storeDir === join(path, ".orca") &&
+      (["runs.read", "runs.control", "runs.subscribe"] as const).every((capability) =>
+        this.verifiedHello?.capabilities.includes(capability),
+      ) &&
+      owner.path === path &&
+      this.target.path === path &&
+      !this.target.readOnly &&
+      this.source === "bundled" &&
+      owner.identity.workspaceId === this.identity.workspaceId &&
+      owner.identity.instanceId === this.identity.instanceId,
+    );
+  }
+
+  /** Stage only a bundled owned child for this exact reviewed workspace; never seek a default port. */
+  async prepareFirstRunConnection(
+    path: string,
+  ): Promise<ConnectionCandidate & { expectedProcessId: number; validateActivation(hello: HelloResult): void }> {
+    if (this.deps.explicitUrl) throw new ConnectionRefusal("ORCA_DAEMON_URL controls this launch.");
+    if (
+      this.closed ||
+      this.updating ||
+      this.macUpdateHold ||
+      this.firstRunHold ||
+      this.pending ||
+      this.connectionPreparations.size
+    )
+      throw new Error("Workspace is busy");
+    if (!path || resolve(path) !== path) throw new ConnectionRefusal("A canonical selected workspace is required.");
+    const hold = Symbol("first-run-candidate");
+    this.firstRunHold = hold;
+    const epoch = this.epoch;
+    let daemon: BundledDaemon | undefined;
+    let exited = false;
+    let settled = false;
+    let reuse = false;
+    let startupAttempted = false;
+    const release = () => {
+      if (this.firstRunHold === hold) this.firstRunHold = undefined;
+    };
+    try {
+      for (const owned of [this.daemon, this.parkedDefault]) {
+        if (!owned) continue;
+        const owner = this.firstRunOwners.get(owned);
+        if (owner?.path === path) {
+          daemon = owned;
+          reuse = true;
+          break;
+        }
+        // Never start a competing writer for an active store of unknown first-run identity.
+        if (owned === this.daemon && this.target.path === path)
+          throw new ConnectionRefusal("The selected workspace already has an unverified owned daemon.");
+      }
+      if (!reuse && this.parkedDefault)
+        throw new ConnectionRefusal("Return to the parked bundled workspace before selecting another.");
+      if (!daemon) {
+        const entry = this.deps.findEntry();
+        if (!entry) throw new NoBundledDaemonError(path);
+        startupAttempted = true;
+        daemon = await this.deps.start({
+          entry,
+          cwd: path,
+          readOnly: false,
+          configPath: join(path, "orca.config.yaml"),
+          onExit: () => {
+            exited = true;
+            if (this.daemon === daemon) this.daemonExited();
+            if (this.parkedDefault === daemon) this.parkedDefault = undefined;
+          },
+        });
+        this.candidates.add(daemon);
+      }
+      const owned = daemon;
+      const processId = owned.pid;
+      if (
+        !Number.isSafeInteger(processId) ||
+        !processId ||
+        processId < 1 ||
+        typeof owned.exited !== "boolean" ||
+        owned.tokenFile !== join(path, "auth", "local-client.token")
+      )
+        throw new ConnectionRefusal("The bundled daemon did not supply owned process and authentication metadata.");
+      const client = this.deps.client(owned.url, { workspace: path, bundled: true, tokenFile: owned.tokenFile });
+      const check = () => {
+        this.assertEpoch(epoch);
+        if (
+          settled ||
+          exited ||
+          owned.exited === true ||
+          this.closed ||
+          this.updating ||
+          this.macUpdateHold ||
+          this.pending ||
+          this.firstRunHold !== hold
+        )
+          throw new Error("Workspace changed while connecting");
+        if (reuse && owned !== this.daemon && owned !== this.parkedDefault) throw new Error("Owned daemon changed");
+      };
+      check();
+      const validateActivation = (hello: HelloResult) => {
+        check();
+        if (!hello.identity || hello.processId !== processId || hello.storeDir !== join(path, ".orca"))
+          throw new ConnectionRefusal("Owned first-run identity changed.");
+        const previousOwner = this.firstRunOwners.get(owned);
+        if (
+          reuse &&
+          (!previousOwner ||
+            previousOwner.identity.workspaceId !== hello.identity.workspaceId ||
+            previousOwner.identity.instanceId !== hello.identity.instanceId)
+        )
+          throw new ConnectionRefusal("Owned first-run identity changed.");
+      };
+      return {
+        client,
+        expectedProcessId: processId,
+        check,
+        validateActivation,
+        dispose: async () => {
+          if (settled) return;
+          settled = true;
+          try {
+            if (!reuse) await owned.stop();
+          } finally {
+            // A timeout/throw is not exit proof. Keep unknown ownership reserved.
+            if (reuse || owned.exited === true) {
+              this.candidates.delete(owned);
+              release();
+            }
+          }
+          if (!reuse && owned.exited !== true)
+            throw new ConnectionRefusal("Owned candidate exit is unconfirmed; connection preparation remains blocked.");
+        },
+        activate: (hello) => {
+          validateActivation(hello);
+          if (!hello.identity) throw new ConnectionRefusal("Owned first-run identity changed.");
+          const old = this.daemon;
+          const oldSource = this.source;
+          if (owned === this.parkedDefault) this.parkedDefault = undefined;
+          if (old && old !== owned && this.source === "bundled") this.parkedDefault = old;
+          this.stream?.close();
+          this.stream = undefined;
+          this.daemon = owned;
+          this.clientNow = client;
+          this.target = { path, readOnly: false, source: "default" };
+          this.source = "bundled";
+          this.savedUrl = undefined;
+          this.identity = hello.identity;
+          this.verifiedHello = hello;
+          this.observedHello = true;
+          this.firstRunOwners.set(owned, { path, identity: hello.identity });
+          this.candidates.delete(owned);
+          settled = true;
+          release();
+          this.epoch += 1;
+          this.deps.onSwitch(false);
+          this.deps.onTarget?.(this.connectionTarget);
+          this.stream = this.deps.subscribe(client);
+          this.deps.onSnapshot(this.snapshot);
+          if (old && old !== owned && oldSource !== "bundled")
+            void old.stop().catch(() => this.deps.onError?.("Previous bundled daemon did not stop", undefined));
+        },
+      };
+    } catch (error) {
+      try {
+        if (daemon && !reuse) await daemon.stop();
+      } finally {
+        if (!startupAttempted || (daemon && daemon.exited === true)) {
+          if (daemon) this.candidates.delete(daemon);
+          release();
+        }
+      }
+      throw error;
+    }
+  }
+
   /** Prepare without stopping the current daemon or opening a replacement stream. */
   async prepareConnection(url: string | null, source: "saved" | "env" = "saved"): Promise<ConnectionCandidate> {
-    if (this.macUpdateHold) throw new Error("Workspace is busy");
+    if (this.macUpdateHold || this.firstRunHold) throw new Error("Workspace is busy");
     const ticket = Symbol("connection-preparation");
     this.connectionPreparations.add(ticket);
     try {
@@ -384,7 +575,8 @@ export class Workspace {
       throw new ConnectionRefusal("Use the bundled daemon button instead of saving its temporary URL.");
     const epoch = this.epoch;
     let daemon: BundledDaemon | undefined;
-    const path = this.deps.defaultPath();
+    const path = this.deps.defaultPath() ?? "";
+    if (url === null && !path) throw new ConnectionRefusal("Prepare and connect a selected first-run workspace first.");
     const reuse = url === null ? (this.source === "bundled" ? this.daemon : this.parkedDefault) : undefined;
     let client: DaemonClient;
     if (reuse) {
@@ -471,7 +663,8 @@ export class Workspace {
   }
 
   async prepareUpdate(token: string): Promise<void> {
-    if (this.macUpdateHold) throw new Error("Workspace is busy");
+    if (this.macUpdateHold || this.firstRunHold || this.deps.setupBusy?.() || this.connectionPreparations.size)
+      throw new Error("Workspace is busy");
     if (this.parkedDefault) throw new Error("Return to the bundled daemon before updating the app");
     this.updating = true;
     try {
@@ -503,8 +696,8 @@ export class Workspace {
     this.deps = deps;
     this.savedUrl = deps.savedUrl;
     this.source = deps.explicitUrl ? "env" : deps.savedUrl ? "saved" : "development";
-    this.target = { path: deps.defaultPath(), readOnly: false, source: deps.explicitUrl ? "env" : "default" };
-    this.clientNow = deps.client(deps.explicitUrl ?? deps.savedUrl ?? deps.defaultUrl, {
+    this.target = { path: deps.defaultPath() ?? "", readOnly: false, source: deps.explicitUrl ? "env" : "default" };
+    this.clientNow = deps.client(deps.explicitUrl ?? deps.savedUrl ?? (this.target.path ? deps.defaultUrl : ""), {
       workspace: this.target.path,
       bundled: false,
     });
@@ -537,7 +730,13 @@ export class Workspace {
 
   /** The first connection, from `whenReady`. Never rejects — see `switchTo`. */
   connect(): Promise<void> {
-    if (this.macUpdateHold) return Promise.reject(new Error("Workspace is busy"));
+    if (this.closed || this.macUpdateHold || this.firstRunHold || this.connectionPreparations.size)
+      return Promise.reject(new Error("Workspace is busy"));
+    if (!this.deps.explicitUrl && !this.savedUrl && !this.target.path) {
+      this.deps.onDaemonGone("Choose a project and empty app workspace in Config.");
+      this.deps.onSnapshot(this.snapshot);
+      return Promise.resolve();
+    }
     return this.switchTo(this.target);
   }
 
@@ -547,17 +746,24 @@ export class Workspace {
    * window that silently did nothing.
    */
   async open(path: string): Promise<WorkspaceSnapshot> {
-    if (this.updating || this.macUpdateHold) throw new Error("Update restart is in progress");
+    if (this.closed || this.updating || this.macUpdateHold || this.firstRunHold || this.connectionPreparations.size)
+      throw new Error("Update restart or connection preparation is in progress");
     if (!this.deps.findEntry()) throw new NoBundledDaemonError(path);
+    if (this.parkedDefault && this.firstRunOwners.get(this.parkedDefault)?.path === path)
+      throw new ConnectionRefusal("This workspace has a parked owned daemon. Return to it before opening its store.");
     await this.switchTo({ path, readOnly: true, source: "chosen" });
     return this.snapshot;
   }
 
   /** The banner's **Connect to a daemon**: back to the daemon the app would have used. */
   async connectLive(): Promise<WorkspaceSnapshot> {
-    if (this.updating || this.macUpdateHold) throw new Error("Update restart is in progress");
+    if (this.closed || this.updating || this.macUpdateHold || this.firstRunHold || this.connectionPreparations.size)
+      throw new Error("Update restart or connection preparation is in progress");
     const { explicitUrl, defaultPath } = this.deps;
-    await this.switchTo({ path: defaultPath(), readOnly: false, source: explicitUrl ? "env" : "default" });
+    const path = defaultPath() ?? "";
+    if (!explicitUrl && !this.savedUrl && !path)
+      throw new Error("Prepare and connect a selected first-run workspace first.");
+    await this.switchTo({ path, readOnly: false, source: explicitUrl ? "env" : "default" });
     return this.snapshot;
   }
 

@@ -59,4 +59,14 @@ it("strips Electron events from onShow and preserves explicit epoch fencing", as
   expect(invoke).toHaveBeenLastCalledWith("orca:runs.list", {}, 1);
   await bridge.guidedLaunch!.snapshot();
   expect(invoke).toHaveBeenLastCalledWith("orca:guidedLaunch.snapshot", undefined, 1);
+  await bridge.firstRun!.status();
+  expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.status", undefined, 1);
+  await bridge.firstRun!.choose();
+  expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.choose", undefined, 1);
+  await bridge.firstRun!.prepare("opaque-review");
+  expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.prepare", "opaque-review", 1);
+  await bridge.firstRun!.connect();
+  expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.connect", undefined, 1);
+  await bridge.daemonConnection!.connect(null);
+  expect(invoke).toHaveBeenLastCalledWith("orca:daemon.connect", null, 1);
 });

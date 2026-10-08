@@ -110,6 +110,12 @@ function forwardMacDraft(_event: unknown, value: unknown): void {
 ipcRenderer.on("orca:macUpdate.prepare", forwardMacDraft);
 
 const bridge: OrcaBridge = {
+  firstRun: {
+    status: () => call("orca:workspace.firstRun.status"),
+    choose: () => call("orca:workspace.firstRun.choose"),
+    prepare: (id) => call("orca:workspace.firstRun.prepare", id),
+    connect: () => call("orca:workspace.firstRun.connect"),
+  },
   macUpdates: {
     read: () => ipcRenderer.sendSync("orca:macUpdate.read") as MacUpdateView,
     act: async (command) => {
@@ -184,7 +190,9 @@ const bridge: OrcaBridge = {
       };
     },
     connect: (url) =>
-      ipcRenderer.invoke("orca:daemon.connect", url) as Promise<{ ok: true } | { ok: false; message: string }>,
+      ipcRenderer.invoke("orca:daemon.connect", url, targetEpoch) as Promise<
+        { ok: true } | { ok: false; message: string }
+      >,
     cancel: () => ipcRenderer.send("orca:daemon.cancel"),
   },
   updates: {

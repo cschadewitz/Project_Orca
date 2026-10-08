@@ -3,9 +3,9 @@
  * menu and the window; the renderer only sees what the preload bridge exposes.
  *
  * Which daemon, in order: `ORCA_DAEMON_URL`, then the saved endpoint, then the daemon inside a
- * packaged app (`./daemon-process.ts`, spawned here and stopped on quit), then the default
- * local `orca serve` — which is the development case, where a developer is running one in
- * a terminal. This is the only file that knows all three; `daemon-process.ts` is Electron-
+ * packaged app over a verified first-run selection or explicit ORCA_WORKSPACE. Without an
+ * explicit target or verified selection the app opens disconnected for setup. This file
+ * owns the composition; `daemon-process.ts` is Electron-
  * free so that it can be tested as a plain module. **Which store that daemon serves is
  * `./workspace.ts`'s**, because it can change while the app is running (#164), and every
  * bridge call waits on the switch rather than on a promise that resolved once at startup.
@@ -20,6 +20,8 @@
  */
 import { z } from "zod";
 import { createDiagnosticsInitializer } from "./diagnostics/initialize.js";
+import { FirstRunSetup } from "./first-run/setup.js";
+import { installFirstRunIPC, startFirstRunWorkspace } from "./first-run/ipc.js";
 import type { DiagnosticsResult } from "../diagnostics-contract.js";
 import { AdmissionIntents, AdmissionIntentController } from "./admission-intents.js";
 import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
@@ -435,10 +437,13 @@ const workspace = new Workspace({
       // A build run from the repository: `dist/`, one level up from `dist/main`.
       fileURLToPath(new URL("../", import.meta.url)),
     ]),
-  start: ({ entry, cwd, readOnly, onExit }) =>
+  start: ({ entry, cwd, readOnly, configPath, onExit }) =>
     startBundledDaemon({
       entry,
       cwd,
+      ...(configPath ? { configPath } : {}),
+      // A first-run startup never retries an owned child whose exit could be uncertain.
+      ...(configPath ? { attempts: 1 } : {}),
       // The one flag the app passes, through the seam `daemon-process.ts` left for it:
       // file mode *is* a read-only daemon, because ADR 0008 forbids a second store path
       // in the renderer (#164).
@@ -462,7 +467,7 @@ const workspace = new Workspace({
       return new DaemonClient("");
     }
     const candidate = new DaemonClient(url, fetch, {
-      requireAuthentication: !isLoopbackDaemon(url),
+      requireAuthentication: options.bundled || !isLoopbackDaemon(url),
       auth: new LocalDaemonToken({
         url,
         workspace: options.workspace,
@@ -523,7 +528,76 @@ const workspace = new Workspace({
   },
   explicitUrl: process.env.ORCA_DAEMON_URL,
   defaultUrl: DEFAULT_DAEMON_URL,
-  defaultPath: () => process.env.ORCA_WORKSPACE ?? app.getPath("home"),
+  defaultPath: () => process.env.ORCA_WORKSPACE || undefined,
+  setupBusy: () => firstRun.isBusy,
+});
+
+const firstRun = new FirstRunSetup({
+  home: app.getPath("home"),
+  receiptPath: join(app.getPath("userData"), "first-run", "selection.json"),
+  choose: async (kind) => {
+    const options = {
+      title: kind === "project" ? "Choose a prepared Git project" : "Choose a separate empty app workspace",
+      properties: ["openDirectory" as const],
+      buttonLabel: "Review selection",
+    };
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const result = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
+    return result.canceled ? undefined : result.filePaths[0];
+  },
+  prepareConnection: async (path) => {
+    const candidate = await workspace.prepareFirstRunConnection(path);
+    return {
+      ...candidate,
+      activate: (hello) => {
+        candidate.validateActivation(hello);
+        preferences.saveDaemonUrl(null);
+        candidate.activate(hello);
+      },
+    };
+  },
+  current: (path) => workspace.currentFirstRun(path),
+});
+
+let firstRunConnectionAttempt = 0;
+async function connectFirstRun(assertCurrent: () => void) {
+  if (firstRun.isBusy || macUpdateWindows.active) throw new Error("Project setup or update preparation is busy");
+  const attempt = ++firstRunConnectionAttempt;
+  const check = () => {
+    assertCurrent();
+    if (attempt !== firstRunConnectionAttempt) throw new Error("Connection cancelled");
+  };
+  check();
+  const release = await guardConnectionDrafts();
+  if (!release) throw new Error("Save or discard pending edits before changing daemons");
+  try {
+    check();
+    return await firstRun.connect(check);
+  } finally {
+    release();
+  }
+}
+
+function captureFirstRunCaller(event: Electron.IpcMainInvokeEvent, epoch: number): () => void {
+  const frame = event.senderFrame;
+  const generation = diagnosticWindowGenerations.get(event.sender.id) ?? 0;
+  return () => {
+    workspace.assertEpoch(epoch);
+    if (
+      !BrowserWindow.getAllWindows().some((win) => !win.isDestroyed() && win.webContents === event.sender) ||
+      !frame ||
+      frame !== event.sender.mainFrame ||
+      generation !== (diagnosticWindowGenerations.get(event.sender.id) ?? 0)
+    )
+      throw new Error("Project setup belongs to a previous window document");
+  };
+}
+installFirstRunIPC(firstRun, {
+  ipc: ipcMain,
+  ready: () => workspace.ready(),
+  held: () => macUpdateWindows.active,
+  capture: captureFirstRunCaller,
+  connect: connectFirstRun,
 });
 
 ipcMain.on("orca:workspace.read", (event) => {
@@ -546,7 +620,7 @@ const OPEN_STORE_DIALOG = {
  * and must not be rendered as one.
  */
 async function openStore(path?: string): Promise<WorkspaceSnapshot> {
-  if (macUpdateWindows.active) throw new Error("Update window preparation is in progress");
+  if (macUpdateWindows.active || firstRun.isBusy) throw new Error("Setup or update preparation is in progress");
   let chosen = path;
   if (chosen === undefined) {
     const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
@@ -589,13 +663,13 @@ const macUpdateWindows = new MacUpdateWindows({
   createDeferred: createWindow,
 });
 // Trusted candidate/recovery/native owners are absent: production routing stays unavailable.
-export const macUpdateGuards = new MacUpdateGuards(workspace, macUpdateWindows);
+export const macUpdateGuards = new MacUpdateGuards(workspace, macUpdateWindows, () => firstRun.isBusy);
 const macUpdates = new MacUpdateApplication();
 installMacUpdateIPC(macUpdates, {
   ipc: ipcMain,
   windows: () => BrowserWindow.getAllWindows(),
   epoch: () => workspace.connectionTarget.epoch,
-  held: () => macUpdateWindows.active,
+  held: () => macUpdateWindows.active || firstRun.isBusy,
 });
 app.on("browser-window-created", (_event, window) => macUpdateWindows.track(window));
 
@@ -654,12 +728,18 @@ ipcMain.on("orca:daemon.read", (event) => {
   event.returnValue = workspace.connectionTarget;
 });
 ipcMain.on("orca:daemon.show", () => send("orca:daemon.show", null));
-ipcMain.on("orca:daemon.cancel", () => targets.cancel());
-ipcMain.handle("orca:daemon.connect", async (_event, url: unknown) => {
+ipcMain.on("orca:daemon.cancel", () => {
+  targets.cancel();
+  firstRunConnectionAttempt++;
+});
+ipcMain.handle("orca:daemon.connect", async (event, url: unknown, epoch: number) => {
   if (url !== null && typeof url !== "string") return { ok: false, message: "Invalid daemon URL" };
   try {
-    if (macUpdateWindows.active) throw new Error("Update window preparation is in progress");
-    await targets.connect(url);
+    if (macUpdateWindows.active || firstRun.isBusy) throw new Error("Setup or update preparation is in progress");
+    if (url === null && !process.env.ORCA_WORKSPACE) {
+      const check = captureFirstRunCaller(event, epoch);
+      await connectFirstRun(check);
+    } else await targets.connect(url);
     return { ok: true };
   } catch (error) {
     return { ok: false, message: connectionFailure(error) };
@@ -712,6 +792,7 @@ ipcMain.on("orca:update.read", (event) => {
 ipcMain.handle("orca:update.act", async (event, action: unknown) => {
   if (
     macUpdateWindows.active ||
+    firstRun.isBusy ||
     !BrowserWindow.getAllWindows().some((win) => win.webContents === event.sender) ||
     event.senderFrame !== event.sender.mainFrame ||
     !isUpdateAction(action)
@@ -961,7 +1042,18 @@ if (!primary) {
     );
     // Not awaited: the shell paints while the daemon starts, and a call that arrives in
     // that second or two waits on `workspace.ready()` rather than going to the wrong URL.
-    void workspace.connect();
+    const startupEpoch = workspace.connectionTarget.epoch;
+    void startFirstRunWorkspace(firstRun, {
+      explicitTarget: Boolean(
+        process.env.ORCA_DAEMON_URL || process.env.ORCA_WORKSPACE || preferences.read().daemonUrl,
+      ),
+      connectExplicit: () => workspace.connect(),
+      assertCurrent: () => workspace.assertEpoch(startupEpoch),
+    }).catch(() =>
+      console.error(
+        "The selected first-run workspace could not be verified or connected. Open Config to review setup.",
+      ),
+    );
     createWindow();
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

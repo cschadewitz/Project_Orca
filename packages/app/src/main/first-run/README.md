@@ -43,13 +43,15 @@ connection actions. Existing diagnostics retain their key and lifecycle. The lau
 route's smoke-check selector populates the exact direct task; it never submits or
 acknowledges permissions automatically. Existing protected intents remain separate.
 
-## Native lifecycle owner's required interface
+## Native lifecycle composition
 
-Main/preload/Workspace are unchanged in this slice following root's ownership update.
-The native lifecycle owner must register `OrcaBridge.firstRun?: FirstRunBridge` from
-`src/first-run-contract.ts`; the renderer currently uses an optional structural seam.
-It shows no setup controls until that native seam is present. Do not claim a mounted
-end-user first-run journey from these component tests alone.
+Original #564 left main/preload/Workspace unchanged under root's ownership split.
+The combined integration now registers `OrcaBridge.firstRun?: FirstRunBridge` from
+`src/first-run-contract.ts` in main and preload, stages exact owned Workspace candidates,
+and removes implicit home startup. The optional bridge is now a declared contract.
+See [combined integration](../../../../../docs/implementation/first-run-native-integration.md)
+for current evidence and filesystem limits; source/portable composition is not native
+end-user acceptance.
 
 Compose `FirstRunSetup` with:
 
@@ -136,7 +138,7 @@ The same focused command passes after the change. Direct binaries were used beca
 this environment's pnpm runner attempted a dependency-state reinstall into an
 unavailable home data path. No manifest/lockfile/dependency change was made.
 
-## Local validation record
+## Original #564 local validation record
 
 Final focused selection: `vitest run` for app `first-run`, `guided-launch-adapter`,
 CLI `first-run-sample`, and renderer `first-run`, `guided-launch-route`,

@@ -16,6 +16,7 @@ import {
   separateDirectories,
   emptyDirectory,
   selectionFailure,
+  verifyRuntimeDirectories,
 } from "./directories.js";
 
 const directory = z.object({ path: z.string(), dev: z.string(), ino: z.string(), uid: z.string() }).strict();
@@ -91,6 +92,7 @@ export class FirstRunSetup {
     )
       throw selectionFailure();
     separateDirectories(project.path, workspace.path);
+    await verifyRuntimeDirectories(workspace);
     const expected = this.files(project.path);
     if (JSON.stringify(Object.keys(receipt.files).sort()) !== JSON.stringify(Object.keys(expected).sort()))
       throw selectionFailure();
@@ -202,6 +204,7 @@ export class FirstRunSetup {
       await mkdir(dirname(this.deps.receiptPath), { recursive: true, mode: 0o700 });
       const temporary = `${this.deps.receiptPath}.${randomUUID()}`;
       await this.writeExclusive(temporary, JSON.stringify(receipt) + "\n");
+      assertCurrent();
       // This is our own selection receipt; replacing it follows the explicit reviewed new selection.
       await rename(temporary, this.deps.receiptPath);
       return this.prepared(receipt);

@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { access, lstat, realpath, readdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { basename, dirname, isAbsolute, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 const execute = promisify(execFile);
 export interface DirectoryIdentity {
@@ -53,6 +53,49 @@ export function separateDirectories(project: string, workspace: string): void {
 }
 export async function emptyDirectory(path: string): Promise<void> {
   if ((await readdir(path)).length !== 0) throw selectionFailure();
+}
+
+/** Reopened daemon-owned trees must not redirect writes outside the selected workspace.
+ * This is a bounded observation; concurrent mutation by the same OS principal remains a native gate.
+ */
+export async function verifyRuntimeDirectories(workspace: DirectoryIdentity): Promise<void> {
+  if (typeof process.getuid !== "function") throw selectionFailure();
+  const pending = [join(workspace.path, ".orca"), join(workspace.path, "auth")];
+  let remaining = 8192;
+  while (pending.length) {
+    const path = pending.pop()!;
+    if (--remaining < 0) throw selectionFailure();
+    let info;
+    try {
+      info = await lstat(path, { bigint: true });
+    } catch (error) {
+      if (
+        (path === join(workspace.path, ".orca") || path === join(workspace.path, "auth")) &&
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      )
+        continue;
+      throw error;
+    }
+    if (
+      info.isSymbolicLink() ||
+      ((path === join(workspace.path, ".orca") || path === join(workspace.path, "auth")) && !info.isDirectory()) ||
+      (!info.isDirectory() && !info.isFile()) ||
+      info.ino <= 0n ||
+      String(info.dev) !== workspace.dev ||
+      String(info.uid) !== workspace.uid ||
+      (info.isFile() && info.nlink !== 1n)
+    )
+      throw selectionFailure();
+    if (info.isDirectory()) {
+      await access(path, constants.R_OK | constants.W_OK | constants.X_OK);
+      const entries = await readdir(path);
+      if (entries.length > remaining || pending.length + entries.length > remaining) throw selectionFailure();
+      pending.push(...entries.map((name) => join(path, name)));
+    }
+  }
 }
 export async function preparedProject(path: string, home: string): Promise<ProjectIdentity> {
   const identity = await ownedDirectory(path, home);

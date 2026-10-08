@@ -80,10 +80,14 @@ it.runIf(process.platform === "linux")(
       const executable = join(directory, "fixture");
       const source = fileURLToPath(new URL("./recovery-preparation/native-storage-syscalls.c", import.meta.url));
       const run = promisify(execFile);
-      await run("/usr/bin/cc", ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", source, "-o", executable], {
-        timeout: 10_000,
-        maxBuffer: 4096,
-      });
+      await run(
+        "/usr/bin/cc",
+        ["-std=c11", "-O2", "-D_FORTIFY_SOURCE=3", "-Wall", "-Wextra", "-Werror", source, "-o", executable],
+        {
+          timeout: 10_000,
+          maxBuffer: 4096,
+        },
+      );
       const result = await run(executable, [directory], { timeout: 10_000, maxBuffer: 1024 });
       expect(result.stdout).toBe("native storage syscall fixture passed\n");
     } finally {

@@ -5,9 +5,9 @@ import type { FirstRunBridge, FirstRunStatus } from "../../../src/first-run-cont
 import { useAnnounce } from "../a11y/announce-context.js";
 import { Button, Card, Text, Well } from "../ui/index.js";
 
-/** Structural optional seam until the native integrator registers FirstRunBridge in preload. */
+/** Optional for clients whose native build does not provide setup. */
 export function firstRunBridge(bridge: OrcaBridge): FirstRunBridge | undefined {
-  return (bridge as OrcaBridge & { firstRun?: FirstRunBridge }).firstRun;
+  return bridge.firstRun;
 }
 export function FirstRunSection(): JSX.Element | null {
   const bridge = firstRunBridge(window.orca);

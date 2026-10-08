@@ -109,6 +109,19 @@ async function rig() {
 }
 
 describe.skipIf(typeof process.getuid !== "function")("dedicated first-run project selection", () => {
+  it.each([".orca", "auth", ".orca/nested"])(
+    "refuses redirected %s before spawning and preserves the external directory",
+    async (name) => {
+      const f = await rig();
+      await f.prepare();
+      if (name.includes("/")) await mkdir(join(f.workspace, ".orca"));
+      await symlink(f.project, join(f.workspace, name), "dir");
+      expect((await f.setup.status()).state).toBe("selection-required");
+      await expect(f.setup.connect(f.assertCurrent)).rejects.toThrow();
+      expect(f.prepareConnection).not.toHaveBeenCalled();
+      expect(await readFile(join(f.project, "sentinel.txt"), "utf8")).toBe("unchanged synthetic project\n");
+    },
+  );
   it("requires review, preserves project checkout, writes only new JEV-free assets, and reconnects exact saved selection", async () => {
     const f = await rig();
     const before = {
