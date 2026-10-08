@@ -28,6 +28,7 @@ import { createServer } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { DaemonClient } from "../client/daemon-client.js";
 import { LocalDaemonToken } from "../client/auth.js";
+import { observeStartup, type StartupDiagnosticObserver } from "./diagnostics/startup-producer.js";
 
 /** Where `scripts/build-daemon.js` writes the bundle and electron-builder copies it to. */
 export const BUNDLED_DAEMON_DIR = "daemon";
@@ -108,6 +109,8 @@ export interface BundledDaemonOptions {
   onExit?: (exit: DaemonExit) => void;
   /** Called with every line the daemon writes, while it runs. */
   onLog?: (line: string) => void;
+  /** Optional closed local facts; never receives output, errors, paths or credentials. */
+  onStartupDiagnostic?: StartupDiagnosticObserver;
   /* -- seams, for the test -- */
   spawn?: SpawnDaemon;
   findPort?: (host: string) => Promise<number>;
@@ -266,13 +269,19 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
     ...args,
   ];
 
-  const child = spawn(execPath, argv, {
-    cwd,
-    // `ELECTRON_RUN_AS_NODE` is what makes `process.execPath` — the Electron binary in a
-    // packaged app — behave as a bare Node and never open a window of its own.
-    env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  let child: DaemonChild;
+  try {
+    child = spawn(execPath, argv, {
+      cwd,
+      // `ELECTRON_RUN_AS_NODE` is what makes `process.execPath` — the Electron binary in a
+      // packaged app — behave as a bare Node and never open a window of its own.
+      env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    observeStartup(options.onStartupDiagnostic, "startup_spawn_failed");
+    throw error;
+  }
 
   let tokenFile: string | undefined;
   const tail = new OutputTail(200, (line) => {
@@ -289,9 +298,16 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
   let exit: DaemonExit | undefined;
   let stopping = false;
   let settled = false;
+  let startupObserved = false;
+  const observeFailure = (code: Parameters<StartupDiagnosticObserver>[0]) => {
+    if (settled || startupObserved) return;
+    startupObserved = true;
+    observeStartup(options.onStartupDiagnostic, code);
+  };
   const exited = new Promise<void>((resolve) => {
     child.once("exit", (code, signal) => {
       exit = { code, signal, output: tail.toString() };
+      observeFailure("startup_exited_before_handshake");
       if (settled && !stopping) onExit?.(exit);
       resolve();
     });
@@ -299,6 +315,7 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
   // A command that cannot be spawned at all (no such file, not executable) emits `error`
   // and, on some platforms, no `exit` — so it is recorded as one.
   child.on("error", (e: Error) => {
+    observeFailure("startup_spawn_failed");
     exit ??= { code: null, signal: null, output: `${tail.toString()}\n${e.message}`.trim() };
   });
 
@@ -310,6 +327,7 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
     if (exit) throw died(exit);
     if (await (probe ? probe(url) : helloAnswers(url, cwd, tokenFile))) break;
     if (now() >= deadline) {
+      observeFailure("startup_handshake_timeout");
       const output = tail.toString();
       child.kill("SIGKILL");
       throw new DaemonStartError(

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   BUNDLED_DAEMON_FILE,
   DaemonStartError,
@@ -101,6 +101,81 @@ describe("findBundledDaemon", () => {
 });
 
 describe("starting the bundled daemon", () => {
+  it.each(["spawn", "exit", "deadline"] as const)(
+    "emits only the actual %s startup category, without private source data",
+    async (boundary) => {
+      const privateText = "/private/token-file secret=synthetic-do-not-export";
+      const h = harness({
+        probes: [
+          boundary === "exit"
+            ? (child) => {
+                child.say("stderr", privateText);
+                child.exit(1);
+                return false;
+              }
+            : false,
+        ],
+      });
+      if (boundary === "spawn")
+        h.seams.spawn = () => {
+          throw new Error(privateText);
+        };
+      const observer = vi.fn();
+      await expect(
+        start(h.seams, { attempts: 1, startTimeoutMs: 1, pollIntervalMs: 1, onStartupDiagnostic: observer }),
+      ).rejects.toThrow();
+      const expected =
+        boundary === "spawn"
+          ? "startup_spawn_failed"
+          : boundary === "exit"
+            ? "startup_exited_before_handshake"
+            : "startup_handshake_timeout";
+      expect(observer.mock.calls).toEqual([[expected]]);
+    },
+  );
+
+  it("emits spawn failure once for asynchronous error followed by exit", async () => {
+    const h = harness({
+      probes: [
+        (child) => {
+          child.emit("error", new Error("synthetic private output"));
+          child.exit(1);
+          return false;
+        },
+      ],
+    });
+    const observer = vi.fn();
+    await expect(start(h.seams, { attempts: 1, onStartupDiagnostic: observer })).rejects.toThrow();
+    expect(observer.mock.calls).toEqual([["startup_spawn_failed"]]);
+  });
+
+  it("preserves successful startup and post-handshake exit without emitting startup failure", async () => {
+    const h = harness();
+    const observer = vi.fn();
+    await start(h.seams, { onStartupDiagnostic: observer });
+    h.children[0]!.exit(1);
+    expect(observer).not.toHaveBeenCalled();
+  });
+
+  it("preserves rejection and retries when the optional observer throws", async () => {
+    const h = harness({
+      probes: [
+        (child) => {
+          child.exit(1);
+          return false;
+        },
+        true,
+      ],
+    });
+    const observer = vi.fn(() => {
+      throw new Error("observer failed");
+    });
+    const daemon = await start(h.seams, { attempts: 2, onStartupDiagnostic: observer });
+    expect(daemon.url).toBe("http://127.0.0.1:7999");
+    expect(h.calls).toHaveLength(2);
+    expect(observer).toHaveBeenCalledOnce();
+  });
+
   it("serves on the port it was given and reports that URL", async () => {
     const h = harness({ ports: [7123] });
     const daemon = await start(h.seams);
