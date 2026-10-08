@@ -16,6 +16,18 @@ are dated preparation evidence. They no longer describe the installation state o
 current main. The [evidence map](runtime-operator-integration.md#current-main-evidence-map)
 separates code, compiled tests and deployed observations.
 
+The [7 October actual-Cal handoff](preparation/private-mcp-access/actual-cal-matrix.md)
+maps the remaining #327/#393 cases to exact bounded invocations, current authority/tool
+gaps, capacity prerequisites and separate #392 owner lifecycle gates. Its new standalone
+P01 suite covers compiled MCP invalid-input/stale-guard refusal before durable intent for
+Request and direct admission, followed by corrected same-key acceptance. P01 is additional
+reference-client evidence; it does not change the historical 60-case counts below or
+complete actual-Cal acceptance. After a fresh build, run it explicitly with:
+
+```sh
+ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-preflight.test.ts --maxWorkers=1
+```
+
 ## Execution
 
 Use Node >=22 and the repository's pinned pnpm. Install the frozen lockfile, then
