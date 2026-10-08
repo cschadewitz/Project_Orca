@@ -1,10 +1,15 @@
 /** #396 acceptance ledger. Pending rows are obligations, never simulated implementation proof. */
 export const baselineSha = "65606fbce827cba914a67b999b1a47c0aab2797a";
-export const implementationPins = { substrate394: null, jev395: null } as const;
+export const candidatePins = {
+  substrate394: "7202a6e06525052f304f4f49abbfd783e163a375",
+  jev395: "e4039a32e4a82aa19cd95b3e98f2813b47486903",
+} as const;
+/** Null means independent exact-head review remains unresolved. */
+export const implementationPins = { substrate394: null, jev395: "e4039a32e4a82aa19cd95b3e98f2813b47486903" } as const;
 /** Observed draft contract only; this does not authorize acceptance or activate tests. */
 export const provisionalContract = {
   substrateComment: "https://github.com/cschadewitz/Project_Orca/issues/394#issuecomment-6051433591",
-  jevDraftHead: "1155f1db2f2f5dbf5b454c9dca685356b77b7d65",
+  jevDraftHead: "e4039a32e4a82aa19cd95b3e98f2813b47486903",
   supportedRegistration: "custom-executor-only",
 } as const;
 export const pendingAcceptance = [

@@ -12,6 +12,9 @@ import {
   configure,
   makeFixture,
   prepareJevFixture,
+  prepareRestorationFixture,
+  providerTrace,
+  jevFixtureData,
   pluginKinds,
   type Fixture,
   type Receipt,
@@ -361,9 +364,316 @@ describe("#396 provisional contract bindings: acceptance remains INCOMPLETE", ()
       await expect(readFile(join(f.root, "credential-trace.jsonl"))).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
-  it("records baseline and absent reviewed implementation pins explicitly", () => {
+  it("records baseline and runtime review gate and exact reviewed adapter pin explicitly", () => {
     expect(baselineSha).toMatch(/^[a-f0-9]{40}$/);
-    expect(implementationPins).toEqual({ substrate394: null, jev395: null });
+    expect(implementationPins).toEqual({ substrate394: null, jev395: "e4039a32e4a82aa19cd95b3e98f2813b47486903" });
   });
-  for (const [owner, assertion] of pendingAcceptance) it.todo(`[${owner}; unbound/unrun] ${assertion}`);
+  for (const [owner, assertion] of pendingAcceptance) it.todo(`[${owner}; final acceptance pending] ${assertion}`);
 });
+
+// Opt-in candidate execution is integration evidence; reviewed-head clearance remains a separate ledger gate.
+describe.skipIf(process.env.ORCA_RESTORATION_CANDIDATE !== "7202a6e06525052f304f4f49abbfd783e163a375")(
+  "#396 published candidate integration",
+  () => {
+    it("restores admitted closure values across processes and runs new admissions with current values", async () => {
+      const f = await fixture("noop");
+      await prepareRestorationFixture(f, "old");
+      const first = await harness.invoke(f, "park");
+      expect(first).toMatchObject({
+        outcome: "ok",
+        status: "paused",
+        descriptorPresent: true,
+        providerCalls: 0,
+        factoryCalls: 0,
+      });
+      const original = await protectedDigests(f);
+      const source = await readFile(join(f.root, "plugin.mjs"), "utf8");
+      await prepareRestorationFixture(f, "new");
+      expect(await readFile(join(f.root, "plugin.mjs"), "utf8")).toBe(source);
+      const resumed = await harness.invoke(f, "resume");
+      differentProcess(first, resumed);
+      expect(resumed).toMatchObject({
+        outcome: "ok",
+        status: "completed",
+        providerCalls: 1,
+        executionModels: ["old-model"],
+        factoryCalls: 1,
+        provisioned: 0,
+        consentWrites: 0,
+      });
+      noLeaks(resumed);
+      await preserveOriginal(f, original);
+      const current = await harness.invoke(f, "run-new");
+      expect(current).toMatchObject({
+        outcome: "ok",
+        status: "completed",
+        executionModels: ["new-model"],
+        providerCalls: 1,
+      });
+      noLeaks(current);
+    });
+
+    it.each(["schemaVersion", "id", "codeVersion", "dependencyIdentity"] as const)(
+      "changed %s refuses before reconstruction",
+      async (field) => {
+        const f = await fixture("noop");
+        await prepareRestorationFixture(f, "old");
+        const first = await harness.invoke(f, "park"),
+          original = await protectedDigests(f);
+        await prepareRestorationFixture(f, "new", { identity: { [field]: field === "schemaVersion" ? 2 : "changed" } });
+        const result = await harness.invoke(f, "historical-admit");
+        differentProcess(first, result);
+        refused(result);
+        expect(result).toMatchObject({ restorationReason: "incompatible_identity", factoryCalls: 0 });
+        await preserveOriginal(f, original);
+      },
+    );
+
+    it.each(["absent", "refused", "throws", "restore-refused"] as const)(
+      "%s trusted verifier fails closed",
+      async (verification) => {
+        const f = await fixture("noop");
+        await prepareRestorationFixture(f, "old");
+        await harness.invoke(f, "park");
+        const result = await harness.invoke(f, "historical-admit", undefined, verification);
+        refused(result);
+        expect(result).toMatchObject({ restorationReason: "identity_unverified", factoryCalls: 0 });
+      },
+    );
+
+    it.each(["throw", "omit", "duplicate"] as const)(
+      "%s second factory cannot activate a partial historical candidate",
+      async (secondFault) => {
+        const f = await fixture("noop");
+        await prepareRestorationFixture(f, "old", { composition: "pair" });
+        await harness.invoke(f, "park");
+        const original = await protectedDigests(f);
+        await prepareRestorationFixture(f, "new", { composition: "pair", secondFault });
+        const result = await harness.invoke(f, "restore-current");
+        expect(result).toMatchObject({
+          outcome: "ok",
+          restorationReason: "reconstruction_failed",
+          factoryCalls: 2,
+          currentGenerationUnchanged: true,
+          status: "completed",
+          executionModels: ["new-model", "new-model"],
+          providerCalls: 2,
+        });
+        noLeaks(result);
+        await preserveOriginal(f, original);
+      },
+    );
+
+    it.each(["host-exec", "host-fs", "workspace", "plan", "builtin-mutation", "human-input"] as const)(
+      "%s callback does not claim executor-only restoration",
+      async (callback) => {
+        const f = await fixture("noop");
+        await prepareRestorationFixture(f, "old", { callback });
+        const first = await harness.invoke(f, "new");
+        expect(first).toMatchObject({ outcome: "ok", descriptorPresent: false, providerCalls: 0 });
+        const result = await harness.invoke(f, "historical-admit");
+        refused(result);
+        expect(result.factoryCalls).toBe(0);
+      },
+    );
+
+    it.each(["mixed", "duplicate-identity"] as const)("%s composition fails closed", async (composition) => {
+      const f = await fixture("noop");
+      await prepareRestorationFixture(f, "old", { composition });
+      if (composition === "duplicate-identity") {
+        const result = await harness.invoke(f, "new");
+        refused(result);
+        expect(result.restorationReason).toBe("invalid_descriptor");
+      } else {
+        expect(await harness.invoke(f, "new")).toMatchObject({ outcome: "ok", descriptorPresent: false });
+        refused(await harness.invoke(f, "historical-admit"));
+      }
+    });
+
+    it.each([
+      "future-contract",
+      "zero-contract",
+      "missing",
+      "malformed",
+      "future-data",
+      "extra-data",
+      "duplicate-record",
+      "duplicate-type",
+      "wrong-spec",
+      "wrong-digest",
+    ] as const)("authenticated %s descriptor refuses without altering original evidence", async (fault) => {
+      const f = await fixture("noop");
+      await prepareRestorationFixture(f, "old");
+      const first = await harness.invoke(f, "park"),
+        original = await protectedDigests(f),
+        stores = fileStores(join(f.root, "store"));
+      const snapshot = (await stores.execution.getGeneration(first.receipt!.generationId)) as {
+        id: string;
+        pluginRestoration: {
+          contractVersion: number;
+          data: Record<string, unknown>;
+          executors: string[];
+          spec: string;
+          entryDigest: string;
+        }[];
+      };
+      snapshot.id = randomUUID();
+      const record = snapshot.pluginRestoration[0]!;
+      if (fault === "future-contract") record.contractVersion = 2;
+      if (fault === "zero-contract") record.contractVersion = 0;
+      if (fault === "missing") Reflect.deleteProperty(snapshot, "pluginRestoration");
+      if (fault === "malformed") Reflect.set(snapshot, "pluginRestoration", {});
+      if (fault === "future-data") record.data.schema = 2;
+      if (fault === "extra-data") record.data.apiKey = canaries[0];
+      if (fault === "duplicate-record") snapshot.pluginRestoration.push(record);
+      if (fault === "duplicate-type") record.executors.push(record.executors[0]!);
+      if (fault === "wrong-spec") record.spec = "./missing.mjs";
+      if (fault === "wrong-digest") record.entryDigest = "f".repeat(64);
+      await stores.execution.putGeneration(snapshot.id, snapshot);
+      await writeFile(join(f.root, "receipt.json"), JSON.stringify({ ...first.receipt, generationId: snapshot.id }));
+      const result = await harness.invoke(f, "historical-admit");
+      refused(result);
+      expect(result.factoryCalls).toBe(0);
+      await preserveOriginal(f, original);
+    });
+
+    it.each(["validate-throw", "capture-secret", "capture-closure"] as const)(
+      "%s capture sanitizes refusal before effects",
+      async (fault) => {
+        const f = await fixture("noop");
+        await prepareRestorationFixture(f, "old", { fault });
+        const result = await harness.invoke(f, "new");
+        refused(result);
+        expect(result.restorationReason).toBe("invalid_descriptor");
+      },
+    );
+
+    it.each([false, true])("JEV before evaluation restores defaults and node override=%s", async (nodeOverride) => {
+      const f = await fixture("noop");
+      await prepareJevFixture(f, "old", "before-evaluation", "none", nodeOverride);
+      const first = await harness.invoke(f, "park");
+      expect(first).toMatchObject({ outcome: "ok", status: "paused", providerCalls: 0, descriptorPresent: true });
+      const original = await protectedDigests(f);
+      await prepareJevFixture(f, "new", "before-evaluation", "none", nodeOverride);
+      const resumed = await harness.invoke(f, "resume");
+      differentProcess(first, resumed);
+      expect(resumed).toMatchObject({
+        outcome: "ok",
+        status: "paused",
+        providerCalls: 1,
+        executionModels: [nodeOverride ? jevFixtureData.nodeOverride : jevFixtureData.old.model],
+        consentWrites: 0,
+      });
+      expect(await providerTrace(f)).toMatchObject([{ endpoint: jevFixtureData.old.baseUrl + "/v1/systemone" }]);
+      noLeaks(resumed);
+      await preserveOriginal(f, original);
+    });
+
+    it.each([
+      "absent",
+      "revoked",
+      "account-changed",
+      "reference-changed",
+      "provider-changed",
+      "key-accessor",
+      "binding-accessor",
+    ] as const)("JEV %s credential refuses before HTTP provider", async (failure) => {
+      const f = await fixture("noop");
+      await prepareJevFixture(f, "old", "before-evaluation");
+      await harness.invoke(f, "park");
+      await prepareJevFixture(f, "new", "before-evaluation", failure);
+      const result = await harness.invoke(f, "resume");
+      expect(result).toMatchObject({ outcome: "ok", status: "failed", providerCalls: 0 });
+      noLeaks(result);
+      expect(await providerTrace(f)).toEqual([]);
+    });
+
+    it("JEV durable result survives fresh-process resume without reevaluation", async () => {
+      const f = await fixture("noop");
+      await prepareJevFixture(f, "old", "after-evaluation");
+      const first = await harness.invoke(f, "park");
+      expect(first).toMatchObject({ outcome: "ok", status: "paused", providerCalls: 1 });
+      const stores = fileStores(join(f.root, "store"));
+      const before = await stores.events.read(first.receipt!.runId);
+      const completed = before.filter((e) => e.type === "step.completed" && e.payload.result.artifactIds.length > 0);
+      expect(completed).toHaveLength(1);
+      const artifactIds = completed.flatMap((event) =>
+        event.type === "step.completed" ? event.payload.result.artifactIds : [],
+      );
+      const artifactsBefore = await Promise.all(artifactIds.map((id) => stores.artifacts.get(id)));
+      expect(artifactsBefore.every(Boolean)).toBe(true);
+      expect(JSON.stringify(artifactsBefore)).not.toContain(canaries[0]);
+      const original = await protectedDigests(f);
+      await prepareJevFixture(f, "new", "after-evaluation", "revoked");
+      const resumed = await harness.invoke(f, "resume");
+      expect(resumed).toMatchObject({ outcome: "ok", status: "paused", providerCalls: 0 });
+      noLeaks(resumed);
+      expect(
+        (await stores.events.read(first.receipt!.runId)).filter(
+          (e) => e.type === "step.completed" && e.payload.result.artifactIds.length > 0,
+        ),
+      ).toEqual(completed);
+      expect(await Promise.all(artifactIds.map((id) => stores.artifacts.get(id)))).toEqual(artifactsBefore);
+      await preserveOriginal(f, original);
+      expect(await providerTrace(f)).toHaveLength(1);
+    });
+
+    it("JEV lost response records failure after one effect without claiming exactly-once recovery", async () => {
+      const f = await fixture("noop");
+      await prepareJevFixture(f, "old", "before-evaluation");
+      await harness.invoke(f, "park");
+      await prepareJevFixture(f, "new", "before-evaluation", "response-lost");
+      const result = await harness.invoke(f, "resume");
+      expect(result).toMatchObject({ outcome: "ok", status: "failed", providerCalls: 1 });
+      noLeaks(result);
+      const inspected = await harness.invoke(f, "inspect");
+      expect(inspected).toMatchObject({ outcome: "ok", status: "failed", providerCalls: 0 });
+      expect(await providerTrace(f)).toHaveLength(1);
+    });
+    it.each(["injected-provider", "inline-key"] as const)("JEV %s options refuse before effects", async (failure) => {
+      const f = await fixture("noop");
+      await prepareJevFixture(f, "old", "before-evaluation", failure);
+      const result = await harness.invoke(f, "new");
+      refused(result, "FIXTURE_FAILURE");
+      expect(result.adapterReason).toBe("options-unsupported");
+    });
+    it.each(["success-echo", "transport-echo"] as const)("JEV %s credential material is sanitized", async (failure) => {
+      const f = await fixture("noop");
+      await prepareJevFixture(f, "old", "before-evaluation");
+      await harness.invoke(f, "park");
+      await prepareJevFixture(f, "new", "before-evaluation", failure);
+      const result = await harness.invoke(f, "resume");
+      expect(result).toMatchObject({ outcome: "ok", status: "failed", providerCalls: 1 });
+      noLeaks(result);
+      const stores = fileStores(join(f.root, "store"));
+      expect(JSON.stringify(await stores.events.read(result.receipt!.runId))).not.toContain(canaries[0]);
+    });
+    it.each(["revoked", "principal-mismatch", "workspace-mismatch", "missing"] as const)(
+      "restored custom executor remains fenced by %s admission authority",
+      async (authority) => {
+        const f = await fixture("noop");
+        await prepareRestorationFixture(f, "old");
+        const first = await harness.invoke(f, "admit");
+        expect(first.outcome).toBe("ok");
+        await prepareRestorationFixture(f, "new");
+        const result = await harness.invoke(f, "execute-admitted", authority);
+        refused(result);
+      },
+    );
+    it("restored custom executor remains fenced by a live process lease", async () => {
+      const f = await fixture("noop");
+      await prepareRestorationFixture(f, "old");
+      await harness.invoke(f, "park");
+      await prepareRestorationFixture(f, "new");
+      const holder = await harness.start(f, "hold-lease");
+      await holder.held;
+      try {
+        refused(await harness.invoke(f, "resume"), "RUN_LEASED");
+      } finally {
+        holder.release();
+        await holder.result;
+      }
+      expect(await providerTrace(f)).toEqual([]);
+    });
+  },
+);

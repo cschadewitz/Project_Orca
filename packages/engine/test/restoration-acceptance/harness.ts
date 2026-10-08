@@ -4,7 +4,15 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertOwned, containsCanary, type Action, type AuthorityMode, type Fixture, type Report } from "./fixture.js";
+import {
+  assertOwned,
+  containsCanary,
+  type Action,
+  type AuthorityMode,
+  type Fixture,
+  type Report,
+  type VerificationMode,
+} from "./fixture.js";
 
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 const entry = fileURLToPath(new URL("worker.ts", import.meta.url));
@@ -13,11 +21,16 @@ const maxOutput = 16 * 1024;
 export class ProcessHarness {
   private readonly children = new Set<ChildProcess>();
   private readonly closures = new Map<ChildProcess, Promise<void>>();
-  async invoke(fixture: Fixture, action: Action, authority?: AuthorityMode): Promise<Report> {
-    const { result } = await this.start(fixture, action, authority);
+  async invoke(
+    fixture: Fixture,
+    action: Action,
+    authority?: AuthorityMode,
+    verification?: VerificationMode,
+  ): Promise<Report> {
+    const { result } = await this.start(fixture, action, authority, verification);
     return result;
   }
-  async start(fixture: Fixture, action: Action, authority?: AuthorityMode) {
+  async start(fixture: Fixture, action: Action, authority?: AuthorityMode, verification?: VerificationMode) {
     await assertOwned(fixture);
     const env: NodeJS.ProcessEnv = {};
     for (const name of ["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP"])
@@ -94,12 +107,21 @@ export class ProcessHarness {
         child.kill("SIGTERM");
       } else report = value;
     });
-    child.send({ action, root: fixture.root, owner: fixture.owner, ...(authority ? { authority } : {}) }, (error) => {
-      if (error) {
-        failure = new Error("Owned restoration fixture command was lost");
-        child.kill("SIGTERM");
-      }
-    });
+    child.send(
+      {
+        action,
+        root: fixture.root,
+        owner: fixture.owner,
+        ...(authority ? { authority } : {}),
+        ...(verification ? { verification } : {}),
+      },
+      (error) => {
+        if (error) {
+          failure = new Error("Owned restoration fixture command was lost");
+          child.kill("SIGTERM");
+        }
+      },
+    );
     return {
       result,
       held:

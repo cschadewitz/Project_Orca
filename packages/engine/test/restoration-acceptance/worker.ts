@@ -1,12 +1,23 @@
 /** Fresh-process production bootstrap driver. No credentials, network providers, live agents or consent restores. */
 import { randomUUID, createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
+import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { consoleLogger, OrcaError, type DirectAdmissionAuthority } from "@orca/core";
 import { LiveHumanInput, type LiveDecisionTarget } from "../../src/live-input.js";
 import { bootstrap } from "../../../cli/src/bootstrap.js";
 import { bindLocalAdmissionExecution } from "../../../cli/src/admission-execution-authority.js";
-import { assertOwned, canaries, containsCanary, type Command, type Receipt, type Report } from "./fixture.js";
+import {
+  assertOwned,
+  canaries,
+  containsCanary,
+  type Command,
+  type Receipt,
+  type Report,
+  type VerificationRecord,
+  providerTrace,
+} from "./fixture.js";
 
 async function run(command: Command): Promise<Report> {
   const report: Report = {
@@ -25,14 +36,47 @@ async function run(command: Command): Promise<Report> {
     logLeak: false,
     errorLeak: false,
   };
+  let initialTrace = 0;
   try {
     await assertOwned(command);
+    initialTrace = (await providerTrace(command)).length;
+    const trusted = JSON.parse(
+      await readFile(join(command.root, "restoration-verification.json"), "utf8").catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return "[]";
+          throw error;
+        },
+      ),
+    ) as VerificationRecord[];
+    let restorationStarted = false;
+    const verifyPluginRestorationIdentity = async (candidate: {
+      spec: string;
+      identity: unknown;
+      entry: { url: string; digest: string };
+    }) => {
+      if (command.verification === "throws") throw new Error(canaries[0]);
+      if (command.verification === "refused" || (command.verification === "restore-refused" && restorationStarted))
+        return false;
+      const record = trusted.find((row) => row.spec === candidate.spec);
+      if (!record || !isDeepStrictEqual(record.identity, candidate.identity)) return false;
+      const path = join(command.root, record.spec);
+      return (
+        candidate.entry.url === pathToFileURL(path).href &&
+        candidate.entry.digest === record.entryDigest &&
+        createHash("sha256")
+          .update(await readFile(path))
+          .digest("hex") === record.entryDigest
+      );
+    };
     const app = await bootstrap({
       configPath: join(command.root, "orca.config.json"),
+      ...(trusted.length && command.verification !== "absent" ? { verifyPluginRestorationIdentity } : {}),
       logger: consoleLogger("debug", {}, (line) => {
         report.logLeak ||= containsCanary(line);
       }),
     });
+    restorationStarted = true;
+    report.descriptorPresent = Reflect.has(app.generations.current.snapshot, "pluginRestoration");
     const orc = app.orchestrator;
     // Instrument existing accepted ports; no fixture-specific restoration API is invented.
     const workspace = orc.generationWorkspaceProvider!.bind(orc);
@@ -122,10 +166,10 @@ async function run(command: Command): Promise<Report> {
           { actor: { principalId: "fixture-owner" }, authorize: async () => {} },
         );
       }
-    } else if (command.action === "park" || command.action === "new") {
+    } else if (command.action === "park" || command.action === "new" || command.action === "run-new") {
       const launch = await app.generations.captureLaunch({ purpose: "workflow", workflowId: "restoration-396" });
       const runId = await launch.startRun({ vars: { secret: canaries[1] } });
-      if (command.action === "park") await orc.run(runId);
+      if (command.action !== "new") await orc.run(runId);
       const pending = await orc.pendingInputs(runId);
       const receipt: Receipt = {
         runId,
@@ -133,7 +177,7 @@ async function run(command: Command): Promise<Report> {
         ...(pending[0] ? { inputId: pending[0].id } : {}),
       };
       report.receipt = receipt;
-      if (command.action === "park") await saveReceipt(receipt);
+      await saveReceipt(receipt);
     } else if (command.action === "admit" || command.action === "admit-lost-response") {
       const authority = authorityFor(command, app.orchestrator.stores.execution);
       bindLocalAdmissionExecution(orc, "direct", authority);
@@ -157,7 +201,25 @@ async function run(command: Command): Promise<Report> {
     } else {
       const receipt = await readReceipt();
       report.receipt = receipt;
-      if (command.action === "restore" || command.action === "historical-admit") {
+      if (command.action === "restore-current") {
+        const current = app.generations.current;
+        try {
+          await app.generations.restore(receipt.generationId);
+          throw new Error("Expected reconstruction refusal");
+        } catch (error) {
+          if (!(error instanceof OrcaError)) throw error;
+          {
+            const reason = restorationReason(error);
+            if (reason) report.restorationReason = reason;
+          }
+          report.errorLeak ||= containsCanary([error.message, error.details]);
+        }
+        report.currentGenerationUnchanged = app.generations.current === current;
+        const launch = await app.generations.captureLaunch({ purpose: "workflow", workflowId: "restoration-396" });
+        const runId = await launch.startRun({ vars: { secret: canaries[1] } });
+        await orc.run(runId);
+        report.receipt = { runId, generationId: launch.generationId };
+      } else if (command.action === "restore" || command.action === "historical-admit") {
         const material = await app.generations.restore(receipt.generationId);
         report.recordedModel = material.agents.resolve("worker").agent.defaultModel!;
         report.recordedWorkspace =
@@ -206,10 +268,35 @@ async function run(command: Command): Promise<Report> {
       error instanceof Error ? [error.message, error instanceof OrcaError ? error.details : {}] : error,
     );
     report.code = error instanceof OrcaError ? error.code : "FIXTURE_FAILURE";
+    if (error instanceof Error && error.message.startsWith("JEV restoration options-unsupported:"))
+      report.adapterReason = "options-unsupported";
+    if (error instanceof OrcaError) {
+      const reason = restorationReason(error);
+      if (reason) report.restorationReason = reason;
+    }
   }
+  report.factoryCalls = Number(Reflect.get(globalThis, "fixture396Factories") ?? 0);
+  const trace = await providerTrace(command);
+  report.providerCalls += trace.length - initialTrace;
+  report.executionModels = trace.slice(initialTrace).map((row) => row.model);
   return report;
 }
 
+function restorationReason(error: OrcaError): string | undefined {
+  const reason = error.details?.pluginRestorationReason;
+  return typeof reason === "string" &&
+    [
+      "invalid_descriptor",
+      "incompatible_identity",
+      "identity_unverified",
+      "unavailable_plugin",
+      "unsupported_registration",
+      "reconstruction_failed",
+      "legacy_generation",
+    ].includes(reason)
+    ? reason
+    : undefined;
+}
 function authorityFor(command: Command, store: import("@orca/store").ExecutionStore): DirectAdmissionAuthority {
   const actor = { principalId: command.authority === "principal-mismatch" ? "another-owner" : "fixture-owner" };
   return {

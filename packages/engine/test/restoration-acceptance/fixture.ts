@@ -2,7 +2,7 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const canaries = ["fixture-credential-canary-396", "fixture-sensitive-input-396"];
@@ -24,6 +24,8 @@ export type Action =
   | "restore"
   | "resume"
   | "new"
+  | "run-new"
+  | "restore-current"
   | "historical-admit"
   | "inspect"
   | "admit"
@@ -32,11 +34,13 @@ export type Action =
   | "permission-open"
   | "permission-answer"
   | "hold-lease";
+export type VerificationMode = "verified" | "absent" | "refused" | "throws" | "restore-refused";
 export interface Command {
   action: Action;
   root: string;
   owner: string;
   authority?: AuthorityMode;
+  verification?: VerificationMode;
 }
 export interface Receipt {
   runId: string;
@@ -51,6 +55,12 @@ export interface Report {
   runtimeSha256: string;
   outcome: "ok" | "refused" | "response-lost";
   code?: string;
+  restorationReason?: string;
+  adapterReason?: "options-unsupported";
+  factoryCalls?: number;
+  descriptorPresent?: boolean;
+  executionModels?: string[];
+  currentGenerationUnchanged?: boolean;
   receipt?: Receipt;
   status?: string;
   recordedModel?: string;
@@ -74,6 +84,17 @@ export interface Fixture {
   root: string;
   owner: string;
   kind: PluginKind;
+}
+export interface FixtureIdentity {
+  id: string;
+  schemaVersion: number;
+  codeVersion: string;
+  dependencyIdentity: string;
+}
+export interface VerificationRecord {
+  spec: string;
+  entryDigest: string;
+  identity: FixtureIdentity;
 }
 export const containsCanary = (value: unknown): boolean =>
   canaries.some((canary) => (JSON.stringify(value) ?? "").includes(canary));
@@ -170,10 +191,23 @@ export const jevFixtureData = {
   codeIdentity: `sha256:${"a".repeat(64)}`,
   dependencyIdentity: `sha256:${"b".repeat(64)}`,
 } as const;
-export type JevFailure = "none" | "absent" | "revoked" | "account-changed" | "response-lost";
+export type JevFailure =
+  | "none"
+  | "absent"
+  | "revoked"
+  | "account-changed"
+  | "reference-changed"
+  | "provider-changed"
+  | "key-accessor"
+  | "binding-accessor"
+  | "response-lost"
+  | "success-echo"
+  | "transport-echo"
+  | "injected-provider"
+  | "inline-key";
 
 /**
- * Provisional preparation only. Call after the parent binds/reviews both exact heads.
+ * Deterministic integration fixture for explicitly selected exact implementation heads.
  * Uses createRestorableJevEvalPlugin, never a substitute descriptor or JEV executor.
  */
 export async function prepareJevFixture(
@@ -204,21 +238,41 @@ globalThis.fetch=async(url,init)=>{
   if(init?.headers?.authorization!=="Bearer "+${JSON.stringify(canaries[0])})throw new Error("Synthetic credential mismatch");
   await trace("provider-trace.jsonl",{endpoint:String(url),model:request.model});
   if(failure==="response-lost")throw new Error("Synthetic response lost after provider effect");
-  return Response.json({model:request.model,answers:{accepted:{type:"noul",noul:0.93}}});
+  if(failure==="transport-echo")throw new Error(${JSON.stringify(canaries[0])});
+  return Response.json({model:failure==="success-echo"?${JSON.stringify(canaries[0])}:request.model,answers:{accepted:{type:"noul",noul:0.93}}});
 };
-export default createRestorableJevEvalPlugin({model:defaults.model,baseUrl:defaults.baseUrl,env:{}},{
+const failure=(await settings()).failure;
+export default createRestorableJevEvalPlugin({model:defaults.model,baseUrl:defaults.baseUrl,env:{},...(failure==="injected-provider"?{provider:{evaluate:async()=>{throw new Error("Unsupported provider must never execute");}}}:{}),...(failure==="inline-key"?{apiKey:${JSON.stringify(canaries[0])}}:{})},{
   codeIdentity:data.codeIdentity,dependencyIdentity:data.dependencyIdentity,credentialBinding:binding,
   resolveCredential:async(recorded,{signal})=>{
     const failure=(await settings()).failure;
     signal.throwIfAborted();
     await trace("credential-trace.jsonl",{resolved:true});
     if(failure==="revoked")throw new Error(${JSON.stringify(canaries[0])});
-    return {binding:failure==="account-changed"?{...recorded,account:"different-account"}:recorded,
+    if(failure==="key-accessor")return {binding:recorded,get apiKey(){throw new Error(${JSON.stringify(canaries[0])});}};
+    if(failure==="binding-accessor")return {get binding(){throw new Error(${JSON.stringify(canaries[0])});},apiKey:${JSON.stringify(canaries[0])}};
+    return {binding:failure==="reference-changed"?{...recorded,reference:"different-reference"}:failure==="provider-changed"?{...recorded,provider:"different-provider"}:failure==="account-changed"?{...recorded,account:"different-account"}:recorded,
       apiKey:failure==="absent"?"":${JSON.stringify(canaries[0])}};
   }
 });
 `;
   await writeFile(join(fixture.root, "plugin.mjs"), source);
+  await writeFile(
+    join(fixture.root, "restoration-verification.json"),
+    JSON.stringify([
+      {
+        spec: "./plugin.mjs",
+        entryDigest: createHash("sha256").update(source).digest("hex"),
+        identity: {
+          id: "jev-eval",
+          schemaVersion: 1,
+          codeVersion: jevFixtureData.codeIdentity,
+          dependencyIdentity: jevFixtureData.dependencyIdentity,
+        },
+      },
+    ]),
+    { mode: 0o600 },
+  );
   const before = boundary === "before-evaluation";
   await writeFile(
     join(fixture.root, "workflow.yaml"),
@@ -245,4 +299,151 @@ ${before ? "  - {from: first, to: jev}\n  - {from: jev, to: second}" : "  - {fro
   - {from: second, to: done}
 `,
   );
+}
+
+export type ReconstructionFault =
+  "none" | "throw" | "omit" | "duplicate" | "validate-throw" | "capture-secret" | "capture-closure";
+export interface RestorationSettings {
+  callback?: "host-exec" | "host-fs" | "workspace" | "plan" | "builtin-mutation" | "human-input";
+  identity?: Partial<FixtureIdentity>;
+  composition?: "single" | "pair" | "mixed" | "duplicate-identity";
+  fault?: ReconstructionFault;
+  secondFault?: ReconstructionFault;
+}
+
+/** Exercise #546's actual executor-only contract through bootstrap; all inputs/effects are fixture-owned. */
+export async function prepareRestorationFixture(
+  fixture: Fixture,
+  era: "old" | "new",
+  settings: RestorationSettings = {},
+): Promise<void> {
+  await configure(fixture, era);
+  const source = (second: boolean) => `import {readFile,appendFile} from "node:fs/promises";
+const settings=JSON.parse(await readFile(new URL("restoration-settings.json",import.meta.url),"utf8"));
+const second=${second};
+const fault=second?settings.secondFault:settings.fault;
+const identity=second?settings.secondIdentity:settings.identity;
+const type=second?"custom:fixture-second":"custom:fixture-eval";
+let captured;
+const executor=(data)=>({type,execute:async()=>{
+  await appendFile(new URL("provider-trace.jsonl",import.meta.url),JSON.stringify({type,model:data.value})+"\\n");
+  return {kind:"completed",result:{artifactIds:[],data:{model:data.value}}};
+}});
+export default {name:identity.id,register(api){
+  captured={schema:1,value:settings.value};api.executors.register(executor(captured));
+  if(!second)switch(settings.callback){
+    case "host-exec":api.agents.host("local").exec=async()=>({code:0,stdout:"",stderr:""});break;
+    case "host-fs":api.agents.host("local").fs.readTextFile=async()=>"unrecorded";break;
+    case "workspace":api.setWorkspaceProvider({name:"fixture",provision:async()=>({hostId:"local",cwd:new URL("old-workspace",import.meta.url).pathname,provider:"fixture"})});break;
+    case "plan":api.plan.addSignalExtractor(()=>[]);break;
+    case "builtin-mutation":api.executors.get("custom:plan-register").execute=executor(captured).execute;break;
+    case "human-input":api.setHumanInput({ask:async()=>undefined});break;
+  }
+},restoration:{identity,
+  capture(){return fault==="capture-secret"?{schema:1,value:${JSON.stringify(canaries[0])}}:fault==="capture-closure"?{schema:1,value:()=>settings.value}:captured;},
+  validate(data){
+    if(fault==="validate-throw")throw new Error(${JSON.stringify(canaries[0])});
+    return data!==null&&typeof data==="object"&&Object.keys(data).sort().join() === "schema,value"&&data.schema === 1&&/^(old|new)-model$/.test(data.value);
+  },
+  restore(data,api){
+    globalThis.fixture396Factories=(globalThis.fixture396Factories??0)+1;
+    if(fault==="omit")return;
+    api.executors.register(executor(data));
+    if(fault==="duplicate")api.executors.register(executor(data));
+    if(fault==="throw")throw new Error(${JSON.stringify(canaries[0])});
+  }
+}};
+`;
+  const firstSource = source(false),
+    secondSource = source(true);
+  await writeFile(join(fixture.root, "plugin.mjs"), firstSource);
+  await writeFile(join(fixture.root, "second.mjs"), secondSource);
+  await writeFile(join(fixture.root, "legacy.mjs"), 'export default {name:"legacy",register(){}};\n');
+  const dependencyIdentity = `sha256:${createHash("sha256")
+    .update(await readFile(process.execPath))
+    .digest("hex")}`;
+  const identity: FixtureIdentity = {
+    id: "fixture-396",
+    schemaVersion: 1,
+    codeVersion: `sha256:${createHash("sha256").update(firstSource).digest("hex")}`,
+    dependencyIdentity,
+    ...settings.identity,
+  };
+  const secondIdentity: FixtureIdentity = {
+    ...identity,
+    id: settings.composition === "duplicate-identity" ? identity.id : "fixture-second-396",
+    codeVersion: `sha256:${createHash("sha256").update(secondSource).digest("hex")}`,
+  };
+  await writeFile(
+    join(fixture.root, "restoration-settings.json"),
+    JSON.stringify({
+      value: `${era}-model`,
+      identity,
+      secondIdentity,
+      callback: settings.callback,
+      fault: settings.fault ?? "none",
+      secondFault: settings.secondFault ?? "none",
+    }),
+    { mode: 0o600 },
+  );
+  const pair = settings.composition === "pair" || settings.composition === "duplicate-identity";
+  const plugins = [
+    "./plugin.mjs",
+    ...(pair ? ["./second.mjs"] : settings.composition === "mixed" ? ["./legacy.mjs"] : []),
+  ];
+  const verification: VerificationRecord[] = [
+    { spec: "./plugin.mjs", identity, entryDigest: createHash("sha256").update(firstSource).digest("hex") },
+    ...(pair
+      ? [
+          {
+            spec: "./second.mjs",
+            identity: secondIdentity,
+            entryDigest: createHash("sha256").update(secondSource).digest("hex"),
+          },
+        ]
+      : []),
+  ];
+  await writeFile(join(fixture.root, "restoration-verification.json"), JSON.stringify(verification), { mode: 0o600 });
+  const config = JSON.parse(await readFile(join(fixture.root, "orca.config.json"), "utf8")) as Record<string, unknown>;
+  config.plugins = plugins;
+  await writeFile(join(fixture.root, "orca.config.json"), JSON.stringify(config));
+  // Always park before the custom effect, independently of human-input callback support.
+  await writeFile(
+    join(fixture.root, "workflow.yaml"),
+    `id: restoration-396
+name: ${era} restoration workflow
+version: '${era === "old" ? "1" : "2"}'
+inputSchema:
+  fields:
+    secret: {type: string, sensitive: true}
+start: s
+nodes:
+  s: {type: start}
+  first: {type: gate, question: Continue?, options: [go]}
+  effect: {type: custom:fixture-eval}
+${pair ? "  effect2: {type: custom:fixture-second}\n" : ""}  done: {type: end}
+edges:
+  - {from: s, to: first}
+  - {from: first, to: effect}
+  - {from: effect, to: ${pair ? "effect2" : "done"}}
+${pair ? "  - {from: effect2, to: done}\n" : ""}`,
+  );
+}
+
+export async function providerTrace(
+  fixture: Pick<Fixture, "root" | "owner">,
+): Promise<{ type?: string; model: string }[]> {
+  await assertOwned(fixture);
+  const text = await readFile(join(fixture.root, "provider-trace.jsonl"), "utf8").catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return "";
+      throw error;
+    },
+  );
+  return text.trim()
+    ? text
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type?: string; model: string })
+    : [];
 }
