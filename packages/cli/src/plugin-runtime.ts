@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { readFile } from "node:fs/promises";
 import {
   builtinExecutors,
+  readPluginRestorationData,
   PluginRestorationIdentitySchema,
   PluginRestorationRecordsSchema,
   pluginRestorationRefusal,
@@ -20,49 +21,6 @@ export interface LoadedRestorationPlugin {
   /** Resolved local entry bytes are an additional check, not a dependency identity. */
   entry?: { url: string; digest: string };
   executors: string[];
-}
-
-/** Bound, plain JSON only; never call accessors, toJSON, or serialize arbitrary process objects. */
-function descriptorData(raw: unknown): PluginRestorationData {
-  let remaining = 4096;
-  const visit = (value: unknown, depth: number): unknown => {
-    if (--remaining < 0 || depth > 32) throw pluginRestorationRefusal("invalid_descriptor");
-    if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value !== "object" || !value) throw pluginRestorationRefusal("invalid_descriptor");
-    if (
-      !Array.isArray(value) &&
-      Object.getPrototypeOf(value) !== Object.prototype &&
-      Object.getPrototypeOf(value) !== null
-    )
-      throw pluginRestorationRefusal("invalid_descriptor");
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    const output: Record<string, unknown> | unknown[] = Array.isArray(value)
-      ? []
-      : (Object.create(null) as Record<string, unknown>);
-    for (const key of Reflect.ownKeys(descriptors)) {
-      if (Array.isArray(value) && key === "length") continue;
-      const property = typeof key === "string" ? descriptors[key] : undefined;
-      if (!property || !("value" in property) || !property.enumerable)
-        throw pluginRestorationRefusal("invalid_descriptor");
-      Object.defineProperty(output, key, {
-        value: visit(property.value, depth + 1),
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
-    }
-    return output;
-  };
-  const result = visit(raw, 0);
-  if (
-    !result ||
-    typeof result !== "object" ||
-    Array.isArray(result) ||
-    Buffer.byteLength(JSON.stringify(result)) > 65536
-  )
-    throw pluginRestorationRefusal("invalid_descriptor");
-  return JSON.parse(JSON.stringify(result)) as PluginRestorationData;
 }
 
 /** v1 requires every plugin in a behavior-bearing generation to opt in. Mixed legacy composition stays bound. */
@@ -96,7 +54,7 @@ export async function capturePluginRestoration(
     }
     let data: PluginRestorationData;
     try {
-      data = descriptorData(await contract.capture());
+      data = readPluginRestorationData(await contract.capture());
       if (contract.validate(data) !== true) throw pluginRestorationRefusal("invalid_descriptor");
     } catch {
       throw pluginRestorationRefusal("invalid_descriptor");
@@ -149,7 +107,8 @@ export async function restorePluginExecutors(
       throw pluginRestorationRefusal("identity_unverified");
     }
     try {
-      if (contract.validate(descriptorData(record.data)) !== true) throw pluginRestorationRefusal("invalid_descriptor");
+      if (contract.validate(readPluginRestorationData(record.data)) !== true)
+        throw pluginRestorationRefusal("invalid_descriptor");
     } catch {
       throw pluginRestorationRefusal("invalid_descriptor");
     }
@@ -175,7 +134,7 @@ export async function restorePluginExecutors(
       }),
     });
     try {
-      await plugins[index]!.plugin.restoration!.restore(descriptorData(record.data), api);
+      await plugins[index]!.plugin.restoration!.restore(readPluginRestorationData(record.data), api);
       if (registered.size !== record.executors.length) throw pluginRestorationRefusal("reconstruction_failed");
     } catch {
       throw pluginRestorationRefusal("reconstruction_failed");

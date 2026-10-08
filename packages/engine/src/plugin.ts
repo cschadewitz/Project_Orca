@@ -15,11 +15,85 @@ import type { PlanService } from "./plan/service.js";
 import type { WorkspaceProvider } from "./workspace/provider.js";
 import { z } from "zod";
 import { OrcaError } from "@orca/core";
+import { Buffer } from "node:buffer";
 
 /** Non-secret, explicitly validated behavioral inputs, never credentials or live authority. */
 export type PluginRestorationData = { [key: string]: PluginRestorationValue };
 export type PluginRestorationValue =
   string | number | boolean | null | PluginRestorationData | PluginRestorationValue[];
+
+/** Canonical bounds shared by capture, protected-record parsing and every recovery path. */
+export function readPluginRestorationData(raw: unknown): PluginRestorationData {
+  let remaining = 4096;
+  let bytes = 0;
+  const invalid = () => pluginRestorationRefusal("invalid_descriptor");
+  const spend = (encoded: string): void => {
+    bytes += Buffer.byteLength(encoded);
+    if (bytes > 65536) throw invalid();
+  };
+  const string = (value: string): void => {
+    // Reject giant values before JSON escaping can allocate an even larger string.
+    if (value.length > 65536) throw invalid();
+    spend(JSON.stringify(value));
+  };
+  const visit = (value: unknown, depth: number): PluginRestorationValue => {
+    if (--remaining < 0 || depth > 32) throw invalid();
+    if (typeof value === "string") {
+      string(value);
+      return value;
+    }
+    if (value === null || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) {
+      spend(JSON.stringify(value));
+      return value;
+    }
+    if (typeof value !== "object" || !value) throw invalid();
+    if (Array.isArray(value)) {
+      const length = Object.getOwnPropertyDescriptor(value, "length")?.value as unknown;
+      if (typeof length !== "number" || length > remaining) throw invalid();
+      // Dense index-only arrays: never expand holes or silently discard non-JSON properties.
+      if (Reflect.ownKeys(value).length !== length + 1) throw invalid();
+      const output: PluginRestorationValue[] = [];
+      spend("[");
+      for (let index = 0; index < length; index++) {
+        const property = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!property || !("value" in property) || !property.enumerable) throw invalid();
+        if (index) spend(",");
+        output.push(visit(property.value, depth + 1));
+      }
+      spend("]");
+      return output;
+    }
+    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) throw invalid();
+    const keys = Reflect.ownKeys(value);
+    if (keys.length > remaining) throw invalid();
+    const output = Object.create(null) as PluginRestorationData;
+    spend("{");
+    for (const [index, key] of keys.entries()) {
+      if (typeof key !== "string") throw invalid();
+      const property = Object.getOwnPropertyDescriptor(value, key);
+      if (!property || !("value" in property) || !property.enumerable) throw invalid();
+      if (index) spend(",");
+      string(key);
+      spend(":");
+      Object.defineProperty(output, key, { value: visit(property.value, depth + 1), enumerable: true });
+    }
+    spend("}");
+    return output;
+  };
+  const result = visit(raw, 0);
+  if (!result || typeof result !== "object" || Array.isArray(result)) throw invalid();
+  // Already bounded to 64 KiB before serialization; no getters/toJSON survive the visitor.
+  return JSON.parse(JSON.stringify(result)) as PluginRestorationData;
+}
+
+const PluginRestorationDataSchema = z.unknown().transform((raw, context) => {
+  try {
+    return readPluginRestorationData(raw);
+  } catch {
+    context.addIssue({ code: "custom", message: "invalid plugin restoration descriptor" });
+    return z.NEVER;
+  }
+});
 export const PluginRestorationIdentitySchema = z.strictObject({
   id: z.string().min(1).max(200),
   schemaVersion: z.number().int().positive(),
@@ -53,7 +127,7 @@ export const PluginRestorationRecordSchema = z.strictObject({
   spec: z.string().min(1).max(4096),
   entryDigest: z.string().regex(/^[a-f0-9]{64}$/),
   identity: PluginRestorationIdentitySchema,
-  data: z.json().refine((value) => value !== null && typeof value === "object" && !Array.isArray(value)),
+  data: PluginRestorationDataSchema,
   executors: z.array(z.string().regex(/^custom:.+/)).max(256),
 });
 export const PluginRestorationRecordsSchema = z.array(PluginRestorationRecordSchema).min(1).max(64);

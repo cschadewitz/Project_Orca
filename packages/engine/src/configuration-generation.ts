@@ -529,6 +529,10 @@ export class ConfigurationGenerations {
     rejectVersionCollisions = true,
   ): Promise<GenerationMaterial> {
     const loaded = supplied ?? (await this.options.loadAssets(config));
+    const restoration = loaded.pluginRestoration
+      ? PluginRestorationRecordsSchema.safeParse(loaded.pluginRestoration)
+      : undefined;
+    if (restoration && !restoration.success) throw pluginRestorationRefusal("invalid_descriptor");
     const assets = structuredClone({ workflows: loaded.workflows, templates: loaded.templates });
     const runtimeBinding = loaded.agents ? randomUUID() : undefined;
     const runtimeHosts = loaded.agents
@@ -547,7 +551,7 @@ export class ConfigurationGenerations {
         savedRevision,
         config: structuredClone(config),
         ...(loaded.workspaceInputs ? { workspaceInputs: structuredClone(loaded.workspaceInputs) } : {}),
-        ...(loaded.pluginRestoration ? { pluginRestoration: structuredClone(loaded.pluginRestoration) } : {}),
+        ...(restoration?.success ? { pluginRestoration: restoration.data } : {}),
         ...(loaded.agents
           ? {
               runtimeBinding,

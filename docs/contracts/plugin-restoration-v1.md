@@ -26,8 +26,13 @@ interface PluginRestorationApi {
 The loader records `contractVersion: 1`, ordered config spec, local entry SHA-256,
 identity, data and registered custom executor types in the existing protected
 generation store. Each data object is limited to 64 KiB of UTF-8 JSON, 4,096
-values and depth 32. There are at most 64 records and 256 executor types per
-record. Accessors, functions, non-finite numbers and non-plain objects are refused.
+values and depth 32. The same canonical bounded visitor validates capture,
+initial generation preparation and every protected-record recovery, including
+the same bootstrap. Array lengths count against the value budget before any
+serialization; arrays must be dense and contain only index properties. UTF-8
+JSON bytes, including escaped keys/values, are counted incrementally before
+serialization. There are at most 64 records and 256 executor types per record.
+Accessors, functions, non-finite numbers and non-plain objects are refused.
 Public run provenance never includes descriptor data or these private identities.
 
 ## Author obligations
@@ -80,7 +85,10 @@ and trusted composition must verify its whole-code/dependency identity.
 Declarative workflow/template/agent/role inputs remain captured by the existing
 generation snapshot. Other callback categories are deliberately unsupported:
 host additions/replacements, in-place host or built-in executor mutations,
-custom workspace providers, plan signal extractors and plugin human-input ports.
+custom workspace providers, plan signal extractors, direct/prototype/nested plan
+service replacements and plugin human-input ports. The bootstrap graph scan
+classifies unrecognized plan-service mutations generation-wide; it never permits
+a historical custom executor to adopt a newly replaced current plan callback.
 Mixed opt-in/legacy compositions remain bootstrap-bound, including a legacy
 no-op plugin alongside an opted-in custom plugin. This is an explicit v1
 limitation; it does not promise general plugin composition restoration.

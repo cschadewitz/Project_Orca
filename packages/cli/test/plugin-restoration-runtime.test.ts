@@ -277,3 +277,115 @@ it("refuses a missing descriptor instead of adopting current custom executors", 
   vi.spyOn(second.orchestrator.stores.execution, "getGeneration").mockResolvedValue(snapshot);
   await expect(second.generations.restore(snapshot.id)).rejects.toThrow("legacy_generation");
 });
+
+it("refuses sparse arrays before canonical serialization can expand them outside the descriptor budget", async () => {
+  const values: string[] = [];
+  values[5000] = "x";
+  const loaded = await plugin({ values });
+  loaded.plugin.restoration!.validate = () => true;
+  await expect(capturePluginRestoration([loaded], false, verifyIdentity)).rejects.toThrow("invalid_descriptor");
+});
+
+it("rejects small/huge sparse arrays and non-index array properties without silently changing captured inputs", async () => {
+  const sparse = new Array<null>(3);
+  const huge = new Array<null>(0xffffffff);
+  const extra: unknown[] = [null];
+  Object.defineProperty(extra, "extra", { value: "not-json-array-data", enumerable: true });
+  const loaded = await plugin();
+  loaded.plugin.restoration!.validate = () => true;
+  for (const values of [sparse, huge, extra]) {
+    loaded.plugin.restoration!.capture = () => ({ values });
+    await expect(capturePluginRestoration([loaded], false, verifyIdentity)).rejects.toThrow("invalid_descriptor");
+  }
+});
+
+it("keeps accepted dense canonical descriptors restorable at the value boundary", async () => {
+  const values = Array<null>(4094).fill(null);
+  const loaded = await plugin({ values });
+  loaded.plugin.restoration!.validate = () => true;
+  const records = await capturePluginRestoration([loaded], false, verifyIdentity);
+  expect(records?.[0]?.data).toEqual({ values });
+  expect((await restorePluginExecutors(records, [loaded], verifyIdentity)).get("custom:fixture")).toBeDefined();
+});
+
+it("enforces encoded UTF-8 limits and revalidates capture-hook output before recording", async () => {
+  const loaded = await plugin({ model: "é".repeat(32768) });
+  loaded.plugin.restoration!.validate = () => true;
+  await expect(capturePluginRestoration([loaded], false, verifyIdentity)).rejects.toThrow("invalid_descriptor");
+  loaded.plugin.restoration!.capture = () => ({ model: "admitted" });
+  loaded.plugin.restoration!.validate = (data) => {
+    Reflect.set(data as object, "model", "x".repeat(65537));
+    return true;
+  };
+  await expect(capturePluginRestoration([loaded], false, verifyIdentity)).rejects.toThrow("invalid_descriptor");
+});
+
+it.each(["historical", "current", "both"])(
+  "refuses %s plan method replacements instead of adopting current plan callbacks",
+  async (mode) => {
+    const dir = await directory();
+    const registration = `if (process.env.ORCA_FIXTURE_UNSUPPORTED === "yes") {
+      const behavior = process.env.ORCA_FIXTURE_MODEL;
+      api.plan.listPlans = async () => [{ name: behavior }];
+    }`;
+    const planExecutor = source
+      .replace("execute: async () => ({", "execute: async (ctx) => ({")
+      .replace("data: { model }", "data: { model: (await ctx.plan.listPlans())[0]?.name ?? model }");
+    await writeFile(join(dir, "entry.mjs"), planExecutor.replace("register(api) {", `register(api) { ${registration}`));
+    await writeFile(join(dir, "fixture.yaml"), workflow);
+    const config = parseOrcaConfig({
+      plugins: ["./entry.mjs"],
+      workflows: ["fixture.yaml"],
+      templates: [],
+      humanInput: { mode: "pause" },
+    });
+    const options = { config, configDir: dir, logger: silentLogger, verifyPluginRestorationIdentity: verifyIdentity };
+    vi.stubEnv("ORCA_FIXTURE_MODEL", "admitted");
+    vi.stubEnv("ORCA_FIXTURE_UNSUPPORTED", mode === "historical" || mode === "both" ? "yes" : "no");
+    const first = await bootstrap(options);
+    const id = await (
+      await first.generations.captureLaunch({ purpose: "workflow", workflowId: "fixture" })
+    ).startRun({});
+    expect((await first.orchestrator.run(id)).run.status).toBe("paused");
+    await first.orchestrator.answer((await first.orchestrator.pendingInputs(id))[0]!.id, "go", id);
+    vi.stubEnv("ORCA_FIXTURE_MODEL", "current");
+    vi.stubEnv("ORCA_FIXTURE_UNSUPPORTED", mode === "current" || mode === "both" ? "yes" : "no");
+    const second = await bootstrap(options);
+    await expect(second.orchestrator.resume(id)).rejects.toMatchObject({ code: "RUN_STATE" });
+    expect(
+      (await second.orchestrator.stores.events.read(id)).some(
+        (event) =>
+          event.type === "step.completed" &&
+          (event.payload.result.data.model === "current" || event.payload.result.data.model === "admitted"),
+      ),
+    ).toBe(false);
+  },
+);
+
+it.each(["bytes", "values", "depth"])(
+  "rejects %s overflow on same-bootstrap protected generation recovery",
+  async (mode) => {
+    const dir = await directory();
+    await writeFile(join(dir, "entry.mjs"), source);
+    await writeFile(join(dir, "fixture.yaml"), workflow);
+    vi.stubEnv("ORCA_FIXTURE_MODEL", "admitted");
+    const config = parseOrcaConfig({ plugins: ["./entry.mjs"], workflows: ["fixture.yaml"], templates: [] });
+    const app = await bootstrap({
+      config,
+      configDir: dir,
+      logger: silentLogger,
+      verifyPluginRestorationIdentity: verifyIdentity,
+    });
+    const snapshot = structuredClone(app.generations.current.snapshot);
+    let data: PluginRestorationData;
+    if (mode === "bytes") data = { model: "x".repeat(65537) };
+    else if (mode === "values") data = { values: Array<null>(4096).fill(null) };
+    else {
+      data = { model: "admitted" };
+      for (let index = 0; index < 33; index++) data = { nested: data };
+    }
+    snapshot.pluginRestoration![0]!.data = data;
+    vi.spyOn(app.orchestrator.stores.execution, "getGeneration").mockResolvedValue(snapshot);
+    await expect(app.generations.restore(snapshot.id)).rejects.toMatchObject({ code: "RUN_STATE" });
+  },
+);

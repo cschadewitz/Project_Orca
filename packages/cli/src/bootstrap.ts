@@ -291,13 +291,15 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   };
   const configuredHosts = new Map(agents.listHosts().map((host) => [host.id, host]));
   const configuredExecutors = new Map(executors.types().map((type) => [type, executors.get(type)]));
-  const runtimeMutated = captureRuntimeObjects([...agents.listHosts(), ...configuredExecutors.values()]);
   let pluginPlanCallbacks = false;
   const addSignalExtractor = plan.addSignalExtractor.bind(plan);
   plan.addSignalExtractor = (extractor) => {
     pluginPlanCallbacks = true;
     addSignalExtractor(extractor);
   };
+  // Include the planning service's behavior graph after installing our own tracking wrapper.
+  // Direct method/prototype/nested replacements are unsupported even without extractor registration.
+  const runtimeMutated = captureRuntimeObjects([...agents.listHosts(), ...configuredExecutors.values(), plan]);
   const pluginEntries = await pluginEntryDigests(config, configDir);
   const loadedPlugins = await loadPlugins(config, configDir, api, logger);
   for (const loaded of loadedPlugins) {
