@@ -140,11 +140,18 @@ export class MacUpdates {
   private sealed = false;
   private download: AbortController | undefined;
   private verified = false;
+  private readonly listeners = new Set<(state: MacUpdateSnapshot) => void>();
 
   constructor(private readonly ports: MacUpdatePorts) {}
 
   get state(): MacUpdateSnapshot {
     return this.snapshot;
+  }
+  subscribe(listener: (state: MacUpdateSnapshot) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
   private set(phase: MacUpdateSnapshot["phase"], blocker?: MacUpdateBlocker): void {
     this.snapshot = Object.freeze({
@@ -152,6 +159,13 @@ export class MacUpdates {
       ...(this.offer ? { offerId: this.offer.id } : {}),
       ...(blocker ? { blocker } : {}),
     });
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(this.snapshot);
+      } catch {
+        /* Observers cannot alter lease ownership. */
+      }
+    }
   }
   /** Fresh offer IDs also invalidate same-version rebuilds and replayed approvals.
    * The caller must defer/revoke an old offer before replacing it while work is pending.

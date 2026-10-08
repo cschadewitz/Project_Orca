@@ -30,6 +30,7 @@ import type {
   WorkspaceSnapshot,
 } from "../bridge.js";
 import type { UpdateSnapshot } from "../update-contract.js";
+import type { MacUpdateView } from "../mac-update-contract.js";
 import type { DiagnosticsResult, DiagnosticsStatus } from "../diagnostics-contract.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
@@ -109,6 +110,23 @@ function forwardMacDraft(_event: unknown, value: unknown): void {
 ipcRenderer.on("orca:macUpdate.prepare", forwardMacDraft);
 
 const bridge: OrcaBridge = {
+  macUpdates: {
+    read: () => ipcRenderer.sendSync("orca:macUpdate.read") as MacUpdateView,
+    act: async (command) => {
+      try {
+        return await call("orca:macUpdate.act", command);
+      } catch {
+        return { ok: false, error: { code: "UPDATE", message: "Update request is unavailable" } };
+      }
+    },
+    subscribe: (listener) => {
+      const forward = (_event: unknown, state: MacUpdateView) => listener(state);
+      ipcRenderer.on("orca:macUpdate.changed", forward);
+      return () => {
+        ipcRenderer.off("orca:macUpdate.changed", forward);
+      };
+    },
+  },
   operator: { preflight: (params) => call("orca:operator.preflight", params) },
   diagnostics: {
     status: () => diagnosticCall("status"),

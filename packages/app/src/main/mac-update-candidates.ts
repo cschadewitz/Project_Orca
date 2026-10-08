@@ -142,6 +142,21 @@ export class MacCandidateSession {
   get state(): MacUpdateSnapshot {
     return this.updates.state;
   }
+  /** Nonsecret metadata for the exact trusted offer, never a delivery/install path. */
+  get offeredCandidate(): Readonly<MacUpdateCandidate & { version: string }> | undefined {
+    if (!this.binding) return undefined;
+    return Object.freeze({
+      ...this.binding.value.candidate,
+      version: this.binding.value.manifest.identity.releaseVersion,
+    });
+  }
+  private offeredEpoch: number | undefined;
+  get targetEpoch(): number | undefined {
+    return this.offeredEpoch;
+  }
+  subscribe(listener: (state: MacUpdateSnapshot) => void): () => void {
+    return this.updates.subscribe(listener);
+  }
   /** Distinct authenticity/cleanup outcome, with no raw native errors or delivery URL exposed. */
   get verification(): "verified" | "failed" | "unknown" | undefined {
     return this.downloadOutcome;
@@ -206,9 +221,16 @@ export class MacCandidateSession {
       }
       if (verdict !== "trusted") return { outcome: verdict === "refused" ? "refused" : "unknown" };
       if (signal.aborted) return { outcome: "refused" };
-      const offerId = this.updates.present(value.candidate, capturedTarget);
-      if (!offerId) return { outcome: "busy" };
+      const previous = this.binding;
+      const previousEpoch = this.offeredEpoch;
       this.binding = { value, bytes };
+      this.offeredEpoch = capturedTarget.epoch;
+      const offerId = this.updates.present(value.candidate, capturedTarget);
+      if (!offerId) {
+        this.binding = previous;
+        this.offeredEpoch = previousEpoch;
+        return { outcome: "busy" };
+      }
       this.downloadOutcome = undefined;
       return { outcome: "available", offerId };
     } catch {

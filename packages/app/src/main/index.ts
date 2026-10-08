@@ -30,6 +30,7 @@ import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates } from "./updates.js";
 import { MacUpdateWindows } from "./mac-update-windows.js";
 import { MacUpdateGuards } from "./mac-update-guards.js";
+import { MacUpdateApplication, installMacUpdateIPC } from "./mac-update-application.js";
 import { updateDriver } from "./update-driver.js";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -557,8 +558,15 @@ const macUpdateWindows = new MacUpdateWindows({
   ipc: ipcMain,
   createDeferred: createWindow,
 });
-// Internal composition only: no offer/approval/install IPC or Mac driver is enabled.
+// Trusted candidate/recovery/native owners are absent: production routing stays unavailable.
 export const macUpdateGuards = new MacUpdateGuards(workspace, macUpdateWindows);
+const macUpdates = new MacUpdateApplication();
+installMacUpdateIPC(macUpdates, {
+  ipc: ipcMain,
+  windows: () => BrowserWindow.getAllWindows(),
+  epoch: () => workspace.connectionTarget.epoch,
+  held: () => macUpdateWindows.active,
+});
 app.on("browser-window-created", (_event, window) => macUpdateWindows.track(window));
 
 async function guardConnectionDrafts(): Promise<(() => void) | undefined> {
