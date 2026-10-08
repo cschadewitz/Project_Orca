@@ -1,4 +1,5 @@
 /** Authenticated, protected continuation admission. A locator is never an acceptance record. */
+import type { RuntimeActivity } from "./runtime-activity.js";
 import { z } from "zod";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
@@ -86,11 +87,24 @@ function authorityUnavailable(error: unknown): boolean {
 }
 
 export class ContinuationAdmissionModel {
+  get runtimeActivity() {
+    return this.options.runtimeActivity;
+  }
+  get executionOrchestrator() {
+    return this.options.orchestrator;
+  }
+  get executionRuntime() {
+    return this.options.executionRuntime;
+  }
+  get taskCount() {
+    return this.tasks.size;
+  }
   private readonly scope = new AsyncLocalStorage<Scope>();
   private readonly service: ContinuationAdmissionService;
   private readonly tasks = new Set<Promise<void>>();
   constructor(
     private readonly options: {
+      runtimeActivity?: RuntimeActivity | undefined;
       claims: RegisteredRetryClaims;
       orchestrator: Orchestrator;
       locators: ContinuationLocators;
@@ -157,6 +171,7 @@ export class ContinuationAdmissionModel {
         const result = await this.service.admit(command, retry, this.authority());
         if (result.state === "resolved" && result.result.state === "accepted") {
           const id = result.result.continuationId;
+          const release = this.options.runtimeActivity?.enter("continuation");
           (this.options.schedule ?? setImmediate)(() => {
             const task = this.reconcile(id, access)
               .then(() => undefined)
@@ -169,7 +184,10 @@ export class ContinuationAdmissionModel {
               })
               .catch(() => undefined);
             this.tasks.add(task);
-            void task.finally(() => this.tasks.delete(task));
+            void task.finally(() => {
+              this.tasks.delete(task);
+              release?.();
+            });
           });
         }
         return result;
@@ -190,31 +208,36 @@ export class ContinuationAdmissionModel {
   }
   /** Internal bounded startup recovery. The callback resolves only the sealed original credential. */
   async recoverBatch(accessFor: (entry: ContinuationEntry) => Promise<ContinuationAccess | undefined>): Promise<void> {
-    const locators = (await this.options.locators.batch?.()) ?? [];
-    if (locators.length > 100) throw unavailable();
-    for (const locator of locators) {
-      const entry = await this.located(locator);
-      if (!entry) continue;
-      // A retry claim is only a discovery candidate. Rebuild the non-authoritative
-      // lookup after the existing encrypted marker has been verified and synced.
-      await this.options.locators.bind(locator);
-      if (entry.dispatch === "settled" || entry.dispatch === "ambiguous") continue;
-      try {
-        const access = entry.actor?.credentialId ? await accessFor(structuredClone(entry)) : undefined;
-        const principal = await access?.current();
-        if (
-          !access ||
-          access.workspaceId !== entry.workspaceId ||
-          principal?.id !== entry.principalId ||
-          principal.credentialId !== entry.actor?.credentialId
-        ) {
-          await this.blockUnavailable(locator);
-          continue;
+    const release = this.options.runtimeActivity?.enter("recovery");
+    try {
+      const locators = (await this.options.locators.batch?.()) ?? [];
+      if (locators.length > 100) throw unavailable();
+      for (const locator of locators) {
+        const entry = await this.located(locator);
+        if (!entry) continue;
+        // A retry claim is only a discovery candidate. Rebuild the non-authoritative
+        // lookup after the existing encrypted marker has been verified and synced.
+        await this.options.locators.bind(locator);
+        if (entry.dispatch === "settled" || entry.dispatch === "ambiguous") continue;
+        try {
+          const access = entry.actor?.credentialId ? await accessFor(structuredClone(entry)) : undefined;
+          const principal = await access?.current();
+          if (
+            !access ||
+            access.workspaceId !== entry.workspaceId ||
+            principal?.id !== entry.principalId ||
+            principal.credentialId !== entry.actor?.credentialId
+          ) {
+            await this.blockUnavailable(locator);
+            continue;
+          }
+          await this.reconcile(entry.receipt.continuationId, access);
+        } catch (error) {
+          if (authorityUnavailable(error)) await this.blockUnavailable(locator).catch(() => undefined);
         }
-        await this.reconcile(entry.receipt.continuationId, access);
-      } catch (error) {
-        if (authorityUnavailable(error)) await this.blockUnavailable(locator).catch(() => undefined);
       }
+    } finally {
+      release?.();
     }
   }
   private async located(locator: ContinuationLocator): Promise<ContinuationEntry | undefined> {
@@ -576,6 +599,7 @@ export class ContinuationAdmissionModel {
       refuse = reject;
     });
     let attachedEntry: ContinuationEntry | undefined;
+    const release = this.options.runtimeActivity?.enter("continuation");
     const task = (async () => {
       try {
         await authority.authorize(entry.command);
@@ -679,7 +703,10 @@ export class ContinuationAdmissionModel {
       }
     })();
     this.tasks.add(task);
-    void task.finally(() => this.tasks.delete(task));
+    void task.finally(() => {
+      this.tasks.delete(task);
+      release?.();
+    });
     return ack;
   }
 }
