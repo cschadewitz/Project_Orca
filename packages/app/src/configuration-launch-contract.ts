@@ -35,6 +35,7 @@ export type EditIntent =
 export interface FieldMetadata {
   readonly acceptsAbsent: boolean | "metadata-unavailable";
   readonly acceptsNull: boolean | "metadata-unavailable";
+  readonly visibility: "non-secret" | "withheld" | "metadata-unavailable";
   readonly default:
     | { state: "none" }
     | { state: "available"; value: unknown }

@@ -147,6 +147,7 @@ export type ConfigSchemaDescription = z.infer<typeof ConfigSchemaDescriptionSche
 export interface ConfigFieldMetadata {
   acceptsAbsent: boolean | "metadata-unavailable";
   acceptsNull: boolean | "metadata-unavailable";
+  visibility: "non-secret" | "withheld" | "metadata-unavailable";
   default:
     | { state: "none" }
     | { state: "available"; value: unknown }
@@ -165,6 +166,7 @@ export type ConfigFieldShape = ConfigFieldMetadata &
 const FieldMetadataShape = {
   acceptsAbsent: z.union([z.boolean(), z.literal("metadata-unavailable")]),
   acceptsNull: z.union([z.boolean(), z.literal("metadata-unavailable")]),
+  visibility: z.enum(["non-secret", "withheld", "metadata-unavailable"]),
   default: z.discriminatedUnion("state", [
     z.object({ state: z.literal("none") }),
     z.object({ state: z.literal("available"), value: z.unknown() }),

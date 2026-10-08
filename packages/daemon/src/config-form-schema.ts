@@ -16,11 +16,14 @@ interface Node {
     entries?: Record<string, string | number>;
     values?: readonly unknown[];
     defaultValue?: unknown;
+    checks?: readonly unknown[];
   };
   description?: string;
 }
 const unknown = "metadata-unavailable";
-const sensitive = (path: string) => /(^|\.)(env|mcpServers|args|command)(\.|\[|$)/.test(path);
+// Environment/transport values and arbitrary arguments may contain credentials.
+// The configured executable field is an authorized binary selector, not a secret input.
+const sensitive = (path: string) => /(^|\.)(env|mcpServers|args)(\.|\[|$)/.test(path);
 
 /** Only audited core schemas enter this walker; callbacks/plugins are not discovered. */
 export function describeConfigFormSchema(): ConfigFormSchema {
@@ -70,9 +73,18 @@ function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
   const meta: ConfigFieldMetadata = {
     acceptsAbsent: acceptance(source, "absent"),
     acceptsNull: acceptance(source, "null"),
+    visibility: sensitive(path) ? "withheld" : "non-secret",
     default: defaultState,
   };
-  const unsupported = (): ConfigFieldShape => ({ ...meta, kind: "unsupported", reason: "opaque" });
+  const unsupported = (): ConfigFieldShape => ({
+    ...meta,
+    visibility: "metadata-unavailable",
+    kind: "unsupported",
+    reason: "opaque",
+    ...(["pipe", "catch", "custom"].includes(node.def.type)
+      ? { default: { state: "metadata-unavailable" as const } }
+      : {}),
+  });
   if (seen.has(node) || wrappers.has(node)) return unsupported();
   const nested = new Set(seen).add(node);
   const child = (n: Node, p: string) => walk(n, p, nested);
@@ -89,7 +101,7 @@ function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
       return node.def.element ? { ...meta, kind: "array", item: child(node.def.element, `${path}[]`) } : unsupported();
     case "record":
       // Constrained/enum/opaque key schemas cannot be described as arbitrary record keys.
-      return node.def.valueType && node.def.keyType?.def.type === "string"
+      return node.def.valueType && node.def.keyType?.def.type === "string" && !node.def.keyType.def.checks?.length
         ? { ...meta, kind: "record", value: child(node.def.valueType, `${path}.<key>`) }
         : unsupported();
     case "union": {

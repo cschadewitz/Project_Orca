@@ -9,6 +9,7 @@ describe("authoritative rich configuration metadata", () => {
     expect(root.kind).toBe("object");
     if (root.kind !== "object") throw new Error("root");
     expect(root.fields.roles).toMatchObject({ kind: "record", value: { kind: "scalar", field: { type: "string" } } });
+    expect(root.visibility).toBe("non-secret");
     const hosts = root.fields.hosts;
     if (hosts?.kind !== "array" || hosts.item.kind !== "union") throw new Error("hosts");
     expect(hosts.item.discriminator).toBe("type");
@@ -57,7 +58,9 @@ describe("authoritative rich configuration metadata", () => {
     expect(describeFormNode(schema, "agents[].env.<key>").default).toEqual({ state: "withheld" });
     expect(calls).toBe(0);
     const shape = describeFormNode(z.enum(["secret"]).describe("secret"), "agents[].env.<key>");
+    expect(shape.visibility).toBe("withheld");
     expect(JSON.stringify(shape)).not.toContain("secret");
+    expect(describeFormNode(z.string(), "agents[].command").visibility).toBe("non-secret");
   });
 
   it("reports ordinary unions/transforms/catch and constrained records unsupported", () => {
@@ -66,8 +69,9 @@ describe("authoritative rich configuration metadata", () => {
       z.string().transform((v) => v),
       z.string().catch("fallback"),
       z.record(z.enum(["x"]), z.string()),
+      z.record(z.string().regex(/^allowed$/), z.string()),
     ])
-      expect(describeFormNode(schema).kind).toBe("unsupported");
+      expect(describeFormNode(schema)).toMatchObject({ kind: "unsupported", visibility: "metadata-unavailable" });
     expect(describeFormNode(z.string().catch("fallback")).acceptsAbsent).toBe("metadata-unavailable");
   });
 });
