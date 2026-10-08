@@ -20,3 +20,6 @@ packages/design/src/tokens.ts
 # Prompt templates: leading whitespace and line breaks end up in an agent's prompt
 # verbatim, so a formatter must not touch them.
 templates/
+
+# Pinned M10 release candidate: producer formatting is part of its digest.
+examples/m10-plugin/candidate/

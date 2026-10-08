@@ -1,0 +1,19 @@
+{
+  "contractVersion": 1,
+  "runtime": {
+    "node": "24.21.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "plugins": [
+    {
+      "spec": "./plugins/m10-owned.mjs",
+      "id": "m10-owned",
+      "schemaVersion": 1,
+      "closure": "closed-node-esm-bundle-v1",
+      "path": "plugins/m10-owned.mjs",
+      "sha256": "8bb8dbe456f8d24b68a762e389c0ce650e2958a831cd436dec96340448b20152",
+      "externalImports": []
+    }
+  ]
+}
