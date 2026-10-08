@@ -58,7 +58,7 @@ export function launchPorts(context = launchContext()) {
       validation: { ok: true, errors: [], warnings: [] },
     }),
     retain: vi.fn<NonNullable<LaunchPorts["retain"]>>().mockResolvedValue({ id: "protected-intent-1" }),
-    submit: vi.fn<LaunchPorts["submit"]>().mockResolvedValue({
+    submit: vi.fn<NonNullable<LaunchPorts["submit"]>>().mockResolvedValue({
       state: "accepted",
       operationId: "retry-original",
       admissionId: "admission-original",

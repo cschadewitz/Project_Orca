@@ -92,7 +92,7 @@ export class GuidedLaunchController {
     );
   }
   edit(draft: LaunchDraft): void {
-    if (this.pending || this.state.intent !== undefined) return;
+    if (this.pending || this.state.intent !== undefined || this.state.unresolvedReview !== undefined) return;
     this.fence += 1;
     this.update({
       draft: structuredClone(draft),
@@ -106,14 +106,18 @@ export class GuidedLaunchController {
   /** Explicit target review can transfer only an unsent draft. Pending intents never transfer. */
   reviewTarget(): void {
     if (this.pending) return;
-    if (this.state.intent !== undefined && !sameScope(this.state.draftTarget, this.state.context.target)) return;
+    if (
+      (this.state.intent !== undefined || this.state.unresolvedReview !== undefined) &&
+      !sameScope(this.state.draftTarget, this.state.context.target)
+    )
+      return;
     this.fence += 1;
     this.update({
       draftTarget: structuredClone(this.state.context.target),
       phase: "editing",
       review: undefined,
       message:
-        this.state.intent === undefined
+        this.state.intent === undefined && this.state.unresolvedReview === undefined
           ? "Target reviewed. Validate the workflow and inputs before launching."
           : "Original target scope reviewed after reconnect. Recover the retained intent under current authority.",
     });
@@ -124,7 +128,8 @@ export class GuidedLaunchController {
     if (context.unavailableReason !== undefined) return context.unavailableReason;
     const reason = draft.mode === "direct" ? context.directReason : context.requestReason;
     if (reason !== undefined) return reason;
-    if (this.ports.retain === undefined) return "Protected guided-launch intent storage is unavailable.";
+    if ((this.ports.retain === undefined || this.ports.submit === undefined) && this.ports.launch === undefined)
+      return "Protected guided-launch intent storage is unavailable.";
     const root = context.roots.find((r) => r.id === draft.rootId);
     if (root?.evidence.state !== "verified") return root?.evidence.reason ?? "Choose a verified workspace root.";
     const workflow = context.workflows.find((w) => w.id === draft.workflowId);
@@ -135,7 +140,7 @@ export class GuidedLaunchController {
     return undefined;
   }
   async preview(): Promise<void> {
-    if (this.pending || this.state.intent !== undefined) return;
+    if (this.pending || this.state.intent !== undefined || this.state.unresolvedReview !== undefined) return;
     const reason = this.disabledReason();
     if (reason !== undefined) {
       this.block(reason);
@@ -196,10 +201,7 @@ export class GuidedLaunchController {
         draft.mode === "direct"
           ? {
               mode: "direct" as const,
-              params: RunsAdmitParamsSchema.parse({
-                ...guards,
-                expectedScope: { principalId: draftTarget.principalId, workspaceId: draftTarget.workspaceId },
-              }),
+              params: RunsAdmitParamsSchema.parse(guards),
             }
           : {
               mode: "request" as const,
@@ -221,6 +223,7 @@ export class GuidedLaunchController {
         generation: context.activeGeneration,
         command,
         warnings: result.validation.warnings,
+        ...(result.checkout === undefined ? {} : { checkout: result.checkout }),
       };
       this.update({
         phase: "review",
@@ -247,16 +250,34 @@ export class GuidedLaunchController {
     }
     const review = this.state.review;
     const retain = this.ports.retain;
-    if (retain === undefined) return;
+    const launch = this.ports.launch;
+    if (retain === undefined && launch === undefined) return;
     this.pending = true;
     const fence = this.fence;
     this.update({ phase: "submitting", message: "Retaining the protected launch intent." });
+    if (launch !== undefined) {
+      this.update({ unresolvedReview: review });
+      try {
+        await this.receive(
+          async () => {
+            const result = await launch(review);
+            this.update({ intent: result.intent, unresolvedReview: undefined });
+            return result.response;
+          },
+          fence,
+          review,
+        );
+      } finally {
+        this.pending = false;
+      }
+      return;
+    }
     try {
-      const intent = await retain(review);
+      const intent = await retain!(review);
       this.update({ intent });
       if (fence !== this.fence) return;
       this.update({ message: "Submitting the retained launch intent." });
-      await this.receive(() => this.ports.submit(intent), fence, review);
+      await this.receive(() => this.ports.submit!(intent), fence, review);
     } catch {
       if (fence === this.fence)
         this.block(
@@ -267,6 +288,42 @@ export class GuidedLaunchController {
     }
   }
   async recover(): Promise<void> {
+    if (!this.pending && this.state.intent === undefined && this.state.unresolvedReview !== undefined) {
+      const review = this.state.unresolvedReview;
+      if (!sameLaunchTarget(review.target, this.state.context.target) || this.ports.launch === undefined) {
+        this.block(
+          "The protected intent handle is unavailable after target/configuration movement. Inspect retained work through the original main-owned connection; do not submit new work.",
+        );
+        return;
+      }
+      const { context, draft } = this.state;
+      const reason =
+        context.unavailableReason ?? (draft.mode === "direct" ? context.directReason : context.requestReason);
+      if (reason !== undefined) {
+        this.block(reason);
+        return;
+      }
+      this.pending = true;
+      const fence = this.fence;
+      this.update({
+        phase: "recovering",
+        message: "Retrying the exact original review through protected main ownership.",
+      });
+      try {
+        await this.receive(
+          async () => {
+            const result = await this.ports.launch!(review);
+            this.update({ intent: result.intent, unresolvedReview: undefined });
+            return result.response;
+          },
+          fence,
+          review,
+        );
+      } finally {
+        this.pending = false;
+      }
+      return;
+    }
     if (
       this.pending ||
       this.state.intent === undefined ||
@@ -351,7 +408,7 @@ export class GuidedLaunchController {
     }
   }
   async loadDraft(): Promise<void> {
-    if (this.pending || this.state.intent !== undefined) return;
+    if (this.pending || this.state.intent !== undefined || this.state.unresolvedReview !== undefined) return;
     if (this.ports.drafts === undefined) {
       this.block("Protected guided-draft persistence is unavailable.");
       return;
@@ -399,6 +456,7 @@ export class GuidedLaunchController {
         inputEpoch: this.state.inputEpoch + 1,
         review: structuredClone(saved.review),
         intent: saved.intent,
+        unresolvedReview: undefined,
         phase: "recovering",
         message: "A protected launch intent was restored. Recover its original outcome.",
       });
@@ -410,6 +468,12 @@ export class GuidedLaunchController {
   }
   async newWork(): Promise<void> {
     if (this.pending) return;
+    if (this.state.unresolvedReview !== undefined) {
+      this.block(
+        "The original launch acknowledgement and intent handle are unresolved. Recover or inspect its protected main-owned intent before starting new work.",
+      );
+      return;
+    }
     if (this.state.intent !== undefined) {
       if (!sameLaunchTarget(this.state.draftTarget, this.state.context.target)) {
         this.block("Return to the original target before abandoning this intent.");

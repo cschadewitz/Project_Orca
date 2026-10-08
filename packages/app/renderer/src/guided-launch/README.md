@@ -6,9 +6,28 @@ It is not registered in the shell and does not add RPCs, persistence, provider d
 workspace provisioning or publication behavior.
 
 `GuidedLaunchController` consumes `LaunchPorts`; `GuidedLaunch` composes shared UI primitives.
-All new interfaces in `contracts.ts` are provisional injected app-local boundaries, pending
-the shared integrator's canonical declarations. The dedicated fixtures are synthetic and
-are not the accepted sample or a native checkout binding.
+Canonical `EditorTarget`, command and preflight types come from #542 declaration commit
+`4cc995c517f0ebe7b1e24d7c417b1d1ea80259ff`. The remaining UI projection, draft and optional
+two-phase retention interfaces are explicit local seams. `shared-bindings.ts` maps canonical
+checkout evidence, coherent reads, atomic submission and all response/recovery kinds without
+adding wire properties. The dedicated fixtures are synthetic, not the accepted sample or a
+native checkout binding. The shared declaration is a type-check dependency of this draft PR;
+it has not been copied, merged or modified by this worker.
+
+The canonical adapter preserves the exact checkout observation from preflight and supplies
+it unchanged to main's independently verified submission. It removes client-owned retry/scope
+fields from the command. Main still owns secure retention before sending and key allocation.
+Atomic submission can lose the acknowledgement before returning its retained handle. In that
+case the controller freezes the exact original review and permits only exact-review retry on
+the same connection; it never infers correlation from workflow/target-only `retained()` rows.
+Target/epoch movement blocks that retry and visibly requires main-owned inspection.
+
+Narrow shared gaps remain explicit: a verified exact intent reference after acknowledgement
+loss across connection movement; protected draft/command restore beyond retained metadata;
+Request override validation/provenance beyond the vars-only preflight; and an unambiguous
+abandonment-success outcome before clearing the local intent. The canonical declaration alone
+does not prove these persistence or recovery semantics. Missing adapters keep the relevant
+operations blocked rather than claiming unsupported behavior.
 
 The integrator must supply these concrete bindings before enabling the surface:
 
@@ -22,10 +41,11 @@ The integrator must supply these concrete bindings before enabling the surface:
   Unsupported target/root/workflow combinations must remain blocked.
 - The reviewed app sample workflow ID/version/digest, task/instruction/result bindings.
   Existing Linux `cal-codex-work` v3 is not implicitly certified for this beta.
-- Protected guided command/draft retention. `retain` must persist the exact frozen target,
+- Protected guided command/draft retention. Optional `retain` must persist the exact frozen target,
   root, guards and command before returning an opaque handle. The palette journal currently
   stores only workflow correlation and is insufficient. No renderer key or second retry
-  ledger is introduced. Missing adapters visibly block submission/restart claims.
+  ledger is introduced. The canonical `launch` path instead delegates retention plus submission
+  to `GuidedLaunchPorts.submit`. Missing adapters visibly block submission/restart claims.
 - `submit` must use the captured connection and retained original command/key, checking
   current authority/target again. Initial direct responses are flat `RunsAdmitResult` with
   operation identity; initial Request responses are flat `RequestsSubmitResult` without an

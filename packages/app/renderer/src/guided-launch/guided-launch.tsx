@@ -111,7 +111,10 @@ export function GuidedLaunch({
   const { draft, context } = state;
   const workflow = context.workflows.find((w) => w.id === draft.workflowId);
   const selectedRoot = context.roots.find((root) => root.id === draft.rootId);
-  const locked = state.intent !== undefined || ["checking", "submitting", "recovering"].includes(state.phase);
+  const locked =
+    state.intent !== undefined ||
+    state.unresolvedReview !== undefined ||
+    ["checking", "submitting", "recovering"].includes(state.phase);
   const reason = controller.disabledReason();
   const invalid = Object.values(draft.vars).some((value) => value === undefined);
   const receipt = state.result === undefined ? undefined : launchReceipt(state.result);
@@ -314,7 +317,7 @@ export function GuidedLaunch({
         >
           Launch
         </Button>
-        {state.intent !== undefined && (
+        {(state.intent !== undefined || state.unresolvedReview !== undefined) && (
           <Button
             onClick={() => {
               void controller.recover();

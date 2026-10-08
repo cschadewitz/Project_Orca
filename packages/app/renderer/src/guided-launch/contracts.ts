@@ -2,14 +2,19 @@
 import type {
   RequestsSubmitParams,
   RequestsSubmitResult,
-  RunsAdmitParams,
   RunsAdmitResult,
   ValidationResultView,
   WorkflowInputSchemaView,
 } from "@orca/protocol";
+import type {
+  CheckoutEvidence,
+  EditorTarget,
+  LaunchCommand as SharedLaunchCommand,
+  PreflightResult,
+} from "../../../src/configuration-launch-contract.js";
 
 /** App-local injection contracts. These do not register an RPC or a storage format. */
-export interface LaunchTarget {
+export interface LaunchTarget extends EditorTarget {
   endpointId: string;
   workspaceId: string;
   instanceId: string;
@@ -51,8 +56,7 @@ export interface LaunchDraft {
   body: string;
   overrides?: RequestsSubmitParams["overrides"];
 }
-export type LaunchCommand =
-  { mode: "direct"; params: RunsAdmitParams } | { mode: "request"; params: RequestsSubmitParams };
+export type LaunchCommand = SharedLaunchCommand;
 export interface LaunchReview {
   target: LaunchTarget;
   draftSequence: number;
@@ -64,6 +68,7 @@ export interface LaunchReview {
   generation: string;
   command: LaunchCommand;
   warnings: ValidationResultView["warnings"];
+  checkout?: CheckoutEvidence;
 }
 /** Opaque handle to the main owner's protected, exact-command intent. No renderer ledger/key. */
 export interface LaunchIntent {
@@ -92,22 +97,29 @@ export interface LaunchPorts {
     workflowVersion: string;
     vars: Record<string, unknown>;
     overrides?: RequestsSubmitParams["overrides"];
-  }): Promise<{
-    target: { workspaceId: string; instanceId: string };
-    workflowId: string;
-    workflowVersion: string;
-    expectedWorkflowRevision: string;
-    expectedConfigGeneration: string;
-    /** Guarded by the integrator's root adapter alongside coherent operator preflight. */
-    rootId: string;
-    rootRevision: string;
-    validation: ValidationResultView;
-  }>;
+  }): Promise<
+    Pick<
+      PreflightResult,
+      | "target"
+      | "workflowId"
+      | "workflowVersion"
+      | "expectedWorkflowRevision"
+      | "expectedConfigGeneration"
+      | "validation"
+    > & {
+      /** Guarded by the integrator's root adapter alongside coherent operator preflight. */
+      rootId: string;
+      rootRevision: string;
+      checkout?: CheckoutEvidence;
+    }
+  >;
   /** Must securely persist the complete frozen command/target/root binding before sending. */
   retain?: (review: LaunchReview) => Promise<LaunchIntent>;
+  /** Canonical shared owner can retain and submit atomically; a lost handle remains ambiguous. */
+  launch?: (review: LaunchReview) => Promise<{ intent: LaunchIntent; response: LaunchResult }>;
   /** Must use the captured target, current authority and retained exact retry key/command. */
-  submit(intent: LaunchIntent): Promise<LaunchInitialResult>;
-  recover(intent: LaunchIntent): Promise<LaunchRecoveryResult>;
+  submit?: (intent: LaunchIntent) => Promise<LaunchInitialResult>;
+  recover(intent: LaunchIntent): Promise<LaunchResult>;
   /** Explicit user action; abandons the intent only, never cancels an admitted run. */
   abandon?: (intent: LaunchIntent) => Promise<boolean>;
   /** Main validates/restores exact target and command binding, including protected draft. */
@@ -134,4 +146,5 @@ export interface LaunchState {
   review?: LaunchReview | undefined;
   intent?: LaunchIntent | undefined;
   result?: LaunchResult | undefined;
+  unresolvedReview?: LaunchReview | undefined;
 }
