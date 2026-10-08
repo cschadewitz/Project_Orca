@@ -22,6 +22,8 @@ import { z } from "zod";
  * client with.
  */
 export const PERMISSIONS = [
+  /** Explicit opt-in host aggregate telemetry; never included in a preset. */
+  "host.telemetry.read",
   /** runs.list/get/events, inputs.list, claims.list, and run notifications on a socket. */
   "runs.read",
   /** artifacts.list/get: artifact metadata and bodies. */
@@ -130,8 +132,8 @@ export function workflowAllowed(scope: ResourceScope, workflowId: string): boole
  * what it grants. A later change to a preset changes no existing credential.
  */
 export const PRESETS = {
-  /** Everything, over everything: the person who runs the daemon. The local bootstrap credential. */
-  owner: { permissions: [...PERMISSIONS], scope: UNRESTRICTED },
+  /** Existing operator authority, excluding explicit opt-in host telemetry. Local bootstrap credential. */
+  owner: { permissions: PERMISSIONS.filter((p) => p !== "host.telemetry.read"), scope: UNRESTRICTED },
   /** Drive and watch every run, plan and agent; no configuration, standing rules or admission. */
   operator: {
     permissions: [
@@ -175,6 +177,6 @@ export const PRESET_NAMES = Object.keys(PRESETS) as PresetName[];
 export const LOCAL_PRINCIPAL: Principal = {
   id: "local-unauthenticated",
   kind: "local",
-  permissions: new Set(PERMISSIONS),
+  permissions: new Set(PRESETS.owner.permissions),
   scope: UNRESTRICTED,
 };

@@ -41,3 +41,7 @@ export * from "./revision-input.js";
 
 export * from "./operator-read-model.js";
 export * from "./continuation-admission.js";
+
+export * from "./host-resources/index.js";
+export * from "./host-workstreams.js";
+export * from "./operator-host-resources.js";

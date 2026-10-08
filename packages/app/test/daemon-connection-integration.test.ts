@@ -18,6 +18,7 @@ const shell = vi.hoisted(() => ({
   events: undefined as EventEmitter | undefined,
   ready: true,
   hasWindow: true,
+  nativeEnabled: true,
   createWindow: vi.fn(),
   openDialog: vi.fn(async () => ({ canceled: false, filePaths: ["/archive/.orca"] })),
   sent: vi.fn(),
@@ -30,11 +31,22 @@ vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
   const events = new EventEmitter();
   shell.events = events;
+  const contentEvents = new EventEmitter();
   const webContents = {
+    on: contentEvents.on.bind(contentEvents),
+    isDestroyed: () => false,
+    isLoadingMainFrame: () => false,
+    setWindowOpenHandler: vi.fn(),
     id: 1,
     mainFrame: {},
     send: (channel: string, value: unknown) => {
       shell.sent(channel, value);
+      if (channel === "orca:macUpdate.prepare")
+        events.emit(
+          "orca:macUpdate.prepared",
+          { sender: webContents, senderFrame: webContents.mainFrame },
+          { ...(value as object), ready: shell.ready },
+        );
       if (channel === "orca:update.prepare" && typeof value === "string")
         events.emit(
           "orca:update.prepared",
@@ -43,6 +55,17 @@ vi.mock("electron", async () => {
         );
     },
   };
+  const window = Object.assign(new EventEmitter(), {
+    isDestroyed: () => false,
+    isFocused: () => true,
+    webContents,
+    isEnabled: () => shell.nativeEnabled,
+    setEnabled: (value: boolean) => {
+      shell.nativeEnabled = value;
+    },
+    once: vi.fn(),
+    loadFile: vi.fn(),
+  });
   return {
     safeStorage: { isEncryptionAvailable: () => false },
     app: {
@@ -58,15 +81,14 @@ vi.mock("electron", async () => {
       constructor() {
         shell.createWindow();
         shell.hasWindow = true;
+        return window;
       }
       static getAllWindows() {
-        return shell.hasWindow ? [{ isDestroyed: () => false, isFocused: () => true, webContents }] : [];
+        return shell.hasWindow ? [window] : [];
       }
       static getFocusedWindow() {
         return this.getAllWindows()[0];
       }
-      once = vi.fn();
-      loadFile = vi.fn();
     },
     ipcMain: Object.assign(events, {
       handle: (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
@@ -112,6 +134,7 @@ beforeEach(() => {
   shell.workspace = undefined;
   shell.ready = true;
   shell.hasWindow = true;
+  shell.nativeEnabled = true;
   shell.createWindow.mockClear();
   shell.stop.mockClear();
   shell.sent.mockClear();
@@ -381,3 +404,28 @@ it.each(["localhost:6722", "not-a-url-private-token", "https://owner:private-tok
     ).toMatchObject({ ok: false, error: { message: expect.stringContaining("HTTP or HTTPS") } });
   },
 );
+
+it("composes the Mac window lease with main IPC while installation stays unavailable", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-main-mac-window-"));
+  shell.userData = directory;
+  const main = await import("../src/main/index.js");
+  const prepared = await main.macUpdateGuards.prepareDrafts();
+  if (prepared.outcome !== "ready") throw new Error("Expected ready");
+  expect(shell.nativeEnabled).toBe(false);
+  const workspace = shell.workspace!;
+  const read = await shell.handlers.get("orca:runs.list")!({}, {}, workspace.connectionTarget.epoch);
+  expect(read).toMatchObject({ ok: false, error: { message: "Update window preparation is in progress" } });
+  const connect = await shell.handlers.get("orca:daemon.connect")!({}, "http://localhost:7890");
+  expect(connect).toMatchObject({ ok: false });
+  expect(shell.stop).not.toHaveBeenCalled();
+  const open = await shell.handlers.get("orca:workspace.open")!(
+    {},
+    { path: "/other" },
+    workspace.connectionTarget.epoch,
+  );
+  expect(open).toMatchObject({ ok: false });
+  expect(shell.openDialog).not.toHaveBeenCalled();
+  expect(await prepared.lease.release()).toBe("released");
+  expect(shell.nativeEnabled).toBe(true);
+  expect(main.macUpdateGuards.draftsValid()).toBe(false);
+});

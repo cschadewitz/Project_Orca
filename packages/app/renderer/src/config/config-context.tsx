@@ -1,5 +1,8 @@
 /**
- * One draft model for the whole app, mounted above the surface switch.
+ * One read feed and persistent draft owners, mounted above the surface switch.
+ *
+ * ConfigurationStudioProvider owns the current target-bound structured/raw config session.
+ * The existing feed retains permission-sidecar drafts and the legacy preview editor.
  *
  * `use-config.ts` holds both documents, both drafts, `expectedRevision` and the
  * `CONFIG_STALE` conflict. It used to be called by whoever needed it — the Config surface,
@@ -23,12 +26,17 @@
  */
 import { createContext, useContext, type JSX, type ReactNode } from "react";
 import { useConfigFeed, type ConfigFeed } from "./use-config.js";
+import { ConfigurationStudioProvider } from "./configuration-studio-context.js";
 
 const ConfigContext = createContext<ConfigFeed | null>(null);
 
 export function ConfigProvider({ children }: { children: ReactNode }): JSX.Element {
   const feed = useConfigFeed();
-  return <ConfigContext.Provider value={feed}>{children}</ConfigContext.Provider>;
+  return (
+    <ConfigContext.Provider value={feed}>
+      <ConfigurationStudioProvider feed={feed}>{children}</ConfigurationStudioProvider>
+    </ConfigContext.Provider>
+  );
 }
 
 /**

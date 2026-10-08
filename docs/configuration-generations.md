@@ -1,5 +1,12 @@
 # Configuration generations and launch provenance (#332)
 
+**Current reading, 7 October 2026:** main uses protocol **2.0** and store epoch
+**`operator-journals-v4`**. The 1.10 / `config-generations-v3` statements in the
+original integration section describe that earlier feature checkpoint. The
+save/apply/restoration boundaries below remain relevant; see the
+[current protocol reference](../packages/protocol/README.md) and
+[capability ledger](ROADMAP.md) for the combined runtime and acceptance limits.
+
 The integrated runtime provides generation capture, restoration, config apply and
 launch provenance. [332-runtime-integration.patch](patches/332-runtime-integration.patch)
 is a historical handoff against preparation commit

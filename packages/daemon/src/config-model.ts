@@ -69,6 +69,9 @@ import {
 } from "@orca/protocol";
 import { withFileLock } from "@orca/store";
 import { describeConfigSchema, validationErrors } from "./config-schema.js";
+import { describeConfigFormSchema } from "./config-form-schema.js";
+import { lowerConfigEdits } from "./config-collection-edits.js";
+import { configReferenceErrors } from "./config-references.js";
 
 /** The default name a `config.set` creates when the workspace has no config file yet. */
 export const DEFAULT_CONFIG_FILENAME = "orca.config.yaml";
@@ -202,6 +205,7 @@ export class ConfigModel {
       config,
       permissions,
       schema: describeConfigSchema(),
+      formSchema: describeConfigFormSchema(),
       effective: this.effective(
         this.generations ? { ...config, parsed: this.generations.effectiveConfig() } : config,
         permissions,
@@ -379,6 +383,7 @@ export class ConfigModel {
    */
   private nextConfigText(current: ConfigDocumentView, params: ConfigSetParams): string {
     if (params.text !== undefined) return params.text;
+    if (params.edits !== undefined) return lowerConfigEdits(current.text, params.edits);
     const patch = params.patch ?? [];
     if (!current.exists || current.text.trim() === "") {
       const out: Record<string, unknown> = {};
@@ -419,7 +424,8 @@ export class ConfigModel {
     }
     const schema = document === "config" ? OrcaConfigSchema : WritablePermissionPolicyFileSchema;
     const parsed = schema.safeParse(raw ?? {});
-    return parsed.success ? [] : validationErrors(parsed.error);
+    if (!parsed.success) return validationErrors(parsed.error);
+    return document === "config" ? configReferenceErrors(OrcaConfigSchema.parse(raw ?? {})) : [];
   }
 
   /**

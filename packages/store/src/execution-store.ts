@@ -8,8 +8,10 @@ import { OrcaError, type OrcaEventInput } from "@orca/core";
 import {
   observePrivateReads,
   privateJsonNames,
+  protectedRecordInvalid,
   readPrivateJson,
   readPrivateJsonBatch,
+  validatePrivateJson,
   writePrivateJson,
 } from "./protected-file.js";
 
@@ -295,11 +297,11 @@ export class FileExecutionStore implements ExecutionStore {
       });
     };
     if (requested.length > 1) return readPrivateJsonBatch(this.dir, names, validate);
-    return validate(await Promise.all(names.map((name) => readPrivateJson(this.dir, name))));
+    return validatePrivateJson(() => Promise.all(names.map((name) => readPrivateJson(this.dir, name))), validate);
   }
 }
 
-export const unavailable = () => new OrcaError("RUN_STATE", "protected execution record is missing or invalid");
+export const unavailable = protectedRecordInvalid;
 const observationLimit = () => new OrcaError("RUN_STATE", "protected execution observation exceeds record limit");
 const memoryDigest = (value: unknown): string =>
   createHash("sha256")

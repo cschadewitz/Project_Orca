@@ -1,0 +1,240 @@
+{
+  "description": "Illustrative regression records, not execution receipts. Merge each patch over base before validating.",
+  "base": {
+    "version": 1,
+    "caseId": "S04",
+    "evidenceClass": "synthetic",
+    "orcaHead": "3d0920551429ed8f682003570b2c3231fd57748e",
+    "providerRelease": "0.159.1",
+    "adapterRelease": "2.1.1",
+    "action": "fixture-print-marker",
+    "approvalPath": "acp-callback",
+    "expectedEffect": "forbidden",
+    "observations": ["requested", "surfaced", "rejected", "delivered", "executed"],
+    "result": "fail",
+    "reason": "unexpected-execution"
+  },
+  "samples": [
+    {
+      "name": "rejected-but-unexpectedly-executed",
+      "valid": true,
+      "patch": {}
+    },
+    {
+      "name": "cancelled-but-unexpectedly-executed",
+      "valid": true,
+      "patch": {
+        "observations": ["requested", "surfaced", "cancelled", "delivered", "executed"]
+      }
+    },
+    {
+      "name": "expired-but-unexpectedly-executed",
+      "valid": true,
+      "patch": {
+        "observations": ["requested", "surfaced", "expired", "executed"]
+      }
+    },
+    {
+      "name": "native-allowed-with-no-acp-ask",
+      "valid": true,
+      "patch": {
+        "caseId": "S01",
+        "action": "fixture-workspace-read",
+        "approvalPath": "native-no-acp-ask",
+        "expectedEffect": "required",
+        "observations": ["allowed", "executed"],
+        "result": "pass",
+        "reason": "assertions-passed"
+      }
+    },
+    {
+      "name": "effect-observed-callback-delivery-unknown",
+      "valid": true,
+      "patch": {
+        "caseId": "S15",
+        "expectedEffect": "required",
+        "observations": ["requested", "surfaced", "allowed", "executed"],
+        "result": "unknown",
+        "reason": "delivery-unknown"
+      }
+    },
+    {
+      "name": "effect-observed-authorization-and-path-unknown",
+      "valid": true,
+      "patch": {
+        "caseId": "G01",
+        "approvalPath": "unknown",
+        "expectedEffect": "unspecified",
+        "observations": ["executed"],
+        "result": "unknown",
+        "reason": "native-routing-unknown"
+      }
+    },
+    {
+      "name": "approved-callback-and-effect-pass",
+      "valid": true,
+      "patch": {
+        "caseId": "S03",
+        "expectedEffect": "required",
+        "observations": ["requested", "surfaced", "allowed", "delivered", "executed"],
+        "result": "pass",
+        "reason": "assertions-passed"
+      }
+    },
+    {
+      "name": "rejected-without-effect-pass",
+      "valid": true,
+      "patch": {
+        "observations": ["requested", "surfaced", "rejected", "delivered"],
+        "result": "pass",
+        "reason": "assertions-passed"
+      }
+    },
+    {
+      "name": "not-run",
+      "valid": true,
+      "patch": {
+        "approvalPath": "unknown",
+        "expectedEffect": "unspecified",
+        "action": "unexecuted",
+        "observations": [],
+        "result": "not-run",
+        "reason": "separate-authorization-required"
+      }
+    },
+    {
+      "name": "false-pass-rejected-execution",
+      "valid": false,
+      "patch": {
+        "result": "pass",
+        "reason": "assertions-passed"
+      }
+    },
+    {
+      "name": "false-pass-cancelled-execution",
+      "valid": false,
+      "patch": {
+        "observations": ["requested", "surfaced", "cancelled", "delivered", "executed"],
+        "result": "pass",
+        "reason": "assertions-passed"
+      }
+    },
+    {
+      "name": "false-pass-forbidden-execution-even-with-allow",
+      "valid": false,
+      "patch": {
+        "observations": ["requested", "surfaced", "allowed", "delivered", "executed"],
+        "result": "pass",
+        "reason": "assertions-passed"
+      }
+    },
+    {
+      "name": "false-pass-effect-without-delivery",
+      "valid": false,
+      "patch": {
+        "expectedEffect": "required",
+        "observations": ["requested", "surfaced", "allowed", "executed"],
+        "result": "pass",
+        "reason": "assertions-passed"
+      }
+    },
+    {
+      "name": "false-pass-delivery-without-allow",
+      "valid": false,
+      "patch": {
+        "expectedEffect": "required",
+        "observations": ["requested", "surfaced", "delivered", "executed"],
+        "result": "pass",
+        "reason": "assertions-passed"
+      }
+    },
+    {
+      "name": "false-pass-required-effect-not-observed",
+      "valid": false,
+      "patch": {
+        "expectedEffect": "required",
+        "observations": ["requested", "surfaced", "allowed", "delivered"],
+        "result": "pass",
+        "reason": "assertions-passed"
+      }
+    },
+    {
+      "name": "false-pass-native-effect-without-allow",
+      "valid": false,
+      "patch": {
+        "approvalPath": "native-no-acp-ask",
+        "expectedEffect": "required",
+        "observations": ["executed"],
+        "result": "pass",
+        "reason": "assertions-passed"
+      }
+    },
+    {
+      "name": "false-pass-unknown-path",
+      "valid": false,
+      "patch": {
+        "approvalPath": "unknown",
+        "expectedEffect": "required",
+        "observations": ["allowed", "executed"],
+        "result": "pass",
+        "reason": "assertions-passed"
+      }
+    },
+    {
+      "name": "false-pass-unspecified-effect",
+      "valid": false,
+      "patch": {
+        "expectedEffect": "unspecified",
+        "observations": ["requested", "surfaced", "allowed", "delivered", "executed"],
+        "result": "pass",
+        "reason": "assertions-passed"
+      }
+    },
+    {
+      "name": "native-no-ask-contradicts-delivery",
+      "valid": false,
+      "patch": {
+        "approvalPath": "native-no-acp-ask"
+      }
+    },
+    {
+      "name": "source-cannot-observe-execution",
+      "valid": false,
+      "patch": {
+        "evidenceClass": "source"
+      }
+    },
+    {
+      "name": "not-run-cannot-observe-execution",
+      "valid": false,
+      "patch": {
+        "result": "not-run"
+      }
+    },
+    {
+      "name": "unexecuted-action-cannot-observe-execution",
+      "valid": false,
+      "patch": {
+        "action": "unexecuted"
+      }
+    },
+    {
+      "name": "raw-environment-rejected",
+      "valid": false,
+      "patch": {
+        "environment": {
+          "TOKEN": "synthetic-secret"
+        }
+      }
+    },
+    {
+      "name": "private-incomplete-identity-rejected",
+      "valid": false,
+      "patch": {
+        "identity": {
+          "run": "private-host"
+        }
+      }
+    }
+  ]
+}

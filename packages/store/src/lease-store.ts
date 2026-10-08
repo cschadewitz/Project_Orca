@@ -144,6 +144,9 @@ export interface HeldLease {
   readonly lease: Lease;
   /** True until a heartbeat found the lease gone. */
   readonly held: boolean;
+  /** Read after release begins: settlement of every already-scheduled heartbeat,
+   * including a renewal that outlives release's last-confirmed-TTL bound. */
+  readonly renewalSettled: Promise<void>;
   /** Stop the heartbeat and drop the lease when possible; bound renewal waits by its last confirmed TTL. Idempotent. */
   release(): Promise<void>;
 }
@@ -213,6 +216,9 @@ export function keepLease(store: LeaseStore, lease: Lease, options: KeepLeaseOpt
     },
     get held() {
       return held;
+    },
+    get renewalSettled() {
+      return beating;
     },
     async release() {
       if (timer) clearTimeout(timer);

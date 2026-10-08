@@ -1,9 +1,10 @@
 /** CLI revision parser and real authenticated HTTP composition; fake wire servers test transport failures only. */
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile as writeFixtureFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrcaError, parseOrcaConfig, silentLogger } from "@orca/core";
 import { createRevisionInputServices, createRevisionRuntime, PausingHumanInput } from "@orca/engine";
@@ -17,25 +18,39 @@ import {
 } from "@orca/protocol";
 import { bootstrap } from "../src/bootstrap.js";
 import type { CommandContext } from "../src/commands/index.js";
-import { revisionsCommand } from "../src/commands/revisions.js";
-import { main } from "../src/main.js";
+import { revisionsCommand as executeRevisionsCommand } from "../src/commands/revisions.js";
+import { main as executeMain } from "../src/main.js";
+import { FixtureLifetime } from "./fixture-lifetime.js";
 
-const cleanups: (() => Promise<unknown>)[] = [];
+let lifetime: FixtureLifetime;
+// Keep every fixture entry point owned, including parser calls and direct writes
+// outside production().invoke(). The real implementations and arguments are unchanged.
+const revisionsCommand = (...args: Parameters<typeof executeRevisionsCommand>) =>
+  lifetime.run(() => executeRevisionsCommand(...args));
+const main = (...args: Parameters<typeof executeMain>) => lifetime.run(() => executeMain(...args));
+const writeFile = (...args: Parameters<typeof writeFixtureFile>) => lifetime.run(() => writeFixtureFile(...args));
 beforeEach(() => {
+  lifetime = new FixtureLifetime();
   vi.stubEnv("ORCA_DAEMON_URL", undefined);
   vi.stubEnv("ORCA_DAEMON_TOKEN", undefined);
   vi.stubEnv("ORCA_DAEMON_TOKEN_FILE", undefined);
 });
-afterEach(async () => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
-  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-});
+afterEach(closeFixture);
+async function closeFixture() {
+  try {
+    await lifetime.close();
+  } finally {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  }
+}
 async function temp() {
-  const dir = await mkdtemp(join(tmpdir(), "orca-revision-cli-"));
-  cleanups.push(() => rm(dir, { recursive: true, force: true }));
-  return dir;
+  return lifetime.run(async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-revision-cli-"));
+    lifetime.root(() => rm(dir, { recursive: true, force: true }));
+    return dir;
+  });
 }
 function context(cwd: string, positionals: string[], flags: CommandContext["flags"] = {}) {
   const lines: string[] = [];
@@ -87,7 +102,10 @@ interface WireRequest {
   method: string;
   params: unknown;
 }
-async function wire(respond: (request: WireRequest, response: ServerResponse) => void | Promise<void>) {
+function wire(respond: (request: WireRequest, response: ServerResponse) => void | Promise<void>) {
+  return lifetime.run(() => startWire(respond));
+}
+async function startWire(respond: (request: WireRequest, response: ServerResponse) => void | Promise<void>) {
   const requests: WireRequest[] = [];
   const authorizations: (string | undefined)[] = [];
   const urls: (string | undefined)[] = [];
@@ -101,17 +119,17 @@ async function wire(respond: (request: WireRequest, response: ServerResponse) =>
       requests.push(value);
       authorizations.push(request.headers.authorization);
       urls.push(request.url);
-      void Promise.resolve(respond(value, response)).catch(() => response.destroy());
+      void lifetime.run(() => respond(value, response)).catch(() => response.destroy());
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  cleanups.push(
+  lifetime.own(
     () =>
       new Promise<void>((resolve, reject) => {
         server.closeAllConnections();
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   );
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Missing test HTTP address");
   return { endpoint: `http://127.0.0.1:${address.port}`, requests, authorizations, urls };
@@ -121,10 +139,13 @@ function reply(response: ServerResponse, request: WireRequest, result: unknown) 
   response.end(JSON.stringify({ kind: "response", id: request.id, ok: true, result }));
 }
 async function inputFile(dir: string, input: unknown = command) {
-  const file = `${randomUUID()}.json`;
-  await writeFile(join(dir, file), JSON.stringify(input));
-  return file;
+  return lifetime.run(async () => {
+    const file = `${randomUUID()}.json`;
+    await writeFile(join(dir, file), JSON.stringify(input));
+    return file;
+  });
 }
+
 async function wireContext(endpoint: string, input: unknown = command, action = "submit") {
   const dir = await temp();
   vi.stubEnv("ORCA_DAEMON_TOKEN", "explicit-test-credential");
@@ -136,7 +157,10 @@ async function wireContext(endpoint: string, input: unknown = command, action = 
 }
 
 /** The production bootstrap, protected stores, registered claims, authority, and daemon methods are real. */
-async function production() {
+function production(afterBootstrap?: (dir: string) => Promise<void>) {
+  return lifetime.run(() => productionSetup(afterBootstrap));
+}
+async function productionSetup(afterBootstrap?: (dir: string) => Promise<void>) {
   const dir = await temp();
   await writeFile(
     join(dir, "revise.yaml"),
@@ -183,6 +207,7 @@ edges:
       return runtime.runtime;
     },
   });
+  await afterBootstrap?.(dir);
   const auth = openAuthDirectory(join(dir, "auth"));
   const issue = (principal: string, permissions: ("runs.read" | "inputs.answer" | "runs.control")[]) =>
     auth.credentials.issue({ principal, permissions, scope: { workflows: ["revise"], runs: "owned" } });
@@ -217,18 +242,142 @@ edges:
       resolver: orchestratorResolver(app.orchestrator),
     },
   });
-  cleanups.push(() => daemon.close());
+  lifetime.own(() => daemon.close());
   const invoke = async (action: string, body?: unknown, key?: string, token = writer.token, endpoint = daemon.url) => {
-    vi.stubEnv("ORCA_DAEMON_TOKEN", token);
-    const ctx = context(dir, action === "discover" ? [action, runId] : [action], {
-      endpoint,
-      ...(body ? { "body-file": await inputFile(dir, body) } : {}),
-      ...(key === undefined ? {} : { "idempotency-key": key }),
+    return lifetime.run(async () => {
+      vi.stubEnv("ORCA_DAEMON_TOKEN", token);
+      const ctx = context(dir, action === "discover" ? [action, runId] : [action], {
+        endpoint,
+        ...(body ? { "body-file": await inputFile(dir, body) } : {}),
+        ...(key === undefined ? {} : { "idempotency-key": key }),
+      });
+      const code = await revisionsCommand(ctx);
+      return { code, data: JSON.parse(ctx.lines[0]!) as unknown, text: ctx.lines.join("\n") };
     });
-    const code = await revisionsCommand(ctx);
-    return { code, data: JSON.parse(ctx.lines[0]!) as unknown, text: ctx.lines.join("\n") };
   };
   return { dir, app, auth, writer, reader, other, daemon, runId, invoke, delivery };
+}
+describe("interrupted production fixture setup", () => {
+  it("settles setup and closes a late-acquired daemon before a single root removal", async () => {
+    let entered!: (dir: string) => void;
+    const acquired = new Promise<string>((resolve) => {
+      entered = resolve;
+    });
+    let resume!: () => void;
+    const held = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const setup = production(async (dir) => {
+      entered(dir);
+      await held;
+    });
+    try {
+      const dir = await acquired;
+      let closed = false;
+      const closing = lifetime.close().then(() => {
+        closed = true;
+      });
+      await access(dir);
+      expect(closed).toBe(false);
+      resume();
+      const f = await setup;
+      await closing;
+      await expect(access(dir)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fetch(`${f.daemon.url}/health`)).rejects.toThrow();
+      await expect(f.invoke("discover")).rejects.toThrow("Fixture is closing");
+      expect(f.delivery).not.toHaveBeenCalled();
+    } finally {
+      resume();
+      await setup;
+    }
+  });
+});
+
+describe("interrupted direct revision calls", () => {
+  it.each(["direct", "parser"] as const)(
+    "keeps roots and globals until a %s call consumes its real response",
+    async (entry) => {
+      const server = await wire((request, response) =>
+        reply(
+          response,
+          request,
+          request.method === "hello"
+            ? hello
+            : {
+                inputs: [],
+                waiting: 0,
+                pendingRevisions: { items: [], incomplete: false },
+                asOf: "now",
+              },
+        ),
+      );
+      const dir = await temp();
+      vi.stubEnv("ORCA_DAEMON_TOKEN", "explicit-test-credential");
+      const entered = deferred<void>();
+      const resume = deferred<void>();
+      const originalFetch = globalThis.fetch;
+      const observedFetch: typeof fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const body = args[1]?.body;
+        if (typeof body === "string" && (JSON.parse(body) as WireRequest).method === "inputs.list") {
+          const stream = response.body!;
+          const reader = stream.getReader();
+          const originalRead = reader.read.bind(reader);
+          let held = false;
+          vi.spyOn(reader, "read").mockImplementation(async () => {
+            const result = await originalRead();
+            if (!held) {
+              held = true;
+              entered.resolve(undefined);
+              await resume.promise;
+            }
+            return result;
+          });
+          vi.spyOn(stream, "getReader").mockReturnValue(reader);
+        }
+        return response;
+      };
+      vi.stubGlobal("fetch", observedFetch);
+      const ctx = context(dir, ["discover", "owned"], { endpoint: server.endpoint });
+      const out = vi.spyOn(ctx, "out");
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const command =
+        entry === "direct"
+          ? revisionsCommand(ctx)
+          : main(["revisions", "discover", "owned", "--cwd", dir, "--endpoint", server.endpoint]);
+      const resourceClosed = vi.fn(async () => {});
+      lifetime.own(resourceClosed);
+      let closing: Promise<void> | undefined;
+      try {
+        await entered.promise;
+        closing = closeFixture();
+        await nextTurn();
+        expect(resourceClosed).not.toHaveBeenCalled();
+        await access(dir);
+        expect(globalThis.fetch).toBe(observedFetch);
+        expect(out).not.toHaveBeenCalled();
+        expect(stdout).not.toHaveBeenCalled();
+        resume.resolve(undefined);
+        expect(await command).toBe(0);
+        await closing;
+        expect(entry === "direct" ? out.mock.calls : stdout.mock.calls).toHaveLength(1);
+        expect(globalThis.fetch).toBe(originalFetch);
+        await expect(access(dir)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        resume.resolve(undefined);
+        await command;
+        await closing;
+      }
+    },
+  );
+});
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 describe("real authenticated revision command composition", () => {

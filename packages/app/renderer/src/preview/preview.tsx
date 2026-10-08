@@ -56,7 +56,7 @@ export function Preview(): JSX.Element {
         </Text>
         <Text style="caption">
           Both themes, every component, from the design system&rsquo;s own lists. The type scale and the bundled glyphs
-          are at <a href="#type">#type</a>.
+          are at <a href="#type">#type</a>. Daemon resource fixtures are at <a href="#resources">#resources</a>.
         </Text>
       </header>
       <div className="preview__themes">
