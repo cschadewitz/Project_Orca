@@ -44,6 +44,12 @@ function pathRisk(path, record, snapshots, manifest) {
     for (const snap of snapshots) {
       const entry = snap.files.get(path);
       if (entry && !["100644", "100755"].includes(entry.mode)) reasons.push("structural_mode_change");
+      if (
+        path.includes("/test/") &&
+        entry?.text &&
+        /\b(?:it|test|describe)\s*\.\s*(?:todo|skip|skipIf)\b/.test(entry.text)
+      )
+        reasons.push("pending_or_skipped_test_assertions");
       // Runtime I/O and loaders retain full checks. Test fixtures run their entire owning
       // domain plus downstream consumers, so ordinary fixture I/O need not select all packages.
       let dependencies = [];

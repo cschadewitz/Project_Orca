@@ -135,6 +135,7 @@ it.each([
   ["packages/engine/src/index.ts", "process.env.ORCA_FEATURE;"],
   ["packages/engine/src/index.ts", 'process["env"].ORCA_FEATURE;'],
   ["packages/engine/src/index.ts", "const load = require; load('external-plugin');"],
+  ["packages/engine/test/pending.test.ts", 'import { it } from "vitest"; it.todo("unbound acceptance");'],
   ["packages/engine/src/auth.ts", "export const secret = 2;"],
   ["packages/engine/package.json", '{"name":"@orca/engine","dependencies":{}}'],
   ["docs/daemon-security.md", "changed permission row"],
