@@ -4,6 +4,8 @@ This isolated #334 slice starts from main `65606fbce827cba914a67b999b1a47c0aab27
 and the reviewed #440 packet `4aa142e870c9cedcd4d26108d975c0f7c7f4619a`.
 Final delivery incorporates main `10834758e49a5e84b9ac06e3bca85f87be923dac`
 and the protected-restore corrections at `b12a8642e5a1f2284b09a341ed6048c54f125be8`.
+The dependency refresh incorporates main `93aa9d1352bb25a24e9fb84940674c3e5dcd78f9`,
+which includes the merged shared launch declarations from #542.
 It is not registered in the shell and does not add RPCs, persistence, provider discovery,
 workspace provisioning or publication behavior.
 
@@ -13,8 +15,8 @@ Canonical `EditorTarget`, command and preflight types come from #542 declaration
 two-phase retention interfaces are explicit local seams. `shared-bindings.ts` maps canonical
 checkout evidence, coherent reads, atomic submission and all response/recovery kinds without
 adding wire properties. The dedicated fixtures are synthetic, not the accepted sample or a
-native checkout binding. The shared declaration is a type-check dependency of this draft PR;
-it has not been copied, merged or modified by this worker.
+native checkout binding. The shared declaration is now available from main; it was brought
+in by the main merge and has not been independently copied or modified by this worker.
 
 The canonical adapter preserves the exact checkout observation from preflight and supplies
 it unchanged to main's independently verified submission. It removes client-owned retry/scope
