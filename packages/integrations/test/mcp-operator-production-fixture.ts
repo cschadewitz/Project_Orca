@@ -247,11 +247,19 @@ export class ProductionFixture {
     }
   }
 
-  boot() {
-    return this.progress.measure("daemon.boot", () => this.bootDaemon());
+  boot(testPreload?: string) {
+    return this.progress.measure("daemon.boot", () => this.bootDaemon(testPreload));
   }
-  private async bootDaemon() {
-    const proc = this.process([cli, "serve", "--config", join(this.dir, "orca.config.yaml"), "--port", "0"]);
+  private async bootDaemon(testPreload?: string) {
+    const proc = this.process([
+      ...(testPreload ? ["--import", `data:text/javascript,${encodeURIComponent(testPreload)}`] : []),
+      cli,
+      "serve",
+      "--config",
+      join(this.dir, "orca.config.yaml"),
+      "--port",
+      "0",
+    ]);
     await until(
       async () => {
         if (proc.child.exitCode !== null)
