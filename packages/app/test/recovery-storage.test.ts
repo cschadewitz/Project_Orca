@@ -262,6 +262,8 @@ describe.skipIf(!linux)("bounded Linux recovery disk", () => {
     await enable(f);
     await f.disk.checkpoint(Buffer.from("secret diagnostic report\n"), f.now, () => true);
     await writeFile(join(f.root, "export-stage.tmp"), "residual", { mode: 0o644 });
+    // Establish the unsafe mode explicitly even when the executor inherits umask 077.
+    await chmod(join(f.root, "export-stage.tmp"), 0o644);
     await writeFile(join(f.root, "setting.json"), '{"enabled":false,"scopeVersion":1,"minutes":99}');
     const before = (await readdir(f.root)).sort();
     await expect(f.disk.cleanup()).rejects.toThrow("cleanup_pending");
