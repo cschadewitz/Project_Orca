@@ -47,16 +47,25 @@ import {
   type SessionFactory,
   type WorkspaceProvider,
   type RequestSubmissionOptions,
+  pluginRestorationRefusal,
+  type PluginRestorationIdentityVerifier,
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
 import { fileStores, memoryStores, type Stores } from "@orca/store";
 import { bindLocalAdmissionExecution } from "./admission-execution-authority.js";
 import { cliHumanInput } from "./human-input-cli.js";
-import { captureRuntimeObjects } from "./plugin-runtime.js";
+import {
+  captureRuntimeObjects,
+  capturePluginRestoration,
+  restorePluginExecutors,
+  type LoadedRestorationPlugin,
+} from "./plugin-runtime.js";
 
 export const CONFIG_FILENAMES = ["orca.config.yaml", "orca.config.yml", "orca.config.json"];
 
 export interface BootstrapOptions {
+  /** Required for plugin restart opt-in. Verify full code/dependency identities using trusted installed release evidence. */
+  verifyPluginRestorationIdentity?: PluginRestorationIdentityVerifier;
   /** Trusted production composition, created over these exact stores before any interpreter runs. */
   revisionRuntime?: (stores: Stores) => NonNullable<OrchestratorOptions["revisionRuntime"]>;
   /** Bound by integration to #332 CaptureLaunch, durable admissions and verified local authority. */
@@ -249,6 +258,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     workspaceInputs.keplerTaskDir,
   );
   let pluginWorkspaceProvider = false;
+  let pluginHumanInput = false;
   const stores = opts.ephemeral
     ? memoryStores()
     : fileStores(resolve(configDir, config.storeDir), undefined, logger.child({ component: "store" }));
@@ -270,6 +280,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     agents,
     plan,
     setHumanInput: (p) => {
+      pluginHumanInput = true;
       explicitHumanInput = true;
       humanInput = p;
     },
@@ -280,15 +291,21 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   };
   const configuredHosts = new Map(agents.listHosts().map((host) => [host.id, host]));
   const configuredExecutors = new Map(executors.types().map((type) => [type, executors.get(type)]));
-  const runtimeMutated = captureRuntimeObjects([...agents.listHosts(), ...configuredExecutors.values()]);
   let pluginPlanCallbacks = false;
   const addSignalExtractor = plan.addSignalExtractor.bind(plan);
   plan.addSignalExtractor = (extractor) => {
     pluginPlanCallbacks = true;
     addSignalExtractor(extractor);
   };
+  // Include the planning service's behavior graph after installing our own tracking wrapper.
+  // Direct method/prototype/nested replacements are unsupported even without extractor registration.
+  const runtimeMutated = captureRuntimeObjects([...agents.listHosts(), ...configuredExecutors.values(), plan]);
   const pluginEntries = await pluginEntryDigests(config, configDir);
-  await loadPlugins(config, configDir, api, logger);
+  const loadedPlugins = await loadPlugins(config, configDir, api, logger);
+  for (const loaded of loadedPlugins) {
+    const entry = pluginEntries?.find((entry) => entry.spec === loaded.spec);
+    if (entry) loaded.entry = entry;
+  }
   // Declarative agents/roles are restored from the encrypted snapshot. Arbitrary executable
   // hosts/providers may close over configuration or unrecorded ambient state, so they are
   // bootstrap-bound until plugins offer a restoration contract. No-op/declarative plugins
@@ -301,10 +318,23 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const pluginExecutors = executors.types().filter((type) => configuredExecutors.get(type) !== executors.get(type));
   const bootstrapBound =
     pluginWorkspaceProvider ||
+    pluginHumanInput ||
     pluginHosts.length > 0 ||
     pluginExecutors.length > 0 ||
     pluginPlanCallbacks ||
     runtimeMutated();
+  const unsupportedRestoration =
+    pluginWorkspaceProvider ||
+    pluginHosts.length > 0 ||
+    pluginPlanCallbacks ||
+    runtimeMutated() ||
+    pluginHumanInput ||
+    pluginExecutors.some((type) => !type.startsWith("custom:"));
+  const pluginRestoration = await capturePluginRestoration(
+    loadedPlugins,
+    unsupportedRestoration,
+    opts.verifyPluginRestorationIdentity,
+  );
   const runtimeFingerprint = pluginEntries
     ? createHash("sha256")
         .update(
@@ -378,6 +408,10 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       startRun: (options, generation) => orchestrator.startRun(options, generation),
     },
     validateCustomNode: (node) => executors.validateNode(node),
+    restorePluginExecutors: (snapshot) => {
+      if (unsupportedRestoration) throw pluginRestorationRefusal("unsupported_registration");
+      return restorePluginExecutors(snapshot.pluginRestoration, loadedPlugins, opts.verifyPluginRestorationIdentity);
+    },
   });
   // Verify bytes still represent the config bootstrap loaded before labelling them active.
   const saved = configFile ? await readFile(configFile, "utf8") : "";
@@ -387,7 +421,8 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     workflows: workflows.list(),
     templates: templates.list(),
     workspaceInputs,
-    ...(config.plugins.length ? { agents } : {}),
+    ...(config.plugins.length ? { agents, executors } : {}),
+    ...(pluginRestoration ? { pluginRestoration } : {}),
     ...(config.plugins.length && runtimeFingerprint ? { runtimeFingerprint } : {}),
     ...(bootstrapBound ? { runtimeBootstrapBound: true } : {}),
   });
@@ -485,14 +520,22 @@ export async function loadPlugins(
   configDir: string,
   api: PluginApi,
   logger: Logger,
-): Promise<void> {
+): Promise<LoadedRestorationPlugin[]> {
+  const loaded: LoadedRestorationPlugin[] = [];
   for (const spec of config.plugins) {
     const mod = (await import(pluginSpecifier(spec, configDir))) as { default?: OrcaPlugin };
     if (!mod.default?.register)
       throw new OrcaError("CONFIG_INVALID", `plugin ${spec} has no default OrcaPlugin export`);
+    const before = new Map(api.executors.types().map((type) => [type, api.executors.get(type)]));
     await mod.default.register(api);
+    loaded.push({
+      spec,
+      plugin: mod.default,
+      executors: api.executors.types().filter((type) => before.get(type) !== api.executors.get(type)),
+    });
     logger.debug("plugin loaded", { plugin: mod.default.name });
   }
+  return loaded;
 }
 
 function pluginSpecifier(spec: string, configDir: string): string {
