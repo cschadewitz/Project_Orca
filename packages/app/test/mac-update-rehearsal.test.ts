@@ -1,5 +1,6 @@
 /** Coherent pre-restart rehearsal; faults cross real consent, preload, window and runtime ownership. */
 import { readFile } from "node:fs/promises";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MacNativeInspection } from "../src/main/mac-candidate-download.js";
 import { macUpdateRehearsal, barrier, type ProofFault } from "./mac-update-rehearsal-fixture.js";
@@ -177,24 +178,39 @@ it("ignores stale nonce, phase, generation and frame ACKs across approval, then 
   f.a.auto(false);
   const id = f.present();
   const entered = barrier();
+  let preparationSettled = false;
   f.prepareDrafts.mockImplementationOnce(() => {
-    const result = f.guards.prepareDrafts();
+    const result = f.guards.prepareDrafts().then((value) => {
+      preparationSettled = true;
+      return value;
+    });
     entered.release();
     return result;
   });
   const pending = f.updates.approve(id);
   await entered.promise;
   const message = f.a.messages[0]!;
-  f.a.ack({ ...message, nonce: "stale", ready: true });
-  f.a.ack({ ...message, generation: message.generation + 1, ready: true });
-  f.a.ack({ ...message, phase: "release", ready: true });
-  f.a.ack({ ...message, ready: true }, {});
-  expect(f.guards.draftsValid()).toBe(false);
-  expect(f.runtimeEvents).toEqual([]);
+  const invalid = [
+    ["nonce", () => f.a.ack({ ...message, nonce: "stale", ready: true })],
+    ["generation", () => f.a.ack({ ...message, generation: message.generation + 1, ready: true })],
+    ["phase", () => f.a.ack({ ...message, phase: "release", ready: true })],
+    ["frame", () => f.a.ack({ ...message, ready: true }, {})],
+  ] as const;
+  for (const [kind, acknowledge] of invalid) {
+    acknowledge();
+    // An accepted ACK resolves the guard through promise continuations. One event-loop
+    // turn drains those microtasks before observing it; cancellation must not mask ready.
+    await nextTurn();
+    expect(preparationSettled, `Invalid ${kind} ACK settled preparation`).toBe(false);
+    expect(f.guards.draftsValid()).toBe(false);
+    expect(f.updates.state.phase).toBe("preparing");
+    expect(f.runtimeEvents).toEqual([]);
+  }
   expect(f.updates.defer(id)).toBe(true);
   f.a.auto(true);
   f.a.forward();
   expect((await pending).phase).toBe("deferred");
+  expect(preparationSettled).toBe(true);
   expect(f.a.frozen()).toBe(false);
   expect(f.a.enabled()).toBe(true);
   expect(f.b.enabled()).toBe(false);

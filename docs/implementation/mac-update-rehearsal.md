@@ -105,6 +105,35 @@ No external candidate download, provider execution or admission reopening occurs
 
 ## Reproduction and remaining gates
 
+### Stale-ACK observation correction
+
+Independent review5450805221 found a test-quality P2 at original rehearsal head
+`e4f3202f06a85ccc713c8aa6c173fdf745b4718a`: synchronous assertions before cancellation
+could not observe the guard's asynchronous ready transition. The corrected test
+records actual preparation settlement and drains its promise continuations with one
+event-loop turn after **each** invalid nonce/generation/phase/frame ACK. It checks
+unsettled preparation, invalid drafts, the preparing coordinator and no maintenance
+request before cancellation. The eventual correct ACK positively settles preparation
+and lets the cancelled coordinator complete known window cleanup. No deadline changes.
+
+Four separate in-memory Vite acceptance mutations were tested against both test
+versions. Each original test **passes** despite the broken guard; each corrected test
+**fails** with `Invalid <kind> ACK settled preparation: expected true to be false`.
+The ordinary corrected 16-case rehearsal, root TypeScript and focused ESLint/Prettier
+pass. This is a test correction, not a production defect or a production source edit.
+
+The mutation experiment uses a temporary Vite pre-transform and the existing root
+Vitest config. For `update-ipc.ts`, independently remove `value.nonce !== held.nonce ||`
+or `value.phase !== waiting.phase ||`, or replace
+`value.generation !== window.generation` with `false`. For `mac-update-windows.ts`,
+remove both `event.senderFrame === event.sender.mainFrame &&` and
+`event.senderFrame === captured.frame &&`. Do not combine mutations. Run only the
+`ignores stale` test with `--maxWorkers=1`; verify each transform was actually applied.
+For the original comparison, feed the test bytes from
+`git show e4f3202f06a85ccc713c8aa6c173fdf745b4718a:packages/app/test/mac-update-rehearsal.test.ts`
+through the same temporary pre-transform while keeping its original module ID.
+All transformations occur in memory; no reviewed source, manifest or fixture changes.
+
 Use the existing per-command activation. Node **24.21.0**, pnpm **12.4.2**, existing
 frozen dependencies and supply-chain controls were retained. `pnpm exec` performed
 its existing frozen policy verification on first use; no manifest or lockfile changed.
