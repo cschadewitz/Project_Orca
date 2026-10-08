@@ -28,9 +28,16 @@ function pathRisk(path, record, snapshots, manifest) {
     if (ordinary)
       return {
         path,
-        tier: record.status === "M" ? "docs" : "full",
-        reasons: [record.status === "M" ? "inventoried_ordinary_prose" : "structural_prose_change"],
+        tier:
+          record.status === "M" && snapshots.every((snap) => snap.files.get(path)?.mode === "100644") ? "docs" : "full",
+        reasons: [
+          record.status === "M" && snapshots.every((snap) => snap.files.get(path)?.mode === "100644")
+            ? "inventoried_ordinary_prose"
+            : "structural_prose_change",
+        ],
       };
+    if (path.endsWith(".md") && /^(?:[RC]|T)/.test(record.status))
+      reasons.push("structural_documentation_rename_or_type_change");
     if (manifest.packagePolicy.fullPatterns.some((pattern) => new RegExp(pattern).test(path)))
       reasons.push("shared_security_configuration_or_non_import_input");
     const releaseFragment = /^changelog\.d\/[^/]+\.(?:added|changed|fixed|store)\.md$/.test(path);

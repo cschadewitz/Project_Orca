@@ -1,5 +1,5 @@
 /** Package-policy regression probes over real Git histories: package closure, non-import triggers and exact runtime reports. */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -198,5 +198,21 @@ it("test-to-doc rename and mixed consumed doc/source retain full checks", () => 
   reset();
   write("packages/engine/src/index.ts", "/** Feature. */\nexport const value = 3;\n");
   write("docs/daemon-security.md", "changed\n");
+  expect(createPlan(candidate(), manifest).wouldRun.tier).toBe("full");
+});
+
+it("does not hide test renames in audited README/release paths or prose mode changes in mixed changes", () => {
+  for (const destination of [
+    "packages/app/renderer/src/config/structured-form/README.md",
+    "changelog.d/123-feature.added.md",
+  ]) {
+    reset();
+    write(destination, "temporary\n");
+    command("mv", "-f", "packages/engine/test/domain.test.ts", destination);
+    expect(createPlan(candidate(), manifest).wouldRun.tier).toBe("full");
+  }
+  reset();
+  chmodSync(join(repo, "README.md"), 0o755);
+  write("packages/engine/src/index.ts", "/** Feature. */\nexport const value = 2;\n");
   expect(createPlan(candidate(), manifest).wouldRun.tier).toBe("full");
 });
