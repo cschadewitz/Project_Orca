@@ -437,7 +437,7 @@ describe("JEV restoration adapter", () => {
     expect(() => createRestorableJevEvalPlugin({ apiKey: KEY }, authority, { attach })).toThrow(/options-unsupported/);
   });
 
-  it("maps capture/validation/isolated registration to #394's published provisional hook", () => {
+  it("maps capture/validation/isolated registration to #394's published provisional hook", async () => {
     const authority = context();
     const plugin = createRestorableJevEvalPlugin({ model: "jev-1.13.0", env: {} }, authority) as ReturnType<
       typeof createRestorableJevEvalPlugin
@@ -449,7 +449,7 @@ describe("JEV restoration adapter", () => {
       codeVersion: authority.codeIdentity,
       dependencyIdentity: authority.dependencyIdentity,
     });
-    const data = hook.capture();
+    const data = await Promise.resolve(hook.capture());
     expect(hook.validate(data)).toBe(true);
     expect(hook.validate({ ...data, schemaVersion: 2 })).toBe(false);
     const register = vi.fn();
