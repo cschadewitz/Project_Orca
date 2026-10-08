@@ -23,6 +23,7 @@ export type Action =
   | "park"
   | "restore"
   | "resume"
+  | "resume-without-answer"
   | "new"
   | "run-new"
   | "restore-current"
@@ -58,6 +59,7 @@ export interface Report {
   restorationReason?: string;
   adapterReason?: "options-unsupported";
   factoryCalls?: number;
+  accessorReads?: number;
   descriptorPresent?: boolean;
   executionModels?: string[];
   currentGenerationUnchanged?: boolean;
@@ -302,13 +304,37 @@ ${before ? "  - {from: first, to: jev}\n  - {from: jev, to: second}" : "  - {fro
 }
 
 export type ReconstructionFault =
-  "none" | "throw" | "omit" | "duplicate" | "validate-throw" | "capture-secret" | "capture-closure";
+  | "none"
+  | "throw"
+  | "omit"
+  | "duplicate"
+  | "validate-throw"
+  | "capture-secret"
+  | "capture-closure"
+  | "sparse-small"
+  | "sparse-huge"
+  | "array-property"
+  | "capture-accessor"
+  | "capture-nonfinite"
+  | "capture-prototype"
+  | "capture-symbol"
+  | "validate-mutate";
 export interface RestorationSettings {
-  callback?: "host-exec" | "host-fs" | "workspace" | "plan" | "builtin-mutation" | "human-input";
+  callback?:
+    | "host-exec"
+    | "host-fs"
+    | "workspace"
+    | "plan"
+    | "plan-direct"
+    | "plan-prototype"
+    | "plan-nested"
+    | "builtin-mutation"
+    | "human-input";
   identity?: Partial<FixtureIdentity>;
   composition?: "single" | "pair" | "mixed" | "duplicate-identity";
   fault?: ReconstructionFault;
   secondFault?: ReconstructionFault;
+  descriptorData?: Record<string, unknown>;
 }
 
 /** Exercise #546's actual executor-only contract through bootstrap; all inputs/effects are fixture-owned. */
@@ -336,13 +362,28 @@ export default {name:identity.id,register(api){
     case "host-fs":api.agents.host("local").fs.readTextFile=async()=>"unrecorded";break;
     case "workspace":api.setWorkspaceProvider({name:"fixture",provision:async()=>({hostId:"local",cwd:new URL("old-workspace",import.meta.url).pathname,provider:"fixture"})});break;
     case "plan":api.plan.addSignalExtractor(()=>[]);break;
+    case "plan-direct":api.plan.listPlans=async()=>[{name:settings.value}];break;
+    case "plan-prototype":Object.getPrototypeOf(api.plan).listPlans=async()=>[{name:settings.value}];break;
+    case "plan-nested":api.plan.stores.plan.plans.list=async()=>[];break;
     case "builtin-mutation":api.executors.get("custom:plan-register").execute=executor(captured).execute;break;
     case "human-input":api.setHumanInput({ask:async()=>undefined});break;
   }
 },restoration:{identity,
-  capture(){return fault==="capture-secret"?{schema:1,value:${JSON.stringify(canaries[0])}}:fault==="capture-closure"?{schema:1,value:()=>settings.value}:captured;},
+  capture(){
+    if(fault==="sparse-small")return {values:new Array(3)};
+    if(fault==="sparse-huge")return {values:new Array(0xffffffff)};
+    if(fault==="array-property"){const values=[null];values.extra="unrecorded";return {values};}
+    if(fault==="capture-accessor")return {get value(){globalThis.fixture396AccessorReads=(globalThis.fixture396AccessorReads??0)+1;throw new Error(${JSON.stringify(canaries[0])});}};
+    if(fault==="capture-nonfinite")return {value:Infinity};
+    if(fault==="capture-prototype")return {value:new Date(0)};
+    if(fault==="capture-symbol")return {[Symbol("unrecorded")]:"value"};
+    if(settings.descriptorData!==undefined)return settings.descriptorData;
+    return fault==="capture-secret"?{schema:1,value:${JSON.stringify(canaries[0])}}:fault==="capture-closure"?{schema:1,value:()=>settings.value}:captured;},
   validate(data){
     if(fault==="validate-throw")throw new Error(${JSON.stringify(canaries[0])});
+    if(fault==="validate-mutate"){data.value="x".repeat(65537);return true;}
+    // These cases intentionally delegate structural limits to the production bounded reader.
+    if(settings.descriptorData!==undefined || ["sparse-small","sparse-huge","array-property","capture-accessor","capture-nonfinite","capture-prototype","capture-symbol"].includes(fault))return true;
     return data!==null&&typeof data==="object"&&Object.keys(data).sort().join() === "schema,value"&&data.schema === 1&&/^(old|new)-model$/.test(data.value);
   },
   restore(data,api){
@@ -383,6 +424,7 @@ export default {name:identity.id,register(api){
       callback: settings.callback,
       fault: settings.fault ?? "none",
       secondFault: settings.secondFault ?? "none",
+      descriptorData: settings.descriptorData,
     }),
     { mode: 0o600 },
   );

@@ -231,9 +231,9 @@ async function run(command: Command): Promise<Report> {
         if (command.action === "historical-admit") {
           await orc.startRun({ workflowId: "restoration-396" }, material);
         }
-      } else if (command.action === "resume") {
+      } else if (command.action === "resume" || command.action === "resume-without-answer") {
         // A restart itself grants no gate answer. Only this explicit fixture command answers one.
-        if (receipt.inputId) await orc.answer(receipt.inputId, "go", receipt.runId);
+        if (command.action === "resume" && receipt.inputId) await orc.answer(receipt.inputId, "go", receipt.runId);
         await orc.resume(receipt.runId);
       } else if (command.action === "execute-admitted") {
         if (command.authority !== "missing")
@@ -276,6 +276,7 @@ async function run(command: Command): Promise<Report> {
     }
   }
   report.factoryCalls = Number(Reflect.get(globalThis, "fixture396Factories") ?? 0);
+  report.accessorReads = Number(Reflect.get(globalThis, "fixture396AccessorReads") ?? 0);
   const trace = await providerTrace(command);
   report.providerCalls += trace.length - initialTrace;
   report.executionModels = trace.slice(initialTrace).map((row) => row.model);

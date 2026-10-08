@@ -1,30 +1,37 @@
 # Restoration acceptance fixtures (#396)
 
-**Final acceptance remains incomplete.** This suite exercises production bootstrap in
-fresh OS processes. The baseline is main `65606fbce827cba914a67b999b1a47c0aab2797a`.
-Candidate runtime #546 is `7202a6e06525052f304f4f49abbfd783e163a375`; independent
-review found historical callback replacement and two descriptor-bound gaps, with
-corrections pending from its owner. Candidate success does not clear those gaps.
-JEV #543 is independently reviewed at `e4039a32e4a82aa19cd95b3e98f2813b47486903`
-(review `5451051133`). `matrix.ts` separates candidate pins from reviewed pins.
-Actual-Cal live acceptance remains parent-owned and **UNRUN**.
+**Final acceptance remains incomplete.** Provider-free restart assertions now consume
+corrected runtime #546 `3054319b37ae61ba22b62ba2f519dc50bf3c0ebc` and adapter #543
+`879bedcf701f4eaad2e8da47bac8feb2444c2d9d`, combined with main
+`10834758e49a5e84b9ac06e3bca85f87be923dac`. Original fixture baseline was
+`65606fbce827cba914a67b999b1a47c0aab2797a`; local extension `76718433` is preserved.
+Candidate source pins are separate from independent review pins: root minimal review
+of this bounded fixture change and its exact corrected dependencies remains pending.
+
+**One Vitest TODO remains:** parent-owned Actual-Cal private-route inspection and
+explicit permitted resume. Two external claims are explicitly unverified rather than
+simulated: installed whole-code/dependency attestation plus real credential authority,
+and real-provider in-flight reconciliation. Exactly-once external effects remain
+unsupported under #297. Synthetic fixtures cannot clear these claims.
 
 Use Node **24.21.0**, pnpm **12.4.2**, and the unchanged frozen dependency/build policy.
-The default suite runs baseline cases and leaves candidate cases visibly skipped.
-To execute candidate integration, combine the exact runtime and adapter source heads
-in a disposable checkout and explicitly select the runtime pin:
+The corrected cases automatically execute when the canonical descriptor reader is
+available from the engine. On a baseline without that dependency they remain visibly
+skipped. An optional exact candidate selector checks the expected pin and requires the
+real seam to exist; it does not manufacture support or independent review clearance.
+Combine the exact source heads in a disposable checkout before collecting evidence:
 
 ```sh
-ORCA_RESTORATION_CANDIDATE=7202a6e06525052f304f4f49abbfd783e163a375 pnpm exec vitest run packages/engine/test/restoration-acceptance.test.ts
+ORCA_RESTORATION_CANDIDATE=3054319b37ae61ba22b62ba2f519dc50bf3c0ebc pnpm exec vitest run packages/engine/test/restoration-acceptance.test.ts -t 'corrected contract integration'
 pnpm run typecheck
 pnpm exec eslint packages/engine/test/restoration-acceptance.test.ts packages/engine/test/restoration-acceptance/*.ts
 pnpm exec prettier --check packages/engine/test/restoration-acceptance.test.ts packages/engine/test/restoration-acceptance/*.ts
 git diff --check
 ```
 
-The flag selects executable evidence, not independent review clearance. Final ledger
-TODOs remain explicit until the parent reviews and binds corrected exact runtime and
-adapter heads, resolves remaining contractual assertions, and supplies live acceptance.
+`matrix.ts` records 14 exercised capability/refusal obligations, the one live TODO,
+and the two external unknowns. Root owns review clearance, publication and final
+acceptance. No CI was polled, dispatched or triggered by this local correction.
 
 ## Owned footprint and execution boundary
 
@@ -53,16 +60,19 @@ a separate generation ID and preserves all original protected bytes.
 | --- | --- |
 | Custom executor closure | Historical effects use captured old inputs; new admissions use changed inputs |
 | Schema/version/data | Contract version 1 restores; future/zero versions, missing/malformed descriptors, invalid data, duplicate records/types and wrong spec/digest refuse before effects |
+| Canonical limits | Oversized encoded bytes, UTF-8 strings, value count and depth refuse at capture and fresh protected recovery; exact supported byte/value/depth boundaries restore without effects |
+| Non-JSON capture | Small/huge sparse arrays, non-index properties, accessors, non-finite numbers, class instances and symbols refuse before expansion, getter execution or effects; validator mutation cannot exceed bounds |
+| Historical/current plan replacement | Direct, prototype and nested method replacements remain bootstrap-bound; introducing any unsupported current callback refuses historical executor recovery before factories/provisioning |
 | Identity and trust | Schema/code/dependency/plugin identity mismatch and absent/refused/throwing trusted verifier refuse before factories or provider execution |
 | Partial reconstruction | Second factory throwing, omitting or duplicating registration discards historical candidate; current generation and current executor behavior remain intact |
 | Unsupported behavior | Host/FS mutation, workspace provider, plan extractor, built-in callback mutation and human-input callback cannot claim executor-only restoration; mixed legacy composition stays bound |
 | Capture refusal | Throwing validation, secret-bearing invalid data and closure data produce sanitized refusal |
-| JEV defaults | Before-evaluation restart uses recorded model/endpoint; node override remains pinned |
+| JEV defaults | Before-evaluation restart uses recorded model/endpoint without resolving credentials during capture/restore; node override remains pinned and new admissions use current defaults |
 | Durable JEV result | Completed event, artifact content/IDs and original generation/workflow bytes survive without another evaluation, even with revoked current credentials |
 | Current credentials | Missing/revoked key, changed account/reference/provider and throwing binding/key accessors fail before HTTP evaluation |
 | Unsupported JEV options | Arbitrary injected provider and inline API key refuse during constructor capture, before executor registration/execution; the current constructor throws a sanitized plain Error (`options-unsupported`), rather than a runtime `RUN_STATE` |
 | Redaction | Successful credential echo, transport credential echo and raw resolver exceptions produce sanitized failed runs/events |
-| Lost responses | Lost admission receipt retries to the same durable IDs; lost JEV response records failure after one synthetic effect, without an exactly-once recovery claim |
+| Lost responses | Lost admission receipt retries to the same durable IDs; lost JEV response records failure after one synthetic effect, and fresh terminal resume preserves that failure without another effect or an exactly-once recovery claim |
 | Authority and lease | Restored custom executors remain fenced by revoked/missing/mismatched current admission authority and an IPC-proven live process lease |
 | Consent | Restart delivers no prior live permission callback and writes no standing consent |
 
@@ -82,22 +92,33 @@ not authentication on Cal's actual private MCP connection. UI reconnect, referen
 clients and subprocess fixtures cannot replace the separate live proof.
 
 Actual user data restores, live agents/providers, credentials, host changes, deployment
-and Actual-Cal private-route inspection/resume are **UNRUN**. Final runtime acceptance
-also requires explicit regressions for its pending reviewed corrections before clearing
-`implementationPins.substrate394` or removing the relevant ledger obligations.
+and Actual-Cal private-route inspection/resume are **UNRUN**. Review pin fields remain
+null until root supplies exact-head clearance. They are not executable-test TODOs.
 
-## Local evidence before the publication hold
+## Local evidence and author review
 
-Combined candidate run: **88 passed, 2 fixture-diagnostic assertions failed, 15 TODO**
-(105 total; 261.70s). Those two assertions expected `RUN_STATE` where the reviewed
-adapter's constructor emits a sanitized plain error. After correcting the assertions,
-the targeted rerun passed **2/2**. Default-main contract preparation passed **3/3**;
-candidate cases remain skipped without the explicit selector.
+The corrected combined checkout preserves the exact runtime and adapter source bytes.
+Focused partitions exercise **80 distinct provider-free restart cases**: 41 runtime,
+refusal and authority cases (including three overlapping credential cases), 15 JEV
+cases, 20 new callback/descriptor regressions, and seven follow-up cases. Two nested
+callback cases in the first regression run used an incorrect fixture store property;
+the fixture path was corrected and those cases passed in the follow-up. No runtime or
+adapter defect was hidden or patched by this fixture owner.
 
-Main workspace and renderer typechecks, scoped ESLint/Prettier and diff/Markdown
-checks pass. Combined checkout typechecking additionally encounters an owner-file
-incompatibility at `packages/integrations/test/jev-restoration.test.ts:456`:
-`Promise<Record<string, unknown>> | Record<string, unknown>` is passed to a synchronous
-mock assertion. That adapter test is untouched. Runtime and adapter source byte checks
-against the pins above pass. Publication is held by the parent's reduced-CI instruction;
-these changes are local until that hold is released.
+Final focused checks pass **6/6 with one Actual-Cal TODO**, covering JEV
+pre-acceptance credential-read absence, current-default admissions, terminal
+lost-response resume and the exact pin ledger.
+Main-baseline and combined workspace typechecks pass; the corrected adapter test fixes
+the previous async-capture assertion type incompatibility. Scoped lint on the owned source tree, formatting,
+protected-byte checks and diff/Markdown checks pass. The scratch checkout reuses linked
+dependencies, so its inherited ESLint package resolves the original project root;
+scoped lint runs in that original owned checkout and combined typechecking runs in the
+corrected checkout.
+The existing baseline cases were not broadly rerun on this combined head.
+
+Author self-review checks the six-path footprint, capability detection on an unbound
+baseline, original protected-record preservation, per-process ownership and cleanup,
+canonical bounds versus the intentionally permissive synthetic validator, and accurate
+external unknowns. Fixtures use no competing restoration or retry API. Publication
+remains held while dependencies are in flight; root performs the remaining minimal
+review and controls remote publication/CI.

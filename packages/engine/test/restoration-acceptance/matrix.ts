@@ -1,18 +1,19 @@
 /** #396 acceptance ledger. Pending rows are obligations, never simulated implementation proof. */
-export const baselineSha = "65606fbce827cba914a67b999b1a47c0aab2797a";
+export const originalBaselineSha = "65606fbce827cba914a67b999b1a47c0aab2797a";
+export const baselineSha = "10834758e49a5e84b9ac06e3bca85f87be923dac";
 export const candidatePins = {
-  substrate394: "7202a6e06525052f304f4f49abbfd783e163a375",
-  jev395: "e4039a32e4a82aa19cd95b3e98f2813b47486903",
+  substrate394: "3054319b37ae61ba22b62ba2f519dc50bf3c0ebc",
+  jev395: "879bedcf701f4eaad2e8da47bac8feb2444c2d9d",
 } as const;
 /** Null means independent exact-head review remains unresolved. */
-export const implementationPins = { substrate394: null, jev395: "e4039a32e4a82aa19cd95b3e98f2813b47486903" } as const;
-/** Observed draft contract only; this does not authorize acceptance or activate tests. */
+export const implementationPins = { substrate394: null, jev395: null } as const;
+/** Exact published contract references; root supplies independent review clearance separately. */
 export const provisionalContract = {
   substrateComment: "https://github.com/cschadewitz/Project_Orca/issues/394#issuecomment-6051433591",
-  jevDraftHead: "e4039a32e4a82aa19cd95b3e98f2813b47486903",
+  jevHead: "879bedcf701f4eaad2e8da47bac8feb2444c2d9d",
   supportedRegistration: "custom-executor-only",
 } as const;
-export const pendingAcceptance = [
+export const exercisedAcceptance = [
   ["394", "opted-in executor restores captured closure inputs; new admission adopts changed inputs"],
   ["394", "supported descriptor schema restores; future and unsupported legacy schemas refuse"],
   ["394", "missing, malformed and tampered descriptors refuse before provisioning or execution"],
@@ -27,5 +28,11 @@ export const pendingAcceptance = [
   ["395", "lost provider response stays visibly ambiguous; resume cannot assert exactly-once effects"],
   ["395", "descriptor, public provenance, artifacts, logs and errors contain no credential values"],
   ["394/395", "current resume authority and lease fencing compose with the restored plugin candidate"],
+] as const;
+export const pendingAcceptance = [
   ["Actual-Cal", "actual private MCP route inspects and explicitly resumes the agreed permitted plugin"],
+] as const;
+export const unverifiedExternalClaims = [
+  "Installed whole-code/dependency release attestation and real credential authority are unverified by synthetic fixtures",
+  "Real provider in-flight reconciliation is unrun; exactly-once external effects remain unsupported under #297",
 ] as const;
