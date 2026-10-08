@@ -1,0 +1,1 @@
+Add an authenticated runtime idle fence and concrete managed-target Mac admission leases. Active execution, callbacks, renewal and queued admission/recovery work defer acquisition; uncertain results retain ownership. Mac installation and recovery activation remain disabled.
