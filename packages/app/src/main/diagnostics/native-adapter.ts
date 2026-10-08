@@ -2,6 +2,7 @@
 import { constants } from "node:fs";
 import { lstat, open, rename, unlink, mkdir } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
+import type { RecoveryFileHandle } from "./recovery-files.js";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -18,7 +19,7 @@ export interface RecoveryNativeAdapter {
   acquire(root: string): Promise<boolean>;
   release(root: string): Promise<void>;
   replace(source: string, destination: string): Promise<void>;
-  write(handle: FileHandle, bytes: Buffer): Promise<void>;
+  write(handle: Pick<RecoveryFileHandle, "writeFile" | "sync">, bytes: Buffer): Promise<void>;
   remove(path: string): Promise<void>;
   validateDestination(root: string, destination: string): Promise<boolean>;
   publish(
