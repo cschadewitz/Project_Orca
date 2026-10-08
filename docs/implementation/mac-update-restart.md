@@ -21,6 +21,17 @@ local target reservation. A fresh authenticated runtime-v1 held/idle proof is
 required before signalling. Blocked or initially unowned targets are refused
 without a signal; malformed/lost/wrong-target proof or a lost reservation is unknown.
 
+The first synchronously eligible stop claims one attempt for the exact workspace/
+boot/PID target and captured child before awaiting proof. Process-local ownership
+is shared across controller instances and alternate views of that same target.
+Concurrent or recreated controllers obtain the original result and the same receipt;
+they cannot obtain another proof, send a second signal or mint another receipt.
+Changing the target on the same captured child is unknown. Claimed attempt results
+are retained for the supervisor's lifetime, including refusal and unknown; no timeout,
+new controller or new signal clears them. Initial ineligible no-touch refusals do not
+claim an attempt. A lost initial ownership/child observation is unknown and seals
+the attempt too. This is not persisted approval or a durable app-relaunch journal.
+
 There is one SIGTERM to that captured child and no PID-based signalling, SIGKILL,
 forced timeout termination or retry. The ordinary `BundledDaemon.stop` currently
 escalates and is deliberately not used. A positive clean close with the reservation
@@ -119,7 +130,8 @@ fresh verification succeeds and the test explicitly releases its own token; it
 then starts only the provider-free workflow. This is simulated opening, not a
 production updater or a full-state snapshot/restore proof.
 
-Cases cover real new PIDs/boot identities, duplicate/forged/replayed receipts,
+Cases cover real new PIDs/boot identities, concurrent/recreated stop controllers,
+alternate child views and changed-target bypass attempts, duplicate/forged/replayed receipts,
 no-touch stop refusal, lost/malformed idle proof, ignored SIGTERM, clean exit with
 lost acknowledgement, crashes and lost reads at initial/final boundaries, resource
 and hello identity mismatches, late bytes/store/work changes, startup fence identity,

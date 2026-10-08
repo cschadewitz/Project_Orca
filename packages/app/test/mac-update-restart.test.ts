@@ -137,6 +137,210 @@ it("never force-kills an owned child that ignores SIGTERM; timeout remains unkno
   expect(f.old.child.child.exitCode).toBeNull();
 });
 
+it.each(["same child", "separate child view"])(
+  "concurrent controllers for the %s share one stop receipt and permit only one replacement launch",
+  async (kind) => {
+    const f = await fixture();
+    const actual = f.old.child.child;
+    const child: MacRestartChild =
+      kind === "same child"
+        ? actual
+        : {
+            get pid() {
+              return actual.pid;
+            },
+            get exitCode() {
+              return actual.exitCode;
+            },
+            get signalCode() {
+              return actual.signalCode;
+            },
+            once: actual.once.bind(actual),
+            kill: actual.kill.bind(actual),
+          };
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((done) => {
+      enter = done;
+    });
+    const gate = new Promise<void>((done) => {
+      release = done;
+    });
+    const proof = f.stopBoundary.proof;
+    const guardedProof = vi.fn(async (...args: Parameters<typeof proof>) => {
+      const result = await proof(...args);
+      enter();
+      await gate;
+      return result;
+    });
+    const boundary = { ...f.stopBoundary, proof: guardedProof };
+    const first = new MacUpdateOwnedStop(actual, f.old.ready.target, boundary, 10_000).stop(signal());
+    const second = new MacUpdateOwnedStop(child, { ...f.old.ready.target }, boundary, 10_000).stop(signal());
+    await entered;
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(guardedProof).toHaveBeenCalledTimes(1);
+    expect(f.old.child.signals).toEqual(["SIGTERM"]);
+    expect(a.outcome).toBe("stopped");
+    expect(b).toBe(a);
+    if (a.outcome !== "stopped" || b.outcome !== "stopped") throw new Error("Expected shared clean stop");
+    const results = await Promise.all([
+      new MacRestartVerification(f.ports, 10_000).verify(f.request(a.receipt), signal()),
+      new MacRestartVerification(f.ports, 10_000).verify(f.request(b.receipt), signal()),
+    ]);
+    expect(results.map((result) => result.outcome).sort()).toEqual(["refused", "verified-closed"]);
+    expect(f.calls.filter((call) => call === "start")).toHaveLength(1);
+    await expect(admission(f)).rejects.toThrow("closed");
+    expect(await f.stop().stop(signal())).toBe(a);
+  },
+);
+
+it("controller recreation cannot retry an unknown idle proof even when a fresh owner could stop the child", async () => {
+  const f = await fixture();
+  const proof = f.stopBoundary.proof;
+  const lost = {
+    ...f.stopBoundary,
+    proof: async (...args: Parameters<typeof proof>) => {
+      await proof(...args);
+      throw new Error("Synthetic lost idle-proof response");
+    },
+  };
+  expect(await new MacUpdateOwnedStop(f.old.child.child, f.old.ready.target, lost, 10_000).stop(signal())).toEqual({
+    outcome: "unknown",
+  });
+  const freshProof = vi.fn(proof);
+  expect(
+    await new MacUpdateOwnedStop(
+      f.old.child.child,
+      { ...f.old.ready.target },
+      { ...f.stopBoundary, proof: freshProof },
+      10_000,
+    ).stop(signal()),
+  ).toEqual({ outcome: "unknown" });
+  expect(freshProof).not.toHaveBeenCalled();
+  expect(f.old.child.signals).toEqual([]);
+  expect(f.old.child.child.exitCode).toBeNull();
+});
+
+it("controller recreation after an unknown signalled stop cannot signal again through a separate child view", async () => {
+  const f = await fixture({ ignoreOldTerm: true });
+  const actual = f.old.child.child;
+  const view: MacRestartChild = {
+    get pid() {
+      return actual.pid;
+    },
+    get exitCode() {
+      return actual.exitCode;
+    },
+    get signalCode() {
+      return actual.signalCode;
+    },
+    once: actual.once.bind(actual),
+    kill: actual.kill.bind(actual),
+  };
+  // Capture a genuine fixture proof for a deterministic would-be second attempt.
+  const held = await f.stopBoundary.proof(f.old.ready.target, signal());
+  vi.useFakeTimers();
+  const first = f.stop(1000).stop(signal());
+  await f.old.child.signalled();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(await first).toEqual({ outcome: "unknown" });
+  const freshProof = vi.fn(async () => held);
+  const second = new MacUpdateOwnedStop(
+    view,
+    { ...f.old.ready.target },
+    { ...f.stopBoundary, proof: freshProof },
+    1000,
+  ).stop(signal());
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(await second).toEqual({ outcome: "unknown" });
+  expect(freshProof).not.toHaveBeenCalled();
+  expect(f.old.child.signals).toEqual(["SIGTERM"]);
+  expect(actual.exitCode).toBeNull();
+});
+
+it("a changed target cannot bypass the sealed attempt on the same captured child", async () => {
+  const f = await fixture();
+  const lost = { ...f.stopBoundary, proof: async () => undefined };
+  expect(await new MacUpdateOwnedStop(f.old.child.child, f.old.ready.target, lost, 10_000).stop(signal())).toEqual({
+    outcome: "unknown",
+  });
+  const changed = { ...f.old.ready.target, instanceId: randomUUID() };
+  const proof = vi.fn(async () => ({ proof: "runtime-v1", target: changed, outcome: "held", active: [] }));
+  expect(
+    await new MacUpdateOwnedStop(f.old.child.child, changed, { ...f.stopBoundary, proof }, 10_000).stop(signal()),
+  ).toEqual({ outcome: "unknown" });
+  expect(proof).not.toHaveBeenCalled();
+  expect(f.old.child.signals).toEqual([]);
+});
+
+it("a lost initial ownership observation stays unknown across controller recreation", async () => {
+  const f = await fixture();
+  const lost = {
+    ...f.stopBoundary,
+    check: () => {
+      throw new Error("Synthetic lost ownership read");
+    },
+  };
+  expect(await new MacUpdateOwnedStop(f.old.child.child, f.old.ready.target, lost, 10_000).stop(signal())).toEqual({
+    outcome: "unknown",
+  });
+  const proof = vi.fn(f.stopBoundary.proof);
+  expect(
+    await new MacUpdateOwnedStop(f.old.child.child, f.old.ready.target, { ...f.stopBoundary, proof }, 10_000).stop(
+      signal(),
+    ),
+  ).toEqual({ outcome: "unknown" });
+  expect(proof).not.toHaveBeenCalled();
+  expect(f.old.child.signals).toEqual([]);
+});
+
+it("a child view that joins an unknown attempt cannot retarget itself to escape ownership", async () => {
+  const f = await fixture();
+  const actual = f.old.child.child;
+  const view: MacRestartChild = {
+    get pid() {
+      return actual.pid;
+    },
+    get exitCode() {
+      return actual.exitCode;
+    },
+    get signalCode() {
+      return actual.signalCode;
+    },
+    once: actual.once.bind(actual),
+    kill: actual.kill.bind(actual),
+  };
+  expect(
+    await new MacUpdateOwnedStop(
+      actual,
+      f.old.ready.target,
+      { ...f.stopBoundary, proof: async () => undefined },
+      10_000,
+    ).stop(signal()),
+  ).toEqual({ outcome: "unknown" });
+  expect(await new MacUpdateOwnedStop(view, f.old.ready.target, f.stopBoundary, 10_000).stop(signal())).toEqual({
+    outcome: "unknown",
+  });
+  const changed = { ...f.old.ready.target, instanceId: randomUUID() };
+  const proof = vi.fn(async () => ({ proof: "runtime-v1", target: changed, outcome: "held", active: [] }));
+  expect(await new MacUpdateOwnedStop(view, changed, { ...f.stopBoundary, proof }, 10_000).stop(signal())).toEqual({
+    outcome: "unknown",
+  });
+  expect(proof).not.toHaveBeenCalled();
+  expect(f.old.child.signals).toEqual([]);
+});
+
+it("an initially unowned no-touch refusal does not prevent a later eligible owner claiming its first attempt", async () => {
+  const f = await fixture();
+  f.reservation(false);
+  expect(await f.stop().stop(signal())).toEqual({ outcome: "refused" });
+  expect(f.old.child.signals).toEqual([]);
+  f.reservation(true);
+  expect((await f.stop().stop(signal())).outcome).toBe("stopped");
+  expect(f.old.child.signals).toEqual(["SIGTERM"]);
+});
+
 it("keeps a crash during the idle-proof boundary unknown and does not send a stop signal", async () => {
   const f = await fixture();
   Object.assign(f.stopBoundary, {

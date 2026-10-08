@@ -35,6 +35,18 @@ interface StoppedOwner {
 const stoppedOwners = new WeakMap<MacStoppedReceipt, StoppedOwner>();
 export type MacOwnedStopResult =
   { readonly outcome: "stopped"; readonly receipt: MacStoppedReceipt } | { readonly outcome: "refused" | "unknown" };
+interface StopAttempt {
+  readonly target: Readonly<RuntimeMaintenanceTarget>;
+  readonly result: Promise<MacOwnedStopResult>;
+}
+// Kept for this supervisor's lifetime: controller recreation must not erase an unknown
+// attempt. Target keys also cover another view of the same child; child keys prohibit
+// retargeting a captured process to escape its attempt. No durable restart authority.
+const stopAttempts = new Map<string, StopAttempt>();
+const childStopAttempts = new WeakMap<MacRestartChild, StopAttempt>();
+function stopTargetKey(target: RuntimeMaintenanceTarget): string {
+  return JSON.stringify([target.workspaceId, target.instanceId, target.processId]);
+}
 export interface MacOwnedStopBoundary {
   /** Current all-window/local target reservation; must remain held through positive exit. */
   check(this: void): boolean;
@@ -82,10 +94,20 @@ export class MacUpdateOwnedStop {
     });
   }
   stop(signal: AbortSignal): Promise<MacOwnedStopResult> {
-    return (this.result ??= this.run(signal));
+    // Initialize the instance promise before run claims it, including when a proof
+    // callback synchronously creates another controller for this captured process.
+    return (this.result ??= Promise.resolve().then(() => this.run(signal)));
   }
   private async run(signal: AbortSignal): Promise<MacOwnedStopResult> {
+    const key = stopTargetKey(this.target);
     try {
+      const childAttempt = childStopAttempts.get(this.child);
+      if (childAttempt && !sameTarget(childAttempt.target, this.target)) return { outcome: "unknown" };
+      const existing = stopAttempts.get(key) ?? childAttempt;
+      if (existing) {
+        childStopAttempts.set(this.child, existing);
+        return existing.result;
+      }
       if (
         !boundMs(this.operationMs) ||
         signal.aborted ||
@@ -93,6 +115,10 @@ export class MacUpdateOwnedStop {
         !this.boundary.check()
       )
         return { outcome: "refused" };
+      // The initial synchronous eligibility checks do not acquire another target.
+      // Claim before any proof await; every subsequent controller shares this exact
+      // attempt/result/receipt, including terminal unknown, with no release or retry.
+      this.claim(key);
       if (!alive(this.child)) return { outcome: "unknown" };
       return await macBounded(signal, this.operationMs, async (bounded) => {
         const proof = RuntimeMaintenanceResultSchema.parse(
@@ -126,8 +152,16 @@ export class MacUpdateOwnedStop {
         return { outcome: "stopped", receipt };
       });
     } catch {
+      // A lost initial ownership/child observation is unknown too; recreating the
+      // controller cannot convert that missing evidence into a fresh stop attempt.
+      if (!stopAttempts.has(key) && !childStopAttempts.has(this.child)) this.claim(key);
       return { outcome: "unknown" };
     }
+  }
+  private claim(key: string): void {
+    const attempt: StopAttempt = { target: this.target, result: this.result! };
+    stopAttempts.set(key, attempt);
+    childStopAttempts.set(this.child, attempt);
   }
 }
 export interface MacRestartBinding {
