@@ -48,8 +48,8 @@ PRs can reduce. Future non-exempt inventory drift deliberately restores full unt
 a separately reviewed certificate refresh; broad runtime/test-only eligibility is
 not enabled. The graph's completeness claim still covers only the named island.
 
-The refreshed certificate audits implementation `fd336c55000a8554bd5741bd8518c27df2ed2649`
-with inventory hash `47843eb5631d9f00944ce1446b5edb2b4312eb48aa022ecf634cf076e3782c54`.
+The refreshed certificate audits implementation `f7fed3d6e89c5ea342a1fa88ebde15026b2450c9`
+with inventory hash `f3f0e561ec2bbcf85a904e3d164e410357e3322cb3aa17cf59fe61b3ee9bed06`.
 Selector version **1.1.2** includes execution/evidence source in its identity.
 The earlier certificate and acceptance records below are historical, not the current
 activation certificate. The enablement PR's full run and first new live consumer
