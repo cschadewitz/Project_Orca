@@ -61,6 +61,11 @@ describe("authoritative rich configuration metadata", () => {
     expect(shape.visibility).toBe("withheld");
     expect(JSON.stringify(shape)).not.toContain("secret");
     expect(describeFormNode(z.string(), "agents[].command").visibility).toBe("non-secret");
+    expect(describeFormNode(z.string().describe("private"), "futureField")).toMatchObject({
+      visibility: "metadata-unavailable",
+      field: { type: "string" },
+    });
+    expect(describeFormNode(z.enum(["private"]), "hosts[].sshArgs[]")).not.toHaveProperty("field.enum");
   });
 
   it("reports ordinary unions/transforms/catch and constrained records unsupported", () => {

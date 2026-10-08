@@ -2,6 +2,7 @@
 import { OrcaConfigSchema } from "@orca/core";
 import type { ConfigFieldMetadata, ConfigFieldShape, ConfigFormSchema, ConfigFieldType } from "@orca/protocol";
 import type { z } from "zod";
+import { configFieldVisibility } from "./config-form-visibility.js";
 
 interface Node {
   def: {
@@ -21,9 +22,6 @@ interface Node {
   description?: string;
 }
 const unknown = "metadata-unavailable";
-// Environment/transport values and arbitrary arguments may contain credentials.
-// The configured executable field is an authorized binary selector, not a secret input.
-const sensitive = (path: string) => /(^|\.)(env|mcpServers|args)(\.|\[|$)/.test(path);
 
 /** Only audited core schemas enter this walker; callbacks/plugins are not discovered. */
 export function describeConfigFormSchema(): ConfigFormSchema {
@@ -73,7 +71,7 @@ function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
   const meta: ConfigFieldMetadata = {
     acceptsAbsent: acceptance(source, "absent"),
     acceptsNull: acceptance(source, "null"),
-    visibility: sensitive(path) ? "withheld" : "non-secret",
+    visibility: configFieldVisibility(path),
     default: defaultState,
   };
   const unsupported = (): ConfigFieldShape => ({
@@ -131,8 +129,8 @@ function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
           path,
           type,
           required: meta.acceptsAbsent === false,
-          ...(!sensitive(path) && choices ? { enum: choices } : {}),
-          ...(!sensitive(path) && (source.description ?? node.description)
+          ...(meta.visibility === "non-secret" && choices ? { enum: choices } : {}),
+          ...(meta.visibility === "non-secret" && (source.description ?? node.description)
             ? { help: source.description ?? node.description }
             : {}),
         },
