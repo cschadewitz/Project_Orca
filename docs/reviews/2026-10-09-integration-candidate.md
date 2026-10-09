@@ -1,5 +1,9 @@
 # Local integration candidate self-review - 9 October 2026
 
+Update: [M21 implementation composition](2026-10-09-integration-m21-composition.md)
+records the later local source head and affected checks. The initial review below
+retains its original tested source pin; M21's final native disposition is pending.
+
 The four requested maximal tips are assembled in a separate desktop task worktree
 on branch `calcifer/integration-candidate-20261009`. The tested source head is
 `d78033e07bdc62fb5cf69bb6746e6807129f4040`. This is source composition and focused
