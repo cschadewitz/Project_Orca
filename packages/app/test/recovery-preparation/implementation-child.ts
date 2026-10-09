@@ -1,3 +1,4 @@
+import { previewText } from "./preview-text.js";
 /** Actual coordinator/disk kill fixture. IPC signals only reached real mutation boundaries. */
 import { join } from "node:path";
 import { implementationFixture, enableAndPreview, value, borrowFixtureHelper } from "./implementation-fixture.js";
@@ -41,7 +42,7 @@ if (
   value(await fixture.controller.save(preview.handle, destination.token));
   if (fixture.controller.status().lastSaveOutcome !== "saved") throw new Error("Prior native export not saved");
   value(await fixture.controller.closePreview(preview.handle));
-  const unknown = value(await fixture.controller.preparePreview("current"));
+  const unknown = await previewText(fixture.controller, value(await fixture.controller.preparePreview("current")));
   fixture.picker.destination = join(profile, "unknown-report.json");
   fixture.native.publication = () => Promise.resolve("unknown");
   const selected = value(await fixture.controller.chooseDestination(unknown.handle));
@@ -53,7 +54,7 @@ if (
   value(await fixture.controller.closePreview(unknown.handle));
   const evidence: OptOutCrashEvidence = { publishedText: preview.text, acknowledgedId };
   if (boundary === "optout-unresolved") {
-    const unresolved = value(await fixture.controller.preparePreview("current"));
+    const unresolved = await previewText(fixture.controller, value(await fixture.controller.preparePreview("current")));
     fixture.picker.destination = join(profile, "unresolved-report.json");
     const selected = value(await fixture.controller.chooseDestination(unresolved.handle));
     await fixture.controller.save(unresolved.handle, selected.token);
@@ -125,7 +126,7 @@ if (boundary === "before-ack") {
 value(await fixture.controller.acknowledgeUnknown(id));
 if (boundary === "during-fresh-intent") {
   value(await fixture.controller.closePreview(preview.handle));
-  const fresh = value(await fixture.controller.preparePreview("current"));
+  const fresh = await previewText(fixture.controller, value(await fixture.controller.preparePreview("current")));
   fixture.picker.destination = join(profile, "fresh-report.json");
   const selected = value(await fixture.controller.chooseDestination(fresh.handle));
   fixture.native.beforeReplace = async (_source, destination) => {

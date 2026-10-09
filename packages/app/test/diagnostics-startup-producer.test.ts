@@ -1,3 +1,4 @@
+import { previewText } from "./recovery-preparation/preview-text.js";
 /** Closed producer and existing consent fences; disk/key fixtures are synthetic. */
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { startupDiagnosticObserver } from "../src/main/diagnostics/startup-producer.js";
@@ -30,7 +31,7 @@ describe.runIf(process.platform === "linux")("startup producer/controller integr
       observe("startup_spawn_failed");
       value(await f.controller.setEnabled(true, 1));
       observe("startup_exited_before_handshake");
-      const preview = value(await f.controller.preparePreview("current"));
+      const preview = await previewText(f.controller, value(await f.controller.preparePreview("current")));
       expect(JSON.parse(preview.text).events.map((event: { code: string }) => event.code)).toEqual([
         "startup_exited_before_handshake",
       ]);
@@ -38,7 +39,7 @@ describe.runIf(process.platform === "linux")("startup producer/controller integr
       value(await f.controller.setEnabled(false, 1));
       observe("startup_handshake_timeout");
       value(await f.controller.setEnabled(true, 1));
-      const fresh = value(await f.controller.preparePreview("current"));
+      const fresh = await previewText(f.controller, value(await f.controller.preparePreview("current")));
       expect(JSON.parse(fresh.text).events).toEqual([]);
       await f.controller.cleanExit();
     });

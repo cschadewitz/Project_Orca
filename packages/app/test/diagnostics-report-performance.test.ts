@@ -1,3 +1,4 @@
+import { previewText } from "./recovery-preparation/preview-text.js";
 /** Canonical compatibility and authority at cooperative report turns; no device acceptance. */
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
@@ -6,6 +7,7 @@ import { DIAGNOSTIC_CODES, type DiagnosticPhase } from "../src/main/diagnostics/
 import { RecoveryController } from "../src/main/diagnostics/recovery-controller.js";
 import { ControlledPayloadMemory } from "../src/main/diagnostics/payload-memory.js";
 import { RECOVERY_LIMITS, type RecoveryDisk } from "../src/main/diagnostics/recovery-contract.js";
+import { DIAGNOSTIC_PREVIEW_BLOCK_BYTES } from "../src/diagnostics-contract.js";
 import {
   validateDiagnosticReportAsync,
   validateOwnedDiagnosticText,
@@ -231,6 +233,64 @@ function fixture() {
   return { controller, disk, reading, payload };
 }
 
+it("admits exact byte ownership, one ordered transport block and a complete-read picker fence", async () => {
+  const { controller, payload } = fixture();
+  await controller.initialize();
+  value(await controller.setEnabled(true, 1));
+  for (let i = 0; i < 8192; i++) controller.record("run", "run_failed");
+  const preview = value(await controller.preparePreview("current"));
+  expect(preview).not.toHaveProperty("text");
+  expect(payload.stats().externalAllowanceBytes).toBe(RECOVERY_LIMITS.exportBytes + 3 * DIAGNOSTIC_PREVIEW_BLOCK_BYTES);
+  expect((await controller.chooseDestination(preview.handle)).ok).toBe(false);
+  expect((await controller.readPreviewBlock(preview.handle, 1)).ok).toBe(false);
+  const first = value(await controller.readPreviewBlock(preview.handle, 0));
+  expect(first.bytes.buffer.byteLength).toBe(first.bytes.length);
+  expect(first.bytes.length).toBeLessThanOrEqual(DIAGNOSTIC_PREVIEW_BLOCK_BYTES);
+  expect(first.bytes.at(-1)).toBe(10);
+  expect((await controller.readPreviewBlock(preview.handle, 0)).ok).toBe(false);
+  expect((await controller.releasePreviewBlock("stale", 0)).ok).toBe(false);
+  value(await controller.releasePreviewBlock(preview.handle, 0));
+  expect(first.bytes.every((byte) => byte === 0)).toBe(true);
+  let offset = first.bytes.length;
+  while (offset < preview.byteLength) {
+    const block = value(await controller.readPreviewBlock(preview.handle, offset));
+    offset += block.bytes.length;
+    value(await controller.releasePreviewBlock(preview.handle, block.offset));
+  }
+  expect((await controller.chooseDestination(preview.handle)).ok).toBe(true);
+  value(await controller.closePreview(preview.handle));
+  expect((await controller.readPreviewBlock(preview.handle, 0)).ok).toBe(false);
+  value(await controller.setEnabled(false, 1));
+  expect(payload.stats().allocatedBytes).toBe(0);
+  await controller.cleanExit();
+});
+
+it.each(["off", "expiry", "document"])(
+  "erases a transported block on %s and charges retirement until disposal",
+  async (reason) => {
+    const { controller, payload, reading } = fixture();
+    await controller.initialize();
+    value(await controller.setEnabled(true, 1));
+    const preview = value(await controller.preparePreview("current"));
+    const block = value(await controller.readPreviewBlock(preview.handle, 0));
+    if (reason === "off") value(await controller.setEnabled(false, 1));
+    else if (reason === "expiry") {
+      reading.elapsedMs += RECOVERY_LIMITS.previewMs;
+      controller.status();
+    } else controller.revokePreviewAuthority();
+    expect(block.bytes.every((byte) => byte === 0)).toBe(true);
+    expect((await controller.readPreviewBlock(preview.handle, 0)).ok).toBe(false);
+    expect(payload.stats().externalAllowanceBytes).toBeGreaterThan(0);
+    value(await controller.closePreview("stale"));
+    expect(payload.stats().externalAllowanceBytes).toBeGreaterThan(0);
+    value(await controller.closePreview(preview.handle));
+    expect(payload.stats().externalAllowanceBytes).toBe(0);
+    value(await controller.setEnabled(false, 1));
+    expect(payload.stats().allocatedBytes).toBe(0);
+    await controller.cleanExit();
+  },
+);
+
 it.each(["off", "document", "clock"])(
   "revokes %s during report preparation without returning plaintext or early reservation release",
   async (revocation) => {
@@ -303,7 +363,7 @@ it.each(["timeout", "off"])("retains frozen binary bytes until a %s Save actuall
   await controller.initialize();
   value(await controller.setEnabled(true, 1));
   controller.record("run", "run_failed");
-  const preview = value(await controller.preparePreview("current"));
+  const preview = await previewText(controller, value(await controller.preparePreview("current")));
   const destination = value(await controller.chooseDestination(preview.handle));
   if (revocation === "timeout") vi.useFakeTimers();
   const saving = controller.save(preview.handle, destination.token);
@@ -322,6 +382,7 @@ it.each(["timeout", "off"])("retains frozen binary bytes until a %s Save actuall
     vi.useRealTimers();
     await saving;
     await off;
+    controller.rendererDisposed();
     for (let turn = 0; turn < 10 && controller.status().payloadReservedBytes; turn++) await setImmediate();
     await controller.cleanExit();
   }

@@ -1,3 +1,4 @@
+import { previewText } from "./recovery-preparation/preview-text.js";
 /** Deterministic controller fences on disposable Linux storage; no native acceptance claim. */
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { access, readFile } from "node:fs/promises";
@@ -271,7 +272,7 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
       expect(f.controller.status().enabled).toBe(true);
       expect((await f.disk.readSetting()).enabled).toBe(true);
       expect(f.controller.record("run", "run_failed")).toBe(true);
-      const fresh = value(await f.controller.preparePreview("previous"));
+      const fresh = await previewText(f.controller, value(await f.controller.preparePreview("previous")));
       value(await f.controller.closePreview(fresh.handle));
       await f.controller.cleanExit();
     });
@@ -321,7 +322,7 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
       value(await f.controller.setEnabled(false, 1));
       value(await f.controller.setEnabled(true, 1));
       expect(f.controller.record("connection", "connection_lost")).toBe(true);
-      const fresh = value(await f.controller.preparePreview("current"));
+      const fresh = await previewText(f.controller, value(await f.controller.preparePreview("current")));
       expect(fresh.text).not.toContain("run_failed");
       value(await f.controller.closePreview(fresh.handle));
       await f.controller.cleanExit();
@@ -337,7 +338,10 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
           value(await f.controller.setEnabled(true, 1));
           expect(f.controller.record("run", "run_failed")).toBe(true);
           await f.controller.checkpoint();
-          const preview = observer === "preview" ? value(await f.controller.preparePreview("current")) : undefined;
+          const preview =
+            observer === "preview"
+              ? await previewText(f.controller, value(await f.controller.preparePreview("current")))
+              : undefined;
           const pending = barrier();
           const settled = barrier();
           const maintain = f.disk.maintain.bind(f.disk);

@@ -257,6 +257,22 @@ diagnosticHandle("setMinutes", z.object({ minutes: z.number().int().min(1).max(1
 diagnosticHandle("preparePreview", z.object({ source: z.enum(["current", "previous"]) }).strict(), (params) =>
   diagnostics.preparePreview((params as { source: "current" | "previous" }).source),
 );
+const diagnosticBlockParams = z
+  .object({ handle: opaqueDiagnosticHandle, offset: z.number().int().min(0).max(1_048_575) })
+  .strict();
+diagnosticHandle("readPreviewBlock", diagnosticBlockParams, (params) => {
+  const block = params as { handle: string; offset: number };
+  return diagnostics.readPreviewBlock(block.handle, block.offset);
+});
+diagnosticHandle(
+  "releasePreviewBlock",
+  diagnosticBlockParams,
+  (params) => {
+    const block = params as { handle: string; offset: number };
+    return diagnostics.releasePreviewBlock(block.handle, block.offset);
+  },
+  true,
+);
 diagnosticHandle(
   "closePreview",
   z.object({ handle: opaqueDiagnosticHandle }).strict(),

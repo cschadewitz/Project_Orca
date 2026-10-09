@@ -1,3 +1,4 @@
+import { previewText } from "./preview-text.js";
 /** Native x64 Windows evidence in a caller-selected disposable parent, never app consent. */
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
@@ -59,7 +60,7 @@ if (process.argv[2] === "child-clock") {
     assert.equal(controller.record("run", "run_failed"), true);
   await controller.checkpoint();
   if (exportProbe) {
-    const preview = value(await controller.preparePreview("current"));
+    const preview = await previewText(controller, value(await controller.preparePreview("current")));
     const selected = value(await controller.chooseDestination(preview.handle));
     void controller.save(preview.handle, selected.token);
   } else process.send?.("checkpoint-committed");
@@ -260,7 +261,7 @@ if (process.argv[2] === "child-clock") {
     try {
       await controller.initialize();
       assert.equal(controller.status().previous, true);
-      const previous = value(await controller.preparePreview("previous"));
+      const previous = await previewText(controller, value(await controller.preparePreview("previous")));
       const report = JSON.parse(previous.text) as { events: unknown[] };
       assert.equal(report.events.length, 8192);
       assert.ok(!previous.text.includes(base) && !previous.text.includes(before.bootId));

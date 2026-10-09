@@ -3,11 +3,13 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   DIAGNOSTICS_PRODUCTION_ENABLED,
   DIAGNOSTICS_SCOPE,
+  DIAGNOSTIC_PREVIEW_BLOCK_BYTES,
   type DiagnosticsResult,
   type DiagnosticsStatus,
   type DiagnosticResultCode,
   type DiagnosticPreview,
   type DiagnosticDestination,
+  type DiagnosticPreviewBlock,
 } from "../../diagnostics-contract.js";
 import { PretriggerBuffer } from "./pretrigger-buffer.js";
 import { type DiagnosticPhase, type DiagnosticCode } from "./profile.js";
@@ -41,6 +43,7 @@ interface Preview {
   boot: string;
   deadline: number;
   payload: PayloadLease;
+  delivered: number;
 }
 const success = <T>(value: T): DiagnosticsResult<T> => ({ ok: true, value });
 const failure = <T>(code: DiagnosticResultCode): DiagnosticsResult<T> => ({ ok: false, code });
@@ -56,6 +59,8 @@ export class RecoveryController {
   private previewCharged = false;
   private retiredPreview: string | undefined;
   private retiredPreviewCharged = false;
+  private transportRelease: (() => void) | undefined;
+  private block: DiagnosticPreviewBlock | undefined;
   private destination: { token: string; handle: string; path: string; epoch: number } | undefined;
   private exportState: ExportState = {};
   private previousAvailable = false;
@@ -312,7 +317,6 @@ export class RecoveryController {
     this.busy = true;
     const work = (async (): Promise<DiagnosticsResult<DiagnosticPreview>> => {
       let owned: PayloadLease | undefined;
-      let text: string;
       try {
         const now = this.now();
         if (!now) {
@@ -339,7 +343,6 @@ export class RecoveryController {
             deadline = Math.min(deadline, old.anchor.elapsedMs + RECOVERY_LIMITS.retentionMs);
             const validated = await validateOwnedDiagnosticReport(old.bytes, true, this.payload);
             owned = validated.payload;
-            text = validated.text;
           } finally {
             old.dispose?.();
           }
@@ -349,7 +352,6 @@ export class RecoveryController {
           if (!snapshot) return failure("unavailable");
           const validated = await validateOwnedDiagnosticText(snapshot.json, this.payload);
           owned = validated.payload;
-          text = validated.text;
           snapshot = undefined;
           bytes = owned.bytes;
         }
@@ -362,6 +364,11 @@ export class RecoveryController {
           after.elapsedMs - now.elapsedMs > RECOVERY_LIMITS.prepareMs
         )
           return failure("stale_preview");
+        // Reserve the renderer owner and all three block copies before transport.
+        // IPC/contextBridge are copying boundaries, never assumed zero-copy.
+        this.transportRelease = this.payload.allowance(
+          RECOVERY_LIMITS.exportBytes + 3 * DIAGNOSTIC_PREVIEW_BLOCK_BYTES,
+        );
         this.preview = {
           handle: randomUUID(),
           epoch,
@@ -371,6 +378,7 @@ export class RecoveryController {
           boot: now.bootId,
           deadline,
           payload: owned,
+          delivered: 0,
         };
         this.previewTimer = setTimeout(
           () => {
@@ -382,7 +390,6 @@ export class RecoveryController {
         this.previewTimer.unref?.();
         return success({
           handle: this.preview.handle,
-          text,
           byteLength: bytes.length,
           source,
           expiresInMs: deadline - after.elapsedMs,
@@ -413,6 +420,31 @@ export class RecoveryController {
     }
     return result;
   }
+  readPreviewBlock(handle: string, offset: number): Promise<DiagnosticsResult<DiagnosticPreviewBlock>> {
+    const preview = this.currentPreview(handle);
+    if (!preview) return Promise.resolve(failure("stale_preview"));
+    if (!Number.isSafeInteger(offset) || offset !== preview.delivered || offset >= preview.bytes.length || this.block)
+      return Promise.resolve(failure("refused"));
+    // Never expose a subarray's 5 MiB arena backing store to structured clone.
+    let length = Math.min(DIAGNOSTIC_PREVIEW_BLOCK_BYTES, preview.bytes.length - offset);
+    if (offset + length < preview.bytes.length) {
+      const newline = preview.bytes.lastIndexOf(10, offset + length - 1);
+      if (newline < offset) return Promise.resolve(failure("unavailable"));
+      length = newline + 1 - offset;
+    }
+    const bytes = new Uint8Array(length);
+    bytes.set(preview.bytes.subarray(offset, offset + bytes.length));
+    this.block = { handle, offset, bytes };
+    return Promise.resolve(success(this.block));
+  }
+  releasePreviewBlock(handle: string, offset: number): Promise<DiagnosticsResult<boolean>> {
+    const block = this.block;
+    if (block?.handle !== handle || block.offset !== offset) return Promise.resolve(failure("stale_preview"));
+    if (this.preview?.handle === handle) this.preview.delivered += block.bytes.length;
+    block.bytes.fill(0);
+    this.block = undefined;
+    return Promise.resolve(success(true));
+  }
   async closePreview(handle: string): Promise<DiagnosticsResult<DiagnosticsStatus>> {
     if (this.preview?.handle === handle) this.dropPreview();
     if (this.retiredPreview === handle) this.releaseRetiredPreview();
@@ -422,6 +454,7 @@ export class RecoveryController {
   async chooseDestination(handle: string): Promise<DiagnosticsResult<DiagnosticDestination>> {
     const preview = this.currentPreview(handle);
     if (!preview) return failure("stale_preview");
+    if (this.block || preview.delivered !== preview.bytes.length) return failure("refused");
     if (this.busy || this.exportState.current)
       return failure(this.exportState.current ? this.code : "publication_pending");
     this.busy = true;
@@ -807,6 +840,8 @@ export class RecoveryController {
       this.dropPreview();
   }
   private dropPreview(): void {
+    this.block?.bytes.fill(0);
+    this.block = undefined;
     if (this.preview) {
       if (this.liveExport) this.savingPayload = this.preview.payload;
       else this.preview.payload.release();
@@ -832,6 +867,8 @@ export class RecoveryController {
     this.emit();
   }
   private releaseRetiredPreview(): void {
+    this.transportRelease?.();
+    this.transportRelease = undefined;
     if (this.retiredPreviewCharged) this.release(RECOVERY_LIMITS.exportBytes);
     this.retiredPreviewCharged = false;
     this.retiredPreview = undefined;

@@ -384,6 +384,7 @@ it("permits old-target preview disposal only from the current window document wi
     ["status", undefined],
     ["setEnabled", { enabled: false, scopeVersion: 1 }],
     ["preparePreview", { source: "current" }],
+    ["readPreviewBlock", { handle, offset: 0 }],
     ["save", { handle, destinationToken: token }],
   ] as const) {
     expect(await invoke(method, params)).toEqual({ ok: false, code: "stale_preview" });
@@ -401,6 +402,12 @@ it("permits old-target preview disposal only from the current window document wi
     }),
   ).toEqual({ ok: false, code: "stale_preview" });
   expect(await invoke("closePreview", { handle: "invalid-handle" })).toEqual({ ok: false, code: "refused" });
+  // Erasure acknowledgement can cross an old target epoch, never sender/document authority.
+  expect(await invoke("releasePreviewBlock", { handle, offset: 0 })).toEqual({ ok: false, code: "stale_preview" });
+  expect(await invoke("releasePreviewBlock", { handle, offset: -1 })).toEqual({ ok: false, code: "refused" });
+  expect(await invoke("releasePreviewBlock", { handle, offset: 0 }, currentEpoch, { sender, senderFrame: {} })).toEqual(
+    { ok: false, code: "stale_preview" },
+  );
   expect(initialize).not.toHaveBeenCalled();
   expect(choices).not.toHaveBeenCalled();
   expect(shell.keyWrap).not.toHaveBeenCalled();

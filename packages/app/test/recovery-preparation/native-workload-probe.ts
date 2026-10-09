@@ -1,3 +1,4 @@
+import { previewText } from "./preview-text.js";
 /** Bounded native-port workload. Linux uses synthetic keys/clock and is never Mac acceptance. */
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -103,7 +104,7 @@ try {
   const checkpointMs = performance.now() - checkpointStart;
   const previewStart = performance.now();
   phase = "preview";
-  const preview = value(await operation(() => controller.preparePreview("current")));
+  const preview = await previewText(controller, value(await operation(() => controller.preparePreview("current"))));
   await setTimeout(2);
   const previewMs = performance.now() - previewStart;
   const selected = value(await operation(() => controller.chooseDestination(preview.handle)));

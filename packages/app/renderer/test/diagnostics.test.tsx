@@ -30,7 +30,6 @@ const defaults: DiagnosticsStatus = {
 const preview: DiagnosticPreview = {
   handle: "opaque-preview",
   source: "current",
-  text: exact,
   byteLength: new TextEncoder().encode(exact).byteLength,
   expiresInMs: 300_000,
   tailLossPossible: true,
@@ -71,6 +70,10 @@ function fakeBridge(patch: Partial<DiagnosticsStatus> = {}) {
       emit({ ...state, activePreviewHandle: preview.handle });
       return ok({ ...preview, source });
     }),
+    readPreviewBlock: vi.fn(async (handle: string, offset: number) =>
+      ok({ handle, offset, bytes: new TextEncoder().encode(exact).slice(offset) }),
+    ),
+    releasePreviewBlock: vi.fn(async (_handle: string, _offset: number) => ok(true)),
     closePreview: vi.fn(async (_handle: string) => {
       const { activePreviewHandle: _active, ...rest } = state;
       emit(rest);
@@ -230,12 +233,15 @@ describe("exact preview and separate local Save", () => {
     const text = ("x".repeat(31) + "\n").repeat(32_768);
     vi.mocked(f.bridge.preparePreview).mockImplementation(async () => {
       f.emit({ ...f.state(), activePreviewHandle: preview.handle });
-      return ok({ ...preview, text, byteLength: text.length });
+      return ok({ ...preview, byteLength: text.length });
     });
+    vi.mocked(f.bridge.readPreviewBlock).mockImplementation(async (handle, offset) =>
+      ok({ handle, offset, bytes: new TextEncoder().encode(text.slice(offset, offset + 16_384)) }),
+    );
     const report = await open(f);
     expect(text.length).toBe(1_048_576);
     expect(report.textContent).toBe(text);
-    expect(report.querySelectorAll(".orca-diagnostics__block")).toHaveLength(128);
+    expect(report.querySelectorAll(".orca-diagnostics__block")).toHaveLength(64);
     fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull());
   });

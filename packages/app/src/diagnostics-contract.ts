@@ -2,6 +2,9 @@
 export const DIAGNOSTICS_SCOPE = 1;
 /** Shipping capture requires a separate independent/native acceptance change. */
 export const DIAGNOSTICS_PRODUCTION_ENABLED = false;
+/** One in-flight block; main, IPC/preload and context-bridge copies are admitted. */
+export const DIAGNOSTIC_PREVIEW_BLOCK_BYTES = 16_384;
+export const DIAGNOSTIC_PREVIEW_MAX_BYTES = 1_048_576;
 export type DiagnosticResultCode =
   | "off"
   | "ready"
@@ -40,11 +43,15 @@ export interface DiagnosticsStatus {
 export type DiagnosticsResult<T> = { ok: true; value: T } | { ok: false; code: DiagnosticResultCode };
 export interface DiagnosticPreview {
   handle: string;
-  text: string;
   byteLength: number;
   source: "current" | "previous";
   expiresInMs: number;
   tailLossPossible: boolean;
+}
+export interface DiagnosticPreviewBlock {
+  handle: string;
+  offset: number;
+  bytes: Uint8Array;
 }
 export interface DiagnosticDestination {
   token: string;
@@ -56,6 +63,8 @@ export interface DiagnosticsBridge {
   setEnabled(enabled: boolean, scopeVersion: number): Promise<DiagnosticsResult<DiagnosticsStatus>>;
   setMinutes(minutes: number): Promise<DiagnosticsResult<DiagnosticsStatus>>;
   preparePreview(source: "current" | "previous"): Promise<DiagnosticsResult<DiagnosticPreview>>;
+  readPreviewBlock(handle: string, offset: number): Promise<DiagnosticsResult<DiagnosticPreviewBlock>>;
+  releasePreviewBlock(handle: string, offset: number): Promise<DiagnosticsResult<boolean>>;
   closePreview(handle: string): Promise<DiagnosticsResult<DiagnosticsStatus>>;
   chooseDestination(handle: string): Promise<DiagnosticsResult<DiagnosticDestination>>;
   save(handle: string, destinationToken: string): Promise<DiagnosticsResult<DiagnosticsStatus>>;

@@ -162,6 +162,8 @@ function setup({ disconnected = false, lose = false, prepared = false, sample = 
     subscribe: vi.fn(() => () => {}),
     setEnabled: vi.fn(async () => ({ ok: true as const, value: status })),
     setMinutes: async () => ({ ok: true as const, value: status }),
+    readPreviewBlock: vi.fn(async () => ({ ok: false as const, code: "unavailable" as const })),
+    releasePreviewBlock: vi.fn(async () => ({ ok: true as const, value: true })),
     preparePreview: vi.fn(async () => ({ ok: false as const, code: "unavailable" as const })),
     closePreview: async () => ({ ok: true as const, value: status }),
     chooseDestination: async () => ({ ok: false as const, code: "unavailable" as const }),

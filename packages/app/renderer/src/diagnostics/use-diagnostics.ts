@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DiagnosticDestination,
-  DiagnosticPreview,
   DiagnosticResultCode,
   DiagnosticsBridge,
   DiagnosticsResult,
@@ -11,11 +10,15 @@ import type {
 import { DIAGNOSTICS_SCOPE } from "../../../src/diagnostics-contract.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { DIAGNOSTICS_MESSAGES } from "./diagnostics-model.js";
+import { DiagnosticPreviewOwner } from "./preview-owner.js";
 
 /** One view owns one exact report reference. Late replies cannot restore disposed content. */
 export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
   const [status, setStatus] = useState<DiagnosticsStatus>();
-  const [preview, setPreview] = useState<DiagnosticPreview>();
+  const [owner, setOwner] = useState<DiagnosticPreviewOwner>();
+  const preview = owner?.preview;
+  const owned = useRef<DiagnosticPreviewOwner | undefined>(undefined);
+  const loading = useRef<Promise<void> | undefined>(undefined);
   const [destination, setDestination] = useState<DiagnosticDestination>();
   const [disposal, setDisposal] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -45,7 +48,9 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
     preparing.current = false;
     const old = handle.current;
     handle.current = undefined;
-    setPreview(undefined);
+    owned.current?.dispose();
+    owned.current = undefined;
+    setOwner(undefined);
     setDestination(undefined);
     if (old !== undefined) {
       disposalHandle.current = old;
@@ -101,15 +106,25 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
       unsubscribe();
       const old = handle.current ?? disposalHandle.current;
       handle.current = undefined;
-      if (old !== undefined) void bridge?.closePreview(old).catch(() => {});
+      owned.current?.dispose();
+      owned.current = undefined;
+      if (old !== undefined) {
+        if (loading.current)
+          void loading.current
+            .catch(() => {})
+            .then(() => bridge?.closePreview(old))
+            .catch(() => {});
+        else void bridge?.closePreview(old).catch(() => {});
+      }
     };
   }, [bridge, receive, say]);
 
   // Effect cleanup/commit removes the old text before main receives disposal acknowledgement.
   useEffect(() => {
     if (disposal === undefined || bridge === undefined) return;
-    void bridge
-      .closePreview(disposal)
+    void Promise.resolve(loading.current)
+      .catch(() => {})
+      .then(() => bridge.closePreview(disposal))
       .then((result) => {
         if (mounted.current && result.ok) receive(result.value);
       })
@@ -192,11 +207,24 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
       }
       if (result.ok) {
         handle.current = result.value.handle;
-        setPreview(result.value);
+        const next = new DiagnosticPreviewOwner(result.value);
+        owned.current = next;
+        const pending = next.read(bridge);
+        loading.current = pending;
+        try {
+          await pending;
+        } finally {
+          if (loading.current === pending) loading.current = undefined;
+        }
+        if (!mounted.current || epoch !== authority.current) return;
+        setOwner(next);
         setMessage(undefined);
       } else say(result.code);
     } catch {
-      if (mounted.current && epoch === authority.current) say("unavailable");
+      if (mounted.current && epoch === authority.current) {
+        clear();
+        say("unavailable");
+      }
     } finally {
       if (mounted.current && epoch === authority.current) {
         preparing.current = false;
@@ -227,6 +255,7 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
   return {
     status,
     preview,
+    reportBlocks: owner?.blocks ?? [],
     destination,
     busy,
     message,
