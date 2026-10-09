@@ -8,15 +8,19 @@ This local integration preserves #584 `a991fbfea9da6d39dea2f0c513cc5a000d993c14`
 `6e89119ed694634e7161fffc9298b0fc71865d4b`. The explicitly requested #586 integration
 supersedes the earlier decision to leave #581 unmounted: its exact native-journal
 ancestry `50c75cf051aadb551b5e365b1acf0110b70853fc` is retained. Reboot-only #577
-remains excluded. Windows #585 is still being completed and is not integrated here.
+remains excluded. Windows #585 `455ac202f7afa00da17dd91a595988b0250003a9` is
+integrated through merge `6d9ea708448b434bbfd90cb250b3e74185a539e4`. Its one storage
+interface conflict retains both Windows platform support and #586 updater capabilities.
 
-Remote main was reverified as `db579fb7ac9cfce2e4e6901713088a80602311da`; the #584
-remote branch remains at its original head. Casey's latest publication/merge/CI hold
+Remote main was reverified as `db579fb7ac9cfce2e4e6901713088a80602311da`; before the
+authorized transfer the #584 remote branch remained at its original head. Casey's latest publication/merge/CI hold
 supersedes the earlier authorization for a canonical main-target draft. No push,
-main-target draft, workflow change, dispatch, rerun, cancellation, release, signing,
+main-target draft, integration-owner workflow change, dispatch, rerun, cancellation, release, signing,
 activation or access change was performed. Existing #584 remains the integration-base
 draft, not a main-target canonical candidate. The earlier serial duplicate lookup found
-no canonical main-target draft for that combined head.
+no canonical main-target draft for that combined head. The latest transfer authorization
+permits a substantive push to the existing integration-target branch so Windows current-user
+acceptance can fetch the exact candidate; main-target publication and CI remain held.
 
 ## Findings and shared fixes
 
@@ -52,8 +56,11 @@ Reuse the exact 69-case selection and constituent map in
 [the #584 composition note](app-same-boot-config-composition.md), and the #580 map in
 [the native recovery note](app-native-recovery-composition.md). No broad local suite was
 repeated. Source outside the shared delta remains pinned to its retained constituent
-ancestry. In particular, #583's 27 delivery/staging blobs remain exact; #582's recovery
-producers remain intact, with only its IPC boundary additionally tracked here.
+ancestry. At #584, #583's 27 delivery/staging blobs were exact; #582's recovery
+producers remain intact, with only its IPC boundary additionally tracked here. After #585,
+its Windows additions change the shared desktop staging workflow and builder target mapping;
+those two #583 delivery interfaces receive the fresh packaging checks below rather than an
+unchanged-blob claim. No workflow file is edited by the integration owner.
 
 | Evidence | Use and limit |
 | --- | --- |
@@ -61,7 +68,7 @@ producers remain intact, with only its IPC boundary additionally tracked here.
 | #578 | Reuse 54 author cases and its final affected 26-case pass. Linux synthetic responsiveness is not Mac acceptance. |
 | #579 | Reuse 52 author checks outside the corrected assertion and shared integration boundaries. |
 | #582 | Reuse 109 author passes, one conditional skip and 13 applied-wiring passes. |
-| #583 | Reuse 162 author passes; all 27 owned delta blobs remain exact. Staging source is not a signed package. |
+| #583 | Reuse 162 author passes outside the Windows-composed desktop staging/builder mapping; fresh shared packaging checks cover those interfaces. Staging source is not a signed package. |
 | #580 / #574 / #576 | Reuse 39 selected, 121 author, and 294 author plus three patch cases respectively. |
 | #586 | Reuse 100 Linux tests / 10 files and its 18 applied-main cases as prior evidence. Main, Workspace, IPC and the two modified durable-phase cases are checked below. Native code is unchanged here. |
 | #567 CI 37872268414 | Baseline only: each Node 22/24 job had 6,306 passes, four skips and one todo. The owner-approved 95% app function threshold remains unchanged. No final-candidate CI or coverage claim. |
@@ -105,10 +112,15 @@ This candidate is not activation-ready and does not close all M10/M21/M22 work.
    needs separately authorized OS launch/isolation authority. An independent all-write
    ledger or immutable live-directory topology is not assumed necessary under the
    continuously closed fixed-path proof.
-4. Windows #585 completion and its final pinned evidence remain outstanding. #583's
+4. Windows #585 source is composed. First-run fence boot/volume authority still refuses
+   Windows; Windows diagnostics native clock/storage do not silently grant that separate
+   authority. Exact MSVC/SDK x64/arm64 staging and packaged Electron/safeStorage loading,
+   paired execution/resource high-water, second-user refusal, physical recovery/durability,
+   traffic/privacy and accessibility acceptance remain Windows work. #583's
    release mapping, signing/runtime/entitlement policy, publisher/notary and private
-   delivery inputs still require owner decisions. Diagnostics connection/resource producer
-   coverage and paired execution/high-water evidence remain incomplete; diagnostics stay off.
+   delivery inputs still require owner decisions. Closed diagnostics connection/run/admission
+   producers are now composed; paired execution/high-water evidence remains incomplete.
+   Diagnostics stay off.
 5. One final combined automatic CI run and canonical main-target draft are deferred by
    the current hold. No exact combined-head CI result exists. Earlier #579 CI
    37880844822 failed both Node 22/24 test jobs; its identified assertion is locally fixed.
@@ -119,3 +131,49 @@ See [the pinned updater contract](mac-closed-window-fixed-path.md) for their ful
 
 All integration commits use Calcifer Schadewitz `<schadewitzcalcifer@gmail.com>` as both
 author and committer. This note accompanies source changes and is not a docs-only push.
+
+## Windows-integrated source and acceptance handoff
+
+The pinned owner patch SHA256 is
+`640b3f0e3bc2c634d8e0999470d5698aa34f5bb02d3909f1fefd521df6ab73d5`.
+It was adapted manually because its #584 main context predates #586 wiring. Current-client
+and validated run-failure facts are forwarded as closed phase/code pairs. Quit and updater
+pause detach power listeners and suppress late source/lifecycle facts; late initialization
+cannot publish app_started after stopping. Existing consent, target and renderer lifetime
+checks remain intact and capture is still disabled.
+
+Fresh composed checks: 36 passes in actual main (24), Workspace drain (3) and source
+producers (9); the added updater-pause power variant passes separately, for 37 distinct
+cases. Shared Mac/Windows staging and builder hooks add 25 passes in three files. Root and
+renderer typechecks, scoped lint, formatting and whitespace checks pass. Initial new
+fixture defects (missing Electron background-color method and notification fields) were
+corrected; the clean final run has no unhandled errors. An accidental invocation under
+Node's test runner was corrected to Vitest; it was not a source failure or CI run.
+
+Reuse #585's eleven actual Windows native case groups, actual x64 PE/builder probe and
+126/93 overlapping regression selections with their 62/46 platform skips. They are not
+fresh Electron, arm64, second-user, resource-limit or physical acceptance. All four Windows
+native input blobs remain byte-identical to the pinned Git head.
+
+For this LF checkout, the production helper's Windows native source SHA256 is
+`a8842b8ddc5c1f2553c1eca9e11df4faa129f22c559533f408a1251d991197ea`.
+Historical Windows evidence's `5fe5178654fff7a2e3c0f799f5da07bbed738acd87d485ff2fca3939870aacd9`
+matches the same sources with CRLF in binding.gyp/clock.c and LF in the two new C files.
+The helper hashes actual file bytes. Rebuild/stage from the acceptance checkout and retain
+its newly emitted manifests; do not copy an old source digest into a new manifest.
+
+In the existing authorized Windows MSVC/SDK environment, use exact locally verified Node
+headers and import libraries laid out as include/node, x64/node.lib and arm64/node.lib:
+
+```powershell
+node tools/packaged-windows/stage-native-addons.js --headers $verifiedNodeRoot
+```
+
+This stages both configured targets into packages/app/dist/diagnostics-native/win32-x64
+and win32-arm64. Use the matching target's exact packaged Electron host to load
+resources/native/diagnostics/win32-<arch>/diagnostics_clock.node and diagnostics_storage.node,
+then test its actual async safeStorage. Node-only GNU binaries from historical evidence
+are not Electron acceptance binaries. Existing bounded Node probes are reproduced by the
+commands in [the Windows implementation handoff](../preparation/crash-recovery/windows-native-implementation.md).
+No toolchain install, signing, release, desktop occupation, access change or workflow
+dispatch is authorized by these build instructions.

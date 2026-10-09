@@ -22,6 +22,7 @@ import { z } from "zod";
 import { createDiagnosticsInitializer } from "./diagnostics/initialize.js";
 import { createManagedMacReplacementStartup } from "./mac-managed-replacement-startup.js";
 import { MacAppWriterBarrier } from "./mac-app-writer-barrier.js";
+import type { OwnedDiagnosticObservation } from "./diagnostics/source-producers.js";
 import { FirstRunSetup } from "./first-run/setup.js";
 import { installFirstRunIPC, startFirstRunWorkspace } from "./first-run/ipc.js";
 import type { DiagnosticsResult } from "../diagnostics-contract.js";
@@ -38,7 +39,17 @@ import { MacUpdateApplication, installMacUpdateIPC } from "./mac-update-applicat
 import { updateDriver } from "./update-driver.js";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeTheme,
+  Notification,
+  safeStorage,
+  powerMonitor,
+} from "electron";
 import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
 import type { AlertItem, AlertsUpdate, BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
@@ -121,6 +132,7 @@ function assertDispatchAllowed(channel: string): void {
  * The barrier seals synchronously; outstanding storage work retains kernel ownership. */
 export async function pauseMacUpdateAppWriters(signal: AbortSignal): Promise<boolean> {
   if (!macReplacement || signal.aborted) return false;
+  stopDiagnosticObservations();
   const paused = await appWriters.pause(
     () => diagnosticsInitializer.close(),
     () => macReplacement.releasePausedAppWriter(),
@@ -148,6 +160,24 @@ const diagnosticsInitializer = createDiagnosticsInitializer({
   },
 });
 const diagnostics = diagnosticsInitializer.controller;
+let diagnosticsStopping = false;
+let powerObservationMounted = false;
+function observeDiagnostic(...fact: OwnedDiagnosticObservation): void {
+  if (!diagnosticsStopping && appWriters.admitting && (!macReplacement || macReplacement.bootstrap.existingWorkAllowed))
+    diagnosticsInitializer.observer(...fact);
+}
+const observeSuspend = () => observeDiagnostic("lifecycle", "sleep_observed");
+const observeResume = () => observeDiagnostic("lifecycle", "wake_observed");
+function stopDiagnosticObservations(): void {
+  if (diagnosticsStopping) return;
+  observeDiagnostic("lifecycle", "app_stopping");
+  diagnosticsStopping = true;
+  if (powerObservationMounted) {
+    powerMonitor.removeListener("suspend", observeSuspend);
+    powerMonitor.removeListener("resume", observeResume);
+    powerObservationMounted = false;
+  }
+}
 diagnostics.subscribe((status) => {
   for (const win of BrowserWindow.getAllWindows())
     if (!win.isDestroyed()) win.webContents.send("orca:diagnostics.changed", status);
@@ -500,6 +530,7 @@ const connection = new ConnectionMachine({
     if (hello.identity) workspace.observeHello(workspace.client, hello);
   },
   onChange: (snapshot) => send("orca:connection", snapshot),
+  onDiagnostic: observeDiagnostic,
 });
 
 // Synchronous, like `preferences.read`: the chrome draws the status bar on its first pass.
@@ -575,6 +606,9 @@ const workspace = new Workspace({
       onAuthFailure: () => {
         if (workspace.client === candidate) connection.authenticationFailed();
       },
+      onDiagnostic: (...fact) => {
+        if (workspace.client === candidate) observeDiagnostic(...fact);
+      },
       onHello: (hello) => {
         if (workspace.client !== candidate) return;
         workspace.observeHello(candidate, hello);
@@ -587,6 +621,9 @@ const workspace = new Workspace({
     daemonClient.subscribe({
       params: {},
       onNotification: (n) => {
+        // The existing stream already validated this closed failure verdict.
+        if (workspace.client === daemonClient && n.method === "run.changed" && n.params.event === "run.failed")
+          observeDiagnostic("run", "run_failed");
         broadcast({ kind: "notification", method: n.method, params: n.params });
         // The cursor the stream would resume from. A sequence number is per-run, so this
         // store-wide subscription has none and the status bar shows no event number — see
@@ -1134,7 +1171,13 @@ if (!primary) {
       );
       return;
     }
-    void appWriters.run(() => diagnosticsInitializer.initialize());
+    void appWriters.run(async () => {
+      await diagnosticsInitializer.initialize();
+      observeDiagnostic("lifecycle", "app_started");
+    });
+    powerMonitor.on("suspend", observeSuspend);
+    powerMonitor.on("resume", observeResume);
+    powerObservationMounted = true;
     applyTheme(preferences.read().theme);
     /* Registering the scheme is what makes `orca://` reach this app at all. In development
        the executable is Electron itself and the app is an argument to it, which is what
@@ -1195,6 +1238,7 @@ app.on("window-all-closed", () => {
 
 // Stop pushing at a process that is going.
 app.on("before-quit", () => {
+  stopDiagnosticObservations();
   targets.cancel();
   connection.close();
   alerts.close();
@@ -1221,6 +1265,7 @@ let quitting = false;
 app.on("will-quit", (event) => {
   if (quitting) return;
   quitting = true;
+  stopDiagnosticObservations();
   event.preventDefault();
   const deadline = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_DEADLINE_MS).unref?.());
   // Begin owned-child shutdown immediately, including when an RPC is stuck. A reserved
