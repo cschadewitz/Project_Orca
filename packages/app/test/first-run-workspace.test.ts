@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
@@ -16,11 +16,12 @@ import { FirstRunSetup } from "../src/main/first-run/setup.js";
 import { startFirstRunWorkspace } from "../src/main/first-run/ipc.js";
 import { compiledSourceFixture } from "./compiled-source-fixture.js";
 
+const selectedPath = resolve("/selected");
 const identity = {
   workspaceId: "11111111-1111-4111-8111-111111111111",
   instanceId: "22222222-2222-4222-8222-222222222222",
 };
-const hello = (path = "/selected"): HelloResult => ({
+const hello = (path = selectedPath): HelloResult => ({
   protocol: PROTOCOL_VERSION,
   orcaVersion: "test",
   capabilities: ["runs.read", "runs.control", "runs.subscribe"],
@@ -36,7 +37,7 @@ function rig(options: Partial<WorkspaceDeps> = {}) {
   const start = vi.fn<WorkspaceDeps["start"]>().mockResolvedValue({
     url: "http://127.0.0.1:7654",
     pid: 123,
-    tokenFile: "/selected/auth/local-client.token",
+    tokenFile: join(selectedPath, "auth", "local-client.token"),
     get exited() {
       return exited;
     },
@@ -45,7 +46,7 @@ function rig(options: Partial<WorkspaceDeps> = {}) {
   const client = vi.fn<WorkspaceDeps["client"]>((url) => new DaemonClient(url));
   const subscribe = vi.fn(() => ({ close: vi.fn() }) as unknown as DaemonSubscription);
   const workspace = new Workspace({
-    findEntry: () => "/bundle.mjs",
+    findEntry: () => resolve("/bundle.mjs"),
     start,
     client,
     subscribe,
@@ -91,21 +92,21 @@ it("keeps the old stream intact while a strict owned candidate fences competing 
   const oldClient = f.workspace.client,
     oldStream = f.workspace.subscription,
     epoch = f.workspace.connectionTarget.epoch;
-  const candidate = await f.workspace.prepareFirstRunConnection("/selected");
+  const candidate = await f.workspace.prepareFirstRunConnection(selectedPath);
   expect(f.start.mock.calls[0]![0]).toMatchObject({
-    cwd: "/selected",
-    configPath: "/selected/orca.config.yaml",
+    cwd: selectedPath,
+    configPath: join(selectedPath, "orca.config.yaml"),
     readOnly: false,
   });
   expect(f.workspace.client).toBe(oldClient);
   expect(f.workspace.subscription).toBe(oldStream);
-  await expect(f.workspace.prepareFirstRunConnection("/selected")).rejects.toThrow("busy");
+  await expect(f.workspace.prepareFirstRunConnection(selectedPath)).rejects.toThrow("busy");
   await expect(f.workspace.prepareConnection("http://other:6722")).rejects.toThrow("busy");
-  await expect(f.workspace.open("/archive")).rejects.toThrow("progress");
+  await expect(f.workspace.open(resolve("/archive"))).rejects.toThrow("progress");
   await expect(f.workspace.prepareUpdate("token")).rejects.toThrow("busy");
   expect(await f.workspace.captureMacUpdateTarget({ epoch, ...identity })).toBeUndefined();
   candidate.activate(hello());
-  expect(f.workspace.currentFirstRun("/selected")).toBe(true);
+  expect(f.workspace.currentFirstRun(selectedPath)).toBe(true);
   expect(f.workspace.connectionTarget.epoch).toBeGreaterThan(epoch);
   expect(() => f.workspace.assertEpoch(epoch)).toThrow("previous connection");
   await candidate.dispose();
@@ -117,7 +118,7 @@ it("disposes only a failed candidate once, preserving the remote target", async 
   const f = rig({ savedUrl: "http://remote:6722" });
   await f.workspace.connect();
   const target = f.workspace.connectionTarget;
-  const candidate = await f.workspace.prepareFirstRunConnection("/selected");
+  const candidate = await f.workspace.prepareFirstRunConnection(selectedPath);
   expect(() => candidate.activate({ ...hello(), processId: 124 })).toThrow("identity changed");
   await candidate.dispose();
   await candidate.dispose();
@@ -127,20 +128,20 @@ it("disposes only a failed candidate once, preserving the remote target", async 
 });
 it("reuses the exact parked first-run child and never starts a competing writer", async () => {
   const f = rig();
-  (await f.workspace.prepareFirstRunConnection("/selected")).activate(hello());
+  (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
   const remote = await f.workspace.prepareConnection("http://remote:6722");
   remote.activate({ ...hello(), identity: { ...identity, instanceId: "33333333-3333-4333-8333-333333333333" } });
-  await expect(f.workspace.prepareFirstRunConnection("/other")).rejects.toThrow("parked");
-  await expect(f.workspace.open("/selected")).rejects.toThrow("parked owned daemon");
-  const back = await f.workspace.prepareFirstRunConnection("/selected");
+  await expect(f.workspace.prepareFirstRunConnection(resolve("/other"))).rejects.toThrow("parked");
+  await expect(f.workspace.open(selectedPath)).rejects.toThrow("parked owned daemon");
+  const back = await f.workspace.prepareFirstRunConnection(selectedPath);
   await back.dispose();
   expect(f.stop).not.toHaveBeenCalled();
-  const retry = await f.workspace.prepareFirstRunConnection("/selected");
+  const retry = await f.workspace.prepareFirstRunConnection(selectedPath);
   retry.activate(hello());
   expect(f.start).toHaveBeenCalledOnce();
-  expect(f.workspace.currentFirstRun("/selected")).toBe(true);
+  expect(f.workspace.currentFirstRun(selectedPath)).toBe(true);
   f.workspace.observeHello(f.workspace.client, { ...hello(), capabilities: ["runs.read"] });
-  expect(f.workspace.currentFirstRun("/selected")).toBe(false);
+  expect(f.workspace.currentFirstRun(selectedPath)).toBe(false);
   await f.workspace.close();
 });
 it.each(["metadata", "entry", "startup"] as const)(
@@ -149,7 +150,7 @@ it.each(["metadata", "entry", "startup"] as const)(
     const f = rig(kind === "entry" ? { findEntry: () => undefined } : {});
     if (kind === "metadata") f.start.mockResolvedValueOnce({ url: "http://127.0.0.1:7654", pid: 123, stop: f.stop });
     if (kind === "startup") f.start.mockRejectedValueOnce(new Error("spawn failed"));
-    await expect(f.workspace.prepareFirstRunConnection("/selected")).rejects.toThrow();
+    await expect(f.workspace.prepareFirstRunConnection(selectedPath)).rejects.toThrow();
     expect(f.client).toHaveBeenCalledTimes(1);
     expect(f.subscribe).not.toHaveBeenCalled();
     expect(f.stop).toHaveBeenCalledTimes(kind === "metadata" ? 1 : 0);
@@ -165,13 +166,13 @@ it("an interrupted spawn stops the late owned child without activating it", asyn
         finish = resolve;
       }),
   );
-  const preparing = f.workspace.prepareFirstRunConnection("/selected");
+  const preparing = f.workspace.prepareFirstRunConnection(selectedPath);
   const refused = expect(preparing).rejects.toThrow("changed");
   await f.workspace.close();
   finish({
     url: "http://127.0.0.1:7654",
     pid: 123,
-    tokenFile: "/selected/auth/local-client.token",
+    tokenFile: join(selectedPath, "auth", "local-client.token"),
     get exited() {
       return f.exited();
     },
@@ -184,9 +185,9 @@ it("an interrupted spawn stops the late owned child without activating it", asyn
 it("uncertain ordinary candidate cleanup keeps ownership reserved and prohibits another writer", async () => {
   const f = rig();
   f.stop.mockImplementation(async () => {});
-  const candidate = await f.workspace.prepareFirstRunConnection("/selected");
+  const candidate = await f.workspace.prepareFirstRunConnection(selectedPath);
   await expect(candidate.dispose()).rejects.toThrow("ownership requires reconciliation");
-  await expect(f.workspace.prepareFirstRunConnection("/selected")).rejects.toThrow("busy");
+  await expect(f.workspace.prepareFirstRunConnection(selectedPath)).rejects.toThrow("busy");
   await expect(f.workspace.prepareUpdate("token")).rejects.toThrow("busy");
   expect(f.start).toHaveBeenCalledOnce();
   await f.workspace.close();
@@ -198,7 +199,7 @@ it("setup activity refuses both updater reservation paths and explicit remote pr
   expect(
     await f.workspace.captureMacUpdateTarget({ epoch: f.workspace.connectionTarget.epoch, ...identity }),
   ).toBeUndefined();
-  await expect(f.workspace.prepareFirstRunConnection("/selected")).rejects.toThrow("ORCA_DAEMON_URL");
+  await expect(f.workspace.prepareFirstRunConnection(selectedPath)).rejects.toThrow("ORCA_DAEMON_URL");
   expect(f.start).not.toHaveBeenCalled();
   await f.workspace.close();
 });
@@ -338,11 +339,11 @@ it("captures saved-config binding only over the exact surviving first-run owner 
       rebindConfig,
     }),
   });
-  const candidate = await f.workspace.prepareFirstRunConnection("/selected");
-  expect(() => f.workspace.captureFirstRunConfiguration("/selected")).toThrow("reconciliation");
+  const candidate = await f.workspace.prepareFirstRunConnection(selectedPath);
+  expect(() => f.workspace.captureFirstRunConfiguration(selectedPath)).toThrow("reconciliation");
   candidate.activate(hello());
-  expect(() => f.workspace.captureFirstRunConfiguration("/wrong")).toThrow("reconciliation");
-  const boundary = f.workspace.captureFirstRunConfiguration("/selected");
+  expect(() => f.workspace.captureFirstRunConfiguration(resolve("/wrong"))).toThrow("reconciliation");
+  const boundary = f.workspace.captureFirstRunConfiguration(selectedPath);
   boundary.rebind("reviewed-old-hash", "reviewed-new-hash");
   expect(rebindConfig).toHaveBeenCalledExactlyOnceWith("reviewed-old-hash", "reviewed-new-hash");
   (await f.workspace.prepareConnection("http://remote:6722")).activate(hello());
@@ -352,8 +353,8 @@ it("captures saved-config binding only over the exact surviving first-run owner 
 });
 it("refuses saved-config capture without the durable rebind interface and after app close", async () => {
   const legacy = rig();
-  (await legacy.workspace.prepareFirstRunConnection("/selected")).activate(hello());
-  expect(() => legacy.workspace.captureFirstRunConfiguration("/selected")).toThrow("reconciliation");
+  (await legacy.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
+  expect(() => legacy.workspace.captureFirstRunConfiguration(selectedPath)).toThrow("reconciliation");
   await legacy.workspace.close();
   const rebindConfig = vi.fn();
   const f = rig({
@@ -365,8 +366,8 @@ it("refuses saved-config capture without the durable rebind interface and after 
       rebindConfig,
     }),
   });
-  (await f.workspace.prepareFirstRunConnection("/selected")).activate(hello());
-  const boundary = f.workspace.captureFirstRunConfiguration("/selected");
+  (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
+  const boundary = f.workspace.captureFirstRunConfiguration(selectedPath);
   await f.workspace.close();
   expect(() => boundary.rebind("old", "new")).toThrow("reconciliation");
   expect(rebindConfig).not.toHaveBeenCalled();
