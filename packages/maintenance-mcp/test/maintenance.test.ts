@@ -8,6 +8,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { MaintenanceBackend } from "../src/backend.js";
 import { createMaintenanceServer } from "../src/server.js";
 import { serveMaintenanceStdio } from "../src/stdio.js";
+import { serveLinuxMaintenanceStdio } from "../src/observer-stdio.js";
 import { INPUTS } from "../src/contracts.js";
 import { LIMITS, OPERATIONS, POLICY_ID } from "../src/policy.js";
 import { FixtureAdapter, hostFixture } from "./fixtures.js";
@@ -337,7 +338,30 @@ describe("SDK transport and package boundary", () => {
     input.destroy();
     output.destroy();
   });
-  it("has no workspace runtime dependency or executable activation hook", async () => {
+  it("opens the explicit observer interface without host I/O for discovery or unconfigured services", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const handle = serveLinuxMaintenanceStdio({ input, output });
+    const client = new Client({ name: "observer-stdio-fixture", version: "1" });
+    cleanup.push(async () => {
+      await client.close();
+      await handle.close();
+      input.destroy();
+      output.destroy();
+    });
+    await client.connect(new StdioServerTransport(output, input));
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(OPERATIONS);
+    expect((await client.callTool({ name: "maintenance_discover", arguments: {} })).structuredContent).toMatchObject({
+      productionSources: "fixed_linux_preparation",
+      mutations: false,
+      hostBootIdentity: { status: "unavailable" },
+    });
+    expect((await client.callTool({ name: "get_service_logs", arguments: service })).structuredContent).toMatchObject({
+      status: "unavailable",
+      reason: "not_configured",
+    });
+  });
+  it("has no workspace runtime dependency, generic transport or automatic activation hook", async () => {
     const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
     expect(pkg.dependencies).toEqual({ "@modelcontextprotocol/server": "2.3.0", zod: "4.6.5" });
     expect(pkg.bin).toBeUndefined();
@@ -345,7 +369,8 @@ describe("SDK transport and package boundary", () => {
     const directory = new URL("../src/", import.meta.url);
     for (const file of await readdir(directory)) {
       const source = await readFile(new URL(file, directory), "utf8");
-      expect(source).not.toMatch(/from ["'](?:@orca\/|node:(?:child_process|fs|net|http|https)|\.\.\/\.\.)/);
+      expect(source).not.toMatch(/from ["'](?:@orca\/|node:(?:net|http|https)|\.\.\/\.\.)/);
+      if (file !== "observer-io.ts") expect(source).not.toMatch(/from ["']node:(?:child_process|fs)/);
     }
   });
 });

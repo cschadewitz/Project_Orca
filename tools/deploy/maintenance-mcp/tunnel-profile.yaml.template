@@ -1,0 +1,16 @@
+# INACTIVE: separate maintenance association/key/runtime; never reuse the work-route profile.
+config_version: 1
+control_plane:
+  base_url: https://api.openai.com
+  tunnel_id: @DEDICATED_MAINTENANCE_TUNNEL_ID@
+  api_key: file:@DEDICATED_MAINTENANCE_KEY_FILE@
+  poll_channels: [main]
+health:
+  listen_addr: 127.0.0.1:@REVIEWED_MAINTENANCE_HEALTH_PORT@
+log:
+  level: info
+  format: struct-text
+mcp:
+  commands:
+    - channel: main
+      command: @PINNED_NODE@ @REVIEWED_MAINTENANCE_LAUNCHER@
