@@ -263,13 +263,13 @@ export class Authorizer {
                 principalId: principal.id,
                 ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
               },
-              configurationAuthority: async (write) => {
+              configurationAuthority: async (write, read = true) => {
                 if (!this.currentPrincipal) throw authRequired();
                 const current = this.currentPrincipal(principal);
                 if (
                   current.id !== principal.id ||
                   current.credentialId !== principal.credentialId ||
-                  !holds(current, "config.read") ||
+                  (read && !holds(current, "config.read")) ||
                   (write && !holds(current, "config.write"))
                 )
                   throw authForbidden();
