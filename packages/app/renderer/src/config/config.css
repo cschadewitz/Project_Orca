@@ -45,6 +45,21 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Narrow form actions are a multiline control variant. Keep the full action
+   label available instead of allowing nowrap text to escape the scroll pane. */
+.orca-config[data-config-layout="stacked"] .orca-btn {
+  max-width: 100%;
+  height: auto;
+  min-height: var(--control-md);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.orca-config[data-config-layout="stacked"] .orca-config__path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .orca-config__form {
   display: flex;
   flex-direction: column;
