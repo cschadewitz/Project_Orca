@@ -167,6 +167,46 @@ beforeEach(() => {
   shell.keyUnwrap.mockClear();
 });
 
+it("mounts closed template commands and gates same-boot setup throughout an updater reservation", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-composed-authoring-ipc-"));
+  shell.userData = directory;
+  const { FirstRunSetup } = await import("../src/main/first-run/setup.js");
+  const { DaemonClient } = await import("../src/client/daemon-client.js");
+  const operations = ["prepareRecovery", "reconcileRecovery", "reviewConfiguration", "bindConfiguration"] as const;
+  const calls = operations.map((method) =>
+    vi.spyOn(FirstRunSetup.prototype, method).mockResolvedValue({ state: "selection-required", reason: "fixture" }),
+  );
+  const rpc = vi.spyOn(DaemonClient.prototype, "call").mockResolvedValue({});
+  await import("../src/main/index.js");
+  const workspace = shell.workspace!;
+  const sender = shell.webContents!;
+  const event = { sender, senderFrame: sender.mainFrame };
+  const epoch = workspace.connectionTarget.epoch;
+  const reserved = vi.spyOn(workspace, "macUpdateReserved", "get").mockReturnValue(true);
+  const review = "11111111-1111-4111-8111-111111111111";
+  const inputs = [undefined, review, undefined, review];
+  for (const [index, method] of operations.entries()) {
+    expect(await shell.handlers.get(`orca:workspace.firstRun.${method}`)!(event, inputs[index], epoch)).toMatchObject({
+      ok: false,
+    });
+    expect(calls[index]).not.toHaveBeenCalled();
+  }
+  reserved.mockReturnValue(false);
+  for (const [index, method] of operations.entries()) {
+    expect(await shell.handlers.get(`orca:workspace.firstRun.${method}`)!(event, inputs[index], epoch)).toMatchObject({
+      ok: true,
+    });
+    expect(calls[index]).toHaveBeenCalledOnce();
+  }
+  const templates = shell.handlers.get("orca:templates")!;
+  expect(await templates(event, { method: "runs.start", params: {} }, epoch)).toMatchObject({ ok: false });
+  expect(rpc).not.toHaveBeenCalled();
+  expect(await templates(event, { method: "templates.get", params: {} }, epoch + 1)).toMatchObject({ ok: false });
+  expect(rpc).not.toHaveBeenCalled();
+  expect(await templates(event, { method: "templates.get", params: {} }, epoch)).toMatchObject({ ok: true });
+  expect(rpc).toHaveBeenCalledExactlyOnceWith("templates.get", {}, expect.anything());
+});
+
 it("dispatches verified opt-out before diagnostics initialization while opt-in waits", async () => {
   directory = await mkdtemp(join(tmpdir(), "orca-diagnostics-revocation-ipc-"));
   shell.userData = directory;

@@ -67,6 +67,16 @@ it("strips Electron events from onShow and preserves explicit epoch fencing", as
   expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.prepare", "opaque-review", 1);
   await bridge.firstRun!.connect();
   expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.connect", undefined, 1);
+  await bridge.firstRun!.prepareRecovery!();
+  expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.prepareRecovery", undefined, 1);
+  await bridge.firstRun!.reconcileRecovery!("opaque-recovery-review");
+  expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.reconcileRecovery", "opaque-recovery-review", 1);
+  await bridge.firstRun!.reviewConfiguration!();
+  expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.reviewConfiguration", undefined, 1);
+  await bridge.firstRun!.bindConfiguration!("opaque-config-review");
+  expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.bindConfiguration", "opaque-config-review", 1);
+  await bridge.templates!.call("templates.get", {});
+  expect(invoke).toHaveBeenLastCalledWith("orca:templates", { method: "templates.get", params: {} }, 1);
   await bridge.daemonConnection!.connect(null);
   expect(invoke).toHaveBeenLastCalledWith("orca:daemon.connect", null, 1);
 });

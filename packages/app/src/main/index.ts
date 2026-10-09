@@ -41,6 +41,8 @@ import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
 import type { AlertItem, AlertsUpdate, BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
 import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/daemon-client.js";
+import { callTemplate } from "../client/template-client.js";
+import type { TemplateMethod } from "../template-bridge.js";
 import { daemonEndpoint } from "../daemon-connection.js";
 import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
@@ -317,6 +319,9 @@ handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) =
 // `--read-only` daemon answers both, because a workflow is a file and not a run.
 handle("orca:workflows.list", (params: Parameters<DaemonClient["workflowsList"]>[0]) => client().workflowsList(params));
 handle("orca:workflows.get", (params: Parameters<DaemonClient["workflowsGet"]>[0]) => client().workflowsGet(params));
+handle("orca:templates", (command: { method: TemplateMethod; params: unknown }) =>
+  callTemplate(client(), command.method, command.params),
+);
 handle("orca:config.get", (params: Parameters<DaemonClient["configGet"]>[0]) => client().configGet(params));
 handle("orca:config.apply", (params: Parameters<DaemonClient["configApply"]>[0]) => client().configApply(params));
 handle("orca:workflows.validateInputs", (params: Parameters<DaemonClient["workflowsValidateInputs"]>[0]) =>
@@ -437,11 +442,12 @@ const workspace = new Workspace({
       // A build run from the repository: `dist/`, one level up from `dist/main`.
       fileURLToPath(new URL("../", import.meta.url)),
     ]),
-  start: ({ entry, cwd, readOnly, configPath, onExit }) =>
+  start: ({ entry, cwd, readOnly, configPath, firstRunToken, onExit }) =>
     startBundledDaemon({
       entry,
       cwd,
       ...(configPath ? { configPath } : {}),
+      ...(firstRunToken ? { firstRunToken } : {}),
       // A first-run startup never retries an owned child whose exit could be uncertain.
       ...(configPath ? { attempts: 1 } : {}),
       // The one flag the app passes, through the seam `daemon-process.ts` left for it:
@@ -557,11 +563,13 @@ const firstRun = new FirstRunSetup({
     };
   },
   current: (path) => workspace.currentFirstRun(path),
+  configuration: (path) => workspace.captureFirstRunConfiguration(path),
 });
 
 let firstRunConnectionAttempt = 0;
 async function connectFirstRun(assertCurrent: () => void) {
-  if (firstRun.isBusy || macUpdateWindows.active) throw new Error("Project setup or update preparation is busy");
+  if (firstRun.isBusy || macUpdateWindows.active || workspace.macUpdateReserved)
+    throw new Error("Project setup or update preparation is busy");
   const attempt = ++firstRunConnectionAttempt;
   const check = () => {
     assertCurrent();
@@ -583,6 +591,7 @@ function captureFirstRunCaller(event: Electron.IpcMainInvokeEvent, epoch: number
   const generation = diagnosticWindowGenerations.get(event.sender.id) ?? 0;
   return () => {
     workspace.assertEpoch(epoch);
+    if (workspace.macUpdateReserved) throw new Error("Update window preparation is in progress");
     if (
       !BrowserWindow.getAllWindows().some((win) => !win.isDestroyed() && win.webContents === event.sender) ||
       !frame ||
@@ -595,7 +604,7 @@ function captureFirstRunCaller(event: Electron.IpcMainInvokeEvent, epoch: number
 installFirstRunIPC(firstRun, {
   ipc: ipcMain,
   ready: () => workspace.ready(),
-  held: () => macUpdateWindows.active,
+  held: () => macUpdateWindows.active || workspace.macUpdateReserved,
   capture: captureFirstRunCaller,
   connect: connectFirstRun,
 });

@@ -216,7 +216,7 @@ afterEach(async () => {
 it.skipIf(typeof process.getuid !== "function")(
   "prepares, authenticates and reopens a real CLI child with exact config/store/owned PID",
   async () => {
-    const root = await mkdtemp(join(tmpdir(), "orca-first-run-owned-"));
+    const root = await mkdtemp(join(process.cwd(), ".orca-first-run-owned-test-"));
     const ownerState: { workspace?: Workspace } = {};
     cleanup = async () => {
       await ownerState.workspace?.close();
@@ -326,3 +326,48 @@ it.skipIf(typeof process.getuid !== "function")(
   },
   30_000,
 );
+
+it("captures saved-config binding only over the exact surviving first-run owner and rejects target changes", async () => {
+  const rebindConfig = vi.fn();
+  const f = rig({
+    reserveFirstRunOwnership: () => ({
+      check: () => {},
+      attach: () => {},
+      verify: () => {},
+      complete: () => f.exited(),
+      rebindConfig,
+    }),
+  });
+  const candidate = await f.workspace.prepareFirstRunConnection("/selected");
+  expect(() => f.workspace.captureFirstRunConfiguration("/selected")).toThrow("reconciliation");
+  candidate.activate(hello());
+  expect(() => f.workspace.captureFirstRunConfiguration("/wrong")).toThrow("reconciliation");
+  const boundary = f.workspace.captureFirstRunConfiguration("/selected");
+  boundary.rebind("reviewed-old-hash", "reviewed-new-hash");
+  expect(rebindConfig).toHaveBeenCalledExactlyOnceWith("reviewed-old-hash", "reviewed-new-hash");
+  (await f.workspace.prepareConnection("http://remote:6722")).activate(hello());
+  expect(() => boundary.rebind("old", "new")).toThrow("previous connection");
+  expect(rebindConfig).toHaveBeenCalledOnce();
+  await f.workspace.close();
+});
+it("refuses saved-config capture without the durable rebind interface and after app close", async () => {
+  const legacy = rig();
+  (await legacy.workspace.prepareFirstRunConnection("/selected")).activate(hello());
+  expect(() => legacy.workspace.captureFirstRunConfiguration("/selected")).toThrow("reconciliation");
+  await legacy.workspace.close();
+  const rebindConfig = vi.fn();
+  const f = rig({
+    reserveFirstRunOwnership: () => ({
+      check: () => {},
+      attach: () => {},
+      verify: () => {},
+      complete: () => f.exited(),
+      rebindConfig,
+    }),
+  });
+  (await f.workspace.prepareFirstRunConnection("/selected")).activate(hello());
+  const boundary = f.workspace.captureFirstRunConfiguration("/selected");
+  await f.workspace.close();
+  expect(() => boundary.rebind("old", "new")).toThrow("reconciliation");
+  expect(rebindConfig).not.toHaveBeenCalled();
+});

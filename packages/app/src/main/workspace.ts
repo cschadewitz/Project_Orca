@@ -58,6 +58,7 @@ export interface WorkspaceDeps {
     cwd: string;
     readOnly: boolean;
     configPath?: string;
+    firstRunToken?: string;
     onExit: (exit: DaemonExit) => void;
   }) => Promise<BundledDaemon>;
   /** Build the read client for a daemon URL. */
@@ -150,6 +151,65 @@ export class Workspace {
     BundledDaemon,
     { path: string; identity: NonNullable<HelloResult["identity"]> }
   >();
+
+  /** Setup cannot change durable ownership while updater completion calls remain open. */
+  get macUpdateReserved(): boolean {
+    return this.macUpdateHold !== undefined;
+  }
+
+  /** Main-only saved-config binding over the exact surviving first-run owner.
+   * Config bytes may have changed after an explicit Config save; rebind checks the old/new hashes.
+   * This captures no alternate target and creates no process or permission grant.
+   */
+  captureFirstRunConfiguration(path: string) {
+    const daemon = this.daemon;
+    const client = this.clientNow;
+    const epoch = this.epoch;
+    const identity = this.identity;
+    const owner = daemon && this.firstRunOwners.get(daemon);
+    const durable = daemon && this.durableFirstRunOwners.get(daemon);
+    if (
+      !daemon ||
+      !owner ||
+      !durable?.rebindConfig ||
+      !identity ||
+      owner.path !== path ||
+      owner.identity.workspaceId !== identity.workspaceId ||
+      owner.identity.instanceId !== identity.instanceId
+    )
+      throw new FirstRunOwnershipRefusal();
+    const check = () => {
+      this.assertEpoch(epoch);
+      if (
+        this.closed ||
+        this.updating ||
+        this.macUpdateStopping ||
+        this.macUpdateHold ||
+        this.firstRunHold ||
+        this.pending ||
+        this.connectionPreparations.size ||
+        this.daemon !== daemon ||
+        daemon.exited === true ||
+        this.clientNow !== client ||
+        this.source !== "bundled" ||
+        this.target.readOnly ||
+        this.target.path !== path ||
+        this.identity?.workspaceId !== identity.workspaceId ||
+        this.identity.instanceId !== identity.instanceId
+      )
+        throw new FirstRunOwnershipRefusal();
+    };
+    check();
+    return {
+      client: client.withCapturedAuthentication(),
+      check,
+      rebind: (expectedHash: string, savedHash: string) => {
+        check();
+        durable.rebindConfig!(expectedHash, savedHash);
+        check();
+      },
+    };
+  }
 
   /** Capture a locally owned target without sending maintenance or stopping any process.
    * The reservation fences connection changes through authentication and subsequent checks.
@@ -519,6 +579,7 @@ export class Workspace {
           cwd: path,
           readOnly: false,
           configPath: join(path, "orca.config.yaml"),
+          ...(ownership.launchToken ? { firstRunToken: ownership.launchToken() } : {}),
           onExit: () => {
             exited = true;
             if (daemon) this.recordFirstRunExit(daemon);

@@ -62,6 +62,7 @@ it("keeps Workspace completion IPC usable during parked drain, then freezes on t
   );
   if (drain.outcome !== "ready") throw new Error("Capture failed");
   expect(await drain.lease.observe()).toBe("draining");
+  expect(f.workspace.macUpdateReserved).toBe(true);
   await expect(f.workspace.ready()).resolves.toBeUndefined();
   expect(() => f.workspace.assertEpoch(target.epoch)).not.toThrow();
   const [input] = await f.orc.pendingInputs(runId);
@@ -79,6 +80,7 @@ it("keeps Workspace completion IPC usable during parked drain, then freezes on t
   expect(() => f.workspace.assertEpoch(target.epoch)).toThrow("closed");
   if (prepared.outcome !== "ready") throw new Error("Prepare failed");
   expect(await prepared.lease.release()).toBe("released");
+  expect(f.workspace.macUpdateReserved).toBe(false);
   await expect(f.workspace.ready()).resolves.toBeUndefined();
 });
 it("ordinary quit never invokes forced shutdown for an updater-owned drain reservation", async () => {

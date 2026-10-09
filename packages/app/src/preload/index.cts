@@ -115,6 +115,10 @@ const bridge: OrcaBridge = {
     choose: () => call("orca:workspace.firstRun.choose"),
     prepare: (id) => call("orca:workspace.firstRun.prepare", id),
     connect: () => call("orca:workspace.firstRun.connect"),
+    prepareRecovery: () => call("orca:workspace.firstRun.prepareRecovery"),
+    reconcileRecovery: (id) => call("orca:workspace.firstRun.reconcileRecovery", id),
+    reviewConfiguration: () => call("orca:workspace.firstRun.reviewConfiguration"),
+    bindConfiguration: (id) => call("orca:workspace.firstRun.bindConfiguration", id),
   },
   macUpdates: {
     read: () => ipcRenderer.sendSync("orca:macUpdate.read") as MacUpdateView,
@@ -270,6 +274,9 @@ const bridge: OrcaBridge = {
     validateInputs: (params) => call("orca:workflows.validateInputs", params),
   },
   agents: { list: (params = {}) => call("orca:agents.list", params) },
+  templates: {
+    call: (method, params) => call("orca:templates", { method, params }),
+  },
   config: {
     get: (params = {}) => call("orca:config.get", params),
     set: (params) => call("orca:config.set", params),
