@@ -1,5 +1,9 @@
 # Windows paired resource and packaged follow-up - 9 October 2026
 
+The subsequent [resource-fix and zoom follow-up](windows-resource-fix-followup.md)
+records controlled allocation accounting and affected reruns. The exact-head
+measurements and retained successful CLI pair below remain unchanged.
+
 **Acceptance remains incomplete.** The exact #590 candidate
 `49a21254dfb02dfce5182902a317298a644bc560` passes the bounded successful
 execution equivalence oracle below, but does not establish the Windows 4 ms,
