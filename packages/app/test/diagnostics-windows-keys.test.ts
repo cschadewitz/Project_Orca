@@ -74,6 +74,29 @@ it("preserved v10 wrappers retain their existing Electron authority without rewr
   expect(backend.unprotectKey).not.toHaveBeenCalled();
 });
 
+it("preserved v10 diagnostic envelopes retain their complete authenticated metadata and key", async () => {
+  const { keys, backend, storage } = fixture();
+  const envelope = Buffer.from(
+    JSON.stringify({
+      version: 1,
+      purpose: "control",
+      epoch: "existing",
+      keyId: "existing",
+      sessionId: "",
+      key: Buffer.alloc(32, 1).toString("base64"),
+    }),
+  );
+  expect(envelope.length).toBeGreaterThan(32);
+  storage.decryptStringAsync.mockResolvedValue({ result: envelope.toString("base64"), shouldReEncrypt: false });
+  const wrapper = Buffer.concat([Buffer.from("v10"), Buffer.alloc(128, 21)]),
+    before = Buffer.from(wrapper);
+  expect(await keys.unwrap(wrapper)).toEqual(envelope);
+  expect(wrapper).toEqual(before);
+  expect(backend.protectKey).not.toHaveBeenCalled();
+  expect(backend.unprotectKey).not.toHaveBeenCalled();
+  expect(storage.encryptStringAsync).not.toHaveBeenCalled();
+});
+
 it.each(["lost", "rotation"])("preserved legacy %s authority remains refused", async (refusal) => {
   const { keys, plaintext, backend, storage } = fixture();
   if (refusal === "lost") storage.decryptStringAsync.mockRejectedValue(new Error("unavailable"));
@@ -83,19 +106,28 @@ it.each(["lost", "rotation"])("preserved legacy %s authority remains refused", a
   expect(backend.unprotectKey).not.toHaveBeenCalled();
 });
 
-it.each([0, 31, 33, 2048])("only a 32-byte diagnostic key can be wrapped (%i)", async (length) => {
+it.each([0, 2049])("out-of-contract diagnostic envelopes refuse before native wrapping (%i)", async (length) => {
   const { keys, backend } = fixture();
   await expect(keys.wrap(Buffer.alloc(length))).rejects.toThrow("unavailable");
   expect(backend.protectKey).not.toHaveBeenCalled();
 });
 
+it.each([1, 31, 33, 2048])("the bounded opaque plaintext contract includes %i-byte envelopes", async (length) => {
+  const { keys, backend } = fixture(),
+    plaintext = Buffer.alloc(length, 17);
+  backend.unprotectKey.mockResolvedValue(Buffer.from(plaintext));
+  const wrapper = await keys.wrap(plaintext);
+  expect(backend.protectKey).toHaveBeenCalledWith(plaintext);
+  expect(await keys.unwrap(wrapper)).toEqual(plaintext);
+});
+
 it("refuses and wipes invalid native plaintext length", async () => {
   const { keys, plaintext, backend } = fixture();
   const wrapper = await keys.wrap(plaintext);
-  const invalid = Buffer.alloc(33, 5);
+  const invalid = Buffer.alloc(2049, 5);
   backend.unprotectKey.mockResolvedValue(invalid);
   await expect(keys.unwrap(wrapper)).rejects.toThrow("unavailable");
-  expect(invalid).toEqual(Buffer.alloc(33));
+  expect(invalid).toEqual(Buffer.alloc(2049));
 });
 
 it("capability inspection does not invoke getters", async () => {

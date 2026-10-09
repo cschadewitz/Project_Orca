@@ -31,7 +31,10 @@ export function createWindowsDiagnosticsKeyAdapter(
   return {
     available: () => Promise.resolve(backend !== undefined),
     async wrap(bytes) {
-      if (!backend || bytes.length !== 32) throw unavailable();
+      // NodeRecoveryDisk supplies an authenticated JSON key envelope, not a raw key.
+      // Preserve the existing opaque 1..2048-byte adapter contract; its caller validates
+      // purpose/epoch/session/key structure after unwrap. DPAPI authenticates all bytes.
+      if (!backend || bytes.length < 1 || bytes.length > 2048) throw unavailable();
       const protectedBytes = await backend.protectKey(bytes);
       try {
         if (!Buffer.isBuffer(protectedBytes) || protectedBytes.length <= 32 || protectedBytes.length > 4088)
@@ -51,7 +54,7 @@ export function createWindowsDiagnosticsKeyAdapter(
         // Preserve existing profile authority, including its rotation/unavailability refusal.
         recovered = await legacy.unwrap(bytes);
       } else throw unavailable();
-      if (!Buffer.isBuffer(recovered) || recovered.length !== 32) {
+      if (!Buffer.isBuffer(recovered) || recovered.length < 1 || recovered.length > 2048) {
         if (Buffer.isBuffer(recovered)) recovered.fill(0);
         throw unavailable();
       }

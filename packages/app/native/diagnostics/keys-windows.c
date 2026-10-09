@@ -46,7 +46,7 @@ static void key_execute(napi_env env,void *data) {
     : CryptUnprotectData(&input,NULL,&entropy,NULL,NULL,CRYPTPROTECT_UI_FORBIDDEN,&job->output)!=0;
   if (job->ok) job->ok = job->protecting
     ? job->output.cbData>32 && job->output.cbData<=4088
-    : job->output.cbData==32;
+    : job->output.cbData>0 && job->output.cbData<=2048;
   SecureZeroMemory(job->input,sizeof(job->input));
 }
 static void key_complete(napi_env env,napi_status status,void *data) {
@@ -71,7 +71,7 @@ static napi_value key_dispatch(napi_env env,napi_callback_info info) {
   bool protecting=mode!=NULL;
   if (count!=1 || napi_is_buffer(env,args[0],&buffer)!=napi_ok || !buffer ||
       napi_get_buffer_info(env,args[0],&bytes,&length)!=napi_ok ||
-      (protecting ? length!=32 : length<=32 || length>4088)) {
+      (protecting ? length==0 || length>2048 : length<=32 || length>4088)) {
     napi_throw_error(env,NULL,"unavailable"); return NULL;
   }
   if (InterlockedIncrement(&key_jobs)>4) {

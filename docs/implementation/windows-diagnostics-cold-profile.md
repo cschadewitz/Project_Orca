@@ -6,6 +6,11 @@ by flushing the diagnostic wrapper alone. Windows now writes a self-contained
 current-user DPAPI wrapper and retains read support for preserved Electron `v10`
 wrappers. Diagnostics capture remains disabled.
 
+The later combined source corrects a separate raw-key/envelope integration mismatch;
+see [the envelope composition correction](windows-diagnostic-envelope-composition.md).
+The pinned native probe below uses raw 32-byte material on `24cf52d`, and does not
+verify the corrected envelope-sized native candidate. Its evidence bytes remain intact.
+
 ## Source and root cause
 
 Implementation source: `24cf52dc18f97f981cafcdc8e71d640e8672de8c`, tree

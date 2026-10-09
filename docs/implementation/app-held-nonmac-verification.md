@@ -164,6 +164,15 @@ author and committer. This note accompanies source changes and is not a docs-onl
 
 ## Windows-integrated source and acceptance handoff
 
+The #585 section below records historical evidence. Current composition additionally
+retains pinned #587 `64bb4941514d09ec3cfe3417959af6830ca0d307` and #588
+`3185dd29b50fc5bab02a54f901c5e26bca243acd`, including the original cold-profile
+evidence bytes. Current source corrects #588's raw-key/envelope mismatch; see
+[the envelope integration note](windows-diagnostic-envelope-composition.md). Its native
+input set/digest supersedes the historical four-file unchanged-source claim below.
+#587's future #180/#336 acceptance scope still awaits the owner's explicit decision;
+see [the bounded M10 contract review](m10-security-contract-closure.md).
+
 The pinned owner patch SHA256 is
 `640b3f0e3bc2c634d8e0999470d5698aa34f5bb02d3909f1fefd521df6ab73d5`.
 It was adapted manually because its #584 main context predates #586 wiring. Current-client
