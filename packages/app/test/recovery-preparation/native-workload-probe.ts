@@ -115,9 +115,13 @@ try {
   assert.deepEqual(await readFile(destination), Buffer.from(preview.text));
   await setImmediate();
   sample();
-  const report = JSON.parse(preview.text) as { events: unknown[]; omissions: { budget: number } };
+  const report = JSON.parse(preview.text) as {
+    events: unknown[];
+    omissions: { budget: number; expired: number; invalid: number };
+  };
   assert.ok(preview.byteLength <= RECOVERY_LIMITS.exportBytes);
-  assert.ok(report.events.length <= 8192);
+  assert.equal(report.events.length, 8192);
+  assert.equal(report.omissions.budget + report.omissions.expired + report.omissions.invalid, 0);
   assert.ok(payloadPeak <= RECOVERY_LIMITS.payloadBytes);
   process.stdout.write(
     JSON.stringify({

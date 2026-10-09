@@ -20,7 +20,7 @@ import {
   type ExportState,
   type RecoveryDisk,
 } from "./recovery-contract.js";
-import { validateDiagnosticReport } from "./report-validation.js";
+import { validateDiagnosticReportAsync } from "./report-validation.js";
 
 export interface RecoveryControllerOptions {
   disk: RecoveryDisk;
@@ -273,10 +273,11 @@ export class RecoveryController {
       if (!anchor) throw new Error("age_uncertain");
       this.previousAvailable = await this.maintainHistory(anchor);
       if (!this.authorized(epoch)) return;
-      const snapshot = this.ring.snapshot();
-      if (!snapshot) throw new Error("unavailable");
       this.reserve(3 * RECOVERY_LIMITS.exportBytes);
       try {
+        const snapshot = await this.ring.snapshotAsync();
+        if (!snapshot) throw new Error("unavailable");
+        if (!this.authorized(epoch)) return;
         const bytes = Buffer.from(snapshot.json);
         await this.options.disk.checkpoint(bytes, anchor, () => this.authorized(epoch));
         if (this.authorized(epoch)) this.lastCheckpoint = anchor;
@@ -319,11 +320,15 @@ export class RecoveryController {
           )
             return failure("expired");
           deadline = Math.min(deadline, old.anchor.elapsedMs + RECOVERY_LIMITS.retentionMs);
-          bytes = validateDiagnosticReport(old.bytes, true);
+          bytes = await validateDiagnosticReportAsync(old.bytes, true);
         } else {
-          const snapshot = this.ring.snapshot();
+          let snapshot = await this.ring.snapshotAsync();
           if (!snapshot) return failure("unavailable");
-          bytes = validateDiagnosticReport(Buffer.from(snapshot.json));
+          const input = Buffer.from(snapshot.json);
+          // Validation holds input, decoded text and bounded reconstruction
+          // output. Drop the frozen string first to retain the four-copy charge.
+          snapshot = undefined;
+          bytes = await validateDiagnosticReportAsync(input);
         }
         const after = this.now();
         if (
