@@ -23,6 +23,12 @@ are new files in this directory. Production and existing test files are reserved
   separate authorization under [#393](https://github.com/cschadewitz/Project_Orca/issues/393).
 - [Validation](validation.md): exact commands, results and blocked checks.
 
+Later follow-up: the [9 October M10 disposition](../../implementation/m10-live-command-evidence-disposition.md)
+reuses this completed packet at #589 over #584 and records the unsupported exact
+evidence contract, required product decision and still-disabled live handoff.
+The original preparation ownership and validation below remain historical; this
+follow-up adds no production fix or installed-provider acceptance.
+
 Run the synthetic fixture with existing dependencies:
 
 ```sh

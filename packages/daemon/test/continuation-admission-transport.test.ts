@@ -1,6 +1,6 @@
 /** Real token transports and durable stores; no permissive continuation authority fixture. */
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentRegistry } from "@orca/agents";
@@ -23,6 +23,8 @@ import { FileContinuationLocatorStore } from "../../store/src/continuation-admis
 import { ContinuationAdmissionModel } from "../src/continuation-admission.js";
 import { CredentialStore, OwnershipStore, orchestratorResolver, type IssueOptions } from "../src/auth/index.js";
 import { daemonExecutionRuntime } from "../src/execution-runtime.js";
+import { createRevisionRuntime } from "../../engine/src/revision-runtime.js";
+import { scriptedAgentSpec } from "@orca/testing";
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -81,7 +83,9 @@ it.each(["http", "socket"] as const)(
     expect(f.effects).toHaveBeenCalledTimes(1);
   },
 );
-async function fixture(options: { manualDispatch?: boolean; readOnly?: boolean; operator?: boolean } = {}) {
+async function fixture(
+  options: { manualDispatch?: boolean; readOnly?: boolean; operator?: boolean; revision?: boolean } = {},
+) {
   const dir = await mkdtemp(join(tmpdir(), "orca-continuation-transport-"));
   cleanups.push(() => rm(dir, { recursive: true, force: true }));
   const credentialsFile = join(dir, "credentials.json"),
@@ -111,15 +115,25 @@ version: '1'
 start: start
 nodes:
   start: {type: start}
-  gate: {type: gate, question: Go?, options: [go]}
+  gate:
+    type: gate
+    question: Go?
+    options: ${options.revision ? "[go, changes]" : "[go]"}
+    ${
+      options.revision
+        ? "revision: {actionId: changes, destinationNodeId: revise, payload: {kind: text, maxBytes: 1024}, composition: replace-revision-slot}"
+        : ""
+    }
   work: {type: 'custom:work'}
+  ${options.revision ? "revise: {type: agent, agent: worker, prompt: Original}" : ""}
   end: {type: end}
 edges:
   - {from: start, to: gate}
-  - {from: gate, to: work}
+  - {from: gate, to: work${options.revision ? ", when: \"choice == 'go'\"" : ""}}
+  ${options.revision ? "- {from: gate, to: revise, when: \"choice == 'changes'\"}\n  - {from: revise, to: end}" : ""}
   - {from: work, to: end}
 `);
-  const config = parseOrcaConfig({ agents: [] });
+  const config = parseOrcaConfig({ agents: options.revision ? [scriptedAgentSpec({ id: "worker" })] : [] });
   async function boot(readOnly = options.readOnly ?? false) {
     const stores = fileStores(dir);
     const currentCredentials = new CredentialStore({ file: credentialsFile });
@@ -133,7 +147,7 @@ edges:
         return completed();
       },
     });
-    const orc = new Orchestrator({
+    const orc: Orchestrator = new Orchestrator({
       stores,
       executors,
       agents: AgentRegistry.fromConfig(config),
@@ -141,6 +155,14 @@ edges:
       templates: new TemplateRegistry(),
       workspaceProvider: new LocalWorkspaceProvider(dir),
       humanInput: new PausingHumanInput(),
+      ...(options.revision
+        ? {
+            revisionRuntime: createRevisionRuntime({
+              stores,
+              authorizeExecution: (runId) => runtime.authorizeExecution(runId),
+            }).runtime,
+          }
+        : {}),
     });
     const runtime = daemonExecutionRuntime({
       instanceId: "transport-test",
@@ -265,6 +287,79 @@ edges:
     params,
   };
 }
+
+it.each(["http", "socket"] as const)(
+  "%s operator refuses fresh revision-action continuation without consuming its key",
+  async (transport) => {
+    const f = await fixture({ operator: true, revision: true, manualDispatch: true });
+    const call = transport === "http" ? (method: string, params: unknown) => f.http(method, params) : await f.socket();
+    const target = OperatorDiscoverySchema.parse(result(await call("operator.discover", {}))).target;
+    const params = { target, ...f.params };
+    expect(
+      await call("operator.continueRun", {
+        ...params,
+        command: { ...params.command, decision: { ...params.command.decision, optionId: "changes" } },
+      }),
+    ).toMatchObject({ ok: false, error: { code: "CONTINUATION_STALE" } });
+    expect(await readdir(join(f.dir, "admission-retries"))).toEqual([]);
+    // A revision action needs revision input; rejecting it must leave this key usable.
+    expect(result(await call("operator.continueRun", params))).toMatchObject({ state: "resolved", replayed: false });
+    expect(result(await call("operator.continueRun", params))).toMatchObject({ state: "resolved", replayed: true });
+    expect(f.effects).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["http", "socket"] as const)(
+  "%s operator rejects terminal Revision continuation without publishing a durable retry reservation",
+  async (transport) => {
+    const f = await fixture({ operator: true, revision: true });
+    const call = transport === "http" ? (method: string, params: unknown) => f.http(method, params) : await f.socket();
+    const target = OperatorDiscoverySchema.parse(result(await call("operator.discover", {}))).target;
+    const params = { target, ...f.params };
+    const original = RunsContinueResultSchema.parse(result(await call("operator.continueRun", params)));
+    if (original.state !== "resolved") throw new Error("not resolved");
+    await f.entered.wait;
+    f.finish.release();
+    await f.model.drain();
+    expect((await f.orc.getState(f.runId)).run.status).toBe("completed");
+    expect(await f.stores.events.readTypes(f.runId, ["revision.recorded"])).not.toHaveLength(0);
+    // Inspect the host's actual catalog, encrypted generations and run journal,
+    // independently of the connector response or its authorized read projection.
+    const snapshot = async () => {
+      const files: Record<string, string> = {};
+      for (const area of ["admission-retries", "private-execution", "runs"]) {
+        for (const entry of await readdir(join(f.dir, area), { recursive: true, withFileTypes: true })) {
+          if (entry.isFile()) {
+            const path = join(entry.parentPath, entry.name);
+            files[path] = (await readFile(path)).toString("base64");
+          }
+        }
+      }
+      return files;
+    };
+    const before = await snapshot();
+    const catalog = await readFile(join(f.dir, "admission-retries/catalog.json"), "utf8");
+    for (const retry of [{ idempotencyKey: "fresh-terminal-revision" }, {}]) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response =
+          "idempotencyKey" in retry
+            ? await call("operator.continueRun", { ...params, retry })
+            : await call("runs.continue", { ...f.params, retry });
+        expect(response).toMatchObject({
+          ok: false,
+          error: { code: "CONTINUATION_STALE" },
+        });
+        expect(await readFile(join(f.dir, "admission-retries/catalog.json"), "utf8")).toBe(catalog);
+        expect(await snapshot()).toEqual(before);
+      }
+    }
+    expect(result(await call("operator.continueRun", params))).toEqual({ ...original, replayed: true });
+    await f.model.drain();
+    expect(await snapshot()).toEqual(before);
+    expect(f.effects).toHaveBeenCalledTimes(1);
+    expect(await f.stores.leases.get(`run:${f.runId}`)).toBeUndefined();
+  },
+);
 
 it.each(["http", "socket"] as const)(
   "%s authenticates context, validates identical schemas and promptly accepts once while execution blocks",
