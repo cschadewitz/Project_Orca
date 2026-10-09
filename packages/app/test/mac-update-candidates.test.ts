@@ -124,7 +124,21 @@ async function rig() {
     trust: { catalog, inspect },
     fetch,
   };
-  const session = new MacCandidateSession(ports);
+  // Explicit synthetic drain lease permits download tests; no production owner/native activation.
+  const session = new MacCandidateSession(ports, {
+    drainAdmission: async (expected, token) => ({
+      outcome: "ready",
+      lease: {
+        target: expected,
+        token,
+        observe: async () => "held",
+        release: async () => "released",
+      },
+    }),
+    prepareDrafts: async () => ({ outcome: "blocked", blocker: "candidate" }),
+    prepareAdmission: async () => ({ outcome: "unknown" }),
+    checkPrepared: async () => "unknown",
+  });
   const offer = async () => {
     const result = await session.offer(input, target, signal());
     expect(result.outcome).toBe("available");
@@ -399,7 +413,7 @@ describe("main-only candidate binding and consent", () => {
     const [newDirectory] = await readdir(r.root);
     expect(newDirectory).toBeTruthy();
     expect(newDirectory).not.toBe(oldDirectory);
-    expect(r.catalog).toHaveBeenCalledTimes(6);
+    expect(r.catalog).toHaveBeenCalledTimes(10);
     expect(r.fetch).toHaveBeenCalledTimes(2 * r.files.size);
     expect(r.inspect).toHaveBeenCalledTimes(2);
   });

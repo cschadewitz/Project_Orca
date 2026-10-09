@@ -740,3 +740,32 @@ it("refuses real unauthenticated replacement access without falling back or reop
   await expect(admission(f)).rejects.toThrow("AUTH_INVALID");
   expect(f.replacement()!.child.child.exitCode).toBeNull();
 });
+
+it("a fresh supervisor reuses closed image/identity/store guards without launching or resurrecting consent", async () => {
+  const f = await fixture();
+  const receipt = await stopped(f);
+  expect((await new MacRestartVerification(f.ports, 10000).verify(f.request(receipt), signal())).outcome).toBe(
+    "verified-closed",
+  );
+  const before = f.calls.filter((call) => call === "start").length;
+  const owned = f.process();
+  const verifier = new MacRestartVerification(f.ports, 10000);
+  expect(
+    (
+      await verifier.inspectExistingClosed(
+        { ...f.request(receipt), previous: receipt.target, process: owned, fenceId: owned.fenceId },
+        signal(),
+      )
+    ).outcome,
+  ).toBe("verified-closed");
+  expect(f.calls.filter((call) => call === "start")).toHaveLength(before);
+  await expect(admission(f)).rejects.toThrow("closed");
+  const wrong = new MacRestartVerification(f.ports, 10000);
+  expect(
+    await wrong.inspectExistingClosed(
+      { ...f.request(receipt), previous: receipt.target, process: owned, fenceId: randomUUID() },
+      signal(),
+    ),
+  ).toEqual({ outcome: "unknown" });
+  expect(f.replacement()!.child.signals).toEqual([]);
+});

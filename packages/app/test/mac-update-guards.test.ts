@@ -385,7 +385,7 @@ describe("owned Mac target capture", () => {
       await r.close();
     }
   });
-  it("coordinator returns to waiting and releases drafts when authoritative attached-execution proof is missing", async () => {
+  it("coordinator refuses missing drain without freezing drafts or invoking prepare-only proof", async () => {
     const r = await ownedRig();
     const w = windows();
     const guards = new MacUpdateGuards(r.workspace, w.boundary);
@@ -409,12 +409,12 @@ describe("owned Mac target capture", () => {
         r.target,
       )!;
       await updater.approve(id);
-      expect(updater.state).toMatchObject({ phase: "waiting", blocker: "activity" });
+      expect(updater.state).toMatchObject({ phase: "failed", blocker: "activity" });
       expect(w.frozen()).toBe(false);
       expect(activate).not.toHaveBeenCalled();
       expect(revalidate).not.toHaveBeenCalled();
       expect(r.stop).not.toHaveBeenCalled();
-      expect(r.requests).toEqual(["hello"]);
+      expect(r.requests).toEqual([]);
     } finally {
       await r.close();
     }

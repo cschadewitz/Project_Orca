@@ -31,7 +31,10 @@ export interface MacCandidatePrepared {
   readonly target: Readonly<MacUpdateTarget>;
   readonly scope: "preparation-only";
 }
-export interface MacCandidatePreparation extends Pick<MacUpdatePorts, "prepareDrafts" | "prepareAdmission"> {
+export interface MacCandidatePreparation extends Pick<
+  MacUpdatePorts,
+  "drainAdmission" | "prepareDrafts" | "prepareAdmission"
+> {
   /** Only explicit untouched refusal allows guard cleanup. No positive readiness/installation result. */
   checkPrepared(this: void, prepared: MacCandidatePrepared): Promise<"refused" | "unknown">;
 }
@@ -78,6 +81,7 @@ export class MacCandidateSession {
       typeof preparation.prepareAdmission === "function" &&
       typeof preparation.checkPrepared === "function"
         ? Object.freeze({
+            drainAdmission: preparation.drainAdmission,
             prepareDrafts: preparation.prepareDrafts,
             prepareAdmission: preparation.prepareAdmission,
             checkPrepared: preparation.checkPrepared,
@@ -118,6 +122,18 @@ export class MacCandidateSession {
         }
         return "failed";
       },
+      approvalCurrent: async (candidate) => {
+        if (!this.ports || !this.binding || !sameCandidate(candidate, this.binding.value.candidate)) return "unknown";
+        try {
+          const result = await macBounded(new AbortController().signal, this.ports.limits.operationMs, (signal) =>
+            macAbortable(() => this.ports!.trust.catalog(this.binding!.value, signal), signal),
+          );
+          return result === "trusted" ? "valid" : result === "refused" ? "refused" : "unknown";
+        } catch {
+          return "unknown";
+        }
+      },
+      ...(guards?.drainAdmission ? { drainAdmission: guards.drainAdmission } : {}),
       prepareDrafts: guards?.prepareDrafts ?? (() => Promise.resolve({ outcome: "blocked", blocker: "candidate" })),
       prepareAdmission:
         guards?.prepareAdmission ?? (() => Promise.resolve({ outcome: "blocked", blocker: "identity" })),
@@ -165,6 +181,7 @@ export class MacCandidateSession {
   async settled(): Promise<MacUpdateSnapshot> {
     await this.operation;
     await this.cleaning;
+    await this.updates.settled();
     return this.state;
   }
   async offer(
@@ -278,6 +295,7 @@ export class MacCandidateSession {
       const operation = this.operation;
       this.cleaning = (async () => {
         await operation;
+        await this.updates.settled();
         // Do not erase candidate evidence while remote/window ownership is uncertain.
         if (this.state.phase === "recovery-required") {
           this.uncertain = true;
