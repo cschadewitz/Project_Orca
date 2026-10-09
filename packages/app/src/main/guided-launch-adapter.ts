@@ -5,10 +5,10 @@ import {
   OperatorMutationContracts,
   ConfigGetResultSchema,
   WorkflowsListResultSchema,
-  WorkflowsGetResultSchema,
   OperatorPreflightResultSchema,
+  OperatorPageResultSchema,
 } from "@orca/protocol";
-import type { AdmissionRetryResult } from "@orca/protocol";
+import type { AdmissionRetryResult, OperatorRow } from "@orca/protocol";
 import type { DaemonClient } from "../client/daemon-client.js";
 import type { DaemonTargetSnapshot } from "../daemon-connection.js";
 import { daemonEndpoint } from "../daemon-connection.js";
@@ -26,6 +26,7 @@ import { canonicalGuidedValue, parseGuidedReview } from "./guided-intent-contrac
 import { observePreparedCheckout } from "./guided-checkout.js";
 import { verifyFirstRunSampleAssets } from "./first-run/sample-assets.js";
 import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_TASK } from "../first-run-sample.js";
+import { launchSelectionProvenance } from "../launch-provenance.js";
 
 export interface GuidedConnectionCapture {
   client: DaemonClient;
@@ -96,11 +97,49 @@ export class GuidedLaunchAdapter {
     current.captured.assertCurrent();
     return result;
   }
+  private async choices(current: Awaited<ReturnType<GuidedLaunchAdapter["current"]>>, generation: string) {
+    if (!current.found.collections.includes("choices")) return undefined;
+    const rows: OperatorRow[] = [];
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    do {
+      const page = await current.captured.client.call(
+        "operator.page",
+        {
+          target: current.found.target,
+          collection: "choices",
+          limit: 100,
+          ...(cursor === undefined ? {} : { cursor }),
+        },
+        OperatorPageResultSchema,
+        false,
+      );
+      current.captured.assertCurrent();
+      if (
+        page.target.workspaceId !== current.found.target.workspaceId ||
+        page.target.instanceId !== current.found.target.instanceId ||
+        page.revision !== generation ||
+        page.restartRequired ||
+        page.items.some((row) => row.configGeneration !== generation) ||
+        (page.truncated && !page.nextCursor)
+      )
+        refuse();
+      rows.push(...page.items);
+      if (rows.length > 1000) refuse();
+      cursor = page.nextCursor;
+      if (cursor !== undefined) {
+        if (seen.has(cursor)) refuse();
+        seen.add(cursor);
+      }
+    } while (cursor !== undefined);
+    return rows;
+  }
   async snapshot(): Promise<GuidedLaunchSnapshot> {
     const current = await this.current();
     let activeGeneration = "";
     let checkout: CheckoutEvidence;
     const workflows = [] as GuidedLaunchSnapshot["workflows"][number][];
+    let choices: OperatorRow[] | undefined;
     try {
       const config = await current.captured.client.call(
         "operator.config",
@@ -114,12 +153,6 @@ export class GuidedLaunchAdapter {
       if (list.workflows.length > 100) refuse();
       for (const item of list.workflows) {
         try {
-          const read = await current.captured.client.call(
-            "workflows.get",
-            { id: item.id, version: item.version },
-            WorkflowsGetResultSchema,
-            false,
-          );
           const preflight = await current.captured.client.call(
             "operator.preflight",
             {
@@ -127,6 +160,7 @@ export class GuidedLaunchAdapter {
               purpose: "workflow",
               workflowId: item.id,
               workflowVersion: item.version,
+              expectedConfigGeneration: activeGeneration,
               vars: {},
             },
             OperatorPreflightResultSchema,
@@ -137,27 +171,38 @@ export class GuidedLaunchAdapter {
             preflight.target.workspaceId !== current.found.target.workspaceId ||
             preflight.target.instanceId !== current.found.target.instanceId ||
             preflight.expectedConfigGeneration !== activeGeneration ||
-            preflight.workflowId !== read.workflow.id ||
-            preflight.workflowVersion !== read.workflow.version
+            preflight.workflowId !== item.id ||
+            preflight.workflowVersion !== item.version ||
+            preflight.inputSchema === undefined
           )
             refuse();
           if (
             item.id === FIRST_RUN_SAMPLE.id &&
-            (read.workflow.version !== FIRST_RUN_SAMPLE.version ||
+            (preflight.workflowVersion !== FIRST_RUN_SAMPLE.version ||
               preflight.expectedWorkflowRevision !== FIRST_RUN_SAMPLE.revision)
           )
             refuse();
           if (item.id === FIRST_RUN_SAMPLE.id) await verifyFirstRunSampleAssets(current.captured.workspace.path);
           workflows.push({
             id: item.id,
-            name: read.workflow.name,
-            version: read.workflow.version,
+            name: item.name,
+            version: preflight.workflowVersion,
             revision: preflight.expectedWorkflowRevision,
-            ...(read.workflow.inputSchema ? { inputSchema: read.workflow.inputSchema } : {}),
+            ...(preflight.inputSchema ? { inputSchema: preflight.inputSchema } : {}),
+            ...(launchSelectionProvenance(preflight) === undefined
+              ? {}
+              : { selectionProvenance: launchSelectionProvenance(preflight)! }),
           });
         } catch {
           current.captured.assertCurrent();
         }
+      }
+      try {
+        choices = await this.choices(current, activeGeneration);
+      } catch {
+        // Missing optional selection reads do not disable configured direct launches or recovery.
+        choices = undefined;
+        current.captured.assertCurrent();
       }
       const final = await current.captured.client.call(
         "operator.config",
@@ -169,6 +214,7 @@ export class GuidedLaunchAdapter {
     } catch {
       // Read authority/config failures disable new launches, not exact protected recovery under its own grants.
       workflows.length = 0;
+      choices = undefined;
       checkout = {
         state: "unavailable",
         reason:
@@ -184,6 +230,7 @@ export class GuidedLaunchAdapter {
       activeGeneration,
       checkout,
       workflows,
+      ...(choices === undefined ? {} : { choices }),
     };
   }
   async preflight(params: PreflightParams) {
@@ -248,7 +295,12 @@ export class GuidedLaunchAdapter {
         )
           refuse();
         if (review.workflowId === FIRST_RUN_SAMPLE.id) await verifyFirstRunSampleAssets(captured.workspace.path);
-        if (review.command.mode === "request" && review.command.params.overrides !== undefined) refuse();
+        if (
+          review.command.mode === "request" &&
+          review.command.params.overrides !== undefined &&
+          !found.collections.includes("choices")
+        )
+          refuse();
         const check = await captured.client.call(
           "operator.preflight",
           {
@@ -256,7 +308,22 @@ export class GuidedLaunchAdapter {
             purpose: review.command.mode === "direct" ? "workflow" : "request",
             workflowId: review.workflowId,
             workflowVersion: review.workflowVersion,
+            expectedWorkflowRevision: review.expectedWorkflowRevision,
+            expectedConfigGeneration: review.expectedConfigGeneration,
             vars: review.command.params.vars ?? {},
+            ...(review.command.mode === "request"
+              ? {
+                  request: {
+                    title: review.command.params.title,
+                    body: review.command.params.body,
+                    ...(review.command.params.source === undefined ? {} : { source: review.command.params.source }),
+                    ...(review.command.params.labels === undefined ? {} : { labels: review.command.params.labels }),
+                  },
+                  ...(review.command.params.overrides === undefined
+                    ? {}
+                    : { overrides: review.command.params.overrides }),
+                }
+              : {}),
           },
           OperatorPreflightResultSchema,
           false,
@@ -271,6 +338,11 @@ export class GuidedLaunchAdapter {
           check.validation.errors.length ||
           check.expectedWorkflowRevision !== review.expectedWorkflowRevision ||
           check.expectedConfigGeneration !== review.expectedConfigGeneration
+        )
+          refuse();
+        if (
+          canonicalGuidedValue(launchSelectionProvenance(check) ?? null) !==
+          canonicalGuidedValue(review.selectionProvenance ?? null)
         )
           refuse();
         const checkout = await this.checkout(current, review.expectedConfigGeneration);

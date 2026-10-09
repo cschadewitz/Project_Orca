@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OperatorMutationContracts, type ConfigGetResult } from "@orca/protocol";
+import { OperatorMutationContracts, type ConfigGetResult, type RequestsSubmitParams } from "@orca/protocol";
 import { CONFIG_GET } from "../renderer/test/fixtures-config.js";
 import type { LaunchReview } from "../src/configuration-launch-contract.js";
 import type { DaemonTargetSnapshot } from "../src/daemon-connection.js";
@@ -14,13 +14,14 @@ import { AdmissionIntents, type IntentEncryption } from "../src/main/admission-i
 import { GuidedLaunchAdapter } from "../src/main/guided-launch-adapter.js";
 import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_FILES, FIRST_RUN_SAMPLE_TASK } from "../src/first-run-sample.js";
 import { observePreparedCheckout } from "../src/main/guided-checkout.js";
+import { launchSelectionProvenance } from "../src/launch-provenance.js";
 
 const dirs: string[] = [];
 afterEach(() => {
   vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
-function fixture(options: { workflowId?: string; workflowRevision?: string } = {}) {
+function fixture(options: { workflowId?: string; workflowRevision?: string; choices?: boolean } = {}) {
   const workflowId = options.workflowId ?? "safe-fixture";
   const workflowRevision = options.workflowRevision ?? "digest-1";
   const vars =
@@ -65,6 +66,8 @@ function fixture(options: { workflowId?: string; workflowRevision?: string } = {
     failure = false,
     unavailable = false,
     rotateOnConfigRead = false;
+  let choiceGeneration = "generation-1";
+  let admittedMode: "direct" | "request" = "direct";
   const calls: { method: string; params: Record<string, unknown>; token: string }[] = [];
   const operationId = "retry_33333333-3333-4333-8333-333333333333";
   const config: ConfigGetResult = {
@@ -103,7 +106,7 @@ function fixture(options: { workflowId?: string; workflowRevision?: string } = {
           "operator.admission",
           "operator.reconcileAdmission",
         ],
-        collections: [],
+        collections: options.choices === false ? [] : ["choices"],
         asOf: "2026-10-08T00:00:00Z",
       };
     else if (request.method === "operator.config") {
@@ -121,7 +124,7 @@ function fixture(options: { workflowId?: string; workflowRevision?: string } = {
       result = { ...config, generation: { ...config.generation, activeGeneration: generation } };
     } else if (request.method === "workflows.list")
       result = {
-        workflows: [{ id: workflowId, name: "Safe fixture", version: "1", nodeCount: 2 }],
+        workflows: [{ id: workflowId, name: "Safe fixture", version: "1", nodeCount: 2, edgeCount: 1, start: "start" }],
         asOf: "2026-10-08T00:00:00Z",
       };
     else if (request.method === "workflows.get")
@@ -144,6 +147,27 @@ function fixture(options: { workflowId?: string; workflowRevision?: string } = {
         },
         asOf: "2026-10-08T00:00:00Z",
       };
+    else if (request.method === "operator.page")
+      result = {
+        target: identity,
+        revision: choiceGeneration,
+        restartRequired: false,
+        truncated: false,
+        items: [
+          { id: "agent-1", kind: "agent", agentId: "agent-1", configGeneration: choiceGeneration },
+          { id: "build", kind: "role", agentId: "agent-1", configGeneration: choiceGeneration },
+          {
+            id: "model-row",
+            kind: "model",
+            agentId: "agent-1",
+            modelId: "model-1",
+            configGeneration: choiceGeneration,
+          },
+          { id: "pack-1", kind: "template-pack", templatePack: "pack-1", configGeneration: choiceGeneration },
+          { id: "item-1", kind: "item-workflow", workflowId: "item-1", configGeneration: choiceGeneration },
+        ],
+        asOf: "2026-10-08T00:00:00Z",
+      };
     else if (request.method === "operator.preflight")
       result = {
         target: identity,
@@ -152,6 +176,29 @@ function fixture(options: { workflowId?: string; workflowRevision?: string } = {
         expectedWorkflowRevision: workflowRevision,
         expectedConfigGeneration: generation,
         validation: { ok: true, errors: [], warnings: [] },
+        inputSchema: {
+          fields: {
+            task: { type: "string", required: true },
+            count: { type: "integer" },
+            enabled: { type: "boolean" },
+            nullable: { type: "string", nullable: true },
+          },
+        },
+        selections: [
+          {
+            nodeId: "build",
+            role: "build",
+            agent: { value: "agent-1", source: "configuration" },
+            model: { value: "model-1", source: "override" },
+            template: { value: "instruction-1", revision: "instruction-revision-1", source: "workflow" },
+          },
+        ],
+        ...(request.params.purpose === "request"
+          ? {
+              itemWorkflow: { value: "item-1", source: "override" },
+              templatePack: { value: "pack-1", source: "override" },
+            }
+          : {}),
         asOf: "2026-10-08T00:00:00Z",
       };
     else {
@@ -163,7 +210,8 @@ function fixture(options: { workflowId?: string; workflowRevision?: string } = {
         throw new Error("lost response with private transport needle");
       }
       const command = request.params.command as { title?: string } | undefined;
-      const mode = command?.title ? "request" : "direct";
+      if (command) admittedMode = command.title ? "request" : "direct";
+      const mode = admittedMode;
       result = {
         state: "resolved",
         operationId,
@@ -223,12 +271,17 @@ function fixture(options: { workflowId?: string; workflowRevision?: string } = {
       };
     });
   const adapter = make();
-  const review = async (mode: "direct" | "request" = "direct"): Promise<LaunchReview> => {
+  const review = async (
+    mode: "direct" | "request" = "direct",
+    overrides?: RequestsSubmitParams["overrides"],
+  ): Promise<LaunchReview> => {
     const observed = await adapter.preflight({
       target: target.identity!,
       purpose: mode === "direct" ? "workflow" : "request",
       workflowId,
       vars,
+      ...(mode === "request" ? { request: { title: "Task", body: "private body needle" } } : {}),
+      ...(overrides === undefined ? {} : { overrides }),
     });
     const params = {
       workflowId,
@@ -236,6 +289,7 @@ function fixture(options: { workflowId?: string; workflowRevision?: string } = {
       expectedWorkflowRevision: workflowRevision,
       expectedConfigGeneration: generation,
       vars,
+      ...(overrides === undefined ? {} : { overrides }),
     };
     return {
       target: { ...target.identity!, epoch: target.epoch },
@@ -245,6 +299,7 @@ function fixture(options: { workflowId?: string; workflowRevision?: string } = {
       expectedWorkflowRevision: params.expectedWorkflowRevision,
       expectedConfigGeneration: generation,
       checkout: observed.checkout,
+      selectionProvenance: launchSelectionProvenance(observed.preflight),
       command:
         mode === "direct"
           ? { mode, params }
@@ -272,6 +327,9 @@ function fixture(options: { workflowId?: string; workflowRevision?: string } = {
     generation: () => {
       generation = "generation-2";
     },
+    choiceGeneration: (next: string) => {
+      choiceGeneration = next;
+    },
     lose: () => {
       lose = true;
     },
@@ -291,6 +349,67 @@ function fixture(options: { workflowId?: string; workflowRevision?: string } = {
   };
 }
 describe("production guided launch composition", () => {
+  it("binds typed declarations and authorized override choices to the same preflight generation", async () => {
+    const f = fixture();
+    const snapshot = await f.adapter.snapshot();
+    expect(snapshot.workflows[0]?.inputSchema?.fields.task).toEqual({ type: "string", required: true });
+    expect(snapshot.workflows[0]?.selectionProvenance?.selections?.[0]?.template).toMatchObject({
+      value: "instruction-1",
+      revision: "instruction-revision-1",
+    });
+    expect(snapshot.choices?.map((row) => row.kind)).toEqual([
+      "agent",
+      "role",
+      "model",
+      "template-pack",
+      "item-workflow",
+    ]);
+    expect(f.calls.some((call) => call.method === "workflows.get")).toBe(false);
+    f.choiceGeneration("older-generation");
+    const staleChoices = await f.adapter.snapshot();
+    expect(staleChoices.choices).toBeUndefined();
+    expect(staleChoices.workflows).toHaveLength(1);
+    expect(staleChoices.checkout.state).toBe("verified");
+  });
+  it("independently revalidates Request descriptors, overrides and exact provenance before protected retention", async () => {
+    const f = fixture();
+    const overrides = {
+      roles: { build: "agent-1" },
+      model: { "agent-1": "model-1" },
+      itemWorkflow: "item-1",
+      templatePack: "pack-1",
+    };
+    const review = await f.review("request", overrides);
+    const submitted = await f.adapter.controller.submit(review);
+    const checks = f.calls.filter((call) => call.method === "operator.preflight");
+    expect(checks.at(-1)?.params).toMatchObject({
+      purpose: "request",
+      expectedConfigGeneration: "generation-1",
+      expectedWorkflowRevision: "digest-1",
+      request: { title: "Task", body: "private body needle" },
+      overrides,
+    });
+    expect((await f.adapter.load(submitted.intent.intentId)).review.selectionProvenance).toEqual(
+      review.selectionProvenance,
+    );
+    expect(f.calls.find((call) => call.method === "operator.submitRequest")?.params.command).toEqual(
+      review.command.params,
+    );
+    const changed = fixture();
+    const other = await changed.review("request", overrides);
+    await expect(
+      changed.adapter.controller.submit({ ...other, selectionProvenance: { selections: [] } }),
+    ).rejects.toThrow("cannot verify");
+    expect(await changed.adapter.controller.retained()).toEqual([]);
+    expect(changed.calls.some((call) => call.method === "operator.submitRequest")).toBe(false);
+  });
+  it("refuses caller-supplied Request overrides without authorized choices before retention or mutation", async () => {
+    const f = fixture({ choices: false });
+    const review = await f.review("request", { model: "model-1" });
+    await expect(f.adapter.controller.submit(review)).rejects.toThrow("cannot verify");
+    expect(await f.adapter.controller.retained()).toEqual([]);
+    expect(f.calls.some((call) => call.method === "operator.submitRequest")).toBe(false);
+  });
   it.each(["direct", "request"] as const)(
     "retains exact %s command before guarded send and pins the discovered credential",
     async (mode) => {
@@ -336,6 +455,25 @@ describe("production guided launch composition", () => {
     f.token("another-principal");
     expect(await restarted.resolve(review)).toBeUndefined();
     await expect(restarted.load(intent!.intentId)).rejects.toThrow();
+  });
+  it("recovers an acknowledgement-lost Request with its protected original descriptor, overrides and key", async () => {
+    const f = fixture();
+    const review = await f.review("request", { model: { "agent-1": "model-1" }, templatePack: "pack-1" });
+    f.lose();
+    await expect(f.adapter.controller.submit(review)).rejects.toThrow("lost response");
+    const original = f.calls.find((call) => call.method === "operator.submitRequest")!;
+    f.reconnect();
+    f.generation();
+    const restarted = f.make();
+    const retained = await restarted.resolve(review);
+    expect((await restarted.load(retained!.intentId)).review).toEqual(review);
+    const recovered = await restarted.controller.recover(retained!.intentId, "reconcile");
+    expect(recovered).toMatchObject({ receipt: { result: { requestId: "request-1", runId: "run-1" } } });
+    const sends = f.calls.filter((call) => call.method === "operator.submitRequest");
+    expect(sends).toHaveLength(2);
+    expect(sends[1]?.params.command).toEqual(original.params.command);
+    expect(sends[1]?.params.retry).toEqual(original.params.retry);
+    expect(readFileSync(f.journalPath).toString()).not.toContain("private body needle");
   });
   it("refuses a preview made for another verified principal before retaining or sending", async () => {
     const f = fixture();
@@ -397,38 +535,58 @@ describe("production guided launch composition", () => {
 });
 
 describe("reserved harmless first-run sample binding", () => {
-  it("refuses changed instruction bytes after review before retaining or sending", async () => {
-    const f = fixture({ workflowId: FIRST_RUN_SAMPLE.id, workflowRevision: FIRST_RUN_SAMPLE.revision });
-    const review = await f.review();
-    writeFileSync(join(f.dir, "first-run/instruction.md"), "different instructions");
-    await expect(f.adapter.controller.submit(review)).rejects.toThrow();
-    expect(f.calls.some((call) => call.method === "operator.admitRun")).toBe(false);
-    expect(await f.adapter.controller.retained()).toEqual([]);
-  });
+  it.skipIf(typeof process.getuid !== "function")(
+    "refuses changed instruction bytes after review before retaining or sending",
+    async () => {
+      const f = fixture({ workflowId: FIRST_RUN_SAMPLE.id, workflowRevision: FIRST_RUN_SAMPLE.revision });
+      const review = await f.review();
+      writeFileSync(join(f.dir, "first-run/instruction.md"), "different instructions");
+      await expect(f.adapter.controller.submit(review)).rejects.toThrow();
+      expect(f.calls.some((call) => call.method === "operator.admitRun")).toBe(false);
+      expect(await f.adapter.controller.retained()).toEqual([]);
+    },
+  );
   it("omits a same-ID sample with a different digest and refuses preflight", async () => {
     const f = fixture({ workflowId: FIRST_RUN_SAMPLE.id });
     expect((await f.adapter.snapshot()).workflows).toEqual([]);
     await expect(f.review()).rejects.toThrow("cannot verify");
     expect(f.calls.some((call) => call.method === "operator.admitRun")).toBe(false);
   });
-  it("retains only the exact direct sample task and refuses Request or altered inputs", async () => {
-    const f = fixture({ workflowId: FIRST_RUN_SAMPLE.id, workflowRevision: FIRST_RUN_SAMPLE.revision });
-    const review = await f.review();
-    if (review.command.mode !== "direct") throw new Error("Expected a direct sample review");
-    const changed: LaunchReview = {
-      ...review,
-      command: { mode: "direct" as const, params: { ...review.command.params, vars: { task: "other task" } } },
-    };
-    await expect(f.adapter.controller.submit(changed)).rejects.toThrow("cannot verify");
-    await expect(f.review("request")).rejects.toThrow("cannot verify");
-    expect(
-      f.calls.some((call) => call.method === "operator.admitRun" || call.method === "operator.submitRequest"),
-    ).toBe(false);
-    const result = await f.adapter.controller.submit(review);
-    expect(result.response).toMatchObject({
-      kind: "retry",
-      receipt: { state: "resolved", result: { state: "accepted" } },
-    });
-    expect(f.calls.find((call) => call.method === "operator.admitRun")!.params.command).toEqual(review.command.params);
-  });
+  it.skipIf(typeof process.getuid !== "function")(
+    "retains only the exact direct sample task and refuses Request or altered inputs",
+    async () => {
+      const f = fixture({ workflowId: FIRST_RUN_SAMPLE.id, workflowRevision: FIRST_RUN_SAMPLE.revision });
+      const review = await f.review();
+      if (review.command.mode !== "direct") throw new Error("Expected a direct sample review");
+      const changed: LaunchReview = {
+        ...review,
+        command: { mode: "direct" as const, params: { ...review.command.params, vars: { task: "other task" } } },
+      };
+      await expect(f.adapter.controller.submit(changed)).rejects.toThrow("cannot verify");
+      await expect(f.review("request")).rejects.toThrow("cannot verify");
+      expect(
+        f.calls.some((call) => call.method === "operator.admitRun" || call.method === "operator.submitRequest"),
+      ).toBe(false);
+      const result = await f.adapter.controller.submit(review);
+      expect(result.response).toMatchObject({
+        kind: "retry",
+        receipt: { state: "resolved", result: { state: "accepted" } },
+      });
+      expect(f.calls.find((call) => call.method === "operator.admitRun")!.params.command).toEqual(
+        review.command.params,
+      );
+    },
+  );
+  it.runIf(process.platform === "win32")(
+    "reports unavailable ownership on Windows without starting the sample",
+    async () => {
+      const f = fixture({ workflowId: FIRST_RUN_SAMPLE.id, workflowRevision: FIRST_RUN_SAMPLE.revision });
+      expect((await f.adapter.snapshot()).workflows).toEqual([]);
+      await expect(f.review()).rejects.toThrow("verifiable identity");
+      expect(await f.adapter.controller.retained()).toEqual([]);
+      expect(
+        f.calls.some((call) => call.method === "operator.admitRun" || call.method === "operator.submitRequest"),
+      ).toBe(false);
+    },
+  );
 });

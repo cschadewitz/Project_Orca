@@ -350,6 +350,23 @@ describe("guided launch exact review and admission", () => {
     expect(ports.recover).toHaveBeenCalledWith({ id: "protected-intent-1" });
     expect(ports.preflight).toHaveBeenCalledTimes(1);
   });
+  it("uses independent recovery grants after launch authority is revoked", async () => {
+    const ports = launchPorts();
+    ports.submit.mockRejectedValue(new Error("lost"));
+    const controller = new GuidedLaunchController(launchContext(), launchDraft(), ports);
+    await controller.preview();
+    await controller.submit();
+    controller.contextChanged({ ...launchContext(), directReason: "Starting new workflows is unauthorized" });
+    await controller.recover();
+    expect(ports.recover).toHaveBeenCalledWith({ id: "protected-intent-1" });
+    expect(ports.preflight).toHaveBeenCalledTimes(1);
+    expect(ports.submit).toHaveBeenCalledTimes(1);
+    controller.contextChanged({ ...launchContext(), recoveryReason: "Recovery is unauthorized" });
+    await controller.recover();
+    expect(ports.recover).toHaveBeenCalledTimes(1);
+    expect(controller.read().message).toBe("Recovery is unauthorized");
+    expect(controller.read().intent).toEqual({ id: "protected-intent-1" });
+  });
   it("invalidates reviewed command when inputs or context change", async () => {
     const ports = launchPorts();
     const controller = new GuidedLaunchController(launchContext(), launchDraft(), ports);
@@ -419,6 +436,30 @@ describe("guided launch exact review and admission", () => {
     expect(save).toHaveBeenCalledWith(launchContext().target, launchDraft());
     expect(controller.read().draft).toEqual(launchDraft());
     expect(controller.read().message).toContain("failed");
+  });
+  it("serializes protected draft saving with edits and submission", async () => {
+    const ports = launchPorts();
+    const saved = deferred<void>();
+    const save = vi.fn<NonNullable<LaunchPorts["drafts"]>["save"]>(() => saved.promise);
+    const controller = new GuidedLaunchController(launchContext(), launchDraft(), {
+      ...ports,
+      drafts: { save, load: async () => undefined },
+    });
+    await controller.preview();
+    const pending = controller.saveDraft();
+    await controller.saveDraft();
+    await controller.submit();
+    expect(controller.read().busy).toBe(true);
+    expect(controller.edit({ ...launchDraft(), vars: { task: "Changed during save" } })).toBe(false);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(ports.retain).not.toHaveBeenCalled();
+    saved.resolve();
+    await pending;
+    expect(controller.read().busy).toBe(false);
+    expect(controller.read().draft).toEqual(launchDraft());
+    await controller.submit();
+    await controller.saveDraft();
+    expect(save).toHaveBeenCalledTimes(1);
   });
 });
 describe("typed launch input parsing", () => {

@@ -1,7 +1,7 @@
 /** Request-only selectors over sanitized authorized selection metadata; no provider discovery. */
 import type { JSX } from "react";
 import type { RequestsSubmitParams } from "@orca/protocol";
-import { ConfigField, Menu, Text } from "../ui/index.js";
+import { Button, ConfigField, Menu, Text } from "../ui/index.js";
 
 type Overrides = NonNullable<RequestsSubmitParams["overrides"]>;
 export interface OverrideChoice {
@@ -110,10 +110,22 @@ export function RequestOverrides({
         />
       ))}
       {typeof value?.model === "string" && (
-        <Text style="caption">
-          A global model override is retained. Per-agent editing is unavailable until that override is cleared by its
-          supported editor.
-        </Text>
+        <>
+          <Text style="caption">
+            A global model override is retained. Clear it to select models for individual agents.
+          </Text>
+          <Button
+            disabled={locked}
+            disabledReason="The original launch intent is retained."
+            onClick={() => {
+              const next = { ...value };
+              delete next.model;
+              onChange(Object.keys(next).length === 0 ? undefined : next);
+            }}
+          >
+            Use configured model defaults
+          </Button>
+        </>
       )}
       <Choice
         label="Item workflow"
@@ -132,7 +144,7 @@ export function RequestOverrides({
         choose={(selected) => change("templatePack", selected)}
       />
       {choices.provenance.map((line, index) => (
-        <Text key={index} style="caption">
+        <Text key={index} style="mono-id">
           {line}
         </Text>
       ))}

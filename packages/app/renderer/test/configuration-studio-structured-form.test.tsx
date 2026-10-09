@@ -218,6 +218,34 @@ describe("authority, redaction, validation and keyboard boundaries", () => {
     expect(form.current()).toEqual({});
     expect(document.activeElement).toBe(screen.getByLabelText(/^New Fixture key/));
   });
+  it("restores array focus to reference selectors after reorder and deletion", () => {
+    const form = renderForm(
+      { ...meta, kind: "array", item: { ...scalar(), acceptsAbsent: false } },
+      ["first", "second"],
+      { referenceChoices: () => ["first", "second"] },
+    );
+    const move = screen.getByRole("button", { name: "Move fixture[1] up" });
+    move.focus();
+    fireEvent.click(move);
+    expect(form.current()).toEqual(["second", "first"]);
+    expect(document.activeElement).toBe(screen.getAllByRole("combobox")[0]);
+    const remove = screen.getByRole("button", { name: "Delete fixture[0]" });
+    remove.focus();
+    fireEvent.click(remove);
+    expect(form.current()).toEqual(["first"]);
+    expect(document.activeElement).toBe(screen.getByRole("combobox"));
+  });
+  it("restores record focus to a remaining reference selector after deletion", () => {
+    renderForm(
+      { ...meta, kind: "record", value: { ...scalar(), acceptsAbsent: false } },
+      { first: "worker-a", second: "worker-b" },
+      { referenceChoices: () => ["worker-a", "worker-b"] },
+    );
+    const remove = screen.getByRole("button", { name: "Delete fixture.first" });
+    remove.focus();
+    fireEvent.click(remove);
+    expect(document.activeElement).toBe(screen.getByRole("combobox"));
+  });
   it("places authorized field errors using ConfigField accessibility wiring", () => {
     const form = renderForm(
       object({ host: scalar() }),

@@ -185,7 +185,12 @@ export class TemplateAuthoringController {
 
   /** Explicit source reconciliation retains edits and always requires a fresh review. */
   reconcile(snapshot: AuthoringSnapshot, retain: boolean): boolean {
-    if (this.state.busy || !sameTarget(this.state.base.target, snapshot.target) || snapshot.writeReason) return false;
+    if (
+      this.state.busy ||
+      !sameTarget(this.state.base.target, snapshot.target) ||
+      (snapshot.writeReason && this.state.edits.length > 0)
+    )
+      return false;
     if (
       retain &&
       this.state.edits.some(
@@ -211,8 +216,8 @@ export class TemplateAuthoringController {
     return true;
   }
 
-  private begin(): { ticket: number; candidate: AuthoringCandidate } | undefined {
-    if (this.state.busy || this.state.blocked || this.state.base.writeReason) return undefined;
+  private begin(write = true): { ticket: number; candidate: AuthoringCandidate } | undefined {
+    if (this.state.busy || this.state.blocked || (write && this.state.base.writeReason)) return undefined;
     const ticket = ++this.operation;
     const candidate = this.candidate();
     this.update({ ...this.state, busy: true });
@@ -254,7 +259,7 @@ export class TemplateAuthoringController {
     const asset = resolveTemplate(this.state.base.assets, id, pack);
     const variant = this.state.variants?.find((entry) => entry.id === id);
     if (!(asset && this.canRead(asset.key)) && !(variant && this.canRead(variant.key))) return;
-    const request = this.begin();
+    const request = this.begin(false);
     if (!request) return;
     this.pendingPreview = request.ticket;
     const { preview: _preview, ...rest } = this.state;

@@ -1,6 +1,12 @@
 /** Authorized app projections and protected handles; execution keys and ciphertext stay in main. */
-import type { WorkflowInputSchemaView } from "@orca/protocol";
-import type { CheckoutEvidence, EditorTarget, LaunchReview, RetainedLaunch } from "./configuration-launch-contract.js";
+import type { OperatorRow, WorkflowInputSchemaView } from "@orca/protocol";
+import type {
+  CheckoutEvidence,
+  EditorTarget,
+  LaunchReview,
+  LaunchSelectionProvenance,
+  RetainedLaunch,
+} from "./configuration-launch-contract.js";
 
 export interface GuidedWorkflowBinding {
   id: string;
@@ -8,6 +14,7 @@ export interface GuidedWorkflowBinding {
   version: string;
   revision: string;
   inputSchema?: WorkflowInputSchemaView;
+  selectionProvenance?: LaunchSelectionProvenance;
 }
 export interface GuidedLaunchSnapshot {
   target: EditorTarget;
@@ -17,6 +24,8 @@ export interface GuidedLaunchSnapshot {
   operations: readonly string[];
   checkout: CheckoutEvidence;
   workflows: readonly GuidedWorkflowBinding[];
+  /** Authorized choices from one active generation; absence disables optional override editing. */
+  choices?: readonly OperatorRow[];
 }
 export interface ProtectedGuidedLaunch {
   intent: RetainedLaunch;

@@ -12,8 +12,8 @@ import { ConfigSurface } from "../src/config/config-surface.js";
 import { fakeBridge } from "./fake-bridge.js";
 import { CONFIG_GET, CONFIG_TEXT } from "./fixtures-config.js";
 import { AS_OF } from "./fixtures.js";
-import { harness } from "./harness.js";
-import { expectedToken, installDesignSystem, resolved, setTheme } from "./themes.js";
+import { harness, stubMatchMedia } from "./harness.js";
+import { expectedToken, installDesignSystem, installSurfaceStyles, resolved, setTheme } from "./themes.js";
 
 const cleanupFns: (() => void)[] = [];
 afterEach(() => {
@@ -33,7 +33,8 @@ it("withholds current config source after read authority is withdrawn while reta
   await waitFor(() => expect(command().value).toBe("private-retained-command"));
   expect(f.writes).toHaveLength(0);
 });
-function setup({ metadata = true, writable = true, deferIdentity = false } = {}) {
+function setup({ metadata = true, writable = true, deferIdentity = false, width = 1280 } = {}) {
+  stubMatchMedia(width);
   const fake = fakeBridge();
   const bridge: OrcaBridge = fake.bridge;
   let target: DaemonTargetSnapshot = {
@@ -176,11 +177,24 @@ function setup({ metadata = true, writable = true, deferIdentity = false } = {})
 const command = () => screen.getByLabelText<HTMLInputElement>(/^commandagents\[0\]\.command/);
 
 describe.each(THEMES)("wired configuration route in %s", (theme) => {
+  it("stacks narrow fields and wraps complete action labels", async () => {
+    installDesignSystem();
+    installSurfaceStyles();
+    setup({ width: 600 });
+    setTheme(theme);
+    await screen.findByRole("group", { name: "Configuration" });
+    expect(command().closest("[data-config-layout]")?.getAttribute("data-config-layout")).toBe("stacked");
+    expect(resolved(command().closest(".orca-field")!, "grid-template-columns")).toBe("minmax(0, 1fr)");
+    const action = screen.getByRole("button", { name: "Read current configuration" });
+    expect(resolved(action, "white-space")).toBe("normal");
+    expect(resolved(action, "overflow-wrap")).toBe("anywhere");
+  });
   it("reviews then saves the daemon's bytes and offers explicit activation", async () => {
     installDesignSystem();
     setup();
     setTheme(theme);
     await screen.findByRole("group", { name: "Configuration" });
+    expect(command().closest("[data-config-layout]")?.getAttribute("data-config-layout")).toBe("columns");
     expect(resolved(command(), "border-top-color")).toBe(expectedToken(theme, "border-control"));
     expect(document.body.textContent).not.toContain("private-form-secret");
     fireEvent.change(command(), { target: { value: "new-command" } });

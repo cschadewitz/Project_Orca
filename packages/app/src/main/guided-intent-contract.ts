@@ -1,6 +1,6 @@
 /** Main-only validation of protected submitted commands; never resolves workflow defaults/secrets. */
 import { z } from "zod";
-import { RequestsSubmitParamsSchema, RunsAdmitParamsSchema } from "@orca/protocol";
+import { OperatorPreflightResultSchema, RequestsSubmitParamsSchema, RunsAdmitParamsSchema } from "@orca/protocol";
 import type { LaunchReview } from "../configuration-launch-contract.js";
 
 const target = z.strictObject({ workspaceId: z.uuid(), instanceId: z.uuid(), epoch: z.number().int().nonnegative() });
@@ -46,6 +46,11 @@ const reviewSchema = z.strictObject({
   expectedWorkflowRevision: z.string().min(1),
   expectedConfigGeneration: z.string().min(1),
   checkout,
+  selectionProvenance: OperatorPreflightResultSchema.pick({
+    selections: true,
+    itemWorkflow: true,
+    templatePack: true,
+  }).optional(),
 });
 
 /** JSON-only, finite, bounded user input; reject before JSON can silently drop a value. */

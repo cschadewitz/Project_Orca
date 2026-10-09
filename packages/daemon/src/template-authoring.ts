@@ -85,6 +85,10 @@ function selections(
 function parseSource(source: Source): Diagnostic[] {
   try {
     source.template = parsePromptTemplate(source.text);
+    if (!source.template.id.trim()) {
+      delete source.template;
+      return [{ key: source.key, code: "missing-id", message: "Declare a non-empty template ID in front matter." }];
+    }
     templateReferences(source.template.body);
     return [];
   } catch {
@@ -242,6 +246,15 @@ export class TemplateAuthoringService {
         ...(selection.templateId ? { templateId: selection.templateId } : {}),
       })),
     );
+    const partialUses = new Map<string, string[]>();
+    for (const source of sources) {
+      if (!source.template) continue;
+      for (const id of templateReferences(source.template.body)) {
+        const uses = partialUses.get(id) ?? [];
+        uses.push(`template:${source.template.id}`);
+        partialUses.set(id, uses);
+      }
+    }
     const snapshot: TemplateCatalog = {
       target,
       configRevision: view.config.revision,
@@ -267,8 +280,9 @@ export class TemplateAuthoringService {
         requires: source.template?.requires ?? [],
         partials: source.template ? templateReferences(source.template.body) : [],
         usedBy: assignments
-          .filter((assignment) => assignment.templateId === source.template?.id)
-          .map((assignment) => `${assignment.workflowId}:${assignment.nodeId}`),
+          .filter((assignment) => assignment.templateId !== undefined && assignment.templateId === source.template?.id)
+          .map((assignment) => `${assignment.workflowId}:${assignment.nodeId}`)
+          .concat(partialUses.get(source.template?.id ?? "") ?? []),
         source: { state: "available", text: source.text },
       })),
       assignments,
@@ -476,12 +490,14 @@ export class TemplateAuthoringService {
   }
   async publish(params: TemplatePublicationParams, authorize: () => Promise<void>): Promise<ConfigApplyResult> {
     return this.options.exclusive(async () => {
+      let reviewed: Source[] = [];
       const recheck = async () => {
         await authorize();
         const current = await this.loaded(params.target);
         this.fence(current, params);
         if (current.snapshot.configRevision !== params.expectedConfigRevision) refuse("Saved configuration changed.");
         if (current.snapshot.errors.length) invalid("Saved catalog is invalid. Repair references before Apply.");
+        reviewed = current.sources;
       };
       await recheck();
       const result = await this.options.applyLocked(
@@ -493,9 +509,8 @@ export class TemplateAuthoringService {
         recheck,
       );
       if (!params.validateOnly && result.outcome === "applied") {
-        const loaded = await this.loaded(params.target);
         await this.recordHistory(
-          loaded.sources.map((source) => ({
+          reviewed.map((source) => ({
             key: source.key,
             revision: source.revision,
             generation: result.status.activeGeneration,

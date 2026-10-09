@@ -15,6 +15,7 @@ export function launchProvenance(
   vars: Record<string, unknown>,
   supplied: Record<string, unknown>,
   overrides?: RunOverrides,
+  itemWorkflowSource?: "config.program.itemWorkflow",
 ) {
   const config = material.snapshot.config;
   const agents = material.agents.withOverrides(overrides);
@@ -77,6 +78,7 @@ export function launchProvenance(
       },
     ];
   });
+  const itemWorkflow = overrides?.itemWorkflow ?? vars.itemWorkflow;
   return {
     configGeneration: material.snapshot.id,
     workflow: { id: definition.id, version: definition.version, revision: workflowRevision(definition) },
@@ -86,6 +88,17 @@ export function launchProvenance(
       value: "[REDACTED]" as const,
     })),
     selections,
+    ...(typeof itemWorkflow === "string"
+      ? {
+          itemWorkflow: {
+            value: itemWorkflow,
+            source: overrides?.itemWorkflow
+              ? "run.overrides.itemWorkflow"
+              : (itemWorkflowSource ??
+                (Object.hasOwn(supplied, "itemWorkflow") ? "caller.vars.itemWorkflow" : "workflow.vars.itemWorkflow")),
+          },
+        }
+      : {}),
     ...(overrides?.templatePack
       ? { templatePack: { value: overrides.templatePack, source: "run.overrides.templatePack" } }
       : {}),

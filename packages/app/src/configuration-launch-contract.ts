@@ -83,6 +83,8 @@ export interface ConfigurationPorts {
 
 export type PreflightParams = z.input<typeof OperatorPreflightParamsSchema>;
 export type PreflightResult = z.output<typeof OperatorPreflightResultSchema>;
+/** Safe resolved selections from the exact guarded preflight, retained with its command. */
+export type LaunchSelectionProvenance = Pick<PreflightResult, "selections" | "itemWorkflow" | "templatePack">;
 export type LaunchCommand =
   | { mode: "direct"; params: Omit<RunsAdmitParams, "idempotencyKey" | "expectedScope"> }
   | { mode: "request"; params: Omit<RequestsSubmitParams, "idempotencyKey"> };
@@ -125,6 +127,7 @@ export interface LaunchReview {
   readonly expectedWorkflowRevision: string;
   readonly expectedConfigGeneration: string;
   readonly checkout: CheckoutEvidence;
+  readonly selectionProvenance?: LaunchSelectionProvenance | undefined;
 }
 /** Initial receipts and outer recovery envelopes intentionally retain different shapes. */
 export type LaunchResponse =

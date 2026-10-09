@@ -17,7 +17,7 @@ afterEach(() => {
   while (disposers.length) disposers.pop()?.();
 });
 const source = "---\nid: sdlc/review # preserved\nrequires: [spec]\n---\nReview {{artifacts.spec.content}}\n";
-function mount(holdSave = false, falseAssignment = false) {
+function mount(holdSave = false, falseAssignment = false, errors: TemplateCatalog["errors"] = [], readOnly = false) {
   stubMatchMedia(1440);
   const fake = fakeBridge();
   const target = { workspaceId: "workspace", instanceId: "daemon" };
@@ -48,7 +48,14 @@ function mount(holdSave = false, falseAssignment = false) {
     "templates.assign",
     "templates.history",
   ];
-  fake.connect({ ...fake.connection, methods });
+  fake.connect({
+    ...fake.connection,
+    methods: readOnly
+      ? methods.filter((method) =>
+          ["config.get", "templates.get", "templates.preview", "templates.history"].includes(method),
+        )
+      : methods,
+  });
   const data: ConfigGetResult = {
     ...CONFIG_GET,
     generation: {
@@ -88,7 +95,7 @@ function mount(holdSave = false, falseAssignment = false) {
       },
     ],
     workflows: [{ id: "review-work", version: "1" }],
-    errors: [],
+    errors,
   };
   const calls: { method: string; params: unknown }[] = [];
   let release: (() => void) | undefined;
@@ -100,6 +107,17 @@ function mount(holdSave = false, falseAssignment = false) {
         return denyReads
           ? { ok: false, error: { code: "AUTH_FORBIDDEN", message: "Refused" } }
           : { ok: true, result: catalog };
+      if (method === "templates.preview")
+        return {
+          ok: true,
+          result: {
+            requestedId: "sdlc/review",
+            resolvedId: "sdlc/review",
+            fallback: false,
+            partialIds: [],
+            text: "Fixture prompt from current catalog",
+          },
+        };
       if (method === "templates.validate")
         return {
           ok: true,
@@ -200,12 +218,14 @@ function mount(holdSave = false, falseAssignment = false) {
     denyReads = true;
     fake.connect({ ...fake.connection, methods: ["config.get"] });
   };
-  const external = () => {
+  const external = (changeGeneration = false) => {
     catalog = {
       ...catalog,
       catalogRevision: "external",
+      ...(changeGeneration ? { generation: "generation-2" } : {}),
       assets: catalog.assets.map((asset) => ({
         ...asset,
+        revision: "external-source",
         source: { state: "available", text: source + "External change\n" },
       })),
     };
@@ -231,6 +251,32 @@ const edit = async () => {
   fireEvent.change(control, { target: { value: source + "Retained instruction\n" } });
   return control;
 };
+it("refreshes clean read-only sources and previews using the current catalog revision and generation", async () => {
+  const f = mount(false, false, [], true);
+  fireEvent.click(await screen.findByRole("button", { name: "Templates" }));
+  const control = await screen.findByRole<HTMLTextAreaElement>("textbox", { name: /^Template source/ });
+  await waitFor(() => expect(control.value).toBe(source));
+  act(() => f.external(true));
+  await waitFor(() => expect(control.value).toBe(source + "External change\n"));
+  expect(control.readOnly).toBe(true);
+  expect(screen.getByRole("button", { name: "Save reviewed source" }).getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Preview prompt" }));
+  expect(await screen.findByLabelText("Rendered prompt")).toHaveProperty(
+    "textContent",
+    "Fixture prompt from current catalog",
+  );
+  expect(f.calls.find((call) => call.method === "templates.preview")?.params).toMatchObject({
+    expectedCatalogRevision: "external",
+    expectedConfigGeneration: "generation-2",
+  });
+});
+
+it("renders authoritative saved catalog diagnostics through the production adapter", async () => {
+  mount(false, false, [{ code: "compatibility", message: "Saved pack changes the base instruction contract." }]);
+  fireEvent.click(await screen.findByRole("button", { name: "Templates" }));
+  expect(await screen.findByText("Saved pack changes the base instruction contract.")).toBeTruthy();
+});
+
 for (const theme of ["light", "dark"] as const)
   describe(`template studio in ${theme}`, () => {
     it("mounts labelled controls, saves exact reviewed source, and requires separate Apply review", async () => {

@@ -1508,6 +1508,8 @@
 
 .orca-window {
   display: grid;
+  /* Bound the shell column to the narrow or zoomed viewport; surfaces own scrolling. */
+  grid-template-columns: minmax(0, 1fr);
   /* A bar is a band of chrome, not a control — these are bar-*, never control-* (#244). */
   grid-template-rows: var(--bar-title) 1fr var(--bar-status);
   height: 100%;
