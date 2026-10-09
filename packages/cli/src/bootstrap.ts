@@ -3,6 +3,12 @@
  * The CLI, the ACP facade and embedders all go through here.
  */
 import { enterFirstRunWriter } from "@orca/protocol/first-run-fence";
+import {
+  enterConfiguredUpdateBootstrap,
+  isClosedUpdateBootstrap,
+  closedUpdateOwnsConfiguredRoots,
+} from "./update-bootstrap.js";
+import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
 import { FileRetryClaimStore } from "@orca/store";
 import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
@@ -151,13 +157,21 @@ export async function loadConfig(
   configPath?: string,
 ): Promise<{ config: OrcaConfig; configDir: string; configFile?: string }> {
   const file = configPath ?? (await findConfig(cwd));
-  if (!file) return { config: parseOrcaConfig({}), configDir: resolve(cwd) };
+  if (!file) {
+    const config = parseOrcaConfig({}),
+      configDir = resolve(cwd);
+    await enterConfiguredUpdateBootstrap(configDir, resolve(configDir, config.storeDir));
+    return { config, configDir };
+  }
   const text = await readFile(file, "utf8");
   const raw = parseConfigFile(file, text);
   try {
     // The path travels with the parsed config: `config.get`/`config.set` serve the file
     // itself, and rediscovering it in the daemon could find a different one (#174).
-    return { config: parseOrcaConfig(raw), configDir: dirname(resolve(file)), configFile: resolve(file) };
+    const config = parseOrcaConfig(raw),
+      configDir = dirname(resolve(file));
+    await enterConfiguredUpdateBootstrap(configDir, resolve(configDir, config.storeDir));
+    return { config, configDir, configFile: resolve(file) };
   } catch (e) {
     throw new OrcaError("CONFIG_INVALID", `${file}: ${(e as Error).message}`, {}, { cause: e });
   }
@@ -235,7 +249,14 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     : await loadConfig(cwd, opts.configPath);
   const firstRunLaunch = process.env.ORCA_FIRST_RUN_LAUNCH;
   delete process.env.ORCA_FIRST_RUN_LAUNCH;
-  await enterFirstRunWriter(resolve(configDir), resolve(configDir, config.storeDir), firstRunLaunch);
+  await enterConfiguredUpdateBootstrap(resolve(configDir), resolve(configDir, config.storeDir));
+  if (isClosedUpdateBootstrap() && config.plugins.length)
+    throw new OrcaError("CONFIG_INVALID", "Closed replacement cannot execute uncertified plugin initialization");
+  if (isClosedUpdateBootstrap())
+    await enterClosedFirstRunInspection(resolve(configDir), resolve(configDir, config.storeDir), () =>
+      closedUpdateOwnsConfiguredRoots(configDir, resolve(configDir, config.storeDir)),
+    );
+  else await enterFirstRunWriter(resolve(configDir), resolve(configDir, config.storeDir), firstRunLaunch);
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config);
   const assets = await releaseAssets(config);

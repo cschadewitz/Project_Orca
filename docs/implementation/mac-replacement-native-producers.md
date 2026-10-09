@@ -1,5 +1,12 @@
 # Native replacement journal producer — #571 / #387
 
+The current fixed-path closed-window successor is documented in
+[mac-closed-window-fixed-path.md](mac-closed-window-fixed-path.md). It preserves this
+constituent and replaces its earlier ledger/topology assumptions with the approved
+closed-window invariant. The #580 patch below remains historical; use the successor's
+#584-pinned handoff. Existing encrypted legacy namespaces are retained and refused,
+because their AAD binds the original path.
+
 This focused dependent slice starts at exact [#580](https://github.com/cschadewitz/Project_Orca/pull/580)
 `b45b2a0d7df15798e6ba985d71f6e9d507d9cee4`. The branch is
 `calcifer/native-replacement-journal-producer`. Author and committer:

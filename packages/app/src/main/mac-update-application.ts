@@ -3,6 +3,7 @@ import type { BridgeResult } from "../bridge.js";
 import type { MacUpdateCommand, MacUpdateView } from "../mac-update-contract.js";
 import type { MacCandidateSession } from "./mac-update-candidates.js";
 import type { BrowserWindow, IpcMain, IpcMainEvent, IpcMainInvokeEvent } from "electron";
+import type { ClosedUpdateWindow } from "@orca/protocol/update-window";
 
 export interface MacUpdateCaller {
   readonly ownedMainFrame: boolean;
@@ -11,7 +12,11 @@ export interface MacUpdateCaller {
   readonly windowsHeld: boolean;
 }
 export class MacUpdateApplication {
-  constructor(private readonly session?: MacCandidateSession) {}
+  private approval: { offerId: string; manifestSha256: string; attempt: string } | undefined;
+  constructor(
+    private readonly session?: MacCandidateSession,
+    private readonly closedWindow?: ClosedUpdateWindow,
+  ) {}
   get state(): MacUpdateView {
     if (!this.session) return Object.freeze({ phase: "unavailable" });
     const { phase, offerId, blocker } = this.session.state;
@@ -63,8 +68,31 @@ export class MacUpdateApplication {
       return invalid();
     try {
       if (value.action === "defer") {
+        const approval = this.approval;
+        if (this.closedWindow && approval && !this.closedWindow.beginDefer(approval.manifestSha256, approval.attempt))
+          return invalid();
         if (!this.session.defer(value.offerId)) return invalid();
-      } else await this.session.approve(value.offerId);
+        if (this.closedWindow && approval) {
+          const settled = await this.session.settled();
+          if (settled.phase !== "deferred" || !this.closedWindow.finishDefer(approval.manifestSha256, approval.attempt))
+            return invalid();
+          this.approval = undefined;
+        }
+      } else {
+        if (this.closedWindow) {
+          if (!this.approval) {
+            if (current.phase !== "available") return invalid();
+            this.closedWindow.closeAdmission(value.manifestSha256);
+            this.approval = {
+              offerId: value.offerId,
+              manifestSha256: value.manifestSha256,
+              attempt: this.closedWindow.snapshot.attempt!,
+            };
+          } else if (this.approval.offerId !== value.offerId || this.approval.manifestSha256 !== value.manifestSha256)
+            return invalid();
+        }
+        await this.session.approve(value.offerId);
+      }
       return { ok: true, result: this.state };
     } catch {
       return invalid();

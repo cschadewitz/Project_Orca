@@ -10,6 +10,7 @@ export interface NativeStorageBackend {
   platform: "darwin" | "posix-fixture";
   /** Separate updater whitelist/durability support; absent in older diagnostics-only addons. */
   replacementStorage?: 1;
+  flushDescriptorSync?(this: void, fd: number): void;
   call(
     operation: string,
     root: unknown,

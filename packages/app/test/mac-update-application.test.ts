@@ -1,7 +1,7 @@
 /** Execute actual Mac preload/IPC over a real candidate session; production remains unavailable. */
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,7 @@ import type { OrcaBridge } from "../src/bridge.js";
 import { MacCandidateSession } from "../src/main/mac-update-candidates.js";
 import { MacUpdateApplication, installMacUpdateIPC } from "../src/main/mac-update-application.js";
 import { macUpdateRehearsal } from "./mac-update-rehearsal-fixture.js";
+import { ClosedUpdateWindow, enterUpdateWriter, provisionUpdateWindow } from "@orca/protocol/update-window";
 
 const source = stripTypeScriptTypes(
   readFileSync(new URL("../src/preload/index.cts", import.meta.url), "utf8").replace(
@@ -23,9 +24,18 @@ const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of closers.splice(0).reverse()) await close();
 });
-async function fixture(enabled = true) {
+async function fixture(enabled = true, closed = false) {
   const f = await macUpdateRehearsal();
-  const root = await mkdtemp(join(tmpdir(), "orca-mac-app-"));
+  const root = await mkdtemp(join(closed ? process.cwd() : tmpdir(), "orca-mac-app-"));
+  let window: ClosedUpdateWindow | undefined;
+  const data = join(root, "data");
+  if (closed) {
+    const control = join(root, "control");
+    await mkdir(data, { mode: 0o700 });
+    await mkdir(control, { mode: 0o700 });
+    await provisionUpdateWindow(control, [data]);
+    window = new ClosedUpdateWindow(control);
+  }
   const session = new MacCandidateSession(
     {
       root,
@@ -46,10 +56,11 @@ async function fixture(enabled = true) {
   );
   closers.push(async () => {
     await session.settled();
+    await window?.detach();
     await f.close();
     await rm(root, { recursive: true, force: true });
   });
-  const application = new MacUpdateApplication(enabled ? session : undefined);
+  const application = new MacUpdateApplication(enabled ? session : undefined, window);
   const ipc = new EventEmitter();
   const renderer = new EventEmitter();
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
@@ -108,6 +119,8 @@ async function fixture(enabled = true) {
     f,
     session,
     application,
+    window,
+    data,
     bridge,
     invoke,
     offer,
@@ -125,6 +138,36 @@ async function fixture(enabled = true) {
     },
   };
 }
+
+it("exact approval durably closes admission; defer settles preparation before reopening", async () => {
+  const h = await fixture(true, true);
+  const command = await h.offer();
+  expect(await h.bridge.macUpdates!.act({ ...command, offerId: "stale" })).toMatchObject({ ok: false });
+  expect(h.window!.snapshot.phase).toBe("open");
+  expect(await h.bridge.macUpdates!.act(command)).toMatchObject({ ok: true, result: { phase: "waiting" } });
+  const attempt = h.window!.snapshot.attempt;
+  await expect(enterUpdateWriter(h.data)).rejects.toThrow();
+  expect(await h.bridge.macUpdates!.act(command)).toMatchObject({ ok: true });
+  expect(h.window!.snapshot.attempt).toBe(attempt);
+  expect(await h.bridge.macUpdates!.act({ ...command, action: "defer" })).toMatchObject({ ok: true });
+  expect(h.window!.snapshot.phase).toBe("open");
+  const lease = await enterUpdateWriter(h.data);
+  expect(lease?.check()).toBe(true);
+  await lease?.close();
+  expect(await h.bridge.macUpdates!.act(command)).toMatchObject({ ok: false });
+  expect(h.window!.snapshot.phase).toBe("open");
+});
+
+it("defer cannot reopen a window once native daemon shutdown has begun", async () => {
+  const h = await fixture(true, true);
+  const command = await h.offer();
+  await h.bridge.macUpdates!.act(command);
+  h.window!.beginStop();
+  expect(await h.bridge.macUpdates!.act({ ...command, action: "defer" })).toMatchObject({ ok: false });
+  expect(h.window!.snapshot.phase).toBe("stopping");
+  expect(h.session.state.phase).toBe("waiting");
+  await expect(enterUpdateWriter(h.data)).rejects.toThrow();
+});
 
 it("actual production-default IPC/preload is unavailable, with no candidate or native operation", async () => {
   const h = await fixture(false);

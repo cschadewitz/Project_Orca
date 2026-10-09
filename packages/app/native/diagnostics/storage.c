@@ -20,6 +20,7 @@ typedef void *napi_ref;
 #include <limits.h>
 #include <sys/stat.h>
 #include <sys/file.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 #ifdef __APPLE__
 #include <sys/acl.h>
@@ -48,6 +49,7 @@ typedef struct job {
   size_t buffer_size, offset, length;
   int error, outcome, number;
   struct stat stat;
+  uint64_t pair_source_dev, pair_source_ino, pair_destination_dev, pair_destination_ino;
   char names[MAX_ENTRIES][64];
 } job;
 
@@ -170,6 +172,177 @@ static int sync_file(int fd) {
 #endif
   return 0;
 }
+
+/* Complete private pair trees. No path-based rm/cp or external mount/extraction commands.
+ * Root descriptors are bound to identities captured before verification, kept through
+ * mutation, and rechecked against the live paths. Every traversal stays openat-relative.
+ * Partial restoration is permitted only after the caller's durable whole-pair intention. */
+typedef struct pair_budget { uint64_t bytes; unsigned entries; } pair_budget;
+static int pair_stat(int fd, struct stat *st, int directory_only) {
+  if (fstat(fd,st) || st->st_uid!=getuid() || (st->st_mode&06000) ||
+      (directory_only && !S_ISDIR(st->st_mode))) { errno=EACCES; return -1; }
+  return 0;
+}
+static ssize_t pair_listx(int fd,char *bytes,size_t size) {
+#ifdef __APPLE__
+  return flistxattr(fd,bytes,size,0);
+#else
+  return flistxattr(fd,bytes,size);
+#endif
+}
+static ssize_t pair_getx(int fd,const char *name,void *bytes,size_t size) {
+#ifdef __APPLE__
+  return fgetxattr(fd,name,bytes,size,0,0);
+#else
+  return fgetxattr(fd,name,bytes,size);
+#endif
+}
+static int pair_setx(int fd,const char *name,const void *bytes,size_t size) {
+#ifdef __APPLE__
+  return fsetxattr(fd,name,bytes,size,0,0);
+#else
+  return fsetxattr(fd,name,bytes,size,0);
+#endif
+}
+static int pair_removex(int fd,const char *name) {
+#ifdef __APPLE__
+  return fremovexattr(fd,name,0);
+#else
+  return fremovexattr(fd,name);
+#endif
+}
+static int pair_metadata(int from,int to,const struct stat *st) {
+  char source[32768],destination_names[32768];
+  ssize_t sn=pair_listx(from,source,sizeof(source)),dn=pair_listx(to,destination_names,sizeof(destination_names));
+  if(sn<0 || dn<0 || sn==(ssize_t)sizeof(source) || dn==(ssize_t)sizeof(destination_names))return -1;
+  for(ssize_t i=0;i<dn;) {
+    size_t length=strnlen(destination_names+i,(size_t)(dn-i)); if(!length || length==(size_t)(dn-i)) { errno=EACCES; return -1; }
+    int found=0; for(ssize_t k=0;k<sn;) { size_t n=strnlen(source+k,(size_t)(sn-k)); if(!n || n==(size_t)(sn-k)){errno=EACCES;return -1;} if(!strcmp(source+k,destination_names+i))found=1; k+=(ssize_t)n+1; }
+    if(!found && pair_removex(to,destination_names+i))return -1;
+    i+=(ssize_t)length+1;
+  }
+  for(ssize_t i=0;i<sn;) {
+    size_t length=strnlen(source+i,(size_t)(sn-i)); if(!length || length==(size_t)(sn-i)){errno=EACCES;return -1;}
+    ssize_t count=pair_getx(from,source+i,NULL,0); if(count<0 || count>1048576){errno=EACCES;return -1;}
+    void *value=malloc(count?(size_t)count:1); if(!value)return -1;
+    int result=pair_getx(from,source+i,value,(size_t)count)!=count || pair_setx(to,source+i,value,(size_t)count);
+    free(value); if(result)return -1; i+=(ssize_t)length+1;
+  }
+#ifdef __APPLE__
+  acl_t acl=acl_get_fd_np(from,ACL_TYPE_EXTENDED);
+  if(!acl && errno==ENOENT)acl=acl_init(0);
+  if(!acl)return -1;
+  int acl_result=acl_set_fd_np(to,acl,ACL_TYPE_EXTENDED); acl_free(acl); if(acl_result)return -1;
+#endif
+  if(fchown(to,st->st_uid,st->st_gid) || fchmod(to,st->st_mode&07777))return -1;
+#ifdef __APPLE__
+  struct timespec times[2]={st->st_atimespec,st->st_mtimespec};
+#else
+  struct timespec times[2]={st->st_atim,st->st_mtim};
+#endif
+  return futimens(to,times) || (S_ISDIR(st->st_mode)?fsync(to):sync_file(to)) ? -1:0;
+}
+static int pair_name(const char *name) { return name[0] && strcmp(name,".") && strcmp(name,"..") && !strchr(name,'/') && !strchr(name,'\n') && !strchr(name,'\r'); }
+static int pair_same_entry(int parent,const char *name,const struct stat *held) { struct stat actual; return !fstatat(parent,name,&actual,AT_SYMLINK_NOFOLLOW) && identity(held,&actual); }
+static int pair_copy(int from,int to,unsigned depth,pair_budget *budget,int preserve_guard) {
+  struct stat directory_stat;
+  if(depth>64 || pair_stat(from,&directory_stat,1))return -1;
+  int list=openat(from,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC); DIR *dir=list<0?NULL:fdopendir(list);
+  if(!dir){if(list>=0)close(list);return -1;}
+  int result=0; struct dirent *entry;
+  errno=0;
+  while((entry=readdir(dir))) {
+    const char *name=entry->d_name; if(!strcmp(name,".") || !strcmp(name,".."))continue;
+    if(!pair_name(name) || ++budget->entries>65536){errno=EACCES;result=-1;break;}
+    if(preserve_guard && !strcmp(name,".orca-update-window.json"))continue;
+    struct stat original; if(fstatat(from,name,&original,AT_SYMLINK_NOFOLLOW) || original.st_uid!=getuid() || (original.st_mode&06000)){result=-1;break;}
+    if(S_ISLNK(original.st_mode)) {
+      char target[PATH_MAX]; ssize_t count=readlinkat(from,name,target,sizeof(target)-1);
+      if(count<1 || count==(ssize_t)sizeof(target)-1){result=-1;break;} target[count]=0;
+      if(target[0]=='/' || strchr(target,'\n') || strchr(target,'\r') || !pair_same_entry(from,name,&original)){errno=EACCES;result=-1;break;}
+      int level=(int)depth; char copy[PATH_MAX];strcpy(copy,target);char *save=NULL,*part=strtok_r(copy,"/",&save);
+      while(part){if(!strcmp(part,"..")){if(--level<0){result=-1;break;}}else if(strcmp(part,"."))++level;part=strtok_r(NULL,"/",&save);}
+      if(result || symlinkat(target,to,name) || fchownat(to,name,original.st_uid,original.st_gid,AT_SYMLINK_NOFOLLOW)){result=-1;break;}
+    } else if(S_ISDIR(original.st_mode)) {
+      int input=openat(from,name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC),output=-1;
+      struct stat held;
+      if(input<0 || pair_stat(input,&held,1) || !identity(&held,&original) || mkdirat(to,name,0700) || (output=openat(to,name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC))<0 || pair_copy(input,output,depth+1,budget,0))result=-1;
+      if(input>=0)close(input);
+      if(output>=0)close(output);
+      if(result)break;
+    } else if(S_ISREG(original.st_mode)) {
+      if(original.st_nlink!=1 || original.st_size<0 || original.st_size>1073741824 || (budget->bytes+=(uint64_t)original.st_size)>1073741824ULL){errno=EACCES;result=-1;break;}
+      int input=openat(from,name,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC),output=-1;
+      struct stat held,final;
+      if(input<0 || pair_stat(input,&held,0) || !identity(&held,&original) || (output=openat(to,name,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600))<0)result=-1;
+      unsigned char buffer[65536];off_t offset=0;
+      while(!result && offset<original.st_size) {
+        size_t request=(size_t)(original.st_size-offset);if(request>sizeof(buffer))request=sizeof(buffer);
+        ssize_t count=pread(input,buffer,request,offset);if(count<=0){result=-1;break;}
+        ssize_t written=0;while(written<count){ssize_t n=pwrite(output,buffer+written,(size_t)(count-written),offset+written);if(n<=0){result=-1;break;}written+=n;}offset+=count;
+      }
+      if(!result && (fstat(input,&final) || final.st_size!=original.st_size || final.st_mtime!=original.st_mtime || final.st_ctime!=original.st_ctime || !pair_same_entry(from,name,&original) || pair_metadata(input,output,&original)))result=-1;
+      if(input>=0)close(input);
+      if(output>=0)close(output);
+      if(result)break;
+    } else {errno=EACCES;result=-1;break;}
+    if(fsync(to)){result=-1;break;}
+    errno=0;
+  }
+  if(!result && errno)result=-1;
+  closedir(dir);
+  if(!result && pair_metadata(from,to,&directory_stat))result=-1;
+  return result;
+}
+static int pair_clear(int fd,unsigned depth,pair_budget *budget) {
+  if(depth>64){errno=EACCES;return -1;}
+  int list=openat(fd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *dir=list<0?NULL:fdopendir(list);
+  if(!dir){if(list>=0)close(list);return -1;}int result=0;struct dirent *entry;errno=0;
+  while((entry=readdir(dir))) {
+    const char *name=entry->d_name;if(!strcmp(name,".") || !strcmp(name,"..") || (!depth && !strcmp(name,".orca-update-window.json")))continue;
+    if(!pair_name(name) || ++budget->entries>65536){errno=EACCES;result=-1;break;}
+    struct stat st;if(fstatat(fd,name,&st,AT_SYMLINK_NOFOLLOW) || st.st_uid!=getuid()){result=-1;break;}
+    if(S_ISDIR(st.st_mode)) {
+      int child=openat(fd,name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);struct stat held;
+      if(child<0 || pair_stat(child,&held,1) || !identity(&held,&st) || pair_clear(child,depth+1,budget) || !pair_same_entry(fd,name,&st) || unlinkat(fd,name,AT_REMOVEDIR))result=-1;
+      if(child>=0)close(child);
+      if(result)break;
+    } else if(!pair_same_entry(fd,name,&st) || unlinkat(fd,name,0)){result=-1;break;}
+    errno=0;
+  }
+  if(!result && errno)result=-1;
+  closedir(dir);
+  if(!result && fsync(fd))result=-1;
+  return result;
+}
+static int pair_path_matches(int fd,const char *path) { int actual=directory(path,0,0);if(actual<0)return 0;struct stat a,b;int same=!fstat(fd,&a)&&!fstat(actual,&b)&&identity(&a,&b);close(actual);return same; }
+static void pair_execute(job *j) {
+  int source=directory(j->path,0,0),destination_fd=-1,parent=-1;
+  struct stat src,dst;char parent_path[PATH_MAX],name[NAME_MAX+1];
+  if(source<0 || pair_stat(source,&src,1) || (uint64_t)src.st_dev!=j->pair_source_dev || (uint64_t)src.st_ino!=j->pair_source_ino)goto failed;
+  int restore=!strcmp(j->operation,"pairRestore");
+  if(restore)destination_fd=directory(j->second,0,0);
+  else {
+    strcpy(parent_path,j->second);char *slash=strrchr(parent_path,'/');if(!slash || !pair_name(slash+1) || strlen(slash+1)>NAME_MAX)goto failed;
+    strcpy(name,slash+1);*slash=0;parent=directory(parent_path,0,1);
+    if(parent<0 || fstat(parent,&dst) || (uint64_t)dst.st_dev!=j->pair_destination_dev || (uint64_t)dst.st_ino!=j->pair_destination_ino || mkdirat(parent,name,0700) || fsync(parent))goto failed;
+    destination_fd=openat(parent,name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+  }
+  if(destination_fd<0 || pair_stat(destination_fd,&dst,1) || identity(&src,&dst) || (restore && ((uint64_t)dst.st_dev!=j->pair_destination_dev || (uint64_t)dst.st_ino!=j->pair_destination_ino)))goto failed;
+  if(!pair_path_matches(source,j->path) || !pair_path_matches(destination_fd,j->second))goto failed;
+  pair_budget budget={0,0};
+  if(restore && pair_clear(destination_fd,0,&budget))goto failed;
+#ifdef ORCA_PAIR_FAULTS
+  if(restore && j->number==1) { (void)write(STDOUT_FILENO,"PAIR_CLEAR\n",11); for(;;)pause(); }
+#endif
+  budget.bytes=0;budget.entries=0;
+  if(pair_copy(source,destination_fd,0,&budget,restore) || !pair_path_matches(source,j->path) || !pair_path_matches(destination_fd,j->second))goto failed;
+  if(parent>=0 && fsync(parent))goto failed;
+  close(source);close(destination_fd);if(parent>=0)close(parent);return;
+failed:
+  j->error=errno?errno:EACCES;if(source>=0)close(source);if(destination_fd>=0)close(destination_fd);if(parent>=0)close(parent);
+}
+
 static int destination(job *j, char *name) {
   if (j->path[0] != '/' || strlen(j->path) >= PATH_MAX ||
       (!strncmp(j->path,j->root->path,strlen(j->root->path)) && j->path[strlen(j->root->path)]=='/')) { errno=EACCES; return -1; }
@@ -186,10 +359,13 @@ static int destination(job *j, char *name) {
 }
 static void execute(napi_env env, void *data) {
   (void)env; job *j=data;
-  if (!strcmp(j->operation,"openRoot")) {
+  if(!strcmp(j->operation,"pairCopy") || !strcmp(j->operation,"pairRestore")) { pair_execute(j); return; }
+  if (!strcmp(j->operation,"openRoot") || !strcmp(j->operation,"provisionReplacementRoot")) {
     if (j->second[0] && strcmp(j->second,"replacement")) { j->error=EACCES; return; }
+    int provision=!strcmp(j->operation,"provisionReplacementRoot");
+    if (provision && strcmp(j->second,"replacement")) { j->error=EACCES; return; }
     /* A missing recovery root is lost authority, never implicit fresh provisioning. */
-    int fd=directory(j->path,j->offset==1 && !j->second[0],1);
+    int fd=directory(j->path,provision || (j->offset==1 && !j->second[0]),1);
     if (fd<0) { j->error=errno; return; }
     j->result=new_handle(fd,1,NULL);
     if (!j->result) { j->error=ENOMEM; return; }
@@ -416,7 +592,7 @@ static napi_value dispatch(napi_env env,napi_callback_info info) {
       !text_arg(env,argv[4],j->second,sizeof(j->second)) || !number_arg(env,argv[6],&j->offset) ||
       !number_arg(env,argv[7],&j->length) || !number_arg(env,argv[8],&position))goto invalid;
   j->number=(int)position;
-  if(strcmp(j->operation,"openRoot")) {
+  if(strcmp(j->operation,"openRoot") && strcmp(j->operation,"provisionReplacementRoot") && strcmp(j->operation,"pairCopy") && strcmp(j->operation,"pairRestore")) {
     j->root=unwrap(env,argv[1]);
     if(!j->root || j->root->kind!=1 || napi_create_reference(env,argv[1],1,&j->root_ref)!=napi_ok)goto invalid;
     if(atomic_exchange(&j->root->busy,1)) { j->error=EBUSY; goto invalid; }
@@ -427,6 +603,15 @@ static napi_value dispatch(napi_env env,napi_callback_info info) {
     j->file=unwrap(env,argv[2]);
     if(!j->file || j->file->kind!=2 || j->file->owner!=j->root || napi_create_reference(env,argv[2],1,&j->file_ref)!=napi_ok)goto invalid;
   }
+
+  if(!strcmp(j->operation,"pairCopy") || !strcmp(j->operation,"pairRestore")) {
+    bool is_buffer=false;char binding[257];unsigned long long a,b,c,d;char extra;
+    if(napi_is_buffer(env,argv[5],&is_buffer)!=napi_ok || !is_buffer || napi_get_buffer_info(env,argv[5],(void**)&j->buffer,&j->buffer_size)!=napi_ok || j->buffer_size>256 || !j->buffer_size)goto invalid;
+    memcpy(binding,j->buffer,j->buffer_size);binding[j->buffer_size]=0;
+    if(sscanf(binding,"%llu:%llu:%llu:%llu%c",&a,&b,&c,&d,&extra)!=4)goto invalid;
+    j->pair_source_dev=a;j->pair_source_ino=b;j->pair_destination_dev=c;j->pair_destination_ino=d;
+  }
+
   if(!strcmp(j->operation,"read") || !strcmp(j->operation,"write")) {
     bool is_buffer=false;
     if(napi_is_buffer(env,argv[5],&is_buffer)!=napi_ok || !is_buffer || napi_get_buffer_info(env,argv[5],(void**)&j->buffer,&j->buffer_size)!=napi_ok ||
@@ -440,8 +625,18 @@ invalid:
   if(owns_busy)atomic_store(&j->root->busy,0);
   napi_reject_deferred(env,j->deferred,failure(env,j->error?j->error:EACCES)); cleanup(j); return promise;
 }
+
+static napi_value flush_descriptor(napi_env env,napi_callback_info info) {
+  napi_value value;size_t argc=1;int32_t fd;struct stat st;
+  if(napi_get_cb_info(env,info,&argc,&value,NULL,NULL)!=napi_ok || argc!=1 || napi_get_value_int32(env,value,&fd)!=napi_ok || fd<0 ||
+      !file_safe(fd,&st) || st.st_size>16384 || sync_file(fd)) {
+    napi_throw(env,failure(env,EACCES));return NULL;
+  }
+  napi_get_undefined(env,&value);return value;
+}
+
 static napi_value initialize(napi_env env,napi_value exports) {
-  napi_value abi,platform,call,replacement;
+  napi_value abi,platform,call,replacement,flush;
 #ifdef __APPLE__
   const char *name="darwin";
 #else
@@ -451,6 +646,7 @@ static napi_value initialize(napi_env env,napi_value exports) {
       napi_create_function(env,"call",NAPI_AUTO_LENGTH,dispatch,NULL,&call)!=napi_ok || napi_set_named_property(env,exports,"abi",abi)!=napi_ok ||
       napi_set_named_property(env,exports,"platform",platform)!=napi_ok || napi_set_named_property(env,exports,"call",call)!=napi_ok ||
       napi_create_uint32(env,1,&replacement)!=napi_ok || napi_set_named_property(env,exports,"replacementStorage",replacement)!=napi_ok ||
+      napi_create_function(env,"flushDescriptorSync",NAPI_AUTO_LENGTH,flush_descriptor,NULL,&flush)!=napi_ok || napi_set_named_property(env,exports,"flushDescriptorSync",flush)!=napi_ok ||
       napi_object_freeze(env,exports)!=napi_ok)return NULL;
   return exports;
 }
