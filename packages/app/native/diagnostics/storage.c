@@ -29,7 +29,7 @@ typedef void *napi_ref;
 #define MAX_ENTRIES 16
 
 typedef struct handle {
-  int fd, kind, lock_fd, destination_fd;
+  int fd, kind, lock_fd, destination_fd, replacement;
   struct handle *owner;
   atomic_uint references, files;
   atomic_int busy;
@@ -80,7 +80,12 @@ static int file_safe(int fd, struct stat *st) {
     st->st_nlink == 1 && !(st->st_mode & 0077) && st->st_size >= 0 &&
     st->st_size <= MAX_BYTES && private_acl(fd);
 }
-static int name_limit(const char *name) {
+static int name_limit(const handle *root, const char *name) {
+  if (root->replacement) {
+    if (!strcmp(name,"writer.lock")) return 4096;
+    if (!strcmp(name,"replacement.enc") || !strcmp(name,"replacement.tmp")) return 40960;
+    return 0;
+  }
   const char *controls[] = {"setting.json","setting.json.tmp","manifest.json","manifest.json.tmp","control.key","control.key.tmp","export.json","export.json.tmp","writer.lock",NULL};
   for (int i = 0; controls[i]; ++i) if (!strcmp(name, controls[i])) return 4096;
   if (!strcmp(name,"export-stage.tmp")) return 1048576;
@@ -182,10 +187,13 @@ static int destination(job *j, char *name) {
 static void execute(napi_env env, void *data) {
   (void)env; job *j=data;
   if (!strcmp(j->operation,"openRoot")) {
-    int fd=directory(j->path,j->offset==1,1);
+    if (j->second[0] && strcmp(j->second,"replacement")) { j->error=EACCES; return; }
+    /* A missing recovery root is lost authority, never implicit fresh provisioning. */
+    int fd=directory(j->path,j->offset==1 && !j->second[0],1);
     if (fd<0) { j->error=errno; return; }
     j->result=new_handle(fd,1,NULL);
     if (!j->result) { j->error=ENOMEM; return; }
+    j->result->replacement=!strcmp(j->second,"replacement");
     strcpy(j->result->path,j->path); return;
   }
   if (!strcmp(j->operation,"closeRoot")) {
@@ -227,6 +235,7 @@ static void execute(napi_env env, void *data) {
   }
   if (!strcmp(j->operation,"stopped")) { j->number=j->root->lock_fd>=0 && atomic_load(&j->root->files)==0; return; }
   if (!strcmp(j->operation,"validateDestination")) {
+    if (j->root->replacement) { j->error=EACCES; return; }
     char name[NAME_MAX+1]; int fd=destination(j,name);
     if (fd>=0) {
       if (j->root->destination_fd>=0 && !strcmp(j->root->destination,j->path)) {
@@ -241,6 +250,7 @@ static void execute(napi_env env, void *data) {
     return;
   }
   if (!strcmp(j->operation,"publish")) {
+    if (j->root->replacement) { j->error=EACCES; return; }
     char name[NAME_MAX+1]; struct stat held,current;
     if (j->root->lock_fd<0 || !file_safe(j->file->fd,&held) || held.st_size<1 || held.st_size>1048576 || strcmp(j->file->name,"export-stage.tmp") ||
         fstatat(j->root->fd,"export-stage.tmp",&current,AT_SYMLINK_NOFOLLOW) || !identity(&held,&current)) { j->outcome=1; return; }
@@ -270,7 +280,7 @@ static void execute(napi_env env, void *data) {
       ssize_t count=pread(j->file->fd,j->buffer+j->offset,j->length,(off_t)j->number);
       if(count<0)j->error=errno; else j->number=(int)count; return;
     }
-    if (j->buffer_size>(size_t)name_limit(j->file->name) || current.st_size!=0) { j->error=EOVERFLOW; return; }
+    if (j->buffer_size>(size_t)name_limit(j->root,j->file->name) || current.st_size!=0) { j->error=EOVERFLOW; return; }
     size_t written=0;
     while(written<j->buffer_size) {
       ssize_t count=pwrite(j->file->fd,j->buffer+written,j->buffer_size-written,(off_t)written);
@@ -278,7 +288,7 @@ static void execute(napi_env env, void *data) {
     }
     return;
   }
-  if (!name_limit(j->path) || (!strcmp(j->path,"writer.lock") && strcmp(j->operation,"stat"))) { j->error=EACCES; return; }
+  if (!name_limit(j->root,j->path) || (!strcmp(j->path,"writer.lock") && strcmp(j->operation,"stat"))) { j->error=EACCES; return; }
   if (!strcmp(j->operation,"stat")) { if(fstatat(j->root->fd,j->path,&j->stat,AT_SYMLINK_NOFOLLOW))j->error=errno; return; }
   if (j->root->lock_fd<0 && strcmp(j->operation,"openRead")) { j->error=EACCES; return; }
   if (!strcmp(j->operation,"openRead") || !strcmp(j->operation,"openCreate")) {
@@ -287,7 +297,7 @@ static void execute(napi_env env, void *data) {
     int fd=openat(j->root->fd,j->path,flags|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK,0600);
     if(fd<0) { j->error=errno; return; }
     struct stat st;
-    if(!file_safe(fd,&st) || st.st_size>name_limit(j->path)) { close(fd); j->error=EACCES; return; }
+    if(!file_safe(fd,&st) || st.st_size>name_limit(j->root,j->path)) { close(fd); j->error=EACCES; return; }
     j->result=new_handle(fd,2,j->root); if(!j->result) { j->error=ENOMEM; return; }
     strcpy(j->result->name,j->path); return;
   }
@@ -297,11 +307,14 @@ static void execute(napi_env env, void *data) {
   if(!file_safe(fd,&st)) { close(fd); j->error=EACCES; return; }
   close(fd);
   if (!strcmp(j->operation,"remove")) {
+    /* Replacement recovery never deletes evidence, including incomplete writes. */
+    if (j->root->replacement) { j->error=EACCES; return; }
     if(unlinkat(j->root->fd,j->path,0)||fsync(j->root->fd))j->error=errno;
     return;
   }
-  if (!strcmp(j->operation,"replace") && name_limit(j->second) && strcmp(j->second,"writer.lock")) {
-    if(st.st_size>name_limit(j->second)) { j->error=EOVERFLOW; return; }
+  if (!strcmp(j->operation,"replace") && name_limit(j->root,j->second) && strcmp(j->second,"writer.lock")) {
+    if (j->root->replacement && (strcmp(j->path,"replacement.tmp") || strcmp(j->second,"replacement.enc"))) { j->error=EACCES; return; }
+    if(st.st_size>name_limit(j->root,j->second)) { j->error=EOVERFLOW; return; }
     struct stat target;
     if(!fstatat(j->root->fd,j->second,&target,AT_SYMLINK_NOFOLLOW)) {
       int existing=openat(j->root->fd,j->second,O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK);
@@ -428,7 +441,7 @@ invalid:
   napi_reject_deferred(env,j->deferred,failure(env,j->error?j->error:EACCES)); cleanup(j); return promise;
 }
 static napi_value initialize(napi_env env,napi_value exports) {
-  napi_value abi,platform,call;
+  napi_value abi,platform,call,replacement;
 #ifdef __APPLE__
   const char *name="darwin";
 #else
@@ -437,6 +450,7 @@ static napi_value initialize(napi_env env,napi_value exports) {
   if(napi_create_uint32(env,1,&abi)!=napi_ok || napi_create_string_utf8(env,name,NAPI_AUTO_LENGTH,&platform)!=napi_ok ||
       napi_create_function(env,"call",NAPI_AUTO_LENGTH,dispatch,NULL,&call)!=napi_ok || napi_set_named_property(env,exports,"abi",abi)!=napi_ok ||
       napi_set_named_property(env,exports,"platform",platform)!=napi_ok || napi_set_named_property(env,exports,"call",call)!=napi_ok ||
+      napi_create_uint32(env,1,&replacement)!=napi_ok || napi_set_named_property(env,exports,"replacementStorage",replacement)!=napi_ok ||
       napi_object_freeze(env,exports)!=napi_ok)return NULL;
   return exports;
 }
