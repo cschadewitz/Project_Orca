@@ -1,6 +1,6 @@
 /** Fresh disposable source processes exercise closed startup only; no signed Mac or full protected-state recovery. */
 import { readFile, writeFile } from "node:fs/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it as platformIt, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { PROTOCOL_VERSION } from "@orca/protocol";
@@ -11,6 +11,8 @@ import {
   type MacRestartChild,
 } from "../src/main/mac-update-restart.js";
 import { restartFixture } from "./mac-restart-fixture.js";
+// Node on Windows cannot deliver the catchable POSIX SIGTERM used by this Mac fixture.
+const it = platformIt.skipIf(process.platform === "win32");
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
   vi.useRealTimers();

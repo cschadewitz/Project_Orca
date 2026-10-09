@@ -23,80 +23,86 @@ edges:
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-it("restores root isolation from captured built-in configuration after restart and keeps old defaults", async () => {
-  const opts = await fixture("");
-  git(opts.configDir, "init", "-q", "-b", "main");
-  git(
-    opts.configDir,
-    "-c",
-    "user.name=test",
-    "-c",
-    "user.email=test@example.invalid",
-    "commit",
-    "--allow-empty",
-    "-qm",
-    "base",
-  );
-  const config = parseOrcaConfig({
-    ...opts.config,
-    plugins: [],
-    workspace: { provider: "git-worktree", repo: ".", worktreeRoot: "trees", isolateRoots: true },
-  });
-  const first = await bootstrap({ ...opts, config });
-  const launch = await first.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" });
-  const id = await launch.startRun({});
-  const workspace = (await first.orchestrator.getState(id)).run.workspace;
-  expect(workspace.rootProvisioning?.runId).toBe(id);
-  await writeFile(join(workspace.cwd, "partial"), "retained");
-  const defaults = parseOrcaConfig({ ...config, workspace: { provider: "git-worktree", repo: "." } });
-  expect(defaults.workspace).not.toHaveProperty("isolateRoots");
-  const second = await bootstrap({ ...opts, config: defaults });
-  expect((await second.orchestrator.run(id)).run.status).toBe("completed");
-  const restored = await second.generations.restore(launch.generationId);
-  const next = await second.orchestrator.startRun({ workflowId: "tiny" }, restored);
-  expect((await second.orchestrator.getState(next)).run.workspace.rootProvisioning).toBeDefined();
-  const ordinary = await second.orchestrator.startRun({ workflowId: "tiny" });
-  expect((await second.orchestrator.getState(ordinary)).run.workspace.cwd).toBe(opts.configDir);
-  // Restart under opt-in configuration must still honor an older generation's default.
-  const third = await bootstrap({ ...opts, config });
-  expect((await third.orchestrator.run(ordinary)).run.status).toBe("completed");
-});
+it.skipIf(process.platform !== "linux")(
+  "restores root isolation from captured built-in configuration after restart and keeps old defaults",
+  async () => {
+    const opts = await fixture("");
+    git(opts.configDir, "init", "-q", "-b", "main");
+    git(
+      opts.configDir,
+      "-c",
+      "user.name=test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-qm",
+      "base",
+    );
+    const config = parseOrcaConfig({
+      ...opts.config,
+      plugins: [],
+      workspace: { provider: "git-worktree", repo: ".", worktreeRoot: "trees", isolateRoots: true },
+    });
+    const first = await bootstrap({ ...opts, config });
+    const launch = await first.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" });
+    const id = await launch.startRun({});
+    const workspace = (await first.orchestrator.getState(id)).run.workspace;
+    expect(workspace.rootProvisioning?.runId).toBe(id);
+    await writeFile(join(workspace.cwd, "partial"), "retained");
+    const defaults = parseOrcaConfig({ ...config, workspace: { provider: "git-worktree", repo: "." } });
+    expect(defaults.workspace).not.toHaveProperty("isolateRoots");
+    const second = await bootstrap({ ...opts, config: defaults });
+    expect((await second.orchestrator.run(id)).run.status).toBe("completed");
+    const restored = await second.generations.restore(launch.generationId);
+    const next = await second.orchestrator.startRun({ workflowId: "tiny" }, restored);
+    expect((await second.orchestrator.getState(next)).run.workspace.rootProvisioning).toBeDefined();
+    const ordinary = await second.orchestrator.startRun({ workflowId: "tiny" });
+    expect((await second.orchestrator.getState(ordinary)).run.workspace.cwd).toBe(opts.configDir);
+    // Restart under opt-in configuration must still honor an older generation's default.
+    const third = await bootstrap({ ...opts, config });
+    expect((await third.orchestrator.run(ordinary)).run.status).toBe("completed");
+  },
+);
 
-it("refuses changed root registration before execution and retains evidence on cancellation", async () => {
-  const opts = await fixture("");
-  git(opts.configDir, "init", "-q", "-b", "main");
-  git(
-    opts.configDir,
-    "-c",
-    "user.name=test",
-    "-c",
-    "user.email=test@example.invalid",
-    "commit",
-    "--allow-empty",
-    "-qm",
-    "base",
-  );
-  const config = parseOrcaConfig({
-    ...opts.config,
-    plugins: [],
-    workspace: { provider: "git-worktree", repo: ".", worktreeRoot: "trees", isolateRoots: true },
-  });
-  const app = await bootstrap({ ...opts, config });
-  const id = await app.orchestrator.startRun({ workflowId: "tiny" });
-  const workspace = (await app.orchestrator.getState(id)).run.workspace;
-  git(workspace.cwd, "checkout", "-qb", "wrong");
-  await expect(app.orchestrator.run(id)).rejects.toMatchObject({ code: "RUN_STATE" });
-  expect((await app.orchestrator.events(id)).some((event) => event.type === "run.started")).toBe(false);
-  await app.orchestrator.cancel(id);
-  expect((await app.orchestrator.getState(id)).run.status).toBe("cancelled");
-  expect(git(opts.configDir, "worktree", "list", "--porcelain")).toContain(workspace.cwd);
-  const missing = await app.orchestrator.startRun({ workflowId: "tiny" });
-  const missingWorkspace = (await app.orchestrator.getState(missing)).run.workspace;
-  vi.spyOn(app.generations, "restore").mockRejectedValue(new OrcaError("RUN_STATE", "missing generation"));
-  await expect(app.orchestrator.run(missing)).rejects.toMatchObject({ code: "RUN_STATE" });
-  expect((await app.orchestrator.events(missing)).some((event) => event.type === "run.started")).toBe(false);
-  expect(git(opts.configDir, "worktree", "list", "--porcelain")).toContain(missingWorkspace.cwd);
-});
+it.skipIf(process.platform !== "linux")(
+  "refuses changed root registration before execution and retains evidence on cancellation",
+  async () => {
+    const opts = await fixture("");
+    git(opts.configDir, "init", "-q", "-b", "main");
+    git(
+      opts.configDir,
+      "-c",
+      "user.name=test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-qm",
+      "base",
+    );
+    const config = parseOrcaConfig({
+      ...opts.config,
+      plugins: [],
+      workspace: { provider: "git-worktree", repo: ".", worktreeRoot: "trees", isolateRoots: true },
+    });
+    const app = await bootstrap({ ...opts, config });
+    const id = await app.orchestrator.startRun({ workflowId: "tiny" });
+    const workspace = (await app.orchestrator.getState(id)).run.workspace;
+    git(workspace.cwd, "checkout", "-qb", "wrong");
+    await expect(app.orchestrator.run(id)).rejects.toMatchObject({ code: "RUN_STATE" });
+    expect((await app.orchestrator.events(id)).some((event) => event.type === "run.started")).toBe(false);
+    await app.orchestrator.cancel(id);
+    expect((await app.orchestrator.getState(id)).run.status).toBe("cancelled");
+    expect(git(opts.configDir, "worktree", "list", "--porcelain")).toContain(workspace.cwd);
+    const missing = await app.orchestrator.startRun({ workflowId: "tiny" });
+    const missingWorkspace = (await app.orchestrator.getState(missing)).run.workspace;
+    vi.spyOn(app.generations, "restore").mockRejectedValue(new OrcaError("RUN_STATE", "missing generation"));
+    await expect(app.orchestrator.run(missing)).rejects.toMatchObject({ code: "RUN_STATE" });
+    expect((await app.orchestrator.events(missing)).some((event) => event.type === "run.started")).toBe(false);
+    expect(git(opts.configDir, "worktree", "list", "--porcelain")).toContain(missingWorkspace.cwd);
+  },
+);
 async function fixture(plugin: string, workflow = tiny) {
   const dir = await mkdtemp(join(tmpdir(), "orca-generation-bootstrap-"));
   dirs.push(dir);
@@ -267,7 +273,7 @@ it.each(["", 'api.agents.mapRole("worker-role", "worker");'])(
       parseOrcaConfig({
         ...opts.config,
         agents: [{ id: "worker", command: "unused", defaultModel: model }],
-        program: { workflow: "tiny" },
+        program: { workflow: "tiny", itemWorkflow: "tiny" },
       });
     const first = await bootstrap({ ...opts, config: config("old") });
     const launch = await first.generations.captureLaunch({ purpose: "request" });

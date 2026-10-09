@@ -2,7 +2,7 @@
 import { mkdtemp, readFile, readdir, rm, stat, mkdir, symlink, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it as platformIt, vi } from "vitest";
 import {
   downloadMacCandidate,
   macSource,
@@ -14,6 +14,8 @@ import {
 import { readMacManifest, sha256 } from "../src/main/mac-candidate-manifest.js";
 import { MacCandidateSession, type MacCandidateOffer } from "../src/main/mac-update-candidates.js";
 
+// The download contract requires POSIX private modes. Windows must refuse it.
+const it = platformIt.skipIf(process.platform === "win32");
 const filesystemFaults = vi.hoisted(() => ({
   cleanup: new Set<string>(),
   writeGate: undefined as (() => Promise<void>) | undefined,
@@ -153,6 +155,17 @@ afterEach(async () => {
   filesystemFaults.writeGate = undefined;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
+
+platformIt.runIf(process.platform === "win32")(
+  "refuses Windows storage before transport, inspection or owned writes",
+  async () => {
+    const r = await rig();
+    expect(await downloadMacCandidate(r.binding, r.bytes, r.ports, signal())).toEqual({ outcome: "failed" });
+    expect(r.fetch).not.toHaveBeenCalled();
+    expect(r.inspect).not.toHaveBeenCalled();
+    expect(await readdir(r.root)).toEqual([]);
+  },
+);
 
 it("cancelled inspection settles its native cleanup before discarding the owned download", async () => {
   const r = await rig(),

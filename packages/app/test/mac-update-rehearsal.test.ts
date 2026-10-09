@@ -1,7 +1,7 @@
 /** Coherent guarded and closed-restart rehearsal; no native installation or admission reopening. */
 import { readFile, writeFile } from "node:fs/promises";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it as platformIt, vi } from "vitest";
 import type { MacNativeInspection } from "../src/main/mac-candidate-download.js";
 import { RuntimeMaintenanceResultSchema, type RuntimeMaintenanceParams } from "@orca/protocol";
 import { z } from "zod";
@@ -9,6 +9,8 @@ import { MacRestartVerification, MacUpdateOwnedStop, type MacRestartProcess } fr
 import { restartFixture } from "./mac-restart-fixture.js";
 import { macUpdateRehearsal, barrier, type ProofFault } from "./mac-update-rehearsal-fixture.js";
 
+// This rehearsal requires POSIX private modes and catchable child SIGTERM.
+const it = platformIt.skipIf(process.platform === "win32");
 const fixtures: Awaited<ReturnType<typeof macUpdateRehearsal>>[] = [];
 const restartClosers: (() => Promise<void>)[] = [];
 async function fixture() {
