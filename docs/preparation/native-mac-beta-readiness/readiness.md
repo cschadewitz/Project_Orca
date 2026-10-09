@@ -1,5 +1,30 @@
 # Invited native Mac beta readiness ledger
 
+**Current slice, 2026-10-09:** [acceptance runbook](acceptance-runbook.md) and
+[operator checklist](operator-checklist.md) reconcile #555's exact unrun staging
+source with #567 `9ac19ead4347180e44be6162a41d2d5726b3f929` mounted setup/launch
+and #569 `1a2e003e04beaa2e13cd35115faa6c4234145264` durable ownership protection.
+No runtime head is imported. #570 recovery remains with the separate integration owner;
+the current owner-loss path has no supported orphan-reconciliation command.
+The [guide](getting-started-draft.md) now matches those draft-source controls and
+agent-free marker-only sample. Gate/artifact/cancel and real-agent configuration
+persistence still require owner outputs. An executable packet generator emits exact
+arm64 prepackaged DMG/ZIP and bounded verification/launch vectors, executes none and
+leaves candidate acceptance blocked. Signing metadata remains unknown after Forbidden.
+Mac availability is later, not now. No Hub publication, device operation or parent
+acceptance is claimed. Exact remaining non-secret prerequisites are in the runbook.
+
+**Historical preparation audit, 2026-10-08:** main independently confirmed/fetched as
+`db579fb7ac9cfce2e4e6901713088a80602311da`. #529 and #541 are merged. Their executor/
+environment and fixture ZIP containment helpers are reused unchanged. Today's
+[candidate execution packet](candidate-execution.md) records the current source/UI
+audit, non-secret prerequisite findings, explicit unsigned staging plan and Casey's
+timed action list. Current main has the guided controller/component but no shell
+registration; #334/#386 integration is separately owned. Diagnostics and Mac updater
+source are present but native activation/acceptance is separately owned and unproven.
+The source/ownership tables below retain the **2026-10-07 historical snapshot**, rather
+than pretending their old open-PR/merge-pending entries describe today's state.
+
 Source audited on 2026-10-07: main
 `c1eba301702fef0466b2d3481c36d62331ee7d48`, independently confirmed with
 `git ls-remote origin refs/heads/main`. AGENTS.md, CONTRIBUTING.md,
@@ -19,7 +44,7 @@ combinations, with **no verified coverage here**. The release requires the relev
 M10 actual-Cal and M21 configuration/launch outcomes. Independent preparation can
 run early. Canvas, fleet, Docker and #486 are not blanket dependencies.
 
-## Existing work and active ownership
+## Historical work and ownership snapshot
 
 | Work | Reused evidence and boundaries |
 | --- | --- |

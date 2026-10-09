@@ -94,10 +94,9 @@ mac:
       arch: [x64, arm64]
     - target: zip
       arch: [x64, arm64]
-  # Unsigned, deliberately and temporarily: there is no Developer ID certificate in this
-  # repository's secrets yet, and electron-builder would otherwise try to sign with whatever
-  # identity is in the runner's keychain and fail the build. Signing and notarisation are
-  # the named follow-up in docs/RELEASING.md, with the secrets they need.
+  # The ordinary lane is deliberately unsigned. Signing authority and protected execution
+  # remain operator prerequisites; Forbidden metadata means unknown, not absent. Explicit
+  # null prevents builder from selecting an incidental runner keychain identity.
   identity: null
   notarize: false
 

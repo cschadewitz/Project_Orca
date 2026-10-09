@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate synthetic delivery-v1 fixtures only; never verify or execute a candidate."""
+"""Single delivery-v1 validator: synthetic fixtures or explicitly trusted native candidates."""
 
 import argparse
 from datetime import datetime
@@ -219,16 +219,17 @@ def validate_sums(data, expected):
         require(entries[path] == digest, f"SHA256SUMS: digest mismatch: {path}")
 
 
-def validate_fixture(directory, fixture_app):
-    """Read a v1 fixture set and a synthetic app tree, without writes or subprocesses."""
+def validate_delivery(directory, kind="fixture"):
+    """Shared v1 structure and byte checks; native truth is an independent adapter."""
     root = Path(directory).resolve(strict=True)
     require(root.is_dir(), "fixture directory: expected directory")
     manifest_path = safe_file(root, MANIFEST)
     manifest_bytes = manifest_path.read_bytes()
     manifest = parse_json(manifest_bytes, MANIFEST)
     require(isinstance(manifest, dict), "manifest: expected object")
-    require(manifest.get("kind") != "candidate", FIXTURE_ONLY)
-    require(manifest.get("kind") == "fixture", "manifest.kind: expected fixture")
+    if kind == "fixture":
+        require(manifest.get("kind") != "candidate", FIXTURE_ONLY)
+    require(manifest.get("kind") == kind, f"manifest.kind: expected {kind}")
     schema(manifest.get("schemaVersion"), "manifest")
     object_fields(manifest, "schemaVersion kind identity identitySha256 artifacts minimumMacOS signing "
                   "notarization stapling evidence", "manifest")
@@ -270,18 +271,34 @@ def validate_fixture(directory, fixture_app):
             expected[name] = digest
     require(set(references) <= evidence_paths, "evidence: referenced report is not listed")
     validate_sums(sums_path.read_bytes(), expected)
+    return manifest
+
+
+def validate_fixture(directory, fixture_app):
+    """Synthetic separate trees never establish container or native truth."""
+    manifest = validate_delivery(directory)
     validate_app(Path(fixture_app).resolve(strict=True), manifest)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--mode", required=True, choices=("fixture", "candidate"),
-                        help="candidate is explicitly unsupported")
+                        help="candidate requires macOS and independent trusted policy")
     parser.add_argument("--fixture-app", type=Path, help="separate synthetic ORCA.app tree (never launched)")
     parser.add_argument("directory", nargs="?", type=Path, help="directory containing the fixture manifest and SHA256SUMS")
+    parser.add_argument("--trusted-policy", type=Path, help="independently trusted candidate expectations, never from download")
+    parser.add_argument("--scratch-parent", type=Path, help="private local executor scratch parent")
     args = parser.parse_args(argv)
     if args.mode == "candidate":
-        parser.error(FIXTURE_ONLY)
+        if args.directory is None or args.trusted_policy is None or args.scratch_parent is None or args.fixture_app is not None:
+            parser.error(FIXTURE_ONLY + "; use --trusted-policy and --scratch-parent for native candidates")
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("orca_native_candidate", Path(__file__).with_name("native-mac-candidate.py"))
+        adapter = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(adapter)
+        return adapter.candidate_main(args.directory, args.trusted_policy, args.scratch_parent)
+    if args.trusted_policy is not None or args.scratch_parent is not None:
+        parser.error("fixture mode does not accept candidate authority inputs")
     if args.directory is None or args.fixture_app is None:
         parser.error("fixture mode requires directory and --fixture-app")
     try:
