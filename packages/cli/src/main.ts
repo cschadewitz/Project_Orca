@@ -4,6 +4,9 @@ import { parseArgs } from "node:util";
 import { consoleLogger, describeError, isOrcaError, type Logger } from "@orca/core";
 import { isProtocolFault } from "@orca/protocol";
 import { commands, ORCA_VERSION } from "./commands/index.js";
+import { assertClosedUpdateCommand, enterCommandUpdateBootstrap } from "./update-bootstrap.js";
+import { dirname, resolve } from "node:path";
+import { homedir } from "node:os";
 
 const USAGE = `orca - Orchestration Runtime for Coding Agents
 
@@ -102,6 +105,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       process.stderr.write(`unknown command '${name}'\n\n${USAGE}`);
       return 1;
     }
+    assertClosedUpdateCommand(name, values);
+    await enterCommandUpdateBootstrap([
+      values.cwd ?? process.cwd(),
+      ...(values.config ? [dirname(resolve(values.config))] : []),
+      ...(values.dir ? [resolve(values.dir)] : []),
+      resolve(homedir(), ".orca"),
+    ]);
     return await command.run({
       cwd: values.cwd ?? process.cwd(),
       configPath: values.config,

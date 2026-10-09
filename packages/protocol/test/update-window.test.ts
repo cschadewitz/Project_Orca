@@ -1,0 +1,210 @@
+/** Real kernel slots and durable closure; synthetic trees are separate from Mac acceptance. */
+import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { afterEach, expect, it } from "vitest";
+import {
+  ClosedUpdateWindow,
+  enterConfiguredUpdateWriters,
+  enterUpdateWriter,
+  provisionUpdateWindow,
+  type UpdateWriterLease,
+} from "../src/update-window.js";
+
+const roots: string[] = [];
+const closers: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const close of closers.splice(0).reverse()) await close();
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+});
+async function fixture(count = 1) {
+  const base = await mkdtemp(join(process.cwd(), "orca-update-window-"));
+  roots.push(base);
+  const control = join(base, "control"),
+    data = Array.from({ length: count }, (_, i) => join(base, "data-" + i));
+  await mkdir(control, { mode: 0o700 });
+  for (const root of data) await mkdir(root, { mode: 0o700 });
+  await provisionUpdateWindow(control, data);
+  const window = new ClosedUpdateWindow(control);
+  closers.push(() => window.detach());
+  return { base, control, data, window };
+}
+async function writer(root: string, launch?: { attempt: string; token: string }) {
+  const lease = await enterUpdateWriter(root, launch);
+  if (!lease) throw new Error("missing fixture owner");
+  closers.push(() => lease.close());
+  return lease;
+}
+it("closes admission before capture while existing writers finish naturally", async () => {
+  const f = await fixture(2),
+    lease = await writer(f.data[0]!);
+  f.window.closeAdmission("a".repeat(64));
+  expect(lease.check()).toBe(true);
+  expect(await f.window.capture()).toBe(false);
+  await expect(enterUpdateWriter(f.data[1]!)).rejects.toThrow();
+  await lease.close();
+  expect(await f.window.capture()).toBe(true);
+  expect(f.window.check()).toBe(true);
+  expect(() => f.window.reopen()).toThrow();
+});
+it("retains closure on app recreation and only opens after validation", async () => {
+  const f = await fixture();
+  f.window.closeAdmission("a".repeat(64));
+  expect(await f.window.capture()).toBe(true);
+  await f.window.detach();
+  await expect(enterUpdateWriter(f.data[0]!)).rejects.toThrow();
+  const recovery = new ClosedUpdateWindow(f.control);
+  closers.push(() => recovery.detach());
+  expect(await recovery.capture()).toBe(true);
+  recovery.setPhase("validating");
+  recovery.setPhase("validated");
+  recovery.reopen();
+  await recovery.detach();
+  expect((await writer(f.data[0]!)).check()).toBe(true);
+});
+it("does not permit two supervisors or concurrent capture", async () => {
+  const f = await fixture();
+  f.window.closeAdmission("a".repeat(64));
+  const pending = f.window.capture();
+  await expect(f.window.capture()).rejects.toThrow();
+  expect(await pending).toBe(true);
+  const other = new ClosedUpdateWindow(f.control);
+  closers.push(() => other.detach());
+  expect(await other.capture()).toBe(false);
+});
+it("detach seals immediately but retains all kernel slots until dispatched writes actually settle", async () => {
+  const f = await fixture();
+  f.window.closeAdmission("a".repeat(64));
+  await f.window.capture();
+  let finish!: () => void;
+  const write = f.window.track(() => new Promise<void>((resolve) => (finish = resolve)));
+  await Promise.resolve();
+  const detached = f.window.detach();
+  expect(f.window.check()).toBe(false);
+  const fresh = new ClosedUpdateWindow(f.control);
+  closers.push(() => fresh.detach());
+  expect(await fresh.capture()).toBe(false);
+  finish();
+  await write;
+  await detached;
+  expect(await fresh.capture()).toBe(true);
+});
+it("only the original untouched approval may defer; durable stopping excludes defer", async () => {
+  const f = await fixture();
+  const candidate = "a".repeat(64);
+  f.window.closeAdmission(candidate);
+  const attempt = f.window.snapshot.attempt!;
+  const fresh = new ClosedUpdateWindow(f.control);
+  closers.push(() => fresh.detach());
+  expect(fresh.beginDefer(candidate, attempt)).toBe(false);
+  expect(f.window.beginDefer("b".repeat(64), attempt)).toBe(false);
+  expect(f.window.beginDefer(candidate, attempt)).toBe(true);
+  expect(() => f.window.beginStop()).toThrow();
+  await expect(enterUpdateWriter(f.data[0]!)).rejects.toThrow();
+  expect(f.window.finishDefer(candidate, attempt)).toBe(true);
+  f.window.closeAdmission(candidate);
+  f.window.beginStop();
+  expect(f.window.beginDefer(candidate, f.window.snapshot.attempt!)).toBe(false);
+  expect(await f.window.capture()).toBe(true);
+  expect(f.window.snapshot.phase).toBe("closed");
+});
+it("keeps ordinary CLI and aliases out during a one-use closed migration", async () => {
+  const f = await fixture(2);
+  f.window.closeAdmission("b".repeat(64));
+  await f.window.capture();
+  const launch = await f.window.beginMigration();
+  await expect(enterConfiguredUpdateWriters([join(f.data[0]!, "nested", "store")])).rejects.toThrow();
+  await expect(enterUpdateWriter(f.data[0]!, { ...launch, token: randomUUID() })).rejects.toThrow();
+  const child = await writer(f.data[0]!, launch);
+  expect(child.check()).toBe(true);
+  expect(f.window.check()).toBe(false);
+  expect(await f.window.endMigration()).toBe(false);
+  expect(() => f.window.reopen()).toThrow();
+  await child.close();
+  expect(await f.window.endMigration()).toBe(true);
+  expect(f.window.check()).toBe(true);
+  await f.window.detach();
+  await expect(enterUpdateWriter(f.data[0]!, launch)).rejects.toThrow();
+});
+it("refuses lost control identity, replaced roots and unsafe/torn state", async () => {
+  const f = await fixture();
+  f.window.closeAdmission("a".repeat(64));
+  await f.window.capture();
+  await rename(f.control, f.control + "-old");
+  await mkdir(f.control, { mode: 0o700 });
+  expect(f.window.check()).toBe(false);
+  await expect(enterUpdateWriter(f.data[0]!)).rejects.toThrow();
+  await expect(provisionUpdateWindow(f.control, f.data)).rejects.toThrow();
+});
+it("refuses deletion of an enrolled anchor rather than provisioning it again", async () => {
+  const f = await fixture();
+  await rm(join(f.data[0]!, ".orca-update-window.json"));
+  await expect(provisionUpdateWindow(f.control, f.data)).rejects.toThrow();
+});
+it("refuses incomplete writes and cannot use a cached open decision", async () => {
+  const f = await fixture();
+  const lease = await writer(f.data[0]!);
+  await writeFile(join(f.control, "window.json.tmp"), "torn", { mode: 0o600 });
+  expect(lease.check()).toBe(false);
+  expect(() => f.window.closeAdmission("a".repeat(64))).toThrow();
+  await expect(enterUpdateWriter(f.data[0]!)).rejects.toThrow();
+});
+it("refuses nested roots, links, changed enrolled set and unknown candidate", async () => {
+  const f = await fixture();
+  await mkdir(join(f.data[0]!, "nested"));
+  await expect(provisionUpdateWindow(f.control, [f.data[0]!, join(f.data[0]!, "nested")])).rejects.toThrow();
+  const alias = join(f.base, "alias");
+  await symlink(f.data[0]!, alias);
+  await expect(enterUpdateWriter(alias)).rejects.toThrow();
+  await expect(provisionUpdateWindow(f.control, [f.base])).rejects.toThrow();
+  expect(() => f.window.closeAdmission("unknown")).toThrow();
+});
+it("permits bounded independent participating writers and refuses capacity overflow", async () => {
+  const f = await fixture(),
+    leases: UpdateWriterLease[] = [];
+  for (let i = 0; i < 8; i++) leases.push(await writer(f.data[0]!));
+  await expect(enterUpdateWriter(f.data[0]!)).rejects.toThrow();
+  f.window.closeAdmission("a".repeat(64));
+  expect(await f.window.capture()).toBe(false);
+  for (const lease of leases) await lease.close();
+  expect(await f.window.capture()).toBe(true);
+});
+async function child(root: string, launch?: { attempt: string; token: string }): Promise<ChildProcess> {
+  const path = resolve("packages/protocol/src/update-window.ts");
+  const script = `import { enterUpdateWriter } from ${JSON.stringify(path)}; const lease = await enterUpdateWriter(process.argv[1], ${JSON.stringify(launch)}); if (!lease) throw new Error('unmanaged'); process.stdout.write('HELD\\n'); setInterval(() => {}, 1000);`;
+  const process = spawn(globalThis.process.execPath, ["--import", "tsx", "--input-type=module", "-e", script, root], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  closers.push(async () => {
+    if (process.exitCode === null && process.signalCode === null) {
+      process.kill("SIGKILL");
+      await new Promise<void>((done) => process.once("close", () => done()));
+    }
+  });
+  await new Promise<void>((done, reject) => {
+    process.stdout.once("data", (data) =>
+      String(data).includes("HELD") ? done() : reject(new Error("child unavailable")),
+    );
+    process.once("exit", () => reject(new Error("child refused")));
+  });
+  return process;
+}
+it("a real surviving child blocks same-boot recovery after supervisor loss", async () => {
+  const f = await fixture();
+  f.window.closeAdmission("a".repeat(64));
+  await f.window.capture();
+  const launch = await f.window.beginMigration();
+  const process = await child(f.data[0]!, launch);
+  await f.window.detach();
+  const fresh = new ClosedUpdateWindow(f.control);
+  closers.push(() => fresh.detach());
+  expect(await fresh.capture()).toBe(false);
+  const exited = new Promise<void>((done) => process.once("close", () => done()));
+  process.kill("SIGKILL");
+  await exited;
+  expect(await fresh.capture()).toBe(true);
+  fresh.setPhase("restoring");
+  fresh.setPhase("restored");
+  expect(JSON.parse(await readFile(join(f.control, "window.json"), "utf8")).phase).toBe("restored");
+});

@@ -4,6 +4,7 @@
  */
 import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
 import { firstRunRequiresExplicitContinuationRecovery } from "../first-run-recovery-fence.js";
+import { assertClosedUpdateCommand, isClosedUpdateBootstrap } from "../update-bootstrap.js";
 import { mcpCommand } from "./mcp.js";
 import { AdmissionRetryModel, ContinuationAdmissionModel, neverAttached } from "@orca/daemon";
 import { admissionRetryOptions } from "./admission-retry.js";
@@ -730,6 +731,7 @@ export const commands: Record<string, Command> = {
     usage:
       "Token authentication is on by default; the local credential is stored in auth/local-client.token beside the workspace config.\n--unauthenticated-loopback explicitly permits unauthenticated local access.\nRemote binds require --trusted-proxy IP (repeatable) behind a TLS-terminating proxy.\n--allow-origin origin permits a browser origin (repeatable; none by default).\n",
     async run(ctx) {
+      assertClosedUpdateCommand("serve", ctx.flags);
       const port = ctx.flags.port === undefined ? 6722 : Number(ctx.flags.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535) {
         throw new OrcaError("CONFIG_INVALID", `--port must be a port number, got '${String(ctx.flags.port)}'`);
@@ -979,7 +981,7 @@ export const commands: Record<string, Command> = {
           ...(planControl ? (["plan.write"] as const) : []),
         ],
         reads,
-        agents,
+        ...(isClosedUpdateBootstrap() ? {} : { agents }),
         config,
         workflowInputs: new WorkflowInputsModel({ resolve: orchestratorDefinitionResolver(app.orchestrator) }),
         ...(control ? { control } : {}),
@@ -991,7 +993,7 @@ export const commands: Record<string, Command> = {
         planSource: app.orchestrator.stores.plan.journal,
       });
       try {
-        if (authDir) await bootstrapLocalOwner(authDir);
+        if (authDir && !isClosedUpdateBootstrap()) await bootstrapLocalOwner(authDir);
       } catch (error) {
         liveRuntime?.close();
         await daemon.close();
@@ -1007,7 +1009,7 @@ export const commands: Record<string, Command> = {
             recoveringContinuations = undefined;
           });
       };
-      const explicitRecovery = firstRunRequiresExplicitContinuationRecovery(app.configDir);
+      const explicitRecovery = isClosedUpdateBootstrap() || firstRunRequiresExplicitContinuationRecovery(app.configDir);
       if (!explicitRecovery) recoverContinuations();
       const continuationTimer =
         daemon.recoverContinuations && !explicitRecovery ? setInterval(recoverContinuations, 5_000) : undefined;

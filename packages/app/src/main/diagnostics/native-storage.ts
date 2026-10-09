@@ -8,6 +8,9 @@ import type { RecoveryFileHandle, RecoveryFileSystem, RecoveryStat } from "./rec
 export interface NativeStorageBackend {
   abi: 1;
   platform: "darwin" | "posix-fixture";
+  /** Separate updater whitelist/durability support; absent in older diagnostics-only addons. */
+  replacementStorage?: 1;
+  flushDescriptorSync?(this: void, fd: number): void;
   call(
     operation: string,
     root: unknown,
@@ -50,8 +53,14 @@ export function loadNativeDiagnosticsStorage(root: string): NativeDiagnosticsSto
 }
 
 /** Explicit injection seam for native conformance; not production consent/acceptance. */
-export function createHandleRelativeStorage(root: string, backend: NativeStorageBackend): NativeDiagnosticsStorage {
+export function createHandleRelativeStorage(
+  root: string,
+  backend: NativeStorageBackend,
+  namespace: "diagnostics" | "replacement" = "diagnostics",
+): NativeDiagnosticsStorage {
   if (!isAbsolute(root) || resolve(root) !== root || root === sep || backend.abi !== 1) throw unavailable();
+  if (namespace !== "diagnostics" && namespace !== "replacement") throw unavailable();
+  if (namespace === "replacement" && backend.replacementStorage !== 1) throw unavailable();
   let held: unknown;
   let tail: Promise<void> = Promise.resolve();
   let closed = false;
@@ -79,7 +88,14 @@ export function createHandleRelativeStorage(root: string, backend: NativeStorage
   };
   const ensure = async (create = false) => {
     if (closed) throw unavailable();
-    held ??= await call("openRoot", root, "", undefined, undefined, create ? 1 : 0);
+    held ??= await call(
+      "openRoot",
+      root,
+      namespace === "replacement" ? "replacement" : "",
+      undefined,
+      undefined,
+      create ? 1 : 0,
+    );
     if (!held) throw unavailable();
   };
   const name = (path: string) => {
