@@ -1,5 +1,5 @@
 /** Main-process-only durable palette intents. Never stores credentials or arbitrary vars. */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { LaunchReview, RetainedLaunch } from "../configuration-launch-contract.js";
@@ -150,6 +150,11 @@ export class AdmissionIntents {
     return this.read()
       .filter((r) => sameScope(r, scope) && r.state === "retained" && !r.guided)
       .map(({ id, workflowId }) => ({ id, workflowId }));
+  }
+  /** Read the existing protected journal through its normal validation/decryption path.
+   * Main-only recovery comparison; no plaintext, key, write or new intent escapes. */
+  continuityHash(): string {
+    return createHash("sha256").update(JSON.stringify(this.read())).digest("hex");
   }
   retainGuided(scope: IntentScope, raw: LaunchReview): IntentRecord {
     const review = parseGuidedReview(raw);

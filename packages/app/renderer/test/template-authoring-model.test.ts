@@ -293,7 +293,7 @@ describe("reviewed template publication", () => {
       });
       await controller.refresh();
       await controller.publish();
-      expect(controller.getSnapshot().blocked).toContain("Reconcile");
+      expect(controller.getSnapshot().blocked).toMatch(/reconcile/i);
       expect(controller.getSnapshot().base).toEqual(base);
       expect(controller.exportSource("sdlc/review")).toBe("changed");
       expect(publish).not.toHaveBeenCalled();

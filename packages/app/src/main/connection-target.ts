@@ -7,6 +7,8 @@ import { daemonEndpoint } from "../daemon-connection.js";
 export interface ConnectionCandidate {
   client: DaemonClient;
   check?: () => void;
+  /** Main-only final identity validation before synchronous preference publication. */
+  validateActivation?: (hello: HelloResult) => void;
   /** Synchronous publication: no await between persistence and activation. */
   activate(hello: HelloResult): void;
   dispose(): Promise<void>;
@@ -89,6 +91,7 @@ export class ConnectionTarget {
         throw new ConnectionRefusal("Save or discard pending edits before changing daemons.");
       if (attempt !== this.attempt) throw new ConnectionRefusal("Connection cancelled.");
       candidate.check?.();
+      candidate.validateActivation?.(hello);
       if (source === "saved") this.deps.save(url);
       candidate.activate(hello);
       activated = true;

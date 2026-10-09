@@ -35,3 +35,34 @@ export const RuntimeMaintenanceResultSchema = z
   .refine((value) => value.outcome === "blocked" || value.active.length === 0, "Held/released proof must be idle");
 export type RuntimeMaintenanceParams = z.infer<typeof RuntimeMaintenanceParamsSchema>;
 export type RuntimeMaintenanceResult = z.infer<typeof RuntimeMaintenanceResultSchema>;
+
+/** Drain is distinct from idle proof: existing work may still need answers or continuation. */
+export const RuntimeDrainParamsSchema = RuntimeMaintenanceParamsSchema.extend({
+  action: z.enum(["drain", "defer"]),
+});
+export const RuntimeMaintenanceRequestSchema = z.union([RuntimeMaintenanceParamsSchema, RuntimeDrainParamsSchema]);
+export const RuntimeDrainResultSchema = z
+  .object({
+    proof: z.literal("runtime-drain-v1"),
+    target: RuntimeMaintenanceTargetSchema,
+    outcome: z.enum(["draining", "held", "blocked", "released"]),
+    active: z.array(RuntimeActivityReasonSchema),
+    unfinished: z
+      .array(
+        z
+          .object({
+            status: z.enum(["created", "running", "waiting", "paused"]),
+            count: z.number().int().positive().max(4096),
+          })
+          .strict(),
+      )
+      .max(4),
+    truncated: z.boolean(),
+  })
+  .strict()
+  .refine(
+    (value) => value.outcome !== "held" || (!value.active.length && !value.unfinished.length && !value.truncated),
+    "Held drain proof must be quiescent",
+  );
+export type RuntimeDrainParams = z.infer<typeof RuntimeDrainParamsSchema>;
+export type RuntimeDrainResult = z.infer<typeof RuntimeDrainResultSchema>;

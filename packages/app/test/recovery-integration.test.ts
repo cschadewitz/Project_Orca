@@ -1,3 +1,4 @@
+import { frozenReportText } from "./recovery-preparation/frozen-report-text.js";
 /** Real encrypted fs/coordinator schedules on disposable Linux profiles; not native acceptance. */
 import { access, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -8,7 +9,7 @@ import { withSyntheticProfile } from "./recovery-preparation/crash-harness.js";
 import { barrier, inspectPrivateRoot } from "./recovery-preparation/filesystem-evidence.js";
 import {
   implementationFixture,
-  enableAndPreview,
+  enableAndExport,
   value,
   SyntheticKeys,
   ControlledNative,
@@ -57,7 +58,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
         expect(fixture.controller.status().enabled).toBe(false);
         expect(fixture.controller.status().previous).toBe(false);
         expect(fixture.controller.record("run", "run_failed")).toBe(false);
-        expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+        expect((await fixture.controller.prepareExport("current")).ok).toBe(false);
         expect(fixture.native.publishCalls).toBe(0);
         expect(fixture.picker.calls).toBe(0);
         expect(wrapped).not.toHaveBeenCalled();
@@ -107,7 +108,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
       expect(fixture.controller.status().cleanupPending).toBe(true);
       expect(fixture.controller.status().unknownOperation).toBe(evidence.unresolvedId);
       expect(fixture.controller.record("run", "run_failed")).toBe(false);
-      expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+      expect((await fixture.controller.prepareExport("current")).ok).toBe(false);
       expect((await fixture.disk.readExportState()).current?.id).toBe(evidence.unresolvedId);
       expect((await fixture.disk.readExportState()).summary?.id).toBe(evidence.acknowledgedId);
       value(await fixture.controller.retryCleanup());
@@ -175,7 +176,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
         if (attempt === "opt-in") expect(result.ok).toBe(false);
         expect(await readFile(journal)).toEqual(durableJournal);
         expect((await fixture.disk.readExportState()).current?.id).toBe(evidence.unresolvedId);
-        expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+        expect((await fixture.controller.prepareExport("current")).ok).toBe(false);
         expect(fixture.controller.record("run", "run_failed")).toBe(false);
         expect(fixture.native.publishCalls).toBe(0);
         expect(fixture.picker.calls).toBe(0);
@@ -193,14 +194,17 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
         keys.usable = true;
         value(await fixture.controller.setEnabled(true, 1));
         expect(fixture.controller.record("run", "run_failed")).toBe(true);
-        const preview = value(await fixture.controller.preparePreview("current"));
+        const preview = await frozenReportText(
+          fixture.controller,
+          value(await fixture.controller.prepareExport("current")),
+        );
         fixture.picker.destination = join(profile, "fresh-after-ack.json");
         value(await fixture.controller.chooseDestination(preview.handle));
         expect(fixture.picker.calls).toBe(1);
         expect(fixture.native.publishCalls).toBe(0);
         expect(await readFile(priorExport)).toEqual(Buffer.from(evidence.publishedText));
         await expect(access(fixture.picker.destination)).rejects.toMatchObject({ code: "ENOENT" });
-        value(await fixture.controller.closePreview(preview.handle));
+        value(await fixture.controller.cancelExport(preview.handle));
         await fixture.controller.cleanExit();
       });
     },
@@ -258,7 +262,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
   it("a Save timeout before admission revokes preview authority while retaining the live worker reservation", async () => {
     await withSyntheticProfile(async (profile) => {
       const fixture = await implementationFixture(profile, { timeoutMs: 500 });
-      const preview = await enableAndPreview(fixture);
+      const preview = await enableAndExport(fixture);
       const destination = value(await fixture.controller.chooseDestination(preview.handle));
       const pending = barrier();
       let admittedPublications = 0;
@@ -272,7 +276,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
       try {
         await enteredWithin(pending.entered);
         expect(await saving).toEqual({ ok: false, code: "publication_pending" });
-        expect(fixture.controller.status().activePreviewHandle).toBeUndefined();
+        expect(fixture.controller.status().activeExportHandle).toBeUndefined();
         expect(fixture.controller.status().payloadReservedBytes).toBe(2 * RECOVERY_LIMITS.exportBytes);
         expect(fixture.controller.status().cleanupPending).toBe(true);
         expect(fixture.controller.status().saveAdmittedBeforeRevocation).toBe(false);
@@ -280,16 +284,16 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
         expect(await readFile(join(fixture.root, "export-stage.tmp"))).toEqual(Buffer.from(preview.text));
         expect(await fixture.controller.chooseDestination(preview.handle)).toEqual({
           ok: false,
-          code: "stale_preview",
+          code: "stale_export",
         });
         expect(await fixture.controller.retryCleanup()).toEqual({ ok: false, code: "publication_pending" });
-        expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+        expect((await fixture.controller.prepareExport("current")).ok).toBe(false);
         expect(fixture.picker.calls).toBe(1);
       } catch (error) {
         // A red regression must still settle its own real disk worker before
         // removing the disposable profile or starting another test.
         pending.release();
-        value(await fixture.controller.closePreview(preview.handle));
+        value(await fixture.controller.cancelExport(preview.handle));
         await waitFor(() => fixture.controller.status().payloadReservedBytes === 0);
         await fixture.controller.cleanExit();
         throw error;
@@ -298,7 +302,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
       }
       // Releasing the adapter alone must refuse admission; no renderer disposal
       // or explicit revocation is allowed to rescue this timed-out operation.
-      await waitFor(() => fixture.controller.status().payloadReservedBytes === RECOVERY_LIMITS.exportBytes);
+      await waitFor(() => fixture.controller.status().payloadReservedBytes === 0);
       expect(admittedPublications).toBe(0);
       expect(fixture.native.publishCalls).toBe(1);
       expect(fixture.controller.status().lastSaveOutcome).toBe("refused");
@@ -307,7 +311,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
       expect((await fixture.disk.readExportState()).current).toBeUndefined();
       await expect(access(join(fixture.root, "export-stage.tmp"))).rejects.toMatchObject({ code: "ENOENT" });
       await expect(access(fixture.picker.destination)).rejects.toMatchObject({ code: "ENOENT" });
-      value(await fixture.controller.closePreview(preview.handle));
+      value(await fixture.controller.cancelExport(preview.handle));
       expect(fixture.controller.status().payloadReservedBytes).toBe(0);
       expect(await fixture.controller.save(preview.handle, destination.token)).toEqual({
         ok: false,
@@ -325,7 +329,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
     async (lateResult) => {
       await withSyntheticProfile(async (profile) => {
         const fixture = await implementationFixture(profile, { timeoutMs: 500 });
-        const preview = await enableAndPreview(fixture);
+        const preview = await enableAndExport(fixture);
         const destination = value(await fixture.controller.chooseDestination(preview.handle));
         const pending = barrier();
         fixture.native.publication = async (stage, path) => {
@@ -348,7 +352,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
         const off = await fixture.controller.setEnabled(false, 1);
         expect(fixture.controller.status().enabled).toBe(false);
         expect(off.ok ? off.value.cleanupPending : true).toBe(true);
-        value(await fixture.controller.closePreview(preview.handle));
+        value(await fixture.controller.cancelExport(preview.handle));
         pending.release();
         await waitFor(() => fixture.controller.status().payloadReservedBytes === 0);
         expect((await fixture.disk.readSetting()).enabled).toBe(false);
@@ -365,7 +369,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
   it("confirmed cessation and safe cleanup permit durable acknowledgement then a separate fresh Save", async () => {
     await withSyntheticProfile(async (profile) => {
       const fixture = await implementationFixture(profile);
-      const first = await enableAndPreview(fixture);
+      const first = await enableAndExport(fixture);
       const oldDestination = value(await fixture.controller.chooseDestination(first.handle));
       fixture.native.publication = () => Promise.resolve("unknown");
       await fixture.controller.save(first.handle, oldDestination.token);
@@ -380,8 +384,11 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
       expect(fixture.native.publishCalls).toBe(1);
       fixture.native.publication = undefined;
       fixture.picker.destination = join(profile, "second-report.json");
-      value(await fixture.controller.closePreview(first.handle));
-      const preview = value(await fixture.controller.preparePreview("current"));
+      value(await fixture.controller.cancelExport(first.handle));
+      const preview = await frozenReportText(
+        fixture.controller,
+        value(await fixture.controller.prepareExport("current")),
+      );
       const destination = value(await fixture.controller.chooseDestination(preview.handle));
       expect(destination.token).not.toBe(oldDestination.token);
       value(await fixture.controller.save(preview.handle, destination.token));
@@ -399,16 +406,19 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
     async (disposal) => {
       await withSyntheticProfile(async (profile) => {
         const fixture = await implementationFixture(profile);
-        const first = await enableAndPreview(fixture);
+        const first = await enableAndExport(fixture);
         const priorPath = fixture.picker.destination;
         const firstDestination = value(await fixture.controller.chooseDestination(first.handle));
         value(await fixture.controller.save(first.handle, firstDestination.token));
-        value(await fixture.controller.closePreview(first.handle));
+        value(await fixture.controller.cancelExport(first.handle));
         await fixture.controller.checkpoint();
         const consent = await fixture.disk.readSetting();
         const setEnabled = vi.spyOn(fixture.controller, "setEnabled");
         const discardPrevious = vi.spyOn(fixture.controller, "discardPrevious");
-        const refused = value(await fixture.controller.preparePreview("current"));
+        const refused = await frozenReportText(
+          fixture.controller,
+          value(await fixture.controller.prepareExport("current")),
+        );
         const refusedPath = join(profile, "refused-report.json");
         fixture.picker.destination = refusedPath;
         const destination = value(await fixture.controller.chooseDestination(refused.handle));
@@ -425,12 +435,12 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
         expect(fixture.native.publishCalls).toBe(2);
         expect(await readFile(refusedPath, "utf8")).toBe(priorUserContent);
         if (disposal === "expiry") {
-          fixture.clock.reading.elapsedMs += RECOVERY_LIMITS.previewMs;
-          expect(fixture.controller.status().activePreviewHandle).toBeUndefined();
-          expect(fixture.controller.status().payloadReservedBytes).toBe(RECOVERY_LIMITS.exportBytes);
-          expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+          fixture.clock.reading.elapsedMs += RECOVERY_LIMITS.exportMs;
+          expect(fixture.controller.status().activeExportHandle).toBeUndefined();
+          expect(fixture.controller.status().payloadReservedBytes).toBe(0);
+          expect((await fixture.controller.chooseDestination(refused.handle)).ok).toBe(false);
         }
-        value(await fixture.controller.closePreview(refused.handle));
+        value(await fixture.controller.cancelExport(refused.handle));
         expect(fixture.controller.status().payloadReservedBytes).toBe(0);
         expect(fixture.controller.record("run", "run_failed")).toBe(true);
         const maintain = vi.spyOn(fixture.disk, "maintain");
@@ -443,7 +453,10 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
         expect(await fixture.disk.readSetting()).toEqual(consent);
         const history = await inspectPrivateRoot(fixture.root);
         expect([...history.files.keys()].some((name) => /^slot-[012]\.bin$/.test(name))).toBe(true);
-        const fresh = value(await fixture.controller.preparePreview("current"));
+        const fresh = await frozenReportText(
+          fixture.controller,
+          value(await fixture.controller.prepareExport("current")),
+        );
         expect(fresh.handle).not.toBe(refused.handle);
         expect(fresh.text).toContain("run_failed");
         fixture.picker.destination = join(profile, "fresh-report.json");
@@ -457,7 +470,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
         expect(await readFile(priorPath)).toEqual(Buffer.from(first.text));
         expect(await readFile(refusedPath, "utf8")).toBe(priorUserContent);
         await expect(access(fixture.picker.destination)).rejects.toMatchObject({ code: "ENOENT" });
-        value(await fixture.controller.closePreview(fresh.handle));
+        value(await fixture.controller.cancelExport(fresh.handle));
         await fixture.controller.cleanExit();
       });
     },
@@ -466,7 +479,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
   it("failed cleanup, unsafe identity and key loss never bypass acknowledgement", async () => {
     await withSyntheticProfile(async (profile) => {
       const fixture = await implementationFixture(profile);
-      const preview = await enableAndPreview(fixture);
+      const preview = await enableAndExport(fixture);
       const destination = value(await fixture.controller.chooseDestination(preview.handle));
       fixture.native.publication = () => Promise.resolve("unknown");
       fixture.native.beforeRemove = async (path) => {
@@ -497,7 +510,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
   it("malformed real operation metadata refuses new Save and cannot be erased by acknowledgement", async () => {
     await withSyntheticProfile(async (profile) => {
       const fixture = await implementationFixture(profile);
-      const preview = await enableAndPreview(fixture);
+      const preview = await enableAndExport(fixture);
       const destination = value(await fixture.controller.chooseDestination(preview.handle));
       fixture.native.publication = () => Promise.resolve("unknown");
       await fixture.controller.save(preview.handle, destination.token);
@@ -521,27 +534,30 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
   it("repeated Save joins one operation and revoked/stale handles cannot mutate later work", async () => {
     await withSyntheticProfile(async (profile) => {
       const fixture = await implementationFixture(profile);
-      const preview = await enableAndPreview(fixture);
+      const preview = await enableAndExport(fixture);
       const destination = value(await fixture.controller.chooseDestination(preview.handle));
       const pending = barrier();
       fixture.native.beforePublish = () => pending.wait();
       const first = fixture.controller.save(preview.handle, destination.token);
       await enteredWithin(pending.entered);
       const second = fixture.controller.save(preview.handle, destination.token);
-      fixture.controller.revokePreviewAuthority();
+      fixture.controller.revokeExportAuthority();
       pending.release();
       await Promise.all([first, second]);
       expect(fixture.native.publishCalls).toBe(1);
       await expect(access(fixture.picker.destination)).rejects.toMatchObject({ code: "ENOENT" });
       fixture.native.beforePublish = undefined;
-      expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
-      value(await fixture.controller.closePreview(preview.handle));
-      const fresh = value(await fixture.controller.preparePreview("current"));
+      expect((await fixture.controller.prepareExport("current")).ok).toBe(false);
+      value(await fixture.controller.cancelExport(preview.handle));
+      const fresh = await frozenReportText(
+        fixture.controller,
+        value(await fixture.controller.prepareExport("current")),
+      );
       await fixture.controller.save(preview.handle, destination.token);
       expect(fixture.native.publishCalls).toBe(1);
-      expect(fixture.controller.status().activePreviewHandle).toBe(fresh.handle);
-      await fixture.controller.closePreview(preview.handle);
-      expect(fixture.controller.status().activePreviewHandle).toBe(fresh.handle);
+      expect(fixture.controller.status().activeExportHandle).toBe(fresh.handle);
+      await fixture.controller.cancelExport(preview.handle);
+      expect(fixture.controller.status().activeExportHandle).toBe(fresh.handle);
       const chosen = value(await fixture.controller.chooseDestination(fresh.handle));
       value(await fixture.controller.save(fresh.handle, chosen.token));
       expect(fixture.native.publishCalls).toBe(2);
@@ -553,7 +569,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
   it("fresh picker and native no-replace preserve existing files and exact committed export bytes", async () => {
     await withSyntheticProfile(async (profile) => {
       const fixture = await implementationFixture(profile);
-      const preview = await enableAndPreview(fixture);
+      const preview = await enableAndExport(fixture);
       const destination = value(await fixture.controller.chooseDestination(preview.handle));
       await writeFile(fixture.picker.destination, "synthetic previous user export\n");
       const result = await fixture.controller.save(preview.handle, destination.token);
@@ -561,8 +577,11 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
       expect(await readFile(fixture.picker.destination, "utf8")).toBe("synthetic previous user export\n");
       expect((await inspectPrivateRoot(fixture.root)).stagingBytes).toBe(0);
       fixture.picker.destination = join(profile, "new.json");
-      value(await fixture.controller.closePreview(preview.handle));
-      const fresh = value(await fixture.controller.preparePreview("current"));
+      value(await fixture.controller.cancelExport(preview.handle));
+      const fresh = await frozenReportText(
+        fixture.controller,
+        value(await fixture.controller.prepareExport("current")),
+      );
       const chosen = value(await fixture.controller.chooseDestination(fresh.handle));
       value(await fixture.controller.save(fresh.handle, chosen.token));
       expect(await readFile(fixture.picker.destination)).toEqual(Buffer.from(fresh.text, "utf8"));
@@ -575,7 +594,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
   it.each(["failure", "hang"])("known committed Save stays saved during completion-record %s", async (fault) => {
     await withSyntheticProfile(async (profile) => {
       const fixture = await implementationFixture(profile, { timeoutMs: 500 });
-      const preview = await enableAndPreview(fixture);
+      const preview = await enableAndExport(fixture);
       const destination = value(await fixture.controller.chooseDestination(preview.handle));
       const pending = barrier();
       fixture.native.beforeReplace = async (source, destination) => {
@@ -616,7 +635,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
     async (earlierOutcome) => {
       await withSyntheticProfile(async (profile) => {
         const fixture = await implementationFixture(profile);
-        const first = await enableAndPreview(fixture);
+        const first = await enableAndExport(fixture);
         const firstPath = fixture.picker.destination;
         const firstDestination = value(await fixture.controller.chooseDestination(first.handle));
         if (earlierOutcome === "refused") fixture.native.publication = () => Promise.resolve("refused");
@@ -625,9 +644,12 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
         if (earlierOutcome === "saved") expect(await readFile(firstPath)).toEqual(Buffer.from(first.text));
         else await expect(access(firstPath)).rejects.toMatchObject({ code: "ENOENT" });
         expect((await fixture.disk.readExportState()).current).toBeUndefined();
-        value(await fixture.controller.closePreview(first.handle));
+        value(await fixture.controller.cancelExport(first.handle));
 
-        const second = value(await fixture.controller.preparePreview("current"));
+        const second = await frozenReportText(
+          fixture.controller,
+          value(await fixture.controller.prepareExport("current")),
+        );
         fixture.picker.destination = join(profile, "new-unknown-report.json");
         const secondDestination = value(await fixture.controller.chooseDestination(second.handle));
         fixture.native.publication = () => Promise.reject(new Error("Synthetic admitted adapter rejection"));
@@ -677,7 +699,10 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
       };
       fixture.native.publication = () => Promise.resolve("unknown");
       for (let index = 0; index < 4; index += 1) {
-        const preview = value(await fixture.controller.preparePreview("current"));
+        const preview = await frozenReportText(
+          fixture.controller,
+          value(await fixture.controller.prepareExport("current")),
+        );
         fixture.picker.destination = join(profile, `report-${index}.json`);
         const destination = value(await fixture.controller.chooseDestination(preview.handle));
         await fixture.controller.save(preview.handle, destination.token);
@@ -687,7 +712,7 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
         const state = await fixture.disk.readExportState();
         expect(state.summary).toEqual({ id: latest, outcome: "unknown", acknowledged: true, olderUnknowns: index > 0 });
         expect(Object.keys(state)).toEqual(["summary"]);
-        value(await fixture.controller.closePreview(preview.handle));
+        value(await fixture.controller.cancelExport(preview.handle));
       }
       expect(replacements).toBeGreaterThanOrEqual(12);
       expect((await fixture.disk.readExportState()).summary?.id).toBe(latest);
@@ -727,7 +752,7 @@ describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", ()
       expect(fixture.controller.status().enabled).toBe(true);
       expect(fixture.controller.status().previous).toBe(false);
       expect(fixture.controller.record("run", "run_failed")).toBe(false);
-      expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+      expect((await fixture.controller.prepareExport("current")).ok).toBe(false);
       expect(await readFile(join(root, "manifest.json"))).toEqual(originalManifest);
       expect(wrapped).not.toHaveBeenCalled();
       expect(fixture.picker.calls).toBe(0);
@@ -749,7 +774,7 @@ describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", ()
       expect((await fixture.disk.readExportState()).current?.id).toBe(id);
       expect(wrapped).not.toHaveBeenCalled();
       expect(fixture.controller.record("run", "run_failed")).toBe(false);
-      expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+      expect((await fixture.controller.prepareExport("current")).ok).toBe(false);
       expect(fixture.picker.calls).toBe(0);
       expect(fixture.native.publishCalls).toBe(0);
       maintenance.mockRestore();
@@ -775,13 +800,16 @@ describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", ()
         payload: { previous: { slot: number } };
       };
       const oldSlot = committed.payload.previous.slot;
-      const preview = value(await fixture.controller.preparePreview("current"));
+      const preview = await frozenReportText(
+        fixture.controller,
+        value(await fixture.controller.prepareExport("current")),
+      );
       const destination = value(await fixture.controller.chooseDestination(preview.handle));
       fixture.native.publication = () => Promise.resolve("unknown");
       await fixture.controller.save(preview.handle, destination.token);
       const id = fixture.controller.status().unknownOperation;
       expect(id).toBeDefined();
-      value(await fixture.controller.closePreview(preview.handle));
+      value(await fixture.controller.cancelExport(preview.handle));
       fixture.clock.reading.elapsedMs = 1100 + RECOVERY_LIMITS.retentionMs;
       tick();
       await waitFor(() => !fixture.controller.status().previous);
@@ -813,7 +841,10 @@ describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", ()
         if (!tick) throw new Error("Actual recovery timer was not installed");
         fixture.controller.record("run", "run_failed");
         await fixture.controller.checkpoint();
-        const preview = value(await fixture.controller.preparePreview("current"));
+        const preview = await frozenReportText(
+          fixture.controller,
+          value(await fixture.controller.prepareExport("current")),
+        );
         const wrapped = vi.spyOn(fixture.keys, "wrap");
         const maintain = fixture.disk.maintain.bind(fixture.disk);
         let finished = false;
@@ -837,7 +868,7 @@ describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", ()
         expect((await fixture.disk.readSetting()).enabled).toBe(true);
         expect(fixture.controller.record("run", "run_failed")).toBe(false);
         expect((await fixture.controller.chooseDestination(preview.handle)).ok).toBe(false);
-        value(await fixture.controller.closePreview(preview.handle));
+        value(await fixture.controller.cancelExport(preview.handle));
         fixture.clock.reading = { bootId: "synthetic-boot", elapsedMs: 3000 };
         value(await fixture.controller.retryCleanup());
         expect(fixture.controller.status().code).toBe("unavailable");
@@ -893,7 +924,10 @@ describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", ()
           reading: { bootId: "synthetic-boot", elapsedMs: 2000 },
         });
         expect(fixture.controller.status().previous).toBe(true);
-        const preview = value(await fixture.controller.preparePreview("previous"));
+        const preview = await frozenReportText(
+          fixture.controller,
+          value(await fixture.controller.prepareExport("previous")),
+        );
         expect(preview.text.includes("run_failed")).toBe(boundary === "after-checkpoint-manifest");
         expect(preview.text).toContain("connection_lost");
         await fixture.controller.cleanExit();
@@ -969,16 +1003,19 @@ describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", ()
       expect((await crashImplementationAt(profile, "checkpoint-committed")).signal).toBe("SIGKILL");
       const fixture = await implementationFixture(profile, { reading: { bootId: "synthetic-boot", elapsedMs: 2000 } });
       expect(fixture.controller.status().previous).toBe(true);
-      const preview = value(await fixture.controller.preparePreview("previous"));
+      const preview = await frozenReportText(
+        fixture.controller,
+        value(await fixture.controller.prepareExport("previous")),
+      );
       expect(preview.tailLossPossible).toBe(true);
       expect(preview.text).toContain("connection_lost");
       const evidence = await inspectPrivateRoot(fixture.root);
       const ciphertext = [...evidence.files].filter(([name]) => /^slot-[012]\.bin$/.test(name));
       expect(ciphertext.length).toBeGreaterThan(0);
       expect(ciphertext.every(([, bytes]) => !bytes.includes(Buffer.from("connection_lost")))).toBe(true);
-      value(await fixture.controller.closePreview(preview.handle));
+      value(await fixture.controller.cancelExport(preview.handle));
       fixture.clock.reading.elapsedMs = 1100 + RECOVERY_LIMITS.retentionMs;
-      const result = await fixture.controller.preparePreview("previous");
+      const result = await fixture.controller.prepareExport("previous");
       expect(result.ok).toBe(false);
       expect(fixture.controller.status().previous).toBe(false);
       await fixture.controller.cleanExit();
@@ -1003,7 +1040,7 @@ describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", ()
           reading: { bootId: fault === "reboot" ? "different-boot" : "synthetic-boot", elapsedMs: 2000 },
         });
         expect(fixture.controller.status().previous).toBe(false);
-        expect((await fixture.controller.preparePreview("previous")).ok).toBe(false);
+        expect((await fixture.controller.prepareExport("previous")).ok).toBe(false);
         expect(fixture.native.publishCalls).toBe(0);
         await fixture.controller.cleanExit();
       });
@@ -1023,9 +1060,12 @@ describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", ()
         expect(fixture.controller.record("unknown", "unknown")).toBe(true);
       }
       const checkpoint = fixture.controller.checkpoint();
-      expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+      expect((await fixture.controller.prepareExport("current")).ok).toBe(false);
       await checkpoint;
-      const preview = value(await fixture.controller.preparePreview("current"));
+      const preview = await frozenReportText(
+        fixture.controller,
+        value(await fixture.controller.prepareExport("current")),
+      );
       expect(preview.byteLength).toBe(Buffer.byteLength(preview.text));
       expect(preview.byteLength).toBeLessThanOrEqual(DIAGNOSTIC_LIMITS.maxReportBytes);
       const report = JSON.parse(preview.text) as { events: unknown[]; omissions: { budget: number } };

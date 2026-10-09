@@ -11,6 +11,7 @@ export interface DiagnosticsSetting {
 export interface StoredCheckpoint {
   bytes: Buffer;
   anchor: BootReading;
+  dispose?(): void;
 }
 export interface StageIdentity {
   device: string;
@@ -77,7 +78,7 @@ export const RECOVERY_LIMITS = Object.freeze({
   entries: 16,
   payloadBytes: 8 * 1_048_576,
   retentionMs: 86_400_000,
-  previewMs: 300_000,
+  exportMs: 300_000,
   checkpointMs: 5000,
   prepareMs: 2000,
   operationMs: 10_000,

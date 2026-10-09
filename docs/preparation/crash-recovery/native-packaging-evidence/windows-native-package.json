@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "platform": "win32",
+  "arch": "x64",
+  "runtime": "24.19.0",
+  "actualPEManifest": {
+    "format": 1,
+    "stage": "before-signing",
+    "platform": "win32",
+    "arch": "x64",
+    "nodeApi": 8,
+    "sourceSha256": "5fe5178654fff7a2e3c0f799f5da07bbed738acd87d485ff2fca3939870aacd9",
+    "files": {
+      "diagnostics_clock.node": {
+        "bytes": 51973,
+        "sha256": "04d6566fa88afee22299eb80ceace8b2d651bac31f80ab0a54254ff42669d2b8"
+      },
+      "diagnostics_storage.node": {
+        "bytes": 85061,
+        "sha256": "db21fcb0ff98cf75737031cf1a2d11614e083cb6b784bd77dc5461229a96fade"
+      }
+    }
+  },
+  "actualBuilderCopyAndHooks": true,
+  "fixedExternalNodeLoad": true,
+  "wrongArchitectureRefused": true,
+  "missingResourcesRefusedWithoutRepositoryFallback": true,
+  "electronRuntimeLoad": "unrun; GNU Node probe binaries have static node.exe imports; shipping node-gyp uses Windows delay-load hook",
+  "arm64NativeBuild": "unrun"
+}

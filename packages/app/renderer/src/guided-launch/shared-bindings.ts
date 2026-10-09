@@ -101,7 +101,7 @@ export function sharedPreflight(
 export function sharedLaunchResult(
   response: LaunchResponse,
   mode: LaunchDraft["mode"],
-  decodeRetryReceipt: (raw: unknown, mode: LaunchDraft["mode"]) => LaunchReceipt,
+  decodeRetryReceipt: (raw: unknown, mode: LaunchDraft["mode"], operationId?: string) => LaunchReceipt,
 ): LaunchResult {
   if (response.kind === "direct") {
     if (mode !== "direct") throw new LaunchPortFailure("unavailable");
@@ -113,7 +113,7 @@ export function sharedLaunchResult(
     return response.receipt;
   }
   if (response.receipt.state === "in-progress") return response.receipt;
-  const receipt = decodeRetryReceipt(response.receipt.result, mode);
+  const receipt = decodeRetryReceipt(response.receipt.result, mode, response.receipt.operationId);
   if ((mode === "request") !== "requestId" in receipt) throw new LaunchPortFailure("unavailable");
   return { ...response.receipt, result: receipt };
 }
@@ -139,7 +139,7 @@ export function sharedRecovery(
     mode: LaunchDraft["mode"];
     action: "inspect" | "reconcile";
     assertCurrent: (target: LaunchTarget) => void;
-    decodeRetryReceipt: (raw: unknown, mode: LaunchDraft["mode"]) => LaunchReceipt;
+    decodeRetryReceipt: (raw: unknown, mode: LaunchDraft["mode"], operationId?: string) => LaunchReceipt;
   },
 ): LaunchPorts["recover"] {
   return async (intent) => {
@@ -154,7 +154,7 @@ export function sharedSubmission(
   shared: Pick<GuidedLaunchPorts, "submit">,
   binding: {
     assertCurrent: (target: LaunchTarget) => void;
-    decodeRetryReceipt: (raw: unknown, mode: LaunchDraft["mode"]) => LaunchReceipt;
+    decodeRetryReceipt: (raw: unknown, mode: LaunchDraft["mode"], operationId?: string) => LaunchReceipt;
   },
 ): NonNullable<LaunchPorts["launch"]> {
   return async (review) => {

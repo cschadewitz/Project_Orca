@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "sourceCommit": "21b615fe278f91888a68198475c6fcc6a791208f",
+  "productionEnabled": false,
+  "method": "Separate native UI cell with production diagnostics component/preload. Current/recovered export controls in light and dark themes; axe violations and focus-on-Cancel assertion. This is not a memory acceptance cell or manual accessibility acceptance.",
+  "axe": [
+    {
+      "source": "previous",
+      "theme": "light",
+      "violations": []
+    },
+    {
+      "source": "previous",
+      "theme": "dark",
+      "violations": []
+    },
+    {
+      "source": "current",
+      "theme": "light",
+      "violations": []
+    },
+    {
+      "source": "current",
+      "theme": "dark",
+      "violations": []
+    }
+  ],
+  "focusOnCancel": "asserted_by_fixture_before_each_save",
+  "exports": {
+    "previous": {
+      "byteLength": 950471,
+      "sha256": "af541a720c3c48d340891b651e0616dd6ecd53f6d892f904d4781fa26c189f6d",
+      "source": "previous",
+      "descriptorOnly": true,
+      "exactFrozenBytes": true,
+      "events": 8192
+    },
+    "current": {
+      "byteLength": 950506,
+      "sha256": "290bb5237d57d4cd82791de357bc3748fcb990bfee847210b7e6d9457a411320",
+      "source": "current",
+      "descriptorOnly": true,
+      "exactFrozenBytes": true,
+      "events": 8192
+    }
+  },
+  "postExitExactOutput": [
+    {
+      "source": "previous",
+      "bytes": 950471,
+      "events": 8192,
+      "sha256": "af541a720c3c48d340891b651e0616dd6ecd53f6d892f904d4781fa26c189f6d",
+      "exactFrozenDigest": true,
+      "finalLF": true
+    },
+    {
+      "source": "current",
+      "bytes": 950506,
+      "events": 8192,
+      "sha256": "290bb5237d57d4cd82791de357bc3748fcb990bfee847210b7e6d9457a411320",
+      "exactFrozenDigest": true,
+      "finalLF": true
+    }
+  ],
+  "allOwnedExitsConfirmed": true,
+  "disposableStateRemoved": true,
+  "manualNarratorKeyboardAcceptance": "unrun"
+}

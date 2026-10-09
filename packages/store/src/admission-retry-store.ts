@@ -1,6 +1,6 @@
 /** Indexed admission journal. Only opaque pointers/counters are public; records reuse ExecutionStore. */
 import { createHmac, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
@@ -269,5 +269,31 @@ export class FileRetryClaimStore implements RetryClaimStore {
       await this.publish("cursor.json", end);
       return ids;
     });
+  }
+  /** Closed bootstrap observation. Never calls catalog()/batch(): those can repair a
+   * pending publication or advance a cursor. Retained history is conservatively parked. */
+  async closedWorkState(): Promise<"empty" | "parked" | "unsupported-generation"> {
+    try {
+      const raw = await this.json("catalog.json");
+      let names: string[];
+      try {
+        names = await readdir(this.dir);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT")
+          return raw === undefined ? "empty" : "unsupported-generation";
+        throw error;
+      }
+      const catalog =
+        raw === undefined ? { total: 0, workspaces: {}, principals: {}, pending: undefined } : Catalog.parse(raw);
+      if (catalog.pending) return "parked";
+      if (catalog.total > 0) return "parked";
+      if ([...Object.values(catalog.workspaces), ...Object.values(catalog.principals)].some((count) => count !== 0))
+        return "unsupported-generation";
+      const cursor = await this.json("cursor.json");
+      if (cursor !== undefined && cursor !== 0) return "unsupported-generation";
+      return names.every((name) => ["catalog.json", "cursor.json"].includes(name)) ? "empty" : "unsupported-generation";
+    } catch {
+      return "unsupported-generation";
+    }
   }
 }

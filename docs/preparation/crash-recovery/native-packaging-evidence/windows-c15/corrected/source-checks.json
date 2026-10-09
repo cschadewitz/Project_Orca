@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "harnessHead": "74a3ef441449523d110849c9d1c92aa0f61fdf83",
+  "sourceReview": [
+    "Open cell begins Off, avoiding enabled startup short-circuit.",
+    "Destination is a sibling saved-<target>.json; regression explicitly retains conservative native prefix refusal.",
+    "Early stop finalizer emits managed accounting; controlled stop expected exit 1.",
+    "Regression flags act only in explicit regressionOnly mode; full paired schedules retain 20 fixed cells.",
+    "20 synthetic seam cells, native dispatch interception before real backend dispatch; native resources reused.",
+    "No product changes, gate weakening, forced GC, timing optimization or additional comparisons."
+  ],
+  "focusedTestsReused": {
+    "receipt": "../source-checks.json",
+    "passes": 31,
+    "failures": 0,
+    "skips": 0,
+    "workers": 1
+  },
+  "regressionFixture": {
+    "receipt": "regressions.json",
+    "functionalPasses": 2,
+    "expectedStops": 1,
+    "memoryGateFailures": 2,
+    "pairedExecution": false
+  },
+  "finalStaticChecks": [
+    {
+      "kind": "node syntax on all three files",
+      "status": "fulfilled",
+      "exitCode": 0,
+      "output": ""
+    },
+    {
+      "kind": "scoped ESLint and Prettier",
+      "status": "fulfilled",
+      "exitCode": 0,
+      "output": "Checking formatting...\nAll matched files use Prettier code style!\n"
+    },
+    {
+      "kind": "read-only postflight",
+      "status": "fulfilled",
+      "exitCode": 0,
+      "output": "{\r\n  \"utc\": \"2026-10-09T20:46:09.2702030Z\",\r\n  \"matchingHeavyJobsAfterComparisons\": 0,\r\n  \"allScheduledOwnedExitsConfirmed\": true,\r\n  \"bothFreshRootsDeleted\": true,\r\n  \"realProcessesStopped\": false\r\n}\r\n"
+    }
+  ],
+  "fullSuiteBuildCi": false
+}

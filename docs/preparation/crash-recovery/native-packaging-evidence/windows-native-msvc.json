@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "sourceCommit": "8969932b3d7f198046a76f88a9bec509ab7dec00",
+  "combinedBase": "6fcd543a368246c2156f86a225072a871c754435",
+  "msvc": true,
+  "ok": true,
+  "platform": "win32",
+  "arch": "x64",
+  "runtime": "24.19.0",
+  "cases": {
+    "kernelClockAcrossProcessesAndWallClockIndependence": true,
+    "privateRootAndExclusiveWriter": true,
+    "existingNonPrivateDaclRefusedWithoutRepair": true,
+    "heldAncestorSwapBlocked": true,
+    "hardlinksRefusedAndPreserved": true,
+    "reparseRootAndChildRefusedWithoutFollowing": true,
+    "closedNamesDeviceNamesAndStreamsRefused": true,
+    "fileSizeHandleAndCloseBounds": true,
+    "exactOneMiBNoReplaceConsentAndDestinationLease": true,
+    "forcedProcessExitNativeCheckpointRecoveryAndOptOut": true,
+    "interruptedExportWriterFenceAndKeyIndependentUnknownCleanup": true
+  },
+  "binaries": {
+    "diagnostics_clock.node": "0b28528e31c92c1e1b70e74aa68206b29a39220075d85bbc8555eca50f6d9107",
+    "diagnostics_storage.node": "bea31fecd94122af70afe6f5280411d9933b93aef4c9e08240265bcac2c2a5fe"
+  },
+  "keys": "synthetic-fixture-only; current-user DPAPI separately verified",
+  "physicalSuspendReboot": "unrun",
+  "powerLoss": "unrun",
+  "differentUser": "unrun"
+}

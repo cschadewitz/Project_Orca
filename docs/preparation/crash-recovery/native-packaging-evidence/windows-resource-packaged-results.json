@@ -1,0 +1,209 @@
+{
+  "schema": 1,
+  "sourceCommit": "a35691f3b22eb193df1108e3a47e69356e49fce9",
+  "productionEnabled": false,
+  "method": "Actual builder-packaged main/preload/production renderer, isolated instrumented bootstrap suppressing protocol registration/window showing/outside connections. Token-authenticated owned loopback daemon. No installer or first-run/update operation.",
+  "a11y": [
+    { "theme": "light", "violations": [], "passes": 8, "incomplete": [] },
+    { "theme": "dark", "violations": [], "passes": 8, "incomplete": [] }
+  ],
+  "runs": [
+    {
+      "defaultOffNoRoot": true,
+      "enabledChoiceStillNoCapture": true,
+      "refusals": {
+        "current": { "ok": false, "code": "unavailable" },
+        "previous": { "ok": false, "code": "unavailable" },
+        "picker": { "ok": false, "code": "stale_preview" },
+        "save": { "ok": false, "code": "stale_preview" }
+      },
+      "rootOnlySettingAndLease": true,
+      "facts": {
+        "packaged": true,
+        "protocolRegistrationSuppressed": 1,
+        "windowShowsSuppressed": 1,
+        "legacyKeyCalls": 0,
+        "pickerCalls": 0,
+        "chromiumExternalRequests": 0,
+        "chromiumLoopbackRequests": 0,
+        "nodeExternalConnects": 0,
+        "nodeLoopbackConnects": 7,
+        "diagnosticIPC": 8,
+        "nativePresent": true,
+        "pendingDiagnosticActions": 0,
+        "lastEnableResponse": {
+          "ok": true,
+          "value": {
+            "enabled": true,
+            "productionEnabled": false,
+            "scopeVersion": 1,
+            "minutes": 5,
+            "code": "unavailable",
+            "previous": false,
+            "tailLossPossible": true,
+            "cleanupPending": false,
+            "acknowledgedUnknown": false,
+            "olderUnknowns": false,
+            "payloadReservedBytes": 0,
+            "controlledBinaryAllocatedBytes": 0,
+            "controlledBinaryPeakBytes": 5242880
+          }
+        }
+      }
+    },
+    {
+      "persistedEnabledChoiceAcrossRestart": true,
+      "productionCaptureStillDisabled": true,
+      "optOutSettled": true,
+      "onlyDisabledSettingAndEmptyLease": true,
+      "facts": {
+        "packaged": true,
+        "protocolRegistrationSuppressed": 1,
+        "windowShowsSuppressed": 1,
+        "legacyKeyCalls": 0,
+        "pickerCalls": 0,
+        "chromiumExternalRequests": 0,
+        "chromiumLoopbackRequests": 0,
+        "nodeExternalConnects": 0,
+        "nodeLoopbackConnects": 7,
+        "diagnosticIPC": 4,
+        "nativePresent": true,
+        "pendingDiagnosticActions": 0,
+        "lastEnableResponse": {
+          "ok": true,
+          "value": {
+            "enabled": false,
+            "productionEnabled": false,
+            "scopeVersion": 1,
+            "minutes": 5,
+            "code": "off",
+            "previous": false,
+            "tailLossPossible": true,
+            "cleanupPending": false,
+            "acknowledgedUnknown": false,
+            "olderUnknowns": false,
+            "payloadReservedBytes": 0,
+            "controlledBinaryAllocatedBytes": 0,
+            "controlledBinaryPeakBytes": 5242880
+          }
+        }
+      }
+    }
+  ],
+  "syntheticRunCompleted": true,
+  "firstStartDefaultOffNoRoot": true,
+  "nativePresent": true,
+  "menuFocusRestored": true,
+  "keyboardFocusVisible": { "outlineStyle": "solid", "outlineWidth": "1.6px" },
+  "zoomScroll": {
+    "scale": 1,
+    "viewportWidth": 333,
+    "viewportHeight": 169,
+    "diagnosticsWidth": 245.60000610351562,
+    "ancestors": [
+      {
+        "className": "orca-config__body",
+        "clientHeight": 32,
+        "scrollHeight": 6307,
+        "scrollTop": 6275.2001953125,
+        "scrollLeft": 0,
+        "clientWidth": 278,
+        "scrollWidth": 278
+      }
+    ],
+    "noHorizontalOverflow": true,
+    "zoomFactor": 2
+  },
+  "enabledStatus": {
+    "ok": true,
+    "value": {
+      "enabled": true,
+      "productionEnabled": false,
+      "scopeVersion": 1,
+      "minutes": 5,
+      "code": "unavailable",
+      "previous": false,
+      "tailLossPossible": true,
+      "cleanupPending": false,
+      "acknowledgedUnknown": false,
+      "olderUnknowns": false,
+      "payloadReservedBytes": 0,
+      "controlledBinaryAllocatedBytes": 0,
+      "controlledBinaryPeakBytes": 5242880
+    }
+  },
+  "enableFilesBeforeRefusal": ["setting.json", "writer.lock"],
+  "enableFilesAfterRefusal": ["setting.json", "writer.lock"],
+  "enableFacts": {
+    "packaged": true,
+    "protocolRegistrationSuppressed": 1,
+    "windowShowsSuppressed": 1,
+    "legacyKeyCalls": 0,
+    "pickerCalls": 0,
+    "chromiumExternalRequests": 0,
+    "chromiumLoopbackRequests": 0,
+    "nodeExternalConnects": 0,
+    "nodeLoopbackConnects": 7,
+    "diagnosticIPC": 8,
+    "nativePresent": true,
+    "pendingDiagnosticActions": 0,
+    "lastEnableResponse": {
+      "ok": true,
+      "value": {
+        "enabled": true,
+        "productionEnabled": false,
+        "scopeVersion": 1,
+        "minutes": 5,
+        "code": "unavailable",
+        "previous": false,
+        "tailLossPossible": true,
+        "cleanupPending": false,
+        "acknowledgedUnknown": false,
+        "olderUnknowns": false,
+        "payloadReservedBytes": 0,
+        "controlledBinaryAllocatedBytes": 0,
+        "controlledBinaryPeakBytes": 5242880
+      }
+    }
+  },
+  "persistedAfterClose": { "enabled": true, "scopeVersion": 1, "minutes": 5 },
+  "nativeSettingReadAfterClose": { "enabled": true, "scopeVersion": 1, "minutes": 5 },
+  "restartStatus": {
+    "ok": true,
+    "value": {
+      "enabled": true,
+      "productionEnabled": false,
+      "scopeVersion": 1,
+      "minutes": 5,
+      "code": "unavailable",
+      "previous": false,
+      "tailLossPossible": true,
+      "cleanupPending": false,
+      "acknowledgedUnknown": false,
+      "olderUnknowns": false,
+      "payloadReservedBytes": 0,
+      "controlledBinaryAllocatedBytes": 0,
+      "controlledBinaryPeakBytes": 5242880
+    }
+  },
+  "restartFacts": {
+    "packaged": true,
+    "protocolRegistrationSuppressed": 1,
+    "windowShowsSuppressed": 1,
+    "legacyKeyCalls": 0,
+    "pickerCalls": 0,
+    "chromiumExternalRequests": 0,
+    "chromiumLoopbackRequests": 0,
+    "nodeExternalConnects": 0,
+    "nodeLoopbackConnects": 7,
+    "diagnosticIPC": 2,
+    "nativePresent": true,
+    "pendingDiagnosticActions": 0
+  },
+  "persistedAfterRestart": { "enabled": true, "scopeVersion": 1, "minutes": 5 },
+  "disabledSettingAfterOff": { "enabled": false, "scopeVersion": 1, "minutes": 5 },
+  "defaultOffPrivacyPassed": true,
+  "packagedConnectionAndRestartPassed": true,
+  "allOwnedExitsConfirmed": true,
+  "disposableStateRemoved": true
+}

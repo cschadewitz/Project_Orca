@@ -34,9 +34,14 @@ import { InlineAsksProvider } from "./attention/inline-asks.js";
 import { useAlertActivation } from "./attention/use-alert-activation.js";
 import type { AlertActivation } from "../../src/bridge.js";
 import { PaletteObjectSources } from "./palette/object-sources.js";
+import { GuidedLaunchProvider } from "./guided-launch/launch-context.js";
+import { GuidedLaunchRoute } from "./guided-launch/launch-route.js";
+import { PaletteGuidedLaunch } from "./guided-launch/palette-launch.js";
 import { PaletteStartRun } from "./palette/start-run.js";
 import {
   describeRoute,
+  configUrl,
+  launchUrl,
   gateUrl,
   resolveRoute,
   runUrl,
@@ -160,6 +165,13 @@ export function App(): JSX.Element {
     setUnavailable(undefined);
     setRoute(next);
     setActive(next.surface);
+  }, []);
+
+  const closeLaunch = useCallback(() => {
+    setRoute(undefined);
+    setUnresolved(undefined);
+    setUnavailable(undefined);
+    setActive("config");
   }, []);
 
   /* Held rather than written inline: Plan memoises its inspector on the callbacks it was
@@ -333,6 +345,10 @@ export function App(): JSX.Element {
                viewer above (#177) rather than on a config document. */
             <ConfigSurface
               connection={connection.state}
+              {...(window.orca.guidedLaunch ? { onLaunch: () => navigate(launchUrl()) } : {})}
+              {...(route?.kind === "launch"
+                ? { launch: <GuidedLaunchRoute onConfiguration={() => navigate(configUrl())} onClose={closeLaunch} /> }
+                : {})}
               {...(route?.kind === "config" ? { open: route.document } : {})}
             />
           ) : (
@@ -362,6 +378,7 @@ export function App(): JSX.Element {
       <PaletteObjectSources onOpen={navigate} />
       {/* And the one write that belongs to no surface: start a run of any registered
           workflow, from wherever a person is standing (#178). */}
+      {window.orca.guidedLaunch && <PaletteGuidedLaunch onOpen={navigate} />}
       <PaletteStartRun onOpen={navigate} />
       {/* Last, so it is over the panel in paint order as well as in z-index. */}
       <CommandPalette controller={palette} onJump={(target) => navigate(target.url)} />
@@ -386,7 +403,9 @@ export function App(): JSX.Element {
   return (
     <ArtifactPanelProvider onOpen={() => setPanelOpen(true)}>
       <ConfigProvider>
-        <InlineAsksProvider feed={attention}>{chrome}</InlineAsksProvider>
+        <GuidedLaunchProvider active={active === "config" && route?.kind === "launch"} onOpen={navigate}>
+          <InlineAsksProvider feed={attention}>{chrome}</InlineAsksProvider>
+        </GuidedLaunchProvider>
       </ConfigProvider>
     </ArtifactPanelProvider>
   );

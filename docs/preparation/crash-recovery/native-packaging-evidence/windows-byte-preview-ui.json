@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "sourceCommit": "2346bc539ae25a3448d21e86448546b6c905c7c4",
+  "productionEnabled": false,
+  "method": "Separate bounded packaged component UI oracle with production surface/theme classes; no repeated-preview, paired-load or resource acceptance claim.",
+  "runs": [
+    {
+      "observer": "ui",
+      "electron": "44.4.5",
+      "node": "24.21.0",
+      "elapsedMs": 7136.375900000001,
+      "repetitions": 0,
+      "events": 8192,
+      "bytes": 950579,
+      "saveExact": true,
+      "selection": {
+        "exact": false,
+        "rangeExact": true,
+        "visibleExact": true,
+        "trailingNewlineSuppressed": true,
+        "focus": true,
+        "actualLength": 950578,
+        "expectedLength": 950579,
+        "mismatch": 950578,
+        "actualCode": null,
+        "expectedCode": 10
+      },
+      "a11y": [
+        {
+          "theme": "light",
+          "violations": []
+        },
+        {
+          "theme": "dark",
+          "violations": []
+        }
+      ],
+      "legacyCalls": 0,
+      "supervisorPostExitExport": {
+        "bytes": 950579,
+        "events": 8192,
+        "sha256": "d49cbf0145c27605982ed1f828ad48fea062a8f17a4b47b74af5e5b5ad2113bb"
+      }
+    }
+  ],
+  "allOwnedExitsConfirmed": true,
+  "disposableStateRemoved": true
+}

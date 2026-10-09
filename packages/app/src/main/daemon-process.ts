@@ -28,6 +28,9 @@ import { createServer } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { DaemonClient } from "../client/daemon-client.js";
 import { LocalDaemonToken } from "../client/auth.js";
+import { MacUpdateOwnedStop, type MacOwnedStopBoundary, type MacOwnedStopResult } from "./mac-update-restart.js";
+import type { RuntimeMaintenanceParams } from "@orca/protocol";
+import { observeStartup, type StartupDiagnosticObserver } from "./diagnostics/startup-producer.js";
 
 /** Where `scripts/build-daemon.js` writes the bundle and electron-builder copies it to. */
 export const BUNDLED_DAEMON_DIR = "daemon";
@@ -38,7 +41,10 @@ export const BUNDLED_DAEMON_FILE = "orca-daemon.mjs";
 const DEFAULT_HOST = "127.0.0.1";
 
 /** The child processes this module drives, as much of one as it uses. */
-export type DaemonChild = Pick<ChildProcess, "pid" | "stdout" | "stderr" | "kill" | "on" | "once">;
+export type DaemonChild = Pick<
+  ChildProcess,
+  "pid" | "exitCode" | "signalCode" | "stdout" | "stderr" | "kill" | "on" | "once"
+>;
 
 /** `node:child_process`'s `spawn`, narrowed to the one call shape used here. */
 export type SpawnDaemon = (
@@ -60,13 +66,26 @@ export interface BundledDaemon {
   /** What to hand `DaemonClient`: `http://host:port`. */
   readonly url: string;
   readonly pid: number | undefined;
+  /** Direct-child terminal evidence. Ordinary stop timeout alone is not this evidence. */
+  readonly exited?: boolean;
   /** The safe startup metadata, never the credential itself. */
   readonly tokenFile?: string;
+  /** Main-only captured child for closed validation; never an IPC capability. */
+  readonly child?: DaemonChild;
   /**
-   * Stop it and wait for it to be gone. Idempotent, and never reports the exit it causes
-   * through `onExit` — a daemon that stops because it was asked to is not news.
+   * Ordinary bounded shutdown, with forced escalation. Never reports its own exit
+   * through onExit and never establishes clean updater-stop evidence. An existing
+   * updater attempt is not escalated; its unknown result remains owned.
    */
   stop(): Promise<void>;
+  /** Main-only capability over this exact child. Never escalates or reopens admission. */
+  stopForMacUpdate?: (
+    this: void,
+    target: RuntimeMaintenanceParams["target"],
+    boundary: MacOwnedStopBoundary,
+    operationMs: number,
+    signal: AbortSignal,
+  ) => Promise<MacOwnedStopResult>;
 }
 
 export interface BundledDaemonOptions {
@@ -81,6 +100,11 @@ export interface BundledDaemonOptions {
   cwd: string;
   /** `orca --config <file>`, when the workspace's config is not found by walking up. */
   configPath?: string;
+  /** Main-only first-run launch capability; never inherited for unrelated children. */
+  firstRunToken?: string;
+  /** Closed replacement child keeps its ownership on failed/late startup; never force-killed. */
+  closedUpdate?: { attempt: string; token: string };
+  onChild?: (child: DaemonChild) => void;
   host?: string;
   /**
    * Extra arguments, appended after `serve`. The seam for flags the app passes —
@@ -108,6 +132,8 @@ export interface BundledDaemonOptions {
   onExit?: (exit: DaemonExit) => void;
   /** Called with every line the daemon writes, while it runs. */
   onLog?: (line: string) => void;
+  /** Optional closed local facts; never receives output, errors, paths or credentials. */
+  onStartupDiagnostic?: StartupDiagnosticObserver;
   /* -- seams, for the test -- */
   spawn?: SpawnDaemon;
   findPort?: (host: string) => Promise<number>;
@@ -217,7 +243,9 @@ class OutputTail {
  * attempt fails the same way.
  */
 export async function startBundledDaemon(options: BundledDaemonOptions): Promise<BundledDaemon> {
-  const attempts = options.attempts ?? 3;
+  if (options.closedUpdate && (!options.args?.includes("--read-only") || !options.args.includes("--no-resume")))
+    throw new DaemonStartError("Closed validation requires read-only startup without resume", "");
+  const attempts = options.closedUpdate ? 1 : (options.attempts ?? 3);
   let failure: DaemonStartError | undefined;
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
@@ -266,13 +294,28 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
     ...args,
   ];
 
-  const child = spawn(execPath, argv, {
-    cwd,
-    // `ELECTRON_RUN_AS_NODE` is what makes `process.execPath` — the Electron binary in a
-    // packaged app — behave as a bare Node and never open a window of its own.
-    env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  let child: DaemonChild;
+  try {
+    child = spawn(execPath, argv, {
+      cwd,
+      // `ELECTRON_RUN_AS_NODE` is what makes `process.execPath` — the Electron binary in a
+      // packaged app — behave as a bare Node and never open a window of its own.
+      env: {
+        ...env,
+        ELECTRON_RUN_AS_NODE: "1",
+        ORCA_FIRST_RUN_LAUNCH: options.firstRunToken,
+        ORCA_UPDATE_ATTEMPT: options.closedUpdate?.attempt,
+        ORCA_UPDATE_LAUNCH: options.closedUpdate?.token,
+        ORCA_MANAGED_UPDATE_CONTROL: options.closedUpdate ? undefined : env.ORCA_MANAGED_UPDATE_CONTROL,
+        ORCA_MANAGED_UPDATE_ADDON: options.closedUpdate ? undefined : env.ORCA_MANAGED_UPDATE_ADDON,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    observeStartup(options.onStartupDiagnostic, "startup_spawn_failed");
+    throw error;
+  }
+  options.onChild?.(child);
 
   let tokenFile: string | undefined;
   const tail = new OutputTail(200, (line) => {
@@ -288,10 +331,19 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
 
   let exit: DaemonExit | undefined;
   let stopping = false;
+  let updateStop: Promise<MacOwnedStopResult> | undefined;
+  let updateTarget: RuntimeMaintenanceParams["target"] | undefined;
   let settled = false;
+  let startupObserved = false;
+  const observeFailure = (code: Parameters<StartupDiagnosticObserver>[0]) => {
+    if (settled || startupObserved) return;
+    startupObserved = true;
+    observeStartup(options.onStartupDiagnostic, code);
+  };
   const exited = new Promise<void>((resolve) => {
     child.once("exit", (code, signal) => {
       exit = { code, signal, output: tail.toString() };
+      observeFailure("startup_exited_before_handshake");
       if (settled && !stopping) onExit?.(exit);
       resolve();
     });
@@ -299,6 +351,7 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
   // A command that cannot be spawned at all (no such file, not executable) emits `error`
   // and, on some platforms, no `exit` — so it is recorded as one.
   child.on("error", (e: Error) => {
+    observeFailure("startup_spawn_failed");
     exit ??= { code: null, signal: null, output: `${tail.toString()}\n${e.message}`.trim() };
   });
 
@@ -308,10 +361,17 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
   const deadline = now() + startTimeoutMs;
   for (;;) {
     if (exit) throw died(exit);
-    if (await (probe ? probe(url) : helloAnswers(url, cwd, tokenFile))) break;
+    // A recovered store can still authenticate the previous bootstrap token while startup rotates it.
+    // Wait for this owned child to announce finished credential bootstrap before accepting hello.
+    if (
+      (!options.firstRunToken || tokenFile === join(cwd, "auth", "local-client.token")) &&
+      (await (probe ? probe(url) : helloAnswers(url, cwd, tokenFile)))
+    )
+      break;
     if (now() >= deadline) {
+      observeFailure("startup_handshake_timeout");
       const output = tail.toString();
-      child.kill("SIGKILL");
+      if (!options.closedUpdate) child.kill("SIGKILL");
       throw new DaemonStartError(
         `the bundled daemon did not answer hello on ${url} within ${startTimeoutMs}ms`,
         output,
@@ -326,14 +386,42 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
 
   return {
     url,
+    child,
     pid: child.pid,
+    get exited() {
+      return child.exitCode !== null || child.signalCode !== null;
+    },
     ...(tokenFile ? { tokenFile } : {}),
+    stopForMacUpdate: (target, boundary, operationMs, signal) => {
+      if (updateStop) {
+        if (
+          target.workspaceId !== updateTarget?.workspaceId ||
+          target.instanceId !== updateTarget.instanceId ||
+          target.processId !== updateTarget.processId
+        )
+          return Promise.resolve({ outcome: "unknown" });
+        return updateStop;
+      }
+      if (stopping) return Promise.resolve({ outcome: "refused" });
+      // Reserve before callbacks: ordinary quit must never escalate an updater attempt.
+      stopping = true;
+      updateTarget = Object.freeze({ ...target });
+      return (updateStop = Promise.resolve().then(async () => {
+        try {
+          return await new MacUpdateOwnedStop(child, updateTarget!, boundary, operationMs).stop(signal);
+        } catch {
+          return { outcome: "unknown" };
+        }
+      }));
+    },
     stop: async () => {
+      if (updateStop) return; // Unknown updater stop stays owned; no quit-time SIGKILL.
       if (exit) return;
       stopping = true;
       child.kill("SIGTERM");
       await Promise.race([exited, sleep(stopTimeoutMs)]);
       if (exit) return;
+      if (options.closedUpdate) return; // Retain an uncertain captured child; no escalation.
       // It ignored the signal, or is wedged. The store is the daemon's only durable state
       // and it only ever reads it, so there is nothing here worth waiting longer for.
       child.kill("SIGKILL");

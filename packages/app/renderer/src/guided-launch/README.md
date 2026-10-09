@@ -1,91 +1,67 @@
-# Guided launch integration boundary
+# Guided launch production integration
 
-This isolated #334 slice starts from main `65606fbce827cba914a67b999b1a47c0aab2797a`
-and the reviewed #440 packet `4aa142e870c9cedcd4d26108d975c0f7c7f4619a`.
-Final delivery incorporates main `10834758e49a5e84b9ac06e3bca85f87be923dac`
-and the protected-restore corrections at `b12a8642e5a1f2284b09a341ed6048c54f125be8`.
-The dependency refresh incorporates main `93aa9d1352bb25a24e9fb84940674c3e5dcd78f9`,
-which includes the merged shared launch declarations from #542.
-It is not registered in the shell and does not add RPCs, persistence, provider discovery,
-workspace provisioning or publication behavior.
+The mounted integration starts from main `db579fb7ac9cfce2e4e6901713088a80602311da`,
+including #548 (`d014461b0d0b477fe828586a0f0c3dbff3de78be`), #553 and #470.
+It consumes the accepted #440 packet and #542 declarations
+(`703c422aef6df7b0af008ec53349cab3e711f2f5`), without changing their runtime architecture.
 
-`GuidedLaunchController` consumes `LaunchPorts`; `GuidedLaunch` composes shared UI primitives.
-Canonical `EditorTarget`, command and preflight types come from #542 declaration commit
-`703c422aef6df7b0af008ec53349cab3e711f2f5`. The remaining UI projection, draft and optional
-two-phase retention interfaces are explicit local seams. `shared-bindings.ts` maps canonical
-checkout evidence, coherent reads, atomic submission and all response/recovery kinds without
-adding wire properties. The dedicated fixtures are synthetic, not the accepted sample or a
-native checkout binding. The shared declaration is now available from main; it was brought
-in by the main merge and has not been independently copied or modified by this worker.
+`orca://launch`, the Config header and the palette open the merged `GuidedLaunch` UI.
+Existing palette admission/recovery commands remain available for their legacy protected
+intents; the shared journal keeps them distinct from guided commands.
+`launch-context.tsx` holds its draft/controller above surface navigation and registers
+unsent/busy/unresolved work with the existing update/connection draft guard. Close and
+Escape retain this session; accepted receipts navigate through the existing run route.
+The local diagnostics section keeps its component identity when Config switches into
+launch. Leaving Config follows its existing diagnostics cleanup lifecycle. No production
+capture, provider invocation, publication or permission grant is activated by opening it.
 
-The canonical adapter preserves the exact checkout observation from preflight and supplies
-it unchanged to main's independently verified submission. It removes client-owned retry/scope
-fields from the command. Main still owns secure retention before sending and key allocation.
-Atomic submission can lose the acknowledgement before returning its retained handle. In that
-case the controller freezes the exact original review and permits only exact-review retry on
-the same connection; it never infers correlation from workflow/target-only `retained()` rows.
-Target/epoch movement blocks that retry and visibly requires main-owned inspection.
+`main/guided-launch-adapter.ts` composes the existing main controller with target-guarded
+operator aliases and the **same encrypted journal** used by palette admission. It captures
+one credential for discovery, independent review and send; ordinary client credential
+refresh cannot change the operation's principal. Main owns the execution key and persists
+exact target, checkout, guards and command before submission. Operator failure projections
+receive a fixed safe explanation, while operation/admission/Request IDs and retry envelopes
+remain intact. Only accepted receipts navigate. Prepared, in-progress, recoverable failure
+and lost responses retain the original intent.
 
-Narrow shared gaps remain explicit: a verified exact intent reference after acknowledgement
-loss across connection movement; protected draft/command restore beyond retained metadata;
-Request override validation/provenance beyond the vars-only preflight; and an unambiguous
-abandonment-success outcome before clearing the local intent. The canonical declaration alone
-does not prove these persistence or recovery semantics. Missing adapters keep the relevant
-operations blocked rather than claiming unsupported behavior.
+`main/guided-checkout.ts` supports the accepted prepared-local track only. It requires an
+explicit local root in applied configuration, resolves it relative to the configuration
+file as bootstrap does, and observes repository, attached branch, base, status and tracked
+changes. The opaque evidence also binds the discovered endpoint/principal, so an across-call
+credential switch cannot adopt another principal's preview. These bounded observations are
+rechecked in main before admission. They are not an
+immutable filesystem snapshot; untracked file contents are not inspected. It creates no
+checkout, branch, worktree or directory and performs no per-launch configuration change.
+Remote/read-only/other workspace profiles remain unavailable for new launch until their
+verified adapter exists. Configuration/catalog read failures do not disable independent
+protected-intent restoration/recovery under current authenticated scope and recovery grants.
 
-The integrator must supply these concrete bindings before enabling the surface:
+After acknowledgement loss, `resolveIntent` matches the **complete frozen review** inside
+main's journal. It never infers a command from workflow/target-only metadata and never mints
+a replacement key. Same-scope reconnect requires target review before recovery. Across app
+restart, the user explicitly selects a retained handle and restores its exact protected
+command; all restored variables are masked independently of later workflow metadata.
+Inspection with no known operation ID refuses to send. Explicit reconciliation can resend
+only the protected original command/key. New work requires acknowledged main confirmation
+of abandonment; it does not cancel existing work. Another endpoint/workspace/principal
+cannot adopt an original intent.
 
-- Current verified endpoint/workspace/instance/principal/epoch, authorization reasons,
-  active generation and authorized workflow/selection projections. Refresh via existing
-  notifications/connection ownership, not polling. Call `contextChanged` on relevant
-  invalidations; that conservatively invalidates review and fences late responses.
-- Coherent operator preflight plus a reviewed root ownership/base freshness adapter. Its
-  `rootId`/`rootRevision` values are explicit app-local evidence bindings, not new wire
-  properties or inferred paths. Root selection changes no runtime config by itself.
-  Unsupported target/root/workflow combinations must remain blocked.
-- The reviewed app sample workflow ID/version/digest, task/instruction/result bindings.
-  Existing Linux `cal-codex-work` v3 is not implicitly certified for this beta.
-- Protected guided command/draft retention. Optional `retain` must persist the exact frozen target,
-  root, guards and command before returning an opaque handle. The palette journal currently
-  stores only workflow correlation and is insufficient. No renderer key or second retry
-  ledger is introduced. The canonical `launch` path instead delegates retention plus submission
-  to `GuidedLaunchPorts.submit`. Missing adapters visibly block submission/restart claims.
-- `submit` must use the captured connection and retained original command/key, checking
-  current authority/target again. Initial direct responses are flat `RunsAdmitResult` with
-  operation identity; initial Request responses are flat `RequestsSubmitResult` without an
-  operation identity. Recovery returns the unflattened resolved/in-progress envelope.
-  Only an accepted receipt navigates; prepared, failure and in-progress remain unresolved.
-  Canonical typed refusals can be mapped to `LaunchPortFailure`; its local classification
-  never invents daemon error codes or echoes raw transport messages. Unknown response loss
-  stays ambiguous and retains the original intent.
-- `restore` must verify the protected exact command, handle and original scope under the
-  current target/authority. Explicit same-scope reconnect review permits recovering the
-  retained handle even after generation/workflow changes; it never rebuilds a command.
-  Pending intents cannot transfer to another endpoint/workspace/principal. Explicit
-  abandonment starts new work and does not cancel an existing run.
-- Layer ownership for Close/Back/Escape and focus restoration, shared announcement delivery,
-  settings navigation, route/palette registration and refresh. The surface adds no live
-  region, global shortcut handler, connection probe or subscription.
+Detailed resolved agent/model/instruction provenance remains unavailable in this adapter;
+the workflow revision and active configuration are the authoritative launch guards.
 
-Typed input parsing retains false, zero, empty strings, null and nested JSON separately
-from omission. Invalid typed text remains in the current control and blocks preview; it is
-not a serializable protected draft. Defaults and schema constraints are resolved by the
-daemon. Sensitive and undeclared inputs are withheld from preview. Request selectors use
-only injected authorized choices; direct commands support no overrides. No completion
-percentage, ETA, cost or automatic publication is claimed.
+The mounted preview requires acknowledgement of configured permission policy for each
+exact review. Runtime permission requests still use existing confirmation bindings. Request
+overrides remain unavailable because vars-only preflight supplies no authoritative override
+validation; no guessed override controls or grants are introduced.
 
-Protected reads publish a busy latch through controller state so controls cannot drift
-from the draft while a restore is pending. Empty reads retain the current draft and review;
-target changes fence late results. Input controls update their local text only after the
-controller accepts the edit. A current unresolved launch must be recovered before restoring
-another launch.
+Remaining handoff dependencies are bounded: the delivery owner's reviewed JEV-free beta
+workflow ID/version/digest, task/instruction/result assets, a fresh configuration generation
+without JEV, and writable dedicated first-run project provisioning. This slice adds no JEV
+or TypeSafe requirement and preserves their existing code/history. Unsent drafts are
+session-only: optional protected unsent-draft storage remains visibly unavailable. Physical
+Mac keychain, Finder/PATH, packaged sample, crash/restart and real-agent proof remain separate
+native acceptance. #334/#386 are not closed by synthetic route tests.
 
-Preview disclosure is captured with the exact review and sensitivity remains monotonic
-through this controller session, including nested sensitive fields. Restored draft and
-command values are conservatively withheld because the current protected-store seam does
-not verify their original sensitivity metadata. New schema flags cannot downgrade that
-protection. These local safeguards do not establish protected persistence or extend the
-shared wire contract.
-
-Dedicated source/DOM tests cover these local boundaries. They do not establish actual-daemon,
-OS keychain/process restart, cross-client, Electron, packaged or physical acceptance.
+Focused acceptance exercises the real renderer shell/preload and main client/schema/journal
+composition against synthetic HTTP and temporary Git repositories. It does not run a daemon,
+provider, capture job or native host acceptance job.

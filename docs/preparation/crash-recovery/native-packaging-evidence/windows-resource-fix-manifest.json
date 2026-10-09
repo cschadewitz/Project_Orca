@@ -1,0 +1,138 @@
+{
+  "schema": 1,
+  "originalCandidate": "49a21254dfb02dfce5182902a317298a644bc560",
+  "resourceSource": "bede7ffd4b63131de0db748aaba9bb013f90b1be",
+  "packageSource": "a35691f3b22eb193df1108e3a47e69356e49fce9",
+  "productionEnabled": false,
+  "controlledBinaryAccountingContinuous": true,
+  "controlledBinaryPeakBytes": 5406720,
+  "controlled8MiBGatePassed": true,
+  "mainPreviewCallbacksUnder4ms": true,
+  "strict4msEventLoopTailsPassed": false,
+  "pairedCurrentLoadGatePassed": false,
+  "managed32MiBGatePassed": false,
+  "minimalManagedIncrementBytes": 59260492,
+  "packaged200PercentNoHorizontalOverflow": true,
+  "nativeInventoryVerified": true,
+  "packagedCompiledDiagnosticsMatch": true,
+  "packagedProductionFlagFalse": true,
+  "allOwnedExitsConfirmed": true,
+  "disposableProfilesRemoved": true,
+  "nativeSourceSha256": "3b69d61dc07f1366167f8a151c84925a78d5b70bcc74e7835936c1984a26bdd3",
+  "compiledDiagnostics": [
+    {
+      "name": "initialize.js",
+      "sha256": "cd56d06edc239bbfff39871ad872f730c8a536b04b06387a8c780e55d69bb203"
+    },
+    {
+      "name": "native-adapter.js",
+      "sha256": "c614303e01c86411948f72040ea3a9292569f3544a531c75fee57e5f64190f27"
+    },
+    {
+      "name": "native-addon.js",
+      "sha256": "3c267d9d9b206020ad233fd4e5bfb3b51de7b30f2f2c1891573a1d33606b83f5"
+    },
+    {
+      "name": "native-clock.js",
+      "sha256": "65961f9bd070a8fafe6ed19b03a7dce4a6bc642bfde45ba11f3b548020a6272f"
+    },
+    {
+      "name": "native-storage.js",
+      "sha256": "36364c1b11d6808dd22127b55f8f7fde8a3a5a7a5e03ca17ad62a6d311f526e1"
+    },
+    {
+      "name": "payload-memory.js",
+      "sha256": "c9891ff6f6191ce061b1f3225c1e8b88f39854216137853f8953ced31f550690"
+    },
+    {
+      "name": "payload-scope.js",
+      "sha256": "6fdfaa063f84f8277b9d1f7ce5ceb86e01103cb82405776bdd939a196502e9bb"
+    },
+    {
+      "name": "pretrigger-buffer.js",
+      "sha256": "e7e79a327f8d2ca6bedf7f42711bc1d66aa440be1e1f819d63253691a2686478"
+    },
+    {
+      "name": "profile.js",
+      "sha256": "78fd1dbad527a74629287e05abf6c60e11b41158f1b263267efe0f8ebb401814"
+    },
+    {
+      "name": "recovery-contract.js",
+      "sha256": "34908374a846e1351fc0463a150d2ece3f0fa10dd0022902fb97dad686beacec"
+    },
+    {
+      "name": "recovery-controller.js",
+      "sha256": "f092f0a5f6353716831f39b87fd5cb6bd3ed96eea7dc5c91eec42a623d1d6fea"
+    },
+    {
+      "name": "recovery-disk.js",
+      "sha256": "f51d0d6957ffc565269fcfa50639ba6e28b979a5977bb43e5d505c8463f4ec31"
+    },
+    {
+      "name": "recovery-files.js",
+      "sha256": "db16caca0656e983aa1afb2ed2e70f1cf4695b842764657f02b4d9f6b3068aae"
+    },
+    {
+      "name": "report-validation.js",
+      "sha256": "019799c09a602146f1d3fa5f4bbbe635420125eb1f0fcbdb2001cc4e813d8bf1"
+    },
+    {
+      "name": "report-work.js",
+      "sha256": "a32150d0be42c5d260921c61708f24e054fc77369da0fa82becbdeb2c58e14bb"
+    },
+    {
+      "name": "snapshot.js",
+      "sha256": "e8ef02b5d85b26acde6630ca1305b8075264c994bbcdfc6ddd589df8700166f4"
+    },
+    {
+      "name": "source-producers.js",
+      "sha256": "5f70d2452aed4c38c434dcb7f8ab1f12fb79fb35b0de8ea366bf7d2fb451ca3a"
+    },
+    {
+      "name": "startup-producer.js",
+      "sha256": "cf986d55ad03f1533f38eb23b32e8fdfe33a25aba8389e0d8e0a9aaeb0de7aab"
+    },
+    {
+      "name": "windows-key-adapter.js",
+      "sha256": "d594771823dde5f9799c31799f3949b3bb409a105d851601ccb93890ff083023"
+    }
+  ],
+  "files": [
+    {
+      "name": "windows-resource-observer-comparison.json",
+      "bytes": 22544,
+      "sha256": "c590f0f64d97d2bb9ccd4e4853f37df030ed0b7520218c486947ae80c590d941",
+      "rawSourceSha256": "10338578397a4a226b525a985399e7d166d7950a83b93fea24d0bb3e935d65f5"
+    },
+    {
+      "name": "windows-resource-compact-results.json",
+      "bytes": 32264,
+      "sha256": "d3ee33aa068c7cca80c44f72b84db0b5b200faf5dd007cd684e102d9daf4d08f",
+      "rawSourceSha256": "8321c29cb239f53fe3ad2c51b93767b3e249209a303df3b102b7de32ee4e2d6c"
+    },
+    {
+      "name": "windows-resource-packaged-results.json",
+      "bytes": 6618,
+      "sha256": "e12e5e6636e4d7960f51897325599ec93217790fadc756788ded98791de45f84",
+      "rawSourceSha256": "a29e611f3d6021c3c6c82901353ce6435f29be0124188c5a0420614f638837af"
+    },
+    {
+      "name": "windows-resource-package-identity.json",
+      "bytes": 921,
+      "sha256": "7cb673f65d7e31cc197410e09836fd8f10d090dbd0247ce40c00eae03b6c59ca",
+      "rawSourceSha256": "04dcaa1410c5d2ad36bc7c7adbc0409ffa272dd05eaf51a0b266b6426259bb61"
+    },
+    {
+      "name": "windows-resource-focused-tests.json",
+      "bytes": 34004,
+      "sha256": "d051bfed00bd8857022556e22cbb8d85815a2e001914a42e5183edcac17f0db7",
+      "rawSourceSha256": "5863c0abb57c332afed39a62417cd97cdae40eaf7345c0f8f4560bfe18c8d785"
+    },
+    {
+      "name": "windows-resource-config-tests.json",
+      "bytes": 31774,
+      "sha256": "ebbfb07c9fb4299d641eafc215cbf60957726ccfbca4269a11f24fca008708eb",
+      "rawSourceSha256": "186ce1b9381d8623902a07a7f11326f9f02b94597399c31f2d76b0a37fb862b8"
+    }
+  ]
+}

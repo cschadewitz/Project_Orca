@@ -38,7 +38,7 @@
  * dropped without anybody being told.
  */
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { parse as parseYaml, parseDocument, stringify as stringifyYaml } from "yaml";
 import { permissionOverlayFor, replacePermissionPolicyFile } from "@orca/agents";
@@ -72,6 +72,7 @@ import { describeConfigSchema, validationErrors } from "./config-schema.js";
 import { describeConfigFormSchema } from "./config-form-schema.js";
 import { lowerConfigEdits } from "./config-collection-edits.js";
 import { configReferenceErrors } from "./config-references.js";
+import { TemplateAuthoringService } from "./template-authoring.js";
 
 /** The default name a `config.set` creates when the workspace has no config file yet. */
 export const DEFAULT_CONFIG_FILENAME = "orca.config.yaml";
@@ -127,6 +128,7 @@ export interface ConfigChange {
  * frame has the same shape of life - no run, no cursor, nothing to replay.
  */
 export class ConfigModel {
+  readonly templates: TemplateAuthoringService;
   private readonly generations: ConfigGenerationProvider | undefined;
   private readonly configFile: string;
   private readonly permissionsFile: string;
@@ -138,6 +140,16 @@ export class ConfigModel {
     this.permissionsFile = opts.permissionsFile ?? join(opts.configDir, PERMISSION_POLICY_FILENAME);
     this.clock = opts.clock ?? systemClock;
     this.generations = opts.generations;
+    this.templates = new TemplateAuthoringService({
+      baseDir: opts.configDir,
+      readConfig: () => this.get(),
+      exclusive: async (command) => {
+        await mkdir(dirname(this.configFile), { recursive: true });
+        return withFileLock(`${this.configFile}.lock`, command);
+      },
+      applyLocked: (params, recheck) => this.applyLocked(params, recheck),
+      changed: () => this.announce("config"),
+    });
     this.generations?.onChange((generation, workflows) => {
       const change: ConfigChange = {
         document: "config",
@@ -198,9 +210,11 @@ export class ConfigModel {
     return this.generations.status(configurationValue(config), config.revision);
   }
 
-  async get(): Promise<ConfigGetResult> {
+  async get(authorize?: () => Promise<void>): Promise<ConfigGetResult> {
+    await authorize?.();
     const config = await this.read("config");
     const permissions = await this.read("permissions");
+    await authorize?.();
     return {
       config,
       permissions,
@@ -232,11 +246,13 @@ export class ConfigModel {
    * before the lock stays, because it refuses the ordinary case sooner; it is no longer the
    * one that decides.
    */
-  async set(params: ConfigSetParams): Promise<ConfigSetResult> {
+  async set(params: ConfigSetParams, authorize?: () => Promise<void>): Promise<ConfigSetResult> {
+    await authorize?.();
     if (params.validateOnly) {
       // Nothing is written, so there is nothing to serialise against: this reports what the
       // document would be, and a `CONFIG_STALE` here is advice rather than a verdict.
       const current = await this.read(params.document);
+      await authorize?.();
       refuseIfStale(params, current);
       const text = this.nextText(current, params);
       const parsed = safeParse(params.document, text);
@@ -249,9 +265,12 @@ export class ConfigModel {
     }
 
     const written =
-      params.document === "config" ? await this.writeConfigFile(params) : await this.writeSidecarFile(params);
+      params.document === "config"
+        ? await this.writeConfigFile(params, authorize)
+        : await this.writeSidecarFile(params, authorize);
     this.publish(written);
     const config = params.document === "config" ? written : await this.read("config");
+    await authorize?.();
     return {
       document: written,
       written: true,
@@ -265,28 +284,35 @@ export class ConfigModel {
   }
 
   /** Explicit manual refresh: reads current file bytes and all candidate assets under the writer lock. */
-  async apply(params: ConfigApplyParams): Promise<ConfigApplyResult> {
+  async apply(params: ConfigApplyParams, authorize?: () => Promise<void>): Promise<ConfigApplyResult> {
+    await authorize?.();
+    await mkdir(dirname(this.configFile), { recursive: true });
+    return withFileLock(`${this.configFile}.lock`, () => this.applyLocked(params, authorize));
+  }
+
+  /** Template publication holds the same lock across catalog verification and generation activation. */
+  private async applyLocked(params: ConfigApplyParams, catalogCheck?: () => Promise<void>): Promise<ConfigApplyResult> {
+    await catalogCheck?.();
     const generations = this.generations;
     if (!generations) throw new OrcaError("NOT_SUPPORTED", "configuration activation is not wired");
-    await mkdir(dirname(this.configFile), { recursive: true });
-    return withFileLock(`${this.configFile}.lock`, async () => {
-      const current = await this.read("config");
-      if (current.revision !== params.expectedRevision)
+    const current = await this.read("config");
+    await catalogCheck?.();
+    if (current.revision !== params.expectedRevision)
+      throw new ProtocolFault("CONFIG_STALE", "saved configuration changed; refresh before applying");
+    const recheck = async () => {
+      const latest = await this.read("config");
+      await catalogCheck?.();
+      if (latest.revision !== params.expectedRevision)
         throw new ProtocolFault("CONFIG_STALE", "saved configuration changed; refresh before applying");
-      const recheck = async () => {
-        const latest = await this.read("config");
-        if (latest.revision !== params.expectedRevision)
-          throw new ProtocolFault("CONFIG_STALE", "saved configuration changed; refresh before applying");
-      };
-      await recheck();
-      return generations.apply(
-        configurationValue(current),
-        current.revision,
-        params.expectedGeneration,
-        params.validateOnly ?? false,
-        recheck,
-      );
-    });
+    };
+    await recheck();
+    return generations.apply(
+      configurationValue(current),
+      current.revision,
+      params.expectedGeneration,
+      params.validateOnly ?? false,
+      recheck,
+    );
   }
 
   /**
@@ -299,17 +325,19 @@ export class ConfigModel {
    * happens in here: patching a YAML document is read-modify-write, and a compare made
    * outside the lock is a compare of bytes that may not be the ones being replaced.
    */
-  private async writeConfigFile(params: ConfigSetParams): Promise<ConfigDocumentView> {
+  private async writeConfigFile(params: ConfigSetParams, authorize?: () => Promise<void>): Promise<ConfigDocumentView> {
     const path = this.pathOf("config");
     await mkdir(dirname(path), { recursive: true });
     return withFileLock(`${path}.lock`, async () => {
+      await authorize?.();
       const current = await this.read("config");
+      await authorize?.();
       refuseIfStale(params, current);
       const text = this.nextConfigText(current, params);
       const errors = this.validate("config", text);
       if (errors.length)
         throw new OrcaError("CONFIG_INVALID", `${path}: ${errors[0]?.message ?? "invalid"}`, { errors });
-      await writeAtomically(path, text);
+      await writeAtomically(path, text, authorize);
       return this.read("config");
     });
   }
@@ -320,8 +348,12 @@ export class ConfigModel {
    * takes that one. `expectedRevision` travels with the document so that the compare happens
    * in there, beside the write, rather than out here where a grant can land between the two.
    */
-  private async writeSidecarFile(params: ConfigSetParams): Promise<ConfigDocumentView> {
+  private async writeSidecarFile(
+    params: ConfigSetParams,
+    authorize?: () => Promise<void>,
+  ): Promise<ConfigDocumentView> {
     const current = await this.read("permissions");
+    await authorize?.();
     refuseIfStale(params, current);
     const text = this.nextSidecarText(current, params);
     const errors = this.validate("permissions", text);
@@ -330,6 +362,7 @@ export class ConfigModel {
     try {
       await replacePermissionPolicyFile(current.path, JSON.parse(text), {
         expectedRevision: params.expectedRevision,
+        authorize,
       });
     } catch (e) {
       // The writer's stable code, in the wire's words. `details` already carries both hashes.
@@ -538,10 +571,15 @@ function setInPlain(target: Record<string, unknown>, path: (string | number)[], 
 }
 
 /** tmp + rename, so a reader never sees half a config file. */
-async function writeAtomically(file: string, text: string): Promise<void> {
+async function writeAtomically(file: string, text: string, authorize?: () => Promise<void>): Promise<void> {
   const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, text, "utf8");
-  await rename(tmp, file);
+  try {
+    await writeFile(tmp, text, "utf8");
+    await authorize?.();
+    await rename(tmp, file);
+  } finally {
+    await rm(tmp, { force: true });
+  }
 }
 
 /** YAML null/empty documents use schema defaults; syntax failures keep undefined and fail validation. */

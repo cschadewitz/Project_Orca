@@ -1,5 +1,5 @@
 /** Actual Config route over the shared feed and merged #333 controls; Save and Apply stay separate. */
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 import type { ConfigDocument } from "@orca/protocol";
 import type { ConnectionState } from "@orca/design";
 import { useSurfaceDensity } from "../appearance-context.js";
@@ -8,6 +8,7 @@ import { scopeProps } from "../keyboard-map.js";
 import { Button, ObjectHeader, StateView, Text, textClass } from "../ui/index.js";
 import { ConnectionSource } from "../daemon-connection/source.js";
 import { SURFACES } from "../chrome/surfaces.js";
+import { useSidebarCollapsed } from "../chrome/use-breakpoints.js";
 import { useConfig } from "./config-context.js";
 import { sameEditorTarget } from "./configuration-adapter.js";
 import { useConfigurationStudio } from "./configuration-studio-context.js";
@@ -18,21 +19,32 @@ import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
 import { agentPolicies } from "./config-model.js";
 import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
+import { FirstRunSection } from "../first-run/first-run-section.js";
+import { TemplateStudioSurface } from "../template-authoring/surface.js";
+import { useTemplateStudio } from "../template-authoring/context.js";
+import { configurationReferenceChoices } from "./reference-choices.js";
 
 export function ConfigurationStudioSurface({
   connection,
   open,
+  launch,
+  onLaunch,
 }: {
   connection: ConnectionState;
   open?: ConfigDocument;
+  launch?: ReactNode;
+  onLaunch?: () => void;
 }): JSX.Element {
   useSurfaceDensity();
+  const narrow = useSidebarCollapsed();
   const feed = useConfig();
   const studio = useConfigurationStudio();
+  const templateStudio = useTemplateStudio().studio;
   const keyboard = useKeyboard();
   const [replace, setReplace] = useState<"form" | "raw">();
   const [privatePreview, setPrivatePreview] = useState(false);
   const [policyConfirmed, setPolicyConfirmed] = useState(false);
+  const [templates, showTemplates] = useState(false);
   const sequence = studio?.state.sequence;
   useEffect(() => {
     setPolicyConfirmed(false);
@@ -40,6 +52,7 @@ export function ConfigurationStudioSurface({
   }, [sequence]);
   const switchMode = useCallback(
     (mode: "form" | "raw") => {
+      showTemplates(false);
       if (studio && !studio.switchMode(mode)) setReplace(mode);
     },
     [studio],
@@ -53,49 +66,85 @@ export function ConfigurationStudioSurface({
   save.current = () => {
     void studio?.save(policyConfirmed);
   };
-  const canSave = studio?.review !== undefined && !studio.busy && studio.reason("save") === undefined;
+  const canSave = !launch && studio?.review !== undefined && !studio.busy && studio.reason("save") === undefined;
   useEffect(() => {
-    if (!canSave) return;
+    if (!canSave || templates) return;
     return keyboard.register({
       scope: "config",
       key: "Mod+S",
       label: "Save reviewed configuration",
       action: () => save.current(),
     });
-  }, [canSave, keyboard]);
-  const data = studio?.source ?? (feed.state.phase === "ready" ? feed.state.data : undefined);
+  }, [canSave, templates, keyboard]);
+  const sourceAuthorized = studio?.readable ?? true;
+  const data = sourceAuthorized
+    ? (studio?.source ?? (feed.state.phase === "ready" ? feed.state.data : undefined))
+    : undefined;
   // Sidecar notifications remain current while the config session retains its original base.
   const permissions =
-    feed.state.phase === "ready" && (!studio || sameEditorTarget(feed.state.target, studio.target))
+    sourceAuthorized && feed.state.phase === "ready" && (!studio || sameEditorTarget(feed.state.target, studio.target))
       ? feed.state.data
       : data;
   const state = studio?.state;
   const review = studio?.review;
   const generation = data?.generation;
   return (
-    <div className="orca-config" data-surface="config" {...scopeProps("config")}>
+    <div
+      className="orca-config"
+      data-surface="config"
+      data-config-layout={narrow ? "stacked" : "columns"}
+      {...scopeProps("config")}
+    >
       {window.orca.daemonConnection && <ConnectionSource bridge={window.orca.daemonConnection} />}
       <ObjectHeader
         crumbs={[{ type: "config", id: data?.config.path ?? "config", label: "Configuration", current: true }]}
         actions={
           <div className="orca-seg" role="group" aria-label="View">
-            {(["form", "raw"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={`orca-seg__btn ${textClass("label")}`}
-                aria-pressed={(studio?.mode ?? "form") === mode}
-                onClick={() => switchMode(mode)}
-              >
-                {mode === "form" ? "Form" : "Raw"}
-              </button>
-            ))}
+            {onLaunch && !launch && (
+              <Button onClick={onLaunch} data-launch-entry>
+                Launch work
+              </Button>
+            )}
+            {!launch && (
+              <>
+                <button
+                  type="button"
+                  className={`orca-seg__btn ${textClass("label")}`}
+                  aria-pressed={templates}
+                  onClick={() => showTemplates(true)}
+                >
+                  Templates
+                </button>
+                {(["form", "raw"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`orca-seg__btn ${textClass("label")}`}
+                    aria-pressed={!templates && (studio?.mode ?? "form") === mode}
+                    onClick={() => switchMode(mode)}
+                  >
+                    {mode === "form" ? "Form" : "Raw"}
+                  </button>
+                ))}
+              </>
+            )}
           </div>
         }
       />
       <div className="orca-config__body">
+        <FirstRunSection key="first-run" />
         <DiagnosticsSection key="diagnostics" />
-        {!data ? (
+        {launch ? (
+          launch
+        ) : templates ? (
+          <TemplateStudioSurface />
+        ) : !sourceAuthorized ? (
+          <StateView
+            kind="disconnected"
+            title="Configuration source withheld"
+            body="Source authority or daemon target changed. Retained edits remain private until access is restored and current state is reviewed."
+          />
+        ) : !data ? (
           feed.state.phase === "error" ? (
             <StateView
               kind="error"
@@ -145,6 +194,9 @@ export function ConfigurationStudioSurface({
                   access={(edits) => studio.editAccess(edits)}
                   onEdit={(edits) => studio.edit(edits)}
                   rowKey={studio.rowKey}
+                  referenceChoices={(path) =>
+                    configurationReferenceChoices(studio.value, templateStudio?.adapter.current, path)
+                  }
                   onShowRaw={() => switchMode("raw")}
                 />
               ) : (
@@ -270,7 +322,8 @@ export function ConfigurationStudioSurface({
                 {studio.frozen && (
                   <>
                     <Text style="caption">
-                      The original draft remains frozen. Reading does not rebase or retry its edits.
+                      Overlapping edits and raw replacements stay retained. Reading reconciles independent form edits
+                      and requires a fresh review; it never retries a write.
                     </Text>
                     <Button
                       disabled={studio.busy}

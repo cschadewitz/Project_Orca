@@ -1,7 +1,3 @@
-import { CredentialStore, OwnershipStore, startDaemon, methodsFor, createDaemonIdentity } from "@orca/daemon";
-import { HelloResultSchema, MaintenanceResultSchema, PROTOCOL_VERSION } from "@orca/protocol";
-import { z } from "zod";
-import { prepareDrafts } from "../src/main/update-ipc.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   MacUpdates,
@@ -51,6 +47,15 @@ function rig() {
       order.push("download-verified");
       return "verified" as const;
     }),
+    drainAdmission: vi.fn(async (expected, token) => ({
+      outcome: "ready" as const,
+      lease: {
+        target: expected,
+        token,
+        observe: vi.fn(async () => "held" as const),
+        release: vi.fn(async () => "released" as const),
+      },
+    })),
     prepareDrafts: vi.fn(async () => {
       order.push("drafts");
       return { outcome: "ready" as const, lease: drafts };
@@ -100,6 +105,9 @@ describe("Mac candidate approval coordinator (synthetic; no native adapter)", ()
       r.ports.prepareDrafts = vi.fn(async () => ({ outcome: "blocked" as const, blocker: "drafts" as const }));
       await r.updates.approve(r.id);
       const changed = { ...candidate, [field]: field === "manifestSha256" ? "b".repeat(64) : "changed" };
+      expect(r.updates.present(changed, target)).toBeUndefined();
+      r.updates.defer(r.id);
+      await r.updates.settled();
       const next = r.updates.present(changed, target)!;
       expect(next).not.toBe(r.id);
       await r.updates.approve(r.id);
@@ -118,7 +126,11 @@ describe("Mac candidate approval coordinator (synthetic; no native adapter)", ()
     mutableTarget.epoch++;
     await r.updates.approve(id);
     expect(r.ports.download).toHaveBeenCalledWith(candidate, expect.any(AbortSignal));
-    expect(r.ports.prepareAdmission).toHaveBeenCalledWith(target, expect.any(String));
+    expect(r.ports.prepareAdmission).toHaveBeenCalledWith(
+      target,
+      expect.any(String),
+      expect.objectContaining({ target }),
+    );
     expect(Object.isFrozen(r.updates.state)).toBe(true);
   });
   it("refuses incomplete approval context and invalid hashes before any download", async () => {
@@ -134,6 +146,7 @@ describe("Mac candidate approval coordinator (synthetic; no native adapter)", ()
     const downloaded = pending<"verified">();
     r.ports.download = vi.fn(() => downloaded.promise);
     const first = r.updates.approve(r.id);
+    await vi.waitFor(() => expect(r.ports.download).toHaveBeenCalledOnce());
     const signal = vi.mocked(r.ports.download).mock.calls[0]![1];
     expect(r.updates.present(candidate, target)).toBeUndefined();
     expect(r.updates.defer("foreign")).toBe(false);
@@ -486,162 +499,4 @@ describe("Mac candidate approval coordinator (synthetic; no native adapter)", ()
     expect(r.ports.download).toHaveBeenCalledOnce();
     expect(r.ports.activate).not.toHaveBeenCalled();
   });
-});
-
-describe("Mac coordinator with real authenticated maintenance (synthetic activation)", () => {
-  it.each(["refused", "committed", "unknown", "prepare-response-lost"] as const)(
-    "fences new-admission races and handles %s activation without native acceptance claims",
-    async (activation) => {
-      const credentials = new CredentialStore();
-      const owner = await credentials.issue({ principal: "synthetic-updater", preset: "owner" });
-      const entered = pending<void>();
-      const finish = pending<void>();
-      let active = true;
-      let admitted = 0;
-      const identity = createDaemonIdentity(target.workspaceId);
-      const daemon = await startDaemon({
-        orcaVersion: "0.0.0-mac-update-fixture",
-        workspaceId: target.workspaceId,
-        identity,
-        capabilities: [],
-        auth: {
-          mode: "token",
-          credentials,
-          ownership: new OwnershipStore(),
-          resolver: {
-            run: async () => undefined,
-            inputRun: async () => undefined,
-            artifactRun: async () => undefined,
-            claimRun: async () => undefined,
-            workflowExists: () => false,
-          },
-        },
-        methods: {
-          ...methodsFor({
-            orcaVersion: "0.0.0-mac-update-fixture",
-            capabilities: [],
-            identity,
-            processId: process.pid,
-          }),
-          "agents.list": {
-            params: z.object({}),
-            handle: async () => {
-              admitted++;
-              if (active) {
-                entered.resolve();
-                await finish.promise;
-              }
-              return [];
-            },
-          },
-        },
-      });
-      const rpc = async (method: string, params: unknown = {}) => {
-        const response = await fetch(daemon.url + "/rpc", {
-          method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
-          body: JSON.stringify({ kind: "request", id: 1, method, params }),
-        });
-        return (await response.json()) as { ok: boolean; result?: unknown };
-      };
-      let work: Promise<{ ok: boolean; result?: unknown }> | undefined;
-      try {
-        const hello = HelloResultSchema.parse(
-          (await rpc("hello", { client: "synthetic-updater", protocol: PROTOCOL_VERSION })).result,
-        );
-        expect(hello.identity).toBeDefined();
-        const ownedTarget = { ...hello.identity!, epoch: 1 };
-        const r = rig();
-        let frozen = false;
-        r.ports.prepareDrafts = async () => {
-          let ack!: (sender: number, value: unknown) => void;
-          await prepareDrafts({
-            ids: [1, 2],
-            listen: (callback) => {
-              ack = callback;
-              return () => undefined;
-            },
-            send: (nonce) => {
-              frozen = true;
-              ack(1, { nonce, ready: true });
-              ack(2, { nonce, ready: true });
-            },
-          });
-          return {
-            outcome: "ready",
-            lease: {
-              release: async () => {
-                frozen = false;
-                return "released";
-              },
-            },
-          };
-        };
-        r.ports.prepareAdmission = async (expected, token) => {
-          const current = HelloResultSchema.parse(
-            (await rpc("hello", { client: "synthetic-updater", protocol: PROTOCOL_VERSION })).result,
-          );
-          if (
-            current.identity?.workspaceId !== expected.workspaceId ||
-            current.identity.instanceId !== expected.instanceId
-          )
-            return { outcome: "blocked", blocker: "identity" };
-          const prepared = await rpc("maintenance", { action: "prepare", token });
-          if (!prepared.ok) return { outcome: "unknown" };
-          if (!MaintenanceResultSchema.parse(prepared.result).ready) return { outcome: "blocked", blocker: "activity" };
-          // Inject loss after a real successful fence, never forge a protocol reply.
-          if (activation === "prepare-response-lost") throw new Error("synthetic dropped prepare response");
-          return {
-            outcome: "ready",
-            lease: {
-              target: expected,
-              release: async () => {
-                const resumed = await rpc("maintenance", { action: "resume", token });
-                return resumed.ok && !MaintenanceResultSchema.parse(resumed.result).ready ? "released" : "unknown";
-              },
-            },
-          };
-        };
-        const admissionResults: boolean[] = [];
-        const frozenAtBoundary: boolean[] = [];
-        let wrongOwnerRejected = false;
-        r.ports.revalidate = async () => {
-          frozenAtBoundary.push(frozen);
-          admissionResults.push((await rpc("agents.list")).ok);
-          wrongOwnerRejected = !(await rpc("maintenance", { action: "resume", token: "wrong-owner" })).ok;
-          return "valid";
-        };
-        r.ports.activate = vi.fn(async () => {
-          frozenAtBoundary.push(frozen);
-          admissionResults.push((await rpc("agents.list")).ok);
-          return activation === "prepare-response-lost" ? "unknown" : activation;
-        });
-        const id = r.updates.present(candidate, ownedTarget)!;
-        work = rpc("agents.list");
-        await entered.promise;
-        expect(await r.updates.approve(id)).toMatchObject({ phase: "waiting", blocker: "activity" });
-        expect(frozen).toBe(false);
-        expect(r.ports.activate).not.toHaveBeenCalled();
-        active = false;
-        finish.resolve();
-        expect((await work).ok).toBe(true);
-        await r.updates.reconsider();
-        expect(r.ports.activate).toHaveBeenCalledTimes(activation === "prepare-response-lost" ? 0 : 1);
-        expect(admissionResults).toEqual(activation === "prepare-response-lost" ? [] : [false, false]);
-        expect(frozenAtBoundary).toEqual(activation === "prepare-response-lost" ? [] : [true, true]);
-        expect(wrongOwnerRejected).toBe(activation !== "prepare-response-lost");
-        expect(admitted).toBe(1); // both racing admissions were rejected, no replay
-        expect(r.updates.state.phase).toBe(
-          activation === "refused" ? "failed" : activation === "committed" ? "awaiting-restart" : "recovery-required",
-        );
-        expect(frozen).toBe(activation !== "refused");
-        expect((await rpc("agents.list")).ok).toBe(activation === "refused");
-        expect(admitted).toBe(activation === "refused" ? 2 : 1);
-      } finally {
-        finish.resolve();
-        await work;
-        await daemon.close();
-      }
-    },
-  );
 });

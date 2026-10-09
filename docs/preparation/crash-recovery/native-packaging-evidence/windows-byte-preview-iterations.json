@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "scope": "Sanitized unsuccessful implementation/fixture attempts retained honestly; these are not final acceptance.",
+  "iterations": [
+    {
+      "sourceCommit": "f6574e877feb077790e541f19f35ddccd953fec9",
+      "completeThirtyRepeatCells": true,
+      "combinedFullBytes": 120983469,
+      "combinedMinimalBytes": 84164892,
+      "controlledPeakBytes": 6340608,
+      "result": "Memory gate failed before explicit backing retirement."
+    },
+    {
+      "sourceCommit": "c44ea63262e7977d8d28c5d3ab3c56c5213c55c0",
+      "incompleteRepeatCells": true,
+      "saveExact": true,
+      "result": "Metadata-only trace identified publication_pending when the periodic checkpoint was busy; the fixture had waited for a report after a legitimate refusal."
+    },
+    {
+      "sourceCommit": "2346bc539ae25a3448d21e86448546b6c905c7c4",
+      "fullCellCompletedBeforeSupervisorSessionLoss": true,
+      "combinedFullBytes": 113572061,
+      "allThirtyPreviews": true,
+      "saveExact": true,
+      "result": "No acceptance claim: supervisor command session was lost before final receipts. Owned main/renderer exits were independently confirmed and only the named disposable profile removed before the complete rerun."
+    },
+    {
+      "sourceCommit": "2346bc539ae25a3448d21e86448546b6c905c7c4",
+      "uiFixtureCorrection": true,
+      "result": "Initial standalone dark-theme oracle lacked production root surface classes. Repeated separately with existing .orca/.orca-surface classes; both themes pass."
+    }
+  ]
+}

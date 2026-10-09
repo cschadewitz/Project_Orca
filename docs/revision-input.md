@@ -6,6 +6,18 @@ below preserve the original handoff; do not reapply them. Current protocol is **
 store epoch **`operator-journals-v4`**. See [operator integration](runtime-operator-integration.md)
 and the [capability ledger](ROADMAP.md) for dated validation and current limits.
 
+**Adapter evidence, 9 October 2026:** merged #549's
+[`m10-supported-client-acp.test.ts`](../packages/integrations/test/m10-supported-client-acp.test.ts)
+rejects unsupported revision slash commands and unregistered revision methods over
+the real ACP JSON-RPC facade, preserving an existing protected pause, Requests,
+admissions, runs, history and protected writes. The older shared-helper test labelled
+ACP is not the wire evidence. Current direct CLI negotiation rejects missing installed
+methods despite a claimed capability, and the MCP SDK contract refuses an absent
+`revise_input` alias before argument diagnostics or a backend mutation. Supported MCP
+revision composition is implemented; ACP revision remains unsupported. See the
+[pinned acceptance map](implementation/m10-security-contract-closure.md) for source
+test execution and native applicability limits.
+
 This is the feature handoff against preparation commit
 `9058fa8935ae4c999293727c005031eec93114be`. It implements the allocated revision
 contracts, service, journal projection, delivery accounting, authenticated authority,
@@ -153,8 +165,10 @@ for an unclaimed record.
   supplied authenticated service and filters discovery by the current grants.
 - `RevisionInputClient` provides the CLI/API submission and pending-replacement helper.
   It requires negotiated methods and the caller's retained intent key. It never falls
-  back to an answer note. ACP/MCP remain unsupported until their owners wire the same
-  contract; the helper's negotiation tests are not end-to-end ACP/MCP acceptance.
+  back to an answer note. In this historical feature handoff ACP/MCP were unsupported
+  until their owners supplied production wiring. Current adapter status and actual
+  ACP wire-refusal evidence are recorded above; the helper's negotiation tests are
+  not end-to-end ACP/MCP acceptance.
 - The reserved core error is `REVISION_STALE`. Until that enum is integrated, the
   feature service takes an injected `() => OrcaError`; fixtures use existing `RUN_STATE`
   rather than casting a code absent from the baseline.

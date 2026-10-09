@@ -2,6 +2,15 @@
  * CLI command implementations. Each command receives parsed positionals and
  * flags and an output sink; `main.ts` handles argument parsing and errors.
  */
+import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
+import { firstRunRequiresExplicitContinuationRecovery } from "../first-run-recovery-fence.js";
+import {
+  assertClosedUpdateCommand,
+  isClosedUpdateBootstrap,
+  configuredUpdateAdmissionOpen,
+  configuredUpdateExistingWorkOpen,
+  closedUpdateStartupReceipt,
+} from "../update-bootstrap.js";
 import { mcpCommand } from "./mcp.js";
 import { AdmissionRetryModel, ContinuationAdmissionModel, neverAttached } from "@orca/daemon";
 import { admissionRetryOptions } from "./admission-retry.js";
@@ -728,6 +737,7 @@ export const commands: Record<string, Command> = {
     usage:
       "Token authentication is on by default; the local credential is stored in auth/local-client.token beside the workspace config.\n--unauthenticated-loopback explicitly permits unauthenticated local access.\nRemote binds require --trusted-proxy IP (repeatable) behind a TLS-terminating proxy.\n--allow-origin origin permits a browser origin (repeatable; none by default).\n",
     async run(ctx) {
+      assertClosedUpdateCommand("serve", ctx.flags);
       const port = ctx.flags.port === undefined ? 6722 : Number(ctx.flags.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535) {
         throw new OrcaError("CONFIG_INVALID", `--port must be a port number, got '${String(ctx.flags.port)}'`);
@@ -946,6 +956,8 @@ export const commands: Record<string, Command> = {
         auth,
         maintenanceToken: process.env.ORCA_MAINTENANCE_TOKEN,
         admissionFile: process.env.ORCA_ADMISSION_FILE,
+        newAdmissionOpen: configuredUpdateAdmissionOpen,
+        existingWorkOpen: configuredUpdateExistingWorkOpen,
         host: ctx.flags.host as string | undefined,
         port,
         orcaVersion: ORCA_VERSION,
@@ -977,7 +989,7 @@ export const commands: Record<string, Command> = {
           ...(planControl ? (["plan.write"] as const) : []),
         ],
         reads,
-        agents,
+        ...(isClosedUpdateBootstrap() ? {} : { agents }),
         config,
         workflowInputs: new WorkflowInputsModel({ resolve: orchestratorDefinitionResolver(app.orchestrator) }),
         ...(control ? { control } : {}),
@@ -989,7 +1001,7 @@ export const commands: Record<string, Command> = {
         planSource: app.orchestrator.stores.plan.journal,
       });
       try {
-        if (authDir) await bootstrapLocalOwner(authDir);
+        if (authDir && !isClosedUpdateBootstrap()) await bootstrapLocalOwner(authDir);
       } catch (error) {
         liveRuntime?.close();
         await daemon.close();
@@ -1005,8 +1017,10 @@ export const commands: Record<string, Command> = {
             recoveringContinuations = undefined;
           });
       };
-      recoverContinuations();
-      const continuationTimer = daemon.recoverContinuations ? setInterval(recoverContinuations, 5_000) : undefined;
+      const explicitRecovery = isClosedUpdateBootstrap() || firstRunRequiresExplicitContinuationRecovery(app.configDir);
+      if (!explicitRecovery) recoverContinuations();
+      const continuationTimer =
+        daemon.recoverContinuations && !explicitRecovery ? setInterval(recoverContinuations, 5_000) : undefined;
       continuationTimer?.unref();
       ctx.out(
         `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,
@@ -1023,6 +1037,15 @@ export const commands: Record<string, Command> = {
           ? `authentication: token; local token file: ${authDir.tokenFile}`
           : "authentication: explicit unauthenticated loopback compatibility mode; any local process may call this daemon",
       );
+      if (isClosedUpdateBootstrap()) {
+        const receipt = await closedUpdateStartupReceipt(
+          app.configDir,
+          storeDir,
+          { ...identity, processId: process.pid },
+          () => app.closedWorkState(),
+        );
+        ctx.out("closed update validation: " + JSON.stringify(receipt));
+      }
       if (daemon.socketUrl) ctx.out(`notifications on ${daemon.socketUrl}: ${SUBSCRIPTION_METHODS.join(", ")}`);
       await new Promise<void>((resolve) => {
         const stop = () => {
@@ -1060,6 +1083,7 @@ export const commands: Record<string, Command> = {
       // workspace is removed after the run unless --keep asks for it.
       const dir = ctx.flags.dir ? String(ctx.flags.dir) : await mkdtemp(join(tmpdir(), "orca-demo-"));
       const keep = Boolean(ctx.flags.dir) || Boolean(ctx.flags.keep);
+      assertNoUnownedFirstRunMutation(resolvePath(dir));
       await mkdir(dir, { recursive: true });
       // commands/ -> (src|dist) -> cli -> packages -> repo root
       const here = fileURLToPath(new URL(".", import.meta.url));

@@ -1,0 +1,256 @@
+{
+  "schema": 1,
+  "startingHead": "7d7d503317c9bc2ae5bb3e3ec972e59f28a2e849",
+  "harnessHead": "74a3ef441449523d110849c9d1c92aa0f61fdf83",
+  "productionSource": "5fac1a05a56152861ca08168da0b052f56e8cbae",
+  "productionUnchanged": true,
+  "productionEnabled": false,
+  "macHeld": true,
+  "authorAndCommitter": "Calcifer Schadewitz <schadewitzcalcifer@gmail.com>",
+  "integrationBase": "calcifer/m10-m21-m22-same-boot-config-integration",
+  "branch": "calcifer/windows-diagnostics-c15-paired",
+  "runtime": {
+    "electron": "44.4.5",
+    "electronNode": "24.21.0",
+    "toolNode": "24.19.0",
+    "nativeReused": true,
+    "priorNativeIdentity": "../windows-save-only-manifest.json"
+  },
+  "compiled": [
+    {
+      "name": "recovery-controller.js",
+      "bytes": 41779,
+      "sha256": "a62b48551a88eb4b1eb4be9f7dd55106c46df1f0b2330b8eda1d46bd0226fd4c"
+    },
+    {
+      "name": "native-storage.js",
+      "bytes": 9418,
+      "sha256": "36364c1b11d6808dd22127b55f8f7fde8a3a5a7a5e03ca17ad62a6d311f526e1"
+    },
+    {
+      "name": "native-clock.js",
+      "bytes": 2802,
+      "sha256": "65961f9bd070a8fafe6ed19b03a7dce4a6bc642bfde45ba11f3b548020a6272f"
+    },
+    {
+      "name": "windows-key-adapter.js",
+      "bytes": 3035,
+      "sha256": "d594771823dde5f9799c31799f3949b3bb409a105d851601ccb93890ff083023"
+    },
+    {
+      "name": "recovery-disk.js",
+      "bytes": 44609,
+      "sha256": "f51d0d6957ffc565269fcfa50639ba6e28b979a5977bb43e5d505c8463f4ec31"
+    },
+    {
+      "name": "payload-memory.js",
+      "bytes": 3981,
+      "sha256": "c9891ff6f6191ce061b1f3225c1e8b88f39854216137853f8953ced31f550690"
+    }
+  ],
+  "binaries": [
+    {
+      "name": "diagnostics_clock.node",
+      "bytes": 654848,
+      "sha256": "0b28528e31c92c1e1b70e74aa68206b29a39220075d85bbc8555eca50f6d9107"
+    },
+    {
+      "name": "diagnostics_storage.node",
+      "bytes": 680960,
+      "sha256": "bea31fecd94122af70afe6f5280411d9933b93aef4c9e08240265bcac2c2a5fe"
+    }
+  ],
+  "executedHarness": [
+    {
+      "name": "paired-child.cjs.gz",
+      "bytes": 6099,
+      "sha256": "7547561e171c6773776a2d8118287e10520065bd31a06e51863c47fc8d7e922f",
+      "sourcePath": "packages/app/test/recovery-preparation/windows-c15-child.cjs",
+      "uncompressed": {
+        "name": "paired-child.cjs",
+        "bytes": 21472,
+        "sha256": "a02888f23a46435fb488003eda1c9a95d79a710fadd183522292bd5fe3e818fc"
+      }
+    },
+    {
+      "name": "paired-supervisor.mjs.gz",
+      "bytes": 4323,
+      "sha256": "e33835d9317e0fd74dd1010b7121401711ac7f029076cb5329341f4308914527",
+      "sourcePath": "packages/app/test/recovery-preparation/windows-c15-paired.mjs",
+      "uncompressed": {
+        "name": "paired-supervisor.mjs",
+        "bytes": 12153,
+        "sha256": "60e3cc4efd0da3a9c9b18bd3f718957d9d8b7919699335ab75c0781ac061c2e5"
+      }
+    },
+    {
+      "name": "regressions.mjs.gz",
+      "bytes": 2056,
+      "sha256": "bbeb98ec6ca3776de079fd63af7c6b602da79cc59e63269ff6a362e86e6ca4a6",
+      "sourcePath": "tools/test/windows-c15-regressions.mjs",
+      "uncompressed": {
+        "name": "regressions.mjs",
+        "bytes": 5460,
+        "sha256": "7b724f893649597cf5bbded8fb8e06fb999ac6d2fb534feb2862b3c20bd6bb41"
+      }
+    }
+  ],
+  "evidence": [
+    {
+      "name": "failure-results.json",
+      "bytes": 60589,
+      "sha256": "d0c0337f5d75aa8ae48763147ded4803bea34e87c90057019090682c61b37f97",
+      "original": {
+        "name": "failure-results.json",
+        "bytes": 60589,
+        "sha256": "d0c0337f5d75aa8ae48763147ded4803bea34e87c90057019090682c61b37f97"
+      },
+      "normalization": "CRLF to LF only for text publication; metric/content bytes unchanged otherwise"
+    },
+    {
+      "name": "stall-results.json",
+      "bytes": 65151,
+      "sha256": "59b49a0170796849eba1a0d4ec76b9348a31968023f46642e614bc727263d59f",
+      "original": {
+        "name": "stall-results.json",
+        "bytes": 65151,
+        "sha256": "59b49a0170796849eba1a0d4ec76b9348a31968023f46642e614bc727263d59f"
+      },
+      "normalization": "CRLF to LF only for text publication; metric/content bytes unchanged otherwise"
+    },
+    {
+      "name": "regressions.json",
+      "bytes": 12010,
+      "sha256": "2d7f90b155c4385b17ffca77fd3fb72da8c7a6001719a1dbf6dbb523716ba7f6",
+      "original": {
+        "name": "regressions.json",
+        "bytes": 12010,
+        "sha256": "2d7f90b155c4385b17ffca77fd3fb72da8c7a6001719a1dbf6dbb523716ba7f6"
+      },
+      "normalization": "CRLF to LF only for text publication; metric/content bytes unchanged otherwise"
+    },
+    {
+      "name": "failure-capacity.json",
+      "bytes": 214,
+      "sha256": "72f89a8cc1a6663c80c5a16d4482cccc20216d2f52d721ee53057cb9ba5c8380",
+      "original": {
+        "name": "failure-capacity.json",
+        "bytes": 223,
+        "sha256": "51ac9bdb6cacecb2917c1bf0fbbe63ac1fe7297c1f9ebca710d50270acb35661"
+      },
+      "normalization": "CRLF to LF only for text publication; metric/content bytes unchanged otherwise"
+    },
+    {
+      "name": "failure-capacity.json.gz",
+      "bytes": 187,
+      "sha256": "26718f3347a51f3b4c72c55efa3261cae3dd8d4a1c40ddd5ea85288cb8788f42",
+      "uncompressed": {
+        "name": "failure-capacity.json",
+        "bytes": 223,
+        "sha256": "51ac9bdb6cacecb2917c1bf0fbbe63ac1fe7297c1f9ebca710d50270acb35661"
+      }
+    },
+    {
+      "name": "stall-capacity.json",
+      "bytes": 200,
+      "sha256": "4e11b98434a7d1a8d53fcaa7e524d941cf245187b000682863fe9925e561ed7c",
+      "original": {
+        "name": "stall-capacity.json",
+        "bytes": 208,
+        "sha256": "e013d19947fc9eaee1149cc9c6f3ea067addd5b6160390a31e3d7450940d081b"
+      },
+      "normalization": "CRLF to LF only for text publication; metric/content bytes unchanged otherwise"
+    },
+    {
+      "name": "stall-capacity.json.gz",
+      "bytes": 184,
+      "sha256": "a141cf3fd592b4fd41213e22075f60699c9e982f8efb6e05aa4731cf06777df0",
+      "uncompressed": {
+        "name": "stall-capacity.json",
+        "bytes": 208,
+        "sha256": "e013d19947fc9eaee1149cc9c6f3ea067addd5b6160390a31e3d7450940d081b"
+      }
+    },
+    {
+      "name": "regression-capacity.json",
+      "bytes": 214,
+      "sha256": "5928f9434b3196a8bad11cec533f77726f402d14075c4c4a3fda266649893592",
+      "original": {
+        "name": "regression-capacity.json",
+        "bytes": 223,
+        "sha256": "8d97f070b297b6e59fe03202d7a6e1647b2c1b6d7cb17994edb0d6e4b39d2e8e"
+      },
+      "normalization": "CRLF to LF only for text publication; metric/content bytes unchanged otherwise"
+    },
+    {
+      "name": "regression-capacity.json.gz",
+      "bytes": 186,
+      "sha256": "ee8762da236703267bf127988c4af3f7d6df78521b3c6bbd98495a30b00cada8",
+      "uncompressed": {
+        "name": "regression-capacity.json",
+        "bytes": 223,
+        "sha256": "8d97f070b297b6e59fe03202d7a6e1647b2c1b6d7cb17994edb0d6e4b39d2e8e"
+      }
+    },
+    {
+      "name": "source-checks.json",
+      "bytes": 1751,
+      "sha256": "053e098708ea21a4bb4bec68d953362fd647efaf915a3b31d6f06b785cd5517b",
+      "original": {
+        "name": "source-checks.json",
+        "bytes": 1751,
+        "sha256": "053e098708ea21a4bb4bec68d953362fd647efaf915a3b31d6f06b785cd5517b"
+      },
+      "normalization": "CRLF to LF only for text publication; metric/content bytes unchanged otherwise"
+    },
+    {
+      "name": "postflight.json",
+      "bytes": 195,
+      "sha256": "51e6b00730c052999ab4e92fd11351cda3a7281b30a17b51f3ebf4b08d0f36d5",
+      "original": {
+        "name": "postflight.json",
+        "bytes": 202,
+        "sha256": "e9c69c8a3489668d34afa0e330f3ef035bf874c14f2e7774d2654c04698e189b"
+      },
+      "normalization": "CRLF to LF only for text publication; metric/content bytes unchanged otherwise"
+    },
+    {
+      "name": "postflight.json.gz",
+      "bytes": 179,
+      "sha256": "d67b358f5872404d4c0c93adef209033cc0dd323d0adb4e9df6b23c4d846dcb0",
+      "uncompressed": {
+        "name": "postflight.json",
+        "bytes": 202,
+        "sha256": "e9c69c8a3489668d34afa0e330f3ef035bf874c14f2e7774d2654c04698e189b"
+      }
+    },
+    {
+      "name": "summary.json",
+      "bytes": 45070,
+      "sha256": "29e7bdb9f5f7e637f0445a0d8964ab6a665ac23b531a9f6f5c478666fe4037a0"
+    },
+    {
+      "name": "verification.json",
+      "bytes": 815,
+      "sha256": "e8655c8827c676d6d1fa7aab804b90b61409fa85830c7e0999cecb7d938dc0a6"
+    }
+  ],
+  "priorEvidence": "../manifest.json",
+  "bounds": {
+    "cliMs": 50000,
+    "childMs": 90000,
+    "childReceiptWaitAfterCliMs": 40000,
+    "writerSettlementMs": 3000,
+    "ownedExitMs": 5000,
+    "defaultInjectedOperationMs": 1000,
+    "nativeWriteOperationMs": 10000,
+    "pressureRequestsPerStallCell": 128,
+    "managedBytes": 33554432,
+    "controlledBinaryBytes": 8388608
+  },
+  "correctedComparisonsPerSchedule": 1,
+  "priorStoppedComparisonsPerSchedule": 1,
+  "regressionFixtureCount": 2,
+  "regressionOutcome": "Functional 2/2 pass; both measured managed-memory gates fail and are retained.",
+  "acceptance": "Held on aggregate On managed-memory gate; full 20-cell synthetic correctness completed in both corrected schedules."
+}

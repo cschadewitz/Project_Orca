@@ -24,8 +24,9 @@ export type MacCatalogVerdict = "trusted" | "refused" | "unknown";
  * Catalog must resolve publisher/support, authenticated invitation, exact candidate, freshness/replay and
  * revocation according to approved policy. Rechecked before and after download; no policy supplied here.
  * Native inspection is read-only and must verify actual Apple signatures/Team/certificate/tickets,
- * extracted sealed identities AND actual bundled daemon hashes in both containers. No execution/mount
- * side effects, writes, installation, credential mutation or unresolved work after its promise settles.
+ * extracted sealed identities AND actual bundled daemon hashes in both containers. Bounded private
+ * extraction/read-only mounting must settle cleanup before returning. No app execution, protected
+ * writes, installation or credential mutation. Cancellation cannot abandon native cleanup.
  */
 export interface MacCandidateTrust {
   catalog(this: void, binding: MacCandidateBinding, signal: AbortSignal): Promise<MacCatalogVerdict>;
@@ -354,7 +355,10 @@ export async function downloadMacCandidate(
       await writeFile(join(directory, "SHA256SUMS"), sums, { flag: "wx", mode: 0o600 });
       let rawInspection: unknown;
       try {
-        rawInspection = await macAbortable(() => ports.trust.inspect(binding, directory!, bounded), bounded);
+        // Native inspection may own read-only mounts/private extraction. Join its settled
+        // cleanup before deleting the download, even after the operation deadline expires.
+        rawInspection = await ports.trust.inspect(binding, directory, bounded);
+        requireLive(bounded);
       } catch {
         if (bounded.aborted) throw new Error("Candidate operation cancelled");
         throw new UnknownTrust();

@@ -17,6 +17,7 @@
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 /* The scroll is here and not on the root, so the save bar stays against the bottom of the
@@ -28,13 +29,38 @@
   gap: var(--space-5);
   padding: var(--space-4);
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
+  /* Anonymous text nodes can contain long identifiers/paths too. Bound their
+     min-content width, while explicit raw/code editors keep their own rules. */
+  overflow-wrap: anywhere;
 }
 
 .orca-config__section {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+/* Reuse the chrome's token-owned narrow layout threshold. Fixed label columns
+   must not force Config beyond its pane at zoom or small window sizes. */
+.orca-config[data-config-layout="stacked"] .orca-field {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Narrow form actions are a multiline control variant. Keep the full action
+   label available instead of allowing nowrap text to escape the scroll pane. */
+.orca-config[data-config-layout="stacked"] .orca-btn {
+  max-width: 100%;
+  height: auto;
+  min-height: var(--control-md);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.orca-config[data-config-layout="stacked"] .orca-config__path {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .orca-config__form {

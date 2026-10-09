@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "schedule": "failure",
+  "sourceCommit": "7d7d503317c9bc2ae5bb3e3ec972e59f28a2e849",
+  "productionSource": "5fac1a05a56152861ca08168da0b052f56e8cbae",
+  "productionEnabled": false,
+  "macHeld": true,
+  "timingDeferred": true,
+  "attempts": 1,
+  "runs": [
+    {
+      "mode": "off",
+      "completed": false
+    }
+  ],
+  "method": "One failure or stall schedule compares sequential Off/On CLI demos; 20 fixed fault cells inside On, no performance retry. Synthetic seams with real Windows x64 Electron/native disk, DPAPI and clock.",
+  "correctnessPass": false,
+  "failureCode": "Expected values to be strictly equal:\n\nfalse !== true\n",
+  "allOwnedExitsConfirmed": true,
+  "disposableStateRemoved": true
+}

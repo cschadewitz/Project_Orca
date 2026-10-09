@@ -149,6 +149,8 @@ jobs:
 
       - name: Lint
         if: needs.changes.outputs.code != 'false' && matrix.node == 24
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm run lint
 
       - name: Check ordinary documentation

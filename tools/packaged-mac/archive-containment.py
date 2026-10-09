@@ -356,7 +356,7 @@ def bound_binary_plist(data):
         require(cursor + payload <= end, "overlapping/truncated binary plist object payload")
 
 
-def inspect_zip(stream, size, manifest, limits):
+def inspect_zip(stream, size, manifest, limits, inventory=False):
     count, offset, central_size = preflight(stream, size, limits)
     with zipfile.ZipFile(stream) as archive:
         require(len(archive.infolist()) == count and archive.start_dir == offset,
@@ -417,7 +417,14 @@ def inspect_zip(stream, size, manifest, limits):
                               ("LSMinimumSystemVersion", manifest["minimumMacOS"])):
             require(type(plist.get(key)) is str and plist[key] == expected,
                     f"archived Info.plist.{key}: verbatim mismatch")
-    return {"appRoot": APP, "members": count, "uncompressedBytes": actual_total}
+    result = {"appRoot": APP, "members": count, "uncompressedBytes": actual_total}
+    if inventory:
+        result["inventory"] = {name: {"kind": kind,
+            **({"sha256": digests[name], "bytes": entries[name].file_size,
+                "mode": (entries[name].external_attr >> 16) & 0o777} if kind == "file" else {}),
+            **({"target": targets[name]} if kind == "link" else {})}
+            for name, kind in nodes.items() if name == APP or name.startswith(APP + "/")}
+    return result
 
 
 def validate_archive(directory, build_id, source_commit, limits=Limits()):

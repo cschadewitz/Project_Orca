@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { NodeRecoveryDisk } from "../src/main/diagnostics/recovery-disk.js";
 import { PosixFixtureNativeAdapter, type DiagnosticsKeyAdapter } from "../src/main/diagnostics/native-adapter.js";
+import { createWindowsDiagnosticsKeyAdapter } from "../src/main/diagnostics/windows-key-adapter.js";
 import { RECOVERY_LIMITS, type BootReading } from "../src/main/diagnostics/recovery-contract.js";
 
 const parents: string[] = [];
@@ -15,13 +16,13 @@ afterEach(async () => {
   for (const parent of parents.splice(0)) await rm(parent, { recursive: true, force: true });
 });
 
-async function fixture() {
+async function fixture(adapt: (keys: DiagnosticsKeyAdapter) => DiagnosticsKeyAdapter = (keys) => keys) {
   const parent = await mkdtemp(join(tmpdir(), "orca-maintenance-"));
   parents.push(parent);
   const root = join(parent, "owned");
   const protection = randomBytes(32);
   let available = true;
-  const keys: DiagnosticsKeyAdapter = {
+  const legacy: DiagnosticsKeyAdapter = {
     async available() {
       return available;
     },
@@ -42,6 +43,7 @@ async function fixture() {
       return plaintext;
     },
   };
+  const keys = adapt(legacy);
   const native = new PosixFixtureNativeAdapter({ stopped: async () => true, moveNoReplace: async () => "refused" });
   const disk = new NodeRecoveryDisk({ root, keys, native });
   active.push(disk);
@@ -85,6 +87,38 @@ async function manifest(root: string): Promise<ManifestView> {
 }
 
 describe.skipIf(process.platform === "win32")("authenticated recovery maintenance", () => {
+  it("Windows wrapper routing supports the real control/session envelopes through same-boot disk recovery", async () => {
+    const f = await fixture((legacy) =>
+      createWindowsDiagnosticsKeyAdapter(
+        {
+          abi: 1,
+          platform: "win32",
+          keyProtection: 1,
+          // Only a controlled protection port. Actual current-user DPAPI is device evidence.
+          protectKey: (bytes: Buffer) => legacy.wrap(bytes),
+          unprotectKey: (bytes: Buffer) => legacy.unwrap(bytes),
+        },
+        legacy,
+      ),
+    );
+    await f.disk.checkpoint(Buffer.from("enveloped checkpoint"), f.now, () => true);
+    const control = await readFile(join(f.root, "control.key"));
+    expect(control.subarray(0, 8).toString()).toBe("ORCADP01");
+    const slot = (await manifest(f.root)).payload.current!.slot;
+    const session = await readFile(join(f.root, `session-${slot}.key`));
+    expect(session.subarray(0, 8).toString()).toBe("ORCADP01");
+    // Retire this fixture's writer without creating another checkpoint/slot.
+    await f.native.release(f.root);
+    active.splice(active.indexOf(f.disk), 1);
+    const reopened = new NodeRecoveryDisk({ root: f.root, keys: f.keys, native: f.native });
+    active.push(reopened);
+    expect(await reopened.open({ ...f.now, elapsedMs: f.now.elapsedMs + 5 })).toBe(true);
+    expect((await reopened.previous({ ...f.now, elapsedMs: f.now.elapsedMs + 6 }))?.bytes).toEqual(
+      Buffer.from("enveloped checkpoint"),
+    );
+    expect(await readFile(join(f.root, "control.key"))).toEqual(control);
+    expect(await readFile(join(f.root, `session-${slot}.key`))).toEqual(session);
+  });
   it("expires crashed current on a new adapter without opening capture or promoting history", async () => {
     const f = await fixture();
     await f.disk.checkpoint(Buffer.from("crashed current\n"), f.now, () => true);

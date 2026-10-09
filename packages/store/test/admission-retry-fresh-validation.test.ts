@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +32,49 @@ async function fixture() {
 }
 
 describe("fresh retry claim validation", () => {
+  it("closed observation neither creates a journal nor advances an empty existing cursor", async () => {
+    const { dir, store } = await fixture();
+    expect(await store.closedWorkState()).toBe("empty");
+    expect(await readdir(dir)).toEqual([]);
+    const journal = join(dir, "admission-retries");
+    await mkdir(journal, { mode: 0o700 });
+    await writeFile(join(journal, "cursor.json"), "0", { mode: 0o600 });
+    expect(await store.closedWorkState()).toBe("empty");
+    expect(await readFile(join(journal, "cursor.json"), "utf8")).toBe("0");
+    expect(await readdir(journal)).toEqual(["cursor.json"]);
+  });
+  it.each(["retained", "pending", "orphan", "corrupt", "inconsistent-counter"])(
+    "closed observation retains %s state without repairing it",
+    async (kind) => {
+      const { dir, store } = await fixture(),
+        journal = join(dir, "admission-retries");
+      await mkdir(journal, { mode: 0o700 });
+      const body =
+        kind === "corrupt"
+          ? "{"
+          : JSON.stringify({
+              total: kind === "retained" ? 1 : 0,
+              workspaces: kind === "inconsistent-counter" ? { workspace: 1 } : {},
+              principals: {},
+              ...(kind === "pending"
+                ? {
+                    pending: {
+                      operationId: "retry_00000000-0000-4000-8000-000000000001",
+                      ref: "00000000-0000-4000-8000-000000000002",
+                      ordinal: 1,
+                    },
+                  }
+                : {}),
+            });
+      const name = kind === "orphan" ? "entry-1.json" : "catalog.json";
+      await writeFile(join(journal, name), body, { mode: 0o600 });
+      expect(await store.closedWorkState()).toBe(
+        ["retained", "pending"].includes(kind) ? "parked" : "unsupported-generation",
+      );
+      expect(await readFile(join(journal, name), "utf8")).toBe(body);
+      expect(await readdir(journal)).toEqual([name]);
+    },
+  );
   it.each([undefined, "same-key"])("a rejection publishes no claim and releases the mutex (key: %s)", async (key) => {
     const { dir, store, execution } = await fixture();
     const writes = vi.spyOn(execution, "putGeneration");

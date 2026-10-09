@@ -435,8 +435,9 @@ function* eventRows(event: OrcaEvent): Generator<OperatorRow> {
   if ("attempt" in p && typeof p.attempt === "number") base.attempt = p.attempt;
   if ("error" in p && p.error) base.errorCode = p.error.code;
   if (event.type === "agent.update") {
-    base.text = event.payload.update.text;
-    base.omitted = ["tool-arguments", "tool-results", "paths"];
+    // Public sensitivity projection can still contain workspace paths in prose.
+    // Preserve closed event metadata, never infer arbitrary text is path-free.
+    base.omitted = ["agent-text", "tool-arguments", "tool-results", "paths"];
   }
   if (event.type === "artifact.recorded") {
     const a = event.payload.artifact;

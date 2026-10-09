@@ -5,6 +5,7 @@ import { useKeyboard } from "../keyboard-context.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { hasUpdateDrafts } from "../update-drafts.js";
 import { Button } from "../ui/index.js";
+import { MacUpdateControl } from "./mac-update-control.js";
 // Restoration belongs to the guarded root in this renderer document, not to a
 // component subscription. The preload owns which lease may send prepare/release.
 const priorInert = new WeakMap<HTMLElement, boolean>();
@@ -61,7 +62,7 @@ export function UpdateControl(): JSX.Element | null {
   useEffect(() => {
     if (!["idle", "unavailable", "downloading"].includes(state.phase)) announce(state.message ?? label);
   }, [state.phase, state.message, label, announce]);
-  if (state.phase === "unavailable") return null;
+  if (state.phase === "unavailable") return window.orca.platform === "darwin" ? <MacUpdateControl /> : null;
   return (
     <Button tone="ghost" size="sm" data-app-region="no-drag" disabled={busy} title={state.message} onClick={act}>
       {label}

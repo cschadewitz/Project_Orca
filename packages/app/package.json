@@ -10,6 +10,7 @@
     "dev": "node scripts/dev.js",
     "build:renderer": "vite build",
     "build:daemon": "node scripts/build-daemon.js",
+    "build:diagnostics-native": "node scripts/diagnostics-native-package.js",
     "start": "electron .",
     "package": "electron-builder --publish never",
     "typecheck:renderer": "tsc -p renderer/tsconfig.json"
@@ -20,7 +21,8 @@
     "electron-updater": "^6.8.9",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.5",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@orca/daemon": "workspace:*",

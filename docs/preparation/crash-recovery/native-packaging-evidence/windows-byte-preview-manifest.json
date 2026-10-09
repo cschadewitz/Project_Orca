@@ -1,0 +1,200 @@
+{
+  "schema": 1,
+  "base": "2167df73bd531a39c290818dfde04eafde31b167",
+  "sourceCommit": "2346bc539ae25a3448d21e86448546b6c905c7c4",
+  "productionEnabled": false,
+  "nativeReused": true,
+  "native": {
+    "format": 1,
+    "stage": "before-signing",
+    "platform": "win32",
+    "arch": "x64",
+    "nodeApi": 8,
+    "sourceSha256": "3b69d61dc07f1366167f8a151c84925a78d5b70bcc74e7835936c1984a26bdd3",
+    "files": {
+      "diagnostics_clock.node": {
+        "bytes": 654848,
+        "sha256": "0b28528e31c92c1e1b70e74aa68206b29a39220075d85bbc8555eca50f6d9107"
+      },
+      "diagnostics_storage.node": {
+        "bytes": 680960,
+        "sha256": "bea31fecd94122af70afe6f5280411d9933b93aef4c9e08240265bcac2c2a5fe"
+      }
+    }
+  },
+  "compiledDiagnostics": [
+    {
+      "name": "initialize.js",
+      "sha256": "cd56d06edc239bbfff39871ad872f730c8a536b04b06387a8c780e55d69bb203"
+    },
+    {
+      "name": "native-adapter.js",
+      "sha256": "c614303e01c86411948f72040ea3a9292569f3544a531c75fee57e5f64190f27"
+    },
+    {
+      "name": "native-addon.js",
+      "sha256": "3c267d9d9b206020ad233fd4e5bfb3b51de7b30f2f2c1891573a1d33606b83f5"
+    },
+    {
+      "name": "native-clock.js",
+      "sha256": "65961f9bd070a8fafe6ed19b03a7dce4a6bc642bfde45ba11f3b548020a6272f"
+    },
+    {
+      "name": "native-storage.js",
+      "sha256": "36364c1b11d6808dd22127b55f8f7fde8a3a5a7a5e03ca17ad62a6d311f526e1"
+    },
+    {
+      "name": "payload-memory.js",
+      "sha256": "c9891ff6f6191ce061b1f3225c1e8b88f39854216137853f8953ced31f550690"
+    },
+    {
+      "name": "payload-scope.js",
+      "sha256": "6fdfaa063f84f8277b9d1f7ce5ceb86e01103cb82405776bdd939a196502e9bb"
+    },
+    {
+      "name": "pretrigger-buffer.js",
+      "sha256": "f56291185a683a9ed0be10ebadf67524485982494f022e751e5607baa6509397"
+    },
+    {
+      "name": "profile.js",
+      "sha256": "78fd1dbad527a74629287e05abf6c60e11b41158f1b263267efe0f8ebb401814"
+    },
+    {
+      "name": "recovery-contract.js",
+      "sha256": "34908374a846e1351fc0463a150d2ece3f0fa10dd0022902fb97dad686beacec"
+    },
+    {
+      "name": "recovery-controller.js",
+      "sha256": "9ece6dc1e91d48383698c835beffe4eccf3ca9ebe0c15a314d7a6c7c01ff646a"
+    },
+    {
+      "name": "recovery-disk.js",
+      "sha256": "f51d0d6957ffc565269fcfa50639ba6e28b979a5977bb43e5d505c8463f4ec31"
+    },
+    {
+      "name": "recovery-files.js",
+      "sha256": "db16caca0656e983aa1afb2ed2e70f1cf4695b842764657f02b4d9f6b3068aae"
+    },
+    {
+      "name": "report-validation.js",
+      "sha256": "f54942c1a8cacd934c718ebffe9a8437ffe447dc389c7ca37f2593f1e7b7be36"
+    },
+    {
+      "name": "report-work.js",
+      "sha256": "b3bc5310b8ab7c04ff3b635ecdaed047974b50884f4de5beeb8bdc541bf53a20"
+    },
+    {
+      "name": "snapshot.js",
+      "sha256": "c464f778d8e61a8a2b5531f1182505b75a6535ca8bc255c93bd9af415f6bfdba"
+    },
+    {
+      "name": "source-producers.js",
+      "sha256": "5f70d2452aed4c38c434dcb7f8ab1f12fb79fb35b0de8ea366bf7d2fb451ca3a"
+    },
+    {
+      "name": "startup-producer.js",
+      "sha256": "cf986d55ad03f1533f38eb23b32e8fdfe33a25aba8389e0d8e0a9aaeb0de7aab"
+    },
+    {
+      "name": "windows-key-adapter.js",
+      "sha256": "d594771823dde5f9799c31799f3949b3bb409a105d851601ccb93890ff083023"
+    }
+  ],
+  "boundaries": [
+    {
+      "name": "packages/app/dist/diagnostics-contract.js",
+      "sha256": "0d82d8690b28360c4677326210c3f85d41aa84ae487f55b9c2bdb801044d9429"
+    },
+    {
+      "name": "packages/app/dist/preload/index.cjs",
+      "sha256": "0bc78a3df853d5cfc45b2fa28dd01f1cfd26b5df291c3c81555e790b3e0365a0"
+    }
+  ],
+  "fixtureFiles": [
+    {
+      "name": "renderer-entry.tsx",
+      "sha256": "439294eb8fe064cccb4739e006fbdbd7253b901333cd404c9cbe8d5523e98e5d"
+    },
+    {
+      "name": "renderer-bundle.js",
+      "sha256": "7566c20d4fecdfa4976e4ea0be35e0a632edc14cae5091aab8f641abe8b94c20"
+    },
+    {
+      "name": "renderer-bundle.css",
+      "sha256": "b5948b016671192e4dfe4cef9bdbbe9c9a1aa7ca854c67e4a55c2b0d37da90f3"
+    },
+    {
+      "name": "renderer.html",
+      "sha256": "cc11174533a6d45c0caeaf5e5acc9d79bda575bba5a414170b4e0915cc8e6467"
+    },
+    {
+      "name": "resource-child.cjs",
+      "sha256": "b35016f4ecb25b4fb0ef9af1bc3ac6b393ce63b9b97c2d91d62669b739bcd15c"
+    },
+    {
+      "name": "run-resource.mjs",
+      "sha256": "d278a8d52833e62e2e321e4b70fb641deadb182f728b7a136268ea4080f4611c"
+    },
+    {
+      "name": "private-memory.ps1",
+      "sha256": "018b0d7d1bdc3e6636a1bda10ed3b3c23516229354f5b376919e99253bb194f2"
+    }
+  ],
+  "uiFixtureFiles": [
+    {
+      "name": "renderer-entry.tsx",
+      "sha256": "439294eb8fe064cccb4739e006fbdbd7253b901333cd404c9cbe8d5523e98e5d"
+    },
+    {
+      "name": "renderer-bundle.js",
+      "sha256": "7566c20d4fecdfa4976e4ea0be35e0a632edc14cae5091aab8f641abe8b94c20"
+    },
+    {
+      "name": "renderer-bundle.css",
+      "sha256": "b5948b016671192e4dfe4cef9bdbbe9c9a1aa7ca854c67e4a55c2b0d37da90f3"
+    },
+    {
+      "name": "renderer.html",
+      "sha256": "cc11174533a6d45c0caeaf5e5acc9d79bda575bba5a414170b4e0915cc8e6467"
+    },
+    {
+      "name": "resource-child.cjs",
+      "sha256": "3e3cc2664e9eed3abc33deef80f360416d61212857e585d58f149989e0315d52"
+    },
+    {
+      "name": "run-resource.mjs",
+      "sha256": "d278a8d52833e62e2e321e4b70fb641deadb182f728b7a136268ea4080f4611c"
+    },
+    {
+      "name": "private-memory.ps1",
+      "sha256": "018b0d7d1bdc3e6636a1bda10ed3b3c23516229354f5b376919e99253bb194f2"
+    }
+  ],
+  "receipts": [
+    {
+      "name": "windows-byte-preview-results.json",
+      "bytes": 36048,
+      "sha256": "45a42fd0af7fbd5a31b0c0621dbc7286d9c670b8c4a365a4c0e15fdae7adb0bf"
+    },
+    {
+      "name": "windows-byte-preview-ui.json",
+      "bytes": 1283,
+      "sha256": "c3305bd8180d82d843063bad5375b34e9520cfeb58e8f54cb631dc4fa55969de"
+    },
+    {
+      "name": "windows-byte-preview-tests.json",
+      "bytes": 25281,
+      "sha256": "35cc3964e0c9d0d0cc651b159435bc0c9a45e9dbb13ac20e1db6b6378a9a7ff4"
+    },
+    {
+      "name": "windows-byte-preview-verification.json",
+      "bytes": 606,
+      "sha256": "253f464c8c526dbf41a9ade353cde6a5eca0403d0dafc6c1ef35c4c625c48a17"
+    },
+    {
+      "name": "windows-byte-preview-iterations.json",
+      "bytes": 1533,
+      "sha256": "39dd605ede46d91b2d427a679090adeaab2fa085185372661a9b0aab3c4ee44e"
+    }
+  ]
+}

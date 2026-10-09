@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   BUNDLED_DAEMON_FILE,
   DaemonStartError,
@@ -21,6 +21,8 @@ class FakeChild extends EventEmitter {
   readonly stdout = new EventEmitter();
   readonly stderr = new EventEmitter();
   readonly signals: string[] = [];
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
 
   kill(signal?: NodeJS.Signals): boolean {
     this.signals.push(signal ?? "SIGTERM");
@@ -32,6 +34,8 @@ class FakeChild extends EventEmitter {
   }
 
   exit(code: number | null, signal: NodeJS.Signals | null = null): void {
+    this.exitCode = code;
+    this.signalCode = signal;
     this.emit("exit", code, signal);
   }
 }
@@ -83,6 +87,56 @@ function harness(
 const start = (seams: Partial<BundledDaemonOptions>, extra: Partial<BundledDaemonOptions> = {}) =>
   startBundledDaemon({ entry: "/res/daemon/orca-daemon.mjs", cwd: "/home/casey", ...seams, ...extra });
 
+it("closed validation captures one uncertain child without retry or timeout escalation", async () => {
+  const h = harness({ probes: [false] }),
+    captured = vi.fn();
+  await expect(
+    start(h.seams, {
+      closedUpdate: { attempt: "attempt", token: "one-use" },
+      args: ["--read-only", "--no-resume"],
+      attempts: 5,
+      startTimeoutMs: 2,
+      onChild: captured,
+      env: {
+        ORCA_MANAGED_UPDATE_CONTROL: "ordinary-control",
+        ORCA_MANAGED_UPDATE_ADDON: "ordinary-addon",
+        ORCA_FIRST_RUN_LAUNCH: "old",
+      },
+    }),
+  ).rejects.toBeInstanceOf(DaemonStartError);
+  expect(h.calls).toHaveLength(1);
+  expect(captured).toHaveBeenCalledWith(h.children[0]);
+  expect(h.children[0]!.signals).toEqual([]);
+  expect(h.calls[0]!.env).toMatchObject({
+    ORCA_UPDATE_ATTEMPT: "attempt",
+    ORCA_UPDATE_LAUNCH: "one-use",
+    ORCA_MANAGED_UPDATE_CONTROL: undefined,
+    ORCA_MANAGED_UPDATE_ADDON: undefined,
+    ORCA_FIRST_RUN_LAUNCH: undefined,
+  });
+});
+
+it("a closed validation stop sends one ordinary signal and never escalates", async () => {
+  const h = harness();
+  const daemon = await start(h.seams, {
+    closedUpdate: { attempt: "attempt", token: "one-use" },
+    args: ["--read-only", "--no-resume"],
+  });
+  expect(daemon.child).toBe(h.children[0]);
+  await daemon.stop();
+  expect(h.children[0]!.signals).toEqual(["SIGTERM"]);
+});
+
+it("closed validation refuses unsafe flags before spawn; ordinary children strip inherited update permits", async () => {
+  const h = harness();
+  await expect(
+    start(h.seams, { closedUpdate: { attempt: "attempt", token: "one-use" }, args: ["--read-only"] }),
+  ).rejects.toThrow("without resume");
+  expect(h.calls).toHaveLength(0);
+  await start(h.seams, { env: { ORCA_UPDATE_ATTEMPT: "old", ORCA_UPDATE_LAUNCH: "old" } });
+  expect(h.calls[0]!.env).toMatchObject({ ORCA_UPDATE_ATTEMPT: undefined, ORCA_UPDATE_LAUNCH: undefined });
+});
+
 describe("findBundledDaemon", () => {
   const expected = join("/resources", "daemon", BUNDLED_DAEMON_FILE);
   const exists = (path: string) => path === expected;
@@ -101,6 +155,81 @@ describe("findBundledDaemon", () => {
 });
 
 describe("starting the bundled daemon", () => {
+  it.each(["spawn", "exit", "deadline"] as const)(
+    "emits only the actual %s startup category, without private source data",
+    async (boundary) => {
+      const privateText = "/private/token-file secret=synthetic-do-not-export";
+      const h = harness({
+        probes: [
+          boundary === "exit"
+            ? (child) => {
+                child.say("stderr", privateText);
+                child.exit(1);
+                return false;
+              }
+            : false,
+        ],
+      });
+      if (boundary === "spawn")
+        h.seams.spawn = () => {
+          throw new Error(privateText);
+        };
+      const observer = vi.fn();
+      await expect(
+        start(h.seams, { attempts: 1, startTimeoutMs: 1, pollIntervalMs: 1, onStartupDiagnostic: observer }),
+      ).rejects.toThrow();
+      const expected =
+        boundary === "spawn"
+          ? "startup_spawn_failed"
+          : boundary === "exit"
+            ? "startup_exited_before_handshake"
+            : "startup_handshake_timeout";
+      expect(observer.mock.calls).toEqual([[expected]]);
+    },
+  );
+
+  it("emits spawn failure once for asynchronous error followed by exit", async () => {
+    const h = harness({
+      probes: [
+        (child) => {
+          child.emit("error", new Error("synthetic private output"));
+          child.exit(1);
+          return false;
+        },
+      ],
+    });
+    const observer = vi.fn();
+    await expect(start(h.seams, { attempts: 1, onStartupDiagnostic: observer })).rejects.toThrow();
+    expect(observer.mock.calls).toEqual([["startup_spawn_failed"]]);
+  });
+
+  it("preserves successful startup and post-handshake exit without emitting startup failure", async () => {
+    const h = harness();
+    const observer = vi.fn();
+    await start(h.seams, { onStartupDiagnostic: observer });
+    h.children[0]!.exit(1);
+    expect(observer).not.toHaveBeenCalled();
+  });
+
+  it("preserves rejection and retries when the optional observer throws", async () => {
+    const h = harness({
+      probes: [
+        (child) => {
+          child.exit(1);
+          return false;
+        },
+        true,
+      ],
+    });
+    const observer = vi.fn(() => {
+      throw new Error("observer failed");
+    });
+    const daemon = await start(h.seams, { attempts: 2, onStartupDiagnostic: observer });
+    expect(daemon.url).toBe("http://127.0.0.1:7999");
+    expect(h.calls).toHaveLength(2);
+    expect(observer).toHaveBeenCalledOnce();
+  });
+
   it("serves on the port it was given and reports that URL", async () => {
     const h = harness({ ports: [7123] });
     const daemon = await start(h.seams);

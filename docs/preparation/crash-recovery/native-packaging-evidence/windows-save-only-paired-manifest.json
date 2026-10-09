@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "sourceCommit": "5fac1a05a56152861ca08168da0b052f56e8cbae",
+  "productionSource": "9ac669fd8b401444576fdbf39057d118d1c0cc90",
+  "productionEnabled": false,
+  "macHeld": true,
+  "authorAndCommitter": "Calcifer Schadewitz <schadewitzcalcifer@gmail.com>",
+  "branch": "calcifer/windows-diagnostics-save-only",
+  "integrationBase": "calcifer/m10-m21-m22-same-boot-config-integration",
+  "sourceDiff": "No packages source changes after 9ac669f. Execution packages cli/core/engine/agents/store/daemon/protocol unchanged between prior accepted paired source 49a21254dfb02dfce5182902a317298a644bc560 and 5fac1a0. Current acceptance publication adds documentation/evidence only.",
+  "runtime": {
+    "electron": "44.4.5",
+    "electronNode": "24.21.0",
+    "toolNode": "24.19.0",
+    "nativeIdentityReference": "windows-save-only-manifest.json"
+  },
+  "compiledController": {
+    "name": "packages/app/dist/main/diagnostics/recovery-controller.js",
+    "bytes": 41779,
+    "sha256": "a62b48551a88eb4b1eb4be9f7dd55106c46df1f0b2330b8eda1d46bd0226fd4c"
+  },
+  "unchangedRendererBundle": {
+    "name": "renderer-bundle.js",
+    "bytes": 747864,
+    "sha256": "d2688ca482a02e71b4c224c59bfde423a4f9681ab018bada6e8acbc20973a204"
+  },
+  "compiledEntry": {
+    "name": "packages/cli/dist/main.js",
+    "bytes": 7125,
+    "sha256": "74ec189a007b6ec9cebdb2dccbbc6318298f9c8abffa5a21ef414cfe32284898"
+  },
+  "fixtureFiles": [
+    {
+      "name": "paired-save-fixture/paired-child.cjs",
+      "bytes": 21142,
+      "sha256": "8ac371806cd8e7b3efd71414ef24045eb196db6985764f35d316a8395d99c328"
+    },
+    {
+      "name": "paired-save-fixture/run-paired.mjs",
+      "bytes": 9726,
+      "sha256": "4adb860f92966ff1fb174e2a4be43844afd7f17112cfe32438cf377e1dc8d113"
+    },
+    {
+      "name": "paired-save-fixture/renderer-entry.tsx",
+      "bytes": 1330,
+      "sha256": "c8fef938bf4ac3e4f85575c3aa6e4e50a3673baf911d186f364838e6578a97b6"
+    },
+    {
+      "name": "paired-save-fixture/renderer-bundle.js",
+      "bytes": 747864,
+      "sha256": "d2688ca482a02e71b4c224c59bfde423a4f9681ab018bada6e8acbc20973a204"
+    },
+    {
+      "name": "paired-save-fixture/renderer-bundle.css",
+      "bytes": 461,
+      "sha256": "0eae26f953c207da1fef0d45588e29ec43e11955565054b528403aa68dbd0bbb"
+    },
+    {
+      "name": "paired-save-fixture/renderer.html",
+      "bytes": 483,
+      "sha256": "35bf5da923f3200219ef17287c037d6e657e11762b52b888c8f187fa968143b3"
+    },
+    {
+      "name": "paired-save-fixture/private-memory.ps1",
+      "bytes": 2955,
+      "sha256": "018b0d7d1bdc3e6636a1bda10ed3b3c23516229354f5b376919e99253bb194f2"
+    }
+  ],
+  "predecessorFixtureFiles": [
+    {
+      "name": "prior-successful-supervisor/run-paired.mjs",
+      "bytes": 8877,
+      "sha256": "6670d1d436cdd019388c74e0315a14c4d15e9fc1ba09c80a8e75057bbda6f535"
+    },
+    {
+      "name": "yield-fixture/resource-child.cjs",
+      "bytes": 21036,
+      "sha256": "b6629f38e56085deda20af13d4acb51420552a807778a1bcfdfa1b74fa216fae"
+    },
+    {
+      "name": "prepare-paired-save.mjs",
+      "bytes": 3283,
+      "sha256": "0b475b80e57a202ddf8ab36a8e485f3ab20ed84354774941c06d0a680668a746"
+    }
+  ],
+  "fixtureAvailability": "Retained local harness identities; reports, execution stores and private profiles removed after owned exit. Published JSON contains no report bodies, user paths or raw stores. CPU stack file URLs normalized to repository-relative/fixture basenames.",
+  "receipts": [
+    {
+      "name": "windows-save-only-paired-results.json",
+      "bytes": 142284,
+      "sha256": "f5e160ef6549913d47d43d904ab5701eb03d59fd3c0f3a93b0e71e7eea4ae0e2"
+    },
+    {
+      "name": "windows-save-only-paired-cpu.json",
+      "bytes": 30943,
+      "sha256": "0cb8dc727f6a03b5c76908ec87a44d619748741d966080099be58e204974df5d"
+    },
+    {
+      "name": "windows-save-only-paired-summary.json",
+      "bytes": 9182,
+      "sha256": "a158b522b31c0f05fe5ae4027e06ebc3b6d88d88f80da377c8bae59c86a8d013"
+    }
+  ],
+  "outcome": "Successful bounded current pair and export/memory/output checks pass; broader observed timing and C15/remaining native/manual/hardware gates stay held."
+}

@@ -102,10 +102,15 @@ export class AdmissionRetryModel {
     retry: RetryOptions,
     authority: DirectAdmissionAuthority,
   ): Promise<RetryResult<DirectAdmissionResult>> {
-    const response = await this.options.direct.admitRun(command, retry, authority);
-    if (response.state === "resolved" && response.result.state === "accepted")
-      this.dispatch(response.operationId, response.result.runId, authority);
-    return response;
+    const release = this.options.runtimeActivity?.enter("dispatch", true);
+    try {
+      const response = await this.options.direct.admitRun(command, retry, authority);
+      if (response.state === "resolved" && response.result.state === "accepted")
+        this.dispatch(response.operationId, response.result.runId, authority);
+      return response;
+    } finally {
+      release?.();
+    }
   }
   inspect(operationId: string, authorities: AdmissionAuthorities): Promise<RetryResult<unknown>> {
     return this.receipt(operationId, authorities, false);

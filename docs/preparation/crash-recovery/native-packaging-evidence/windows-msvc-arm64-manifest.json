@@ -1,0 +1,18 @@
+{
+  "format": 1,
+  "stage": "before-signing",
+  "platform": "win32",
+  "arch": "arm64",
+  "nodeApi": 8,
+  "sourceSha256": "3b69d61dc07f1366167f8a151c84925a78d5b70bcc74e7835936c1984a26bdd3",
+  "files": {
+    "diagnostics_clock.node": {
+      "bytes": 859648,
+      "sha256": "0c97bd2185c8de52ca0e4af285bfb0eb1b7707250fe9cfb5b7475962ae32aa90"
+    },
+    "diagnostics_storage.node": {
+      "bytes": 891392,
+      "sha256": "d285aab75d26eda1f85a0397c682bf34323517d636b5449524a7730d425b9761"
+    }
+  }
+}

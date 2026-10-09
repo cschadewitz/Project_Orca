@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "sourceCommit": "05b651add9b88609eef617e29d67d873843af177",
+  "fresh": {
+    "passed": 27,
+    "failed": 0,
+    "skipped": 0,
+    "file": "packages/app/renderer/test/diagnostics.test.tsx",
+    "extendedRegression": "Observer stays structural and does not read report.textContent; ready/closed states preserved.",
+    "checks": [
+      {
+        "name": "renderer-typescript",
+        "exitCode": 0
+      },
+      {
+        "name": "affected-eslint",
+        "exitCode": 0
+      },
+      {
+        "name": "affected-prettier",
+        "exitCode": 0
+      },
+      {
+        "name": "whitespace",
+        "exitCode": 0
+      }
+    ]
+  },
+  "reused": {
+    "sourceCommit": "2346bc539ae25a3448d21e86448546b6c905c7c4",
+    "previousFocusedPassed": 114,
+    "existingPlatformSkip": 1,
+    "reason": "Production main/preload/renderer files unchanged; root types, app/preload build, CSS and previous consent/ownership/UTF-8/Save/axe results retained at their original pin."
+  },
+  "fullSuite": false,
+  "actionsDispatched": false
+}

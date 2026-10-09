@@ -52,3 +52,33 @@ it("refuses missing, throwing, closed or changed proof without opening an owned 
   activity.close();
   expect(() => activity.resume("owner")).toThrow("unavailable");
 });
+it("closes new admissions while allowing existing producers to drain, then seals all entry", () => {
+  const activity = new RuntimeActivity();
+  activity.bind(
+    () => ({ available: true, active: [] }),
+    () => false,
+  );
+  const finish = activity.enter("execution");
+  expect(activity.beginDrain("owner")).toBe(true);
+  expect(() => activity.enter("dispatch", true)).toThrow("closed");
+  for (const reason of ["callback", "renewal", "dispatch", "continuation", "recovery"] as const)
+    activity.enter(reason)();
+  expect(activity.prepare("owner").held).toBe(false);
+  finish();
+  expect(activity.prepare("owner").held).toBe(true);
+  expect(() => activity.enter("callback")).toThrow("closed");
+  activity.resume("owner");
+  activity.enter("dispatch", true)();
+});
+it("rejects a stale inventory observation even when intervening activity has finished", () => {
+  const activity = new RuntimeActivity();
+  activity.bind(
+    () => ({ available: true, active: [] }),
+    () => false,
+  );
+  activity.beginDrain("owner");
+  const observed = activity.revision;
+  activity.enter("continuation")();
+  expect(activity.prepare("owner", observed)).toEqual({ held: false, active: ["unavailable"] });
+  expect(activity.prepare("owner", activity.revision).held).toBe(true);
+});

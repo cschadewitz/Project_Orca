@@ -166,7 +166,7 @@ describe("the wired structured editor and daemon boundary", () => {
     expect(f.studio.frozen).toBe(true);
     expect(f.studio.busy).toBe(false);
   });
-  it("does not replay retained indices on a changed source, even after a reread", async () => {
+  it("reconciles independent form edits onto current comments and requires a fresh review", async () => {
     const f = await fixture();
     f.studio.edit([{ kind: "set", path: ["humanInput"], value: { mode: "pause" } }]);
     await writeFile(join(f.dir, "orca.config.yaml"), "# external\nroles: {}\n");
@@ -176,7 +176,10 @@ describe("the wired structured editor and daemon boundary", () => {
     const base = f.studio.source.config.revision;
     await f.studio.readCurrent();
     expect(f.studio.state.edits).toEqual(retained);
-    expect(f.studio.source.config.revision).toBe(base);
+    expect(f.studio.source.config.revision).not.toBe(base);
+    expect(f.studio.source.config.text).toContain("# external");
+    expect(f.studio.frozen).toBe(false);
+    expect(f.studio.review).toBeUndefined();
     await f.studio.save();
     expect(f.sets.filter((p) => !p.validateOnly)).toHaveLength(0);
     await f.studio.readCurrent(true);

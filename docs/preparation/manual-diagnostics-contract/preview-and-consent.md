@@ -1,3 +1,5 @@
+> **Owner-approved save-only scope, 9 October 2026:** Casey directed, "Okay lets skip the in app preview, just let them save and export." The active crash-diagnostics flow prepares a main-owned frozen report, lets the user choose a destination, and requires a separate Save. No report contents, text-selection surface or report-byte transport is exposed to renderer/preload. Earlier viewer requirements below are historical and superseded for this flow; consent, canonical validation/redaction, expiry, exact saved output, privacy and numeric resource gates remain. See [save-only implementation and acceptance](../crash-recovery/windows-save-only-followup.md). Production capture stays disabled and Mac stays held.
+
 # Preview, consent and state specification
 
 A wireframe/state proposal for #416 and #386/#389 integration, not a shipped UI. Build

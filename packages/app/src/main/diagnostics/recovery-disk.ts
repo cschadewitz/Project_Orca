@@ -1,9 +1,11 @@
 /** Bounded encrypted recovery files; no execution store, logger, or network dependencies. */
+import { ControlledPayloadMemory, type PayloadLease } from "./payload-memory.js";
+import { PayloadScope } from "./payload-scope.js";
 import { constants } from "node:fs";
-import { lstat, open, readdir } from "node:fs/promises";
+import { setImmediate } from "node:timers/promises";
 import { join, resolve } from "node:path";
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import type { FileHandle } from "node:fs/promises";
+import { nodeRecoveryFiles, type RecoveryFileHandle, type RecoveryFileSystem } from "./recovery-files.js";
 import {
   RECOVERY_LIMITS,
   validReading,
@@ -47,6 +49,7 @@ interface KeyEnvelope {
 const DEFAULT_SETTING: DiagnosticsSetting = { enabled: false, scopeVersion: 1, minutes: 5 };
 const RECORD_OVERHEAD = 16_384;
 const CONTROL_LIMIT = 4096;
+const CRYPTO_CHUNK_BYTES = 65_536;
 const allowedNames = new Set([
   "setting.json",
   "setting.json.tmp",
@@ -67,7 +70,11 @@ export interface RecoveryDiskOptions {
   root: string;
   keys: DiagnosticsKeyAdapter;
   native: RecoveryNativeAdapter;
+  /** Native composition supplies a handle-relative port; fixtures retain Node I/O. */
+  files?: RecoveryFileSystem;
   scopeVersion?: number;
+  /** Production composition shares the controller/ring binary owner. */
+  payload?: ControlledPayloadMemory;
 }
 
 /** One disk object/profile writer. Outstanding native calls retain its mutation gate.
@@ -94,28 +101,83 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   private lease = false;
   private lastReading: BootReading | undefined;
   private rootIdentity: StageIdentity | undefined;
+  private readonly files: RecoveryFileSystem;
+  private binary: PayloadScope | undefined;
+  private readonly persistent = new Map<Buffer, PayloadLease>();
 
   constructor(private readonly options: RecoveryDiskOptions) {
     this.root = resolve(options.root);
     this.scope = options.scopeVersion ?? 1;
+    this.files = options.files ?? nodeRecoveryFiles;
     if (this.root !== options.root || !Number.isSafeInteger(this.scope) || this.scope < 1)
       throw new Error("unavailable");
   }
 
   private serialized<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.tail.then(work);
+    const run = this.tail.then(async () => {
+      const binary = this.options.payload ? new PayloadScope(this.options.payload) : undefined;
+      this.binary = binary;
+      try {
+        return await work();
+      } finally {
+        binary?.dispose();
+        this.binary = undefined;
+      }
+    });
     this.tail = run.then(
       () => undefined,
       () => undefined,
     );
     return run;
   }
+  private allocate(length: number): Buffer {
+    return this.binary?.allocate(length) ?? Buffer.alloc(length);
+  }
+  private from(input: string | Buffer, encoding: BufferEncoding = "utf8"): Buffer {
+    return (
+      this.binary?.from(input, encoding) ??
+      (typeof input === "string" ? Buffer.from(input, encoding) : Buffer.from(input))
+    );
+  }
+  private random(length: number): Buffer {
+    return this.binary?.random(length) ?? randomBytes(length);
+  }
+  private json(value: unknown): Buffer {
+    return this.from(JSON.stringify(value));
+  }
+  private crypto(maximum: number, work: () => Buffer): Buffer {
+    return this.binary?.crypto(maximum, work) ?? work();
+  }
+  private cryptoText(maximum: number, work: () => string): string {
+    return this.binary?.cryptoText(maximum, work) ?? work();
+  }
+  private provider(work: () => Promise<Buffer>): Promise<Buffer> {
+    // DPAPI's closed <=4096-byte wrapper and <=2048-byte plaintext include native
+    // input/output and adapter copies; reserve their conservative 32 KiB bound.
+    return this.binary?.provider(32_768, work) ?? work();
+  }
+  private keep(bytes: Buffer): Buffer {
+    if (this.binary) this.persistent.set(bytes, this.binary.take(bytes));
+    return bytes;
+  }
+  private forget(bytes: Buffer | undefined): void {
+    if (!bytes) return;
+    const lease = this.persistent.get(bytes);
+    if (lease) {
+      this.persistent.delete(bytes);
+      lease.release();
+    } else bytes.fill(0);
+  }
+  /** Native composition retains handles/lease beyond logical controller timeouts. */
+  waitForSettlement(): Promise<void> {
+    return this.tail;
+  }
   private path(name: string): string {
     return join(this.root, name);
   }
   private async safeRoot(): Promise<void> {
     if (!(await this.options.native.verifyRoot(this.root))) throw new Error("unavailable");
-    const stat = await lstat(this.root);
+    const stat = await this.files.lstat(this.root);
     if (this.rootIdentity && !sameIdentity(stat, this.rootIdentity)) throw new Error("cleanup_pending");
     this.rootIdentity ??= { device: String(stat.dev), inode: String(stat.ino) };
   }
@@ -130,7 +192,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     preserveUnsafeStage = false,
   ): Promise<{ retained: number; controls: number; export: number; entries: number }> {
     await this.safeRoot();
-    const names = await readdir(this.root);
+    const names = await this.files.readdir(this.root);
     if (names.length > RECOVERY_LIMITS.entries) throw new Error("capacity_limited");
     let retained = 0,
       controls = 0,
@@ -138,7 +200,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       cleanup = 0;
     for (const name of names) {
       if (!allowedNames.has(name)) throw new Error("cleanup_pending");
-      const stat = await lstat(this.path(name));
+      const stat = await this.files.lstat(this.path(name));
       // Explicit opt-out may preserve only this fixed unsafe file/link while
       // deleting independently verified history. lstat never follows its target;
       // all size/entry budgets still apply, and remove() remains fully strict.
@@ -188,7 +250,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     )
       throw new Error("capacity_limited");
     try {
-      await lstat(this.path(name));
+      await this.files.lstat(this.path(name));
       throw new Error("cleanup_pending");
     } catch (error) {
       if (!isCode(error, "ENOENT")) throw error;
@@ -196,9 +258,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
   private async read(name: string, maximum = CONTROL_LIMIT): Promise<Buffer | undefined> {
     await this.safeRoot();
-    let file: FileHandle;
+    let file: RecoveryFileHandle;
     try {
-      file = await open(this.path(name), constants.O_RDONLY | constants.O_NOFOLLOW);
+      file = await this.files.open(this.path(name), constants.O_RDONLY | constants.O_NOFOLLOW);
     } catch (error) {
       if (isCode(error, "ENOENT")) return undefined;
       throw error;
@@ -214,7 +276,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       )
         throw new Error("unavailable");
       // Preallocate only the already bounded size; reject growth/shrink while reading.
-      const bytes = Buffer.alloc(stat.size);
+      const bytes = this.allocate(stat.size);
       let position = 0;
       while (position < bytes.length) {
         const result = await file.read(bytes, position, bytes.length - position, position);
@@ -229,7 +291,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
   private async create(name: string, bytes: Buffer, preserveUnsafeStage = false): Promise<void> {
     await this.reserve(bytes.length, !name.endsWith(".bin"), name, preserveUnsafeStage);
-    const handle = await open(
+    const handle = await this.files.open(
       this.path(name),
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
       0o600,
@@ -250,7 +312,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     await this.safeRoot();
     let stat;
     try {
-      stat = await lstat(this.path(name));
+      stat = await this.files.lstat(this.path(name));
     } catch (error) {
       if (isCode(error, "ENOENT")) return;
       throw error;
@@ -285,7 +347,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   readSetting(): Promise<DiagnosticsSetting> {
     return this.serialized(async () => {
       try {
-        await lstat(this.root);
+        await this.files.lstat(this.root);
         return await this.setting();
       } catch {
         return { ...DEFAULT_SETTING, scopeVersion: this.scope };
@@ -305,7 +367,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       await this.acquire();
       const stopped = await this.options.native.writersStopped(this.root);
       if (stopped) await this.remove("setting.json.tmp");
-      await this.atomic("setting.json", json(setting), !setting.enabled && stopped);
+      await this.atomic("setting.json", this.json(setting), !setting.enabled && stopped);
       if (!setting.enabled) this.active = false;
     });
   }
@@ -329,9 +391,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
   private async protect(envelope: KeyEnvelope, key: Buffer): Promise<Buffer> {
     if (!(await this.options.keys.available())) throw new Error("unavailable");
-    const plaintext = json({ ...envelope, key: key.toString("base64") });
+    const plaintext = this.json({ ...envelope, key: key.toString("base64") });
     try {
-      const wrapped = await this.options.keys.wrap(plaintext);
+      const wrapped = await this.provider(() => this.options.keys.wrap(plaintext));
       if (wrapped.length > CONTROL_LIMIT) throw new Error("capacity_limited");
       return wrapped;
     } finally {
@@ -348,7 +410,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     if (!(await this.options.keys.available())) throw new Error("unavailable");
     const wrapped = await this.read(name);
     if (!wrapped) throw new Error("unavailable");
-    const plaintext = await this.options.keys.unwrap(wrapped);
+    const plaintext = await this.provider(() => this.options.keys.unwrap(wrapped));
     try {
       if (plaintext.length > 2048) throw new Error("unavailable");
       const value: unknown = JSON.parse(plaintext.toString("utf8"));
@@ -364,7 +426,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         !/^[A-Za-z0-9+/]{43}=$/.test(value.key)
       )
         throw new Error("unavailable");
-      const key = Buffer.from(value.key, "base64");
+      const key = this.from(value.key, "base64");
       if (key.length !== 32) throw new Error("unavailable");
       return key;
     } finally {
@@ -373,8 +435,11 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
   private async commit(manifest: Manifest, admit: () => boolean = () => true): Promise<void> {
     if (!this.control) throw new Error("unavailable");
-    const payload = json(manifest);
-    const bytes = json({ payload: manifest, mac: createHmac("sha256", this.control).update(payload).digest("hex") });
+    const payload = this.json(manifest);
+    const bytes = this.json({
+      payload: manifest,
+      mac: this.cryptoText(64, () => createHmac("sha256", this.control!).update(payload).digest("hex")),
+    });
     await this.create("manifest.json.tmp", bytes);
     if (!admit()) {
       await this.remove("manifest.json.tmp");
@@ -403,21 +468,21 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       throw new Error("unavailable");
     const manifest = envelope.payload;
     const control = await this.unprotect("control.key", "control", manifest.epoch, manifest.epoch, "");
-    const mac = createHmac("sha256", control).update(json(manifest)).digest();
-    if (!timingSafeEqual(mac, Buffer.from(envelope.mac, "hex"))) {
+    const mac = this.crypto(32, () => createHmac("sha256", control).update(this.json(manifest)).digest());
+    if (!timingSafeEqual(mac, this.from(envelope.mac, "hex"))) {
       control.fill(0);
       throw new Error("unavailable");
     }
     return { manifest, control };
   }
   private async verifyRecordEnvelope(record: RecordHeader): Promise<void> {
-    const expected = json(record);
+    const expected = this.json(record);
     if (expected.length > CONTROL_LIMIT) throw new Error("unavailable");
-    const file = await open(this.path(`slot-${record.slot}.bin`), constants.O_RDONLY | constants.O_NOFOLLOW);
+    const file = await this.files.open(this.path(`slot-${record.slot}.bin`), constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const stat = await file.stat();
       if (stat.size !== record.bytes + expected.length + 32) throw new Error("unavailable");
-      const prefix = Buffer.alloc(expected.length + 4);
+      const prefix = this.allocate(expected.length + 4);
       let position = 0;
       while (position < prefix.length) {
         const { bytesRead } = await file.read(prefix, position, prefix.length - position, position);
@@ -443,11 +508,11 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       const bytes = await this.read("manifest.json");
       if (!bytes) {
         // Never regenerate authority over stray history/key files.
-        const names = await readdir(this.root);
+        const names = await this.files.readdir(this.root);
         if (names.some((name) => /^(slot-|session-|control\.key|manifest\.)/.test(name)))
           throw new Error("unavailable");
         const epoch = randomUUID();
-        this.control = randomBytes(32);
+        this.control = this.keep(this.random(32));
         await this.atomic(
           "control.key",
           await this.protect(
@@ -458,8 +523,8 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         await this.commit({ version: 1, scopeVersion: this.scope, epoch, generation: 0 }, admit);
       } else {
         const { manifest, control } = await this.authenticatedManifest(bytes);
-        this.control?.fill(0);
-        this.control = control;
+        this.forget(this.control);
+        this.control = this.keep(control);
         this.manifest = manifest;
         // Only the authenticated predecessor can survive interrupted replacement.
         await this.remove("manifest.json.tmp");
@@ -492,7 +557,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       if (!admit()) throw new Error("off");
       this.revoked = false;
       this.closed = false;
-      this.session?.key.fill(0);
+      this.forget(this.session?.key);
       this.session = undefined;
       this.captureOpened = true;
       this.active = true;
@@ -519,7 +584,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     return this.serialized(async () => {
       if (!admit()) throw new Error("off");
       try {
-        await lstat(this.root);
+        await this.files.lstat(this.root);
       } catch (error) {
         if (isCode(error, "ENOENT") && !this.manifest && !this.control) return false;
         throw new Error("unavailable", { cause: error });
@@ -532,7 +597,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       // authority before choosing orphan files; cached roles cannot decide this.
       const bytes = await this.read("manifest.json");
       if (!bytes) {
-        const names = await readdir(this.root);
+        const names = await this.files.readdir(this.root);
         if (
           this.manifest ||
           this.control ||
@@ -551,8 +616,8 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         control.fill(0);
         throw new Error("off");
       }
-      this.control?.fill(0);
-      this.control = control;
+      this.forget(this.control);
+      this.control = this.keep(control);
       this.manifest = manifest;
       const certain = this.reading(now);
       const { current, previous, ...authority } = manifest;
@@ -596,7 +661,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       if (bytes.length > RECOVERY_LIMITS.exportBytes || bytes.length === 0) throw new Error("capacity_limited");
       if (!this.reading(anchor)) throw new Error("age_uncertain");
       await this.inspect();
-      if (!this.session) this.session = { key: randomBytes(32), id: randomUUID(), keyId: randomUUID() };
+      if (!this.session) this.session = { key: this.keep(this.random(32)), id: randomUUID(), keyId: randomUUID() };
       const manifest = this.manifest;
       const slot = ([0, 1, 2] as const).find(
         (slot) => slot !== manifest.current?.slot && slot !== manifest.previous?.slot,
@@ -613,15 +678,23 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         anchor: { ...anchor },
         bytes: bytes.length,
       };
-      const aad = json(record);
-      const nonce = randomBytes(12);
+      const aad = this.json(record);
+      const nonce = this.random(12);
       const cipher = createCipheriv("aes-256-gcm", this.session.key, nonce);
       cipher.setAAD(aad);
-      const encrypted = cipher.update(bytes);
-      cipher.final();
-      const prefix = Buffer.alloc(4);
-      prefix.writeUInt32BE(aad.length);
-      const sealed = Buffer.concat([prefix, aad, nonce, cipher.getAuthTag(), encrypted]);
+      const sealed = this.allocate(bytes.length + aad.length + 32);
+      sealed.writeUInt32BE(aad.length);
+      aad.copy(sealed, 4);
+      nonce.copy(sealed, 4 + aad.length);
+      for (let offset = 0; offset < bytes.length; offset += CRYPTO_CHUNK_BYTES) {
+        await setImmediate();
+        const chunk = bytes.subarray(offset, offset + CRYPTO_CHUNK_BYTES);
+        const encrypted = this.cryptoText(2 * chunk.length, () => cipher.update(chunk, undefined, "latin1"));
+        if (encrypted.length !== chunk.length) throw new Error("unavailable");
+        sealed.write(encrypted, 32 + aad.length + offset, "latin1");
+      }
+      if (this.cryptoText(32, () => cipher.final("latin1")).length) throw new Error("unavailable");
+      this.crypto(16, () => cipher.getAuthTag()).copy(sealed, 16 + aad.length);
       if (sealed.length > RECOVERY_LIMITS.exportBytes + RECORD_OVERHEAD) throw new Error("capacity_limited");
       await this.create(
         `session-${slot}.key`,
@@ -656,7 +729,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       const size = bytes.readUInt32BE(0);
       if (size > CONTROL_LIMIT || size + 32 + record.bytes !== bytes.length) throw new Error("unavailable");
       const aad = bytes.subarray(4, 4 + size);
-      if (!aad.equals(json(record))) throw new Error("unavailable");
+      if (!aad.equals(this.json(record))) throw new Error("unavailable");
       const key = await this.unprotect(
         `session-${record.slot}.key`,
         "session",
@@ -668,14 +741,23 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         const decipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(4 + size, 16 + size));
         decipher.setAAD(aad);
         decipher.setAuthTag(bytes.subarray(16 + size, 32 + size));
-        const plaintext = decipher.update(bytes.subarray(32 + size));
+        const plaintext = this.allocate(record.bytes);
         try {
-          decipher.final();
+          for (let offset = 0; offset < record.bytes; offset += CRYPTO_CHUNK_BYTES) {
+            await setImmediate();
+            const chunk = bytes.subarray(32 + size + offset, 32 + size + offset + CRYPTO_CHUNK_BYTES);
+            const decoded = this.cryptoText(2 * chunk.length, () => decipher.update(chunk, undefined, "latin1"));
+            if (decoded.length !== chunk.length) throw new Error("unavailable");
+            plaintext.write(decoded, offset, "latin1");
+          }
+          if (this.cryptoText(32, () => decipher.final("latin1")).length) throw new Error("unavailable");
         } catch {
           plaintext.fill(0);
           throw new Error("unavailable");
         }
-        return { bytes: plaintext, anchor: { ...record.anchor } };
+        if (!this.binary) return { bytes: plaintext, anchor: { ...record.anchor } };
+        const owned = this.binary.take(plaintext);
+        return { bytes: owned.bytes, anchor: { ...record.anchor }, dispose: () => owned.release() };
       } finally {
         key.fill(0);
       }
@@ -702,9 +784,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         await this.commit(next);
         await this.cleanUnreferenced();
       }
-      this.session?.key.fill(0);
+      this.forget(this.session?.key);
       this.session = undefined;
-      this.control?.fill(0);
+      this.forget(this.control);
       this.control = undefined;
       this.manifest = undefined;
       this.captureOpened = false;
@@ -720,7 +802,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     this.maintenanceEpoch++;
     return this.serialized(async () => {
       try {
-        await lstat(this.root);
+        await this.files.lstat(this.root);
       } catch (error) {
         if (isCode(error, "ENOENT")) return;
         throw error;
@@ -738,9 +820,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         "control.key.tmp",
       ])
         await this.remove(name);
-      this.session?.key.fill(0);
+      this.forget(this.session?.key);
       this.session = undefined;
-      this.control?.fill(0);
+      this.forget(this.control);
       this.control = undefined;
       this.manifest = undefined;
       this.captureOpened = false;
@@ -763,7 +845,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   readExportState(): Promise<ExportState> {
     return this.serialized(async () => {
       try {
-        await lstat(this.root);
+        await this.files.lstat(this.root);
       } catch (error) {
         if (isCode(error, "ENOENT")) return {};
         throw error;
@@ -774,7 +856,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
   private async exportCommit(state: ExportState): Promise<void> {
     if (!validExportState(state)) throw new Error("cleanup_pending");
-    await this.atomic("export.json", json(state));
+    await this.atomic("export.json", this.json(state));
   }
   writeExportState(state: ExportState): Promise<void> {
     return this.serialized(async () => {
@@ -790,7 +872,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       if (state.current?.id !== id || state.current.phase !== "intent" || state.current.stage)
         throw new Error("cleanup_pending");
       await this.reserve(0, false, "export-stage.tmp");
-      const file = await open(
+      const file = await this.files.open(
         this.path("export-stage.tmp"),
         constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
         0o600,
@@ -802,11 +884,11 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         await this.exportCommit({ ...state, current: { id, phase: "staged", stage: identity } });
         await this.options.native.write(file, bytes);
         // Verify the entire exact copy without another full-size buffer.
-        const check = await open(this.path("export-stage.tmp"), constants.O_RDONLY | constants.O_NOFOLLOW);
+        const check = await this.files.open(this.path("export-stage.tmp"), constants.O_RDONLY | constants.O_NOFOLLOW);
         try {
           const observed = await check.stat();
           if (!sameIdentity(observed, identity) || observed.size !== bytes.length) throw new Error("cleanup_pending");
-          const chunk = Buffer.alloc(Math.min(65_536, bytes.length));
+          const chunk = this.allocate(Math.min(65_536, bytes.length));
           for (let offset = 0; offset < bytes.length; offset += chunk.length) {
             const length = Math.min(chunk.length, bytes.length - offset);
             const result = await check.read(chunk, 0, length, offset);
@@ -829,7 +911,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     if (!(await this.options.native.writersStopped(this.root))) throw new Error("cleanup_pending");
     if (!identity) {
       try {
-        await lstat(this.path("export-stage.tmp"));
+        await this.files.lstat(this.path("export-stage.tmp"));
         throw new Error("cleanup_pending");
       } catch (error) {
         if (!isCode(error, "ENOENT")) throw error;
@@ -841,7 +923,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   clearStage(identity?: StageIdentity): Promise<void> {
     return this.serialized(async () => {
       try {
-        await lstat(this.root);
+        await this.files.lstat(this.root);
       } catch (error) {
         if (isCode(error, "ENOENT") && !identity) return;
         throw error;
@@ -873,13 +955,16 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     });
   }
   writersStopped(): Promise<boolean> {
-    return this.serialized(() => this.options.native.writersStopped(this.root));
+    return this.serialized(async () => {
+      // A restarted unknown export has not opened history or claimed a writer lease.
+      // Only native lease acquisition can prove the prior process stopped; no PID,
+      // timeout or missing filename can substitute for that ownership proof.
+      await this.acquire();
+      return this.options.native.writersStopped(this.root);
+    });
   }
 }
 
-function json(value: unknown): Buffer {
-  return Buffer.from(JSON.stringify(value));
-}
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

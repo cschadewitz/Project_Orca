@@ -2,6 +2,13 @@
  * Bootstrap: turn `orca.config.yaml` into a wired Orchestrator + ProgramService.
  * The CLI, the ACP facade and embedders all go through here.
  */
+import { enterFirstRunWriter } from "@orca/protocol/first-run-fence";
+import {
+  enterConfiguredUpdateBootstrap,
+  isClosedUpdateBootstrap,
+  closedUpdateOwnsConfiguredRoots,
+} from "./update-bootstrap.js";
+import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
 import { FileRetryClaimStore } from "@orca/store";
 import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
@@ -124,6 +131,8 @@ export interface OrcaApp {
   templates: TemplateRegistry;
   agents: AgentRegistry;
   logger: Logger;
+  /** Existing store owners, read-only and conservative; no retry cursor or reconciliation. */
+  closedWorkState(): Promise<"empty" | "parked" | "unsupported-generation">;
 }
 
 export async function findConfig(cwd: string): Promise<string | undefined> {
@@ -150,13 +159,21 @@ export async function loadConfig(
   configPath?: string,
 ): Promise<{ config: OrcaConfig; configDir: string; configFile?: string }> {
   const file = configPath ?? (await findConfig(cwd));
-  if (!file) return { config: parseOrcaConfig({}), configDir: resolve(cwd) };
+  if (!file) {
+    const config = parseOrcaConfig({}),
+      configDir = resolve(cwd);
+    await enterConfiguredUpdateBootstrap(configDir, resolve(configDir, config.storeDir));
+    return { config, configDir };
+  }
   const text = await readFile(file, "utf8");
   const raw = parseConfigFile(file, text);
   try {
     // The path travels with the parsed config: `config.get`/`config.set` serve the file
     // itself, and rediscovering it in the daemon could find a different one (#174).
-    return { config: parseOrcaConfig(raw), configDir: dirname(resolve(file)), configFile: resolve(file) };
+    const config = parseOrcaConfig(raw),
+      configDir = dirname(resolve(file));
+    await enterConfiguredUpdateBootstrap(configDir, resolve(configDir, config.storeDir));
+    return { config, configDir, configFile: resolve(file) };
   } catch (e) {
     throw new OrcaError("CONFIG_INVALID", `${file}: ${(e as Error).message}`, {}, { cause: e });
   }
@@ -232,6 +249,16 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const { config, configDir, configFile } = opts.config
     ? { config: opts.config, configDir: opts.configDir ?? cwd, configFile: undefined }
     : await loadConfig(cwd, opts.configPath);
+  const firstRunLaunch = process.env.ORCA_FIRST_RUN_LAUNCH;
+  delete process.env.ORCA_FIRST_RUN_LAUNCH;
+  await enterConfiguredUpdateBootstrap(resolve(configDir), resolve(configDir, config.storeDir));
+  if (isClosedUpdateBootstrap() && config.plugins.length)
+    throw new OrcaError("CONFIG_INVALID", "Closed replacement cannot execute uncertified plugin initialization");
+  if (isClosedUpdateBootstrap())
+    await enterClosedFirstRunInspection(resolve(configDir), resolve(configDir, config.storeDir), () =>
+      closedUpdateOwnsConfiguredRoots(configDir, resolve(configDir, config.storeDir)),
+    );
+  else await enterFirstRunWriter(resolve(configDir), resolve(configDir, config.storeDir), firstRunLaunch);
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config);
   const assets = await releaseAssets(config);
@@ -493,6 +520,20 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     submissionAuthority: submission?.authority,
     retryClaims,
     retryClaimStore,
+    async closedWorkState() {
+      try {
+        const retry = retryClaimStore ? await retryClaimStore.closedWorkState() : "unsupported-generation";
+        if (retry !== "empty") return retry;
+        const admissions = await submission.admissions.records.list();
+        if (admissions.length) return "parked";
+        const ids = await orchestrator.listRuns();
+        // Retained runs may carry generations, continuations or protected input.
+        // This initial native binding supports empty work only, without replay/restoration.
+        return ids.length ? "parked" : "empty";
+      } catch {
+        return "unsupported-generation";
+      }
+    },
     directAdmissions,
     retrySafeAdmissions:
       directAdmissions && program.submissions

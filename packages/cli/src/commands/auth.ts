@@ -1,4 +1,5 @@
 /** Local credential administration: only explicit issue/rotate output contains a bearer token. */
+import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
 import { resolve } from "node:path";
 import { OrcaError } from "@orca/core";
 import {
@@ -43,6 +44,7 @@ export async function authCommand(ctx: CommandContext): Promise<number> {
   if (extra.length || (sub === "list" && value !== undefined))
     throw new OrcaError("CONFIG_INVALID", `unexpected arguments for auth ${sub}`);
   const { configDir } = await loadConfig(ctx.cwd, ctx.configPath);
+  assertNoUnownedFirstRunMutation(resolve(configDir));
   const auth = openAuthDirectory(resolve(configDir, "auth"));
   switch (sub) {
     case "issue": {

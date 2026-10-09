@@ -5,12 +5,14 @@
   padding: var(--space-4);
 }
 
-.orca-template-authoring textarea {
+.orca-template-authoring textarea,
+.orca-template-editor textarea {
   width: 100%;
   min-height: var(--control-lg);
 }
 
-.orca-template-authoring pre {
+.orca-template-authoring pre,
+.orca-template-editor pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

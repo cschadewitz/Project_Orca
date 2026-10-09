@@ -380,11 +380,14 @@ export async function replacePermissionPolicyFile(
     lock?: { timeoutMs?: number; staleMs?: number } | undefined;
     /** sha256 hex of the bytes the caller's edit was based on; `""` for "there was no file". */
     expectedRevision?: string | undefined;
+    /** Current caller authority, checked under the lock and immediately before replacement. */
+    authorize?: (() => Promise<void>) | undefined;
   },
 ): Promise<PermissionPolicyFile> {
   const parsed = parsePermissionPolicyDocument(doc);
   const expected = opts?.expectedRevision;
   await withPolicyLock(file, opts?.lock, async () => {
+    await opts?.authorize?.();
     if (expected !== undefined) {
       const actual = await revisionOf(file);
       if (actual !== expected)
@@ -394,7 +397,7 @@ export async function replacePermissionPolicyFile(
           { file, expectedRevision: expected, actualRevision: actual },
         );
     }
-    await writePolicyFile(file, parsed);
+    await writePolicyFile(file, parsed, opts?.authorize);
   });
   return parsed;
 }
@@ -446,10 +449,19 @@ function serialize(doc: PermissionPolicyFile): string {
   return `${JSON.stringify({ version: doc.version, agents }, null, 2)}\n`;
 }
 
-async function writePolicyFile(file: string, doc: PermissionPolicyFile): Promise<void> {
+async function writePolicyFile(
+  file: string,
+  doc: PermissionPolicyFile,
+  authorize?: () => Promise<void>,
+): Promise<void> {
   const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, serialize(doc), "utf8");
-  await rename(tmp, file);
+  try {
+    await writeFile(tmp, serialize(doc), "utf8");
+    await authorize?.();
+    await rename(tmp, file);
+  } finally {
+    await rm(tmp, { force: true });
+  }
 }
 
 /**

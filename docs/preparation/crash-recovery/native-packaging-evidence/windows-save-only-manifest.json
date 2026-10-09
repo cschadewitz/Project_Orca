@@ -1,0 +1,367 @@
+{
+  "schema": 1,
+  "base": "af75a263efd34c8935ec72cc026fa30157c95043",
+  "sourceCommit": "21b615fe278f91888a68198475c6fcc6a791208f",
+  "publicationProductionCodeMatchesSourceRequired": true,
+  "publicationAdditionalTestOnlyProbe": "windows-compiled-refusal.mjs API correction; no production changes after measured source",
+  "intendedBaseBranch": "calcifer/m10-m21-m22-same-boot-config-integration",
+  "branch": "calcifer/windows-diagnostics-save-only",
+  "authorAndCommitter": "Calcifer Schadewitz <schadewitzcalcifer@gmail.com>",
+  "productionEnabled": false,
+  "macHeld": true,
+  "ownerScope": "Explicit save/export; in-app viewer and text selection removed.",
+  "nativeReused": true,
+  "native": {
+    "format": 1,
+    "stage": "before-signing",
+    "platform": "win32",
+    "arch": "x64",
+    "nodeApi": 8,
+    "sourceSha256": "3b69d61dc07f1366167f8a151c84925a78d5b70bcc74e7835936c1984a26bdd3",
+    "files": {
+      "diagnostics_clock.node": {
+        "bytes": 654848,
+        "sha256": "0b28528e31c92c1e1b70e74aa68206b29a39220075d85bbc8555eca50f6d9107"
+      },
+      "diagnostics_storage.node": {
+        "bytes": 680960,
+        "sha256": "bea31fecd94122af70afe6f5280411d9933b93aef4c9e08240265bcac2c2a5fe"
+      }
+    }
+  },
+  "electron": "44.4.5",
+  "electronNode": "24.21.0",
+  "toolNode": "24.19.0",
+  "compiledDiagnostics": [
+    {
+      "name": "initialize.js",
+      "bytes": 1868,
+      "sha256": "cd56d06edc239bbfff39871ad872f730c8a536b04b06387a8c780e55d69bb203"
+    },
+    {
+      "name": "native-adapter.js",
+      "bytes": 11432,
+      "sha256": "c614303e01c86411948f72040ea3a9292569f3544a531c75fee57e5f64190f27"
+    },
+    {
+      "name": "native-addon.js",
+      "bytes": 1588,
+      "sha256": "3c267d9d9b206020ad233fd4e5bfb3b51de7b30f2f2c1891573a1d33606b83f5"
+    },
+    {
+      "name": "native-clock.js",
+      "bytes": 2802,
+      "sha256": "65961f9bd070a8fafe6ed19b03a7dce4a6bc642bfde45ba11f3b548020a6272f"
+    },
+    {
+      "name": "native-storage.js",
+      "bytes": 9418,
+      "sha256": "36364c1b11d6808dd22127b55f8f7fde8a3a5a7a5e03ca17ad62a6d311f526e1"
+    },
+    {
+      "name": "payload-memory.js",
+      "bytes": 3981,
+      "sha256": "c9891ff6f6191ce061b1f3225c1e8b88f39854216137853f8953ced31f550690"
+    },
+    {
+      "name": "payload-scope.js",
+      "bytes": 3432,
+      "sha256": "6fdfaa063f84f8277b9d1f7ce5ceb86e01103cb82405776bdd939a196502e9bb"
+    },
+    {
+      "name": "pretrigger-buffer.js",
+      "bytes": 11069,
+      "sha256": "f56291185a683a9ed0be10ebadf67524485982494f022e751e5607baa6509397"
+    },
+    {
+      "name": "profile.js",
+      "bytes": 1632,
+      "sha256": "78fd1dbad527a74629287e05abf6c60e11b41158f1b263267efe0f8ebb401814"
+    },
+    {
+      "name": "recovery-contract.js",
+      "bytes": 652,
+      "sha256": "572dd78038cc9653301e619d31d34bd692ea3117dff42610726c3337e89ff813"
+    },
+    {
+      "name": "recovery-controller.js",
+      "bytes": 41318,
+      "sha256": "dc5e0226d726197a24f6c96dfbe3893483043569520e36bcfe586878aa7fb5c6"
+    },
+    {
+      "name": "recovery-disk.js",
+      "bytes": 44609,
+      "sha256": "f51d0d6957ffc565269fcfa50639ba6e28b979a5977bb43e5d505c8463f4ec31"
+    },
+    {
+      "name": "recovery-files.js",
+      "bytes": 326,
+      "sha256": "db16caca0656e983aa1afb2ed2e70f1cf4695b842764657f02b4d9f6b3068aae"
+    },
+    {
+      "name": "report-validation.js",
+      "bytes": 6407,
+      "sha256": "f54942c1a8cacd934c718ebffe9a8437ffe447dc389c7ca37f2593f1e7b7be36"
+    },
+    {
+      "name": "report-work.js",
+      "bytes": 1078,
+      "sha256": "b3bc5310b8ab7c04ff3b635ecdaed047974b50884f4de5beeb8bdc541bf53a20"
+    },
+    {
+      "name": "snapshot.js",
+      "bytes": 8615,
+      "sha256": "c464f778d8e61a8a2b5531f1182505b75a6535ca8bc255c93bd9af415f6bfdba"
+    },
+    {
+      "name": "source-producers.js",
+      "bytes": 814,
+      "sha256": "5f70d2452aed4c38c434dcb7f8ab1f12fb79fb35b0de8ea366bf7d2fb451ca3a"
+    },
+    {
+      "name": "startup-producer.js",
+      "bytes": 873,
+      "sha256": "cf986d55ad03f1533f38eb23b32e8fdfe33a25aba8389e0d8e0a9aaeb0de7aab"
+    },
+    {
+      "name": "windows-key-adapter.js",
+      "bytes": 3035,
+      "sha256": "d594771823dde5f9799c31799f3949b3bb409a105d851601ccb93890ff083023"
+    }
+  ],
+  "boundaries": [
+    {
+      "name": "packages/app/dist/diagnostics-contract.js",
+      "bytes": 305,
+      "sha256": "b54ba5e7c847fdfa53f9fdb178ee14ae11b449d82cf6b5cab6dc87981f28183e"
+    },
+    {
+      "name": "packages/app/dist/preload/index.cjs",
+      "bytes": 14665,
+      "sha256": "139a2bec93db6deac1e7044a026d4f53958a51ed7659ebdba56f0c79d4458705"
+    }
+  ],
+  "fixtureFiles": [
+    {
+      "name": "build-fixture.mjs",
+      "bytes": 459,
+      "sha256": "660df03708963f2c581aac2c6118879418009a01a4aa7c9dedfc857e94010d87"
+    },
+    {
+      "name": "renderer-entry.tsx",
+      "bytes": 1330,
+      "sha256": "c8fef938bf4ac3e4f85575c3aa6e4e50a3673baf911d186f364838e6578a97b6"
+    },
+    {
+      "name": "renderer-bundle.js",
+      "bytes": 747864,
+      "sha256": "d2688ca482a02e71b4c224c59bfde423a4f9681ab018bada6e8acbc20973a204"
+    },
+    {
+      "name": "renderer-bundle.css",
+      "bytes": 461,
+      "sha256": "0eae26f953c207da1fef0d45588e29ec43e11955565054b528403aa68dbd0bbb"
+    },
+    {
+      "name": "renderer.html",
+      "bytes": 483,
+      "sha256": "35bf5da923f3200219ef17287c037d6e657e11762b52b888c8f187fa968143b3"
+    },
+    {
+      "name": "resource-child.cjs",
+      "bytes": 18292,
+      "sha256": "4b5d8ab33c93c694011915ceb20950d136228b0da3f2139ae4f2042b6551b9b4"
+    },
+    {
+      "name": "run-resource.mjs",
+      "bytes": 6515,
+      "sha256": "88aadbfc069dad775b58ec05e540726d1dfc0b77e594b8988cf989a5a7d1cf0f"
+    },
+    {
+      "name": "private-memory.ps1",
+      "bytes": 2955,
+      "sha256": "018b0d7d1bdc3e6636a1bda10ed3b3c23516229354f5b376919e99253bb194f2"
+    },
+    {
+      "name": "axe.min.js",
+      "bytes": 580491,
+      "sha256": "c24f097bd2f451d4f933e8bc7d8d539f8672a2ebcb5cc9f9f3eec8ca9470a0c1"
+    }
+  ],
+  "changedSourceFiles": [
+    {
+      "name": "packages/app/renderer/src/diagnostics/diagnostics-model.ts",
+      "bytes": 2352,
+      "sha256": "c206741ba7480720ee21e8524ff87ac569ffbcd0e7baef8239a6a9bd2d860cea"
+    },
+    {
+      "name": "packages/app/renderer/src/diagnostics/diagnostics-section.tsx",
+      "bytes": 12267,
+      "sha256": "3b77ef1faf690a4d335acf27c73e8788f32510ad59e2ab08dcef59ee43b8f22a"
+    },
+    {
+      "name": "packages/app/renderer/src/diagnostics/diagnostics.css",
+      "bytes": 469,
+      "sha256": "2d09ed16c2910cb301194551eb837340e84c452c17fdf3be57d624d53cf8aa5f"
+    },
+    {
+      "name": "packages/app/renderer/src/diagnostics/use-diagnostics.ts",
+      "bytes": 8427,
+      "sha256": "f2c0db8203f90ff7aec4997213188e08a058d4e04df6b3a12a512ce720f8a162"
+    },
+    {
+      "name": "packages/app/renderer/test/diagnostics.test.tsx",
+      "bytes": 30376,
+      "sha256": "3edc8fb934f7a223c9447180abf1b5a77858ca4c395fd1ff1b5987ef485cd8df"
+    },
+    {
+      "name": "packages/app/renderer/test/guided-launch-route.test.tsx",
+      "bytes": 19785,
+      "sha256": "5919217e2b5c3287aa9dfa7f3a98ef76c5e3425203954d06c3167905168366b9"
+    },
+    {
+      "name": "packages/app/src/diagnostics-contract.ts",
+      "bytes": 2529,
+      "sha256": "34a8cf95518d494bdbb448e2e0c7aca3937fb9e967daa212cb505241e2799bff"
+    },
+    {
+      "name": "packages/app/src/main/diagnostics/recovery-contract.ts",
+      "bytes": 3022,
+      "sha256": "30e9cdd81a65c955428817462636eb30b0b1b9e4a335aece5026f14011f9289d"
+    },
+    {
+      "name": "packages/app/src/main/diagnostics/recovery-controller.ts",
+      "bytes": 38611,
+      "sha256": "245076c2621983e7a07506b07a2f3374d2f99376d916955c29f8ebc31d7f8c07"
+    },
+    {
+      "name": "packages/app/src/main/index.ts",
+      "bytes": 58537,
+      "sha256": "c221dd3f3ae54e8f17408a5e0429f3d1c5a1af417818f551fd1219fb5dcb89df"
+    },
+    {
+      "name": "packages/app/src/preload/index.cts",
+      "bytes": 16246,
+      "sha256": "92363c08834307b66999e726a01fe684544fe424a507f650253200c1afc781b2"
+    },
+    {
+      "name": "packages/app/test/daemon-connection-integration.test.ts",
+      "bytes": 50910,
+      "sha256": "e7dd57d7e62af45bc3a9347c2648f5ed7850673b5f591f7485bca126a049a50f"
+    },
+    {
+      "name": "packages/app/test/diagnostics-preload.test.ts",
+      "bytes": 4475,
+      "sha256": "99beec501977b31439d003a468548b827ca89b1f02e0450e91ba5e70df02dd21"
+    },
+    {
+      "name": "packages/app/test/diagnostics-report-performance.test.ts",
+      "bytes": 20940,
+      "sha256": "7773c8a416eb51a39162aa7414be8931eaf21ccf1f33f586968daa3265a689c0"
+    },
+    {
+      "name": "packages/app/test/diagnostics-startup-consent.test.ts",
+      "bytes": 3515,
+      "sha256": "de56c5d1386e8add744c0f57ac9dc1e4744657ec0d4584bb0f829efab36c6045"
+    },
+    {
+      "name": "packages/app/test/diagnostics-startup-producer.test.ts",
+      "bytes": 3121,
+      "sha256": "4e28110f98bff0ae951c83aadf13269b57f5da8699534820fcfa432a10320547"
+    },
+    {
+      "name": "packages/app/test/diagnostics-windows-refusal.test.ts",
+      "bytes": 4734,
+      "sha256": "a3a9414731e07b9bdefcef6184f74e3e68d407c9bed114eac1da89a4fdc29bbe"
+    },
+    {
+      "name": "packages/app/test/recovery-authority.test.ts",
+      "bytes": 18752,
+      "sha256": "79d0039bcdcc5451bff99e6ac96d17b04e921690d1ce93c981fd09966e18e26e"
+    },
+    {
+      "name": "packages/app/test/recovery-integration.test.ts",
+      "bytes": 62461,
+      "sha256": "793de1b1a10208fddce16ddea6cbb2234c226003e8a65b2d2874052c6c1ddafe"
+    },
+    {
+      "name": "packages/app/test/recovery-preparation/frozen-report-text.ts",
+      "bytes": 804,
+      "sha256": "d49b8a7d4c8480bcd2a1a3b7b65467c62a3a6a859174396e9b55b61b8fbb590c"
+    },
+    {
+      "name": "packages/app/test/recovery-preparation/implementation-child.ts",
+      "bytes": 7011,
+      "sha256": "88a3f8f869742e3abd76785437648226d0193fd8adf99ecf0da4ef765bce8e30"
+    },
+    {
+      "name": "packages/app/test/recovery-preparation/implementation-fixture.ts",
+      "bytes": 8456,
+      "sha256": "c1f6d39b626d340a232a4df47ac0dce97055308f053501ef45f4a3624ae18876"
+    },
+    {
+      "name": "packages/app/test/recovery-preparation/native-storage-node-probe.ts",
+      "bytes": 3224,
+      "sha256": "e84a09f6876092cb5dab1d35335ed072717348157927c9e398a00d14b1fd72f6"
+    },
+    {
+      "name": "packages/app/test/recovery-preparation/native-workload-probe.ts",
+      "bytes": 7068,
+      "sha256": "8f2181384cf2c303dfeead2149370d5c07b00004adbd4c60582f11bf3171e405"
+    },
+    {
+      "name": "packages/app/test/recovery-preparation/windows-controller-probe.ts",
+      "bytes": 7460,
+      "sha256": "071514ea552740a85449c8cfa921a3d59587820e01a7a6d9efff66f5d0f91295"
+    },
+    {
+      "name": "packages/app/test/recovery-preparation/windows-native-probe.ts",
+      "bytes": 16648,
+      "sha256": "3225413b4502d46a4b94ed5f57a4f2ec4adfe6802a10a426bfd5fc1c6e210a6b"
+    },
+    {
+      "name": "packages/app/test/recovery-preparation/windows-native-resource-probe.ts",
+      "bytes": 7278,
+      "sha256": "da4932fe194b2bc5eedf7203869fce7665cbeb766614b6fe29ba2758124c2bc2"
+    },
+    {
+      "name": "packages/app/test/recovery-preparation/workload-measurement.ts",
+      "bytes": 3617,
+      "sha256": "640512f1081872cc87057ce38d5ec30bc4174a8eef452114d9b4b6039f4fdabc"
+    },
+    {
+      "name": "packages/app/test/report-validation.test.ts",
+      "bytes": 4992,
+      "sha256": "438217aab13283444235345c0491ad1552d9b6c2b176b19c83e6787fce0e301e"
+    }
+  ],
+  "receipts": [
+    {
+      "name": "windows-save-only-results.json",
+      "bytes": 38441,
+      "sha256": "28d4dda9ca506f4ff8edccdc1a680a37e876f8e5d2129f4088d8a8ebc99f4caa"
+    },
+    {
+      "name": "windows-save-only-ui.json",
+      "bytes": 1905,
+      "sha256": "db13d80dd258987fde643da8d2d2a6a77a13eb3a89c100cf998902efce63b819"
+    },
+    {
+      "name": "windows-save-only-checks.json",
+      "bytes": 26677,
+      "sha256": "122ac92637ef7bba8c405b9a8bfc3d78abddad34a0f68623c95205a0bb742964"
+    },
+    {
+      "name": "windows-save-only-compiled-refusal.json",
+      "bytes": 739,
+      "sha256": "79c84f3d2367830e69e7ec67acd6a1e58f68350e712bab17d604b909d12c7288"
+    },
+    {
+      "name": "windows-save-only-setup-refusal.json",
+      "bytes": 430,
+      "sha256": "e4f720ee524ca395b74ce90f624496831f7ab02187323669e97726120c463a99"
+    }
+  ],
+  "fixtureAvailability": "Local retained fixture hashes; test-only main byte oracles do not add production content transport.",
+  "overallAcceptance": "held: strict recovered-export responsiveness failed and independent/native/manual gates remain"
+}

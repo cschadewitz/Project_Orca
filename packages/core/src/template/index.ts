@@ -1,4 +1,4 @@
-export { renderTemplate, checkTemplate, formatValue, type RenderOptions } from "./render.js";
+export { renderTemplate, checkTemplate, templateReferences, formatValue, type RenderOptions } from "./render.js";
 export { TemplateRegistry, parsePromptTemplate, PromptTemplateSchema, type PromptTemplate } from "./registry.js";
 export {
   renderDeliverablesBlock,

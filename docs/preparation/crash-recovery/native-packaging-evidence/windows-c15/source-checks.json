@@ -1,0 +1,205 @@
+{
+  "schema": 1,
+  "passed": 31,
+  "failed": 0,
+  "skipped": 0,
+  "files": [
+    {
+      "name": "diagnostics-payload-memory.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "reuses aligned storage, erases released bytes and refuses before the unchanged ceiling",
+          "status": "passed",
+          "durationMs": 4.5309999999999775
+        },
+        {
+          "name": "charges before a provider starts and retains its returned bytes until actual disposal",
+          "status": "passed",
+          "durationMs": 0.6722000000000037
+        },
+        {
+          "name": "bounds maximum checkpoint/open buffers, owns returned plaintext and retires persistent keys",
+          "status": "passed",
+          "durationMs": 343.7808
+        }
+      ]
+    },
+    {
+      "name": "diagnostics-report-performance.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "preserves the generic canonical oracle for every enum, maximum offsets/count and empty reports",
+          "status": "passed",
+          "durationMs": 110.21039999999999
+        },
+        {
+          "name": "freezes all 8192 events before yielding and remains immutable across collection/stop",
+          "status": "passed",
+          "durationMs": 51.14459999999997
+        },
+        {
+          "name": "keeps a full-count checkpoint immutable and owned after the live ring stops",
+          "status": "passed",
+          "durationMs": 54.91230000000007
+        },
+        {
+          "name": "validates immutable decoded bytes even if the source Buffer changes during a yielded turn",
+          "status": "passed",
+          "durationMs": 2822.5778999999998
+        },
+        {
+          "name": "retains exact rejection of extra/duplicate fields, framing, invalid UTF-8 and event semantics",
+          "status": "passed",
+          "durationMs": 246.60950000000003
+        },
+        {
+          "name": "accepts every closed pair at decimal boundaries and rejects noncanonical event spellings",
+          "status": "passed",
+          "durationMs": 6.855199999999968
+        },
+        {
+          "name": "keeps validated immutable text and independently owned exact bytes through disposal",
+          "status": "passed",
+          "durationMs": 66.02700000000004
+        },
+        {
+          "name": "yields each batch with one completion promise and rejects scheduled generator failures",
+          "status": "passed",
+          "durationMs": 0.7491999999997461
+        },
+        {
+          "name": "prepares only a descriptor with frozen bytes/digest and no renderer transport allowance",
+          "status": "passed",
+          "durationMs": 72.79730000000018
+        },
+        {
+          "name": "erases main-owned report bytes immediately on off without a renderer disposal acknowledgement",
+          "status": "passed",
+          "durationMs": 2.873399999999947
+        },
+        {
+          "name": "erases main-owned report bytes immediately on expiry without a renderer disposal acknowledgement",
+          "status": "passed",
+          "durationMs": 1.8432999999999993
+        },
+        {
+          "name": "erases main-owned report bytes immediately on document without a renderer disposal acknowledgement",
+          "status": "passed",
+          "durationMs": 1.693000000000211
+        },
+        {
+          "name": "cancels a picker without publication and requires a fresh destination",
+          "status": "passed",
+          "durationMs": 2.5898000000001957
+        },
+        {
+          "name": "fences off between recovered input disposal and report digest publication",
+          "status": "passed",
+          "durationMs": 77.57539999999972
+        },
+        {
+          "name": "fences document between recovered input disposal and report digest publication",
+          "status": "passed",
+          "durationMs": 75.48689999999988
+        },
+        {
+          "name": "fences clock between recovered input disposal and report digest publication",
+          "status": "passed",
+          "durationMs": 74.34720000000016
+        },
+        {
+          "name": "revokes off during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "durationMs": 78.18040000000019
+        },
+        {
+          "name": "revokes document during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "durationMs": 77.54190000000017
+        },
+        {
+          "name": "revokes clock during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "durationMs": 70.4399000000003
+        },
+        {
+          "name": "rechecks authority after checkpoint serialization before any disk dispatch",
+          "status": "passed",
+          "durationMs": 23.9991
+        },
+        {
+          "name": "retains frozen binary bytes until a timeout Save actually settles",
+          "status": "passed",
+          "durationMs": 14.138400000000729
+        },
+        {
+          "name": "retains frozen binary bytes until a off Save actually settles",
+          "status": "passed",
+          "durationMs": 12.48869999999988
+        },
+        {
+          "name": "retains frozen binary bytes until a cancel Save actually settles",
+          "status": "passed",
+          "durationMs": 13.299700000000485
+        },
+        {
+          "name": "retains frozen binary bytes until a document Save actually settles",
+          "status": "passed",
+          "durationMs": 7.506899999999405
+        },
+        {
+          "name": "joins repeated Save clicks and publishes only the frozen report despite later capture",
+          "status": "passed",
+          "durationMs": 2.394600000000537
+        },
+        {
+          "name": "refuses altered frozen bytes at the last publication admission check",
+          "status": "passed",
+          "durationMs": 1.9030000000002474
+        },
+        {
+          "name": "orders consent revocation before publication admission without inventing an unsaved outcome",
+          "status": "passed",
+          "durationMs": 4.08640000000014
+        },
+        {
+          "name": "orders consent revocation after publication admission without inventing an unsaved outcome",
+          "status": "passed",
+          "durationMs": 3.479099999999562
+        }
+      ]
+    }
+  ],
+  "finalHarnessSourceChecks": [
+    "node --check (both files)",
+    "scoped ESLint",
+    "scoped Prettier",
+    "git diff --check"
+  ],
+  "retainedPreflightFailures": [
+    {
+      "stage": "Vitest config startup",
+      "code": "spawn EPERM",
+      "testsStarted": 0,
+      "resolution": "One-worker approved execution completed 31 tests; no overlapping workload."
+    },
+    {
+      "stage": "Initial scoped lint",
+      "errors": 21,
+      "resolution": "CommonJS fixture-specific require declaration, unused-expression and console output corrected before comparisons."
+    },
+    {
+      "stage": "Private-parent adjustment lint",
+      "errors": 1,
+      "code": "unused os import",
+      "resolution": "Removed before actual failure pair."
+    }
+  ],
+  "independentReview": false,
+  "fullSuite": false,
+  "coverage": false,
+  "ci": false,
+  "finalCorrectedHarnessRuntime": "unrun"
+}

@@ -6,6 +6,15 @@ Source audited: `7abc2342aa672ee9d2f10d565ca4f8eb546184df` (both HEAD and fetche
 `origin/main` on 2026-10-02). **No packaged or physical-Mac checks were executed.**
 This directory specifies future tests; it does not implement or accept the parent.
 
+**9 October binding addendum:** the [acceptance runbook](../native-mac-beta-readiness/acceptance-runbook.md)
+pins #567's mounted Config setup/Launch work and agent-free
+`orca-beta-local-check` v1. That start/set/end sample records a run-variable marker
+and terminal success only. It creates no output artifact, gate or permission request;
+the MAC-06 report oracle and MAC-07/08 gate/cancel/failure variants still require the
+packaged-test owner's fixtures. A prepared `first-run/result.json` is not a run output.
+#569 protection does not implement #570 orphan recovery. All native/physical rows
+remain not run or blocked. Baseline statements below are historical source observations.
+
 Start with this matrix, then read [harness design](harness-design.md),
 [fixture contracts](fixture-contracts.md), [manual checklist](manual-checklist.md),
 [evidence template](evidence-template.md) and [implementation handoff](implementation-handoff.md).

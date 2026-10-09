@@ -5,6 +5,7 @@ import type { ConfigReview, DocumentPath, EditorTarget } from "../../../src/conf
 import { StructuredEditorSession, type EditorSnapshot } from "./structured-form/editor-session.js";
 import { atPath, projectEdits } from "./structured-form/collection-model.js";
 import type { EditIntent } from "./structured-form/contracts.js";
+import { reconcileConfigurationEdits } from "./reconciliation.js";
 import {
   ConfigurationAdapter,
   ConfigurationRefusal,
@@ -124,6 +125,13 @@ export class ConfigurationStudio {
   get source(): ConfigGetResult {
     return this.data;
   }
+  get readable(): boolean {
+    const connection = this.bridge.connection.read();
+    return (
+      sameEditorTarget(this.target, currentEditorTarget(this.bridge)) &&
+      (connection.state !== "live" || Boolean(connection.methods?.includes("config.get")))
+    );
+  }
   get shape() {
     return richShape(this.data);
   }
@@ -163,6 +171,8 @@ export class ConfigurationStudio {
       return "Read current configuration, then explicitly discard this retained draft before a new review.";
     const connection = this.bridge.connection.read();
     if (connection.state !== "live") return "Wait for the daemon connection before sending this action.";
+    if (!connection.methods?.includes("config.get"))
+      return "Current source authority is unavailable. Restore access before reviewing retained edits.";
     const method = action === "apply" ? "config.apply" : "config.set";
     if (!connection.methods?.includes(method) || (action === "apply" && !this.bridge.config.apply))
       return `This daemon does not offer ${method}.`;
@@ -503,7 +513,29 @@ export class ConfigurationStudio {
     try {
       const response = await this.adapter.read();
       // A discard decision applies only to the draft that existed when the read began.
-      if (sequence !== this.state.sequence || mode !== this.mode || (retained && !discard)) {
+      if (sequence !== this.state.sequence || mode !== this.mode) {
+        this.stale = true;
+        return;
+      }
+      if (retained && !discard) {
+        if (mode === "form") {
+          const reconciliation = reconcileConfigurationEdits(
+            this.data.config.parsed ?? {},
+            response.config.parsed ?? {},
+            this.session.snapshot().edits,
+          );
+          if (
+            reconciliation.conflicts.length === 0 &&
+            this.session.reconcile(this.target, response.config.revision, reconciliation.edits)
+          ) {
+            this.data = response;
+            this.stale = false;
+            this.adapter.invalidate();
+            this.saved = undefined;
+            this.rows = new RowIdentities();
+            return;
+          }
+        }
         this.stale = true;
         return;
       }

@@ -1,0 +1,1967 @@
+{
+  "baseline": {
+    "sourceCommit": "5eece6c7f863e7fe833188843355e107fa2ab3a6",
+    "method": "Cumulative sampled allocations, including objects collected by minor/major GC, across the original bounded scenario. Sampling estimates are not continuous bounds.",
+    "main": {
+      "intervalBytes": 32768,
+      "includeCollected": true,
+      "totalSampledBytes": 447680208,
+      "top": [
+        {
+          "bytes": 82000784,
+          "function": "validationTextWork",
+          "file": "report-validation.js",
+          "line": 24,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "scheduleReportWork",
+              "file": "report-work.js",
+              "line": 10
+            }
+          ]
+        },
+        {
+          "bytes": 71975932,
+          "function": "diagnosticReportWork",
+          "file": "snapshot.js",
+          "line": 70,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "scheduleReportWork",
+              "file": "report-work.js",
+              "line": 10
+            }
+          ]
+        },
+        {
+          "bytes": 57037436,
+          "function": "toString",
+          "file": "node:buffer",
+          "line": 918,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "scheduleReportWork",
+              "file": "report-work.js",
+              "line": 10
+            },
+            {
+              "function": "diagnosticReportWork",
+              "file": "snapshot.js",
+              "line": 70
+            }
+          ]
+        },
+        {
+          "bytes": 46160552,
+          "function": "scheduleReportWork",
+          "file": "report-work.js",
+          "line": 10,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 30419916,
+          "function": "toString",
+          "file": "node:buffer",
+          "line": 918,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "recovery-controller.js",
+              "line": 299
+            }
+          ]
+        },
+        {
+          "bytes": 29484084,
+          "function": "events",
+          "file": "pretrigger-buffer.js",
+          "line": 126,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "scheduleReportWork",
+              "file": "report-work.js",
+              "line": 10
+            },
+            {
+              "function": "diagnosticReportWork",
+              "file": "snapshot.js",
+              "line": 70
+            }
+          ]
+        },
+        {
+          "bytes": 28885304,
+          "function": "write",
+          "file": "node:string_decoder",
+          "line": 76,
+          "parents": [
+            {
+              "function": "cryptoText",
+              "file": "recovery-disk.js",
+              "line": 97
+            },
+            {
+              "function": "cryptoText",
+              "file": "payload-scope.js",
+              "line": 74
+            },
+            {
+              "function": "(anonymous)",
+              "file": "recovery-disk.js",
+              "line": 644
+            },
+            {
+              "function": "update",
+              "file": "cipher",
+              "line": 155
+            }
+          ]
+        },
+        {
+          "bytes": 28518720,
+          "function": "decode",
+          "file": "encoding",
+          "line": 482,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "scheduleReportWork",
+              "file": "report-work.js",
+              "line": 10
+            },
+            {
+              "function": "validationTextWork",
+              "file": "report-validation.js",
+              "line": 24
+            }
+          ]
+        },
+        {
+          "bytes": 4133184,
+          "function": "validationTextWork",
+          "file": "report-validation.js",
+          "line": 24,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "scheduleReportWork",
+              "file": "report-work.js",
+              "line": 10
+            },
+            {
+              "function": "next",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 3869760,
+          "function": "setImmediate",
+          "file": "promises",
+          "line": 94,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "scheduleReportWork",
+              "file": "report-work.js",
+              "line": 10
+            }
+          ]
+        },
+        {
+          "bytes": 3542980,
+          "function": "withResolvers",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "scheduleReportWork",
+              "file": "report-work.js",
+              "line": 10
+            },
+            {
+              "function": "setImmediate",
+              "file": "promises",
+              "line": 94
+            }
+          ]
+        },
+        {
+          "bytes": 3048724,
+          "function": "get",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "scheduleReportWork",
+              "file": "report-work.js",
+              "line": 10
+            },
+            {
+              "function": "diagnosticReportWork",
+              "file": "snapshot.js",
+              "line": 70
+            }
+          ]
+        },
+        {
+          "bytes": 2917600,
+          "function": "get",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "scheduleReportWork",
+              "file": "report-work.js",
+              "line": 10
+            },
+            {
+              "function": "validationTextWork",
+              "file": "report-validation.js",
+              "line": 24
+            }
+          ]
+        },
+        {
+          "bytes": 2754304,
+          "function": "(V8 API)",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 2131432,
+          "function": "normalizeString",
+          "file": "node:path",
+          "line": 92,
+          "parents": [
+            {
+              "function": "(anonymous)",
+              "file": "native-storage.js",
+              "line": 87
+            },
+            {
+              "function": "name",
+              "file": "native-storage.js",
+              "line": 58
+            },
+            {
+              "function": "relative",
+              "file": "node:path",
+              "line": 610
+            },
+            {
+              "function": "resolve",
+              "file": "node:path",
+              "line": 190
+            }
+          ]
+        },
+        {
+          "bytes": 2097856,
+          "function": "join",
+          "file": "node:path",
+          "line": 506,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "inspect",
+              "file": "recovery-disk.js",
+              "line": 144
+            },
+            {
+              "function": "path",
+              "file": "recovery-disk.js",
+              "line": 125
+            }
+          ]
+        },
+        {
+          "bytes": 1934704,
+          "function": "write",
+          "file": "node:string_decoder",
+          "line": 76,
+          "parents": [
+            {
+              "function": "(anonymous)",
+              "file": "recovery-disk.js",
+              "line": 608
+            },
+            {
+              "function": "cryptoText",
+              "file": "recovery-disk.js",
+              "line": 97
+            },
+            {
+              "function": "(anonymous)",
+              "file": "recovery-disk.js",
+              "line": 644
+            },
+            {
+              "function": "update",
+              "file": "cipher",
+              "line": 155
+            }
+          ]
+        },
+        {
+          "bytes": 1901240,
+          "function": "toString",
+          "file": "node:buffer",
+          "line": 918,
+          "parents": [
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "scheduleReportWork",
+              "file": "report-work.js",
+              "line": 10
+            },
+            {
+              "function": "next",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "diagnosticReportWork",
+              "file": "snapshot.js",
+              "line": 70
+            }
+          ]
+        },
+        {
+          "bytes": 1901196,
+          "function": "decode",
+          "file": "encoding",
+          "line": 482,
+          "parents": [
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "scheduleReportWork",
+              "file": "report-work.js",
+              "line": 10
+            },
+            {
+              "function": "next",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "validationTextWork",
+              "file": "report-validation.js",
+              "line": 24
+            }
+          ]
+        },
+        {
+          "bytes": 1606300,
+          "function": "join",
+          "file": "node:path",
+          "line": 506,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "inspect",
+              "file": "recovery-disk.js",
+              "line": 144
+            }
+          ]
+        }
+      ]
+    },
+    "renderer": {
+      "intervalBytes": 32768,
+      "includeCollected": true,
+      "totalSampledBytes": 36027072,
+      "top": [
+        {
+          "bytes": 29764824,
+          "function": "(V8 API)",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 853632,
+          "function": "detachFiberAfterEffects",
+          "file": "renderer-bundle.js",
+          "line": 8362,
+          "parents": [
+            {
+              "function": "recursivelyTraversePassiveUnmountEffects",
+              "file": "renderer-bundle.js",
+              "line": 9571
+            },
+            {
+              "function": "commitPassiveUnmountOnFiber",
+              "file": "renderer-bundle.js",
+              "line": 9589
+            },
+            {
+              "function": "recursivelyTraversePassiveUnmountEffects",
+              "file": "renderer-bundle.js",
+              "line": 9571
+            },
+            {
+              "function": "commitPassiveUnmountEffectsInsideOfDeletedTree_begin",
+              "file": "renderer-bundle.js",
+              "line": 9644
+            }
+          ]
+        },
+        {
+          "bytes": 557960,
+          "function": "createFiberFromTypeAndProps",
+          "file": "renderer-bundle.js",
+          "line": 3011,
+          "parents": [
+            {
+              "function": "(anonymous)",
+              "file": "renderer-bundle.js",
+              "line": 4108
+            },
+            {
+              "function": "reconcileChildFibersImpl",
+              "file": "renderer-bundle.js",
+              "line": 3984
+            },
+            {
+              "function": "reconcileChildrenArray",
+              "file": "renderer-bundle.js",
+              "line": 3902
+            },
+            {
+              "function": "createChild",
+              "file": "renderer-bundle.js",
+              "line": 3779
+            }
+          ]
+        },
+        {
+          "bytes": 295008,
+          "function": "completeWork",
+          "file": "renderer-bundle.js",
+          "line": 7081,
+          "parents": [
+            {
+              "function": "performWorkOnRoot",
+              "file": "renderer-bundle.js",
+              "line": 9772
+            },
+            {
+              "function": "renderRootSync",
+              "file": "renderer-bundle.js",
+              "line": 10084
+            },
+            {
+              "function": "workLoopSync",
+              "file": "renderer-bundle.js",
+              "line": 10134
+            },
+            {
+              "function": "completeUnitOfWork",
+              "file": "renderer-bundle.js",
+              "line": 10317
+            }
+          ]
+        },
+        {
+          "bytes": 229584,
+          "function": "filter",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "beginWork",
+              "file": "renderer-bundle.js",
+              "line": 6686
+            },
+            {
+              "function": "updateFunctionComponent",
+              "file": "renderer-bundle.js",
+              "line": 6051
+            },
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            },
+            {
+              "function": "Text",
+              "file": "renderer-bundle.js",
+              "line": 14585
+            }
+          ]
+        },
+        {
+          "bytes": 196704,
+          "function": "jsxProd",
+          "file": "renderer-bundle.js",
+          "line": 14540,
+          "parents": [
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            },
+            {
+              "function": "DiagnosticsSection",
+              "file": "renderer-bundle.js",
+              "line": 15302
+            },
+            {
+              "function": "map",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "renderer-bundle.js",
+              "line": 15492
+            }
+          ]
+        },
+        {
+          "bytes": 163952,
+          "function": "Text",
+          "file": "renderer-bundle.js",
+          "line": 14585,
+          "parents": [
+            {
+              "function": "workLoopSync",
+              "file": "renderer-bundle.js",
+              "line": 10134
+            },
+            {
+              "function": "beginWork",
+              "file": "renderer-bundle.js",
+              "line": 6686
+            },
+            {
+              "function": "updateFunctionComponent",
+              "file": "renderer-bundle.js",
+              "line": 6051
+            },
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            }
+          ]
+        },
+        {
+          "bytes": 163912,
+          "function": "DiagnosticsSection",
+          "file": "renderer-bundle.js",
+          "line": 15302,
+          "parents": [
+            {
+              "function": "workLoopSync",
+              "file": "renderer-bundle.js",
+              "line": 10134
+            },
+            {
+              "function": "beginWork",
+              "file": "renderer-bundle.js",
+              "line": 6686
+            },
+            {
+              "function": "updateFunctionComponent",
+              "file": "renderer-bundle.js",
+              "line": 6051
+            },
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            }
+          ]
+        },
+        {
+          "bytes": 131356,
+          "function": "fn",
+          "file": "renderer-preload.cjs",
+          "line": 2,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "onMessage",
+              "file": "sandbox_bundle",
+              "line": 2
+            },
+            {
+              "function": "emit",
+              "file": "sandbox_bundle",
+              "line": 2
+            }
+          ]
+        },
+        {
+          "bytes": 131208,
+          "function": "filter",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "beginWork",
+              "file": "renderer-bundle.js",
+              "line": 6686
+            },
+            {
+              "function": "updateFunctionComponent",
+              "file": "renderer-bundle.js",
+              "line": 6051
+            },
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            },
+            {
+              "function": "Text",
+              "file": "renderer-bundle.js",
+              "line": 14585
+            }
+          ]
+        },
+        {
+          "bytes": 131124,
+          "function": "Button",
+          "file": "renderer-bundle.js",
+          "line": 14592,
+          "parents": [
+            {
+              "function": "workLoopSync",
+              "file": "renderer-bundle.js",
+              "line": 10134
+            },
+            {
+              "function": "beginWork",
+              "file": "renderer-bundle.js",
+              "line": 6686
+            },
+            {
+              "function": "updateFunctionComponent",
+              "file": "renderer-bundle.js",
+              "line": 6051
+            },
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            }
+          ]
+        },
+        {
+          "bytes": 131120,
+          "function": "Menu",
+          "file": "renderer-bundle.js",
+          "line": 14854,
+          "parents": [
+            {
+              "function": "workLoopSync",
+              "file": "renderer-bundle.js",
+              "line": 10134
+            },
+            {
+              "function": "beginWork",
+              "file": "renderer-bundle.js",
+              "line": 6686
+            },
+            {
+              "function": "updateFunctionComponent",
+              "file": "renderer-bundle.js",
+              "line": 6051
+            },
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            }
+          ]
+        },
+        {
+          "bytes": 131120,
+          "function": "useDiagnostics",
+          "file": "renderer-bundle.js",
+          "line": 15080,
+          "parents": [
+            {
+              "function": "beginWork",
+              "file": "renderer-bundle.js",
+              "line": 6686
+            },
+            {
+              "function": "updateFunctionComponent",
+              "file": "renderer-bundle.js",
+              "line": 6051
+            },
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            },
+            {
+              "function": "DiagnosticsSection",
+              "file": "renderer-bundle.js",
+              "line": 15302
+            }
+          ]
+        },
+        {
+          "bytes": 98848,
+          "function": "push",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "DiagnosticsSection",
+              "file": "renderer-bundle.js",
+              "line": 15302
+            },
+            {
+              "function": "exports.useMemo",
+              "file": "renderer-bundle.js",
+              "line": 740
+            },
+            {
+              "function": "updateMemo",
+              "file": "renderer-bundle.js",
+              "line": 5056
+            },
+            {
+              "function": "(anonymous)",
+              "file": "renderer-bundle.js",
+              "line": 15305
+            }
+          ]
+        },
+        {
+          "bytes": 98356,
+          "function": "send",
+          "file": "sandbox_bundle",
+          "line": 2,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "sandbox_bundle",
+              "line": 2
+            }
+          ]
+        },
+        {
+          "bytes": 98352,
+          "function": "(anonymous)",
+          "file": "renderer-bundle.js",
+          "line": 15361,
+          "parents": [
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            },
+            {
+              "function": "ConfigField",
+              "file": "renderer-bundle.js",
+              "line": 14639
+            },
+            {
+              "function": "children",
+              "file": "renderer-bundle.js",
+              "line": 15355
+            },
+            {
+              "function": "from",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 98344,
+          "function": "(anonymous)",
+          "file": "renderer-bundle.js",
+          "line": 15361,
+          "parents": [
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            },
+            {
+              "function": "ConfigField",
+              "file": "renderer-bundle.js",
+              "line": 14639
+            },
+            {
+              "function": "children",
+              "file": "renderer-bundle.js",
+              "line": 15355
+            },
+            {
+              "function": "from",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 98340,
+          "function": "Button",
+          "file": "renderer-bundle.js",
+          "line": 14592,
+          "parents": [
+            {
+              "function": "workLoopSync",
+              "file": "renderer-bundle.js",
+              "line": 10134
+            },
+            {
+              "function": "beginWork",
+              "file": "renderer-bundle.js",
+              "line": 6686
+            },
+            {
+              "function": "updateFunctionComponent",
+              "file": "renderer-bundle.js",
+              "line": 6051
+            },
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            }
+          ]
+        },
+        {
+          "bytes": 65624,
+          "function": "createFiberImplClass",
+          "file": "renderer-bundle.js",
+          "line": 2972,
+          "parents": [
+            {
+              "function": "reconcileChildFibersImpl",
+              "file": "renderer-bundle.js",
+              "line": 3984
+            },
+            {
+              "function": "reconcileChildrenArray",
+              "file": "renderer-bundle.js",
+              "line": 3902
+            },
+            {
+              "function": "createChild",
+              "file": "renderer-bundle.js",
+              "line": 3779
+            },
+            {
+              "function": "createFiberFromTypeAndProps",
+              "file": "renderer-bundle.js",
+              "line": 3011
+            }
+          ]
+        },
+        {
+          "bytes": 65624,
+          "function": "createWorkInProgress",
+          "file": "renderer-bundle.js",
+          "line": 2979,
+          "parents": [
+            {
+              "function": "updateSlot",
+              "file": "renderer-bundle.js",
+              "line": 3825
+            },
+            {
+              "function": "updateElement",
+              "file": "renderer-bundle.js",
+              "line": 3736
+            },
+            {
+              "function": "updateFragment",
+              "file": "renderer-bundle.js",
+              "line": 3767
+            },
+            {
+              "function": "useFiber",
+              "file": "renderer-bundle.js",
+              "line": 3709
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "postfix": {
+    "sourceCommit": "e5d6a0a0ae9e14826c531cf1d94e2d2d16aa00ce",
+    "method": "Separate retained-only sampled allocations at the end of the fixed bounded scenario. Samples include retired engine storage not yet naturally collected; no heap snapshot/forced GC, no strong-retainer/leak conclusion. Different sampling mode, so these totals are not a before/after cumulative allocation comparison.",
+    "main": {
+      "intervalBytes": 32768,
+      "includeCollected": false,
+      "totalSampledBytes": 630696,
+      "top": [
+        {
+          "bytes": 82112,
+          "function": "processTimers",
+          "file": "timers",
+          "line": 603,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 65544,
+          "function": "(anonymous)",
+          "file": "browser_init",
+          "line": 1,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "browser_init",
+              "line": 1
+            },
+            {
+              "function": "invokeInWebContents",
+              "file": "browser_init",
+              "line": 1
+            },
+            {
+              "function": "Promise",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 49160,
+          "function": "diagnosticSerializationWork",
+          "file": "snapshot.js",
+          "line": 132,
+          "parents": [
+            {
+              "function": "advance",
+              "file": "report-work.js",
+              "line": 13
+            },
+            {
+              "function": "next",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "work",
+              "file": "snapshot.js",
+              "line": 116
+            },
+            {
+              "function": "next",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 38220,
+          "function": "processImmediate",
+          "file": "timers",
+          "line": 525,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 33300,
+          "function": "validationCanonicalTextWork",
+          "file": "report-validation.js",
+          "line": 37,
+          "parents": [
+            {
+              "function": "advance",
+              "file": "report-work.js",
+              "line": 13
+            },
+            {
+              "function": "next",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "validationTextWork",
+              "file": "report-validation.js",
+              "line": 31
+            },
+            {
+              "function": "next",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 33212,
+          "function": "validationTextWork",
+          "file": "report-validation.js",
+          "line": 31,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "processImmediate",
+              "file": "timers",
+              "line": 525
+            },
+            {
+              "function": "advance",
+              "file": "report-work.js",
+              "line": 13
+            },
+            {
+              "function": "next",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 33152,
+          "function": "test",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "recovery-disk.js",
+              "line": 826
+            },
+            {
+              "function": "exportCommit",
+              "file": "recovery-disk.js",
+              "line": 820
+            },
+            {
+              "function": "validExportState",
+              "file": "recovery-disk.js",
+              "line": 995
+            }
+          ]
+        },
+        {
+          "bytes": 33120,
+          "function": "initAsyncResource",
+          "file": "timers",
+          "line": 203,
+          "parents": [
+            {
+              "function": "advance",
+              "file": "report-work.js",
+              "line": 13
+            },
+            {
+              "function": "(anonymous)",
+              "file": "browser_init",
+              "line": 1
+            },
+            {
+              "function": "setImmediate",
+              "file": "node:timers",
+              "line": 215
+            },
+            {
+              "function": "Immediate",
+              "file": "timers",
+              "line": 747
+            }
+          ]
+        },
+        {
+          "bytes": 33088,
+          "function": "compileForInternalLoader",
+          "file": "realm",
+          "line": 383,
+          "parents": [
+            {
+              "function": "(anonymous)",
+              "file": "live-profile-child.cjs",
+              "line": 27
+            },
+            {
+              "function": "deepStrictEqual",
+              "file": "node:assert",
+              "line": 336
+            },
+            {
+              "function": "lazyLoadComparison",
+              "file": "node:assert",
+              "line": 76
+            },
+            {
+              "function": "requireBuiltin",
+              "file": "realm",
+              "line": 420
+            }
+          ]
+        },
+        {
+          "bytes": 33000,
+          "function": "(anonymous)",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 32832,
+          "function": "startsWith",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "validationTextWork",
+              "file": "report-validation.js",
+              "line": 31
+            },
+            {
+              "function": "next",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "validationCanonicalTextWork",
+              "file": "report-validation.js",
+              "line": 37
+            },
+            {
+              "function": "diagnosticEventOffset",
+              "file": "snapshot.js",
+              "line": 72
+            }
+          ]
+        },
+        {
+          "bytes": 32800,
+          "function": "status",
+          "file": "recovery-controller.js",
+          "line": 133,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "recovery-controller.js",
+              "line": 758
+            },
+            {
+              "function": "emit",
+              "file": "recovery-controller.js",
+              "line": 970
+            }
+          ]
+        },
+        {
+          "bytes": 32796,
+          "function": "lstat",
+          "file": "native-storage.js",
+          "line": 87,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "inspect",
+              "file": "recovery-disk.js",
+              "line": 144
+            }
+          ]
+        },
+        {
+          "bytes": 32788,
+          "function": "rg",
+          "file": "live-profile-child.cjs",
+          "line": 87,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 32788,
+          "function": "(anonymous)",
+          "file": "recovery-disk.js",
+          "line": 906,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 32784,
+          "function": "save",
+          "file": "recovery-controller.js",
+          "line": 446,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "emit",
+              "file": "node:events",
+              "line": 489
+            },
+            {
+              "function": "(anonymous)",
+              "file": "browser_init",
+              "line": 1
+            },
+            {
+              "function": "(anonymous)",
+              "file": "live-profile-child.cjs",
+              "line": 59
+            }
+          ]
+        }
+      ]
+    },
+    "renderer": {
+      "intervalBytes": 32768,
+      "includeCollected": false,
+      "totalSampledBytes": 3144820,
+      "top": [
+        {
+          "bytes": 2852304,
+          "function": "(V8 API)",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 65544,
+          "function": "jsxProd",
+          "file": "renderer-bundle.js",
+          "line": 14540,
+          "parents": [
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            },
+            {
+              "function": "DiagnosticsSection",
+              "file": "renderer-bundle.js",
+              "line": 15302
+            },
+            {
+              "function": "map",
+              "file": "(engine)",
+              "line": 0
+            },
+            {
+              "function": "(anonymous)",
+              "file": "renderer-bundle.js",
+              "line": 15492
+            }
+          ]
+        },
+        {
+          "bytes": 62316,
+          "function": "(IDLE_EXTERNAL)",
+          "file": "(engine)",
+          "line": 0,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 33276,
+          "function": "click",
+          "file": "renderer-bundle.js",
+          "line": 15513,
+          "parents": [
+            {
+              "function": "emit",
+              "file": "sandbox_bundle",
+              "line": 2
+            },
+            {
+              "function": "(anonymous)",
+              "file": "sandbox_bundle",
+              "line": 2
+            },
+            {
+              "function": "(anonymous)",
+              "file": "sandbox_bundle",
+              "line": 2
+            },
+            {
+              "function": "(anonymous)",
+              "file": "(engine)",
+              "line": 1
+            }
+          ]
+        },
+        {
+          "bytes": 32928,
+          "function": "flushMutationEffects",
+          "file": "renderer-bundle.js",
+          "line": 10447,
+          "parents": [
+            {
+              "function": "performWorkOnRoot",
+              "file": "renderer-bundle.js",
+              "line": 9772
+            },
+            {
+              "function": "completeRootWhenReady",
+              "file": "renderer-bundle.js",
+              "line": 9909
+            },
+            {
+              "function": "completeRoot",
+              "file": "renderer-bundle.js",
+              "line": 10365
+            },
+            {
+              "function": "commitRoot",
+              "file": "renderer-bundle.js",
+              "line": 10390
+            }
+          ]
+        },
+        {
+          "bytes": 32864,
+          "function": "onMessage",
+          "file": "sandbox_bundle",
+          "line": 2,
+          "parents": [
+            {
+              "function": "(root)",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        },
+        {
+          "bytes": 32800,
+          "function": "save",
+          "file": "renderer-bundle.js",
+          "line": 15291,
+          "parents": [
+            {
+              "function": "(anonymous)",
+              "file": "renderer-bundle.js",
+              "line": 11111
+            },
+            {
+              "function": "processDispatchQueue",
+              "file": "renderer-bundle.js",
+              "line": 10985
+            },
+            {
+              "function": "onClick",
+              "file": "renderer-bundle.js",
+              "line": 14614
+            },
+            {
+              "function": "onClick",
+              "file": "renderer-bundle.js",
+              "line": 15478
+            }
+          ]
+        },
+        {
+          "bytes": 32788,
+          "function": "(anonymous)",
+          "file": "renderer-bundle.js",
+          "line": 15361,
+          "parents": [
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4407
+            },
+            {
+              "function": "ConfigField",
+              "file": "renderer-bundle.js",
+              "line": 14639
+            },
+            {
+              "function": "children",
+              "file": "renderer-bundle.js",
+              "line": 15355
+            },
+            {
+              "function": "from",
+              "file": "(engine)",
+              "line": 0
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "liveRun": {
+    "profiling": true,
+    "schema": 1,
+    "sourceCommit": "e5d6a0a0ae9e14826c531cf1d94e2d2d16aa00ce",
+    "productionEnabled": false,
+    "method": "Separate post-fix retained-only sampling profile. No forced GC; survivor samples also include retired engine storage awaiting natural collection and do not prove strong ownership. One minimal On cell compared with the retained four-cell baseline, 30 repeated previews for On, minimum 7 seconds each; no CLI rerun. Full retains original hook/status/trace/heartbeat/oracle costs; minimal uses 100ms main/phase-boundary renderer sampling and no retained plaintext oracle. OS private-commit monitor identical. Continuous shared allocator peak is separately reported. Sampling gives observed managed/native process costs, not a continuous JS/OS peak guarantee. Renderer component readings preserve backing/embedder attribution.",
+    "runs": [
+      {
+        "ok": true,
+        "mode": "on",
+        "electron": "44.4.5",
+        "node": "24.21.0",
+        "productionEnabled": false,
+        "fixtureCaptureOverride": true,
+        "pairedExecution": false,
+        "observer": "minimal",
+        "measurementOnly": true,
+        "elapsedMs": 8608.659599999999,
+        "events": 8192,
+        "bytes": 950753,
+        "saveExact": false,
+        "repetitions": 30,
+        "callbacks": {},
+        "gaps": {},
+        "transitions": {},
+        "gc": [],
+        "clockMaxMs": 0.15850000000000364,
+        "clockCalls": 8649,
+        "nativeIOElapsedMaxMs": {},
+        "nativeIOReferencedBufferPeakBytes": 0,
+        "payloadReservationPeakBytes": 4194304,
+        "controlledBinary": {
+          "allocatedBytes": 0,
+          "peakBytes": 5406720,
+          "arenaBytes": 0,
+          "externalAllowanceBytes": 0,
+          "leases": 0,
+          "allocations": 832
+        },
+        "rendererSamples": [
+          {
+            "phase": "checkpoint",
+            "backingStorageSize": 878047,
+            "embedderHeapUsedSize": 1845624,
+            "totalSize": 3670016,
+            "usedSize": 2365780
+          },
+          {
+            "phase": "renderer-preview",
+            "backingStorageSize": 879180,
+            "embedderHeapUsedSize": 1845624,
+            "totalSize": 4624384,
+            "usedSize": 3743036
+          },
+          {
+            "phase": "save",
+            "backingStorageSize": 880666,
+            "embedderHeapUsedSize": 1845624,
+            "totalSize": 5672960,
+            "usedSize": 3683812
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 880988,
+            "embedderHeapUsedSize": 1966208,
+            "totalSize": 6627328,
+            "usedSize": 4866352
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 881310,
+            "embedderHeapUsedSize": 1966208,
+            "totalSize": 7843840,
+            "usedSize": 6034504
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 881635,
+            "embedderHeapUsedSize": 2091976,
+            "totalSize": 9846784,
+            "usedSize": 6612356
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 881957,
+            "embedderHeapUsedSize": 2095640,
+            "totalSize": 10801152,
+            "usedSize": 7757472
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 882279,
+            "embedderHeapUsedSize": 2351672,
+            "totalSize": 11755520,
+            "usedSize": 8892888
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 882601,
+            "embedderHeapUsedSize": 2480512,
+            "totalSize": 12709888,
+            "usedSize": 10029536
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 882929,
+            "embedderHeapUsedSize": 2480512,
+            "totalSize": 14188544,
+            "usedSize": 10603780
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 883251,
+            "embedderHeapUsedSize": 2606200,
+            "totalSize": 15142912,
+            "usedSize": 11738204
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 883573,
+            "embedderHeapUsedSize": 2606200,
+            "totalSize": 16097280,
+            "usedSize": 12882244
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 883895,
+            "embedderHeapUsedSize": 2606200,
+            "totalSize": 17051648,
+            "usedSize": 14020944
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 884217,
+            "embedderHeapUsedSize": 2860192,
+            "totalSize": 18268160,
+            "usedSize": 14564804
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 884539,
+            "embedderHeapUsedSize": 2860192,
+            "totalSize": 19222528,
+            "usedSize": 15698576
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 884861,
+            "embedderHeapUsedSize": 3113728,
+            "totalSize": 20176896,
+            "usedSize": 16831736
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 885183,
+            "embedderHeapUsedSize": 3113728,
+            "totalSize": 21131264,
+            "usedSize": 17968112
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 885505,
+            "embedderHeapUsedSize": 3113728,
+            "totalSize": 22085632,
+            "usedSize": 19105140
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 885801,
+            "embedderHeapUsedSize": 3113320,
+            "totalSize": 23302144,
+            "usedSize": 20240456
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 886097,
+            "embedderHeapUsedSize": 3368976,
+            "totalSize": 24518656,
+            "usedSize": 21377532
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 886393,
+            "embedderHeapUsedSize": 3497792,
+            "totalSize": 25473024,
+            "usedSize": 22508976
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 886689,
+            "embedderHeapUsedSize": 3497792,
+            "totalSize": 26689536,
+            "usedSize": 22514128
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 886985,
+            "embedderHeapUsedSize": 3623584,
+            "totalSize": 27643904,
+            "usedSize": 23651452
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 887281,
+            "embedderHeapUsedSize": 3748792,
+            "totalSize": 28598272,
+            "usedSize": 24803140
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 887577,
+            "embedderHeapUsedSize": 3748792,
+            "totalSize": 29552640,
+            "usedSize": 25944452
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 887873,
+            "embedderHeapUsedSize": 4006528,
+            "totalSize": 30507008,
+            "usedSize": 27084832
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 888169,
+            "embedderHeapUsedSize": 4006528,
+            "totalSize": 31723520,
+            "usedSize": 28218784
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 888491,
+            "embedderHeapUsedSize": 4006528,
+            "totalSize": 32677888,
+            "usedSize": 29353608
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 888813,
+            "embedderHeapUsedSize": 4006528,
+            "totalSize": 33894400,
+            "usedSize": 30487516
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 889109,
+            "embedderHeapUsedSize": 3605008,
+            "totalSize": 36683776,
+            "usedSize": 30430572
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 879893,
+            "embedderHeapUsedSize": 1644176,
+            "totalSize": 36589568,
+            "usedSize": 30337780
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 880189,
+            "embedderHeapUsedSize": 1644176,
+            "totalSize": 37543936,
+            "usedSize": 31474904
+          },
+          {
+            "phase": "renderer-preview-repeat",
+            "backingStorageSize": 880485,
+            "embedderHeapUsedSize": 1749680,
+            "totalSize": 38498304,
+            "usedSize": 32609720
+          },
+          {
+            "phase": "opt-out",
+            "backingStorageSize": 881200,
+            "embedderHeapUsedSize": 1749680,
+            "totalSize": 38498304,
+            "usedSize": 32779384
+          },
+          {
+            "phase": "comparable-wait",
+            "backingStorageSize": 881200,
+            "embedderHeapUsedSize": 1749680,
+            "totalSize": 38498304,
+            "usedSize": 32779384
+          }
+        ],
+        "mainAtPeak": {
+          "phase": "opt-out",
+          "rss": 114425856,
+          "heapTotal": 18591744,
+          "heapUsed": 12937288,
+          "external": 9099380,
+          "arrayBuffers": 0
+        },
+        "mainHeapExternalIncrementBytes": 14024432,
+        "mainRssIncrementBytes": 23748608,
+        "rendererBase": {
+          "backingStorageSize": 877810,
+          "embedderHeapUsedSize": 1845624,
+          "totalSize": 3670016,
+          "usedSize": 2245916
+        },
+        "rendererHeapBackingEmbedderIncrementBytes": 30440914,
+        "legacyCalls": 0,
+        "traceWritten": false,
+        "memory": {
+          "fields": ["privateCommit", "processLifetimePeakCommit", "workingSet", "processLifetimePeakWorkingSet"],
+          "max": [
+            [97136640, 101175296, 117063680, 118247424],
+            [100237312, 101867520, 152186880, 154009600]
+          ],
+          "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed.",
+          "sampleCount": 556,
+          "schema": 1,
+          "baseline": [
+            [44572672, 44806144, 94289920, 94294016],
+            [31903744, 31903744, 84373504, 84377600]
+          ],
+          "combinedPrivateCommitPeak": 196993024
+        },
+        "combinedManagedIncrementBytes": 44465346,
+        "privateCommitIncrementBytes": 120516608,
+        "supervisorPostExitExport": {
+          "bytes": 950753,
+          "events": 8192,
+          "sha256": "8300d71bd6673e0b8f31ee7ddd2a41b8088a1ab9db8c298cac38de8794cf8252"
+        }
+      }
+    ],
+    "allOwnedExitsConfirmed": true,
+    "disposableStateRemoved": true
+  }
+}
