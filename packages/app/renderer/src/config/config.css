@@ -31,6 +31,9 @@
   min-height: 0;
   min-width: 0;
   overflow-y: auto;
+  /* Anonymous text nodes can contain long identifiers/paths too. Bound their
+     min-content width, while explicit raw/code editors keep their own rules. */
+  overflow-wrap: anywhere;
 }
 
 .orca-config__section {
