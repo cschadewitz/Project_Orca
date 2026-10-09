@@ -30,8 +30,8 @@
       'sources!': ['storage.c'],
       'win_delay_load_hook': 'false',
       'defines': ['_CRT_SECURE_NO_WARNINGS'],
-      'sources': ['storage-windows.c', 'windows-delay-load.c'],
-      'libraries': ['advapi32.lib', 'delayimp.lib'],
+      'sources': ['storage-windows.c', 'keys-windows.c', 'windows-delay-load.c'],
+      'libraries': ['advapi32.lib', 'crypt32.lib', 'delayimp.lib'],
       'msvs_settings': { 'VCCLCompilerTool': {
         'AdditionalOptions': ['/std:c11'], 'WarningLevel': 4, 'WarnAsError': 'true'
       }, 'VCLinkerTool': { 'DelayLoadDLLs': ['node.exe'], 'AdditionalOptions': ['/ignore:4199'] } }

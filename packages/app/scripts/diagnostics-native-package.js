@@ -31,7 +31,7 @@ function target(arch, platform = "darwin") {
 function sourceDigest(root, platform = "darwin") {
   const digest = createHash("sha256");
   for (const name of platform === "win32"
-    ? ["binding.gyp", "clock.c", "storage-windows.c", "windows-delay-load.c"]
+    ? ["binding.gyp", "clock.c", "storage-windows.c", "keys-windows.c", "windows-delay-load.c"]
     : nativeSources) {
     digest.update(name + "\0");
     digest.update(readFileSync(join(root, "native/diagnostics", name)));

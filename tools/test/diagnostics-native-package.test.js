@@ -37,6 +37,7 @@ function fixture(arch = "arm64", platform = "darwin") {
     "clock.c",
     "storage.c",
     "storage-windows.c",
+    "keys-windows.c",
     "windows-delay-load.c",
   ]) {
     copyFileSync(join(appRoot, "native/diagnostics", name), join(root, "native/diagnostics", name));
@@ -136,6 +137,12 @@ it.each(["linux"])("does not require or package a diagnostics backend on %s", (p
   expect(config[platform === "win32" ? "win" : platform].extraResources).toBeUndefined();
 });
 
+it.each(["x64", "arm64"])("Windows %s packaging refuses a changed DPAPI source after staging", (arch) => {
+  const { root, directory } = fixture(arch, "win32");
+  verifyNativePackage(directory, arch, root, "win32");
+  writeFileSync(join(root, "native/diagnostics/keys-windows.c"), "changed source");
+  expect(() => verifyNativePackage(directory, arch, root, "win32")).toThrow();
+});
 it.each(["x64", "arm64"])(
   "the actual builder copies fixed Windows %s PE resources and verifies both hooks",
   async (arch) => {
