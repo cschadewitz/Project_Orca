@@ -2,6 +2,7 @@
 import { ControlledPayloadMemory, type PayloadLease } from "./payload-memory.js";
 import { PayloadScope } from "./payload-scope.js";
 import { constants } from "node:fs";
+import { setImmediate } from "node:timers/promises";
 import { join, resolve } from "node:path";
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { nodeRecoveryFiles, type RecoveryFileHandle, type RecoveryFileSystem } from "./recovery-files.js";
@@ -48,6 +49,7 @@ interface KeyEnvelope {
 const DEFAULT_SETTING: DiagnosticsSetting = { enabled: false, scopeVersion: 1, minutes: 5 };
 const RECORD_OVERHEAD = 16_384;
 const CONTROL_LIMIT = 4096;
+const CRYPTO_CHUNK_BYTES = 65_536;
 const allowedNames = new Set([
   "setting.json",
   "setting.json.tmp",
@@ -140,14 +142,14 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   private random(length: number): Buffer {
     return this.binary?.random(length) ?? randomBytes(length);
   }
-  private concat(parts: Buffer[]): Buffer {
-    return this.binary?.concat(parts) ?? Buffer.concat(parts);
-  }
   private json(value: unknown): Buffer {
     return this.from(JSON.stringify(value));
   }
   private crypto(maximum: number, work: () => Buffer): Buffer {
     return this.binary?.crypto(maximum, work) ?? work();
+  }
+  private cryptoText(maximum: number, work: () => string): string {
+    return this.binary?.cryptoText(maximum, work) ?? work();
   }
   private provider(work: () => Promise<Buffer>): Promise<Buffer> {
     // DPAPI's closed <=4096-byte wrapper and <=2048-byte plaintext include native
@@ -436,7 +438,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     const payload = this.json(manifest);
     const bytes = this.json({
       payload: manifest,
-      mac: createHmac("sha256", this.control).update(payload).digest("hex"),
+      mac: this.cryptoText(64, () => createHmac("sha256", this.control!).update(payload).digest("hex")),
     });
     await this.create("manifest.json.tmp", bytes);
     if (!admit()) {
@@ -680,11 +682,19 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       const nonce = this.random(12);
       const cipher = createCipheriv("aes-256-gcm", this.session.key, nonce);
       cipher.setAAD(aad);
-      const encrypted = cipher.update(bytes);
-      cipher.final();
-      const prefix = this.allocate(4);
-      prefix.writeUInt32BE(aad.length);
-      const sealed = this.concat([prefix, aad, nonce, this.crypto(16, () => cipher.getAuthTag()), encrypted]);
+      const sealed = this.allocate(bytes.length + aad.length + 32);
+      sealed.writeUInt32BE(aad.length);
+      aad.copy(sealed, 4);
+      nonce.copy(sealed, 4 + aad.length);
+      for (let offset = 0; offset < bytes.length; offset += CRYPTO_CHUNK_BYTES) {
+        await setImmediate();
+        const chunk = bytes.subarray(offset, offset + CRYPTO_CHUNK_BYTES);
+        const encrypted = this.cryptoText(2 * chunk.length, () => cipher.update(chunk, undefined, "latin1"));
+        if (encrypted.length !== chunk.length) throw new Error("unavailable");
+        sealed.write(encrypted, 32 + aad.length + offset, "latin1");
+      }
+      if (this.cryptoText(32, () => cipher.final("latin1")).length) throw new Error("unavailable");
+      this.crypto(16, () => cipher.getAuthTag()).copy(sealed, 16 + aad.length);
       if (sealed.length > RECOVERY_LIMITS.exportBytes + RECORD_OVERHEAD) throw new Error("capacity_limited");
       await this.create(
         `session-${slot}.key`,
@@ -731,15 +741,22 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         const decipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(4 + size, 16 + size));
         decipher.setAAD(aad);
         decipher.setAuthTag(bytes.subarray(16 + size, 32 + size));
-        const plaintext = this.crypto(record.bytes, () => decipher.update(bytes.subarray(32 + size)));
+        const plaintext = this.allocate(record.bytes);
         try {
-          this.crypto(16, () => decipher.final());
+          for (let offset = 0; offset < record.bytes; offset += CRYPTO_CHUNK_BYTES) {
+            await setImmediate();
+            const chunk = bytes.subarray(32 + size + offset, 32 + size + offset + CRYPTO_CHUNK_BYTES);
+            const decoded = this.cryptoText(2 * chunk.length, () => decipher.update(chunk, undefined, "latin1"));
+            if (decoded.length !== chunk.length) throw new Error("unavailable");
+            plaintext.write(decoded, offset, "latin1");
+          }
+          if (this.cryptoText(32, () => decipher.final("latin1")).length) throw new Error("unavailable");
         } catch {
           plaintext.fill(0);
           throw new Error("unavailable");
         }
         if (!this.binary) return { bytes: plaintext, anchor: { ...record.anchor } };
-        const owned = this.binary.take(this.from(plaintext));
+        const owned = this.binary.take(plaintext);
         return { bytes: owned.bytes, anchor: { ...record.anchor }, dispose: () => owned.release() };
       } finally {
         key.fill(0);

@@ -84,7 +84,7 @@ it("bounds maximum checkpoint/open buffers, owns returned plaintext and retires 
   // Keep a ring lease as the production composition does between operations.
   const ring = memory.allocate(81_920),
     input = memory.allocate(RECOVERY_LIMITS.exportBytes);
-  input.bytes.fill(65);
+  for (let index = 0; index < input.bytes.length; index++) input.bytes[index] = index & 255;
   try {
     await disk.writeSetting({ enabled: true, scopeVersion: 1, minutes: 5 });
     await disk.open(anchor);
@@ -97,7 +97,7 @@ it("bounds maximum checkpoint/open buffers, owns returned plaintext and retires 
       expect(await restarted.open({ ...anchor, elapsedMs: 1001 })).toBe(true);
       const previous = await restarted.previous({ ...anchor, elapsedMs: 1002 });
       expect(previous?.bytes.length).toBe(RECOVERY_LIMITS.exportBytes);
-      expect(previous?.bytes.every((byte) => byte === 65)).toBe(true);
+      expect(previous?.bytes.every((byte, index) => byte === (index & 255))).toBe(true);
       previous?.dispose?.();
       expect(previous?.bytes.every((byte) => byte === 0)).toBe(true);
       expect(memory.stats().peakBytes).toBeLessThanOrEqual(RECOVERY_LIMITS.payloadBytes);

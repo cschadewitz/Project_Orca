@@ -66,6 +66,19 @@ export class PayloadScope {
     }
   }
 
+  /** Bounded synchronous crypto returns a binary string directly. Reserve the
+   * temporary native output before dispatch; no returned full-report Buffer is
+   * left waiting for GC. Engine strings remain part of the measured memory gate.
+   */
+  cryptoText(maximum: number, work: () => string): string {
+    const release = this.memory.allowance(maximum);
+    try {
+      return work();
+    } finally {
+      release();
+    }
+  }
+
   /** Transfer an owned arena lease to a session key or returned plaintext. */
   take(bytes: Buffer): PayloadLease {
     const lease = this.leases.get(bytes);

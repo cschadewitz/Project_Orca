@@ -1,4 +1,4 @@
-/* Config owns outer scrolling; the read-only native text control contains the complete report. */
+/* Config owns the only scroller. Every exact-text block remains in the document. */
 .orca-diagnostics,
 .orca-diagnostics__preview {
   min-width: 0;
@@ -30,8 +30,6 @@
   width: 100%;
   box-sizing: border-box;
   min-width: 0;
-  min-height: var(--editor-min-height);
-  resize: vertical;
   margin: 0;
   padding: var(--space-3);
   border: var(--stroke-hairline) solid var(--border-control);
@@ -40,6 +38,12 @@
   color: var(--ink-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.orca-diagnostics__block {
+  display: block;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto calc(64 * var(--text-mono-body-line-height));
 }
 
 .orca-diagnostics__exact:focus-visible {

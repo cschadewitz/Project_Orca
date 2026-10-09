@@ -1,7 +1,7 @@
 /** Explicit local consent, exact-byte preview and separate picker/Save controls. */
-import type { JSX } from "react";
+import { useMemo, type JSX } from "react";
 import type { DiagnosticsBridge } from "../../../src/diagnostics-contract.js";
-import { Button, ConfigField, Menu, Text, textClass } from "../ui/index.js";
+import { Button, ConfigField, Menu, Text } from "../ui/index.js";
 import { DIAGNOSTICS_MESSAGES, EARLIER_EXPORT_WARNING, SAVE_WARNING } from "./diagnostics-model.js";
 import { useDiagnostics } from "./use-diagnostics.js";
 import "./diagnostics.css";
@@ -10,6 +10,26 @@ import "./diagnostics.css";
 export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsBridge }): JSX.Element {
   const bridge = supplied ?? (window.orca as typeof window.orca & { diagnostics?: DiagnosticsBridge })?.diagnostics;
   const state = useDiagnostics(bridge);
+  // Keep every byte in one exact view. Each block is a substring of that view,
+  // with its newline intact; browser layout can skip blocks outside the viewport.
+  const reportBlocks = useMemo(() => {
+    const text = state.preview?.text;
+    if (text === undefined) return [];
+    const blocks: string[] = [];
+    let start = 0,
+      end = 0,
+      lines = 0;
+    while (end < text.length) {
+      const newline = text.indexOf("\n", end);
+      end = newline < 0 ? text.length : newline + 1;
+      if (++lines === 64 || end === text.length) {
+        blocks.push(text.slice(start, end));
+        start = end;
+        lines = 0;
+      }
+    }
+    return blocks;
+  }, [state.preview?.text]);
   const status = state.status;
   const enabled = status?.enabled === true;
   const available =
@@ -266,12 +286,20 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
               </Button>
             </>
           )}
-          <textarea
-            readOnly
+          <Text
+            style="mono-body"
+            as="pre"
+            tabIndex={0}
+            role="region"
             aria-label="Complete exact diagnostic report"
-            className={`orca-diagnostics__exact ${textClass("mono-body")}`}
-            value={state.preview.text}
-          />
+            className="orca-diagnostics__exact"
+          >
+            {reportBlocks.map((block, index) => (
+              <span className="orca-diagnostics__block" key={index}>
+                {block}
+              </span>
+            ))}
+          </Text>
         </section>
       )}
     </section>
