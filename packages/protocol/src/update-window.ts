@@ -141,10 +141,19 @@ function anchor(root: string) {
   return { anchor: result, state: current };
 }
 
-/** Existing lifetime writers may finish draining; each NEW app dispatch checks this. */
+/** New admissions require the durable window to remain open. */
 export function updateAdmissionOpen(root: string): boolean {
   try {
     return anchor(root).state.phase === "open";
+  } catch {
+    return false;
+  }
+}
+/** A held lifetime writer may finish existing work until the final stop boundary.
+ * This is not permission to acquire ownership or start a new run. */
+export function updateExistingWorkAllowed(root: string): boolean {
+  try {
+    return ["open", "draining", "deferring"].includes(anchor(root).state.phase);
   } catch {
     return false;
   }

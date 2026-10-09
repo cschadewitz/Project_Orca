@@ -5,6 +5,7 @@ import {
   ClosedUpdateWindow,
   enterUpdateWriter,
   updateAdmissionOpen,
+  updateExistingWorkAllowed,
   type UpdateWriterLease,
 } from "@orca/protocol/update-window";
 import { createNativeMacReplacementStartup } from "./mac-replacement-startup.js";
@@ -28,6 +29,15 @@ export function createManagedMacReplacementStartup(options: {
     ordinary = false;
   let operation: Promise<"ordinary" | "closed" | "unknown"> | undefined;
   const bootstrap = {
+    get existingWorkAllowed() {
+      return (
+        !sealed &&
+        ordinary &&
+        lease?.check() === true &&
+        updateExistingWorkAllowed(options.appRoot) &&
+        native.bootstrap.ordinaryAllowed
+      );
+    },
     get ordinaryAllowed() {
       return (
         !sealed &&

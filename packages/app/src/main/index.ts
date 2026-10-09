@@ -20,6 +20,8 @@
  */
 import { z } from "zod";
 import { createDiagnosticsInitializer } from "./diagnostics/initialize.js";
+import { createManagedMacReplacementStartup } from "./mac-managed-replacement-startup.js";
+import { MacAppWriterBarrier } from "./mac-app-writer-barrier.js";
 import { FirstRunSetup } from "./first-run/setup.js";
 import { installFirstRunIPC, startFirstRunWorkspace } from "./first-run/ipc.js";
 import type { DiagnosticsResult } from "../diagnostics-contract.js";
@@ -34,7 +36,7 @@ import { MacUpdateWindows } from "./mac-update-windows.js";
 import { MacUpdateGuards } from "./mac-update-guards.js";
 import { MacUpdateApplication, installMacUpdateIPC } from "./mac-update-application.js";
 import { updateDriver } from "./update-driver.js";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage } from "electron";
 import { rawTokens, type ThemeId } from "@orca/design";
@@ -53,6 +55,78 @@ import { ConnectionMachine } from "./connection-state.js";
 import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./deep-link.js";
 import { findBundledDaemon, startBundledDaemon } from "./daemon-process.js";
 import { storeRoot, Workspace } from "./workspace.js";
+
+// Mount synchronously before producers. This disabled bootstrap slice enrolls app data
+// only; the integration owner must capture ALL configured roots before enabling updates.
+const appWriterRoot = app.getPath("userData");
+const appWriters = new MacAppWriterBarrier();
+const macReplacement =
+  process.platform === "darwin"
+    ? createManagedMacReplacementStartup({
+        control: join(dirname(appWriterRoot), basename(appWriterRoot) + "-native-replacement"),
+        appRoot: appWriterRoot,
+        safeStorage,
+      })
+    : undefined;
+const ordinaryStartupAllowed = () =>
+  appWriters.admitting && (!macReplacement || macReplacement.bootstrap.ordinaryAllowed);
+function assertOrdinaryStartup(): void {
+  if (!ordinaryStartupAllowed()) throw new Error("Native replacement recovery keeps protected startup closed");
+}
+
+// Existing run completion and observation remain available during the reserved drain.
+// New admissions and app/configuration mutations still require the open window.
+const drainCompletionChannels = new Set([
+  "orca:hello",
+  "orca:runs.list",
+  "orca:runs.get",
+  "orca:runs.events",
+  "orca:inputs.list",
+  "orca:claims.list",
+  "orca:artifacts.list",
+  "orca:artifacts.get",
+  "orca:agents.list",
+  "orca:workflows.list",
+  "orca:workflows.get",
+  "orca:config.get",
+  "orca:plans.list",
+  "orca:plan.get",
+  "orca:items.list",
+  "orca:schedule.get",
+  "orca:schedule.explain",
+  "orca:dependencies.list",
+  "orca:risks.list",
+  "orca:decisions.list",
+  "orca:journal.list",
+  "orca:inputs.revise",
+  "orca:inputs.revisionPending",
+  "orca:inputs.replaceRevision",
+  "orca:inputs.answer",
+  "orca:runs.cancel",
+  "orca:runs.resume",
+]);
+function assertDispatchAllowed(channel: string): void {
+  if (
+    ordinaryStartupAllowed() ||
+    (appWriters.admitting &&
+      workspace.macUpdateReserved &&
+      macReplacement?.bootstrap.existingWorkAllowed &&
+      drainCompletionChannels.has(channel))
+  )
+    return;
+  assertOrdinaryStartup();
+}
+
+/** Bind to MacClosedWindowCommit only with the real native session/root inventory.
+ * The barrier seals synchronously; outstanding storage work retains kernel ownership. */
+export async function pauseMacUpdateAppWriters(signal: AbortSignal): Promise<boolean> {
+  if (!macReplacement || signal.aborted) return false;
+  const paused = await appWriters.pause(
+    () => diagnosticsInitializer.close(),
+    () => macReplacement.releasePausedAppWriter(),
+  );
+  return paused && !signal.aborted;
+}
 
 const preferences = new PreferencesFile(join(app.getPath("userData"), "preferences.json"));
 
@@ -88,6 +162,7 @@ const diagnosticHandle = (
 ): void => {
   ipcMain.handle(`orca:diagnostics.${method}`, async (event, params: unknown, epoch: number): Promise<unknown> => {
     try {
+      assertOrdinaryStartup();
       const win = BrowserWindow.fromWebContents(event.sender);
       const generation = diagnosticWindowGenerations.get(event.sender.id) ?? 0;
       const consentGeneration = diagnosticConsentGeneration;
@@ -112,21 +187,23 @@ const diagnosticHandle = (
       // Exact-handle disposal grants no capture, content, picker or Save authority.
       // A workspace switch may revoke its old target epoch before DOM removal;
       // acknowledge removal from this same verified document without initialization.
-      if (disposalOnly) return await run(parsed.data);
+      if (disposalOnly) return await appWriters.run(() => run(parsed.data));
       // Opt-out revokes in the controller before any initialization wait. Its
       // current sender, target and strict consent parameters were verified above.
       if (method === "setEnabled" && (parsed.data as { enabled: boolean }).enabled === false) {
         diagnosticConsentGeneration++;
-        return await run(parsed.data);
+        return await appWriters.run(() => run(parsed.data));
       }
-      await diagnosticsInitializer.initialize();
-      if (
-        !currentSender() ||
-        epoch !== workspace.connectionTarget.epoch ||
-        (method === "setEnabled" && consentGeneration !== diagnosticConsentGeneration)
-      )
-        return { ok: false, code: "stale_preview" } satisfies DiagnosticsResult<never>;
-      return await run(parsed.data);
+      return await appWriters.run(async () => {
+        await diagnosticsInitializer.initialize();
+        if (
+          !currentSender() ||
+          epoch !== workspace.connectionTarget.epoch ||
+          (method === "setEnabled" && consentGeneration !== diagnosticConsentGeneration)
+        )
+          return { ok: false, code: "stale_preview" } satisfies DiagnosticsResult<never>;
+        return await run(parsed.data);
+      });
     } catch {
       return { ok: false, code: "unavailable" } satisfies DiagnosticsResult<never>;
     }
@@ -198,21 +275,26 @@ deepLinks.offer(urlFromArgv(process.argv));
 function handle<P, R>(channel: string, run: (params: P) => Promise<R>): void {
   ipcMain.handle(channel, async (_event, params: P, epoch: number): Promise<BridgeResult<R>> => {
     try {
+      assertDispatchAllowed(channel);
       if (macUpdateWindows.active) throw new Error("Update window preparation is in progress");
       if (!channel.startsWith("orca:workspace.")) {
         return {
           ok: true,
-          result: await callInConnection(workspace, epoch, () => {
-            if (macUpdateWindows.active) throw new Error("Update window preparation is in progress");
-            return run(params);
-          }),
+          result: await appWriters.run(() =>
+            callInConnection(workspace, epoch, () => {
+              assertDispatchAllowed(channel);
+              if (macUpdateWindows.active) throw new Error("Update window preparation is in progress");
+              return run(params);
+            }),
+          ),
         };
       }
       workspace.assertEpoch(epoch);
       await workspace.ready();
       workspace.assertEpoch(epoch);
+      assertDispatchAllowed(channel);
       if (macUpdateWindows.active) throw new Error("Update window preparation is in progress");
-      return { ok: true, result: await run(params) };
+      return { ok: true, result: await appWriters.run(() => run(params)) };
     } catch (e) {
       if (e instanceof DaemonClientError) return { ok: false, error: e.error };
       return { ok: false, error: { code: "AGENT_TRANSPORT", message: e instanceof Error ? e.message : String(e) } };
@@ -435,6 +517,14 @@ let alertsEpoch = 0;
  * said — arrives here as a dependency, which is what keeps the switch itself a plain test.
  */
 const workspace = new Workspace({
+  updateBootstrap: {
+    get ordinaryAllowed() {
+      return ordinaryStartupAllowed();
+    },
+    get existingWorkAllowed() {
+      return appWriters.admitting && macReplacement?.bootstrap.existingWorkAllowed === true;
+    },
+  },
   findEntry: () =>
     findBundledDaemon([
       // A packaged app: electron-builder's `extraResources`, beside `app.asar`.
@@ -557,6 +647,7 @@ const firstRun = new FirstRunSetup({
       ...candidate,
       activate: (hello) => {
         candidate.validateActivation(hello);
+        assertOrdinaryStartup();
         preferences.saveDaemonUrl(null);
         candidate.activate(hello);
       },
@@ -590,6 +681,7 @@ function captureFirstRunCaller(event: Electron.IpcMainInvokeEvent, epoch: number
   const frame = event.senderFrame;
   const generation = diagnosticWindowGenerations.get(event.sender.id) ?? 0;
   return () => {
+    assertOrdinaryStartup();
     workspace.assertEpoch(epoch);
     if (workspace.macUpdateReserved) throw new Error("Update window preparation is in progress");
     if (
@@ -604,7 +696,8 @@ function captureFirstRunCaller(event: Electron.IpcMainInvokeEvent, epoch: number
 installFirstRunIPC(firstRun, {
   ipc: ipcMain,
   ready: () => workspace.ready(),
-  held: () => macUpdateWindows.active || workspace.macUpdateReserved,
+  held: () => !ordinaryStartupAllowed() || macUpdateWindows.active || workspace.macUpdateReserved,
+  run: (work) => appWriters.run(work),
   capture: captureFirstRunCaller,
   connect: connectFirstRun,
 });
@@ -728,7 +821,10 @@ let connectionDraftRelease: (() => void) | undefined;
 const targets = new ConnectionTarget({
   explicitUrl: process.env.ORCA_DAEMON_URL,
   prepare: (url, source) => workspace.prepareConnection(url, source),
-  save: (url) => preferences.saveDaemonUrl(url),
+  save: (url) => {
+    assertOrdinaryStartup();
+    preferences.saveDaemonUrl(url);
+  },
   guard: async () => {
     connectionDraftRelease = await guardConnectionDrafts();
     return connectionDraftRelease !== undefined;
@@ -749,11 +845,15 @@ ipcMain.on("orca:daemon.cancel", () => {
 ipcMain.handle("orca:daemon.connect", async (event, url: unknown, epoch: number) => {
   if (url !== null && typeof url !== "string") return { ok: false, message: "Invalid daemon URL" };
   try {
+    assertOrdinaryStartup();
     if (macUpdateWindows.active || firstRun.isBusy) throw new Error("Setup or update preparation is in progress");
-    if (url === null && !process.env.ORCA_WORKSPACE) {
-      const check = captureFirstRunCaller(event, epoch);
-      await connectFirstRun(check);
-    } else await targets.connect(url);
+    await appWriters.run(async () => {
+      assertOrdinaryStartup();
+      if (url === null && !process.env.ORCA_WORKSPACE) {
+        const check = captureFirstRunCaller(event, epoch);
+        await connectFirstRun(check);
+      } else await targets.connect(url);
+    });
     return { ok: true };
   } catch (error) {
     return { ok: false, message: connectionFailure(error) };
@@ -861,6 +961,7 @@ ipcMain.on("orca:preferences.read", (event) => {
 });
 ipcMain.handle("orca:preferences.write", (_event, patch: unknown): BridgeResult<Preferences> => {
   try {
+    assertOrdinaryStartup();
     const next = preferences.write(patch);
     applyTheme(next.theme);
     return { ok: true, result: next };
@@ -1023,8 +1124,17 @@ if (!primary) {
   // so quitting here is what makes the link open over there.
   app.quit();
 } else {
-  void app.whenReady().then(() => {
-    void diagnosticsInitializer.initialize();
+  void app.whenReady().then(async () => {
+    if (macReplacement) await macReplacement.initialize([appWriterRoot]);
+    if (!ordinaryStartupAllowed()) {
+      createWindow();
+      dialog.showErrorBox(
+        "Native replacement recovery is required",
+        "Protected startup remains closed. Keep the app, stores and OS keychain intact for explicit recovery.",
+      );
+      return;
+    }
+    void appWriters.run(() => diagnosticsInitializer.initialize());
     applyTheme(preferences.read().theme);
     /* Registering the scheme is what makes `orca://` reach this app at all. In development
        the executable is Electron itself and the app is an argument to it, which is what
@@ -1057,17 +1167,21 @@ if (!primary) {
     // Not awaited: the shell paints while the daemon starts, and a call that arrives in
     // that second or two waits on `workspace.ready()` rather than going to the wrong URL.
     const startupEpoch = workspace.connectionTarget.epoch;
-    void startFirstRunWorkspace(firstRun, {
-      explicitTarget: Boolean(
-        process.env.ORCA_DAEMON_URL || process.env.ORCA_WORKSPACE || preferences.read().daemonUrl,
-      ),
-      connectExplicit: () => workspace.connect(),
-      assertCurrent: () => workspace.assertEpoch(startupEpoch),
-    }).catch(() =>
-      console.error(
-        "The selected first-run workspace could not be verified or connected. Open Config to review setup.",
-      ),
-    );
+    void appWriters
+      .run(() =>
+        startFirstRunWorkspace(firstRun, {
+          explicitTarget: Boolean(
+            process.env.ORCA_DAEMON_URL || process.env.ORCA_WORKSPACE || preferences.read().daemonUrl,
+          ),
+          connectExplicit: () => workspace.connect(),
+          assertCurrent: () => workspace.assertEpoch(startupEpoch),
+        }),
+      )
+      .catch(() =>
+        console.error(
+          "The selected first-run workspace could not be verified or connected. Open Config to review setup.",
+        ),
+      );
     createWindow();
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1109,7 +1223,20 @@ app.on("will-quit", (event) => {
   quitting = true;
   event.preventDefault();
   const deadline = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_DEADLINE_MS).unref?.());
-  void Promise.race([Promise.allSettled([workspace.close(), diagnosticsInitializer.close()]), deadline]).finally(() =>
-    setImmediate(() => app.quit()),
+  // Begin owned-child shutdown immediately, including when an RPC is stuck. A reserved
+  // updater drain still keeps its child. App lifetime ownership waits for both paths.
+  const workspaceClosed = workspace.close().then(
+    () => true,
+    () => false,
   );
+  void Promise.race([
+    appWriters.pause(
+      async () => {
+        if (!(await workspaceClosed)) throw new Error("Workspace shutdown did not settle");
+        await diagnosticsInitializer.close();
+      },
+      async () => macReplacement?.close(),
+    ),
+    deadline,
+  ]).finally(() => setImmediate(() => app.quit()));
 });

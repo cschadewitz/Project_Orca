@@ -12,6 +12,8 @@ export function installFirstRunIPC(
     ipc: Pick<IpcMain, "handle">;
     ready(): Promise<void>;
     held(): boolean;
+    /** Retain app writer ownership through asynchronous receipt/configuration writes. */
+    run?<T>(work: () => Promise<T>): Promise<T>;
     /** Capture both the current document/frame and connection epoch. */
     capture(event: IpcMainInvokeEvent, epoch: number): () => void;
     connect(assertCurrent: () => void): Promise<FirstRunStatus>;
@@ -33,7 +35,7 @@ export function installFirstRunIPC(
           await boundary.ready();
           check();
           if (boundary.held()) throw new Error("Update window preparation is in progress");
-          const result = await run(value, check);
+          const result = await (boundary.run ? boundary.run(() => run(value, check)) : run(value, check));
           if (method !== "connect") check();
           return { ok: true, result };
         } catch (error) {

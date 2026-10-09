@@ -14,7 +14,7 @@ const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of closers.splice(0).reverse()) await close();
 });
-async function fixture(bootstrap?: { ordinaryAllowed: boolean }) {
+async function fixture(bootstrap?: { ordinaryAllowed: boolean; existingWorkAllowed?: boolean }) {
   const f = await runtimeMaintenanceFixture({ gated: true });
   closers.push(f.close);
   const directory = await mkdtemp(join(tmpdir(), "orca-wiring-token-"));
@@ -48,7 +48,8 @@ async function fixture(bootstrap?: { ordinaryAllowed: boolean }) {
   return { ...f, workspace, start, stop };
 }
 it("keeps Workspace completion IPC usable during parked drain, then freezes on the same held owner", async () => {
-  const f = await fixture();
+  const bootstrap = { ordinaryAllowed: true, existingWorkAllowed: true };
+  const f = await fixture(bootstrap);
   await f.workspace.connect();
   f.workspace.observeHello(f.workspace.client, await f.workspace.client.hello("wiring-test", false));
   const started = await f.call("runs.start", { workflowId: "flow" });
@@ -62,6 +63,7 @@ it("keeps Workspace completion IPC usable during parked drain, then freezes on t
   );
   if (drain.outcome !== "ready") throw new Error("Capture failed");
   expect(await drain.lease.observe()).toBe("draining");
+  bootstrap.ordinaryAllowed = false;
   expect(f.workspace.macUpdateReserved).toBe(true);
   await expect(f.workspace.ready()).resolves.toBeUndefined();
   expect(() => f.workspace.assertEpoch(target.epoch)).not.toThrow();
@@ -81,6 +83,7 @@ it("keeps Workspace completion IPC usable during parked drain, then freezes on t
   if (prepared.outcome !== "ready") throw new Error("Prepare failed");
   expect(await prepared.lease.release()).toBe("released");
   expect(f.workspace.macUpdateReserved).toBe(false);
+  bootstrap.ordinaryAllowed = true;
   await expect(f.workspace.ready()).resolves.toBeUndefined();
 });
 it("ordinary quit never invokes forced shutdown for an updater-owned drain reservation", async () => {
@@ -99,7 +102,7 @@ it("ordinary quit never invokes forced shutdown for an updater-owned drain reser
   expect(f.stop).not.toHaveBeenCalled();
 });
 it("a durable bootstrap gate blocks normal and first-run process startup before writer work", async () => {
-  const f = await fixture({ ordinaryAllowed: false });
+  const f = await fixture({ ordinaryAllowed: false, existingWorkAllowed: true });
   await expect(f.workspace.connect()).rejects.toThrow("closed");
   await expect(f.workspace.prepareFirstRunConnection(f.dir)).rejects.toThrow("closed");
   await expect(f.workspace.prepareConnection(null)).rejects.toThrow("closed");

@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "@orca/protocol";
 import type { DaemonClient } from "../src/client/daemon-client.js";
@@ -19,8 +19,17 @@ const shell = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => Promise<unknown>>(),
   rendererEvents: new Map<string, () => void>(),
   events: undefined as EventEmitter | undefined,
+  appEvents: undefined as EventEmitter | undefined,
   webContents: undefined as { id: number; mainFrame: object } | undefined,
   ready: true,
+  startReady: false,
+  replacementBootstrap: undefined as
+    { ordinaryAllowed: boolean; existingWorkAllowed?: boolean; inspect: () => Promise<unknown> } | undefined,
+  replacementMounted: vi.fn(),
+  replacementReleased: vi.fn(async () => {}),
+  replacementClosed: vi.fn(async () => {}),
+  quit: vi.fn(),
+  recoveryMessage: vi.fn(),
   hasWindow: true,
   nativeEnabled: true,
   createWindow: vi.fn(),
@@ -37,6 +46,8 @@ vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
   const events = new EventEmitter();
   shell.events = events;
+  const appEvents = new EventEmitter();
+  shell.appEvents = appEvents;
   const contentEvents = new EventEmitter();
   const webContents = {
     isDestroyed: () => false,
@@ -91,8 +102,9 @@ vi.mock("electron", async () => {
       getVersion: () => "0.6.0",
       setBadgeCount: shell.badge,
       // Test bootstrap explicitly; creating a real BrowserWindow is outside this IPC regression.
-      whenReady: () => new Promise(() => {}),
-      on: vi.fn(),
+      whenReady: () => (shell.startReady ? Promise.resolve() : new Promise(() => {})),
+      on: (event: string, listener: (...args: unknown[]) => void) => appEvents.on(event, listener),
+      quit: shell.quit,
     },
     BrowserWindow: class {
       constructor() {
@@ -116,7 +128,7 @@ vi.mock("electron", async () => {
       },
     }),
     nativeTheme: { on: vi.fn() },
-    dialog: { showOpenDialog: shell.openDialog },
+    dialog: { showOpenDialog: shell.openDialog, showErrorBox: shell.recoveryMessage },
     Menu: {},
     Notification: class {
       static isSupported() {
@@ -128,6 +140,18 @@ vi.mock("electron", async () => {
     },
   };
 });
+vi.mock("../src/main/mac-managed-replacement-startup.js", () => ({
+  createManagedMacReplacementStartup: (options: unknown) => {
+    shell.replacementMounted(options);
+    if (!shell.replacementBootstrap) throw new Error("Synthetic bootstrap fixture missing");
+    return {
+      bootstrap: shell.replacementBootstrap,
+      initialize: () => shell.replacementBootstrap!.inspect(),
+      releasePausedAppWriter: shell.replacementReleased,
+      close: shell.replacementClosed,
+    };
+  },
+}));
 vi.mock("../src/main/workspace.js", async (original) => {
   const actual = await original<typeof import("../src/main/workspace.js")>();
   return {
@@ -150,11 +174,19 @@ let directory: string;
 beforeEach(() => {
   vi.resetModules();
   shell.events?.removeAllListeners();
+  shell.appEvents?.removeAllListeners();
   shell.handlers.clear();
   shell.rendererEvents.clear();
   shell.workspace = undefined;
   shell.home = "";
   shell.ready = true;
+  shell.startReady = false;
+  shell.replacementBootstrap = undefined;
+  shell.replacementMounted.mockClear();
+  shell.replacementReleased.mockClear();
+  shell.replacementClosed.mockClear();
+  shell.quit.mockClear();
+  shell.recoveryMessage.mockClear();
   shell.hasWindow = true;
   shell.nativeEnabled = true;
   shell.createWindow.mockClear();
@@ -373,6 +405,7 @@ afterEach(async () => {
   await shell.workspace?.close();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 
@@ -738,3 +771,168 @@ it.skipIf(typeof process.getuid !== "function")(
     expect(await readdir(selected)).toEqual(["first-run", "orca.config.yaml"]);
   },
 );
+
+it("native replacement bootstrap blocks protected main IPC before its journal inspection", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-native-bootstrap-ipc-"));
+  shell.userData = directory;
+  shell.replacementBootstrap = { ordinaryAllowed: false, inspect: vi.fn(async () => ({ outcome: "unknown" })) };
+  vi.stubGlobal("process", { ...process, platform: "darwin" });
+  await import("../src/main/index.js");
+  expect(shell.replacementMounted).toHaveBeenCalledOnce();
+  expect(shell.replacementMounted).toHaveBeenCalledWith(
+    expect.objectContaining({
+      control: join(dirname(directory), basename(directory) + "-native-replacement"),
+      appRoot: directory,
+    }),
+  );
+  const sender = shell.webContents!;
+  const event = { sender, senderFrame: sender.mainFrame };
+  const epoch = shell.workspace!.connectionTarget.epoch;
+  const invoke = (channel: string, value?: unknown) => shell.handlers.get(channel)!(event, value, epoch);
+  expect(await invoke("orca:preferences.write", { theme: "dark" })).toMatchObject({ ok: false });
+  expect(await invoke("orca:guidedLaunch.submit", {})).toMatchObject({ ok: false });
+  expect(await invoke("orca:workspace.firstRun.prepare", "11111111-1111-4111-8111-111111111111")).toMatchObject({
+    ok: false,
+  });
+  expect(await invoke("orca:diagnostics.setEnabled", { enabled: true, scopeVersion: 1 })).toMatchObject({ ok: false });
+  await expect(shell.workspace!.prepareConnection(null)).rejects.toThrow("closed");
+  expect(shell.keyWrap).not.toHaveBeenCalled();
+  expect(shell.stop).not.toHaveBeenCalled();
+  expect(await readdir(directory)).toEqual([]);
+});
+
+it("native replacement unknown startup paints recovery without normal diagnostics or child bootstrap", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-native-bootstrap-ready-"));
+  shell.userData = directory;
+  shell.startReady = true;
+  const inspect = vi.fn(async () => ({ outcome: "unknown" }));
+  shell.replacementBootstrap = { ordinaryAllowed: false, inspect };
+  vi.stubGlobal("process", { ...process, platform: "darwin" });
+  const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
+  const initialize = vi.spyOn(RecoveryController.prototype, "initialize");
+  await import("../src/main/index.js");
+  await vi.waitFor(() => expect(shell.recoveryMessage).toHaveBeenCalledOnce());
+  expect(inspect).toHaveBeenCalledOnce();
+  expect(shell.createWindow).toHaveBeenCalledOnce();
+  expect(initialize).not.toHaveBeenCalled();
+  expect(shell.keyWrap).not.toHaveBeenCalled();
+  expect(shell.stop).not.toHaveBeenCalled();
+  expect(await readdir(directory)).toEqual([]);
+});
+
+it("main pause refuses new writes and retains its app writer until a dispatched RPC settles", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-native-pause-ipc-"));
+  shell.userData = directory;
+  shell.replacementBootstrap = { ordinaryAllowed: true, inspect: vi.fn(async () => "ordinary") };
+  vi.stubGlobal("process", { ...process, platform: "darwin" });
+  const { DaemonClient } = await import("../src/client/daemon-client.js");
+  const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
+  vi.spyOn(RecoveryController.prototype, "cleanExit").mockResolvedValue();
+  let finish!: (value: unknown) => void;
+  const rpc = vi.spyOn(DaemonClient.prototype, "call").mockReturnValue(new Promise((resolve) => (finish = resolve)));
+  const main = await import("../src/main/index.js");
+  const sender = shell.webContents!,
+    event = { sender, senderFrame: sender.mainFrame };
+  const epoch = shell.workspace!.connectionTarget.epoch;
+  const dispatched = shell.handlers.get("orca:templates")!(event, { method: "templates.get", params: {} }, epoch);
+  await vi.waitFor(() => expect(rpc).toHaveBeenCalledOnce());
+  const paused = main.pauseMacUpdateAppWriters(new AbortController().signal);
+  expect(await shell.handlers.get("orca:preferences.write")!(event, { theme: "dark" })).toMatchObject({ ok: false });
+  expect(shell.replacementReleased).not.toHaveBeenCalled();
+  finish({});
+  // The actual RPC settled; Workspace deliberately discards its now-closed projection.
+  expect(await dispatched).toMatchObject({ ok: false });
+  expect(await paused).toBe(true);
+  expect(shell.replacementReleased).toHaveBeenCalledOnce();
+  expect(shell.keyWrap).not.toHaveBeenCalled();
+  expect(shell.stop).not.toHaveBeenCalled();
+});
+
+it("durable admission closure retains completion only for the reserved live drain", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-native-completion-ipc-"));
+  shell.userData = directory;
+  shell.replacementBootstrap = {
+    ordinaryAllowed: false,
+    existingWorkAllowed: true,
+    inspect: vi.fn(async () => "ordinary"),
+  };
+  vi.stubGlobal("process", { ...process, platform: "darwin" });
+  const { DaemonClient } = await import("../src/client/daemon-client.js");
+  const rpc = vi.spyOn(DaemonClient.prototype, "call").mockResolvedValue({});
+  await import("../src/main/index.js");
+  const workspace = shell.workspace!,
+    sender = shell.webContents!;
+  const event = { sender, senderFrame: sender.mainFrame };
+  const invoke = (channel: string) => shell.handlers.get(channel)!(event, {}, workspace.connectionTarget.epoch);
+  expect(await invoke("orca:inputs.answer")).toMatchObject({ ok: false });
+  Reflect.set(workspace, "macUpdateHold", Symbol("held-runtime"));
+  expect(await invoke("orca:inputs.answer")).toMatchObject({ ok: true });
+  expect(await invoke("orca:runs.get")).toMatchObject({ ok: true });
+  expect(rpc).toHaveBeenCalledTimes(2);
+  for (const channel of ["orca:runs.start", "orca:templates", "orca:config.apply", "orca:guidedLaunch.submit"])
+    expect(await invoke(channel)).toMatchObject({ ok: false });
+  expect(await shell.handlers.get("orca:preferences.write")!(event, { theme: "dark" })).toMatchObject({ ok: false });
+  shell.replacementBootstrap.existingWorkAllowed = false;
+  expect(await invoke("orca:inputs.answer")).toMatchObject({ ok: false });
+  expect(rpc).toHaveBeenCalledTimes(2);
+});
+
+it("quit retains app ownership until dispatch and background storage both settle", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-native-quit-ipc-"));
+  shell.userData = directory;
+  shell.replacementBootstrap = { ordinaryAllowed: true, inspect: vi.fn(async () => "ordinary") };
+  vi.stubGlobal("process", { ...process, platform: "darwin" });
+  const { DaemonClient } = await import("../src/client/daemon-client.js");
+  const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
+  let finish!: (value: unknown) => void, settled!: () => void;
+  const rpc = vi.spyOn(DaemonClient.prototype, "call").mockReturnValue(new Promise((resolve) => (finish = resolve)));
+  const background = vi
+    .spyOn(RecoveryController.prototype, "cleanExit")
+    .mockReturnValue(new Promise<void>((resolve) => (settled = resolve)));
+  await import("../src/main/index.js");
+  const sender = shell.webContents!,
+    event = { sender, senderFrame: sender.mainFrame };
+  const dispatched = shell.handlers.get("orca:runs.get")!(event, {}, shell.workspace!.connectionTarget.epoch);
+  await vi.waitFor(() => expect(rpc).toHaveBeenCalledOnce());
+  const closeWorkspace = vi.spyOn(shell.workspace!, "close");
+  shell.appEvents!.emit("will-quit", { preventDefault: vi.fn() });
+  expect(closeWorkspace).toHaveBeenCalledOnce();
+  expect(background).not.toHaveBeenCalled();
+  expect(shell.replacementClosed).not.toHaveBeenCalled();
+  finish({});
+  expect(await dispatched).toMatchObject({ ok: false });
+  await vi.waitFor(() => expect(background).toHaveBeenCalledOnce());
+  expect(shell.replacementClosed).not.toHaveBeenCalled();
+  settled();
+  await vi.waitFor(() => expect(shell.replacementClosed).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(shell.quit).toHaveBeenCalledOnce());
+});
+
+it("main pause tracks first-run receipt work before releasing its app writer", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-native-first-run-pause-"));
+  shell.userData = directory;
+  shell.replacementBootstrap = { ordinaryAllowed: true, inspect: vi.fn(async () => "ordinary") };
+  vi.stubGlobal("process", { ...process, platform: "darwin" });
+  const { FirstRunSetup } = await import("../src/main/first-run/setup.js");
+  const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
+  vi.spyOn(RecoveryController.prototype, "cleanExit").mockResolvedValue();
+  let finish!: (value: { state: "selection-required"; reason: string }) => void;
+  const prepare = vi
+    .spyOn(FirstRunSetup.prototype, "prepareRecovery")
+    .mockReturnValue(new Promise((resolve) => (finish = resolve)));
+  const main = await import("../src/main/index.js");
+  const sender = shell.webContents!,
+    event = { sender, senderFrame: sender.mainFrame };
+  const dispatched = shell.handlers.get("orca:workspace.firstRun.prepareRecovery")!(
+    event,
+    undefined,
+    shell.workspace!.connectionTarget.epoch,
+  );
+  await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+  const paused = main.pauseMacUpdateAppWriters(new AbortController().signal);
+  expect(shell.replacementReleased).not.toHaveBeenCalled();
+  finish({ state: "selection-required", reason: "fixture" });
+  expect(await dispatched).toMatchObject({ ok: false });
+  expect(await paused).toBe(true);
+  expect(shell.replacementReleased).toHaveBeenCalledOnce();
+});

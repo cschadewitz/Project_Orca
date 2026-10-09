@@ -49,7 +49,7 @@ export interface WorkspaceTarget {
 
 export interface WorkspaceDeps {
   /** Main creates this closed before any protected-state bootstrap or producer work. */
-  updateBootstrap?: { readonly ordinaryAllowed: boolean };
+  updateBootstrap?: { readonly ordinaryAllowed: boolean; readonly existingWorkAllowed?: boolean };
   /** The bundled daemon's entry point, or undefined in a development build. */
   findEntry: () => string | undefined;
   /** Start `orca serve` on a workspace. `readOnly` becomes the `--read-only` flag. */
@@ -459,7 +459,7 @@ export class Workspace {
   }
 
   assertEpoch(epoch: number): void {
-    if (this.macUpdateStopping || this.macUpdateFrozen || this.deps.updateBootstrap?.ordinaryAllowed === false)
+    if (this.macUpdateStopping || this.macUpdateFrozen || !this.existingDispatchAllowed())
       throw new Error("Update restart admission is closed");
     if (epoch !== this.epoch) throw new Error("The daemon changed. This operation belongs to the previous connection.");
   }
@@ -904,9 +904,16 @@ export class Workspace {
    * when it stops waiting, not the one that was there when it started.
    */
   async ready(): Promise<void> {
-    if (this.macUpdateStopping || this.macUpdateFrozen || this.deps.updateBootstrap?.ordinaryAllowed === false)
+    if (this.macUpdateStopping || this.macUpdateFrozen || !this.existingDispatchAllowed())
       throw new Error("Update restart admission is closed");
     while (this.pending) await this.pending;
+  }
+
+  private existingDispatchAllowed(): boolean {
+    return (
+      this.deps.updateBootstrap?.ordinaryAllowed !== false ||
+      (this.macUpdateHold !== undefined && this.deps.updateBootstrap.existingWorkAllowed === true)
+    );
   }
 
   /** The first connection, from `whenReady`. Never rejects — see `switchTo`. */

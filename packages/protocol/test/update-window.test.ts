@@ -9,6 +9,8 @@ import {
   enterConfiguredUpdateWriters,
   enterUpdateWriter,
   provisionUpdateWindow,
+  updateAdmissionOpen,
+  updateExistingWorkAllowed,
   type UpdateWriterLease,
 } from "../src/update-window.js";
 
@@ -39,7 +41,10 @@ async function writer(root: string, launch?: { attempt: string; token: string })
 it("closes admission before capture while existing writers finish naturally", async () => {
   const f = await fixture(2),
     lease = await writer(f.data[0]!);
+  expect(updateAdmissionOpen(f.data[0]!)).toBe(true);
   f.window.closeAdmission("a".repeat(64));
+  expect(updateAdmissionOpen(f.data[0]!)).toBe(false);
+  expect(updateExistingWorkAllowed(f.data[0]!)).toBe(true);
   expect(lease.check()).toBe(true);
   expect(await f.window.capture()).toBe(false);
   await expect(enterUpdateWriter(f.data[1]!)).rejects.toThrow();
@@ -100,11 +105,13 @@ it("only the original untouched approval may defer; durable stopping excludes de
   expect(fresh.beginDefer(candidate, attempt)).toBe(false);
   expect(f.window.beginDefer("b".repeat(64), attempt)).toBe(false);
   expect(f.window.beginDefer(candidate, attempt)).toBe(true);
+  expect(updateExistingWorkAllowed(f.data[0]!)).toBe(true);
   expect(() => f.window.beginStop()).toThrow();
   await expect(enterUpdateWriter(f.data[0]!)).rejects.toThrow();
   expect(f.window.finishDefer(candidate, attempt)).toBe(true);
   f.window.closeAdmission(candidate);
   f.window.beginStop();
+  expect(updateExistingWorkAllowed(f.data[0]!)).toBe(false);
   expect(f.window.beginDefer(candidate, f.window.snapshot.attempt!)).toBe(false);
   expect(await f.window.capture()).toBe(true);
   expect(f.window.snapshot.phase).toBe("closed");
