@@ -36,12 +36,15 @@ export async function runtimeMaintenanceFixture(
     wrongCredentials?: boolean;
     invalidIdentity?: boolean;
     lease?: RunLeaseOptions;
+    gated?: boolean;
   } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "orca-runtime-maintenance-"));
   await writeFile(
     join(dir, "flow.yaml"),
-    "id: flow\nname: Flow\nversion: '1'\nstart: s\nnodes: {s: {type: start}, e: {type: end}}\nedges: [{from: s, to: e}]\n",
+    options.gated
+      ? "id: flow\nname: Flow\nversion: '1'\nstart: s\nnodes: {s: {type: start}, g: {type: gate, question: 'Finish?', options: [finish]}, e: {type: end}}\nedges: [{from: s, to: g}, {from: g, to: e}]\n"
+      : "id: flow\nname: Flow\nversion: '1'\nstart: s\nnodes: {s: {type: start}, e: {type: end}}\nedges: [{from: s, to: e}]\n",
   );
   const app = await bootstrap({
     configDir: dir,

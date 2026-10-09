@@ -1,9 +1,14 @@
-/** Synchronous producer entry and idle fencing; never installs, cancels or replays work. */
+/** Synchronous producer entry, drain and idle fencing; never installs, cancels or replays work. */
 import { OrcaError } from "@orca/core";
 import type { RuntimeActivityReason } from "@orca/protocol";
 export class RuntimeActivity {
   private readonly active = new Map<symbol, RuntimeActivityReason>();
   private token: string | undefined;
+  private draining = false;
+  private revisionValue = 0;
+  get revision(): number {
+    return this.revisionValue;
+  }
   private closed = false;
   private sources: (() => { available: boolean; active: RuntimeActivityReason[] }) | undefined;
   private admissionClosed: (() => boolean) | undefined;
@@ -12,13 +17,14 @@ export class RuntimeActivity {
     this.sources = sources;
     this.admissionClosed = admissionClosed;
   }
-  enter(reason: RuntimeActivityReason): () => void {
-    if (this.closed || this.token || this.admissionClosed?.())
+  enter(reason: RuntimeActivityReason, newAdmission = false): () => void {
+    if (this.closed || (this.token && (!this.draining || newAdmission)) || this.admissionClosed?.())
       throw new OrcaError("RUN_STATE", "Runtime admission is closed");
     const id = Symbol(reason);
     this.active.set(id, reason);
+    this.revisionValue++;
     return () => {
-      this.active.delete(id);
+      if (this.active.delete(id)) this.revisionValue++;
     };
   }
   snapshot(): { available: boolean; active: RuntimeActivityReason[] } {
@@ -32,7 +38,15 @@ export class RuntimeActivity {
       return { available: false, active: ["unavailable"] };
     }
   }
-  prepare(token: string): { held: boolean; active: RuntimeActivityReason[] } {
+  beginDrain(token: string): boolean {
+    if (this.token && this.token !== token) throw new OrcaError("RUN_STATE", "Another updater owns runtime admission");
+    if (this.token && !this.draining) return true;
+    if (!this.snapshot().available || this.admissionClosed?.()) return false;
+    this.token = token;
+    this.draining = true;
+    return true;
+  }
+  prepare(token: string, observedRevision?: number): { held: boolean; active: RuntimeActivityReason[] } {
     if (this.token && this.token !== token) throw new OrcaError("RUN_STATE", "Another updater owns runtime admission");
     const snapshot = this.snapshot();
     if (!snapshot.available || (this.admissionClosed?.() && !this.token))
@@ -41,13 +55,17 @@ export class RuntimeActivity {
     // producer reservations after every observation and before publishing the fence.
     const active = [...new Set([...snapshot.active, ...this.active.values()])];
     if (active.length) return { held: false, active };
+    if (observedRevision !== undefined && observedRevision !== this.revisionValue)
+      return { held: false, active: ["unavailable"] };
     this.token = token;
+    this.draining = false;
     return { held: true, active: [] };
   }
   resume(token: string): void {
     if (!this.token || this.token !== token) throw new OrcaError("RUN_STATE", "Runtime admission owner changed");
     if (!this.snapshot().available) throw new OrcaError("RUN_STATE", "Runtime idle proof unavailable");
     this.token = undefined;
+    this.draining = false;
   }
   close(): void {
     this.closed = true;
