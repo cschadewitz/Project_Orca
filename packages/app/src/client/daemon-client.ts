@@ -159,9 +159,22 @@ import {
 import { type ZodType } from "zod";
 import { assertCredentialDestination, authenticationCode, type DaemonTokenSource } from "./auth.js";
 import { DaemonSubscription, type DaemonSubscriptionOptions } from "./subscription.js";
+import { observeOwnedDiagnostic, type OwnedDiagnosticObserver } from "../main/diagnostics/source-producers.js";
 
 /** Where `orca serve` listens unless told otherwise; 6722 spells ORCA on a phone keypad. */
 export const DEFAULT_DAEMON_URL = "http://127.0.0.1:6722";
+
+const admissionMethod = (method: string) =>
+  ["runs.admit", "requests.submit", "operator.admitRun", "operator.submitRequest"].includes(method);
+function ownData(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object") return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && Object.hasOwn(descriptor, "value") ? (descriptor.value as unknown) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Params as a caller passes them. The paging defaults (`limit`, `offset`) are the daemon's
@@ -177,6 +190,8 @@ export class DaemonClientError extends Error {
 }
 
 export interface DaemonClientOptions {
+  /** Existing authorized operation facts only; never sends content or performs a diagnostic RPC. */
+  onDiagnostic?: OwnedDiagnosticObserver;
   auth?: DaemonTokenSource;
   requireAuthentication?: boolean;
   /** Ordinary RPC failures. Hello owners publish failures after checking their lifetime. */
@@ -229,27 +244,42 @@ export class DaemonClient {
         token = this.options.auth?.read();
       } catch {
         if (publishAuthFailure) this.options.onAuthFailure?.();
+        if (publishAuthFailure) this.observeError({ code: "AUTH_INVALID", message: "" });
         throw new DaemonClientError({ code: "AUTH_INVALID", message: "Daemon authentication failed" });
       }
-      if (this.options.requireAuthentication && !token)
+      if (this.options.requireAuthentication && !token) {
+        if (publishAuthFailure) this.observeError({ code: "AUTH_REQUIRED", message: "" });
         throw new DaemonClientError({
           code: "AUTH_REQUIRED",
           message: "Remote daemon requires an explicit credential",
         });
+      }
       assertCredentialDestination(this.url, token);
-      const res = await this.fetchImpl(`${this.url}/rpc`, {
-        method: "POST",
-        ...(signal ? { signal } : {}),
-        redirect: "manual",
-        headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify(req),
-      });
+      // Serialization failure is pre-dispatch and carries no uncertain-admission fact.
+      const body = JSON.stringify(req);
+      let res: Response;
+      try {
+        res = await this.fetchImpl(`${this.url}/rpc`, {
+          method: "POST",
+          ...(signal ? { signal } : {}),
+          redirect: "manual",
+          headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+          body,
+        });
+      } catch (error) {
+        // This owner knows a request was dispatched and no response was received.
+        // The error object is rethrown unchanged, never examined by diagnostics.
+        if (admissionMethod(method))
+          observeOwnedDiagnostic(this.options.onDiagnostic, "admission", "admission_uncertain");
+        throw error;
+      }
       // Proxies may reject before the daemon sees the request, with HTML/plain text rather
       // than an ORCA envelope. Status is authoritative: never retry these as network blips
       // or accept an apparent successful envelope carried by a refused HTTP response.
       if (res.status >= 300 && res.status < 400) {
         void res.body?.cancel().catch(() => undefined);
         if (publishAuthFailure) this.options.onAuthFailure?.();
+        if (publishAuthFailure) this.observeError({ code: "AUTH_FORBIDDEN", message: "" });
         throw new DaemonClientError({ code: "AUTH_FORBIDDEN", message: "Daemon RPC redirects are refused" });
       }
       const transportAuthError: ProtocolError | undefined =
@@ -265,12 +295,28 @@ export class DaemonClient {
           parsed.success && !parsed.data.ok && authenticationCode(parsed.data) ? parsed.data.error : transportAuthError;
       } else {
         if (!parsed.success) {
+          if (admissionMethod(method))
+            observeOwnedDiagnostic(this.options.onDiagnostic, "admission", "admission_uncertain");
           throw new DaemonClientError({
             code: "PROTOCOL_MESSAGE",
             message: "daemon sent something that is not a response",
           });
         }
-        if (parsed.data.ok) return result.parse(parsed.data.result);
+        if (parsed.data.ok) {
+          const validated = result.safeParse(parsed.data.result);
+          if (!validated.success) {
+            if (admissionMethod(method))
+              observeOwnedDiagnostic(this.options.onDiagnostic, "admission", "admission_uncertain");
+            throw validated.error;
+          }
+          if (admissionMethod(method)) {
+            const receipt =
+              ownData(validated.data, "state") === "resolved" ? ownData(validated.data, "result") : validated.data;
+            if (ownData(receipt, "state") === "recoverable-failure")
+              observeOwnedDiagnostic(this.options.onDiagnostic, "admission", "admission_recoverable_failure");
+          }
+          return validated.data;
+        }
         error = parsed.data.error;
       }
       if (error.code === "AUTH_INVALID" && retryAuth && attempt === 0) {
@@ -282,8 +328,23 @@ export class DaemonClient {
       }
       if (publishAuthFailure && (transportAuthError || error.code === "AUTH_INVALID" || error.code === "AUTH_REQUIRED"))
         this.options.onAuthFailure?.();
+      if (publishAuthFailure) this.observeError(error);
       throw new DaemonClientError(error);
     }
+  }
+
+  private observeError(error: ProtocolError): void {
+    if (error.code === "AUTH_REQUIRED")
+      observeOwnedDiagnostic(this.options.onDiagnostic, "connection", "authentication_required");
+    else if (error.code === "AUTH_INVALID")
+      observeOwnedDiagnostic(this.options.onDiagnostic, "connection", "authentication_invalid");
+    else if (error.code === "AUTH_FORBIDDEN")
+      observeOwnedDiagnostic(this.options.onDiagnostic, "connection", "authorization_denied");
+    else if (
+      error.code === "RUN_STATE" &&
+      ownData(ownData(error.details, "diagnostics"), "protectedState") === "unavailable"
+    )
+      observeOwnedDiagnostic(this.options.onDiagnostic, "protected_state", "protected_state_unavailable");
   }
 
   async hello(client: string, retryAuth = true): Promise<HelloResult> {
@@ -480,8 +541,13 @@ export class DaemonClient {
   }
 
   /** Re-drive a parked run. Answers when it parks again or finishes, never mid-flight. */
-  runsResume(params: RunsResumeParams): Promise<RunsResumeResult> {
-    return this.call(RUNS_RESUME_METHOD, params, RunsResumeResultSchema);
+  async runsResume(params: RunsResumeParams): Promise<RunsResumeResult> {
+    try {
+      return await this.call(RUNS_RESUME_METHOD, params, RunsResumeResultSchema);
+    } catch (error) {
+      observeOwnedDiagnostic(this.options.onDiagnostic, "resume", "resume_failed");
+      throw error;
+    }
   }
 
   /** Stop a run, with the reason recorded on `run.cancelled`. */

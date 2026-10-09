@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "platform": "win32",
+  "arch": "x64",
+  "node": "24.19.0",
+  "offeredEvents": 8192,
+  "retainedEvents": 8192,
+  "previousRetainedEvents": 8192,
+  "serializedBytes": 959527,
+  "omissions": {
+    "budget": 0,
+    "expired": 0,
+    "invalid": 0,
+    "unavailable": "unknown"
+  },
+  "exactSaveAndExportSurvivesOptOut": true,
+  "recordMaxMs": 0.47630000000003747,
+  "callbackMaxMsByPhase": {
+    "idle": 0.2722000000001117,
+    "idle->capture": 0.7191000000000258,
+    "capture": 2.1585000000000036,
+    "capture->checkpoint": 1.548799999999801,
+    "checkpoint": 2.7199000000000524,
+    "checkpoint->preview-previous": 0.29569999999989705,
+    "preview-previous": 2.4347999999999956,
+    "preview-previous->oracle": 3.3165999999998803,
+    "oracle->preview-current": 0.04800000000000182,
+    "preview-current": 2.4848000000001775,
+    "preview-current->picker": 0.26700000000005275,
+    "picker": 0.05850000000009459,
+    "picker->save": 0.30730000000016844,
+    "save": 3.2905000000000655,
+    "save->opt-out": 0.570299999999861,
+    "opt-out": 0.21669999999994616,
+    "opt-out->oracle": 0.2110000000002401,
+    "oracle": 0.20600000000013097
+  },
+  "timerDelayMaxMsByPhase": {
+    "idle": 14.944400000000087,
+    "capture": 2.2954999999999472,
+    "checkpoint": 15.007899999999836,
+    "preview-previous": 15.601999999999862,
+    "preview-current": 14.212400000000116,
+    "picker": 0,
+    "save": 15.474399999999832,
+    "opt-out": 15.430299999999988,
+    "oracle": 0.14789999999993597
+  },
+  "managedIncrementBytes": 19577320,
+  "rssIncrementBytes": 22790144,
+  "payloadPeak": 4194304,
+  "method": "Real Windows native clock/storage and actual controller; synthetic key adapter; full current+previous; async_hooks callback elapsed duration and 1ms timers. Oracle and phase-transition callbacks separate, retained. Memory sampled heap+external and RSS increment in one Node process; baseline after initialization/promotion, includes allocated ring. No renderer/paired runtime or native allocation high-water. Combined 32MiB and full 4ms Windows acceptance unproven.",
+  "nativeBinariesAtObservation": {
+    "diagnostics_clock.node": "04d6566fa88afee22299eb80ceace8b2d651bac31f80ab0a54254ff42669d2b8",
+    "diagnostics_storage.node": "e449794e89b711fa18ebaa0f40361bd9f4b7223f1d6309094f7de0951a26fb0d"
+  },
+  "laterNativeSourceChange": "Only trailing blank lines at storage C EOF removed; subsequent matrix/package binary pins refreshed. No semantic change after resource observation."
+}

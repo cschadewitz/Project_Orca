@@ -880,7 +880,13 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     });
   }
   writersStopped(): Promise<boolean> {
-    return this.serialized(() => this.options.native.writersStopped(this.root));
+    return this.serialized(async () => {
+      // A restarted unknown export has not opened history or claimed a writer lease.
+      // Only native lease acquisition can prove the prior process stopped; no PID,
+      // timeout or missing filename can substitute for that ownership proof.
+      await this.acquire();
+      return this.options.native.writersStopped(this.root);
+    });
   }
 }
 

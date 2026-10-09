@@ -1,0 +1,16 @@
+{
+  "platform": "win32",
+  "osVersion": "10.0.19045.0",
+  "backend": "System.Security.Cryptography.ProtectedData / CurrentUser DPAPI",
+  "syntheticBytes": 32,
+  "separateProcessRestart": true,
+  "secondRestart": true,
+  "tamperRefused": true,
+  "wrongEntropyRefused": true,
+  "supervisedWriterTerminated": true,
+  "committedWrapperSurvivesProcessTermination": true,
+  "differentUserRefusal": "not run",
+  "ElectronAsyncSafeStorage": "not run",
+  "diagnosticsRecovery": "not exercised",
+  "method": "Bounded hidden PowerShell children, synthetic bytes/entropy, disposable temp wrapper. No account identity, plaintext, ciphertext, paths, boot identity or errors retained. No power-loss, native diagnostics storage, inherited DACL or two-account proof."
+}

@@ -1,0 +1,78 @@
+diff --git a/packages/app/src/main/index.ts b/packages/app/src/main/index.ts
+index c9a4143..499cfe6 100644
+--- a/packages/app/src/main/index.ts
++++ b/packages/app/src/main/index.ts
+@@ -36,7 +36,17 @@ import { MacUpdateApplication, installMacUpdateIPC } from "./mac-update-applicat
+ import { updateDriver } from "./update-driver.js";
+ import { join } from "node:path";
+ import { fileURLToPath } from "node:url";
+-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage } from "electron";
++import {
++  app,
++  BrowserWindow,
++  dialog,
++  ipcMain,
++  Menu,
++  nativeTheme,
++  Notification,
++  safeStorage,
++  powerMonitor,
++} from "electron";
+ import { rawTokens, type ThemeId } from "@orca/design";
+ import type { NotificationMessage } from "@orca/protocol";
+ import type { AlertItem, AlertsUpdate, BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
+@@ -74,6 +84,7 @@ const diagnosticsInitializer = createDiagnosticsInitializer({
+   },
+ });
+ const diagnostics = diagnosticsInitializer.controller;
++let diagnosticsStopping = false;
+ diagnostics.subscribe((status) => {
+   for (const win of BrowserWindow.getAllWindows())
+     if (!win.isDestroyed()) win.webContents.send("orca:diagnostics.changed", status);
+@@ -418,4 +429,5 @@ const connection = new ConnectionMachine({
+     if (hello.identity) workspace.observeHello(workspace.client, hello);
+   },
+   onChange: (snapshot) => send("orca:connection", snapshot),
++  onDiagnostic: diagnosticsInitializer.observer,
+ });
+@@ -485,6 +497,9 @@ const workspace = new Workspace({
+       onAuthFailure: () => {
+         if (workspace.client === candidate) connection.authenticationFailed();
+       },
++      onDiagnostic: (...fact) => {
++        if (workspace.client === candidate) diagnosticsInitializer.observer(...fact);
++      },
+       onHello: (hello) => {
+         if (workspace.client !== candidate) return;
+         workspace.observeHello(candidate, hello);
+@@ -497,4 +512,8 @@ const workspace = new Workspace({
+     daemonClient.subscribe({
+       params: {},
+       onNotification: (n) => {
++        // This existing subscription already validated the notification. Forward one
++        // closed fact only while its client still owns the current workspace.
++        if (workspace.client === daemonClient && n.method === "run.changed" && n.params.event === "run.failed")
++          diagnosticsInitializer.observer("run", "run_failed");
+         broadcast({ kind: "notification", method: n.method, params: n.params });
+@@ -1024,7 +1043,12 @@ if (!primary) {
+   app.quit();
+ } else {
+   void app.whenReady().then(() => {
+-    void diagnosticsInitializer.initialize();
++    void diagnosticsInitializer.initialize().then(() => {
++      if (!diagnosticsStopping) diagnosticsInitializer.observer("lifecycle", "app_started");
++    });
++    // Native record() checks boot/elapsed authority before accepting a wake fact.
++    powerMonitor.on("suspend", () => diagnosticsInitializer.observer("lifecycle", "sleep_observed"));
++    powerMonitor.on("resume", () => diagnosticsInitializer.observer("lifecycle", "wake_observed"));
+     applyTheme(preferences.read().theme);
+     /* Registering the scheme is what makes `orca://` reach this app at all. In development
+        the executable is Electron itself and the app is an argument to it, which is what
+@@ -1082,5 +1106,7 @@ app.on("window-all-closed", () => {
+ // Stop pushing at a process that is going.
+ app.on("before-quit", () => {
++  if (!diagnosticsStopping) diagnosticsInitializer.observer("lifecycle", "app_stopping");
++  diagnosticsStopping = true;
+   targets.cancel();
+   connection.close();
+   alerts.close();

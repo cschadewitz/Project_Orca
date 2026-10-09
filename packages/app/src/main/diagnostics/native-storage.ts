@@ -7,7 +7,7 @@ import type { RecoveryFileHandle, RecoveryFileSystem, RecoveryStat } from "./rec
 
 export interface NativeStorageBackend {
   abi: 1;
-  platform: "darwin" | "posix-fixture";
+  platform: "darwin" | "win32" | "posix-fixture";
   /** Separate updater whitelist/durability support; absent in older diagnostics-only addons. */
   replacementStorage?: 1;
   flushDescriptorSync?(this: void, fd: number): void;
@@ -35,15 +35,15 @@ const refusedFiles: RecoveryFileSystem = {
   open: () => Promise.reject(unavailable()),
 };
 
-/** No Node/path-based fallback. Windows remains unavailable pending its native proof. */
+/** No Node/path-based fallback. Native capability does not enable capture. */
 export function loadNativeDiagnosticsStorage(root: string): NativeDiagnosticsStorage {
-  if (process.platform === "darwin") {
+  if (process.platform === "darwin" || process.platform === "win32") {
     try {
       const backend = loadDiagnosticsAddon("diagnostics_storage");
       const abi = Object.getOwnPropertyDescriptor(backend, "abi")?.value as unknown;
       const platform = Object.getOwnPropertyDescriptor(backend, "platform")?.value as unknown;
       const call = Object.getOwnPropertyDescriptor(backend, "call")?.value as unknown;
-      if (abi === 1 && platform === "darwin" && typeof call === "function")
+      if (abi === 1 && platform === process.platform && typeof call === "function")
         return createHandleRelativeStorage(root, backend as NativeStorageBackend);
     } catch {
       /* Missing/incompatible addon stays unavailable. */
