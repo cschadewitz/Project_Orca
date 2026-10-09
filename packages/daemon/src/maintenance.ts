@@ -34,6 +34,8 @@ export class Maintenance {
       target: RuntimeMaintenanceParams["target"];
       unfinished?: () => Promise<Pick<RuntimeDrainResult, "unfinished" | "truncated">>;
     },
+    private readonly newAdmissionOpen?: () => boolean,
+    private readonly existingWorkOpen?: () => boolean,
   ) {
     this.token = token;
   }
@@ -47,11 +49,25 @@ export class Maintenance {
     return { ready: this.token === token, active: [...this.active.values()] };
   }
   admissionClosed(): boolean {
-    return Boolean(this.token) || this.externallyClosed();
+    return Boolean(this.token) || this.externallyClosed() || this.durableAdmissionClosed();
+  }
+  private durableAdmissionClosed(): boolean {
+    try {
+      return this.newAdmissionOpen !== undefined && this.newAdmissionOpen() !== true;
+    } catch {
+      return true;
+    }
   }
   /** Draining closes new admissions while retaining the producers needed to finish existing work. */
   existingWorkClosed(): boolean {
-    return Boolean(this.token && !this.draining) || this.externallyClosed();
+    return Boolean(this.token && !this.draining) || this.externallyClosed() || this.durableExistingWorkClosed();
+  }
+  private durableExistingWorkClosed(): boolean {
+    try {
+      return this.existingWorkOpen !== undefined && this.existingWorkOpen() !== true;
+    } catch {
+      return true;
+    }
   }
   private runtimeChange(
     params: RuntimeMaintenanceParams | RuntimeDrainParams,
@@ -195,7 +211,12 @@ export class Maintenance {
       result[name] = {
         ...method,
         handle: async (params, ctx) => {
-          if ((this.token && (!this.draining || newAdmission)) || this.externallyClosed())
+          if (
+            (this.token && (!this.draining || newAdmission)) ||
+            this.externallyClosed() ||
+            this.durableExistingWorkClosed() ||
+            (newAdmission && this.durableAdmissionClosed())
+          )
             throw new ProtocolFault("PROTOCOL_MESSAGE", "Update admission is closed; retry later");
           const id = Symbol(name);
           this.active.set(id, name);

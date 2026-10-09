@@ -11,6 +11,8 @@ import {
   provisionUpdateWindow,
   updateAdmissionOpen,
   updateExistingWorkAllowed,
+  enrollUpdateWindowRoots,
+  inspectUpdateWindowRoots,
   type UpdateWriterLease,
 } from "../src/update-window.js";
 
@@ -38,6 +40,55 @@ async function writer(root: string, launch?: { attempt: string; token: string })
   closers.push(() => lease.close());
   return lease;
 }
+it("enrolls new managed roots before producers while retaining the existing app writer identity", async () => {
+  const f = await fixture(),
+    app = await writer(f.data[0]!);
+  const next = join(f.base, "new-config");
+  await mkdir(next, { mode: 0o700 });
+  const original = await readFile(join(f.data[0]!, ".orca-update-window.json"));
+  const enrolled = await enrollUpdateWindowRoots(f.control, [next, join(next, "future-store")]);
+  expect(enrolled.roots.map((root) => root.path)).toEqual([f.data[0]!, next].sort());
+  expect(app.check()).toBe(true);
+  expect(await readFile(join(f.data[0]!, ".orca-update-window.json"))).toEqual(original);
+  const child = await writer(next);
+  expect(child.check()).toBe(true);
+  const fresh = new ClosedUpdateWindow(f.control);
+  closers.push(() => fresh.detach());
+  fresh.closeAdmission("a".repeat(64));
+  expect(await fresh.capture()).toBe(false);
+  await app.close();
+  await child.close();
+  expect(await fresh.capture()).toBe(true);
+});
+it("refuses enrollment into a closed namespace or a broader overlapping root without publication", async () => {
+  const f = await fixture(),
+    next = join(f.base, "new-config");
+  await mkdir(next, { mode: 0o700 });
+  const original = await readFile(join(f.control, "window.json"));
+  await expect(enrollUpdateWindowRoots(f.control, [f.base])).rejects.toThrow();
+  expect(await readFile(join(f.control, "window.json"))).toEqual(original);
+  f.window.closeAdmission("a".repeat(64));
+  await expect(enrollUpdateWindowRoots(f.control, [next])).rejects.toThrow();
+  await expect(readFile(join(next, ".orca-update-window.json"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+it("torn added-root enrollment refuses ordinary work and preserves the original anchor", async () => {
+  const f = await fixture(),
+    app = await writer(f.data[0]!),
+    next = join(f.base, "new-config");
+  await mkdir(next, { mode: 0o700 });
+  const original = await readFile(join(f.data[0]!, ".orca-update-window.json"));
+  await expect(
+    enrollUpdateWindowRoots(f.control, [next], {
+      fileSync: () => {
+        throw new Error("Lost acknowledgement");
+      },
+    }),
+  ).rejects.toThrow();
+  expect(app.check()).toBe(false);
+  expect(updateAdmissionOpen(f.data[0]!)).toBe(false);
+  expect(() => inspectUpdateWindowRoots(f.control)).toThrow();
+  expect(await readFile(join(f.data[0]!, ".orca-update-window.json"))).toEqual(original);
+});
 it("closes admission before capture while existing writers finish naturally", async () => {
   const f = await fixture(2),
     lease = await writer(f.data[0]!);

@@ -37,6 +37,8 @@ export async function runtimeMaintenanceFixture(
     invalidIdentity?: boolean;
     lease?: RunLeaseOptions;
     gated?: boolean;
+    newAdmissionOpen?: () => boolean;
+    existingWorkOpen?: () => boolean;
   } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "orca-runtime-maintenance-"));
@@ -118,6 +120,8 @@ export async function runtimeMaintenanceFixture(
     control: options.wrongControl ? undefined : control,
     liveInputs: runtime.port,
     runtimeIdle: runtime,
+    newAdmissionOpen: options.newAdmissionOpen,
+    existingWorkOpen: options.existingWorkOpen,
     requestSubmissions: options.omitRequests ? undefined : requests,
     admissionRetries: admissions,
     continuationAdmissions: continuations,

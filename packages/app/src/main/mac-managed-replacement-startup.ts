@@ -2,14 +2,14 @@
 import { join } from "node:path";
 import { lstat } from "node:fs/promises";
 import {
-  ClosedUpdateWindow,
   enterUpdateWriter,
   updateAdmissionOpen,
   updateExistingWorkAllowed,
+  inspectUpdateWindowRoots,
   type UpdateWriterLease,
 } from "@orca/protocol/update-window";
 import { createNativeMacReplacementStartup } from "./mac-replacement-startup.js";
-import { provisionMacUpdateNamespace } from "./mac-update-namespace.js";
+import { provisionMacUpdateNamespace, enrollMacUpdateRoots } from "./mac-update-namespace.js";
 
 /** The main owner supplies its complete captured configured root set before producers.
  * Control is a private sibling outside the unchanged live paths. Unknown enrollment,
@@ -56,6 +56,12 @@ export function createManagedMacReplacementStartup(options: {
   return {
     bootstrap,
     journal: native.journal,
+    /** Serialized before first-run config creation or a newly owned daemon bootstrap. */
+    async enrollProtectedRoots(roots: readonly string[]): Promise<void> {
+      if (!bootstrap.ordinaryAllowed) throw new Error("Protected startup is closed");
+      await enrollMacUpdateRoots(options.control, roots);
+      if (!bootstrap.ordinaryAllowed) throw new Error("Protected root enrollment did not settle");
+    },
     initialize(protectedRoots: readonly string[]): Promise<"ordinary" | "closed" | "unknown"> {
       return (operation ??= Promise.resolve().then(async () => {
         try {
@@ -77,13 +83,10 @@ export function createManagedMacReplacementStartup(options: {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
           }
           if (!established) await provisionMacUpdateNamespace(options.control, protectedRoots);
-          const window = new ClosedUpdateWindow(options.control);
-          if (
-            JSON.stringify([...protectedRoots].sort()) !==
-            JSON.stringify(window.snapshot.roots.map((r) => r.path).sort())
-          )
+          const enrolled = inspectUpdateWindowRoots(options.control);
+          if (!protectedRoots.every((root) => enrolled.roots.some((captured) => captured.path === root)))
             return "unknown";
-          if (window.snapshot.phase !== "open") return "closed";
+          if (enrolled.phase !== "open") return "closed";
           const decision = await native.bootstrap.inspect();
           if (decision.outcome !== "ordinary") return decision.outcome === "replacement-closed" ? "closed" : "unknown";
           lease = await enterUpdateWriter(options.appRoot);

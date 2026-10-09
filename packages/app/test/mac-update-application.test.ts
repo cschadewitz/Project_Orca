@@ -24,7 +24,7 @@ const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of closers.splice(0).reverse()) await close();
 });
-async function fixture(enabled = true, closed = false) {
+async function fixture(enabled = true, closed = false, activationAllowed = true) {
   const f = await macUpdateRehearsal();
   const root = await mkdtemp(join(closed ? process.cwd() : tmpdir(), "orca-mac-app-"));
   let window: ClosedUpdateWindow | undefined;
@@ -60,7 +60,12 @@ async function fixture(enabled = true, closed = false) {
     await f.close();
     await rm(root, { recursive: true, force: true });
   });
-  const application = new MacUpdateApplication(enabled ? session : undefined, window);
+  const resolveWindow = vi.fn(() => window);
+  const application = new MacUpdateApplication(
+    enabled ? session : undefined,
+    closed ? resolveWindow : undefined,
+    () => activationAllowed,
+  );
   const ipc = new EventEmitter();
   const renderer = new EventEmitter();
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
@@ -120,6 +125,7 @@ async function fixture(enabled = true, closed = false) {
     session,
     application,
     window,
+    resolveWindow,
     data,
     bridge,
     invoke,
@@ -156,6 +162,18 @@ it("exact approval durably closes admission; defer settles preparation before re
   await lease?.close();
   expect(await h.bridge.macUpdates!.act(command)).toMatchObject({ ok: false });
   expect(h.window!.snapshot.phase).toBe("open");
+  expect(h.resolveWindow).toHaveBeenCalledTimes(1);
+});
+
+it("the production activation hold keeps a constructed session unavailable and leaves admission open", async () => {
+  const h = await fixture(true, true, false);
+  const command = await h.offer();
+  expect(h.bridge.macUpdates!.read()).toEqual({ phase: "unavailable" });
+  expect(await h.bridge.macUpdates!.act(command)).toMatchObject({ ok: false });
+  expect(h.window!.snapshot.phase).toBe("open");
+  expect(h.resolveWindow).not.toHaveBeenCalled();
+  expect(h.f.downloadFetch).not.toHaveBeenCalled();
+  expect(h.f.runtimeEvents).toEqual([]);
 });
 
 it("defer cannot reopen a window once native daemon shutdown has begun", async () => {

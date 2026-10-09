@@ -157,6 +157,51 @@ export class Workspace {
     return this.macUpdateHold !== undefined;
   }
 
+  /** Main-only facts for the authenticated managed process. A held update may keep
+   * checking this same owner after its clean stop; no replacement is discovered. */
+  captureMacUpdateOwnerFacts(expected: MacUpdateTarget) {
+    const daemon = this.daemon,
+      client = this.clientNow,
+      hello = this.verifiedHello;
+    const directory = resolve(this.target.path);
+    const current = () =>
+      !this.closed &&
+      !this.pending &&
+      !this.updating &&
+      !this.firstRunHold &&
+      !this.connectionPreparations.size &&
+      !this.candidates.size &&
+      !this.parkedDefault &&
+      !this.deps.setupBusy?.() &&
+      this.source === "bundled" &&
+      !this.target.readOnly &&
+      this.daemon === daemon &&
+      this.clientNow === client &&
+      this.verifiedHello === hello &&
+      this.epoch === expected.epoch &&
+      this.identity?.workspaceId === expected.workspaceId &&
+      this.identity.instanceId === expected.instanceId &&
+      resolve(this.target.path) === directory &&
+      daemon?.pid === hello?.processId &&
+      hello !== undefined &&
+      isCompatible(PROTOCOL_VERSION, hello.protocol) &&
+      hello?.identity?.workspaceId === expected.workspaceId &&
+      hello.identity.instanceId === expected.instanceId &&
+      hello.storeDir === join(directory, ".orca");
+    if (!daemon || !hello || !Number.isSafeInteger(daemon.pid) || !daemon.pid || !current()) return undefined;
+    return Object.freeze({
+      target: Object.freeze({ ...expected }),
+      previousTarget: Object.freeze({
+        workspaceId: expected.workspaceId,
+        instanceId: expected.instanceId,
+        processId: daemon.pid,
+      }),
+      configDir: directory,
+      storeDir: hello.storeDir!,
+      check: current,
+    });
+  }
+
   /** Main-only saved-config binding over the exact surviving first-run owner.
    * Config bytes may have changed after an explicit Config save; rebind checks the old/new hashes.
    * This captures no alternate target and creates no process or permission grant.

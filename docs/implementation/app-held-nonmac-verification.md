@@ -14,8 +14,9 @@ interface conflict retains both Windows platform support and #586 updater capabi
 
 Remote main was reverified as `db579fb7ac9cfce2e4e6901713088a80602311da`; before the
 authorized transfer the #584 remote branch remained at its original head. Casey's latest publication/merge/CI hold
-supersedes the earlier authorization for a canonical main-target draft. No push,
-main-target draft, integration-owner workflow change, dispatch, rerun, cancellation, release, signing,
+supersedes the earlier authorization for a canonical main-target draft. Source transfer at
+`a664d890d5630dc3ba1cb9d5bda34e19fd0d6a52` was pushed to the existing integration branch.
+No main-target draft, integration-owner workflow change, dispatch, rerun, cancellation, release, signing,
 activation or access change was performed. Existing #584 remains the integration-base
 draft, not a main-target canonical candidate. The earlier serial duplicate lookup found
 no canonical main-target draft for that combined head. The latest transfer authorization
@@ -25,8 +26,10 @@ acceptance can fetch the exact candidate; main-target publication and CI remain 
 ## Findings and shared fixes
 
 The supplied #586 patch was checked against its exact #584 main/IPC inputs and applied.
-Its disabled app-root bootstrap now precedes ordinary producer initialization. Updates
-remain sessionless and diagnostics remain disabled.
+Its app-root bootstrap now precedes ordinary producer initialization. Reviewed workspace
+and resolved configuration/store roots are enrolled before their first producer. The
+managed session/commit/recovery composition is mounted with missing delivery authority
+and an independent false activation gate. Diagnostics remain disabled.
 
 Three shared boundaries needed correction:
 
@@ -91,28 +94,53 @@ The app's existing manifest and lockfile already specify YAML 2.9.1. The preinst
 checkout lacked its app dependency link; the existing installed package was linked
 locally for checks. No dependency install, manifest edit or lockfile regeneration.
 
+### Subsequent managed production composition
+
+The final source delta adds reviewed-root enrollment, retained-root startup inspection,
+live daemon new-work/completion observers and a managed application factory. That factory
+connects exact authenticated Workspace facts, fresh-window approval, checked candidate
+revalidation, fixed-path backup/commit, native handoff and explicit closed verification/
+restoration. Its delivery/native authority input remains absent in main and its separate
+activation gate is false. A constructed session cannot bypass that gate. The factory
+adds no renderer paths, persisted consent, catalog polling or automatic recovery replay.
+
+Focused checks for this delta pass 123 distinct cases in ten files: actual main 25,
+session guards 16, app/preload approval 15, managed owner/authority 3, candidate download/
+session 49, actual CLI bootstrap 5, authenticated main handshake 1, enrollment/retained-root
+checks 5, live daemon admission 2 and first-run enrollment 2. The selected root/daemon/
+first-run invocation filters 66 unrelated cases. Both TypeScript projects pass. Scoped
+lint, formatting and whitespace checks pass after correcting two unbound test-spy references.
+
+The first session-guard run failed fourteen old fixture expectations: the fixture omitted
+the required #580 drain owner and expected the earlier prepare-before-drain sequence.
+It now captures the real Workspace drain owner and scopes proof fault injection to final
+prepare; all sixteen checks pass without relaxing missing-owner refusal. Initial first-run
+assertion and main Electron mock/native-singleton access issues were corrected and the
+affected checks rerun. The native singleton is now resolved only at authorized activation.
+These local failures are not CI results. The previously pinned 69-case selection and
+constituent evidence retain their stated limits; this additional delta receives the checks
+above instead of a blanket unchanged-evidence claim.
+
 ## Remaining non-Mac blockers and authority
 
 This candidate is not activation-ready and does not close all M10/M21/M22 work.
 
-1. Complete trusted config/store/app root enrollment and rejection of overlaps must be
-   bound before those producers start. The mounted bootstrap slice enrolls only userData.
-   Native catalog/session, exact target authorization, fixed-path commit/recovery ports,
-   whole-image verification, continuity checks and the owned one-use closed child launch
-   still require production composition. No permissive substitute is supplied here.
-2. The already running daemon does not bind its dispatch admission gate to the durable
-   update window. CLI lifetime enrollment refuses new process launches; daemon Maintenance
-   currently reads only its runtime token and optional ORCA_ADMISSION_FILE. Thus the
-   durable-close-to-runtime-drain interval is not yet a complete new-admission fence for
-   direct external clients. Bind a new-admission-only predicate while retaining completion
-   and maintenance/defer RPCs, then verify this interval before activation.
-3. The supported writer authority boundary requires an explicit decision: participating
-   managed app/CLI/daemon lifetimes, or exclusion of arbitrary older/unmanaged filesystem
-   writers. Cooperative kernel slots prove only participating ownership. The latter choice
-   needs separately authorized OS launch/isolation authority. An independent all-write
-   ledger or immutable live-directory topology is not assumed necessary under the
-   continuously closed fixed-path proof.
-4. Windows #585 source is composed. First-run fence boot/volume authority still refuses
+1. The approved private catalog/invitation source and freshness/revocation policy remain
+   unknown (delivery D3). The exact question has been raised; candidate declarations
+   cannot supply that authority. The mounted managed composition requires the approved
+   download/native inspection provider, independently accepted installed-image policy,
+   existing secure-storage/intent/TCC continuity inspection and owned one-use closed-child
+   producer. These production authority providers are not supplied by main yet. This is
+   remaining implementation/configuration work, not a claim of Mac acceptance alone.
+2. Root enrollment and live daemon admission are implemented. Enrollment serializes new
+   roots before first-run writes/managed CLI bootstrap, retains immutable existing anchors,
+   refuses overlaps/closed windows and closes ordinary work after torn publication. The
+   daemon observes durable new-work and existing-work predicates on live dispatch, closing
+   the pre-drain interval for direct clients while preserving completion and maintenance.
+   The supported boundary is managed participating app/CLI/daemon lifetimes, as directed.
+   It does not claim isolation from arbitrary same-user filesystem writers; no additional
+   all-write ledger or immutable directory topology is introduced.
+3. Windows #585 source is composed. First-run fence boot/volume authority still refuses
    Windows; Windows diagnostics native clock/storage do not silently grant that separate
    authority. Exact MSVC/SDK x64/arm64 staging and packaged Electron/safeStorage loading,
    paired execution/resource high-water, second-user refusal, physical recovery/durability,
@@ -121,7 +149,7 @@ This candidate is not activation-ready and does not close all M10/M21/M22 work.
    delivery inputs still require owner decisions. Closed diagnostics connection/run/admission
    producers are now composed; paired execution/high-water evidence remains incomplete.
    Diagnostics stay off.
-5. One final combined automatic CI run and canonical main-target draft are deferred by
+4. One final combined automatic CI run and canonical main-target draft are deferred by
    the current hold. No exact combined-head CI result exists. Earlier #579 CI
    37880844822 failed both Node 22/24 test jobs; its identified assertion is locally fixed.
 

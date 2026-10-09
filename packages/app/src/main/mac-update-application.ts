@@ -13,12 +13,14 @@ export interface MacUpdateCaller {
 }
 export class MacUpdateApplication {
   private approval: { offerId: string; manifestSha256: string; attempt: string } | undefined;
+  private window: ClosedUpdateWindow | undefined;
   constructor(
     private readonly session?: MacCandidateSession,
-    private readonly closedWindow?: ClosedUpdateWindow,
+    private readonly closedWindow?: ClosedUpdateWindow | (() => ClosedUpdateWindow | undefined),
+    private readonly activationAllowed: () => boolean = () => true,
   ) {}
   get state(): MacUpdateView {
-    if (!this.session) return Object.freeze({ phase: "unavailable" });
+    if (!this.session || !this.activationAllowed()) return Object.freeze({ phase: "unavailable" });
     const { phase, offerId, blocker } = this.session.state;
     const candidate = this.session.offeredCandidate;
     return Object.freeze({
@@ -38,6 +40,7 @@ export class MacUpdateApplication {
     });
     if (
       !this.session ||
+      !this.activationAllowed() ||
       !caller.ownedMainFrame ||
       !Number.isSafeInteger(caller.epoch) ||
       caller.epoch < 0 ||
@@ -63,30 +66,36 @@ export class MacUpdateApplication {
     if (
       value.offerId !== current.offerId ||
       value.manifestSha256 !== current.manifestSha256 ||
-      (value.action === "approve" && caller.windowsHeld)
+      (value.action === "approve" &&
+        (caller.windowsHeld || (this.closedWindow && !this.approval && current.phase !== "available")))
     )
       return invalid();
     try {
+      const closedWindow =
+        this.window ?? (typeof this.closedWindow === "function" ? this.closedWindow() : this.closedWindow);
+      if (this.closedWindow && !closedWindow) return invalid();
       if (value.action === "defer") {
         const approval = this.approval;
-        if (this.closedWindow && approval && !this.closedWindow.beginDefer(approval.manifestSha256, approval.attempt))
+        if (closedWindow && approval && !closedWindow.beginDefer(approval.manifestSha256, approval.attempt))
           return invalid();
         if (!this.session.defer(value.offerId)) return invalid();
-        if (this.closedWindow && approval) {
+        if (closedWindow && approval) {
           const settled = await this.session.settled();
-          if (settled.phase !== "deferred" || !this.closedWindow.finishDefer(approval.manifestSha256, approval.attempt))
+          if (settled.phase !== "deferred" || !closedWindow.finishDefer(approval.manifestSha256, approval.attempt))
             return invalid();
           this.approval = undefined;
+          this.window = undefined;
         }
       } else {
-        if (this.closedWindow) {
+        if (closedWindow) {
           if (!this.approval) {
             if (current.phase !== "available") return invalid();
-            this.closedWindow.closeAdmission(value.manifestSha256);
+            closedWindow.closeAdmission(value.manifestSha256);
+            this.window = closedWindow;
             this.approval = {
               offerId: value.offerId,
               manifestSha256: value.manifestSha256,
-              attempt: this.closedWindow.snapshot.attempt!,
+              attempt: closedWindow.snapshot.attempt!,
             };
           } else if (this.approval.offerId !== value.offerId || this.approval.manifestSha256 !== value.manifestSha256)
             return invalid();

@@ -141,6 +141,15 @@ function anchor(root: string) {
   return { anchor: result, state: current };
 }
 
+/** Validate every retained enrollment against its live directory and immutable anchor. */
+export function inspectUpdateWindowRoots(control: string): UpdateWindowState {
+  const current = state(control),
+    identity = fenceDirectory(control);
+  for (const root of current.roots)
+    if (!same(anchor(root.path).anchor, { version: 1, id: current.id, root, control: identity })) throw unavailable();
+  return structuredClone(current);
+}
+
 /** New admissions require the durable window to remain open. */
 export function updateAdmissionOpen(root: string): boolean {
   try {
@@ -353,6 +362,75 @@ export async function provisionUpdateWindow(
     } else write(join(control, "enrolled.json"), enrollment, false, durability);
   } finally {
     for (const handle of handles) await close(handle);
+  }
+}
+
+/** Extend an OPEN managed namespace before starting a producer for its new roots.
+ * Existing root identities/anchors never change. Enrollment owns every new root slot
+ * and a control mutex. A torn publication closes admission rather than repairing it.
+ * This excludes participating producers, not arbitrary filesystem writers. */
+export async function enrollUpdateWindowRoots(
+  control: string,
+  requested: readonly string[],
+  durability?: UpdateWindowDurability,
+): Promise<UpdateWindowState> {
+  if (!isAbsolute(control) || resolve(control) !== control || !requested.length || requested.length > 32)
+    throw unavailable();
+  const identity = fenceDirectory(control);
+  const mutex = await hold(identity, 0);
+  const held: Server[] = [];
+  try {
+    const current = state(control);
+    if (current.phase !== "open" || current.attempt !== null) throw unavailable();
+    for (const root of current.roots)
+      if (!same(anchor(root.path).anchor, { version: 1, id: current.id, root, control: identity })) throw unavailable();
+    const paths = [...new Set(requested)];
+    if (paths.some((path) => !isAbsolute(path) || resolve(path) !== path)) throw unavailable();
+    // A parent root covers its configured store descendants. Existing enrolled roots
+    // cannot be replaced by a broader parent or transplanted to another namespace.
+    const additions = paths
+      .filter(
+        (path) =>
+          !current.roots.some((root) => path === root.path || path.startsWith(root.path + "/")) &&
+          !paths.some((other) => path !== other && path.startsWith(other + "/")),
+      )
+      .map((path) => {
+        assertFenceVolume(path);
+        return fenceDirectory(path);
+      });
+    const roots = [...current.roots, ...additions].sort((a, b) => a.path.localeCompare(b.path));
+    if (
+      roots.length > 32 ||
+      roots.some(
+        (root) =>
+          root.path === control ||
+          root.path.startsWith(control + "/") ||
+          control.startsWith(root.path + "/") ||
+          roots.some((other) => other !== root && root.path.startsWith(other.path + "/")),
+      )
+    )
+      throw unavailable();
+    if (!additions.length) return current;
+    for (const root of additions) {
+      if (exists(join(root.path, GUARD))) throw unavailable();
+      for (let slot = 0; slot < SLOTS; slot++) held.push(await hold(root, slot));
+    }
+    if (
+      !same(state(control), current) ||
+      !same(fenceDirectory(control), identity) ||
+      additions.some((root) => !same(fenceDirectory(root.path), root))
+    )
+      throw unavailable();
+    const next = UpdateWindowStateSchema.parse({ ...current, roots });
+    // Until the final enrollment publication, ordinary readers refuse the mismatch.
+    write(join(control, "window.json"), next, true, durability);
+    for (const root of additions)
+      write(join(root.path, GUARD), { version: 1, id: current.id, root, control: identity }, false, durability);
+    write(join(control, "enrolled.json"), { version: 1, id: current.id, roots, control: identity }, true, durability);
+    return inspectUpdateWindowRoots(control);
+  } finally {
+    for (const slot of held) await close(slot);
+    await close(mutex);
   }
 }
 

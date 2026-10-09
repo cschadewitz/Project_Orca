@@ -1,4 +1,4 @@
-/** #387 main-only trusted candidate binding and process-local consent; all activation adapters disabled. */
+/** Main-only trusted candidate binding and process-local consent. */
 import {
   downloadMacCandidate,
   macAbortable,
@@ -23,6 +23,7 @@ import {
   type MacUpdateTarget,
   type MacUpdatePorts,
 } from "./mac-updates.js";
+import type { MacNativeCommitRequest } from "./mac-native-handoff.js";
 
 /** Read-only preparation checkpoint, never native activation or recovery eligibility. */
 export interface MacCandidatePrepared {
@@ -37,6 +38,12 @@ export interface MacCandidatePreparation extends Pick<
 > {
   /** Only explicit untouched refusal allows guard cleanup. No positive readiness/installation result. */
   checkPrepared(this: void, prepared: MacCandidatePrepared): Promise<"refused" | "unknown">;
+}
+/** Explicit production binding. Legacy preparation-only adapters cannot gain activation
+ * by returning a positive string. Main supplies both checked revalidation and commit. */
+export interface MacCandidateExecution {
+  revalidate(this: void, prepared: MacCandidatePrepared): Promise<"valid" | "refused" | "unknown">;
+  activate(this: void, request: MacNativeCommitRequest): Promise<"committed" | "refused" | "unknown">;
 }
 
 export interface MacCandidateOffer {
@@ -57,9 +64,9 @@ function sameCandidate(a: MacUpdateCandidate, b: MacUpdateCandidate): boolean {
   );
 }
 /** Construct only in trusted main code, after policy/delivery ownership is approved. No production
- * constructor call, renderer IPC, persisted approval, catalog polling, native updater or installation.
+ * renderer capability, persisted approval or catalog polling is created by this class.
  * Without trusted preparation ports a verified download stops at the disabled draft guard.
- * Preparation cannot authorize native installation. Unknown verification/cleanup seals this
+ * Preparation cannot authorize native installation; an explicit execution owner is required. Unknown verification/cleanup seals this
  * session; the existing coordinator's failed phase proves only that installed app/state were untouched.
  */
 export class MacCandidateSession {
@@ -74,7 +81,15 @@ export class MacCandidateSession {
   private retiredOfferId: string | undefined;
   private operation: Promise<MacUpdateSnapshot> | undefined;
 
-  constructor(ports?: MacCandidateDownloadPorts, preparation?: MacCandidatePreparation) {
+  constructor(
+    ports?: MacCandidateDownloadPorts,
+    preparation?: MacCandidatePreparation,
+    execution?: MacCandidateExecution,
+  ) {
+    const native =
+      execution && typeof execution.revalidate === "function" && typeof execution.activate === "function"
+        ? Object.freeze({ revalidate: execution.revalidate, activate: execution.activate })
+        : undefined;
     const guards =
       preparation &&
       typeof preparation.prepareDrafts === "function" &&
@@ -141,18 +156,36 @@ export class MacCandidateSession {
         if (!guards) return "refused";
         if (this.uncertain || !this.binding || !this.owned || !sameCandidate(candidate, this.binding.value.candidate))
           return "unknown";
-        const result = await guards.checkPrepared(
-          Object.freeze({
-            binding: this.binding.value,
-            directory: this.owned.directory,
-            target,
-            scope: "preparation-only" as const,
-          }),
-        );
+        const prepared = Object.freeze({
+          binding: this.binding.value,
+          directory: this.owned.directory,
+          target,
+          scope: "preparation-only" as const,
+        });
+        if (native) return native.revalidate(prepared);
+        const result = await guards.checkPrepared(prepared);
         // Malformed/positive adapter output is never complete-state/native readiness.
         return result === "refused" ? "refused" : "unknown";
       },
-      activate: () => Promise.resolve("refused"),
+      activate: async (candidate, lease) => {
+        if (
+          !native ||
+          this.uncertain ||
+          !this.binding ||
+          !this.owned ||
+          !sameCandidate(candidate, this.binding.value.candidate)
+        )
+          return "refused";
+        return native.activate({
+          prepared: Object.freeze({
+            binding: this.binding.value,
+            directory: this.owned.directory,
+            target: lease.target,
+            scope: "preparation-only",
+          }),
+          lease,
+        });
+      },
     });
   }
   get state(): MacUpdateSnapshot {

@@ -1,7 +1,12 @@
 /** Explicit first provisioning, separate from opening an already established journal. */
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { ClosedUpdateWindow, provisionUpdateWindow, type UpdateWindowDurability } from "@orca/protocol/update-window";
+import {
+  ClosedUpdateWindow,
+  provisionUpdateWindow,
+  enrollUpdateWindowRoots,
+  type UpdateWindowDurability,
+} from "@orca/protocol/update-window";
 import { loadDiagnosticsAddon } from "./diagnostics/native-addon.js";
 import type { NativeStorageBackend } from "./diagnostics/native-storage.js";
 
@@ -19,6 +24,14 @@ export function createNativeClosedUpdateWindow(control: string, fixture?: Native
   if (!backend || backend.abi !== 1 || backend.replacementStorage !== 1 || (!fixture && backend.platform !== "darwin"))
     throw unavailable();
   return new ClosedUpdateWindow(control, durability(backend));
+}
+
+export async function enrollMacUpdateRoots(control: string, roots: readonly string[]): Promise<void> {
+  const backend =
+    process.platform === "darwin" ? (loadDiagnosticsAddon("diagnostics_storage") as NativeStorageBackend) : undefined;
+  if (!backend || backend.abi !== 1 || backend.platform !== "darwin" || backend.replacementStorage !== 1)
+    throw unavailable();
+  await enrollUpdateWindowRoots(control, roots, durability(backend));
 }
 
 /** Must run under the already captured pre-producer launch authority, before startup

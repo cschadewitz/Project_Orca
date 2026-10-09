@@ -13,6 +13,34 @@ async function fixture(options?: Parameters<typeof runtimeMaintenanceFixture>[0]
   closers.push(f.close);
   return f;
 }
+it("durable closure blocks new admission before runtime drain while existing completion remains usable", async () => {
+  let admission = true,
+    existing = true;
+  const f = await fixture({ gated: true, newAdmissionOpen: () => admission, existingWorkOpen: () => existing });
+  const started = await f.call("runs.start", { workflowId: "flow" });
+  if (!started.ok) throw new Error("Start failed");
+  const runId = (started.result as { runId: string }).runId;
+  admission = false;
+  expect(await f.call("runs.start", { workflowId: "flow" })).toMatchObject({ ok: false });
+  expect(await f.call("runs.get", { runId })).toMatchObject({ ok: true });
+  const [input] = await f.orc.pendingInputs(runId);
+  expect(await f.call("inputs.answer", { runId, requestId: input!.id, optionId: "finish" })).toMatchObject({
+    ok: true,
+  });
+  existing = false;
+  expect(await f.call("runs.get", { runId })).toMatchObject({ ok: false });
+  expect(await f.hello()).toMatchObject({ ok: true });
+});
+
+it("a failed durable admission observer refuses new work without breaking completion", async () => {
+  const f = await fixture({
+    newAdmissionOpen: () => {
+      throw new Error("Lost root authority");
+    },
+  });
+  expect(await f.call("runs.start", { workflowId: "flow" })).toMatchObject({ ok: false });
+  expect(await f.call("runs.list", {})).toMatchObject({ ok: true });
+});
 it("advertises only complete authenticated serving bindings and rejects incomplete or mismatched composition", async () => {
   const full = await fixture();
   expect(await full.hello()).toMatchObject({

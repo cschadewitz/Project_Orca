@@ -53,6 +53,8 @@ export interface FirstRunDeps {
   /** Must return a bundled, token-file authenticated candidate and its owned child PID. */
   prepareConnection(path: string): Promise<ConnectionCandidate & { expectedProcessId: number }>;
   current(path: string): boolean;
+  /** Main enrolls the reviewed existing workspace before any configuration producer. */
+  enroll?(path: string): Promise<void>;
   /** Exact surviving owned daemon, captured in main. Does not start or adopt a daemon. */
   configuration?(path: string): {
     client: DaemonClient;
@@ -248,6 +250,8 @@ export class FirstRunSetup {
         throw selectionFailure();
       separateDirectories(project.path, workspace.path);
       await emptyDirectory(workspace.path);
+      assertCurrent();
+      await this.deps.enroll?.(workspace.path);
       assertCurrent();
       // Consume before the first write. Any incomplete preparation requires choosing a fresh empty directory.
       this.selection = undefined;

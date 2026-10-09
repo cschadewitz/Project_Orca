@@ -4,7 +4,12 @@
  */
 import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
 import { firstRunRequiresExplicitContinuationRecovery } from "../first-run-recovery-fence.js";
-import { assertClosedUpdateCommand, isClosedUpdateBootstrap } from "../update-bootstrap.js";
+import {
+  assertClosedUpdateCommand,
+  isClosedUpdateBootstrap,
+  configuredUpdateAdmissionOpen,
+  configuredUpdateExistingWorkOpen,
+} from "../update-bootstrap.js";
 import { mcpCommand } from "./mcp.js";
 import { AdmissionRetryModel, ContinuationAdmissionModel, neverAttached } from "@orca/daemon";
 import { admissionRetryOptions } from "./admission-retry.js";
@@ -950,6 +955,8 @@ export const commands: Record<string, Command> = {
         auth,
         maintenanceToken: process.env.ORCA_MAINTENANCE_TOKEN,
         admissionFile: process.env.ORCA_ADMISSION_FILE,
+        newAdmissionOpen: configuredUpdateAdmissionOpen,
+        existingWorkOpen: configuredUpdateExistingWorkOpen,
         host: ctx.flags.host as string | undefined,
         port,
         orcaVersion: ORCA_VERSION,

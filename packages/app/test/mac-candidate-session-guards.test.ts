@@ -18,6 +18,7 @@ async function fixture() {
   const check = vi.fn(async (_prepared: MacCandidatePrepared): Promise<"refused" | "unknown"> => "unknown");
   const session = createMacCandidateSession({
     workspace: f.workspace,
+    captureDrain: (target) => f.workspace.captureMacUpdateDrainTarget(target),
     windows: f.windows,
     download: {
       root,
@@ -103,10 +104,7 @@ it("waits for actual runtime work, reuses approved owned bytes and reaches only 
   expect(h.session.defer(id)).toBe(false);
   await h.session.reconsider();
   await h.session.approve(id);
-  expect(h.f.runtimeEvents).toEqual([
-    { action: "prepare", outcome: "blocked" },
-    { action: "prepare", outcome: "held" },
-  ]);
+  expect(h.f.runtimeEvents).toEqual([{ action: "prepare", outcome: "held" }]);
   expect(await h.session.offer(h.input, h.f.target, new AbortController().signal)).toEqual({ outcome: "unknown" });
 });
 

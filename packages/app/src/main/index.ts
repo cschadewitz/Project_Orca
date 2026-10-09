@@ -22,6 +22,7 @@ import { z } from "zod";
 import { createDiagnosticsInitializer } from "./diagnostics/initialize.js";
 import { createManagedMacReplacementStartup } from "./mac-managed-replacement-startup.js";
 import { MacAppWriterBarrier } from "./mac-app-writer-barrier.js";
+import { diagnosticsAddonPath } from "./diagnostics/native-addon.js";
 import type { OwnedDiagnosticObservation } from "./diagnostics/source-producers.js";
 import { FirstRunSetup } from "./first-run/setup.js";
 import { installFirstRunIPC, startFirstRunWorkspace } from "./first-run/ipc.js";
@@ -35,7 +36,8 @@ import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates } from "./updates.js";
 import { MacUpdateWindows } from "./mac-update-windows.js";
 import { MacUpdateGuards } from "./mac-update-guards.js";
-import { MacUpdateApplication, installMacUpdateIPC } from "./mac-update-application.js";
+import { installMacUpdateIPC } from "./mac-update-application.js";
+import { createManagedMacUpdateApplication } from "./mac-managed-update-application.js";
 import { updateDriver } from "./update-driver.js";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,6 +51,7 @@ import {
   Notification,
   safeStorage,
   powerMonitor,
+  autoUpdater,
 } from "electron";
 import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
@@ -67,8 +70,8 @@ import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./d
 import { findBundledDaemon, startBundledDaemon } from "./daemon-process.js";
 import { storeRoot, Workspace } from "./workspace.js";
 
-// Mount synchronously before producers. This disabled bootstrap slice enrolls app data
-// only; the integration owner must capture ALL configured roots before enabling updates.
+// Mount synchronously before producers. Selected workspace/configuration roots are
+// enrolled before their first producer; replacement activation remains held below.
 const appWriterRoot = app.getPath("userData");
 const appWriters = new MacAppWriterBarrier();
 const macReplacement =
@@ -568,6 +571,23 @@ const workspace = new Workspace({
       entry,
       cwd,
       ...(configPath ? { configPath } : {}),
+      ...(macReplacement
+        ? {
+            env: {
+              ...process.env,
+              ORCA_MANAGED_UPDATE_CONTROL: join(
+                dirname(appWriterRoot),
+                basename(appWriterRoot) + "-native-replacement",
+              ),
+              ORCA_MANAGED_UPDATE_ADDON: diagnosticsAddonPath("diagnostics_storage", {
+                platform: process.platform,
+                arch: process.arch,
+                electron: process.versions.electron !== undefined,
+                ...(process.resourcesPath ? { resourcesPath: process.resourcesPath } : {}),
+              }),
+            },
+          }
+        : {}),
       ...(firstRunToken ? { firstRunToken } : {}),
       // A first-run startup never retries an owned child whose exit could be uncertain.
       ...(configPath ? { attempts: 1 } : {}),
@@ -666,6 +686,9 @@ const workspace = new Workspace({
 });
 
 const firstRun = new FirstRunSetup({
+  enroll: async (path) => {
+    if (macReplacement) await macReplacement.enrollProtectedRoots([path]);
+  },
   home: app.getPath("home"),
   receiptPath: join(app.getPath("userData"), "first-run", "selection.json"),
   choose: async (kind) => {
@@ -808,7 +831,17 @@ export const macUpdateGuards = new MacUpdateGuards(
   () => firstRun.isBusy,
   (target) => workspace.captureMacUpdateDrainTarget(target),
 );
-const macUpdates = new MacUpdateApplication();
+// Source composition is present while the catalog/invitation authority and native
+// acceptance are unresolved. Casey's activation hold is independent of that policy.
+export const managedMacUpdates = createManagedMacUpdateApplication({
+  control: join(dirname(appWriterRoot), basename(appWriterRoot) + "-native-replacement"),
+  workspace,
+  guards: macUpdateGuards,
+  native: () => autoUpdater,
+  activationAllowed: () => false,
+  pauseAppWriters: pauseMacUpdateAppWriters,
+});
+const macUpdates = managedMacUpdates.application;
 installMacUpdateIPC(macUpdates, {
   ipc: ipcMain,
   windows: () => BrowserWindow.getAllWindows(),

@@ -110,6 +110,10 @@ export interface DaemonOptions extends MethodContext {
   auth?: DaemonAuthOptions | undefined;
   maintenanceToken?: string | undefined;
   admissionFile?: string | undefined;
+  /** Durable managed-root admission, independent of runtime drain. Existing completion remains available. */
+  newAdmissionOpen?: (() => boolean) | undefined;
+  /** Held completion/observation permission; final durable stop or lost root identity closes it. */
+  existingWorkOpen?: (() => boolean) | undefined;
   host?: string | undefined;
   /** `0` (the default) picks a free port; read the real one from `DaemonHandle.port`. */
   port?: number | undefined;
@@ -256,6 +260,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           },
         }
       : undefined,
+    opts.newAdmissionOpen,
+    opts.existingWorkOpen,
   );
   const ctx: MethodContext = {
     ...(identity ? { identity } : {}),

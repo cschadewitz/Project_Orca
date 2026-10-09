@@ -111,6 +111,32 @@ async function rig() {
 }
 
 describe.skipIf(typeof process.getuid !== "function")("dedicated first-run project selection", () => {
+  it("enrolls the reviewed workspace before configuration writes and refuses failed enrollment", async () => {
+    const f = await rig();
+    const enroll = vi.fn(async (path: string) => {
+      expect(path).toBe(f.workspace);
+      expect(await readdir(path)).toEqual([]);
+      throw new Error("Enrollment did not settle");
+    });
+    f.deps.enroll = enroll;
+    await expect(f.prepare()).rejects.toThrow("Project setup could not verify");
+    expect(enroll).toHaveBeenCalledOnce();
+    expect(await readdir(f.workspace)).toEqual([]);
+    expect(f.prepareConnection).not.toHaveBeenCalled();
+  });
+  it("writes configuration only after reviewed-root enrollment has settled", async () => {
+    const f = await rig();
+    const enroll = vi.fn(async (path: string) => {
+      expect(await readdir(path)).toEqual([]);
+      await writeFile(join(path, ".orca-update-window.json"), "fixture enrollment anchor\n", { mode: 0o600 });
+    });
+    f.deps.enroll = enroll;
+    await f.prepare();
+    expect(enroll).toHaveBeenCalledOnce();
+    expect(await readFile(join(f.workspace, ".orca-update-window.json"), "utf8")).toBe("fixture enrollment anchor\n");
+    expect(await readdir(f.workspace)).toContain("orca.config.yaml");
+    expect(f.prepareConnection).not.toHaveBeenCalled();
+  });
   it.each(["current", "prepare", "hello", "dispose"] as const)(
     "preserves ownership reconciliation refusal from %s through the setup wrapper",
     async (stage) => {

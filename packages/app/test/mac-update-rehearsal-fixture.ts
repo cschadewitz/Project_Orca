@@ -158,6 +158,9 @@ export async function macUpdateRehearsal(
       };
       if (request.method !== "maintenance.runtime") return actualFetch(input, init);
       const action = request.params.action!;
+      // These fixtures inject proof/lost-response faults at final prepare. The current
+      // coordinator's earlier real drain/defer calls must retain their own contract.
+      if (action === "drain" || action === "defer") return actualFetch(input, init);
       runtimeEvents.push({ action });
       // Never reopen fixture admission. A release attempt can only fail before dispatch.
       if (action === "resume") {
