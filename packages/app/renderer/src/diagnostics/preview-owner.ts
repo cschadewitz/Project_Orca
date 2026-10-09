@@ -27,6 +27,20 @@ export class DiagnosticPreviewOwner {
   }
   async read(bridge: Pick<DiagnosticsBridge, "readPreviewBlock" | "releasePreviewBlock">): Promise<void> {
     const decoder = new TextDecoder("utf-8", { fatal: true });
+    // Timers are throttled in hidden/background windows. One task channel still
+    // yields between bounded batches without delaying disposal by a timer clamp.
+    const channel = new MessageChannel();
+    let resume: (() => void) | undefined;
+    channel.port1.onmessage = () => {
+      const next = resume;
+      resume = undefined;
+      next?.();
+    };
+    const turn = () =>
+      new Promise<void>((resolve) => {
+        resume = resolve;
+        channel.port2.postMessage(0);
+      });
     let offset = 0;
     try {
       while (offset < this.bytes.length) {
@@ -55,12 +69,16 @@ export class DiagnosticPreviewOwner {
         }
         if (!released.ok && !this.disposed) throw new Error(released.code);
         // Yield between decoding/layout batches, including fake/local bridges.
-        if (offset < this.bytes.length) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        if (offset < this.bytes.length) await turn();
       }
       if (this.disposed) throw new Error("stale_preview");
     } catch (error) {
       this.dispose();
       throw error;
+    } finally {
+      channel.port1.onmessage = null;
+      channel.port1.close();
+      channel.port2.close();
     }
   }
 }

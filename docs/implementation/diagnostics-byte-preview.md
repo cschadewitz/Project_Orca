@@ -19,7 +19,9 @@ reservations, not a zero-copy claim or a bound on engine/native internals. IPC a
 contextBridge both copy. Preload retains and erases its isolated-world copy after
 renderer acknowledgement, and fences replies pending during revocation. Renderer
 copies each block into one bounded UTF-8 owner, decodes with fatal UTF-8 handling,
-erases its incoming copy and yields between bounded batches. The complete report
+erases its incoming copy and yields between bounded batches through one reusable
+MessageChannel. Background timer throttling cannot stall this cooperative task
+queue. The complete report
 is rendered in one focusable, labelled `pre` with all blocks in document order;
 offscreen layout uses the existing content-visibility rules. No omitted text,
 pagination or preview reconstruction is used for Save.
