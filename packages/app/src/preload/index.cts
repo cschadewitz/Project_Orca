@@ -31,7 +31,12 @@ import type {
 } from "../bridge.js";
 import type { UpdateSnapshot } from "../update-contract.js";
 import type { MacUpdateView } from "../mac-update-contract.js";
-import type { DiagnosticPreviewBlock, DiagnosticsResult, DiagnosticsStatus } from "../diagnostics-contract.js";
+import type {
+  DiagnosticPreviewBlock,
+  DiagnosticPreview,
+  DiagnosticsResult,
+  DiagnosticsStatus,
+} from "../diagnostics-contract.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
 
@@ -62,6 +67,7 @@ let diagnosticBlock: DiagnosticPreviewBlock | undefined;
 let diagnosticBlockPending = false;
 let diagnosticPendingHandle: string | undefined;
 let diagnosticBlockEpoch = 0;
+let diagnosticStatusRevision = 0;
 function eraseDiagnosticBytes(bytes: Uint8Array): void {
   if (!bytes.byteLength) return;
   bytes.fill(0);
@@ -74,6 +80,8 @@ function eraseDiagnosticBlock(): void {
   diagnosticBlock = undefined;
 }
 ipcRenderer.on("orca:diagnostics.changed", (_event: unknown, status: DiagnosticsStatus) => {
+  if (status.revision < diagnosticStatusRevision) return;
+  diagnosticStatusRevision = status.revision;
   const handle = diagnosticBlock?.handle ?? diagnosticPendingHandle;
   if (!status.enabled || (handle !== undefined && status.activePreviewHandle !== handle)) eraseDiagnosticBlock();
 });
@@ -198,7 +206,11 @@ const bridge: OrcaBridge = {
       return diagnosticCall("setEnabled", { enabled, scopeVersion });
     },
     setMinutes: (minutes) => diagnosticCall("setMinutes", { minutes }),
-    preparePreview: (source) => diagnosticCall("preparePreview", { source }),
+    preparePreview: async (source) => {
+      const result = await diagnosticCall<DiagnosticPreview>("preparePreview", { source });
+      if (result.ok) diagnosticStatusRevision = Math.max(diagnosticStatusRevision, result.value.statusRevision);
+      return result;
+    },
     readPreviewBlock: readDiagnosticBlock,
     releasePreviewBlock: (handle, offset) => {
       if (diagnosticBlock?.handle === handle && diagnosticBlock.offset === offset) {

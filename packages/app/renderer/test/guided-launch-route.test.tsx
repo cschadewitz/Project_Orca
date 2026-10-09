@@ -156,6 +156,7 @@ function setup({ disconnected = false, lose = false, prepared = false, sample = 
     acknowledgedUnknown: false,
     olderUnknowns: false,
     payloadReservedBytes: 0,
+    revision: 0,
   };
   const diagnostics = {
     status: vi.fn(async () => ({ ok: true as const, value: status })),

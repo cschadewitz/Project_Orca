@@ -54,6 +54,7 @@ export class RecoveryController {
   private ring: PretriggerBuffer;
   private epoch = 0;
   private authorityEpoch = 0;
+  private statusRevision = 0;
   private reading: BootReading | undefined;
   private preview: Preview | undefined;
   private previewCharged = false;
@@ -174,6 +175,7 @@ export class RecoveryController {
     const now = this.now();
     this.checkPreview(now);
     return {
+      revision: ++this.statusRevision,
       enabled: this.setting.enabled,
       productionEnabled: this.productionEnabled,
       scopeVersion: DIAGNOSTICS_SCOPE,
@@ -390,6 +392,7 @@ export class RecoveryController {
         );
         this.previewTimer.unref?.();
         return success({
+          statusRevision: this.statusRevision,
           handle: this.preview.handle,
           byteLength: bytes.length,
           source,
@@ -419,7 +422,7 @@ export class RecoveryController {
       if (this.retiredPreview === result.value.handle) this.releaseRetiredPreview();
       return failure("stale_preview");
     }
-    return result;
+    return result.ok ? success({ ...result.value, statusRevision: this.statusRevision }) : result;
   }
   readPreviewBlock(handle: string, offset: number): Promise<DiagnosticsResult<DiagnosticPreviewBlock>> {
     const preview = this.currentPreview(handle);

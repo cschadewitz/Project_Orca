@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type {
   DiagnosticDestination,
   DiagnosticPreview,
+  DiagnosticPreviewBlock,
   DiagnosticsBridge,
   DiagnosticsResult,
   DiagnosticsStatus,
@@ -26,9 +27,11 @@ const defaults: DiagnosticsStatus = {
   acknowledgedUnknown: false,
   olderUnknowns: false,
   payloadReservedBytes: 0,
+  revision: 0,
 };
 const preview: DiagnosticPreview = {
   handle: "opaque-preview",
+  statusRevision: 0,
   source: "current",
   byteLength: new TextEncoder().encode(exact).byteLength,
   expiresInMs: 300_000,
@@ -70,8 +73,9 @@ function fakeBridge(patch: Partial<DiagnosticsStatus> = {}) {
       emit({ ...state, activePreviewHandle: preview.handle });
       return ok({ ...preview, source });
     }),
-    readPreviewBlock: vi.fn(async (handle: string, offset: number) =>
-      ok({ handle, offset, bytes: new TextEncoder().encode(exact).slice(offset) }),
+    readPreviewBlock: vi.fn(
+      async (handle: string, offset: number): Promise<DiagnosticsResult<DiagnosticPreviewBlock>> =>
+        ok({ handle, offset, bytes: new TextEncoder().encode(exact).slice(offset) }),
     ),
     releasePreviewBlock: vi.fn(async (_handle: string, _offset: number) => ok(true)),
     closePreview: vi.fn(async (_handle: string) => {
@@ -228,6 +232,26 @@ async function open(f: ReturnType<typeof fakeBridge>) {
 const enabled = { enabled: true, productionEnabled: true, code: "ready" as const };
 
 describe("exact preview and separate local Save", () => {
+  it("binds a descriptor revision so an older pushed snapshot cannot dispose its pending byte owner", async () => {
+    const f = fakeBridge(enabled);
+    vi.mocked(f.bridge.preparePreview).mockResolvedValueOnce(ok({ ...preview, statusRevision: 2 }));
+    const block = deferred<DiagnosticsResult<DiagnosticPreviewBlock>>();
+    vi.mocked(f.bridge.readPreviewBlock).mockReturnValueOnce(block.promise);
+    mount(f.bridge);
+    await screen.findByText("Local diagnostics: On");
+    fireEvent.click(screen.getByRole("button", { name: "Preview current diagnostics" }));
+    await waitFor(() => expect(f.bridge.readPreviewBlock).toHaveBeenCalledOnce());
+    act(() => f.emit({ ...f.state(), revision: 1 }));
+    await act(async () =>
+      block.resolve(ok({ handle: preview.handle, offset: 0, bytes: new TextEncoder().encode(exact) })),
+    );
+    const report = await screen.findByRole("region", { name: "Complete exact diagnostic report" });
+    expect(report.textContent).toBe(exact);
+    expect(f.bridge.closePreview).not.toHaveBeenCalled();
+    act(() => f.emit({ ...f.state(), revision: 3 }));
+    await waitFor(() => expect(f.bridge.closePreview).toHaveBeenCalledWith(preview.handle));
+    expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+  });
   it("keeps all 1 MiB of exact text and the final newline across offscreen layout blocks", async () => {
     const f = fakeBridge(enabled);
     const text = ("x".repeat(31) + "\n").repeat(32_768);

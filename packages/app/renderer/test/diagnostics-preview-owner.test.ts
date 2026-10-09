@@ -5,6 +5,7 @@ import type { DiagnosticPreview, DiagnosticPreviewBlock, DiagnosticsResult } fro
 
 const preview = (byteLength: number): DiagnosticPreview => ({
   handle: "synthetic",
+  statusRevision: 0,
   byteLength,
   source: "current",
   expiresInMs: 300_000,

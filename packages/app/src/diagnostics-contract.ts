@@ -21,6 +21,7 @@ export type DiagnosticResultCode =
   | "unknown_ready"
   | "acknowledged_unknown";
 export interface DiagnosticsStatus {
+  revision: number;
   enabled: boolean;
   productionEnabled: boolean;
   scopeVersion: number;
@@ -42,6 +43,7 @@ export interface DiagnosticsStatus {
 }
 export type DiagnosticsResult<T> = { ok: true; value: T } | { ok: false; code: DiagnosticResultCode };
 export interface DiagnosticPreview {
+  statusRevision: number;
   handle: string;
   byteLength: number;
   source: "current" | "previous";

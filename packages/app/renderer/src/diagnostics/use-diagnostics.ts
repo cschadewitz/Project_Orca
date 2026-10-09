@@ -24,6 +24,7 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
   const authoritativeStatus = useRef<DiagnosticsStatus | undefined>(undefined);
+  const statusRevision = useRef(0);
   const offFeedback = useRef(false);
   const authority = useRef(0);
   const handle = useRef<string | undefined>(undefined);
@@ -61,7 +62,8 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
 
   const receive = useCallback(
     (next: DiagnosticsStatus) => {
-      if (!mounted.current) return;
+      if (!mounted.current || next.revision < statusRevision.current) return false;
+      statusRevision.current = next.revision;
       pushed.current += 1;
       authoritativeStatus.current = next;
       setStatus(next);
@@ -75,6 +77,7 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
           (!next.enabled || next.code === "stale_preview" || next.code === "expired" || next.code === "age_uncertain"))
       )
         clear();
+      return true;
     },
     [clear],
   );
@@ -160,8 +163,7 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
         const result = await action();
         if (!mounted.current || epoch !== authority.current) return;
         if (result.ok) {
-          receive(result.value);
-          say(result.value.code);
+          if (receive(result.value)) say(result.value.code);
         } else if (turningOff) reportOffFailure();
         else say(result.code);
       } catch {
@@ -206,6 +208,9 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
         return;
       }
       if (result.ok) {
+        // A small descriptor reply can overtake a pushed snapshot at the proxy
+        // boundary. Older status cannot retire this newer report's authority.
+        statusRevision.current = Math.max(statusRevision.current, result.value.statusRevision);
         handle.current = result.value.handle;
         const next = new DiagnosticPreviewOwner(result.value);
         owned.current = next;

@@ -13,6 +13,11 @@ the prior main copy. Reads require current document/target/preview authority;
 erasure acknowledgements can cross a revoked target epoch only from the same
 verified current window document. Stale handles cannot dispose successor content.
 
+Main assigns monotonic revisions to status snapshots and binds the successful
+descriptor to its latest revision. Preload and renderer reject older pushed status
+after accepting a descriptor. A delayed Off or closed-preview snapshot cannot
+retire a successor; newer revocation still erases in-flight copies immediately.
+
 Main admits 1,048,576 bytes for the renderer owner and 49,152 bytes for three
 transport copies before returning the descriptor. These are controlled ownership
 reservations, not a zero-copy claim or a bound on engine/native internals. IPC and
