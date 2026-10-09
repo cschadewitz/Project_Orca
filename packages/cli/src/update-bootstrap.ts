@@ -35,6 +35,29 @@ export function configuredUpdateExistingWorkOpen(): boolean {
   return true;
 }
 export const isClosedUpdateBootstrap = () => Boolean(launch);
+/** Source-supported file-store compatibility identifier, independent of downloaded
+ * declarations. Changing supported store semantics requires changing this identifier. */
+export const CLOSED_UPDATE_STORE_EPOCH = "orca-file-stores-v1";
+export async function closedUpdateStartupReceipt(
+  configDir: string,
+  storeDir: string,
+  target: { workspaceId: string; instanceId: string; processId: number },
+  work: () => Promise<"empty" | "parked" | "unsupported-generation">,
+) {
+  if (!launch || !(await closedUpdateOwnsConfiguredRoots(configDir, storeDir)))
+    throw new Error("Closed update startup inspection unavailable");
+  const observed = await work();
+  if (!(await closedUpdateOwnsConfiguredRoots(configDir, storeDir)))
+    throw new Error("Closed update startup inspection unavailable");
+  return {
+    version: 1,
+    target,
+    fenceId: launch.attempt,
+    directory: resolve(storeDir),
+    epoch: CLOSED_UPDATE_STORE_EPOCH,
+    work: observed,
+  };
+}
 export function assertClosedUpdateCommand(command: string, flags: Record<string, unknown>): void {
   if (
     invalid ||

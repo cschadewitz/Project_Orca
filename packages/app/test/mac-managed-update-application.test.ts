@@ -23,28 +23,34 @@ async function fixture(policy: boolean, allowed: boolean) {
     download: {
       root: "/unused-held-download-root",
       limits: { fileBytes: 100_000, totalBytes: 1_000_000, operationMs: 5000 },
-      trust: { catalog: f.catalog, inspect: f.inspect },
+      trust: { catalog: f.catalog },
       fetch: f.downloadFetch,
     },
-    binaryRoot: "/unused-held-binary",
+    nativePolicy: vi.fn(async () => undefined),
     previousManifestSha256: "a".repeat(64),
+  };
+  const providers = {
+    binaryRoot: () => "/unused-held-binary",
+    inspect: f.inspect,
     verifyBinary: vi.fn(async () => false),
     continuity: vi.fn(async () => {
       throw new Error("Held");
     }),
     startClosed: vi.fn(async () => undefined),
+    stopClosed: vi.fn(async () => false),
   };
   const pause = vi.fn(async () => false);
   const owner = createManagedMacUpdateApplication({
     control: "/unused-held-control",
     workspace: f.workspace,
     guards: f.guards,
+    providers,
     ...(policy ? { authority } : {}),
     native: () => native as unknown as AutoUpdater,
     activationAllowed: () => allowed,
     pauseAppWriters: pause,
   });
-  return { f, native, authority, pause, owner };
+  return { f, native, authority, providers, pause, owner };
 }
 
 it.each([
@@ -66,9 +72,10 @@ it.each([
   await expect(h.owner.restoreClosed(h.f.binding.candidate.manifestSha256, signal)).rejects.toThrow("unavailable");
   expect(h.f.catalog).not.toHaveBeenCalled();
   expect(h.f.downloadFetch).not.toHaveBeenCalled();
-  expect(h.authority.verifyBinary).not.toHaveBeenCalled();
-  expect(h.authority.continuity).not.toHaveBeenCalled();
-  expect(h.authority.startClosed).not.toHaveBeenCalled();
+  expect(h.providers.verifyBinary).not.toHaveBeenCalled();
+  expect(h.providers.continuity).not.toHaveBeenCalled();
+  expect(h.providers.startClosed).not.toHaveBeenCalled();
+  expect(h.providers.stopClosed).not.toHaveBeenCalled();
   expect(h.pause).not.toHaveBeenCalled();
   expect(h.native.setFeedURL).not.toHaveBeenCalled();
   expect(h.native.checkForUpdates).not.toHaveBeenCalled();

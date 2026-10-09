@@ -6,6 +6,7 @@ No signing, notary submission, app launch, installation, publication or access c
 """
 
 import hashlib
+import base64
 import importlib.util
 import os
 from pathlib import Path
@@ -200,7 +201,7 @@ def verify_signature(path, record, signing, scratch, runner, dmg=False):
 def code_inventory(app, inventory, runner):
     selected = {"ORCA.app"}
     for name, record in inventory.items():
-        path = app.parent / name
+        path = app.joinpath(*name.split("/")[1:])
         if record["kind"] == "directory" and name.endswith((".app", ".framework", ".xpc", ".appex", ".bundle")):
             selected.add(name)
         elif record["kind"] == "file":
@@ -216,6 +217,31 @@ def code_inventory(app, inventory, runner):
     return selected
 
 
+def verify_app_image(app, manifest, policy, scratch, runner, saved_root=False):
+    """The same whole-image acceptance for container copies and fixed-path saved pairs."""
+    inventory = containment.inventory_tree(app, saved_root=saved_root)
+    require(code_inventory(app, inventory, runner) == set(policy["code"]), "native code policy coverage mismatch")
+    delivery.validate_app(app, manifest)
+    app_plist = plistlib.loads(containment.read_bounded(app / "Contents/Info.plist", MAX_METADATA))
+    require(app_plist.get("CFBundleExecutable") == "ORCA", "native plist executable mismatch")
+    package = containment.read_asar_package(app)
+    require(isinstance(package, dict) and package.get("version") == manifest["identity"]["appVersion"],
+            "native packaged app version mismatch")
+    electron_plist = plistlib.loads(containment.read_bounded(
+        app / "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/Info.plist", MAX_METADATA))
+    require(isinstance(electron_plist, dict) and electron_plist.get("CFBundleVersion") == manifest["identity"]["toolchain"]["electron"],
+            "native packaged Electron version mismatch")
+    for path, record in sorted(policy["code"].items()):
+        verify_signature(app.joinpath(*path.split("/")[1:]), record, policy["signing"], scratch, runner)
+    runner.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--all-architectures", str(app)])
+    runner.run("/usr/bin/xcrun", ["stapler", "validate", str(app)])
+    runner.run("/usr/bin/syspolicy_check", ["distribution", str(app)])
+    require(containment.inventory_tree(app, saved_root=saved_root) == inventory, "native validation changed app bytes")
+    return {"identityBase64": base64.b64encode(containment.read_bounded(
+                app / "Contents/Resources/orca-build.json", MAX_METADATA)).decode("ascii"),
+            "daemonSha256": delivery.file_digest(app / "Contents/Resources/daemon/orca-daemon.mjs")[0]}
+
+
 def verify_candidate(directory, policy, parent, runner=None):
     require(sys.platform == "darwin" and platform.machine() == "arm64", "native arm64 macOS executor required")
     root, manifest = pin_manifest(directory, policy)
@@ -228,28 +254,15 @@ def verify_candidate(directory, policy, parent, runner=None):
         verify_signature(artifacts["dmg"], None, policy["signing"], scratch, runner, dmg=True)
         runner.run("/usr/bin/xcrun", ["stapler", "validate", str(artifacts["dmg"])])
         runner.run("/usr/sbin/spctl", ["--assess", "--type", "open", "--context", "context:primary-signature", str(artifacts["dmg"])])
-        for app in (dmg_app, zip_app):
-            require(code_inventory(app, inventory, runner) == set(policy["code"]), "native code policy coverage mismatch")
-            delivery.validate_app(app, manifest)
-            app_plist = plistlib.loads(containment.read_bounded(app / "Contents/Info.plist", MAX_METADATA))
-            require(app_plist.get("CFBundleExecutable") == "ORCA", "native plist executable mismatch")
-            package = containment.read_asar_package(app)
-            require(isinstance(package, dict) and package.get("version") == manifest["identity"]["appVersion"],
-                    "native packaged app version mismatch")
-            electron_plist = plistlib.loads(containment.read_bounded(
-                app / "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/Info.plist", MAX_METADATA))
-            require(isinstance(electron_plist, dict) and electron_plist.get("CFBundleVersion") == manifest["identity"]["toolchain"]["electron"],
-                    "native packaged Electron version mismatch")
-            for path, record in sorted(policy["code"].items()):
-                verify_signature(app.parent / path, record, policy["signing"], scratch, runner)
-            runner.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--all-architectures", str(app)])
-            runner.run("/usr/bin/xcrun", ["stapler", "validate", str(app)])
-            runner.run("/usr/bin/syspolicy_check", ["distribution", str(app)])
-            require(containment.inventory_tree(app) == inventory, "native validation changed app bytes")
+        copies = [{"format": format, **verify_app_image(app, manifest, policy, scratch, runner)}
+                  for format, app in (("dmg", dmg_app), ("zip", zip_app))]
+        require(all(containment.inventory_tree(app) == inventory for app in (dmg_app, zip_app)),
+                "native validation changed container copies")
         # Rehash final containers and pinned metadata after extraction and verification.
         pin_manifest(root, policy)
     return {"kind": "candidate", "buildId": manifest["identity"]["buildId"],
-            "sourceCommit": manifest["identity"]["sourceCommit"], "identitySha256": manifest["identitySha256"]}
+            "sourceCommit": manifest["identity"]["sourceCommit"], "identitySha256": manifest["identitySha256"],
+            "manifestSha256": policy["manifestSha256"], "copies": copies}
 
 
 def candidate_main(directory, policy_path, parent):

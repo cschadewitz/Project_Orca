@@ -87,6 +87,56 @@ function harness(
 const start = (seams: Partial<BundledDaemonOptions>, extra: Partial<BundledDaemonOptions> = {}) =>
   startBundledDaemon({ entry: "/res/daemon/orca-daemon.mjs", cwd: "/home/casey", ...seams, ...extra });
 
+it("closed validation captures one uncertain child without retry or timeout escalation", async () => {
+  const h = harness({ probes: [false] }),
+    captured = vi.fn();
+  await expect(
+    start(h.seams, {
+      closedUpdate: { attempt: "attempt", token: "one-use" },
+      args: ["--read-only", "--no-resume"],
+      attempts: 5,
+      startTimeoutMs: 2,
+      onChild: captured,
+      env: {
+        ORCA_MANAGED_UPDATE_CONTROL: "ordinary-control",
+        ORCA_MANAGED_UPDATE_ADDON: "ordinary-addon",
+        ORCA_FIRST_RUN_LAUNCH: "old",
+      },
+    }),
+  ).rejects.toBeInstanceOf(DaemonStartError);
+  expect(h.calls).toHaveLength(1);
+  expect(captured).toHaveBeenCalledWith(h.children[0]);
+  expect(h.children[0]!.signals).toEqual([]);
+  expect(h.calls[0]!.env).toMatchObject({
+    ORCA_UPDATE_ATTEMPT: "attempt",
+    ORCA_UPDATE_LAUNCH: "one-use",
+    ORCA_MANAGED_UPDATE_CONTROL: undefined,
+    ORCA_MANAGED_UPDATE_ADDON: undefined,
+    ORCA_FIRST_RUN_LAUNCH: undefined,
+  });
+});
+
+it("a closed validation stop sends one ordinary signal and never escalates", async () => {
+  const h = harness();
+  const daemon = await start(h.seams, {
+    closedUpdate: { attempt: "attempt", token: "one-use" },
+    args: ["--read-only", "--no-resume"],
+  });
+  expect(daemon.child).toBe(h.children[0]);
+  await daemon.stop();
+  expect(h.children[0]!.signals).toEqual(["SIGTERM"]);
+});
+
+it("closed validation refuses unsafe flags before spawn; ordinary children strip inherited update permits", async () => {
+  const h = harness();
+  await expect(
+    start(h.seams, { closedUpdate: { attempt: "attempt", token: "one-use" }, args: ["--read-only"] }),
+  ).rejects.toThrow("without resume");
+  expect(h.calls).toHaveLength(0);
+  await start(h.seams, { env: { ORCA_UPDATE_ATTEMPT: "old", ORCA_UPDATE_LAUNCH: "old" } });
+  expect(h.calls[0]!.env).toMatchObject({ ORCA_UPDATE_ATTEMPT: undefined, ORCA_UPDATE_LAUNCH: undefined });
+});
+
 describe("findBundledDaemon", () => {
   const expected = join("/resources", "daemon", BUNDLED_DAEMON_FILE);
   const exists = (path: string) => path === expected;

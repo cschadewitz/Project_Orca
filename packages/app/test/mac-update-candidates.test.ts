@@ -154,6 +154,31 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
+it("cancelled inspection settles its native cleanup before discarding the owned download", async () => {
+  const r = await rig(),
+    controller = new AbortController(),
+    entered = pending<void>(),
+    cleanup = pending<void>();
+  const original = r.inspect.getMockImplementation()!;
+  r.inspect.mockImplementation(async (...args) => {
+    entered.resolve();
+    await cleanup.promise;
+    return original(...args);
+  });
+  let settled = false;
+  const operation = downloadMacCandidate(r.binding, r.bytes, r.ports, controller.signal).finally(() => {
+    settled = true;
+  });
+  await entered.promise;
+  controller.abort();
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  expect((await readdir(r.root)).length).toBe(1);
+  cleanup.resolve();
+  expect((await operation).outcome).toBe("failed");
+  expect(await readdir(r.root)).toEqual([]);
+});
+
 describe("main-only candidate binding and consent", () => {
   it("refuses missing policy without catalog, filesystem or network access", async () => {
     const r = await rig();

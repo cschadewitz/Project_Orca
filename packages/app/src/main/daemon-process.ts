@@ -70,6 +70,8 @@ export interface BundledDaemon {
   readonly exited?: boolean;
   /** The safe startup metadata, never the credential itself. */
   readonly tokenFile?: string;
+  /** Main-only captured child for closed validation; never an IPC capability. */
+  readonly child?: DaemonChild;
   /**
    * Ordinary bounded shutdown, with forced escalation. Never reports its own exit
    * through onExit and never establishes clean updater-stop evidence. An existing
@@ -100,6 +102,9 @@ export interface BundledDaemonOptions {
   configPath?: string;
   /** Main-only first-run launch capability; never inherited for unrelated children. */
   firstRunToken?: string;
+  /** Closed replacement child keeps its ownership on failed/late startup; never force-killed. */
+  closedUpdate?: { attempt: string; token: string };
+  onChild?: (child: DaemonChild) => void;
   host?: string;
   /**
    * Extra arguments, appended after `serve`. The seam for flags the app passes —
@@ -238,7 +243,9 @@ class OutputTail {
  * attempt fails the same way.
  */
 export async function startBundledDaemon(options: BundledDaemonOptions): Promise<BundledDaemon> {
-  const attempts = options.attempts ?? 3;
+  if (options.closedUpdate && (!options.args?.includes("--read-only") || !options.args.includes("--no-resume")))
+    throw new DaemonStartError("Closed validation requires read-only startup without resume", "");
+  const attempts = options.closedUpdate ? 1 : (options.attempts ?? 3);
   let failure: DaemonStartError | undefined;
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
@@ -293,13 +300,22 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
       cwd,
       // `ELECTRON_RUN_AS_NODE` is what makes `process.execPath` — the Electron binary in a
       // packaged app — behave as a bare Node and never open a window of its own.
-      env: { ...env, ELECTRON_RUN_AS_NODE: "1", ORCA_FIRST_RUN_LAUNCH: options.firstRunToken },
+      env: {
+        ...env,
+        ELECTRON_RUN_AS_NODE: "1",
+        ORCA_FIRST_RUN_LAUNCH: options.firstRunToken,
+        ORCA_UPDATE_ATTEMPT: options.closedUpdate?.attempt,
+        ORCA_UPDATE_LAUNCH: options.closedUpdate?.token,
+        ORCA_MANAGED_UPDATE_CONTROL: options.closedUpdate ? undefined : env.ORCA_MANAGED_UPDATE_CONTROL,
+        ORCA_MANAGED_UPDATE_ADDON: options.closedUpdate ? undefined : env.ORCA_MANAGED_UPDATE_ADDON,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (error) {
     observeStartup(options.onStartupDiagnostic, "startup_spawn_failed");
     throw error;
   }
+  options.onChild?.(child);
 
   let tokenFile: string | undefined;
   const tail = new OutputTail(200, (line) => {
@@ -355,7 +371,7 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
     if (now() >= deadline) {
       observeFailure("startup_handshake_timeout");
       const output = tail.toString();
-      child.kill("SIGKILL");
+      if (!options.closedUpdate) child.kill("SIGKILL");
       throw new DaemonStartError(
         `the bundled daemon did not answer hello on ${url} within ${startTimeoutMs}ms`,
         output,
@@ -370,6 +386,7 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
 
   return {
     url,
+    child,
     pid: child.pid,
     get exited() {
       return child.exitCode !== null || child.signalCode !== null;
@@ -404,6 +421,7 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
       child.kill("SIGTERM");
       await Promise.race([exited, sleep(stopTimeoutMs)]);
       if (exit) return;
+      if (options.closedUpdate) return; // Retain an uncertain captured child; no escalation.
       // It ignored the signal, or is wedged. The store is the daemon's only durable state
       // and it only ever reads it, so there is nothing here worth waiting longer for.
       child.kill("SIGKILL");

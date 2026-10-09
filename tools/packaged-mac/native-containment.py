@@ -71,9 +71,9 @@ def read_asar_package(app):
     return archive.delivery.parse_json(data, "ASAR package.json")
 
 
-def inventory_tree(root, limits=Limits()):
+def inventory_tree(root, limits=Limits(), saved_root=False):
     """Lstat every node, bound hashes, and resolve links without following them."""
-    require(root.name == APP and stat.S_ISDIR(root.lstat().st_mode), "native app root")
+    require((root.name == APP or saved_root) and stat.S_ISDIR(root.lstat().st_mode), "native app root")
     nodes, records, targets, spellings = {}, {}, {}, {}
     pending, total, link_count = [(root, APP)], 0, 0
     while pending:

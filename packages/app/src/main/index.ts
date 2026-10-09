@@ -38,6 +38,7 @@ import { MacUpdateWindows } from "./mac-update-windows.js";
 import { MacUpdateGuards } from "./mac-update-guards.js";
 import { installMacUpdateIPC } from "./mac-update-application.js";
 import { createManagedMacUpdateApplication } from "./mac-managed-update-application.js";
+import { createManagedMacNativeProviders } from "./mac-native-providers.js";
 import { updateDriver } from "./update-driver.js";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,6 +53,7 @@ import {
   safeStorage,
   powerMonitor,
   autoUpdater,
+  systemPreferences,
 } from "electron";
 import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
@@ -837,6 +839,15 @@ export const managedMacUpdates = createManagedMacUpdateApplication({
   control: join(dirname(appWriterRoot), basename(appWriterRoot) + "-native-replacement"),
   workspace,
   guards: macUpdateGuards,
+  providers: createManagedMacNativeProviders({
+    appRoot: appWriterRoot,
+    control: join(dirname(appWriterRoot), basename(appWriterRoot) + "-native-replacement"),
+    executable: () => app.getPath("exe"),
+    helper: () => join(process.resourcesPath, "native/mac-validator/tools/deploy/native-mac-runtime.py"),
+    intents: intentJournal,
+    storage: safeStorage,
+    permissions: () => systemPreferences,
+  }),
   native: () => autoUpdater,
   activationAllowed: () => false,
   pauseAppWriters: pauseMacUpdateAppWriters,

@@ -128,10 +128,12 @@ This candidate is not activation-ready and does not close all M10/M21/M22 work.
 1. The approved private catalog/invitation source and freshness/revocation policy remain
    unknown (delivery D3). The exact question has been raised; candidate declarations
    cannot supply that authority. The mounted managed composition requires the approved
-   download/native inspection provider, independently accepted installed-image policy,
-   existing secure-storage/intent/TCC continuity inspection and owned one-use closed-child
-   producer. These production authority providers are not supplied by main yet. This is
-   remaining implementation/configuration work, not a claim of Mac acceptance alone.
+   catalog transport, independently accepted installed-image manifest and existing #583
+   native policy records. Provider-independent native inspection, secure-storage/intent/OS
+   continuity and owned one-use closed-child source are now bound through
+   [the native provider composition](mac-native-provider-composition.md). Main still supplies
+   no approved catalog authority, and activation remains independently held. These owner
+   inputs are unresolved configuration/service work; actual native execution is separate.
 2. Root enrollment and live daemon admission are implemented. Enrollment serializes new
    roots before first-run writes/managed CLI bootstrap, retains immutable existing anchors,
    refuses overlaps/closed windows and closes ordinary work after torn publication. The

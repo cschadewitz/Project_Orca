@@ -62,11 +62,14 @@ export class MacClosedWindowValidation {
       }
     }));
   }
-  async finishAfterCleanChildExit(signal: AbortSignal): Promise<"validated-closed" | "unknown"> {
+  async finishAfterCleanChildExit(
+    signal: AbortSignal,
+    stop?: () => Promise<boolean>,
+  ): Promise<"validated-closed" | "unknown"> {
     if (signal.aborted || !this.operation) return "unknown";
     const result = await this.operation;
+    if (result.outcome !== "verified-closed" || signal.aborted || (stop && !(await stop()))) return "unknown";
     if (
-      result.outcome !== "verified-closed" ||
       this.child?.exitCode !== 0 ||
       this.child.signalCode !== null ||
       this.child.pid !== result.startup.target.processId ||

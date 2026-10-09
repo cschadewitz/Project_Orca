@@ -84,6 +84,27 @@ it("the actual builder validates the hooks/config and keeps native output out of
   expect(config.afterPack).toBe("./scripts/verify-diagnostics-native.js");
 });
 
+it("the actual Mac builder copies the existing native validator with its relative imports intact", async () => {
+  const resources = mkdtempSync(join(tmpdir(), "orca-native-validator-package-"));
+  scratch.push(resources);
+  const matchers = getFileMatchers(config, "extraResources", resources, {
+    defaultSrc: appRoot,
+    globalOutDir: join(appRoot, "dist/release"),
+    customBuildOptions: config.mac,
+    macroExpander: (value) => value.replaceAll("${arch}", "arm64"),
+  }).filter((matcher) => matcher.to.includes("mac-validator"));
+  expect(matchers).toHaveLength(2);
+  await copyFiles(matchers, undefined, false);
+  for (const [folder, files] of [
+    ["deploy", ["native-mac-runtime.py", "native-mac-candidate.py", "native-mac-verify.py"]],
+    ["packaged-mac", ["native-containment.py", "archive-containment.py"]],
+  ])
+    for (const name of files) {
+      const expected = readFileSync(join(appRoot, "../../tools", folder, name));
+      expect(readFileSync(join(resources, "native/mac-validator/tools", folder, name))).toEqual(expected);
+    }
+});
+
 it.each(["arm64", "x64"])("the actual builder copies only %s resources and both hooks verify", async (arch) => {
   const { root, directory, resources, context } = fixture(arch);
   beforePack(context);

@@ -132,6 +132,14 @@ it("starts the real authenticated same-boot closed first-run child without adopt
     },
   );
   children.push(child);
+  let output = "";
+  const receiptReady = new Promise<void>((done, reject) => {
+    child.stdout.on("data", (chunk) => {
+      output += String(chunk);
+      if (output.includes("closed update validation: ")) done();
+    });
+    child.once("exit", () => reject(new Error("Closed receipt unavailable")));
+  });
   const url = await new Promise<string>((done, reject) => {
     let bytes = "";
     child.stdout.on("data", (chunk) => {
@@ -145,6 +153,18 @@ it("starts the real authenticated same-boot closed first-run child without adopt
     auth: new LocalDaemonToken({ url, workspace: f.workspace, tokenFile, env: {} }),
   });
   const hello = await client.hello("closed-source-test");
+  await receiptReady;
+  const receiptLine = output.split("\n").find((line) => line.startsWith("closed update validation: "));
+  expect(receiptLine).toBeDefined();
+  expect(JSON.parse(receiptLine!.slice("closed update validation: ".length))).toEqual({
+    version: 1,
+    target: { ...hello.identity, processId: child.pid },
+    fenceId: permit.attempt,
+    directory: join(f.workspace, ".orca"),
+    epoch: "orca-file-stores-v1",
+    work: "empty",
+  });
+  expect(output).not.toContain(permit.token);
   expect(hello.capabilities).not.toContain("runs.control");
   expect(hello.methods).not.toContain("config.set");
   expect(hello.methods).not.toContain("runs.start");

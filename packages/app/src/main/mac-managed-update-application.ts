@@ -7,8 +7,9 @@ import { MacCandidateSession, type MacCandidateOffer, type MacCandidatePrepared 
 import { macBounded, type MacCandidateDownloadPorts } from "./mac-candidate-download.js";
 import { matchesSealedMacIdentity } from "./mac-candidate-manifest.js";
 import { MacClosedWindowCommit } from "./mac-closed-window-commit.js";
-import { MacClosedWindowValidation, type ClosedValidationPorts } from "./mac-closed-window-validation.js";
-import { MacFixedPathRecovery, type FixedPathRecoveryPorts } from "./mac-fixed-path-recovery.js";
+import { MacClosedWindowValidation } from "./mac-closed-window-validation.js";
+import { MacFixedPathRecovery } from "./mac-fixed-path-recovery.js";
+import type { ManagedMacNativeProviders, MacNativePolicyResolver } from "./mac-native-providers.js";
 import { createPairTreePort } from "./mac-fixed-path-files.js";
 import { MacNativeHandoff, type MacNativeCommitRequest } from "./mac-native-handoff.js";
 import { createNativeClosedUpdateWindow } from "./mac-update-namespace.js";
@@ -19,13 +20,12 @@ import type { ClosedUpdateWindow } from "@orca/protocol/update-window";
 import { isAbsolute, resolve } from "node:path";
 
 export interface ManagedMacUpdateAuthority {
-  readonly download: MacCandidateDownloadPorts;
-  readonly binaryRoot: string;
+  readonly download: Omit<MacCandidateDownloadPorts, "trust"> & {
+    readonly trust: Pick<MacCandidateDownloadPorts["trust"], "catalog">;
+  };
+  readonly nativePolicy: MacNativePolicyResolver;
   /** Independently accepted installed image, not appVersion or candidate declarations. */
   readonly previousManifestSha256: string;
-  readonly verifyBinary: FixedPathRecoveryPorts["verifyBinary"];
-  readonly continuity: FixedPathRecoveryPorts["continuity"];
-  readonly startClosed: ClosedValidationPorts["startClosed"];
 }
 
 /** All authority callbacks are main-only. Missing approved catalog/native acceptance
@@ -35,31 +35,34 @@ export function createManagedMacUpdateApplication(options: {
   readonly control: string;
   readonly workspace: Workspace;
   readonly guards: MacUpdateGuards;
+  readonly providers: ManagedMacNativeProviders;
   readonly authority?: ManagedMacUpdateAuthority;
   readonly native: () => Pick<AutoUpdater, "on" | "off" | "setFeedURL" | "checkForUpdates" | "quitAndInstall">;
   readonly activationAllowed: () => boolean;
   readonly pauseAppWriters: (signal: AbortSignal) => Promise<boolean>;
 }) {
   const supplied = options.authority;
+  const providers = Object.freeze({ ...options.providers });
+  const binaryRoot = supplied ? providers.binaryRoot() : undefined;
   const authority =
     supplied &&
-    isAbsolute(supplied.binaryRoot) &&
-    resolve(supplied.binaryRoot) === supplied.binaryRoot &&
+    binaryRoot &&
+    isAbsolute(binaryRoot) &&
+    resolve(binaryRoot) === binaryRoot &&
     /^[a-f0-9]{64}$/.test(supplied.previousManifestSha256) &&
-    [
-      supplied.verifyBinary,
-      supplied.continuity,
-      supplied.startClosed,
-      supplied.download?.trust?.catalog,
-      supplied.download?.trust?.inspect,
-      supplied.download?.fetch,
-    ].every((port) => typeof port === "function")
+    [supplied.nativePolicy, supplied.download?.trust?.catalog, supplied.download?.fetch].every(
+      (port) => typeof port === "function",
+    )
       ? Object.freeze({
           ...supplied,
           download: Object.freeze({
             ...supplied.download,
             limits: Object.freeze({ ...supplied.download.limits }),
-            trust: Object.freeze({ ...supplied.download.trust }),
+            trust: Object.freeze({
+              catalog: supplied.download.trust.catalog,
+              inspect: (binding, directory, signal) =>
+                providers.inspect(binding, directory, supplied.nativePolicy, signal),
+            } satisfies MacCandidateDownloadPorts["trust"]),
           }),
         })
       : undefined;
@@ -107,7 +110,7 @@ export function createManagedMacUpdateApplication(options: {
       )
     )
       return "refused";
-    if (!(await authority.verifyBinary(authority.binaryRoot, authority.previousManifestSha256, signal)))
+    if (!(await providers.verifyBinary(binaryRoot!, authority.previousManifestSha256, authority.nativePolicy, signal)))
       return "refused";
     return !signal.aborted && allowed() && targetMatches(prepared) && options.guards.draftsValid()
       ? "valid"
@@ -122,10 +125,10 @@ export function createManagedMacUpdateApplication(options: {
   const activate = async (request: MacNativeCommitRequest): Promise<"committed" | "refused" | "unknown"> => {
     if (!allowed() || !authority || !window || !facts || !targetMatches(request.prepared)) return "refused";
     if (!handoff) {
-      recovery = new MacFixedPathRecovery(window, options.control, authority.binaryRoot, {
+      recovery = new MacFixedPathRecovery(window, options.control, binaryRoot!, {
         trees: createPairTreePort("darwin"),
-        verifyBinary: authority.verifyBinary,
-        continuity: authority.continuity,
+        verifyBinary: (path, hash, signal) => providers.verifyBinary(path, hash, authority.nativePolicy, signal),
+        continuity: providers.continuity,
       });
       const captured = facts;
       const owner = new MacClosedWindowCommit(
@@ -199,10 +202,10 @@ export function createManagedMacUpdateApplication(options: {
       if (!captured.snapshot.attempt || captured.snapshot.phase === "open" || !(await captured.capture()))
         return "unknown" as const;
       window = captured;
-      recovery = new MacFixedPathRecovery(captured, options.control, authority.binaryRoot, {
+      recovery = new MacFixedPathRecovery(captured, options.control, binaryRoot!, {
         trees: createPairTreePort("darwin"),
-        verifyBinary: authority.verifyBinary,
-        continuity: authority.continuity,
+        verifyBinary: (path, hash, signal) => providers.verifyBinary(path, hash, authority.nativePolicy, signal),
+        continuity: providers.continuity,
       });
       const identity = await recovery.readStartupIdentity(signal);
       return !signal.aborted && identity.candidate.manifestSha256 === captured.snapshot.candidate
@@ -217,14 +220,17 @@ export function createManagedMacUpdateApplication(options: {
       validation ??= new MacClosedWindowValidation(
         window,
         recovery,
-        { startClosed: authority.startClosed },
+        {
+          startClosed: (identity, permit, signal) =>
+            providers.startClosed(identity, permit, authority.nativePolicy, signal),
+        },
         authority.download.limits.operationMs,
       );
       return validation.verify(signal);
     },
     async finishAfterCleanChildExit(signal: AbortSignal) {
       if (!allowed() || !validation) return "unknown" as const;
-      return validation.finishAfterCleanChildExit(signal);
+      return validation.finishAfterCleanChildExit(signal, () => providers.stopClosed(signal));
     },
     async restoreClosed(candidateManifestSha256: string, signal: AbortSignal) {
       if (!allowed() || !authority || !recovery) throw new Error("Protected restoration unavailable");

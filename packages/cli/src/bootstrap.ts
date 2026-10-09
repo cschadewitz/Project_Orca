@@ -131,6 +131,8 @@ export interface OrcaApp {
   templates: TemplateRegistry;
   agents: AgentRegistry;
   logger: Logger;
+  /** Existing store owners, read-only and conservative; no retry cursor or reconciliation. */
+  closedWorkState(): Promise<"empty" | "parked" | "unsupported-generation">;
 }
 
 export async function findConfig(cwd: string): Promise<string | undefined> {
@@ -518,6 +520,20 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     submissionAuthority: submission?.authority,
     retryClaims,
     retryClaimStore,
+    async closedWorkState() {
+      try {
+        const retry = retryClaimStore ? await retryClaimStore.closedWorkState() : "unsupported-generation";
+        if (retry !== "empty") return retry;
+        const admissions = await submission.admissions.records.list();
+        if (admissions.length) return "parked";
+        const ids = await orchestrator.listRuns();
+        // Retained runs may carry generations, continuations or protected input.
+        // This initial native binding supports empty work only, without replay/restoration.
+        return ids.length ? "parked" : "empty";
+      } catch {
+        return "unsupported-generation";
+      }
+    },
     directAdmissions,
     retrySafeAdmissions:
       directAdmissions && program.submissions

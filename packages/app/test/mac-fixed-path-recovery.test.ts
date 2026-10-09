@@ -153,7 +153,9 @@ it("a failed replacement producer retains closure and cannot complete validation
     validation = new MacClosedWindowValidation(c.window, c.recovery, { startClosed }, 5000);
   expect(await validation.verify(signal())).toEqual({ outcome: "unknown" });
   expect(startClosed).toHaveBeenCalledOnce();
-  expect(await validation.finishAfterCleanChildExit(signal())).toBe("unknown");
+  const stop = vi.fn(async () => true);
+  expect(await validation.finishAfterCleanChildExit(signal(), stop)).toBe("unknown");
+  expect(stop).not.toHaveBeenCalled();
   expect(c.window.snapshot.phase).toBe("migrating");
   expect(() => c.window.reopen()).toThrow();
 });

@@ -65,7 +65,9 @@ class ControlledRunner:
             elif "--entitlements" in args:
                 return plistlib.dumps({"unexpected": True}) if self.bad == "entitlements" else b"", b""
             else:
-                name = "ORCA.app" + str(Path(args[-1])).split("ORCA.app", 1)[1] if "ORCA.app" in args[-1] else None
+                path = Path(args[-1])
+                name = ("ORCA.app/Contents" + str(path).split("/Contents", 1)[1]
+                        if "/Contents" in str(path) else "ORCA.app" if (path / "Contents/Info.plist").is_file() else None)
                 identifier = self.policy["code"].get(name, {}).get("identifier", "disk-image")
                 team = "BADTEAM" if self.bad == "team" else "Q2FP9UY5T4"
                 return b"", (f"Identifier={identifier}\nTeamIdentifier={team}\n"
@@ -162,6 +164,42 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(len([call for call in runner.calls if call[1][:2] == ["stapler", "validate"]]), 3)
         self.assertEqual(list(self.parent.iterdir()), [])
         self.assertFalse(any("--sign" in call[1] or "submit" in call[1] for call in runner.calls))
+        self.assertEqual({copy["format"] for copy in result["copies"]}, {"dmg", "zip"})
+        self.assertTrue(all(copy["daemonSha256"] == self.manifest["identity"]["daemon"]["sha256"] for copy in result["copies"]))
+
+    def test_fixed_saved_image_reuses_signature_identity_and_containment_checks(self):
+        spec = importlib.util.spec_from_file_location("runtime_test_adapter", ROOT / "tools/deploy/native-mac-runtime.py")
+        runtime = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runtime)
+        saved = self.base / "binary"
+        shutil.copytree(self.app, saved)
+        runner = ControlledRunner(saved, self.policy)
+        manifest = (self.root / candidate.delivery.MANIFEST).read_bytes()
+        with patch.object(runtime.sys, "platform", "darwin"), patch.object(runtime.platform, "machine", return_value="arm64"):
+            result = runtime.inspect_image(saved, manifest, self.policy, self.parent, runner)
+            self.assertEqual(result["outcome"], "verified")
+            self.assertEqual(result["manifestSha256"], sha(manifest))
+            self.assertEqual(result["daemonSha256"], self.manifest["identity"]["daemon"]["sha256"])
+            self.assertEqual(list(self.parent.iterdir()), [])
+            for bad in ("certificate", "team", "entitlements", "ticket"):
+                runner.bad = bad
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    runtime.inspect_image(saved, manifest, self.policy, self.parent, runner)
+            runner.bad = None
+            (saved / "Contents/Resources/daemon/orca-daemon.mjs").write_bytes(b"changed daemon")
+            with self.assertRaises(ValueError):
+                runtime.inspect_image(saved, manifest, self.policy, self.parent, runner)
+
+    def test_runtime_json_interface_refuses_non_native_and_malformed_without_paths(self):
+        if sys.platform == "darwin":
+            self.skipTest("non-native interface case requires non-Darwin executor")
+        for request in ({"operation": "image", "path": str(self.app), "manifestBase64": "!", "policy": self.policy,
+                         "scratchParent": str(self.parent)}, {"unexpected": str(self.base)}):
+            result = subprocess.run([sys.executable, "-B", str(ROOT / "tools/deploy/native-mac-runtime.py")],
+                                    input=json.dumps(request), capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(json.loads(result.stdout), {"outcome": "refused"})
+            self.assertEqual(result.stderr, "")
 
     def test_independent_manifest_pin_refuses_recomputed_download_checksums(self):
         pin = self.policy["manifestSha256"]

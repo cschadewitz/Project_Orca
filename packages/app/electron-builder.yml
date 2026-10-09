@@ -85,6 +85,12 @@ linux:
 
 mac:
   extraResources:
+    - from: ../../tools/deploy
+      to: native/mac-validator/tools/deploy
+      filter: ["native-mac-runtime.py", "native-mac-candidate.py", "native-mac-verify.py"]
+    - from: ../../tools/packaged-mac
+      to: native/mac-validator/tools/packaged-mac
+      filter: ["native-containment.py", "archive-containment.py"]
     - from: "dist/diagnostics-native/darwin-${arch}"
       to: "native/diagnostics/darwin-${arch}"
       filter: ["diagnostics_clock.node", "diagnostics_storage.node", "manifest.json"]

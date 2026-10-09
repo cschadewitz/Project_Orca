@@ -9,6 +9,7 @@ import {
   isClosedUpdateBootstrap,
   configuredUpdateAdmissionOpen,
   configuredUpdateExistingWorkOpen,
+  closedUpdateStartupReceipt,
 } from "../update-bootstrap.js";
 import { mcpCommand } from "./mcp.js";
 import { AdmissionRetryModel, ContinuationAdmissionModel, neverAttached } from "@orca/daemon";
@@ -1036,6 +1037,15 @@ export const commands: Record<string, Command> = {
           ? `authentication: token; local token file: ${authDir.tokenFile}`
           : "authentication: explicit unauthenticated loopback compatibility mode; any local process may call this daemon",
       );
+      if (isClosedUpdateBootstrap()) {
+        const receipt = await closedUpdateStartupReceipt(
+          app.configDir,
+          storeDir,
+          { ...identity, processId: process.pid },
+          () => app.closedWorkState(),
+        );
+        ctx.out("closed update validation: " + JSON.stringify(receipt));
+      }
       if (daemon.socketUrl) ctx.out(`notifications on ${daemon.socketUrl}: ${SUBSCRIPTION_METHODS.join(", ")}`);
       await new Promise<void>((resolve) => {
         const stop = () => {

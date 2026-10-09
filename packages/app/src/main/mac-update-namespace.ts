@@ -84,7 +84,14 @@ export async function provisionMacUpdateNamespace(
   };
   await provision(control);
   const names = await readdir(control);
-  if (names.some((name) => !["journal", "window.json", "window.json.tmp", "enrolled.json", "pairs"].includes(name)))
+  if (
+    names.some(
+      (name) =>
+        !["journal", "window.json", "window.json.tmp", "enrolled.json", "pairs", "inspection", "downloads"].includes(
+          name,
+        ),
+    )
+  )
     throw unavailable();
   const journal = join(control, "journal");
   try {
