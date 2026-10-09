@@ -79,3 +79,35 @@ untrusted values into shell commands. The staging package is not for invited-use
 distribution or Gatekeeper acceptance. For signing sequence, native read-only checks,
 both format oracles and Casey's timed action list, use the
 [candidate execution packet](../../docs/preparation/native-mac-beta-readiness/candidate-execution.md).
+
+## Bounded acceptance command packet
+
+`node tools/packaged-mac/acceptance-packet.js --source-commit <full-clean-SHA>`
+plus the seven explicit local path selections documented in the
+[acceptance runbook](../../docs/preparation/native-mac-beta-readiness/acceptance-runbook.md)
+generates command vectors only. It reuses the source/staging policy and minimal app
+environment; it does not read artifacts, credentials or ambient environment, run
+native commands, launch an app, extract containers or publish anything. CLI execution/
+candidate switches refuse. Paths are lexical selections, not ownership or containment
+proof; generated packets with real private paths stay local.
+
+The exact locked-builder vector selects arm64 DMG+ZIP from an already accepted
+stapled app with `--prepackaged` and `--publish never`. This skips signing hooks and
+remains blocked on the production producer/policy/signing handoff. Twenty later
+read-only observations use absolute commands, one worker, zero retries, 30-second
+timeouts and 16 KiB ceilings per output stream. The app distribution descriptor
+requires macOS 14+ `syspolicy_check`; it does not choose the supported-OS floor.
+Both launch vectors have explicit minimal
+environments and remain blocked on native validator/extraction/GUI/automation.
+There is no native execution consumer or packaged Mac E2E project in this slice;
+source smoke/type proof must not be reported as installed candidate acceptance.
+
+With existing installed binaries, the focused preparation check is:
+
+```sh
+./node_modules/.bin/vitest run tools/test/packaged-mac-acceptance-packet.test.js --maxWorkers=1
+```
+
+Tests normalize the real locked builder's prepackaged targets/config without building,
+check separate contained-copy paths, bounded descriptors, minimal environment with
+synthetic child-only canaries, and safe CLI rejection. No Mac/credential read occurs.

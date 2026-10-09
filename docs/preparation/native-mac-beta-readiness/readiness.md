@@ -1,6 +1,20 @@
 # Invited native Mac beta readiness ledger
 
-**Current preparation audit, 2026-10-08:** main independently confirmed/fetched as
+**Current slice, 2026-10-09:** [acceptance runbook](acceptance-runbook.md) and
+[operator checklist](operator-checklist.md) reconcile #555's exact unrun staging
+source with #567 `9ac19ead4347180e44be6162a41d2d5726b3f929` mounted setup/launch
+and #569 `1a2e003e04beaa2e13cd35115faa6c4234145264` durable ownership protection.
+No runtime head is imported. #570 recovery remains with the separate integration owner;
+the current owner-loss path has no supported orphan-reconciliation command.
+The [guide](getting-started-draft.md) now matches those draft-source controls and
+agent-free marker-only sample. Gate/artifact/cancel and real-agent configuration
+persistence still require owner outputs. An executable packet generator emits exact
+arm64 prepackaged DMG/ZIP and bounded verification/launch vectors, executes none and
+leaves candidate acceptance blocked. Signing metadata remains unknown after Forbidden.
+Mac availability is later, not now. No Hub publication, device operation or parent
+acceptance is claimed. Exact remaining non-secret prerequisites are in the runbook.
+
+**Historical preparation audit, 2026-10-08:** main independently confirmed/fetched as
 `db579fb7ac9cfce2e4e6901713088a80602311da`. #529 and #541 are merged. Their executor/
 environment and fixture ZIP containment helpers are reused unchanged. Today's
 [candidate execution packet](candidate-execution.md) records the current source/UI

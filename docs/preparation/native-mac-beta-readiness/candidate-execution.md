@@ -1,5 +1,11 @@
 # Native Mac candidate execution packet
 
+**Historical 8 October packet.** The [9 October acceptance runbook](acceptance-runbook.md)
+supersedes its UI/sample assumptions, reconciles #567/#569/#570 and supplies exact
+bounded command selections. The new [guided operator checklist](operator-checklist.md)
+is for the later session; the Mac is not yet available. Keep this packet's #555
+staging/signing sequence and focused evidence as dated preparation, not current acceptance.
+
 One self-reviewed preparation packet for #385/#388/#389 on 2026-10-08, based on
 independently fetched main `db579fb7ac9cfce2e4e6901713088a80602311da`. Casey approved
 parallel M10/M22 preparation; root owns final-main CI recovery, review/integration and
