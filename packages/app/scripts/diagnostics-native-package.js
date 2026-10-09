@@ -137,6 +137,9 @@ export function buildNativePackage({ arch, headers, root = appRoot }) {
       cpSync(join(resolve(headers), "include"), join(selectedHeaders, "include"), { recursive: true });
       mkdirSync(join(selectedHeaders, "Release"), { recursive: true });
       copyFileSync(join(resolve(headers), arch, "node.lib"), join(selectedHeaders, "Release/node.lib"));
+      // The C targets also name their selected architecture's import library directly.
+      mkdirSync(join(selectedHeaders, arch), { recursive: true });
+      copyFileSync(join(resolve(headers), arch, "node.lib"), join(selectedHeaders, arch, "node.lib"));
       const appRequire = createRequire(join(root, "package.json"));
       const builderRequire = createRequire(appRequire.resolve("electron-builder"));
       execFileSync(
