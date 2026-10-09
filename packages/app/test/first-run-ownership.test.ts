@@ -20,13 +20,15 @@ import { FirstRunSetup } from "../src/main/first-run/setup.js";
 
 const roots: string[] = [];
 it.each([true, false])(
-  "IPC exposes the safe reconciliation route only for ownership refusal (%s)",
+  "IPC exposes the safe reconciliation route through the setup wrapper (%s)",
   async (ownership) => {
     const handlers = new Map<string, (event: IpcMainInvokeEvent, input: unknown, epoch: number) => unknown>();
     const setup = new FirstRunSetup({
       home: tmpdir(),
       receiptPath: "/unused/receipt.json",
-      choose: async () => undefined,
+      choose: async () => {
+        throw ownership ? new FirstRunOwnershipRefusal() : new Error("sensitive raw startup failure");
+      },
       current: () => false,
       prepareConnection: async () => {
         throw new Error("unused");
@@ -41,11 +43,10 @@ it.each([true, false])(
       ready: async () => {},
       held: () => false,
       capture: () => () => {},
-      connect: async () => {
-        throw ownership ? new FirstRunOwnershipRefusal() : new Error("sensitive raw startup failure");
-      },
+      connect: (check) => setup.connect(check),
     });
-    const result = await handlers.get("orca:workspace.firstRun.connect")!({} as IpcMainInvokeEvent, undefined, 0);
+    // Exercise the real setup operation wrapper before the IPC error boundary.
+    const result = await handlers.get("orca:workspace.firstRun.choose")!({} as IpcMainInvokeEvent, undefined, 0);
     expect(result).toMatchObject({
       ok: false,
       error: {

@@ -279,6 +279,7 @@ export class FirstRunSetup {
     try {
       return await operation();
     } catch (error) {
+      if (error instanceof FirstRunOwnershipRefusal) throw error;
       if (error instanceof Error && error.message.startsWith("The selected local daemon")) throw error;
       throw new Error(
         "Project setup could not verify the selected directories or write its new files. Check ownership, access and Git, then choose a fresh empty workspace. Existing files were preserved.",
