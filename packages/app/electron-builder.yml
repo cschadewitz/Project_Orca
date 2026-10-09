@@ -110,7 +110,7 @@ win:
   extraResources:
     - from: "dist/diagnostics-native/win32-${arch}"
       to: "native/diagnostics/win32-${arch}"
-      filter: ["diagnostics_clock.node", "diagnostics_storage.node", "manifest.json"]
+      filter: ["diagnostics_clock.node", "diagnostics_storage.node", "first_run_windows.node", "manifest.json"]
   # Preserve existing NSIS upgrade/uninstall GUID and shortcut AppUserModelID.
   # Changing this requires a separate Windows migration decision (docs/RELEASING.md).
   appId: dev.orca.desktop

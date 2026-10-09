@@ -7,6 +7,7 @@ export interface FirstRunReview {
   readonly workspace: string;
   readonly branch: string;
   readonly baseCommit: string;
+  readonly creation?: { parent: string; kind: "private-child" };
   readonly sample: { id: string; version: string; revision: string };
 }
 export type FirstRunStatus =

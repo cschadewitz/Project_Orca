@@ -37,6 +37,8 @@ function fixture(arch = "arm64", platform = "darwin") {
     "clock.c",
     "storage.c",
     "storage-windows.c",
+    "storage-windows-common.h",
+    "first-run-windows.c",
     "keys-windows.c",
     "windows-delay-load.c",
   ]) {
@@ -50,7 +52,8 @@ function fixture(arch = "arm64", platform = "darwin") {
     bytes.writeUInt32LE(arch === "arm64" ? 0x0100000c : 0x01000007, 4);
     bytes.writeUInt32LE(8, 12);
   }
-  for (const name of NATIVE_ADDONS) writeFileSync(join(directory, name), bytes);
+  for (const name of platform === "win32" ? [...NATIVE_ADDONS, "first_run_windows.node"] : NATIVE_ADDONS)
+    writeFileSync(join(directory, name), bytes);
   writeFileSync(
     join(directory, "manifest.json"),
     JSON.stringify(nativePackageManifest(directory, arch, root, platform)) + "\n",

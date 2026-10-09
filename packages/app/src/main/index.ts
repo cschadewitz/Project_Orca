@@ -695,7 +695,12 @@ const firstRun = new FirstRunSetup({
   receiptPath: join(app.getPath("userData"), "first-run", "selection.json"),
   choose: async (kind) => {
     const options = {
-      title: kind === "project" ? "Choose a prepared Git project" : "Choose a separate empty app workspace",
+      title:
+        kind === "project"
+          ? "Choose a prepared Git project"
+          : process.platform === "win32"
+            ? "Choose a parent for a new private app workspace"
+            : "Choose a separate empty app workspace",
       properties: ["openDirectory" as const],
       buttonLabel: "Review selection",
     };

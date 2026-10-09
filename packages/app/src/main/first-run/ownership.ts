@@ -1,4 +1,6 @@
 /** Append-only startup reservations; direct-child exit or exclusive same-boot writer fencing settles ownership. */
+import { windowsDirectory, windowsRead, windowsWrite, windowsPrivateChild } from "@orca/protocol/first-run-fence";
+
 import {
   closeSync,
   constants,
@@ -78,6 +80,11 @@ export function absent(path: string): boolean {
   }
 }
 export function directory(path: string, parent?: Directory): Directory {
+  if (process.platform === "win32") {
+    const identity = windowsDirectory(path);
+    if (parent && (identity.dev !== parent.dev || identity.uid !== parent.uid)) return refuse();
+    return identity;
+  }
   const info = lstatSync(path, { bigint: true });
   if (
     typeof process.getuid !== "function" ||
@@ -94,6 +101,10 @@ export function sameDirectory(a: Directory, b: Directory): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 export function read(path: string, parent: Directory, limit = 4096): string {
+  if (process.platform === "win32") {
+    directory(parent.path, parent);
+    return windowsRead(path, limit);
+  }
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const info = fstatSync(fd, { bigint: true });
@@ -111,6 +122,10 @@ export function read(path: string, parent: Directory, limit = 4096): string {
   }
 }
 function syncDirectory(path: string): void {
+  if (process.platform === "win32") {
+    windowsDirectory(path);
+    return;
+  }
   const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try {
     fsyncSync(fd);
@@ -120,6 +135,10 @@ function syncDirectory(path: string): void {
 }
 export function write(path: string, text: string, parent: Directory): void {
   directory(parent.path, parent);
+  if (process.platform === "win32") {
+    windowsWrite(path, text);
+    return;
+  }
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try {
     writeFileSync(fd, text);
@@ -235,6 +254,7 @@ export function inspectFirstRunOwnership(path: string, allowUnsettled = false, a
         return refuse();
       if (claim.version === 2 && (!claim.launchHash || !claim.fence || !claim.boot || claim.store === undefined))
         return refuse();
+      if (process.platform === "win32" && claim.version !== 2) return refuse();
       if (claim.version === 1 && (claim.launchHash || claim.fence || claim.boot || claim.store !== undefined))
         return refuse();
       effectiveHash = claim.configHash;
@@ -334,7 +354,8 @@ export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
     if (absent(rootPath)) {
       // Pre-ledger or lost-ledger runtime state is uncertain. Do not silently migrate/adopt it.
       if (!absent(anchorPath) || !absent(join(path, ".orca")) || !absent(join(path, "auth"))) return refuse();
-      mkdirSync(rootPath, { mode: 0o700 });
+      if (process.platform === "win32") windowsPrivateChild(rootPath);
+      else mkdirSync(rootPath, { mode: 0o700 });
       syncDirectory(path);
       write(
         anchorPath,
@@ -350,7 +371,8 @@ export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
     const { names, previous } = inspected;
     const attemptPath = join(rootPath, String(names.length + 1).padStart(6, "0"));
     // Exclusive mkdir is arbitration, not a PID-based lock with stale-owner removal.
-    mkdirSync(attemptPath, { mode: 0o700 });
+    if (process.platform === "win32") windowsPrivateChild(attemptPath);
+    else mkdirSync(attemptPath, { mode: 0o700 });
     syncDirectory(rootPath);
     const attempt = directory(attemptPath, root);
     const reservationId = randomUUID();

@@ -18,6 +18,8 @@
  *
  * Usage: node packages/app/scripts/build-daemon.js [--outfile <path>]
  */
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { build } from "esbuild";
 import { createRequire } from "node:module";
@@ -75,7 +77,7 @@ const result = await build({
   // packages under packages/ never move off 0.1.0 (docs/RELEASING.md). So the bundled
   // daemon reports exactly what `orca serve` reports from the same commit, and both report
   // the release (#229).
-  define: { __ORCA_VERSION__: JSON.stringify(releaseVersion) },
+  define: { __ORCA_VERSION__: JSON.stringify(releaseVersion), __ORCA_FIRST_RUN_BUNDLED__: "true" },
   // `ws`'s optional native accelerators. They are `try`-ed at runtime and absent here by
   // design — bundling a prebuilt binary per platform to shave a memcpy is not a trade
   // worth making for a loopback socket.
@@ -95,3 +97,16 @@ const result = await build({
 const bytes = Object.values(result.metafile.outputs).reduce((total, out) => total + out.bytes, 0);
 console.log(`daemon bundle: ${outfile.replace(repoRoot, "")} (${(bytes / 1024 / 1024).toFixed(1)} MiB)`);
 console.log(`run it with: node ${outfile.replace(appDir, "")} --cwd <workspace> serve`);
+
+// The fixed daemon loader resolves only beside this exact bundle. Windows first-run
+// refuses when either source-built addon is absent; no repository/runtime fallback.
+if (process.platform === "win32") {
+  const native = join(dirname(outfile), "../native/diagnostics", `win32-${process.arch}`);
+  for (const name of ["first_run_windows.node", "diagnostics_clock.node"]) {
+    const source = join(appDir, "native/diagnostics/build/Release", name);
+    if (existsSync(source)) {
+      mkdirSync(native, { recursive: true });
+      copyFileSync(source, join(native, name));
+    }
+  }
+}
