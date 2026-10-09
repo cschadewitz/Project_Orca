@@ -1,0 +1,303 @@
+{
+  "schema": 1,
+  "sourceCommit": "9ac669fd8b401444576fdbf39057d118d1c0cc90",
+  "focused": {
+    "files": 4,
+    "total": 62,
+    "passed": 61,
+    "failed": 0,
+    "platformSkipped": 1,
+    "suites": [
+      {
+        "name": "packages/app/test/daemon-connection-integration.test.ts",
+        "tests": [
+          {
+            "name": "mounts closed template commands and gates same-boot setup throughout an updater reservation",
+            "status": "passed"
+          },
+          {
+            "name": "dispatches verified opt-out before diagnostics initialization while opt-in waits",
+            "status": "passed"
+          },
+          {
+            "name": "a verified newer Off fences an older Enable waiting at the main initialization boundary",
+            "status": "passed"
+          },
+          {
+            "name": "renderer-process-gone fences a preview waiting at main initialization without a reload",
+            "status": "passed"
+          },
+          {
+            "name": "permits old-target preview disposal only from the current window document without initializing diagnostics",
+            "status": "passed"
+          },
+          {
+            "name": "returns env → read-only store → env through IPC, honoring drafts and preserving the saved endpoint",
+            "status": "passed"
+          },
+          {
+            "name": "opens a store with no windows and still refuses drafts when a window exists",
+            "status": "passed"
+          },
+          {
+            "name": "preserves env permission alerts when first hello arrives after the renderer update",
+            "status": "passed"
+          },
+          {
+            "name": "preserves bundled permission alerts when first hello arrives after the renderer update",
+            "status": "passed"
+          },
+          {
+            "name": "preserves store permission alerts when first hello arrives after the renderer update",
+            "status": "passed"
+          },
+          {
+            "name": "installs synchronous IPC and disconnects safely for malformed configuration localhost:6722",
+            "status": "passed"
+          },
+          {
+            "name": "installs synchronous IPC and disconnects safely for malformed configuration not-a-url-private-token",
+            "status": "passed"
+          },
+          {
+            "name": "installs synchronous IPC and disconnects safely for malformed configuration https://owner:private-token@host",
+            "status": "passed"
+          },
+          {
+            "name": "composes the Mac window lease with main IPC while installation stays unavailable",
+            "status": "passed"
+          },
+          {
+            "name": "mounts first-run selection/preparation before hello and rejects paths, stale frames, epochs and pending drafts",
+            "status": "skipped"
+          },
+          {
+            "name": "native replacement bootstrap blocks protected main IPC before its journal inspection",
+            "status": "passed"
+          },
+          {
+            "name": "native replacement unknown startup paints recovery without normal diagnostics or child bootstrap",
+            "status": "passed"
+          },
+          {
+            "name": "main pause refuses new writes and retains its app writer until a dispatched RPC settles",
+            "status": "passed"
+          },
+          {
+            "name": "durable admission closure retains completion only for the reserved live drain",
+            "status": "passed"
+          },
+          {
+            "name": "quit retains app ownership until dispatch and background storage both settle",
+            "status": "passed"
+          },
+          {
+            "name": "main pause tracks first-run receipt work before releasing its app writer",
+            "status": "passed"
+          },
+          {
+            "name": "main forwards only current-client and current-subscription diagnostic facts",
+            "status": "passed"
+          },
+          {
+            "name": "main removes power observation on quit and suppresses later facts",
+            "status": "passed"
+          },
+          {
+            "name": "main removes power observation on updater pause and suppresses later facts",
+            "status": "passed"
+          },
+          {
+            "name": "late diagnostic initialization cannot publish app_started after quit",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/test/diagnostics-report-performance.test.ts",
+        "tests": [
+          {
+            "name": "preserves the generic canonical oracle for every enum, maximum offsets/count and empty reports",
+            "status": "passed"
+          },
+          {
+            "name": "freezes all 8192 events before yielding and remains immutable across collection/stop",
+            "status": "passed"
+          },
+          {
+            "name": "keeps a full-count checkpoint immutable and owned after the live ring stops",
+            "status": "passed"
+          },
+          {
+            "name": "validates immutable decoded bytes even if the source Buffer changes during a yielded turn",
+            "status": "passed"
+          },
+          {
+            "name": "retains exact rejection of extra/duplicate fields, framing, invalid UTF-8 and event semantics",
+            "status": "passed"
+          },
+          {
+            "name": "accepts every closed pair at decimal boundaries and rejects noncanonical event spellings",
+            "status": "passed"
+          },
+          {
+            "name": "keeps validated immutable text and independently owned exact bytes through disposal",
+            "status": "passed"
+          },
+          {
+            "name": "yields each batch with one completion promise and rejects scheduled generator failures",
+            "status": "passed"
+          },
+          {
+            "name": "prepares only a descriptor with frozen bytes/digest and no renderer transport allowance",
+            "status": "passed"
+          },
+          {
+            "name": "erases main-owned report bytes immediately on off without a renderer disposal acknowledgement",
+            "status": "passed"
+          },
+          {
+            "name": "erases main-owned report bytes immediately on expiry without a renderer disposal acknowledgement",
+            "status": "passed"
+          },
+          {
+            "name": "erases main-owned report bytes immediately on document without a renderer disposal acknowledgement",
+            "status": "passed"
+          },
+          {
+            "name": "cancels a picker without publication and requires a fresh destination",
+            "status": "passed"
+          },
+          {
+            "name": "fences off between recovered input disposal and report digest publication",
+            "status": "passed"
+          },
+          {
+            "name": "fences document between recovered input disposal and report digest publication",
+            "status": "passed"
+          },
+          {
+            "name": "fences clock between recovered input disposal and report digest publication",
+            "status": "passed"
+          },
+          {
+            "name": "revokes off during report preparation without returning plaintext or early reservation release",
+            "status": "passed"
+          },
+          {
+            "name": "revokes document during report preparation without returning plaintext or early reservation release",
+            "status": "passed"
+          },
+          {
+            "name": "revokes clock during report preparation without returning plaintext or early reservation release",
+            "status": "passed"
+          },
+          {
+            "name": "rechecks authority after checkpoint serialization before any disk dispatch",
+            "status": "passed"
+          },
+          {
+            "name": "retains frozen binary bytes until a timeout Save actually settles",
+            "status": "passed"
+          },
+          {
+            "name": "retains frozen binary bytes until a off Save actually settles",
+            "status": "passed"
+          },
+          {
+            "name": "retains frozen binary bytes until a cancel Save actually settles",
+            "status": "passed"
+          },
+          {
+            "name": "retains frozen binary bytes until a document Save actually settles",
+            "status": "passed"
+          },
+          {
+            "name": "joins repeated Save clicks and publishes only the frozen report despite later capture",
+            "status": "passed"
+          },
+          {
+            "name": "refuses altered frozen bytes at the last publication admission check",
+            "status": "passed"
+          },
+          {
+            "name": "orders consent revocation before publication admission without inventing an unsaved outcome",
+            "status": "passed"
+          },
+          {
+            "name": "orders consent revocation after publication admission without inventing an unsaved outcome",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/test/diagnostics-startup-consent.test.ts",
+        "tests": [
+          {
+            "name": "keeps durable consent when navigation revokes a preview during the startup read",
+            "status": "passed"
+          },
+          {
+            "name": "keeps durable consent when renderer-disposal revokes a preview during the startup read",
+            "status": "passed"
+          },
+          {
+            "name": "a newer off fences the pending enabled startup read",
+            "status": "passed"
+          },
+          {
+            "name": "a newer shutdown fences the pending enabled startup read",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/test/diagnostics-windows-refusal.test.ts",
+        "tests": [
+          {
+            "name": "Windows x64 native capability has one fixed packaged location",
+            "status": "passed"
+          },
+          {
+            "name": "Windows arm64 native capability has one fixed packaged location",
+            "status": "passed"
+          },
+          {
+            "name": "repeated actual Windows off/refused attempts and recreation retain no files or key/picker authority",
+            "status": "passed"
+          },
+          {
+            "name": "Windows key seam refuses unavailable without plaintext fallback",
+            "status": "passed"
+          },
+          {
+            "name": "Windows key seam refuses rotation without plaintext fallback",
+            "status": "passed"
+          }
+        ]
+      }
+    ]
+  },
+  "newRegressions": "Three cases revoke Off/document/clock after recovered input disposal and before digest publication, proving lease/reservation retention and final erasure without returning authority.",
+  "staticChecks": [
+    "Root TypeScript noEmit passed",
+    "App/main/preload TypeScript build passed",
+    "ESLint for changed controller/test passed",
+    "Prettier for changed controller/test passed",
+    "git diff --check passed"
+  ],
+  "reused": "Prior renderer types, CSS, preload/renderer/validation/producer/payload tests and native UI axe evidence were not rerun: those source paths and their contract are unchanged. Refreshed main IPC/consent/refusal and lifecycle suites are explicit above.",
+  "unrun": [
+    "full suite",
+    "coverage",
+    "Actions dispatch",
+    "full Vite build",
+    "Linux-only crash schedules",
+    "ARM64/Mac/physical",
+    "paired execution under failures/load",
+    "manual Narrator/keyboard",
+    "second-user isolation",
+    "remaining native expiry/network/failure/crash schedules",
+    "independent review"
+  ]
+}

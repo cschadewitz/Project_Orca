@@ -1,5 +1,7 @@
 # Windows diagnostics save-only scope and evidence - 9 October 2026
 
+> **Historical pre-yield source:** The [turn-attribution follow-up](windows-save-only-turn-yield-followup.md) records one identified product fix and a 3.8011 ms passing recovered-export verification at `9ac669fd8b401444576fdbf39057d118d1c0cc90`. The 5.2331 ms failure below remains unchanged evidence of this earlier source. Overall activation stays held.
+
 **The save-only memory gate passes; strict recovered-export responsiveness remains
 open.** This implements Casey's approved direction: "Okay lets skip the in app
 preview, just let them save and export." It starts from exact draft #595

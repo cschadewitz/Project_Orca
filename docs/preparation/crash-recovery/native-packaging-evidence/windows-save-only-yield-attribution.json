@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "originalSource": "21b615fe278f91888a68198475c6fcc6a791208f",
+  "candidateBeforeFix": "fb951acdb288c7ffa0ee9032e2f4bf7bcde95182",
+  "sourceAfterFix": "9ac669fd8b401444576fdbf39057d118d1c0cc90",
+  "originalFailureMs": 5.2331000000001495,
+  "gateMs": 4,
+  "attempts": "One unchanged-source Full attribution cell, then one Full/Minimal verification pair after the identified fix; no pass hunting.",
+  "before": {
+    "heartbeatGapMs": 4.919200000000046,
+    "callbackWallMs": 4.572800000000143,
+    "observerHookWallMs": 0.28169999999977335,
+    "residualWallMs": 0.06470000000012988,
+    "sampleWallMs": 0.25040000000035434,
+    "longestCapturedCallbackMs": 3.1900000000000546,
+    "gcOverlapMs": 0,
+    "limitation": "Callback spans include all work inside the callback and do not measure thread CPU. Observer includes hook sampling/status work; residual is not assigned to OS scheduling. CPU sampling is approximate; the original 5.2331ms interval cannot be reconstructed from phase maxima."
+  },
+  "after": {
+    "heartbeatGapMs": 3.8010999999999058,
+    "callbackWallMs": 3.456000000000131,
+    "observerHookWallMs": 0.2443999999998141,
+    "residualWallMs": 0.10069999999996071,
+    "sampleWallMs": 0.22050000000081127,
+    "longestCapturedCallbackMs": 2.9468000000001666,
+    "gcOverlapMs": 0,
+    "limitation": "Callback spans include all work inside the callback and do not measure thread CPU. Observer includes hook sampling/status work; residual is not assigned to OS scheduling. CPU sampling is approximate; the original 5.2331ms interval cannot be reconstructed from phase maxima."
+  },
+  "inference": "The contiguous recovered completion chain combines report encoding/source disposal with synchronous SHA-256; sampled native Hash.update is under RecoveryController.digest. A yield before digest splits accumulated completion work. This identifies a product scheduling defect in the reproduced interval without claiming exact causal reconstruction of the original failure.",
+  "fix": "Yield once after recovered validation/encoding and source disposal, retaining frozen lease and 4MiB preparation reservation; original authority/deadline checks run after the yield. Current export path unchanged.",
+  "productionEnabled": false,
+  "affectedGate": "passed_single_bounded_verification",
+  "broaderAcceptance": "held"
+}
