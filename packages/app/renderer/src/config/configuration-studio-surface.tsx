@@ -8,6 +8,7 @@ import { scopeProps } from "../keyboard-map.js";
 import { Button, ObjectHeader, StateView, Text, textClass } from "../ui/index.js";
 import { ConnectionSource } from "../daemon-connection/source.js";
 import { SURFACES } from "../chrome/surfaces.js";
+import { useSidebarCollapsed } from "../chrome/use-breakpoints.js";
 import { useConfig } from "./config-context.js";
 import { sameEditorTarget } from "./configuration-adapter.js";
 import { useConfigurationStudio } from "./configuration-studio-context.js";
@@ -35,6 +36,7 @@ export function ConfigurationStudioSurface({
   onLaunch?: () => void;
 }): JSX.Element {
   useSurfaceDensity();
+  const narrow = useSidebarCollapsed();
   const feed = useConfig();
   const studio = useConfigurationStudio();
   const templateStudio = useTemplateStudio().studio;
@@ -87,7 +89,12 @@ export function ConfigurationStudioSurface({
   const review = studio?.review;
   const generation = data?.generation;
   return (
-    <div className="orca-config" data-surface="config" {...scopeProps("config")}>
+    <div
+      className="orca-config"
+      data-surface="config"
+      data-config-layout={narrow ? "stacked" : "columns"}
+      {...scopeProps("config")}
+    >
       {window.orca.daemonConnection && <ConnectionSource bridge={window.orca.daemonConnection} />}
       <ObjectHeader
         crumbs={[{ type: "config", id: data?.config.path ?? "config", label: "Configuration", current: true }]}

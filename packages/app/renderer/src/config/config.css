@@ -39,6 +39,12 @@
   gap: var(--space-2);
 }
 
+/* Reuse the chrome's token-owned narrow layout threshold. Fixed label columns
+   must not force Config beyond its pane at zoom or small window sizes. */
+.orca-config[data-config-layout="stacked"] .orca-field {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .orca-config__form {
   display: flex;
   flex-direction: column;

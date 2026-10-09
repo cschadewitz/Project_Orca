@@ -1508,6 +1508,9 @@
 
 .orca-window {
   display: grid;
+  /* The chrome's min-content width must not widen the single surface column
+     beyond a narrow/zoomed viewport. Surfaces own their bounded scroll regions. */
+  grid-template-columns: minmax(0, 1fr);
   /* A bar is a band of chrome, not a control — these are bar-*, never control-* (#244). */
   grid-template-rows: var(--bar-title) 1fr var(--bar-status);
   height: 100%;
