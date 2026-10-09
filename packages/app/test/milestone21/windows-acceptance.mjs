@@ -847,14 +847,21 @@ const field = (path) =>
 async function navigate(label) {
   await page.getByRole("navigation", { name: "Surfaces" }).getByRole("button", { name: label, exact: true }).click();
 }
-async function choose(scope, label, item, keyboard = false, operation) {
+async function choose(scope, label, item, keyboard = false, operation, exactMenuLabel = false) {
   if (operation) currentOperation = `${operation}-open-menu`;
   const trigger = scope.getByRole("button", { name: new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) });
   await trigger.click();
   if (operation) currentOperation = `${operation}-find-option`;
-  const option = page.getByRole("menuitem", { name: item, exact: true });
+  // Retained-launch hints are part of the accessible name. The Menu primitive exposes
+  // its exact label separately, so selection never guesses or reads an operation hint.
+  const option = exactMenuLabel
+    ? page
+        .getByRole("menu", { name: label, exact: true })
+        .locator(`[role="menuitem"][data-orca-menu-label=${JSON.stringify(item)}]`)
+    : page.getByRole("menuitem", { name: item, exact: true });
   if (operation) {
     await option.waitFor();
+    check((await option.count()) === 1, `${operation}-option-unique`);
     check((await option.getAttribute("aria-disabled")) !== "true", `${operation}-option-enabled`);
   }
   if (keyboard) {
@@ -1521,99 +1528,222 @@ async function guidedRequest() {
     throw error;
   }
 }
+async function diagnoseRestartRecovery() {
+  try {
+    const flags = await page.evaluate(
+      ({ expectedLabel, admissionId, requestId }) => {
+        const config = document.querySelector('.orca-config[data-surface="config"]');
+        const root = config?.querySelector('[aria-label="Guided launch"]');
+        const workspace = config?.querySelector('[aria-label="Launch work workspace"]');
+        const runs = document.querySelector('main[data-surface="runs"]');
+        const flags = {
+          "guided-mounted": Boolean(root),
+          "original-request-selected-in-runs": Boolean(runs?.textContent.includes(requestId)),
+        };
+        const button = (owner, label) =>
+          [...(owner?.querySelectorAll("button") ?? [])].find(
+            (element) => element.getAttribute("aria-label") === label || element.textContent.trim() === label,
+          );
+        for (const [name, owner, label] of [
+          ["retained-menu-trigger", workspace, "Protected launch to restore"],
+          ["restore", root, "Restore protected launch"],
+          ["recover", root, "Recover original launch"],
+        ]) {
+          const element = button(owner, label);
+          flags[`${name}-mounted`] = Boolean(element);
+          flags[`${name}-enabled`] = Boolean(
+            element && !element.disabled && element.getAttribute("aria-disabled") !== "true",
+          );
+        }
+        const menu = workspace?.querySelector('[role="menu"][aria-label="Protected launch to restore"]');
+        const options = [...(menu?.querySelectorAll('[role="menuitem"]') ?? [])];
+        const requested = options.filter((element) => element.getAttribute("data-orca-menu-label") === expectedLabel);
+        flags["retained-menu-mounted"] = Boolean(menu);
+        flags["retained-options-present"] = options.length > 0;
+        flags["retained-options-single"] = options.length === 1;
+        flags["retained-request-label-present"] = requested.length > 0;
+        flags["retained-request-label-unique"] = requested.length === 1;
+        flags["retained-request-label-enabled"] =
+          requested.length === 1 && requested[0].getAttribute("aria-disabled") !== "true";
+        flags["accepted-receipt-mounted"] = Boolean(root?.textContent.includes(`Admission ${admissionId} / accepted`));
+        const text = workspace?.textContent ?? "";
+        const known = {
+          "restore-refused": "The protected launch intent could not be restored.",
+          "restore-empty": "No protected launch was found. Your current draft is retained.",
+          "scope-refused": "The saved intent belongs to another target or principal.",
+          "target-review-required":
+            "Review the original authorized target before recovering the exact protected launch.",
+          "authority-refused":
+            "Current authorization refused the launch operation. Your draft and any retained intent are preserved.",
+          "operation-unavailable":
+            "The launch operation is unavailable. Your draft and any retained intent are preserved.",
+          "context-changed": "Configuration or connection changed. Review the draft again.",
+          "restore-reading": "Reading the protected launch. Editing is paused until the read finishes.",
+        };
+        for (const [name, message] of Object.entries(known)) flags[`message-${name}`] = text.includes(message);
+        return flags;
+      },
+      {
+        expectedLabel: `${PROGRAM} (request)`,
+        admissionId: receipt.ids.requestAdmissionId,
+        requestId: receipt.ids.requestId,
+      },
+    );
+    for (const [name, present] of Object.entries(flags)) receipt.checks[`diagnostic-restart-${name}`] = present;
+  } catch {
+    receipt.checks["diagnostic-restart-capture-available"] = false;
+  }
+}
 async function restartChecks() {
-  const before = await rpc("runs.list", { offset: 0, limit: 100 });
-  check(before.runs.length === 2, "exactly-two-synthetic-admitted-runs");
-  await mergeMethods();
-  await closeApp(true);
-  await launchApp(true);
-  const after = await rpc("runs.list", { offset: 0, limit: 100 });
-  check(
-    after.runs.length === 2 &&
-      after.runs.some((run) => run.id === receipt.ids.directRunId) &&
-      after.runs.some((run) => run.id === receipt.ids.requestRunId),
-    "restart-keeps-original-runs",
-  );
-  await navigate("Config");
-  await field("roles.builder").waitFor();
-  check(
-    (await field("roles.builder").inputValue()) === "worker-b" &&
-      (await field("roles.observer").inputValue()) === "m21-config-agent",
-    "restart-config-form-persistence",
-  );
-  const config = await rpc("config.get");
-  check(
-    config.config.revision === receipt.hashes.configSource && config.generation.state === "active",
-    "restart-saved-config-active",
-  );
-  await surface().getByRole("button", { name: "Templates", exact: true }).click();
-  await studio()
-    .getByLabel(/^Template\s*template\.id/)
-    .selectOption(fixture.strictKey);
-  check(
-    digest(
-      await studio()
-        .getByLabel(/^Template source\s*template\.markdown/)
-        .inputValue(),
-    ) === receipt.hashes.strictSource,
-    "restart-template-source-persistence",
-  );
-  await studio()
-    .getByLabel(/^History template\s*history\.template/)
-    .selectOption(fixture.strictKey);
-  await studio().getByRole("button", { name: "Read revision history", exact: true }).click();
-  await studio()
-    .getByText(/; active generation /)
-    .waitFor();
-  const history = await rpc("templates.history", { target: fixture.target, key: fixture.strictKey });
-  check(
-    history.entries.some(
-      (entry) => entry.revision === receipt.hashes.strictSource && entry.generation === receipt.ids.templateGeneration,
-    ),
-    "restart-template-history-persistence",
-  );
-  await surface().getByRole("button", { name: "Form", exact: true }).click();
-  await openLaunch();
-  await choose(
-    page.getByLabel("Launch work workspace", { exact: true }),
-    "Protected launch to restore",
-    `${PROGRAM} (request)`,
-    true,
-  );
-  await guided().getByRole("button", { name: "Restore protected launch", exact: true }).click();
-  const recover = guided().getByRole("button", { name: "Recover original launch", exact: true });
-  await recover.waitFor();
-  await pressTwice(recover);
-  await guided().getByText(`Admission ${receipt.ids.requestAdmissionId} / accepted`, { exact: false }).waitFor();
-  const recovered = await observation();
-  check(
-    recovered.receipts.some(
-      (entry) =>
-        ["operator.admission", "operator.reconcileAdmission"].includes(entry.method) &&
-        entry.admissionId === receipt.ids.requestAdmissionId &&
-        entry.runId === receipt.ids.requestRunId &&
-        entry.requestId === receipt.ids.requestId,
-    ),
-    "restart-real-server-recovery-original-receipt",
-  );
-  check(
-    (recovered.methods[DIRECT_METHOD] ?? 0) === 0 &&
-      (recovered.methods[REQUEST_METHOD] ?? 0) === 0 &&
-      (recovered.methods["runs.admit"] ?? 0) === 0 &&
-      (recovered.methods["requests.submit"] ?? 0) === 0,
-    "restart-recovery-submits-no-new-work",
-  );
-  check(
-    (await rpc("runs.list", { offset: 0, limit: 100 })).runs.length === 2,
-    "restart-restore-reuses-original-admission",
-  );
-  const journal = await readFile(join(fixture.profile, "admission-intents.enc"));
-  check(
-    journal.length > 0 && !journal.includes(Buffer.from("Synthetic descriptor body")),
-    "native-protected-journal-withholds-fixture-text",
-  );
-  receipt.hashes.protectedJournal = digest(journal);
-  await mergeMethods();
+  try {
+    currentOperation = "restart-count-original-runs";
+    const before = await rpc("runs.list", { offset: 0, limit: 100 });
+    check(before.runs.length === 2, "exactly-two-synthetic-admitted-runs");
+    currentOperation = "restart-close-original-app";
+    await mergeMethods();
+    await closeApp(true);
+    currentOperation = "restart-launch-source-bundled-app";
+    await launchApp(true);
+    currentOperation = "restart-read-original-runs";
+    const after = await rpc("runs.list", { offset: 0, limit: 100 });
+    check(
+      after.runs.length === 2 &&
+        after.runs.some((run) => run.id === receipt.ids.directRunId) &&
+        after.runs.some((run) => run.id === receipt.ids.requestRunId),
+      "restart-keeps-original-runs",
+    );
+    currentOperation = "restart-config-form";
+    await navigate("Config");
+    await field("roles.builder").waitFor();
+    check(
+      (await field("roles.builder").inputValue()) === "worker-b" &&
+        (await field("roles.observer").inputValue()) === "m21-config-agent",
+      "restart-config-form-persistence",
+    );
+    const config = await rpc("config.get");
+    check(
+      config.config.revision === receipt.hashes.configSource && config.generation.state === "active",
+      "restart-saved-config-active",
+    );
+    currentOperation = "restart-template-source";
+    await surface().getByRole("button", { name: "Templates", exact: true }).click();
+    await studio()
+      .getByLabel(/^Template\s*template\.id/)
+      .selectOption(fixture.strictKey);
+    check(
+      digest(
+        await studio()
+          .getByLabel(/^Template source\s*template\.markdown/)
+          .inputValue(),
+      ) === receipt.hashes.strictSource,
+      "restart-template-source-persistence",
+    );
+    currentOperation = "restart-template-history";
+    await studio()
+      .getByLabel(/^History template\s*history\.template/)
+      .selectOption(fixture.strictKey);
+    await studio().getByRole("button", { name: "Read revision history", exact: true }).click();
+    await studio()
+      .getByText(/; active generation /)
+      .waitFor();
+    const history = await rpc("templates.history", { target: fixture.target, key: fixture.strictKey });
+    check(
+      history.entries.some(
+        (entry) =>
+          entry.revision === receipt.hashes.strictSource && entry.generation === receipt.ids.templateGeneration,
+      ),
+      "restart-template-history-persistence",
+    );
+    currentOperation = "restart-return-config-form";
+    await surface().getByRole("button", { name: "Form", exact: true }).click();
+    await openLaunch("restart");
+    await choose(
+      page.getByLabel("Launch work workspace", { exact: true }),
+      "Protected launch to restore",
+      `${PROGRAM} (request)`,
+      true,
+      "restart-retained-request-select",
+      true,
+    );
+    currentOperation = "restart-restore-click";
+    await guided().getByRole("button", { name: "Restore protected launch", exact: true }).click();
+    const recover = guided().getByRole("button", { name: "Recover original launch", exact: true });
+    currentOperation = "restart-recover-ready";
+    await recover.waitFor();
+    await waitUntil(async () => !(await recover.isDisabled()), 10_000);
+    check(true, "restart-recovery-control-ready");
+    currentOperation = "restart-recover-click";
+    await pressTwice(recover);
+    currentOperation = "restart-recover-accepted-receipt";
+    await waitUntil(
+      async () =>
+        (await observation()).receipts.some(
+          (entry) =>
+            ["operator.admission", "operator.reconcileAdmission"].includes(entry.method) &&
+            entry.admissionId === receipt.ids.requestAdmissionId &&
+            entry.runId === receipt.ids.requestRunId &&
+            entry.requestId === receipt.ids.requestId,
+        ),
+      10_000,
+    );
+    currentOperation = "restart-recover-mounted-original-work";
+    // Accepted recovery navigates to Runs. Its selected detail and exact Request crumb
+    // prove the original work is mounted after the real server receipt arrives.
+    await waitUntil(
+      async () =>
+        page.evaluate(
+          ({ requestId }) => {
+            const runs = document.querySelector('main[data-surface="runs"]');
+            const selectedSurface = document.querySelector(
+              'nav[aria-label="Surfaces"] button[aria-current="page"] .orca-nav__label',
+            );
+            const selectedTitle = runs?.querySelector(".orca-runs__detail .orca-inspector__title");
+            return Boolean(
+              selectedSurface?.textContent === "Runs" &&
+              selectedTitle?.textContent === "M21 synthetic Request" &&
+              runs?.textContent.includes(requestId),
+            );
+          },
+          { requestId: receipt.ids.requestId },
+        ),
+      10_000,
+    );
+    check(true, "restart-mounted-original-work-recovered");
+    const recovered = await observation();
+    check(
+      recovered.receipts.some(
+        (entry) =>
+          ["operator.admission", "operator.reconcileAdmission"].includes(entry.method) &&
+          entry.admissionId === receipt.ids.requestAdmissionId &&
+          entry.runId === receipt.ids.requestRunId &&
+          entry.requestId === receipt.ids.requestId,
+      ),
+      "restart-real-server-recovery-original-receipt",
+    );
+    check(
+      (recovered.methods[DIRECT_METHOD] ?? 0) === 0 &&
+        (recovered.methods[REQUEST_METHOD] ?? 0) === 0 &&
+        (recovered.methods["runs.admit"] ?? 0) === 0 &&
+        (recovered.methods["requests.submit"] ?? 0) === 0,
+      "restart-recovery-submits-no-new-work",
+    );
+    check(
+      (await rpc("runs.list", { offset: 0, limit: 100 })).runs.length === 2,
+      "restart-restore-reuses-original-admission",
+    );
+    currentOperation = "restart-protected-journal-check";
+    const journal = await readFile(join(fixture.profile, "admission-intents.enc"));
+    check(
+      journal.length > 0 && !journal.includes(Buffer.from("Synthetic descriptor body")),
+      "native-protected-journal-withholds-fixture-text",
+    );
+    receipt.hashes.protectedJournal = digest(journal);
+    await mergeMethods();
+    currentOperation = currentPhase;
+  } catch (error) {
+    await diagnoseRestartRecovery();
+    throw error;
+  }
 }
 async function cleanup() {
   await stopChild(cliChild);
