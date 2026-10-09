@@ -23,7 +23,7 @@ index c9a4143a02e8cdb340840948571f3ed806978c29..f767333b5411483e7eb0a9c68cd82e03
 @@ -54,6 +56,35 @@ import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./d
  import { findBundledDaemon, startBundledDaemon } from "./daemon-process.js";
  import { storeRoot, Workspace } from "./workspace.js";
- 
+
 +// Mount synchronously before producers. This disabled bootstrap slice enrolls app data
 +// only; the integration owner must capture ALL configured roots before enabling updates.
 +const appWriterRoot = app.getPath("userData");
@@ -54,7 +54,7 @@ index c9a4143a02e8cdb340840948571f3ed806978c29..f767333b5411483e7eb0a9c68cd82e03
 +}
 +
  const preferences = new PreferencesFile(join(app.getPath("userData"), "preferences.json"));
- 
+
  /** The dev server's URL when `scripts/dev.js` started one; undefined in a packaged app. */
 @@ -88,6 +119,7 @@ const diagnosticHandle = (
  ): void => {
@@ -307,7 +307,7 @@ index 0f2142c59a01e2c8a62ad388434b0753d9c13a87..5a8d35c12af26f0e43b886104b413aff
 +  vi.unstubAllGlobals();
    if (directory) await rm(directory, { recursive: true, force: true });
  });
- 
+
 @@ -738,3 +761,79 @@ it.skipIf(typeof process.getuid !== "function")(
      expect(await readdir(selected)).toEqual(["first-run", "orca.config.yaml"]);
    },
