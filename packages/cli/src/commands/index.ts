@@ -2,6 +2,8 @@
  * CLI command implementations. Each command receives parsed positionals and
  * flags and an output sink; `main.ts` handles argument parsing and errors.
  */
+import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
+import { firstRunRequiresExplicitContinuationRecovery } from "../first-run-recovery-fence.js";
 import { mcpCommand } from "./mcp.js";
 import { AdmissionRetryModel, ContinuationAdmissionModel, neverAttached } from "@orca/daemon";
 import { admissionRetryOptions } from "./admission-retry.js";
@@ -1005,8 +1007,10 @@ export const commands: Record<string, Command> = {
             recoveringContinuations = undefined;
           });
       };
-      recoverContinuations();
-      const continuationTimer = daemon.recoverContinuations ? setInterval(recoverContinuations, 5_000) : undefined;
+      const explicitRecovery = firstRunRequiresExplicitContinuationRecovery(app.configDir);
+      if (!explicitRecovery) recoverContinuations();
+      const continuationTimer =
+        daemon.recoverContinuations && !explicitRecovery ? setInterval(recoverContinuations, 5_000) : undefined;
       continuationTimer?.unref();
       ctx.out(
         `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,
@@ -1060,6 +1064,7 @@ export const commands: Record<string, Command> = {
       // workspace is removed after the run unless --keep asks for it.
       const dir = ctx.flags.dir ? String(ctx.flags.dir) : await mkdtemp(join(tmpdir(), "orca-demo-"));
       const keep = Boolean(ctx.flags.dir) || Boolean(ctx.flags.keep);
+      assertNoUnownedFirstRunMutation(resolvePath(dir));
       await mkdir(dir, { recursive: true });
       // commands/ -> (src|dist) -> cli -> packages -> repo root
       const here = fileURLToPath(new URL(".", import.meta.url));

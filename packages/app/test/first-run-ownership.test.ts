@@ -16,6 +16,7 @@ import {
   reserveFirstRunOwnership,
 } from "../src/main/first-run/ownership.js";
 import { installFirstRunIPC } from "../src/main/first-run/ipc.js";
+import { syntheticFirstRunWriter } from "./fixtures/synthetic-first-run-writer.js";
 import { FirstRunSetup } from "../src/main/first-run/setup.js";
 
 const roots: string[] = [];
@@ -52,7 +53,7 @@ it.each([true, false])(
       error: {
         code: "AGENT_TRANSPORT",
         message: ownership
-          ? expect.stringContaining("no supported orphan reconciliation")
+          ? expect.stringContaining("Review same-boot recovery")
           : expect.stringContaining("Project setup was refused"),
       },
     });
@@ -103,7 +104,10 @@ const hello = (path: string): HelloResult => ({
 });
 function app(path: string, options: Partial<WorkspaceDeps> = {}) {
   const owned = child(path);
-  const start = vi.fn<WorkspaceDeps["start"]>().mockResolvedValue(owned.daemon);
+  const start = vi.fn<WorkspaceDeps["start"]>().mockImplementation(async () => {
+    syntheticFirstRunWriter(path, 123);
+    return owned.daemon;
+  });
   const subscribe = vi.fn(() => ({ close: vi.fn() }) as unknown as DaemonSubscription);
   const client = vi.fn((url: string) => new DaemonClient(url));
   const workspace = new Workspace({
@@ -139,7 +143,7 @@ it("persists the reservation before startup, and app recreation cannot retry int
       throw new Error("startup result lost");
     },
   });
-  await expect(first.workspace.prepareFirstRunConnection(path)).rejects.toThrow("no supported orphan reconciliation");
+  await expect(first.workspace.prepareFirstRunConnection(path)).rejects.toThrow("Review same-boot recovery");
   const before = await evidence(path);
   await first.workspace.close();
   const second = app(path);
@@ -243,9 +247,7 @@ it("app loss before persisting even an otherwise terminal child exit leaves rela
   lostApp.exit();
   const before = await evidence(path);
   const relaunched = app(path);
-  await expect(relaunched.workspace.prepareFirstRunConnection(path)).rejects.toThrow(
-    "no supported orphan reconciliation",
-  );
+  await expect(relaunched.workspace.prepareFirstRunConnection(path)).rejects.toThrow("Review same-boot recovery");
   expect(relaunched.start).not.toHaveBeenCalled();
   expect(before["000001/terminal.json"]).toBeUndefined();
   expect(await evidence(path)).toEqual(before);
@@ -288,6 +290,7 @@ it("a late startup result after quit settles only when its own exit is actually 
   const preparing = first.workspace.prepareFirstRunConnection(path);
   const refused = expect(preparing).rejects.toThrow("changed");
   await first.workspace.close();
+  syntheticFirstRunWriter(path, 123);
   finish(first.daemon);
   await refused;
   await expect(app(path).workspace.prepareFirstRunConnection(path)).rejects.toThrow("reconciliation");
@@ -369,6 +372,7 @@ it.each([".orca", "auth"])("pre-ledger %s state is preserved and cannot be silen
 it.each(["symlink", "hardlink"])("%s evidence is refused before startup", async (kind) => {
   const path = await selected();
   const claim = reserveFirstRunOwnership(path);
+  syntheticFirstRunWriter(path, 123);
   claim.attach(child(path).daemon);
   const file = join(attempt(path), "child.json"),
     copied = join(path, "preserved-child.json");

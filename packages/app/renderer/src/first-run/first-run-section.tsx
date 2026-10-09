@@ -59,7 +59,9 @@ export function FirstRunSection(): JSX.Element | null {
         announce(text);
       } else {
         setMessage(
-          "Setup was refused. Check directory ownership, writable access and Git; retry or choose a fresh empty workspace. Existing files were preserved.",
+          result.error.message.startsWith("Local startup ownership requires reconciliation.")
+            ? "Local startup ownership requires reconciliation. Review same-boot recovery, then reconcile when the owned writer has exited. Preserve all ownership evidence, work and credentials."
+            : "Setup was refused. Check directory ownership, writable access and Git; retry or choose a fresh empty workspace. Existing files were preserved.",
         );
         announce("Project setup was refused. Existing files were preserved.");
       }
@@ -119,6 +121,97 @@ export function FirstRunSection(): JSX.Element | null {
               }
             >
               Connect selected local workspace
+            </Button>
+          </>
+        )}
+        {state?.state === "recovery" && bridge.reconcileRecovery && (
+          <>
+            <Text style="caption">
+              {state.recovery.state === "surviving-owned-daemon"
+                ? "The exact owned daemon is still running. No process was adopted or stopped."
+                : state.recovery.state === "unknown-writer"
+                  ? "Writer ownership is unknown. Preserve the workspace for operator review."
+                  : "Recovery is ready for verification."}
+            </Text>
+            <Text style="body">
+              Recovery checks exclusive ownership before releasing this reservation. A surviving owned daemon stays
+              preserved; an unknown writer requires operator review. Existing work and credentials stay preserved.
+              Reconciliation starts no daemon and resumes no work.
+            </Text>
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void perform(
+                  () => bridge.reconcileRecovery!(state.recovery.requestId),
+                  "Ownership reconciled. Connect explicitly, then inspect retained work before continuing it.",
+                )
+              }
+            >
+              Reconcile same-boot ownership
+            </Button>
+          </>
+        )}
+        {state?.state === "configuration-review" && bridge.bindConfiguration && (
+          <>
+            <Text style="body">
+              Bind this saved configuration for reopening the selected workspace. Project, store and sample bindings
+              stay fixed. This starts no agent and grants no permissions.
+            </Text>
+            <Well style="mono-id">Saved revision: {state.review.revision}</Well>
+            {state.review.checks.map((check) => (
+              <Text key={check.agentId} style="caption">
+                {check.agentId}:{" "}
+                {check.state === "handshake-required"
+                  ? "Executable available; explicitly check ACP, version and sign-in before real work."
+                  : check.state === "missing"
+                    ? "Executable missing from the app PATH; configure an absolute executable path in Config."
+                    : check.state === "architecture"
+                      ? "Executable architecture is incompatible with this app."
+                      : "Executable access or format could not be verified."}
+              </Text>
+            ))}
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void perform(
+                  () => bridge.bindConfiguration!(state.review.id),
+                  "Saved configuration bound for reopening. ACP and real-agent acceptance remain separate.",
+                )
+              }
+            >
+              Bind reviewed saved configuration
+            </Button>
+          </>
+        )}
+        {bridge.reviewConfiguration && (
+          <Button
+            disabled={busy}
+            onClick={() =>
+              void perform(
+                () => bridge.reviewConfiguration!(),
+                "Review saved configuration and local executable checks before binding it.",
+              )
+            }
+          >
+            Review saved configuration for reopening
+          </Button>
+        )}
+        {state?.state === "prepared" && bridge.prepareRecovery && (
+          <>
+            <Text style="caption">
+              If app loss blocked this store, review recovery and verify exclusive writer ownership before
+              reconciliation. It preserves the journal, work and credentials. It does not stop a live daemon.
+            </Text>
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void perform(
+                  () => bridge.prepareRecovery!(),
+                  "Recovery prepared. Reconcile to check writer quiescence.",
+                )
+              }
+            >
+              Review same-boot recovery
             </Button>
           </>
         )}

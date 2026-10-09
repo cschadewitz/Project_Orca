@@ -152,3 +152,8 @@ TypeScript no-emit checks pass; Vite production renderer build passes (existing
 large-chunk advisory only); scoped CSS token check and `git diff --check` pass.
 These checks use installed dependency binaries, with no package install, lockfile or
 manifest edits. The original worktree stays on `work` at the supplied main SHA.
+
+The #570 successor adds main-only launch capabilities, kernel lifetime admission,
+explicit same-boot reconciliation and quiescent saved-config binding. Shared entrypoint
+composition and legacy limits are documented in
+[the handoff](../../../../../docs/implementation/first-run-same-boot-recovery.md).

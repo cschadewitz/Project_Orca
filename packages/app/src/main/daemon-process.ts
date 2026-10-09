@@ -98,6 +98,8 @@ export interface BundledDaemonOptions {
   cwd: string;
   /** `orca --config <file>`, when the workspace's config is not found by walking up. */
   configPath?: string;
+  /** Main-only first-run launch capability; never inherited for unrelated children. */
+  firstRunToken?: string;
   host?: string;
   /**
    * Extra arguments, appended after `serve`. The seam for flags the app passes —
@@ -291,7 +293,7 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
       cwd,
       // `ELECTRON_RUN_AS_NODE` is what makes `process.execPath` — the Electron binary in a
       // packaged app — behave as a bare Node and never open a window of its own.
-      env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
+      env: { ...env, ELECTRON_RUN_AS_NODE: "1", ORCA_FIRST_RUN_LAUNCH: options.firstRunToken },
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (error) {
@@ -343,7 +345,13 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
   const deadline = now() + startTimeoutMs;
   for (;;) {
     if (exit) throw died(exit);
-    if (await (probe ? probe(url) : helloAnswers(url, cwd, tokenFile))) break;
+    // A recovered store can still authenticate the previous bootstrap token while startup rotates it.
+    // Wait for this owned child to announce finished credential bootstrap before accepting hello.
+    if (
+      (!options.firstRunToken || tokenFile === join(cwd, "auth", "local-client.token")) &&
+      (await (probe ? probe(url) : helloAnswers(url, cwd, tokenFile)))
+    )
+      break;
     if (now() >= deadline) {
       observeFailure("startup_handshake_timeout");
       const output = tail.toString();

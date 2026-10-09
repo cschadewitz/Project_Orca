@@ -12,7 +12,7 @@ afterEach(() => {
   cleanup();
   while (teardown.length) teardown.pop()?.();
 });
-function setup() {
+function setup(overrides: Partial<FirstRunBridge> = {}) {
   const fake = fakeBridge();
   let state: FirstRunStatus = { state: "selection-required", reason: "Explicit owned directories required." };
   const firstRun = {
@@ -37,6 +37,7 @@ function setup() {
     }),
     connect: vi.fn<FirstRunBridge["connect"]>(async () => ({ ok: true, result: state })),
   } satisfies FirstRunBridge;
+  Object.assign(firstRun, overrides);
   Object.assign(fake.bridge, { firstRun });
   teardown.push(fake.install());
   const h = harness();
@@ -78,4 +79,73 @@ it("keeps the selected review after a refused write and never displays private n
   expect(screen.queryByText(/private path\/secret needle/)).toBeNull();
   expect(screen.getByRole("button", { name: "Create reviewed sample files" })).toBeTruthy();
   expect(f.firstRun.connect).not.toHaveBeenCalled();
+});
+
+it("requires explicit recovery preparation and reconciliation without connecting or resuming work", async () => {
+  const requestId = "11111111-1111-4111-8111-111111111111";
+  const prepared: FirstRunStatus = {
+    state: "prepared",
+    project: "/Sample α",
+    workspace: "/App β",
+    sample: FIRST_RUN_SAMPLE,
+  };
+  const prepareRecovery = vi.fn(async () => ({
+    ok: true as const,
+    result: { state: "recovery" as const, recovery: { state: "ready" as const, requestId } },
+  }));
+  const reconcileRecovery = vi.fn(async () => ({ ok: true as const, result: prepared }));
+  const f = setup({ status: async () => ({ ok: true, result: prepared }), prepareRecovery, reconcileRecovery });
+  await screen.findByRole("button", { name: "Review same-boot recovery" });
+  expect(prepareRecovery).not.toHaveBeenCalled();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Review same-boot recovery" })));
+  expect(prepareRecovery).toHaveBeenCalledOnce();
+  expect(screen.getByText(/Recovery checks exclusive ownership/)).toBeTruthy();
+  expect(reconcileRecovery).not.toHaveBeenCalled();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Reconcile same-boot ownership" })));
+  expect(reconcileRecovery).toHaveBeenCalledExactlyOnceWith(requestId);
+  expect(f.firstRun.connect).not.toHaveBeenCalled();
+});
+it("reviews executable availability and requires explicit saved-config binding without provider execution", async () => {
+  const id = "22222222-2222-4222-8222-222222222222";
+  const reviewConfiguration = vi.fn(async () => ({
+    ok: true as const,
+    result: {
+      state: "configuration-review" as const,
+      review: {
+        id,
+        revision: "synthetic revision",
+        agentCount: 1,
+        checks: [{ agentId: "local", state: "missing" as const }],
+      },
+    },
+  }));
+  const bindConfiguration = vi.fn(async () => ({
+    ok: true as const,
+    result: { state: "prepared" as const, project: "/Sample α", workspace: "/App β", sample: FIRST_RUN_SAMPLE },
+  }));
+  const f = setup({ reviewConfiguration, bindConfiguration });
+  await screen.findByRole("button", { name: "Review saved configuration for reopening" });
+  expect(reviewConfiguration).not.toHaveBeenCalled();
+  await act(async () =>
+    fireEvent.click(screen.getByRole("button", { name: "Review saved configuration for reopening" })),
+  );
+  expect(screen.getByText(/Executable missing from the app PATH/)).toBeTruthy();
+  expect(bindConfiguration).not.toHaveBeenCalled();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Bind reviewed saved configuration" })));
+  expect(bindConfiguration).toHaveBeenCalledExactlyOnceWith(id);
+  expect(f.firstRun.connect).not.toHaveBeenCalled();
+});
+it("shows fixed recovery instructions while withholding arbitrary native error text", async () => {
+  const f = setup();
+  await screen.findByText("Explicit owned directories required.");
+  f.firstRun.choose.mockResolvedValueOnce({
+    ok: false,
+    error: {
+      code: "AGENT_TRANSPORT",
+      message: "Local startup ownership requires reconciliation. private secret needle",
+    },
+  });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
+  expect(screen.getByText(/Review same-boot recovery, then reconcile when the owned writer has exited/)).toBeTruthy();
+  expect(screen.queryByText(/private secret needle/)).toBeNull();
 });

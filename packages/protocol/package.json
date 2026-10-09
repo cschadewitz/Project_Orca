@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./first-run-fence": {
+      "types": "./dist/first-run-fence.d.ts",
+      "import": "./dist/first-run-fence.js"
     }
   },
   "files": [
