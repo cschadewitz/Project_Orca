@@ -143,7 +143,7 @@ export class ProductionFixture {
         storeDir: "state",
         workflows: ["workflows/*.yaml"],
         templates: [],
-        program: { workflow: "gate" },
+        program: { workflow: "gate", itemWorkflow: "gate" },
         agents: [agent("worker"), agent("live-worker", true)],
       }),
     );

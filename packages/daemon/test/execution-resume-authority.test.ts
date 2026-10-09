@@ -205,7 +205,7 @@ edges: [{from: s, to: gate}, {from: gate, to: end}]
       await generations.initialize(
         parseOrcaConfig({
           agents: [AgentSpecSchema.parse({ id: "worker", command: "unused", permissions: { default: "ask" } })],
-          program: { workflow: "visible" },
+          program: { workflow: "visible", itemWorkflow: "private-child" },
         }),
         "fixture",
       );
