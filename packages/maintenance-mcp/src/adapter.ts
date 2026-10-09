@@ -12,6 +12,7 @@ export interface ReadBudget {
   deadlineMs: number;
 }
 export interface ObservationAdapter {
+  readonly sourceMode?: "fixed_linux_preparation";
   /**
    * Trusted implementation boundary, NOT a plugin loaded from a caller-supplied path.
    * Enforce budgets while reading, before allocating/decoding; honor abort promptly.
