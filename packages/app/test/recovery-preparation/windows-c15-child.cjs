@@ -181,7 +181,7 @@ app.whenReady().then(async () => {
     await until(() => fs.existsSync(path.join(request.base, "execution.running")));
     const started = performance.now();
     // Every asynchronous RecoveryDisk operation, picker, and two native writer dispatches.
-    const methods = [
+    const allMethods = [
       "readSetting",
       "readExportState",
       "writeSetting",
@@ -203,6 +203,10 @@ app.whenReady().then(async () => {
       "nativePublish",
       "nativeWrite",
     ];
+    const methods = request.regressionTargets ?? allMethods;
+    assert.ok(Array.isArray(methods) && methods.length > 0 && methods.length <= allMethods.length);
+    assert.ok(methods.every((method) => allMethods.includes(method)));
+    r.regressionOnly = request.regressionTargets !== undefined;
     r.expectedCells = methods;
     for (const target of methods) {
       phase = target + ":setup";
@@ -321,6 +325,11 @@ app.whenReady().then(async () => {
         },
       });
       current = { controller, payload, raw, storage, fault };
+      if (request.regressionBadDestinationProbe) {
+        assert.equal(await raw.validateDestination(path.join(request.base, target + "-saved.json")), false);
+        assert.equal(await raw.validateDestination(destination), true);
+        cell.prefixRefusalVerified = true;
+      }
       let prepared, token;
       const startup = ["readSetting", "readExportState"];
       if (!startup.includes(target)) await controller.initialize();
@@ -457,6 +466,7 @@ app.whenReady().then(async () => {
       sample();
       current = undefined;
       assert.equal(fs.readFileSync(path.join(request.base, "sentinel"), "utf8"), "synthetic unrelated file");
+      if (r.regressionOnly && request.regressionStopAfter === r.cells.length) throw Error("synthetic-regression-stop");
       fs.writeFileSync(
         path.join(request.base, "progress.json"),
         JSON.stringify({ mode: request.mode, schedule: request.schedule, completed: r.cells.length, target }),
