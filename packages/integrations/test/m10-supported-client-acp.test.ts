@@ -81,7 +81,7 @@ edges:
       storeDir: "state",
       workflows: ["*.yaml"],
       templates: [],
-      program: { workflow: "program" },
+      program: { workflow: "program", itemWorkflow: "program" },
       agents: [{ id: "unused", command: process.execPath }],
     }),
     logger: silentLogger,

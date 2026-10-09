@@ -12,6 +12,7 @@ import {
   WorkflowRegistry,
   WorkflowDefinitionSchema,
   validateWorkflow,
+  validateWorkflowInputs,
   type OrcaConfig,
   type PromptTemplate,
   type WorkflowDefinition,
@@ -371,6 +372,15 @@ export class ConfigurationGenerations {
           Object.hasOwn(definition.vars, "itemWorkflow"))
           ? { itemWorkflow: material.snapshot.config.program.itemWorkflow, ...options.vars }
           : options.vars;
+      // Strict Request input diagnostics precede lookup in the captured item-workflow registry.
+      if (selection.purpose === "request") {
+        const { validation } = validateWorkflowInputs(definition, vars ?? {});
+        if (!validation.ok)
+          throw new OrcaError("WORKFLOW_INPUT_INVALID", `workflow '${definition.id}' inputs are invalid`, {
+            errors: validation.errors,
+            warnings: validation.warnings,
+          });
+      }
       const itemWorkflow =
         overrides?.itemWorkflow ??
         vars?.itemWorkflow ??

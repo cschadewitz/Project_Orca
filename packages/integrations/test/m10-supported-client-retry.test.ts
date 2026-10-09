@@ -119,7 +119,7 @@ it.each(["submit", "run"])(
     cleanups.push(() => rm(dir, { recursive: true, force: true }));
     await writeFile(
       join(dir, "orca.config.yaml"),
-      "storeDir: state\nworkflows: [program.yaml]\ntemplates: []\nprogram: {workflow: program}\n",
+      "storeDir: state\nworkflows: [program.yaml]\ntemplates: []\nprogram: {workflow: program, itemWorkflow: program}\n",
     );
     await writeFile(
       join(dir, "program.yaml"),

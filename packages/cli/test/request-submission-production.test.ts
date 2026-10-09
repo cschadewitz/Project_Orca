@@ -24,7 +24,7 @@ async function fixture() {
       `id: ${id}\nname: ${id}\nversion: '1'\nstart: s\nnodes: {s: {type: start}, e: {type: end}}\nedges: [{from: s, to: e}]\n`,
     );
   const config = (workflow = "alpha") =>
-    parseOrcaConfig({ workflows: ["*.yaml"], templates: [], program: { workflow } });
+    parseOrcaConfig({ workflows: ["*.yaml"], templates: [], program: { workflow, itemWorkflow: workflow } });
   return { dir, config, options: { config: config(), configDir: dir, logger: silentLogger } };
 }
 it("does not invent embedder authority; explicit local admission persists ownership", async () => {
@@ -112,9 +112,24 @@ edges: [{from: s, to: e}]
   const admitted = await app.program.submit({ title: "Strict Request", body: "" });
   const state = await app.orchestrator.getState(admitted.runId);
   expect(Object.keys(state.run.vars)).toEqual(["request"]);
+  const writes = [
+    vi.spyOn(app.orchestrator.stores.execution, "putInputs"),
+    vi.spyOn(app.orchestrator.stores.requests, "put"),
+    vi.spyOn(app.orchestrator.stores.events, "append"),
+  ];
+  const admissions = await app.program.submissions!.list(app.submissionAuthority!);
+  const ownershipFile = join(f.dir, "auth", "ownership.json");
+  const ownership = await readFile(ownershipFile, "utf8");
   await expect(
     app.program.submit({ title: "Bad", body: "", vars: { itemWorkflow: "undeclared" } }),
   ).rejects.toMatchObject({ code: "WORKFLOW_INPUT_INVALID" });
+  await expect(
+    app.program.submit({ title: "Bad", body: "", workflowId: "beta", vars: { itemWorkflow: "undeclared" } }),
+  ).rejects.toMatchObject({ code: "WORKFLOW_NOT_FOUND" });
+  for (const write of writes) expect(write).not.toHaveBeenCalled();
+  expect(await app.program.submissions!.list(app.submissionAuthority!)).toEqual(admissions);
+  expect(await app.orchestrator.listRuns()).toEqual([admitted.runId]);
+  expect(await readFile(ownershipFile, "utf8")).toBe(ownership);
   expect((await app.program.runSubmitted(admitted)).run.status).toBe("completed");
 });
 
