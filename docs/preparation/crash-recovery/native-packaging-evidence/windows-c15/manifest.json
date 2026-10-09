@@ -1,0 +1,166 @@
+{
+  "schema": 1,
+  "startingHead": "7d7d503317c9bc2ae5bb3e3ec972e59f28a2e849",
+  "productionSource": "5fac1a05a56152861ca08168da0b052f56e8cbae",
+  "productionUnchanged": true,
+  "productionEnabled": false,
+  "macHeld": true,
+  "authorAndCommitter": "Calcifer Schadewitz <schadewitzcalcifer@gmail.com>",
+  "integrationBase": "calcifer/m10-m21-m22-same-boot-config-integration",
+  "branch": "calcifer/windows-diagnostics-c15-paired",
+  "runtime": {
+    "electron": "44.4.5",
+    "electronNode": "24.21.0",
+    "toolNode": "24.19.0",
+    "nativeReused": true,
+    "priorNativeIdentity": "../windows-save-only-manifest.json"
+  },
+  "compiled": [
+    {
+      "name": "recovery-controller.js",
+      "bytes": 41779,
+      "sha256": "a62b48551a88eb4b1eb4be9f7dd55106c46df1f0b2330b8eda1d46bd0226fd4c"
+    },
+    {
+      "name": "native-storage.js",
+      "bytes": 9418,
+      "sha256": "36364c1b11d6808dd22127b55f8f7fde8a3a5a7a5e03ca17ad62a6d311f526e1"
+    },
+    {
+      "name": "native-clock.js",
+      "bytes": 2802,
+      "sha256": "65961f9bd070a8fafe6ed19b03a7dce4a6bc642bfde45ba11f3b548020a6272f"
+    },
+    {
+      "name": "windows-key-adapter.js",
+      "bytes": 3035,
+      "sha256": "d594771823dde5f9799c31799f3949b3bb409a105d851601ccb93890ff083023"
+    },
+    {
+      "name": "recovery-disk.js",
+      "bytes": 44609,
+      "sha256": "f51d0d6957ffc565269fcfa50639ba6e28b979a5977bb43e5d505c8463f4ec31"
+    },
+    {
+      "name": "payload-memory.js",
+      "bytes": 3981,
+      "sha256": "c9891ff6f6191ce061b1f3225c1e8b88f39854216137853f8953ced31f550690"
+    }
+  ],
+  "binaries": [
+    {
+      "name": "diagnostics_clock.node",
+      "bytes": 654848,
+      "sha256": "0b28528e31c92c1e1b70e74aa68206b29a39220075d85bbc8555eca50f6d9107"
+    },
+    {
+      "name": "diagnostics_storage.node",
+      "bytes": 680960,
+      "sha256": "bea31fecd94122af70afe6f5280411d9933b93aef4c9e08240265bcac2c2a5fe"
+    }
+  ],
+  "finalHarness": [
+    {
+      "name": "windows-c15-child.cjs",
+      "bytes": 20770,
+      "sha256": "9c87cd0167c0ad2b5bb872786c240bdbe3baf79500c0b040b0d991c3b9037dbe"
+    },
+    {
+      "name": "windows-c15-paired.mjs",
+      "bytes": 12153,
+      "sha256": "60e3cc4efd0da3a9c9b18bd3f718957d9d8b7919699335ab75c0781ac061c2e5"
+    }
+  ],
+  "finalCorrectedHarnessRuntime": "unrun",
+  "comparisonHarness": [
+    {
+      "name": "failure-child.cjs.gz",
+      "bytes": 5788,
+      "sha256": "ee5fda59f948f921da0fb53f70ffa4392cfc0c0aa1241f7b0500ad455110541d",
+      "uncompressedBytes": 20437,
+      "uncompressedSha256": "1c3de4c97d195ff5d562c9e48b029296cc021eb735a580249e79f121838d8013"
+    },
+    {
+      "name": "failure-supervisor.mjs.gz",
+      "bytes": 4234,
+      "sha256": "f93ab05af11a3c5d0280bb2a86923931909a93734e9d4987a77f838131e373a7",
+      "uncompressedBytes": 11840,
+      "uncompressedSha256": "40b84bc6187160b3ef16cb7d91323206da51f5f08eeb395296e2904a0530ea32"
+    },
+    {
+      "name": "stall-child.cjs.gz",
+      "bytes": 5796,
+      "sha256": "a2b6aa28a058d69c2bafe7dbe87fbedcc0ffe3dddc4b4db95b480751ad5de284",
+      "uncompressedBytes": 20451,
+      "uncompressedSha256": "d2c8f117e0e7a245ff1e3c17dc0f1b92cb4a7cf0c026538a04fad7b36a09d5da"
+    },
+    {
+      "name": "stall-supervisor.mjs.gz",
+      "bytes": 4234,
+      "sha256": "d53a27f5a4f1451f546fccb26c0698b481542939cc79aec0b90da2f4029d7acf",
+      "uncompressedBytes": 11840,
+      "uncompressedSha256": "9e2f4f4c3b7630095924eab431278d5470380edba28bcc80a79bbfd9c3becc61"
+    }
+  ],
+  "evidence": [
+    {
+      "name": "failure-results.json",
+      "bytes": 29405,
+      "sha256": "340c348a58f5ebb6dcf44d311a3e12bd89fcffe8c41dc278f4eee9e0e3b09693"
+    },
+    {
+      "name": "stall-results.json",
+      "bytes": 44020,
+      "sha256": "ce079a5c56f415040d230bb124d02fdd3549657e8bcc0dca9adb4b404e3e5743"
+    },
+    {
+      "name": "setup-temp-refusal.json",
+      "bytes": 726,
+      "sha256": "9675eeab0fe392f78060b08523684ca6ed6a216bdd57bf808f69d98da6659916"
+    },
+    {
+      "name": "failure-capacity.json",
+      "bytes": 214,
+      "sha256": "bf8d5211c99e2ad9bfad2dcd9bedb4d8724c3a6f1a09381f99751f837c45898c"
+    },
+    {
+      "name": "stall-capacity.json",
+      "bytes": 214,
+      "sha256": "1b1743db47c58105874eb13640e8ae93c97cd2535d50cd379333958ca51100c7"
+    },
+    {
+      "name": "source-checks.json",
+      "bytes": 7336,
+      "sha256": "0b3c1f7de618e777833adcd101734374f57f66266ad0680eb0c865217740cca7"
+    },
+    {
+      "name": "summary.json",
+      "bytes": 6320,
+      "sha256": "64082344da7900de149027684b31124c244f69574fb1a4d9f2580854b69c2246"
+    }
+  ],
+  "bounds": {
+    "cliMs": 50000,
+    "failureChildMs": 60000,
+    "stallChildMs": 90000,
+    "writerSettlementMs": 3000,
+    "ownedExitMs": 5000,
+    "failureInjectedOperationMs": 250,
+    "stallInjectedOperationMs": 1000,
+    "plannedNativeWriteOperationMs": 10000,
+    "nativeWriteCell": "unrun"
+  },
+  "corrections": {
+    "afterFailure": "Off startup for open; 1s synthetic operation deadline; nativeWrite last for overlap; 90s child bound",
+    "afterStall": "saved- prefix avoids native diagnostic-root prefix refusal; failure memory finalizer and closed result code retained; descendant harness commits accepted only with production source unchanged"
+  },
+  "comparisonsRepeated": false,
+  "setupRefusalCount": 1,
+  "actualComparisonCount": 2,
+  "limitations": [
+    "Both On campaigns stopped. Failure 3/20 and stall 10/20 complete. Final corrected harness runtime unrun.",
+    "No On managed receipt on stopped campaigns; unchanged 32MiB gate remains unproven here.",
+    "Native dispatch failure/stall and 10s writer timeout cells unrun; synthetic disk seam results are not physical failure proof.",
+    "No renderer, broad responsiveness, continuous managed/native allocation, network observation, manual accessibility, second user, ARM64, physical or Mac acceptance."
+  ]
+}

@@ -1,5 +1,11 @@
 # Current save-only Windows pair and remaining acceptance - 9 October 2026
 
+Later on 9 October, the [C15 harness follow-up](windows-c15-paired-followup.md)
+retained one stopped failure pair and one stopped stall pair. C15 stays held;
+the final fixture corrections are runtime-unrun. The owner deferred meeting the
+4 ms target in [#597](https://github.com/cschadewitz/Project_Orca/issues/597), without
+changing thresholds or accepting the earlier timing observations below.
+
 **The single current Off/On execution pair, exact exports and sampled memory pass;
 broader responsiveness and C15 failure/stall acceptance remain held.** This tests
 exact draft #596 source `5fac1a05a56152861ca08168da0b052f56e8cbae`. Production source
