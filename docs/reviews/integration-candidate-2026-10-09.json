@@ -1,0 +1,213 @@
+{
+  "schema": 1,
+  "kind": "local-source-self-review",
+  "sourceHead": "d78033e07bdc62fb5cf69bb6746e6807129f4040",
+  "node": "24.19.0",
+  "pnpm": "12.4.2",
+  "platform": "win32",
+  "arch": "x64",
+  "source": {
+    "checkedAt": "2026-10-09T21:27:36.017Z",
+    "sourceHead": "d78033e07bdc62fb5cf69bb6746e6807129f4040",
+    "main": "db579fb7ac9cfce2e4e6901713088a80602311da",
+    "ancestry": [
+      {
+        "ref": "input-pr599",
+        "head": "79da801d2d9eb1bb9fac5163aa34a5c3fc76803f",
+        "included": true
+      },
+      {
+        "ref": "input-pr592",
+        "head": "f0841c4534034e72c2fdaa9d095592a9dac9f4a2",
+        "included": true
+      },
+      {
+        "ref": "input-pr565",
+        "head": "00d464fc4fd9c8d3c6557d35d0e80ffda8a5c1c5",
+        "included": true
+      },
+      {
+        "ref": "input-pr575",
+        "head": "a6908d039f829da298d35f162accf5103c22e693",
+        "included": true
+      }
+    ],
+    "contained": {
+      "pr584In599": true,
+      "pr558In565": true,
+      "pr562In565": true
+    },
+    "excludedPr577Head": "3deeeed4b4a8f3a069263668d76065675425c307",
+    "divergentPr577CommitsExcluded": 2,
+    "exactSourceServeBodyPreserved": true,
+    "firstRunAndClosedBootstrapPrecedePluginVerification": true,
+    "restorationVerifierAndConfigBindingPreserved": true,
+    "diagnosticsProductionEnabled": false,
+    "macActivationAllowed": false,
+    "appProductAndNativeSourceUnchangedFromPr599": true,
+    "diffCheck": "pass",
+    "sourceHashes": {
+      "packages/cli/src/bootstrap.ts": "720820818ea6ad68b435654d26fee1a29a5f6098246ccb17508ace7ce1e46176",
+      "packages/cli/src/commands/index.ts": "ef17d081ca106d6ef75287e48fd4dfd9b52fa199533fec261fad4f2606627d7a",
+      "packages/app/src/diagnostics-contract.ts": "34a8cf95518d494bdbb448e2e0c7aca3937fb9e967daa212cb505241e2799bff",
+      "packages/app/src/main/diagnostics/initialize.ts": "8d0ebcedcd8453e42586dceefade12c16f98189e5122152cbbecd2c82fa50388",
+      "packages/app/src/main/diagnostics/recovery-controller.ts": "8cbbefab7dd952fcb3756a391fcf0b5f047fbe591ab2010ab2b73440d024a70f",
+      "packages/app/src/main/index.ts": "c221dd3f3ae54e8f17408a5e0429f3d1c5a1af417818f551fd1219fb5dcb89df",
+      "packages/daemon/src/continuation-admission.ts": "8aad9a2ec0aa201193f9ff47e3b1e7bc67beb3dcabc1126d397ed88864e5d755"
+    }
+  },
+  "remoteHeadsRechecked": [
+    {
+      "head": "db579fb7ac9cfce2e4e6901713088a80602311da",
+      "ref": "refs/heads/main"
+    },
+    {
+      "head": "00d464fc4fd9c8d3c6557d35d0e80ffda8a5c1c5",
+      "ref": "refs/pull/565/head"
+    },
+    {
+      "head": "a6908d039f829da298d35f162accf5103c22e693",
+      "ref": "refs/pull/575/head"
+    },
+    {
+      "head": "f0841c4534034e72c2fdaa9d095592a9dac9f4a2",
+      "ref": "refs/pull/592/head"
+    },
+    {
+      "head": "79da801d2d9eb1bb9fac5163aa34a5c3fc76803f",
+      "ref": "refs/pull/599/head"
+    }
+  ],
+  "tests": {
+    "command": "node node_modules/vitest/vitest.mjs run <14 files listed below> --maxWorkers=1 --reporter=default --reporter=json",
+    "passedFiles": 14,
+    "passed": 158,
+    "failed": 0,
+    "skipped": 2,
+    "files": [
+      {
+        "file": "packages/app/test/diagnostics-preload.test.ts",
+        "status": "passed",
+        "passed": 4,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/test/diagnostics-shipping-ipc.test.ts",
+        "status": "passed",
+        "passed": 2,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/test/diagnostics-source-producers.test.ts",
+        "status": "passed",
+        "passed": 9,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/test/diagnostics-startup-consent.test.ts",
+        "status": "passed",
+        "passed": 4,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/test/diagnostics-startup-producer.test.ts",
+        "status": "passed",
+        "passed": 1,
+        "skipped": [
+          "startup producer/controller integration uses current consent and never replays observations collected before opt-in or after Off",
+          "startup producer/controller integration cannot activate the production-disabled controller"
+        ]
+      },
+      {
+        "file": "packages/app/test/diagnostics-windows-refusal.test.ts",
+        "status": "passed",
+        "passed": 5,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/test/mac-app-writer-barrier.test.ts",
+        "status": "passed",
+        "passed": 2,
+        "skipped": []
+      },
+      {
+        "file": "packages/cli/test/installed-plugin-serve-guards.test.ts",
+        "status": "passed",
+        "passed": 3,
+        "skipped": []
+      },
+      {
+        "file": "packages/cli/test/plugin-release-bootstrap.test.ts",
+        "status": "passed",
+        "passed": 7,
+        "skipped": []
+      },
+      {
+        "file": "packages/cli/test/plugin-release.test.ts",
+        "status": "passed",
+        "passed": 34,
+        "skipped": []
+      },
+      {
+        "file": "packages/cli/test/plugin-restoration-runtime.test.ts",
+        "status": "passed",
+        "passed": 24,
+        "skipped": []
+      },
+      {
+        "file": "packages/engine/test/continuation-admission.test.ts",
+        "status": "passed",
+        "passed": 23,
+        "skipped": []
+      },
+      {
+        "file": "packages/maintenance-mcp/test/linux-observer.test.ts",
+        "status": "passed",
+        "passed": 21,
+        "skipped": []
+      },
+      {
+        "file": "packages/maintenance-mcp/test/observer-acquisition.test.ts",
+        "status": "passed",
+        "passed": 19,
+        "skipped": []
+      }
+    ]
+  },
+  "statics": {
+    "rootTypecheck": "pass",
+    "rendererTypecheck": "pass",
+    "scopedEslint": "pass",
+    "scopedPrettier": "pass",
+    "diffCheck": "pass",
+    "scopedFiles": [
+      "packages/cli/src/bootstrap.ts",
+      "packages/cli/src/commands/index.ts",
+      "packages/app/test/diagnostics-shipping-ipc.test.ts",
+      "packages/cli/test/installed-plugin-serve-guards.test.ts"
+    ]
+  },
+  "scope": {
+    "M21FinalDeltaIncluded": false,
+    "fullCombinedSuite": false,
+    "coverage": false,
+    "builds": false,
+    "Electron": false,
+    "nativeAcceptance": false,
+    "CI": false,
+    "published": false,
+    "independentReview": false
+  },
+  "remainingGates": [
+    "M21 final delta and its exact-head review/validation",
+    "parent checkpoint before any CI/publication/heavy desktop activity",
+    "C15 enabled-mode managed-memory failure remains unresolved",
+    "Mac native updater activation remains held",
+    "installed-provider exact-command evidence remains unsupported/blocked"
+  ],
+  "notes": [
+    "Constituent evidence is retained at its original source pins and is not combined validation.",
+    "Windows native-refusal tests ran; capable-storage IPC ports are synthetic and do not establish native acceptance.",
+    "Only reversible local source/dependency/fixture operations performed."
+  ]
+}
