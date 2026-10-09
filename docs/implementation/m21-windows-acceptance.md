@@ -9,7 +9,7 @@ and targets `calcifer/m10-m21-m22-same-boot-config-integration`. It preserves th
 | Issue | Corrections in this branch | Focused evidence |
 | --- | --- | --- |
 | #333 | Reference-selector focus after structural operations; narrow shell/Config field and review-action layout. | Renderer form, route and existing Config tests; daemon Save/Apply, reference and authority tests. |
-| #334 | Mounted authorized Request overrides; exact captured input declaration and descriptor; revision/generation/grant fences; verified selection provenance; independent protected recovery grants; typed navigation drafts; pending and accepted receipt guards. | Main adapter/journal, mounted route/controller/restore, daemon preflight/projection, protocol and captured-generation tests. |
+| #334 | Mounted authorized Request overrides; exact captured input declaration and descriptor; revision/generation/grant fences; verified selection provenance; independent protected recovery grants; typed navigation drafts; pending and accepted receipt guards; confirmed abandonment across same-target authority refresh. | Main adapter/journal, mounted route/controller/restore, daemon preflight/projection, protocol and captured-generation tests. |
 | #355 | Authoritative catalog errors; clean read-only refresh/preview; exact partial consumers; blank-ID refusal; applied history from reviewed source digests. | Mounted route/controller/editor tests and file-backed template authoring tests. |
 
 Request preflight and admission share the defaulted in-memory Request descriptor. Declared
@@ -38,7 +38,9 @@ The combined focused invocation selected 24 existing/new test files and passed 3
 two supported-platform sample skips; the existing Config surface's 31 tests passed
 separately. The final captured Request default guard added three passing preflight cases;
 its 41-test backend/protocol check, 59 existing Request submission cases and 23 generation
-cases passed after the guard. Final distinct coverage: **25 files, 425 passed, 2 skipped**,
+cases passed after the guard. Native acceptance exposed a confirmed-abandonment race during
+same-target authority refresh. Its seven new refresh/identity cases and all 52 controller
+cases passed after correction. Final distinct coverage: **25 files, 432 passed, 2 skipped**,
 one worker at a time. This was not a
 full suite, coverage run, CI run or Actions dispatch.
 

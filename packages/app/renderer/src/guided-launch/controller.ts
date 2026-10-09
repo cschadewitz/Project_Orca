@@ -593,10 +593,18 @@ export class GuidedLaunchController {
         this.block("Explicit intent abandonment is unavailable. Recover the original work first.");
         return;
       }
-      const fence = this.fence;
+      const intent = this.state.intent;
+      const target = this.state.draftTarget;
       this.pending = true;
       try {
-        if (!(await abandon(this.state.intent)) || fence !== this.fence) return;
+        // Main rechecks authority and confirms abandonment. A same-target context refresh
+        // invalidates launch reviews, but must not resurrect that acknowledged old handle.
+        if (
+          !(await abandon(intent)) ||
+          !sameLaunchTarget(target, this.state.context.target) ||
+          this.state.intent?.id !== intent.id
+        )
+          return;
       } catch {
         this.block("The original intent could not be abandoned. Recover it before starting new work.");
         return;

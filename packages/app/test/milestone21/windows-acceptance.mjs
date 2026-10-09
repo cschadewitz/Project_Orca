@@ -28,7 +28,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
-import { PROTOCOL_VERSION, ResponseMessageSchema } from "@orca/protocol";
+import { PROTOCOL_VERSION, ResponseMessageSchema, RunsGetResultSchema } from "@orca/protocol";
 
 const appDir = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const repo = resolve(appDir, "../..");
@@ -79,6 +79,22 @@ const METHODS = [
   "runs.events",
   "launches.recover",
 ];
+const RPC_ERROR_CODES = [
+  "AUTH_REQUIRED",
+  "AUTH_INVALID",
+  "AUTH_FORBIDDEN",
+  "PROTOCOL_METHOD",
+  "PROTOCOL_MESSAGE",
+  "CONFIG_INVALID",
+  "CONFIG_STALE",
+  "WORKFLOW_INVALID",
+  "WORKFLOW_NOT_FOUND",
+  "WORKFLOW_INPUT_INVALID",
+  "RUN_NOT_FOUND",
+  "RUN_STATE",
+  "STORE_IO",
+  "INTERNAL",
+];
 const receipt = {
   windows: process.platform === "win32",
   accepted: false,
@@ -94,6 +110,7 @@ let currentOperation = "prerequisites";
 let fixture;
 let app;
 let nativeMainPid;
+let nativeMainCreated;
 let page;
 let bundledChildren = [];
 let cliChild;
@@ -373,6 +390,7 @@ async function writeAssets() {
 
 let nextRpc = 1;
 async function rpc(method, params = {}) {
+  const methodLabel = METHODS.includes(method) ? method : "other";
   const token = (await readFile(join(fixture.workspace, "auth/local-client.token"), "utf8")).trim();
   const response = await fetch(`${fixture.url}/rpc`, {
     method: "POST",
@@ -381,9 +399,17 @@ async function rpc(method, params = {}) {
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
     body: JSON.stringify({ kind: "request", id: nextRpc++, method, params }),
   });
-  if (!response.ok) throw new SafeFailure("fixture-rpc-http-refused");
+  if (!response.ok) {
+    receipt.checks[`fixture-rpc-failure-method-${methodLabel}`] = true;
+    throw new SafeFailure("fixture-rpc-http-refused");
+  }
   const envelope = ResponseMessageSchema.parse(await response.json());
-  if (!envelope.ok) throw new SafeFailure("fixture-rpc-refused");
+  if (!envelope.ok) {
+    const code = RPC_ERROR_CODES.includes(envelope.error.code) ? envelope.error.code : "OTHER";
+    receipt.checks[`fixture-rpc-failure-method-${methodLabel}`] = true;
+    receipt.checks[`fixture-rpc-failure-code-${code}`] = true;
+    throw new SafeFailure("fixture-rpc-refused");
+  }
   return envelope.result;
 }
 async function cliBootstrap() {
@@ -464,6 +490,159 @@ async function waitChildrenGone(parentPid, known, force) {
     });
   }
   await waitUntil(async () => (await ownedChildren(parentPid, known)).length === 0, 10_000);
+}
+async function captureNativeMainIdentity() {
+  check(Number.isInteger(nativeMainPid) && nativeMainPid > 0, "native-main-identity-pid-valid");
+  const command = `$ErrorActionPreference = 'Stop'; $p = Get-CimInstance Win32_Process -Filter 'ProcessId = ${nativeMainPid}'; if (-not $p -or $p.ExecutablePath -ne ${psLiteral(electronExecutable)} -or -not $p.CommandLine.Contains(${psLiteral(`--user-data-dir=${fixture.profile}`)}) -or -not $p.CommandLine.Contains(${psLiteral(appDir)})) { throw 'identity-refused' }; $p.CreationDate.ToUniversalTime().Ticks.ToString()`;
+  try {
+    const result = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
+      windowsHide: true,
+      timeout: 5000,
+      maxBuffer: 4096,
+    });
+    const created = result.stdout.trim();
+    check(/^[0-9]+$/.test(created), "native-main-creation-identity-observed");
+    nativeMainCreated = created;
+  } catch {
+    throw new SafeFailure("native-main-creation-identity-refused");
+  }
+}
+async function confirmOwnedIntentAbandonment() {
+  check(
+    (await app.evaluate(() => process.pid)) === nativeMainPid && /^[0-9]+$/.test(nativeMainCreated ?? ""),
+    "request-native-intent-owner-current",
+  );
+  const scriptFile = join(fixture.root, "confirm-owned-intent.ps1");
+  await writeFile(
+    scriptFile,
+    String.raw`param([int]$OwnedPid, [string]$ExpectedCreationTicks)
+$ErrorActionPreference = 'Stop'
+$flags = [ordered]@{
+  identityVerified = $false; assembliesLoaded = $false; dialogFound = $false
+  dialogUnique = $false; buttonsExact = $false; invokeSupported = $false
+  invoked = $false; dialogGone = $false
+}
+try {
+  function Assert-OwnedProcess {
+    $p = Get-CimInstance Win32_Process -Filter "ProcessId = $OwnedPid"
+    if (-not $p -or $p.CreationDate.ToUniversalTime().Ticks.ToString() -ne $ExpectedCreationTicks) { throw 'identity-refused' }
+  }
+  Assert-OwnedProcess
+  $flags.identityVerified = $true
+  Add-Type -AssemblyName UIAutomationClient
+  Add-Type -AssemblyName UIAutomationTypes
+  $flags.assembliesLoaded = $true
+  $owned = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $OwnedPid)
+  $question = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Abandon this launch intent?')
+  function Find-OwnedDialogs {
+    $windows = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $owned)
+    $found = @()
+    foreach ($win in $windows) {
+      if ($win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $question).Count -gt 0) { $found += $win }
+    }
+    return ,$found
+  }
+  $deadline = [DateTime]::UtcNow.AddSeconds(8)
+  do {
+    Assert-OwnedProcess
+    $dialogs = Find-OwnedDialogs
+    if ($dialogs.Count -gt 0) { break }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $deadline)
+  $flags.dialogFound = $dialogs.Count -gt 0
+  if ($dialogs.Count -ne 1) { throw 'dialog-missing-or-ambiguous' }
+  $flags.dialogUnique = $true
+  $buttonType = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+  $buttons = $dialogs[0].FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonType)
+  $keep = @($buttons | Where-Object { $_.Current.Name -ceq 'Keep retained intent' })
+  $abandon = @($buttons | Where-Object { $_.Current.Name -ceq 'Abandon intent' })
+  if ($keep.Count -ne 1 -or $abandon.Count -ne 1) { throw 'buttons-not-exact' }
+  $flags.buttonsExact = $true
+  $pattern = $null
+  if (-not $abandon[0].TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { throw 'invoke-unavailable' }
+  $flags.invokeSupported = $true
+  Assert-OwnedProcess
+  ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+  $flags.invoked = $true
+  do {
+    Assert-OwnedProcess
+    $dialogs = Find-OwnedDialogs
+    if ($dialogs.Count -eq 0) { $flags.dialogGone = $true; break }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $deadline)
+} catch {
+  # Fixed boolean flags only; neither native UI text nor exception details are emitted.
+}
+$flags | ConvertTo-Json -Compress
+`,
+  );
+  let flags;
+  try {
+    // The policy applies to this helper process only; no host policy is changed.
+    const { stdout } = await execute(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        scriptFile,
+        String(nativeMainPid),
+        nativeMainCreated,
+      ],
+      {
+        windowsHide: true,
+        timeout: 10_000,
+        maxBuffer: 4096,
+      },
+    );
+    flags = JSON.parse(stdout);
+  } catch {
+    throw new SafeFailure("request-native-intent-confirmation-unavailable");
+  }
+  const names = [
+    "identityVerified",
+    "assembliesLoaded",
+    "dialogFound",
+    "dialogUnique",
+    "buttonsExact",
+    "invokeSupported",
+    "invoked",
+    "dialogGone",
+  ];
+  for (const name of names) receipt.checks[`request-native-intent-${name}`] = flags?.[name] === true;
+  check(
+    names.every((name) => flags?.[name] === true),
+    "request-native-intent-confirmation-complete",
+  );
+  currentOperation = "request-new-work-reset";
+  let reset;
+  try {
+    await waitUntil(async () => {
+      reset = await guided().evaluate((root, originalAdmissionId) => {
+        const recovery = [...root.querySelectorAll("button")].find(
+          (button) => button.textContent.trim() === "Recover original launch",
+        );
+        const taskPath = [...root.querySelectorAll(".orca-field__path")].find(
+          (path) => path.textContent === "vars.task",
+        );
+        const task = taskPath?.closest(".orca-field")?.querySelector("input");
+        return {
+          retainedIntentCleared: recovery === undefined,
+          originalReceiptCleared: !root.textContent.includes(originalAdmissionId),
+          typedTaskEditable: Boolean(task && !task.disabled),
+        };
+      }, receipt.ids.directAdmissionId);
+      return reset.retainedIntentCleared && reset.originalReceiptCleared && reset.typedTaskEditable;
+    }, 10_000);
+  } catch {
+    for (const name of ["retainedIntentCleared", "originalReceiptCleared", "typedTaskEditable"])
+      receipt.checks[`request-new-work-${name}`] = reset?.[name] === true;
+    throw new SafeFailure("request-new-work-state-not-cleared");
+  }
+  for (const name of ["retainedIntentCleared", "originalReceiptCleared", "typedTaskEditable"])
+    check(reset[name], `request-new-work-${name}`);
 }
 async function observeClient(application) {
   await application.evaluate(
@@ -597,6 +776,7 @@ async function launchApp(restart = false) {
       actual.dev === expected.dev,
     restart ? "restart-same-physical-profile" : "isolated-physical-profile",
   );
+  await captureNativeMainIdentity();
   bundledChildren = await ownedChildren(nativeMainPid);
   // Startup runs concurrently with the window; capture again after the live handshake.
   page = await app.firstWindow({ timeout: TIMEOUT });
@@ -647,6 +827,7 @@ async function closeApp(requireGraceful = false) {
   await waitChildrenGone(parentPid, descendants, !graceful);
   bundledChildren = [];
   nativeMainPid = undefined;
+  nativeMainCreated = undefined;
   if (requireGraceful) check(graceful, "graceful-app-restart-exit");
 }
 
@@ -666,14 +847,22 @@ const field = (path) =>
 async function navigate(label) {
   await page.getByRole("navigation", { name: "Surfaces" }).getByRole("button", { name: label, exact: true }).click();
 }
-async function choose(scope, label, item, keyboard = false) {
+async function choose(scope, label, item, keyboard = false, operation) {
+  if (operation) currentOperation = `${operation}-open-menu`;
   const trigger = scope.getByRole("button", { name: new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) });
   await trigger.click();
+  if (operation) currentOperation = `${operation}-find-option`;
   const option = page.getByRole("menuitem", { name: item, exact: true });
+  if (operation) {
+    await option.waitFor();
+    check((await option.getAttribute("aria-disabled")) !== "true", `${operation}-option-enabled`);
+  }
   if (keyboard) {
     await option.focus();
+    if (operation) currentOperation = `${operation}-keyboard-choose`;
     await page.keyboard.press("Enter");
   } else await option.click();
+  if (operation) receipt.checks[`${operation}-completed`] = true;
 }
 async function pressTwice(locator) {
   // Both DOM clicks occur in the same renderer task. Production pending guards own deduplication.
@@ -987,14 +1176,18 @@ async function geometryAndAxe() {
     win.setContentSize(1300, 800);
   });
 }
-async function openLaunch() {
+async function openLaunch(operation = "launch") {
+  currentOperation = `${operation}-entry-config-navigation`;
   await navigate("Config");
+  currentOperation = `${operation}-entry-open`;
   await surface().getByRole("button", { name: "Launch work", exact: true }).click();
+  currentOperation = `${operation}-entry-preview-mounted`;
   await guided().getByRole("button", { name: "Preview launch", exact: true }).waitFor();
+  currentOperation = currentPhase;
 }
-async function chooseWorkflow(id) {
+async function chooseWorkflow(id, operation) {
   const label = id === DIRECT ? "M21 typed task (1)" : "M21 Request program (1)";
-  await choose(guided(), "Workflow", label, true);
+  await choose(guided(), "Workflow", label, true, operation);
 }
 async function confirmPermission() {
   await guided().getByRole("checkbox").check();
@@ -1024,6 +1217,12 @@ async function diagnoseLaunchPreview(mode) {
           "Guided launch could not verify this target. Check connection, configuration and checkout, then read again. Your original draft is retained.",
         checking: "Validating inputs and the active configuration.",
         review: "Review the exact target, workflow and inputs before launching.",
+        "new-work-selected": "New work selected. Review before launching; previous work was not cancelled.",
+        "new-work-abandon-refused": "The original intent could not be abandoned. Recover it before starting new work.",
+        "new-work-target-changed": "Return to the original target before abandoning this intent.",
+        "new-work-unresolved":
+          "The original launch acknowledgement and intent handle are unresolved. Recover or inspect its protected main-owned intent before starting new work.",
+        admitted: "Work admitted. Execution is not yet confirmed complete.",
       };
       return Object.fromEntries(Object.entries(known).map(([name, message]) => [name, text.includes(message)]));
     });
@@ -1044,6 +1243,73 @@ async function diagnoseLaunchPreview(mode) {
     }
   } catch {
     receipt.checks[`diagnostic-${mode}-capture-available`] = false;
+  }
+}
+async function diagnoseRequestControls() {
+  try {
+    const flags = await page.evaluate(() => {
+      const config = document.querySelector('.orca-config[data-surface="config"]');
+      const root = config?.querySelector('[aria-label="Guided launch"]');
+      const flags = { "config-mounted": config !== null, "guided-mounted": root !== undefined && root !== null };
+      const visible = (element) => Boolean(element?.getClientRects().length);
+      const status = (name, element) => {
+        flags[`${name}-mounted`] = element !== undefined && element !== null;
+        flags[`${name}-visible`] = visible(element);
+        flags[`${name}-enabled`] = Boolean(
+          element && !element.disabled && element.getAttribute("aria-disabled") !== "true",
+        );
+      };
+      const button = (owner, label) =>
+        [...(owner?.querySelectorAll("button") ?? [])].find(
+          (element) => element.getAttribute("aria-label") === label || element.textContent.trim() === label,
+        );
+      const field = (path) => {
+        const marker = [...(root?.querySelectorAll(".orca-field__path") ?? [])].find(
+          (element) => element.textContent === path,
+        );
+        return marker?.closest(".orca-field")?.querySelector("input, textarea");
+      };
+      status("launch-entry", button(config, "Launch work"));
+      for (const [name, label] of [
+        ["new-work", "Start explicit new work"],
+        ["preview", "Preview launch"],
+        ["mode", "Launch mode"],
+        ["workflow", "Workflow"],
+        ["agent-override", "Agent for builder"],
+        ["model-override", "Model for worker-b"],
+        ["item-override", "Item workflow"],
+        ["pack-override", "Template pack"],
+      ])
+        status(name, button(root, label));
+      for (const [name, path] of [
+        ["title", "title"],
+        ["body", "body"],
+        ["direct-task", "vars.task"],
+        ["item-input", "vars.itemWorkflow"],
+      ])
+        status(name, field(path));
+      const mode = button(root, "Launch mode"),
+        workflow = button(root, "Workflow");
+      flags["direct-mode-selected"] = mode?.textContent.trim() === "Start a workflow";
+      flags["request-mode-selected"] = mode?.textContent.trim() === "Submit a Request";
+      flags["direct-workflow-selected"] = workflow?.textContent.trim() === "M21 typed task (1)";
+      flags["request-workflow-selected"] = workflow?.textContent.trim() === "M21 Request program (1)";
+      for (const [name, label] of [
+        ["request-mode-option", "Submit a Request"],
+        ["request-workflow-option", "M21 Request program (1)"],
+      ]) {
+        const option = [...document.querySelectorAll('[role="menuitem"]')].find(
+          (element) =>
+            element.querySelector("[data-orca-menu-label]")?.textContent === label ||
+            element.textContent.trim() === label,
+        );
+        status(name, option);
+      }
+      return flags;
+    });
+    for (const [name, present] of Object.entries(flags)) receipt.checks[`diagnostic-request-control-${name}`] = present;
+  } catch {
+    receipt.checks["diagnostic-request-controls-available"] = false;
   }
 }
 async function previewLaunch(mode) {
@@ -1079,22 +1345,47 @@ async function admitted(method, previous) {
   const receipts = observed.receipts.filter((entry) => entry.method === method);
   check(receipts.length === previous + 1, `${method === DIRECT_METHOD ? "direct" : "request"}-single-admission`);
   const result = receipts.at(-1);
-  await waitUntil(async () =>
-    (await rpc("inputs.list", { runId: result.runId })).inputs.some((input) => input.nodeId === "hold" && !input.live),
-  );
-  const run = await rpc("runs.get", { runId: result.runId });
+  const mode = method === DIRECT_METHOD ? "direct" : "request";
+  receipt.ids[method === DIRECT_METHOD ? "directRunId" : "requestRunId"] = result.runId;
+  receipt.ids[method === DIRECT_METHOD ? "directAdmissionId" : "requestAdmissionId"] = result.admissionId;
+  if (result.requestId) receipt.ids.requestId = result.requestId;
+  let run;
+  currentOperation = `${mode}-admitted-gate-read`;
+  await waitUntil(async () => {
+    const parsed = RunsGetResultSchema.safeParse(await rpc("runs.get", { runId: result.runId }));
+    check(parsed.success, "admitted-run-contract-valid");
+    run = parsed.data;
+    check(!run.steps.some((step) => step.nodeId === "task"), `${mode}-agent-step-not-scheduled`);
+    return run.steps.some(
+      (step) => step.nodeId === "hold" && step.status === "waiting" && step.waitingOn === "human-input",
+    );
+  });
   check(
-    run.steps.some((step) => step.nodeId === "hold") && !run.steps.some((step) => step.nodeId === "task"),
-    `${method === DIRECT_METHOD ? "direct" : "request"}-parked-before-agent`,
+    run.run.id === result.runId &&
+      run.steps.some(
+        (step) => step.nodeId === "hold" && step.nodeType === "gate" && step.waitingOn === "human-input",
+      ) &&
+      !run.steps.some((step) => step.agentId !== undefined || step.agentSessionId !== undefined),
+    `${mode}-parked-before-agent`,
+  );
+  // Read only the settled public event log in this disposable store. Protected inputs
+  // and executable-generation material are never opened or returned by this check.
+  const events = (await readFile(join(fixture.workspace, ".orca/runs", `${result.runId}.jsonl`), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const created = events.find((event) => event.type === "run.created");
+  const hold = events.find((event) => event.type === "step.scheduled" && event.payload.nodeId === "hold");
+  check(
+    created?.runId === result.runId &&
+      created.payload.workflowId === (method === DIRECT_METHOD ? DIRECT : PROGRAM) &&
+      hold !== undefined &&
+      events.some((event) => event.type === "human.requested" && event.payload.stepRunId === hold.payload.stepRunId) &&
+      !events.some((event) => event.type === "step.scheduled" && event.payload.nodeId === "task") &&
+      !events.some((event) => event.type.startsWith("agent.")),
+    `${mode}-public-events-confirm-gate-before-agent`,
   );
   if (method === REQUEST_METHOD) {
-    // Read only the settled public event log in this disposable store. Protected inputs
-    // and executable-generation material are never opened or returned by this check.
-    const events = (await readFile(join(fixture.workspace, ".orca/runs", `${result.runId}.jsonl`), "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    const created = events.find((event) => event.type === "run.created");
     const provenance = created?.payload?.provenance;
     check(
       provenance?.itemWorkflow?.value === ITEM &&
@@ -1114,9 +1405,7 @@ async function admitted(method, previous) {
     );
   }
   check((await git(fixture.project, "status", "--porcelain")) === "", "prepared-project-unchanged");
-  receipt.ids[method === DIRECT_METHOD ? "directRunId" : "requestRunId"] = result.runId;
-  receipt.ids[method === DIRECT_METHOD ? "directAdmissionId" : "requestAdmissionId"] = result.admissionId;
-  if (result.requestId) receipt.ids.requestId = result.requestId;
+  currentOperation = currentPhase;
   return result;
 }
 async function guidedDirect() {
@@ -1165,45 +1454,72 @@ async function guidedDirect() {
   await admitted(DIRECT_METHOD, before);
 }
 async function guidedRequest() {
-  await openLaunch();
-  await guided().getByRole("button", { name: "Start explicit new work", exact: true }).click();
-  await choose(guided(), "Launch mode", "Submit a Request", true);
-  await chooseWorkflow(PROGRAM);
-  await guided()
-    .getByLabel(/^Request title\s*title/)
-    .fill("M21 synthetic Request");
-  await guided()
-    .getByLabel(/^Request body\s*body/)
-    .fill("Synthetic descriptor body. No agent execution.");
-  await choose(guided(), "Agent for builder", "worker-b", true);
-  await choose(guided(), "Model for worker-b", "worker-b-model", true);
-  await choose(guided(), "Item workflow", ITEM, true);
-  await choose(guided(), "Template pack", "strict", true);
-  check(
-    (await guided()
-      .getByLabel(/^request\s*vars\.request/)
-      .count()) === 0,
-    "request-service-owned-input-not-editable",
-  );
-  await previewLaunch("request");
-  const observed = await observation();
-  check(
-    observed.preflight.at(-1)?.valid === true && observed.preflight.at(-1)?.requestOverridesResolved === true,
-    "request-real-preflight-resolves-descriptor-and-overrides",
-  );
-  check(
-    await guided().getByText("task: agent worker-b (run.overrides.roles); role builder.", { exact: true }).isVisible(),
-    "request-mounted-agent-provenance",
-  );
-  check(
-    await guided().getByText("task: model worker-b-model (run.overrides.model).", { exact: true }).isVisible(),
-    "request-mounted-model-provenance",
-  );
-  await audit("request-review", '[aria-label="Guided launch"]');
-  await confirmPermission();
-  const before = observed.receipts.filter((entry) => entry.method === REQUEST_METHOD).length;
-  await pressTwice(guided().getByRole("button", { name: "Launch", exact: true }));
-  await admitted(REQUEST_METHOD, before);
+  try {
+    await openLaunch("request");
+    currentOperation = "request-start-new-work";
+    await guided().getByRole("button", { name: "Start explicit new work", exact: true }).click();
+    receipt.checks["request-start-new-work-clicked"] = true;
+    currentOperation = "request-native-intent-confirmation";
+    await confirmOwnedIntentAbandonment();
+    await choose(guided(), "Launch mode", "Submit a Request", true, "request-mode-select");
+    await chooseWorkflow(PROGRAM, "request-workflow-select");
+    for (const name of ["task", "count", "enabled"]) {
+      currentOperation = `request-omit-undeclared-${name}`;
+      await guided()
+        .getByRole("button", { name: `Omit undeclared input ${name}`, exact: true })
+        .click();
+    }
+    currentOperation = "request-title-input";
+    await guided()
+      .getByLabel(/^Request title\s*title/)
+      .fill("M21 synthetic Request");
+    currentOperation = "request-body-input";
+    await guided()
+      .getByLabel(/^Request body\s*body/)
+      .fill("Synthetic descriptor body. No agent execution.");
+    await choose(guided(), "Agent for builder", "worker-b", true, "request-agent-override");
+    await choose(guided(), "Model for worker-b", "worker-b-model", true, "request-model-override");
+    await choose(guided(), "Item workflow", ITEM, true, "request-item-override");
+    await choose(guided(), "Template pack", "strict", true, "request-pack-override");
+    currentOperation = "request-service-input-check";
+    check(
+      (await guided()
+        .getByLabel(/^request\s*vars\.request/)
+        .count()) === 0,
+      "request-service-owned-input-not-editable",
+    );
+    await previewLaunch("request");
+    currentOperation = "request-preflight-check";
+    const observed = await observation();
+    check(
+      observed.preflight.at(-1)?.valid === true && observed.preflight.at(-1)?.requestOverridesResolved === true,
+      "request-real-preflight-resolves-descriptor-and-overrides",
+    );
+    currentOperation = "request-agent-provenance-check";
+    check(
+      await guided()
+        .getByText("task: agent worker-b (run.overrides.roles); role builder.", { exact: true })
+        .isVisible(),
+      "request-mounted-agent-provenance",
+    );
+    currentOperation = "request-model-provenance-check";
+    check(
+      await guided().getByText("task: model worker-b-model (run.overrides.model).", { exact: true }).isVisible(),
+      "request-mounted-model-provenance",
+    );
+    currentOperation = "request-review-audit";
+    await audit("request-review", '[aria-label="Guided launch"]');
+    currentOperation = "request-permission-confirm";
+    await confirmPermission();
+    const before = observed.receipts.filter((entry) => entry.method === REQUEST_METHOD).length;
+    currentOperation = "request-submit";
+    await pressTwice(guided().getByRole("button", { name: "Launch", exact: true }));
+    await admitted(REQUEST_METHOD, before);
+  } catch (error) {
+    await diagnoseRequestControls();
+    await diagnoseLaunchPreview("request");
+    throw error;
+  }
 }
 async function restartChecks() {
   const before = await rpc("runs.list", { offset: 0, limit: 100 });

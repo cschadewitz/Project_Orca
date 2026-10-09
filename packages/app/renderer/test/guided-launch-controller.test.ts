@@ -405,6 +405,77 @@ describe("guided launch exact review and admission", () => {
     await controller.submit();
     expect(ports.submit).toHaveBeenNthCalledWith(2, { id: "new-intent" });
   });
+  it.each(["refreshing", "unauthorized"] as const)(
+    "reconciles acknowledged abandonment during a same-target %s context refresh without launching",
+    async (change) => {
+      const ports = launchPorts();
+      const confirmation = deferred<boolean>();
+      ports.abandon.mockReturnValue(confirmation.promise);
+      const controller = new GuidedLaunchController(launchContext(), launchDraft(), ports);
+      await controller.preview();
+      await controller.submit();
+      const previous = controller.read();
+      const pending = controller.newWork();
+      expect(controller.read().busy).toBe(true);
+      expect(controller.edit({ ...launchDraft(), vars: { task: "Replacement while confirming" } })).toBe(false);
+      const context = {
+        ...launchContext(),
+        activeGeneration: "generation-2",
+        ...(change === "refreshing"
+          ? { unavailableReason: "Reading the current authorized connection" }
+          : { directReason: "Starting new workflows is unauthorized" }),
+      };
+      controller.contextChanged(context);
+      confirmation.resolve(true);
+      await pending;
+      expect(ports.abandon).toHaveBeenCalledWith(previous.intent);
+      expect(controller.read().busy).toBe(false);
+      expect(controller.read().intent).toBeUndefined();
+      expect(controller.read().result).toBeUndefined();
+      expect(controller.read().review).toBeUndefined();
+      expect(controller.read().draft).toEqual(previous.draft);
+      expect(controller.read().draftTarget).toEqual(previous.draftTarget);
+      expect(controller.read().phase).toBe("editing");
+      expect(controller.read().sequence).toBe(previous.sequence + 1);
+      await controller.submit();
+      await controller.preview();
+      expect(ports.preflight).toHaveBeenCalledTimes(1);
+      expect(ports.retain).toHaveBeenCalledTimes(1);
+      expect(ports.submit).toHaveBeenCalledTimes(1);
+      expect(controller.read().message).toBe(context.unavailableReason ?? context.directReason);
+    },
+  );
+  it.each(["endpointId", "workspaceId", "instanceId", "principalId", "epoch"] as const)(
+    "does not transfer new work when %s changes during abandonment confirmation",
+    async (field) => {
+      const ports = launchPorts();
+      const confirmation = deferred<boolean>();
+      ports.abandon.mockReturnValue(confirmation.promise);
+      const controller = new GuidedLaunchController(launchContext(), launchDraft(), ports);
+      await controller.preview();
+      await controller.submit();
+      const previous = controller.read();
+      const pending = controller.newWork();
+      const context = launchContext();
+      if (field === "epoch") context.target.epoch += 1;
+      else context.target[field] = "changed-target-identity";
+      controller.contextChanged(context);
+      confirmation.resolve(true);
+      await pending;
+      expect(controller.read().busy).toBe(false);
+      expect(controller.read().intent).toEqual(previous.intent);
+      expect(controller.read().draftTarget).toEqual(previous.draftTarget);
+      expect(controller.read().draft).toEqual(previous.draft);
+      expect(controller.read().sequence).toBe(previous.sequence);
+      expect(controller.read().phase).toBe("blocked");
+      expect(controller.edit({ ...launchDraft(), mode: "request" })).toBe(false);
+      await controller.preview();
+      await controller.submit();
+      expect(ports.preflight).toHaveBeenCalledTimes(1);
+      expect(ports.retain).toHaveBeenCalledTimes(1);
+      expect(ports.submit).toHaveBeenCalledTimes(1);
+    },
+  );
   it("restores a protected exact-command intent in a fresh controller and blocks foreign scope", async () => {
     const ports = launchPorts();
     const original = new GuidedLaunchController(launchContext(), launchDraft(), ports);
