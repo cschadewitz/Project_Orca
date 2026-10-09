@@ -1,5 +1,11 @@
 # Bounded native Mac acceptance handoff — 9 October 2026
 
+The later [native delivery source adapters](../native-mac-delivery/production-adapters.md)
+implement pre-signing identity, an explicit trusted candidate validator and bounded
+native containment. The pinned preparation observations below describe #573's state;
+its packet still executes no command. Native/physical acceptance and explicit owner
+version/OS/provenance/publisher/private-route decisions remain open.
+
 Preparation for #385/#388/#389/#390. No Mac, signing, delivery, provider, Hub or
 physical operation ran. The source packet stacks on #555
 `6aac5ace722dd3c3ebc7f156f22efb73b923efdb`. UI/ownership observations use #567

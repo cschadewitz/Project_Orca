@@ -1,5 +1,11 @@
 # Credential-free signing foundation (#464)
 
+The fixture CLI described here remains fixture-only. The 9 October
+[native source adapters](production-adapters.md) add a separate pre-signing producer
+and candidate route in the existing validator, with independent trusted inputs and
+bounded native containment. Their source/controlled-port tests do not prove signed
+or physical acceptance, and do not activate the ordinary unsigned lane.
+
 Implemented from freshly fetched main
 `94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`, then integrated with reviewed main
 `b9b8807252e39c506c24b17ec0c637701e4a68d1`. This is an isolated producer and

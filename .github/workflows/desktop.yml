@@ -121,6 +121,38 @@ jobs:
       - name: The bundled daemon answers authenticated hello
         run: node tools/probe-bundled-daemon.js
 
+      # Node-API 8 is ABI-stable across the packaged Electron runtime. Fetch official
+      # headers for this exact setup-node runtime, verify the archive before unpacking,
+      # then reuse the explicit local compiler stage for every configured Mac target.
+      # This ordinary lane remains unsigned; staging never activates diagnostics.
+      - name: Stage native addons for all requested Mac architectures
+        if: matrix.name == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_version=$(node -p 'process.versions.node')
+          case "$node_version" in *[!0-9.]*|'') exit 1 ;; esac
+          headers_scratch=$(mktemp -d "$RUNNER_TEMP/orca-native-headers.XXXXXX")
+          trap 'rm -rf -- "$headers_scratch"' EXIT
+          archive="node-v${node_version}-headers.tar.gz"
+          base="https://nodejs.org/download/release/v${node_version}"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 60 --max-filesize 16777216 \
+            "$base/$archive" --output "$headers_scratch/$archive"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 30 --max-filesize 65536 \
+            "$base/SHASUMS256.txt" --output "$headers_scratch/SHASUMS256.txt"
+          (cd "$headers_scratch"; ARCHIVE="$archive" python3 - <<'PY'
+          import os, pathlib, re
+          name = os.environ["ARCHIVE"]
+          entries = [line for line in pathlib.Path("SHASUMS256.txt").read_text().splitlines()
+                     if re.fullmatch(r"[0-9a-f]{64}  " + re.escape(name), line)]
+          if len(entries) != 1:
+              raise SystemExit("Exact Node header checksum unavailable")
+          pathlib.Path("headers.sha256").write_text(entries[0] + "\n")
+          PY
+          shasum -a 256 -c headers.sha256)
+          tar -xzf "$headers_scratch/$archive" -C "$headers_scratch"
+          node tools/packaged-mac/stage-native-addons.js --headers "$headers_scratch/node-v${node_version}"
+
       # electron-builder finds packages/app/electron-builder.yml by name; `-c.` overrides one
       # value in it. `exec` rather than `run package` so that no stray `--` reaches yargs.
       #
