@@ -1,5 +1,10 @@
 # Windows MSVC and JSON-envelope acceptance - 9 October 2026
 
+The subsequent [authorized ARM64 cross-build follow-up](windows-msvc-arm64-crossbuild.md)
+supersedes this snapshot's missing ARM64 import/build prerequisites. Runtime and
+substantial acceptance gaps below remain open. Publication is tracked by the new
+draft PR against #584's integration branch; the original evidence bytes remain intact.
+
 This addendum tests combined #584 `6fcd543a368246c2156f86a225072a871c754435`
 (tree `347915826aeaeaebb2bec244856b01326137968c`) plus local, unsquashed fix
 `8969932b3d7f198046a76f88a9bec509ab7dec00`
