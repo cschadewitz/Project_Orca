@@ -22,7 +22,7 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
     while (end < text.length) {
       const newline = text.indexOf("\n", end);
       end = newline < 0 ? text.length : newline + 1;
-      if (++lines === 64 || end === text.length) {
+      if (++lines === 256 || end === text.length) {
         blocks.push(text.slice(start, end));
         start = end;
         lines = 0;

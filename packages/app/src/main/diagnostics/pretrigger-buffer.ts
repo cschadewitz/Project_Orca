@@ -157,11 +157,40 @@ export class PretriggerBuffer {
 
   /** Freeze the ring atomically, then serialize independent bounded batches. */
   async snapshotAsync(): Promise<FrozenDiagnosticSnapshot | undefined> {
-    const report = this.freezeReport();
-    return report && this.freezeJson(await canonicalDiagnosticReportAsync(report, this.payload));
+    const report = this.freezeReport(false);
+    if (!report) return undefined;
+    const size = this.size,
+      historyStart = this.historyStart;
+    if (!size) return this.freezeJson(await canonicalDiagnosticReportAsync(report, this.payload));
+    // Freeze compact owned bytes atomically. Yielded serialization creates one
+    // event at a time instead of retaining another 8192-object report tree.
+    const frozen = this.payload.allocate(size * 10);
+    const times = new Float64Array(frozen.bytes.buffer, frozen.bytes.byteOffset, size);
+    const codes = new Uint16Array(frozen.bytes.buffer, frozen.bytes.byteOffset + size * 8, size);
+    for (let index = 0; index < size; index++) {
+      const position = (this.head + index) % this.maxEvents;
+      times[index] = this.times![position]!;
+      codes[index] = this.codes![position]!;
+    }
+    function* events() {
+      for (let index = 0; index < size; index++) {
+        const pair = pairs[codes[index]!]!;
+        yield {
+          phase: pair.phase,
+          code: pair.code,
+          offsetMs: times[index]! - historyStart,
+          entityAlias: "unknown" as const,
+        };
+      }
+    }
+    try {
+      return this.freezeJson(await canonicalDiagnosticReportAsync(report, this.payload, { size, events: events() }));
+    } finally {
+      frozen.release();
+    }
   }
 
-  private freezeReport(): DiagnosticReport | undefined {
+  private freezeReport(includeEvents = true): DiagnosticReport | undefined {
     const now = this.tick();
     if (now === undefined) return undefined;
     const oldest = this.size ? this.times![this.head] : undefined;
@@ -181,16 +210,18 @@ export class PretriggerBuffer {
         expired: omissionCount(this.expired),
         invalid: omissionCount(this.invalid),
       },
-      Array.from({ length: this.size }, (_, index) => {
-        const position = (this.head + index) % this.maxEvents;
-        const event = pairs[this.codes![position]!]!;
-        return {
-          phase: event.phase,
-          code: event.code,
-          offsetMs: this.times![position]! - this.historyStart,
-          entityAlias: "unknown" as const,
-        };
-      }),
+      includeEvents
+        ? Array.from({ length: this.size }, (_, index) => {
+            const position = (this.head + index) % this.maxEvents;
+            const event = pairs[this.codes![position]!]!;
+            return {
+              phase: event.phase,
+              code: event.code,
+              offsetMs: this.times![position]! - this.historyStart,
+              entityAlias: "unknown" as const,
+            };
+          })
+        : [],
     );
   }
 

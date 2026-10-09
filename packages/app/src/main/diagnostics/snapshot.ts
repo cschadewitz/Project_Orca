@@ -16,6 +16,11 @@ export interface DiagnosticEvent {
   readonly entityAlias: "unknown";
 }
 
+export interface DiagnosticEventSource {
+  readonly size: number;
+  readonly events: Iterable<DiagnosticEvent>;
+}
+
 export interface DiagnosticCoverage {
   readonly requestedWindowMs: number;
   readonly observedWindowMs: number;
@@ -117,11 +122,12 @@ export function diagnosticEventText(event: DiagnosticEvent): string {
 export function* diagnosticReportWork(
   report: DiagnosticReport,
   payload?: ControlledPayloadMemory,
+  source?: DiagnosticEventSource,
 ): Generator<void, string> {
   // The envelope is small/fixed. Never send the growing event array through the
   // generic per-object sort/replacer or serialize the whole report in one turn.
   const envelope = canonicalJson({ ...report, events: [] });
-  if (report.events.length === 0) return envelope;
+  if ((source?.size ?? report.events.length) === 0) return envelope;
   const marker = '  "events": []';
   const start = envelope.indexOf(marker);
   if (start < 0) throw new Error("unavailable");
@@ -137,10 +143,10 @@ export function* diagnosticReportWork(
     };
     append(envelope.slice(0, start));
     append('  "events": [\n');
-    for (let index = 0; index < report.events.length; index++) {
-      const event = report.events[index]!;
+    let index = 0;
+    for (const event of source?.events ?? report.events) {
       append((index === 0 ? "" : ",\n") + diagnosticEventText(event));
-      if ((index + 1) % REPORT_BATCH_EVENTS === 0) yield;
+      if (++index % REPORT_BATCH_EVENTS === 0) yield;
     }
     append("\n  ]");
     append(envelope.slice(start + marker.length));
@@ -157,8 +163,9 @@ export function canonicalDiagnosticReport(report: DiagnosticReport): string {
 export function canonicalDiagnosticReportAsync(
   report: DiagnosticReport,
   payload?: ControlledPayloadMemory,
+  source?: DiagnosticEventSource,
 ): Promise<string> {
-  return scheduleReportWork(diagnosticReportWork(report, payload));
+  return scheduleReportWork(diagnosticReportWork(report, payload, source));
 }
 
 // Reserve the maximum complete envelope, including future offset digits, saturation

@@ -43,7 +43,7 @@
 .orca-diagnostics__block {
   display: block;
   content-visibility: auto;
-  contain-intrinsic-block-size: auto calc(64 * var(--text-mono-body-line-height));
+  contain-intrinsic-block-size: auto calc(256 * var(--text-mono-body-line-height));
 }
 
 .orca-diagnostics__exact:focus-visible {

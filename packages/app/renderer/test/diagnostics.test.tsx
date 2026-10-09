@@ -235,7 +235,7 @@ describe("exact preview and separate local Save", () => {
     const report = await open(f);
     expect(text.length).toBe(1_048_576);
     expect(report.textContent).toBe(text);
-    expect(report.querySelectorAll(".orca-diagnostics__block")).toHaveLength(512);
+    expect(report.querySelectorAll(".orca-diagnostics__block")).toHaveLength(128);
     fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull());
   });

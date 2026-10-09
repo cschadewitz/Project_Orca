@@ -287,10 +287,11 @@ export class RecoveryController {
       if (!this.authorized(epoch)) return;
       this.reserve(3 * RECOVERY_LIMITS.exportBytes);
       try {
-        const snapshot = await this.ring.snapshotAsync();
+        let snapshot = await this.ring.snapshotAsync();
         if (!snapshot) throw new Error("unavailable");
         if (!this.authorized(epoch)) return;
         const lease = this.payload.from(snapshot.json);
+        snapshot = undefined;
         try {
           await this.options.disk.checkpoint(lease.bytes, anchor, () => this.authorized(epoch));
         } finally {
