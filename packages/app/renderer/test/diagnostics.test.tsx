@@ -11,6 +11,7 @@ import type {
 } from "../../src/diagnostics-contract.js";
 import { DiagnosticsSection } from "../src/diagnostics/diagnostics-section.js";
 import { DiagnosticReportView } from "../src/diagnostics/report-view.js";
+import { hasCompleteDiagnosticPreview } from "./diagnostics-resource-observer.js";
 import { ConfigProvider } from "../src/config/config-context.js";
 import { ConfigSurface } from "../src/config/config-surface.js";
 import { harness, installBridge } from "./harness.js";
@@ -122,10 +123,17 @@ it("reuses exact DOM text nodes while clearing Close, shorter successors and unm
   const nodes = [...report.querySelectorAll("span")];
   const first = nodes[0]!.firstChild!;
   expect(report.textContent).toBe("first\nsecond\n");
+  const textRead = vi.spyOn(report, "textContent", "get").mockImplementation(() => {
+    throw new Error("unbounded plaintext polling");
+  });
+  expect(hasCompleteDiagnosticPreview(document)).toBe(true);
+  expect(textRead).not.toHaveBeenCalled();
+  textRead.mockRestore();
   view.rerender(<DiagnosticReportView blocks={[]} shown={false} />);
   expect(report.textContent).toBe("");
   expect(nodes.every((span) => span.textContent === "")).toBe(true);
   expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+  expect(hasCompleteDiagnosticPreview(document)).toBe(false);
   view.rerender(<DiagnosticReportView blocks={["successor\n"]} shown />);
   expect(report.textContent).toBe("successor\n");
   expect(report.firstChild).toBe(nodes[0]);
