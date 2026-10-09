@@ -54,12 +54,15 @@ Dependencies, lockfile, CI workflow and coverage configuration match final #567.
 
 ## Delta review and self-review
 
-1. **Outstanding inherited policy finding:** #567 commit
+1. **Resolved owner-authorized coverage override:** #567 commit
    `9ac19ead4347180e44be6162a41d2d5726b3f929` lowers app Node function coverage from 99 to
    95 at `vitest.config.ts:101`. [Development](../DEVELOPMENT.md#coverage) describes coverage
-   as a ratchet and directs adding tests rather than lowering it. Green coverage therefore
-   proves the revised 95 threshold, not the previous 99 threshold. The requested exact
-   constituent is retained; this finding requires the parent's resolution before acceptance.
+   as a ratchet. The parent subsequently supplied transcript evidence that Casey explicitly
+   authorized lowering only the failing app function threshold to 95 and approved committing
+   and pushing that exact change. This explicit owner instruction overrides the repository's
+   default policy; the finding is resolved and is not a merge blocker. Other thresholds stay
+   unchanged. Green coverage proves the authorized 95 threshold, not the previous 99 threshold.
+   This consolidation retains the exact constituent and makes no threshold change.
 2. **#569 correction verified:** the outer `FirstRunSetup.exclusive()` wrapper now preserves
    `FirstRunOwnershipRefusal`, including errors from current ownership, preparation,
    handshake and disposal. IPC retains the concrete reconciliation refusal and sanitizes
@@ -75,7 +78,7 @@ Dependencies, lockfile, CI workflow and coverage configuration match final #567.
 
 | Evidence | Exact scope and result | Limit |
 | --- | --- | --- |
-| [CI 37872268414](https://github.com/cschadewitz/Project_Orca/actions/runs/37872268414) | #567 head `9ac19ea`; tested synthetic merge `7bf26cb8098b8549731b42f0b9add287b4242427`. Both trees are `b62ba6e2da5abbf374bf24f3f28caee8e09603c6`. Node 22 job `113632858520` and Node 24 job `113632858560` succeeded; each reports 421 test files passed, 3 skipped, 6,306 tests passed, 4 skipped and 1 todo. Both built, ran two mandatory retry cases and compiled smoke; Node 24 also passed statics and coverage. | Baseline evidence only; excludes #568/#569. Coverage used the lowered app function threshold. No packaged/native acceptance. |
+| [CI 37872268414](https://github.com/cschadewitz/Project_Orca/actions/runs/37872268414) | #567 head `9ac19ea`; tested synthetic merge `7bf26cb8098b8549731b42f0b9add287b4242427`. Both trees are `b62ba6e2da5abbf374bf24f3f28caee8e09603c6`. Node 22 job `113632858520` and Node 24 job `113632858560` succeeded; each reports 421 test files passed, 3 skipped, 6,306 tests passed, 4 skipped and 1 todo. Both built, ran two mandatory retry cases and compiled smoke; Node 24 also passed statics and coverage. | Baseline evidence only; excludes #568/#569. Coverage used the explicitly authorized 95 app function threshold. No packaged/native acceptance. |
 | #569 author evidence and supplied focused review | Pinned corrected `1a2e003`; durable-ownership/Workspace review reused. Correction adds four POSIX Connect cases plus the corrected IPC tests. | The historical PR body pins earlier heads; use the exact head above. No combined-head CI claim. |
 | #568 author evidence and supplied focused review | Pinned `a9412a0`; author reports 80 passing tests in 10 files; delegation says focused review required no changes. Exact blobs retained. | Not rerun here. App approval-to-drain wiring is still pending. |
 | This owner, merged baseline `dc0397d` | Seven selected cases passed in three files, 1.86 seconds, at most two workers. Four POSIX Connect stages, two IPC cases and one disposable authenticated compiled CLI-child case. Root and renderer no-emit TypeScript passed. | 64 cases excluded by name selection; no full-suite or coverage run. Synthetic subscriptions/Electron boundaries remain. |
