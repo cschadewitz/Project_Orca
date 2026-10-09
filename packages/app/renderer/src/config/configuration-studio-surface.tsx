@@ -18,6 +18,9 @@ import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
 import { agentPolicies } from "./config-model.js";
 import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
+import { TemplateStudioSurface } from "../template-authoring/surface.js";
+import { useTemplateStudio } from "../template-authoring/context.js";
+import { configurationReferenceChoices } from "./reference-choices.js";
 
 export function ConfigurationStudioSurface({
   connection,
@@ -29,10 +32,12 @@ export function ConfigurationStudioSurface({
   useSurfaceDensity();
   const feed = useConfig();
   const studio = useConfigurationStudio();
+  const templateStudio = useTemplateStudio().studio;
   const keyboard = useKeyboard();
   const [replace, setReplace] = useState<"form" | "raw">();
   const [privatePreview, setPrivatePreview] = useState(false);
   const [policyConfirmed, setPolicyConfirmed] = useState(false);
+  const [templates, showTemplates] = useState(false);
   const sequence = studio?.state.sequence;
   useEffect(() => {
     setPolicyConfirmed(false);
@@ -40,6 +45,7 @@ export function ConfigurationStudioSurface({
   }, [sequence]);
   const switchMode = useCallback(
     (mode: "form" | "raw") => {
+      showTemplates(false);
       if (studio && !studio.switchMode(mode)) setReplace(mode);
     },
     [studio],
@@ -55,18 +61,21 @@ export function ConfigurationStudioSurface({
   };
   const canSave = studio?.review !== undefined && !studio.busy && studio.reason("save") === undefined;
   useEffect(() => {
-    if (!canSave) return;
+    if (!canSave || templates) return;
     return keyboard.register({
       scope: "config",
       key: "Mod+S",
       label: "Save reviewed configuration",
       action: () => save.current(),
     });
-  }, [canSave, keyboard]);
-  const data = studio?.source ?? (feed.state.phase === "ready" ? feed.state.data : undefined);
+  }, [canSave, templates, keyboard]);
+  const sourceAuthorized = studio?.readable ?? true;
+  const data = sourceAuthorized
+    ? (studio?.source ?? (feed.state.phase === "ready" ? feed.state.data : undefined))
+    : undefined;
   // Sidecar notifications remain current while the config session retains its original base.
   const permissions =
-    feed.state.phase === "ready" && (!studio || sameEditorTarget(feed.state.target, studio.target))
+    sourceAuthorized && feed.state.phase === "ready" && (!studio || sameEditorTarget(feed.state.target, studio.target))
       ? feed.state.data
       : data;
   const state = studio?.state;
@@ -79,12 +88,20 @@ export function ConfigurationStudioSurface({
         crumbs={[{ type: "config", id: data?.config.path ?? "config", label: "Configuration", current: true }]}
         actions={
           <div className="orca-seg" role="group" aria-label="View">
+            <button
+              type="button"
+              className={`orca-seg__btn ${textClass("label")}`}
+              aria-pressed={templates}
+              onClick={() => showTemplates(true)}
+            >
+              Templates
+            </button>
             {(["form", "raw"] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
                 className={`orca-seg__btn ${textClass("label")}`}
-                aria-pressed={(studio?.mode ?? "form") === mode}
+                aria-pressed={!templates && (studio?.mode ?? "form") === mode}
                 onClick={() => switchMode(mode)}
               >
                 {mode === "form" ? "Form" : "Raw"}
@@ -95,7 +112,15 @@ export function ConfigurationStudioSurface({
       />
       <div className="orca-config__body">
         <DiagnosticsSection key="diagnostics" />
-        {!data ? (
+        {templates ? (
+          <TemplateStudioSurface />
+        ) : !sourceAuthorized ? (
+          <StateView
+            kind="disconnected"
+            title="Configuration source withheld"
+            body="Source authority or daemon target changed. Retained edits remain private until access is restored and current state is reviewed."
+          />
+        ) : !data ? (
           feed.state.phase === "error" ? (
             <StateView
               kind="error"
@@ -145,6 +170,9 @@ export function ConfigurationStudioSurface({
                   access={(edits) => studio.editAccess(edits)}
                   onEdit={(edits) => studio.edit(edits)}
                   rowKey={studio.rowKey}
+                  referenceChoices={(path) =>
+                    configurationReferenceChoices(studio.value, templateStudio?.adapter.current, path)
+                  }
                   onShowRaw={() => switchMode("raw")}
                 />
               ) : (
@@ -270,7 +298,8 @@ export function ConfigurationStudioSurface({
                 {studio.frozen && (
                   <>
                     <Text style="caption">
-                      The original draft remains frozen. Reading does not rebase or retry its edits.
+                      Overlapping edits and raw replacements stay retained. Reading reconciles independent form edits
+                      and requires a fresh review; it never retries a write.
                     </Text>
                     <Button
                       disabled={studio.busy}

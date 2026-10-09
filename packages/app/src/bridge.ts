@@ -15,6 +15,7 @@
  * it states what is waiting, and the main process has no verdict to give back.
  */
 import type { DiagnosticsBridge } from "./diagnostics-contract.js";
+import type { TemplateBridge } from "./template-bridge.js";
 import type { DaemonConnectionBridge } from "./daemon-connection.js";
 import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
 import type { PreflightParams, PreflightResult } from "./configuration-launch-contract.js";
@@ -388,6 +389,8 @@ export interface OrcaBridge {
     /** Saved and active remain separate guarded operations. */
     apply?: (params: ConfigApplyParams) => Promise<BridgeResult<ConfigApplyResult>>;
   };
+  /** Optional until the integration owner registers the typed template IPC dispatcher. */
+  templates?: TemplateBridge;
   notifications: {
     /**
      * Daemon-initiated messages: run and step transitions, coalesced agent output, inputs

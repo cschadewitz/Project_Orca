@@ -20,6 +20,7 @@ export interface AuthoringSnapshot {
   readonly target: AuthoringTarget;
   readonly revision: string;
   readonly generation: string;
+  readonly contextRevision?: string;
   readonly assets: readonly TemplateAsset[];
   readonly writeReason?: string;
 }

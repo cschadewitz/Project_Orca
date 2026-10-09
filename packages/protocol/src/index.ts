@@ -41,3 +41,4 @@ export * from "./operator-boundary-projection.js";
 export * from "./host-resources.js";
 export * from "./host-resource-fixtures.js";
 export * from "./operator-host-resources.js";
+export * from "./templates.js";
