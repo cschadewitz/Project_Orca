@@ -1,0 +1,632 @@
+{
+  "schema": 1,
+  "sourceCommit": "2346bc539ae25a3448d21e86448546b6c905c7c4",
+  "passed": 114,
+  "failed": 0,
+  "skipped": 1,
+  "scope": "Eight focused diagnostics/authority/consent/ownership/ring/preload/renderer files; no full suite or coverage.",
+  "suites": [
+    {
+      "file": "packages/app/test/daemon-connection-integration.test.ts",
+      "status": "passed",
+      "cases": [
+        {
+          "name": "mounts closed template commands and gates same-boot setup throughout an updater reservation",
+          "status": "passed",
+          "durationMs": 1470.7888000000003
+        },
+        {
+          "name": "dispatches verified opt-out before diagnostics initialization while opt-in waits",
+          "status": "passed",
+          "durationMs": 150.56209999999965
+        },
+        {
+          "name": "a verified newer Off fences an older Enable waiting at the main initialization boundary",
+          "status": "passed",
+          "durationMs": 84.78330000000005
+        },
+        {
+          "name": "renderer-process-gone fences a preview waiting at main initialization without a reload",
+          "status": "passed",
+          "durationMs": 94.3730999999998
+        },
+        {
+          "name": "permits old-target preview disposal only from the current window document without initializing diagnostics",
+          "status": "passed",
+          "durationMs": 61.966499999999996
+        },
+        {
+          "name": "returns env → read-only store → env through IPC, honoring drafts and preserving the saved endpoint",
+          "status": "passed",
+          "durationMs": 155.99249999999984
+        },
+        {
+          "name": "opens a store with no windows and still refuses drafts when a window exists",
+          "status": "passed",
+          "durationMs": 85.4056999999998
+        },
+        {
+          "name": "preserves env permission alerts when first hello arrives after the renderer update",
+          "status": "passed",
+          "durationMs": 135.64229999999952
+        },
+        {
+          "name": "preserves bundled permission alerts when first hello arrives after the renderer update",
+          "status": "passed",
+          "durationMs": 124.11250000000018
+        },
+        {
+          "name": "preserves store permission alerts when first hello arrives after the renderer update",
+          "status": "passed",
+          "durationMs": 109.42669999999998
+        },
+        {
+          "name": "installs synchronous IPC and disconnects safely for malformed configuration localhost:6722",
+          "status": "passed",
+          "durationMs": 99.58320000000003
+        },
+        {
+          "name": "installs synchronous IPC and disconnects safely for malformed configuration not-a-url-private-token",
+          "status": "passed",
+          "durationMs": 78.57539999999972
+        },
+        {
+          "name": "installs synchronous IPC and disconnects safely for malformed configuration https://owner:private-token@host",
+          "status": "passed",
+          "durationMs": 121.09619999999995
+        },
+        {
+          "name": "composes the Mac window lease with main IPC while installation stays unavailable",
+          "status": "passed",
+          "durationMs": 68.58019999999942
+        },
+        {
+          "name": "mounts first-run selection/preparation before hello and rejects paths, stale frames, epochs and pending drafts",
+          "status": "skipped"
+        },
+        {
+          "name": "native replacement bootstrap blocks protected main IPC before its journal inspection",
+          "status": "passed",
+          "durationMs": 69.73270000000048
+        },
+        {
+          "name": "native replacement unknown startup paints recovery without normal diagnostics or child bootstrap",
+          "status": "passed",
+          "durationMs": 85.50730000000021
+        },
+        {
+          "name": "main pause refuses new writes and retains its app writer until a dispatched RPC settles",
+          "status": "passed",
+          "durationMs": 139.6870000000008
+        },
+        {
+          "name": "durable admission closure retains completion only for the reserved live drain",
+          "status": "passed",
+          "durationMs": 95.6911
+        },
+        {
+          "name": "quit retains app ownership until dispatch and background storage both settle",
+          "status": "passed",
+          "durationMs": 246.52189999999973
+        },
+        {
+          "name": "main pause tracks first-run receipt work before releasing its app writer",
+          "status": "passed",
+          "durationMs": 125.28150000000005
+        },
+        {
+          "name": "main forwards only current-client and current-subscription diagnostic facts",
+          "status": "passed",
+          "durationMs": 96.30709999999999
+        },
+        {
+          "name": "main removes power observation on quit and suppresses later facts",
+          "status": "passed",
+          "durationMs": 188.38790000000063
+        },
+        {
+          "name": "main removes power observation on updater pause and suppresses later facts",
+          "status": "passed",
+          "durationMs": 141.0693999999994
+        },
+        {
+          "name": "late diagnostic initialization cannot publish app_started after quit",
+          "status": "passed",
+          "durationMs": 67.94760000000042
+        }
+      ]
+    },
+    {
+      "file": "packages/app/test/diagnostics-payload-memory.test.ts",
+      "status": "passed",
+      "cases": [
+        {
+          "name": "reuses aligned storage, erases released bytes and refuses before the unchanged ceiling",
+          "status": "passed",
+          "durationMs": 7.841700000000003
+        },
+        {
+          "name": "charges before a provider starts and retains its returned bytes until actual disposal",
+          "status": "passed",
+          "durationMs": 1.1281000000000176
+        },
+        {
+          "name": "bounds maximum checkpoint/open buffers, owns returned plaintext and retires persistent keys",
+          "status": "passed",
+          "durationMs": 760.2333
+        }
+      ]
+    },
+    {
+      "file": "packages/app/test/diagnostics-preload.test.ts",
+      "status": "passed",
+      "cases": [
+        {
+          "name": "ignores stale status and old closes while a successor owns an isolated-world copy",
+          "status": "passed",
+          "durationMs": 121.46479999999997
+        },
+        {
+          "name": "erases and refuses a late block after a newer consent revocation while acknowledging main disposal",
+          "status": "passed",
+          "durationMs": 10.216799999999978
+        }
+      ]
+    },
+    {
+      "file": "packages/app/test/diagnostics-report-performance.test.ts",
+      "status": "passed",
+      "cases": [
+        {
+          "name": "preserves the generic canonical oracle for every enum, maximum offsets/count and empty reports",
+          "status": "passed",
+          "durationMs": 166.981
+        },
+        {
+          "name": "freezes all 8192 events before yielding and remains immutable across collection/stop",
+          "status": "passed",
+          "durationMs": 87.50690000000009
+        },
+        {
+          "name": "keeps a full-count checkpoint immutable and owned after the live ring stops",
+          "status": "passed",
+          "durationMs": 97.8782000000001
+        },
+        {
+          "name": "validates immutable decoded bytes even if the source Buffer changes during a yielded turn",
+          "status": "passed",
+          "durationMs": 4452.6073
+        },
+        {
+          "name": "retains exact rejection of extra/duplicate fields, framing, invalid UTF-8 and event semantics",
+          "status": "passed",
+          "durationMs": 417.1370999999999
+        },
+        {
+          "name": "accepts every closed pair at decimal boundaries and rejects noncanonical event spellings",
+          "status": "passed",
+          "durationMs": 8.136000000000422
+        },
+        {
+          "name": "keeps validated immutable text and independently owned exact bytes through disposal",
+          "status": "passed",
+          "durationMs": 100.48959999999988
+        },
+        {
+          "name": "yields each batch with one completion promise and rejects scheduled generator failures",
+          "status": "passed",
+          "durationMs": 0.7717000000002372
+        },
+        {
+          "name": "admits exact byte ownership, one ordered transport block and a complete-read picker fence",
+          "status": "passed",
+          "durationMs": 83.58460000000014
+        },
+        {
+          "name": "erases a transported block on off and charges retirement until disposal",
+          "status": "passed",
+          "durationMs": 3.0242000000007465
+        },
+        {
+          "name": "erases a transported block on expiry and charges retirement until disposal",
+          "status": "passed",
+          "durationMs": 2.4526000000005297
+        },
+        {
+          "name": "erases a transported block on document and charges retirement until disposal",
+          "status": "passed",
+          "durationMs": 2.3479000000006636
+        },
+        {
+          "name": "revokes off during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "durationMs": 99.04460000000017
+        },
+        {
+          "name": "revokes document during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "durationMs": 81.46849999999995
+        },
+        {
+          "name": "revokes clock during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "durationMs": 87.98839999999927
+        },
+        {
+          "name": "rechecks authority after checkpoint serialization before any disk dispatch",
+          "status": "passed",
+          "durationMs": 36.96140000000014
+        },
+        {
+          "name": "retains frozen binary bytes until a timeout Save actually settles",
+          "status": "passed",
+          "durationMs": 15.450200000000223
+        },
+        {
+          "name": "retains frozen binary bytes until a off Save actually settles",
+          "status": "passed",
+          "durationMs": 15.785100000000057
+        }
+      ]
+    },
+    {
+      "file": "packages/app/test/diagnostics-startup-consent.test.ts",
+      "status": "passed",
+      "cases": [
+        {
+          "name": "keeps durable consent when navigation revokes a preview during the startup read",
+          "status": "passed",
+          "durationMs": 11.15990000000005
+        },
+        {
+          "name": "keeps durable consent when renderer-disposal revokes a preview during the startup read",
+          "status": "passed",
+          "durationMs": 1.8030999999999722
+        },
+        {
+          "name": "a newer off fences the pending enabled startup read",
+          "status": "passed",
+          "durationMs": 2.0486000000000217
+        },
+        {
+          "name": "a newer shutdown fences the pending enabled startup read",
+          "status": "passed",
+          "durationMs": 0.9949000000000296
+        }
+      ]
+    },
+    {
+      "file": "packages/app/test/pretrigger-buffer.test.ts",
+      "status": "passed",
+      "cases": [
+        {
+          "name": "volatile diagnostic pre-trigger buffer is off by default, reads nothing while off, and restarts empty/off",
+          "status": "passed",
+          "durationMs": 12.888300000000072
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer expires at five minutes, including without new observations",
+          "status": "passed",
+          "durationMs": 6.416099999999915
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer shortens immediately and never reconstructs history when lengthened",
+          "status": "passed",
+          "durationMs": 7.872700000000009
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer evicts oldest at the count cap, shows loss and coverage, and wraps the ring",
+          "status": "passed",
+          "durationMs": 7.655899999999974
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer enforces complete serialized bytes independently of count and counts unfit events",
+          "status": "passed",
+          "durationMs": 7.455299999999966
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer keeps a frozen complete snapshot above the old 256-event/256-KiB limits",
+          "status": "passed",
+          "durationMs": 41.77690000000007
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer caps a burst at 8192 with visible saturated omissions and bounded snapshots",
+          "status": "passed",
+          "durationMs": 337.8880999999999
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer does not reset an active session and refreshes exported identities for every snapshot",
+          "status": "passed",
+          "durationMs": 5.481399999999894
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer refuses unsupported resource caps {\"maxEvents\":0}",
+          "status": "passed",
+          "durationMs": 1.8658000000000357
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer refuses unsupported resource caps {\"maxEvents\":8193}",
+          "status": "passed",
+          "durationMs": 1.1734999999998763
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer refuses unsupported resource caps {\"maxReportBytes\":1114}",
+          "status": "passed",
+          "durationMs": 1.0967000000000553
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer refuses unsupported resource caps {\"maxReportBytes\":1048577}",
+          "status": "passed",
+          "durationMs": 0.51949999999988
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer invalidates on uncertain clock NaN",
+          "status": "passed",
+          "durationMs": 1.9738000000002103
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer invalidates on uncertain clock Infinity",
+          "status": "passed",
+          "durationMs": 2.076599999999871
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer invalidates on uncertain clock -1",
+          "status": "passed",
+          "durationMs": 2.0108999999999924
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer invalidates on uncertain clock 9007199254740992",
+          "status": "passed",
+          "durationMs": 2.307499999999891
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer fails closed on backward/throwing clocks and ignores wall-clock jumps",
+          "status": "passed",
+          "durationMs": 4.671499999999924
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer rejects content-bearing objects and strings without reading or coercing them",
+          "status": "passed",
+          "durationMs": 6.320299999999861
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer rejects invalid configuration 0 without changing retention",
+          "status": "passed",
+          "durationMs": 2.4809000000000196
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer rejects invalid configuration 16 without changing retention",
+          "status": "passed",
+          "durationMs": 2.0466999999998734
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer rejects invalid configuration 1.5 without changing retention",
+          "status": "passed",
+          "durationMs": 2.2725000000000364
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer rejects invalid configuration NaN without changing retention",
+          "status": "passed",
+          "durationMs": 1.832400000000007
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer rejects invalid configuration Infinity without changing retention",
+          "status": "passed",
+          "durationMs": 2.8566000000000713
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer keeps the draft schema, count/time ceilings and phase/code allowlist coordinated",
+          "status": "passed",
+          "durationMs": 5.451300000000174
+        }
+      ]
+    },
+    {
+      "file": "packages/app/renderer/test/diagnostics-preview-owner.test.ts",
+      "status": "passed",
+      "cases": [
+        {
+          "name": "refuses 0-byte owners before allocating",
+          "status": "passed",
+          "durationMs": 2.927099999999996
+        },
+        {
+          "name": "refuses -1-byte owners before allocating",
+          "status": "passed",
+          "durationMs": 0.2878000000000043
+        },
+        {
+          "name": "refuses 1048577-byte owners before allocating",
+          "status": "passed",
+          "durationMs": 0.2551000000000272
+        },
+        {
+          "name": "refuses NaN-byte owners before allocating",
+          "status": "passed",
+          "durationMs": 0.3486000000000331
+        },
+        {
+          "name": "refuses 1.5-byte owners before allocating",
+          "status": "passed",
+          "durationMs": 0.397199999999998
+        },
+        {
+          "name": "keeps exact UTF-8 and newline, erases each transport copy and disposes retained storage",
+          "status": "passed",
+          "durationMs": 5.423600000000022
+        },
+        {
+          "name": "erases plaintext before retiring its backing store and retains zeroed fallback storage",
+          "status": "passed",
+          "durationMs": 1.5620999999999867
+        },
+        {
+          "name": "erases owner and transport on malformed offset replies",
+          "status": "passed",
+          "durationMs": 2.0312999999999874
+        },
+        {
+          "name": "erases owner and transport on malformed handle replies",
+          "status": "passed",
+          "durationMs": 0.9562999999999988
+        },
+        {
+          "name": "erases owner and transport on malformed length replies",
+          "status": "passed",
+          "durationMs": 0.9082000000000221
+        },
+        {
+          "name": "erases owner and transport on malformed utf8 replies",
+          "status": "passed",
+          "durationMs": 0.6454000000000519
+        },
+        {
+          "name": "disposes a late copy after cancellation without restoring text or reading a successor block",
+          "status": "passed",
+          "durationMs": 0.7608000000000175
+        }
+      ]
+    },
+    {
+      "file": "packages/app/renderer/test/diagnostics.test.tsx",
+      "status": "passed",
+      "cases": [
+        {
+          "name": "reuses exact DOM text nodes while clearing Close, shorter successors and unmount",
+          "status": "passed",
+          "durationMs": 33.10399999999936
+        },
+        {
+          "name": "persistent diagnostics choice remains available while legacy configuration is pending and preserves its preview when that read completes",
+          "status": "passed",
+          "durationMs": 108.27379999999994
+        },
+        {
+          "name": "persistent diagnostics choice remains available while studio configuration is pending and preserves its preview when that read completes",
+          "status": "passed",
+          "durationMs": 73.60750000000007
+        },
+        {
+          "name": "persistent diagnostics choice starts off with five minutes and no automatic consent, preview, picker or save",
+          "status": "passed",
+          "durationMs": 19.66529999999966
+        },
+        {
+          "name": "persistent diagnostics choice does not migrate a remembered setting into production capture or automatically preview recovery",
+          "status": "passed",
+          "durationMs": 9.1212000000005
+        },
+        {
+          "name": "persistent diagnostics choice uses the shared menu to explicitly set the approved lookback range",
+          "status": "passed",
+          "durationMs": 51.75870000000032
+        },
+        {
+          "name": "persistent diagnostics choice leaves ordinary UI usable when the bridge is absent or rejects without rendering a raw exception",
+          "status": "passed",
+          "durationMs": 8.720099999999547
+        },
+        {
+          "name": "persistent diagnostics choice does not let an old initial status read replace a newer main push",
+          "status": "passed",
+          "durationMs": 5.659500000000662
+        },
+        {
+          "name": "exact preview and separate local Save binds a descriptor revision so an older pushed snapshot cannot dispose its pending byte owner",
+          "status": "passed",
+          "durationMs": 118.69849999999951
+        },
+        {
+          "name": "exact preview and separate local Save keeps all 1 MiB of exact text and the final newline across offscreen layout blocks",
+          "status": "passed",
+          "durationMs": 38.85919999999987
+        },
+        {
+          "name": "exact preview and separate local Save rejects late plaintext when age uncertainty arrives during pending preparation",
+          "status": "passed",
+          "durationMs": 29.277100000000246
+        },
+        {
+          "name": "exact preview and separate local Save renders every exact byte including omissions and newline, then requires picker and separate Save",
+          "status": "passed",
+          "durationMs": 46.603000000000065
+        },
+        {
+          "name": "exact preview and separate local Save removes old destination authority while a new picker is pending and ignores its late reply after close",
+          "status": "passed",
+          "durationMs": 49.425600000000486
+        },
+        {
+          "name": "exact preview and separate local Save acknowledges disposal only after the text is gone and restores no content on a late preview reply",
+          "status": "passed",
+          "durationMs": 52.9395999999997
+        },
+        {
+          "name": "exact preview and separate local Save clears a revoked handle on target/source/key-loss status push, and closes the handle on unmount",
+          "status": "passed",
+          "durationMs": 63.02840000000015
+        },
+        {
+          "name": "exact preview and separate local Save expires the exact preview without renewing it for new checkpoints",
+          "status": "passed",
+          "durationMs": 37.85949999999957
+        },
+        {
+          "name": "exact preview and separate local Save reports a Save admitted before opt-out truthfully when its completion arrives late",
+          "status": "passed",
+          "durationMs": 33.56779999999981
+        },
+        {
+          "name": "exact preview and separate local Save does not carry a prior Save success into a new pending or unknown Save",
+          "status": "passed",
+          "durationMs": 124.90369999999984
+        },
+        {
+          "name": "exact preview and separate local Save allows a fresh explicit Save after known refusal and preview close without changing consent",
+          "status": "passed",
+          "durationMs": 151.48569999999927
+        },
+        {
+          "name": "exact preview and separate local Save allows a fresh explicit Save after known refusal and preview expiry without changing consent",
+          "status": "passed",
+          "durationMs": 1109.4215999999997
+        },
+        {
+          "name": "exact preview and separate local Save disposes the view but does not claim Off when revocation is unconfirmed by transport",
+          "status": "passed",
+          "durationMs": 43.05479999999989
+        },
+        {
+          "name": "exact preview and separate local Save disposes the view but does not claim Off when revocation is unconfirmed by stale_preview",
+          "status": "passed",
+          "durationMs": 46.854599999998754
+        },
+        {
+          "name": "exact preview and separate local Save uses authoritative disabled status for failed durable opt-out and clears its feedback on explicit enable",
+          "status": "passed",
+          "durationMs": 70.99919999999838
+        },
+        {
+          "name": "exact preview and separate local Save clears session-only off failure feedback when main reports diagnostics On again",
+          "status": "passed",
+          "durationMs": 23.673099999999977
+        },
+        {
+          "name": "unknown Save, cleanup and explicit acknowledgement blocks unknown work and offers a disabled acknowledgement with a visible cleanup retry",
+          "status": "passed",
+          "durationMs": 20.064900000001217
+        },
+        {
+          "name": "unknown Save, cleanup and explicit acknowledgement acknowledges only, then requires a fresh explicit preview, picker and Save",
+          "status": "passed",
+          "durationMs": 46.49879999999939
+        },
+        {
+          "name": "unknown Save, cleanup and explicit acknowledgement keeps cleanup and unresolved outcome visible while off without offering capture authority",
+          "status": "passed",
+          "durationMs": 25.26419999999962
+        }
+      ]
+    }
+  ]
+}
