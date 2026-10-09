@@ -1,0 +1,219 @@
+{
+  "schema": 1,
+  "sourceCommit": "5fac1a05a56152861ca08168da0b052f56e8cbae",
+  "productionSource": "9ac669fd8b401444576fdbf39057d118d1c0cc90",
+  "attempts": "One successful Off member followed by one On member, sequential; no repeats or concurrent build/test. This fixture injects no diagnostic failure or stall.",
+  "capacityBeforeRun": {
+    "logicalProcessors": 12,
+    "cpuLoadPercent": 0,
+    "totalVisibleMemoryKiB": 33463424,
+    "freePhysicalMemoryKiB": 14053552,
+    "diskFreeBytes": 74915868672,
+    "concurrentHeavyJobs": "none observed; existing unrelated processes untouched"
+  },
+  "command": "node evidence/paired-save-fixture/run-paired.mjs",
+  "ownedExecutionCommand": "node packages/cli/dist/main.js demo --dir <disposable fixture execution> --keep --quiet",
+  "executionBounds": {
+    "cliMs": 50000,
+    "receiptPollMs": 54000,
+    "childDonePollMs": 45000,
+    "ownedExitMs": 5000
+  },
+  "fixture": "Existing successful execution supervisor reused with current Full save-only production renderer/preload/controller fixture. Only start/done synchronization, metadata and post-exit output verification adapted. Native x64 DPAPI/storage/clock identities unchanged. Isolated synthetic profile and scripted provider; no real prompts, credentials, network endpoint, deployment or production capture.",
+  "memory": [
+    {
+      "mode": "off",
+      "mainIncrementBytes": 4172715,
+      "rendererIncrementBytes": 0,
+      "combinedManagedIncrementBytes": 4172715,
+      "controlledBinaryPeakBytes": 0,
+      "controlledAfterOffBytes": 0,
+      "privateCommitIncrementBytes": 5402624
+    },
+    {
+      "mode": "on",
+      "mainIncrementBytes": 23129999,
+      "rendererIncrementBytes": 2454248,
+      "combinedManagedIncrementBytes": 25584247,
+      "controlledBinaryPeakBytes": 5406720,
+      "controlledAfterOffBytes": 0,
+      "privateCommitIncrementBytes": 71864320
+    }
+  ],
+  "unchangedGates": {
+    "managedBytes": 33554432,
+    "controlledBinaryBytes": 8388608,
+    "eventLoopMs": 4
+  },
+  "memoryLimitations": "Sum of independently sampled main heapUsed+external and renderer heap/backing/embedder increments; arrayBuffers subset not added twice. No continuous-peak or whole-machine guarantee. OS private commit/RSS separate. CLI process is not included in diagnostic main/renderer accounting. Diagnostic work overlaps the CLI process lifetime, then waits after Off; no proof every export overlaps a specific executing CLI step.",
+  "currentPair": {
+    "executionEqual": true,
+    "workEqual": true,
+    "artifactCount": 29,
+    "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+    "offElapsedMs": 41942.013600000006,
+    "onElapsedMs": 41638.3387,
+    "normalization": "Generated identity/provenance/timestamp metadata excluded; generated UUID/time text normalized. Kind/name, semantic front matter, prose and multiplicity retained. This compares semantic outputs, not raw IDs or complete execution graph."
+  },
+  "productPhaseGapsMs": {
+    "initialize-promotion": 2.951000000000022,
+    "capture": 1.3665000000000873,
+    "checkpoint": 1.761700000000019,
+    "previous-export": 3.778099999999995,
+    "current-export": 3.1721999999999753,
+    "export-repeat": 3.0560000000004948,
+    "previous-save": 2.7438999999999396,
+    "current-save": 2.632300000000214,
+    "opt-out": 1.608299999999872,
+    "paired-wait": 0.8723000000009051
+  },
+  "recoveredGapClippedUnions": {
+    "heartbeatGapMs": 3.778099999999995,
+    "callbackWallMs": 3.240200000000641,
+    "observerHookWallMs": 0.27569999999968786,
+    "residualWallMs": 0.26219999999966603,
+    "sampleWallMs": 0.2546000000004369,
+    "longestCallbackMs": 2.9220000000000255,
+    "gcOverlapMs": 0
+  },
+  "retainedOver4msSamples": [
+    {
+      "mode": "off",
+      "kind": "same_phase_heartbeat",
+      "phase": "setup",
+      "ms": 9.078499999999963,
+      "classification": "setup_unattributed"
+    },
+    {
+      "mode": "off",
+      "kind": "callback_wall",
+      "phase": "setup",
+      "ms": 8.886300000000006,
+      "classification": "setup_unattributed"
+    },
+    {
+      "mode": "on",
+      "kind": "transition_heartbeat",
+      "phase": "checkpoint->previous-export",
+      "ms": 42.13830000000007,
+      "classification": "profiler_start_interval"
+    },
+    {
+      "mode": "on",
+      "kind": "transition_heartbeat",
+      "phase": "previous-export->attribution-stop",
+      "ms": 9.261099999999942,
+      "classification": "profiler_stop_interval"
+    },
+    {
+      "mode": "on",
+      "kind": "transition_heartbeat",
+      "phase": "previous-save->previous-cancel-export",
+      "ms": 5.474500000000262,
+      "classification": "saved_output_oracle_interval"
+    },
+    {
+      "mode": "on",
+      "kind": "transition_heartbeat",
+      "phase": "current-save->current-cancel-export",
+      "ms": 7.419199999999819,
+      "classification": "saved_output_oracle_interval"
+    },
+    {
+      "mode": "on",
+      "kind": "callback_wall",
+      "phase": "checkpoint",
+      "ms": 38.70790000000011,
+      "classification": "profiler_start_under_checkpoint_label"
+    },
+    {
+      "mode": "on",
+      "kind": "callback_wall",
+      "phase": "previous-export->attribution-stop",
+      "ms": 7.695100000000139,
+      "classification": "profiler_stop_interval"
+    },
+    {
+      "mode": "on",
+      "kind": "callback_wall",
+      "phase": "previous-save->previous-cancel-export",
+      "ms": 5.2146000000000186,
+      "classification": "saved_output_oracle_interval"
+    },
+    {
+      "mode": "on",
+      "kind": "callback_wall",
+      "phase": "current-save->current-cancel-export",
+      "ms": 6.94360000000006,
+      "classification": "saved_output_oracle_interval"
+    },
+    {
+      "mode": "on",
+      "kind": "process_trace_duration",
+      "process": "renderer",
+      "name": "Layout",
+      "count": 12,
+      "maxMs": 6.986,
+      "over4ms": 1,
+      "classification": "unattributed_renderer_layout"
+    }
+  ],
+  "timingLimitations": "Profiler start occurs before changing checkpoint phase to previous-export; 38.7079ms checkpoint-labelled callback includes profiler work. Saved-output interval includes synchronous fixture read/byte equality/digest/JSON checks. Entire failed intervals remain failed observations; known fixture work does not explain every millisecond. Setup and renderer Layout remain unattributed; residual is not assigned to OS scheduling. Trace summary lacks timestamps/thread IDs, so Layout cannot be linked to a phase and process GC duration cannot be treated as main-thread blocking. Native I/O maxima are async elapsed time, not callback blocking. Callback spans are wall time, not thread CPU.",
+  "exactOutputs": [
+    {
+      "source": "previous",
+      "bytes": 950474,
+      "sha256": "3a96ae7b0cf2fd282aa51b6db4ccd213791aef5435c60a9ef5baab5564ae06ff",
+      "events": 8192,
+      "omissions": 0,
+      "finalLF": true,
+      "exactFrozenDigest": true
+    },
+    {
+      "source": "current",
+      "bytes": 950299,
+      "sha256": "4f9febe75c8e8b60f2095241f2993657be94389f53cf5e03a0aedbed912c8681",
+      "events": 8192,
+      "omissions": 0,
+      "finalLF": true,
+      "exactFrozenDigest": true
+    }
+  ],
+  "acceptance": {
+    "proven": [
+      "single current successful semantic Off/On pair",
+      "same-phase export 4ms samples",
+      "bounded managed and controlled binary samples",
+      "two exact saved outputs, plus live frozen-byte equality",
+      "30 prepare/cancel repetitions",
+      "all owned exits/state removal"
+    ],
+    "failed": [
+      "whole observed 4ms envelope: setup, profiler, saved-output oracle and unattributed renderer Layout; every over-gate sample retained"
+    ],
+    "reused": [
+      "61 focused passes/1 platform skip and changed-source types/build/lint at production source 9ac669f",
+      "prior 114 focused passes/5 skips, renderer types/CSS and UI axe evidence for unchanged paths",
+      "controller-model stall/refusal/pending-write/lease tests; not native paired C15"
+    ],
+    "reportedIndependentReview": {
+      "sourceCommit": "5fac1a05a56152861ca08168da0b052f56e8cbae",
+      "result": "User reported no blocking issues in save-only delta; not a new review executed by this acceptance run"
+    },
+    "unrun": [
+      "C15 Windows failure/stall paired execution oracle absent",
+      "broader renderer/setup tail attribution",
+      "remaining native expiry/network/failure/crash schedules",
+      "manual Narrator/keyboard/disclosure",
+      "second-user isolation",
+      "ARM64/physical hardware",
+      "exact-source Linux crash schedules",
+      "Mac held",
+      "full suite/coverage/Actions/Vite build"
+    ],
+    "productionEnabled": false,
+    "macHeld": true,
+    "overallActivation": "held"
+  },
+  "c15Gap": "No Windows oracle combines concurrent real execution semantics with every failing/stalled diagnostics operation and independently verified settlement/cleanup/accounting. Existing Windows parked-export cleanup and standalone/native probes do not supply it; recovery-authority/native-crash suites are Linux-only. Gap reported before fixture adaptation; no substantial new fault-injection harness or failure/stall acceptance claim."
+}

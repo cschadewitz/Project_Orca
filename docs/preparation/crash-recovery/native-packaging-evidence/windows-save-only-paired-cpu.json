@@ -1,0 +1,1527 @@
+{
+  "cpuStartBracket": {
+    "beforeMs": 1409.87,
+    "afterMs": 1448.6695
+  },
+  "cpuEndBracket": {
+    "beforeMs": 1529.2409,
+    "afterMs": 1536.9941
+  },
+  "profile": {
+    "nodes": [
+      {
+        "id": 1,
+        "callFrame": {
+          "functionName": "(root)",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 0,
+        "children": [
+          2,
+          7,
+          10,
+          11,
+          16,
+          24,
+          25,
+          27,
+          38,
+          51,
+          58,
+          74
+        ]
+      },
+      {
+        "id": 2,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 27,
+          "columnNumber": 21
+        },
+        "hitCount": 0,
+        "children": [
+          3,
+          6
+        ]
+      },
+      {
+        "id": 3,
+        "callFrame": {
+          "functionName": "cpuPost",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 127,
+          "columnNumber": 16
+        },
+        "hitCount": 0,
+        "children": [
+          4
+        ]
+      },
+      {
+        "id": 4,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 127,
+          "columnNumber": 48
+        },
+        "hitCount": 0,
+        "children": [
+          5
+        ]
+      },
+      {
+        "id": 5,
+        "callFrame": {
+          "functionName": "post",
+          "scriptId": "193",
+          "url": "node:inspector",
+          "lineNumber": 114,
+          "columnNumber": 6
+        },
+        "hitCount": 0,
+        "children": [
+          82
+        ]
+      },
+      {
+        "id": 82,
+        "callFrame": {
+          "functionName": "dispatch",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 139,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "callFrame": {
+          "functionName": "prepareThroughUI",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 104,
+          "columnNumber": 25
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 108,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "callFrame": {
+          "functionName": "promiseAfterHook",
+          "scriptId": "11",
+          "url": "node:internal/async_hooks",
+          "lineNumber": 353,
+          "columnNumber": 25
+        },
+        "hitCount": 0,
+        "children": [
+          8
+        ]
+      },
+      {
+        "id": 8,
+        "callFrame": {
+          "functionName": "emitHook",
+          "scriptId": "11",
+          "url": "node:internal/async_hooks",
+          "lineNumber": 229,
+          "columnNumber": 17
+        },
+        "hitCount": 0,
+        "children": [
+          9
+        ]
+      },
+      {
+        "id": 9,
+        "callFrame": {
+          "functionName": "after",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 81,
+          "columnNumber": 191
+        },
+        "hitCount": 1,
+        "children": [
+          48
+        ],
+        "positionTicks": [
+          {
+            "line": 82,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 48,
+        "callFrame": {
+          "functionName": "sample",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 79,
+          "columnNumber": 35
+        },
+        "hitCount": 1,
+        "children": [
+          49,
+          53
+        ],
+        "positionTicks": [
+          {
+            "line": 80,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 49,
+        "callFrame": {
+          "functionName": "memoryUsage",
+          "scriptId": "31",
+          "url": "node:internal/process/per_thread",
+          "lineNumber": 215,
+          "columnNumber": 22
+        },
+        "hitCount": 0,
+        "children": [
+          50
+        ]
+      },
+      {
+        "id": 50,
+        "callFrame": {
+          "functionName": "memoryUsage",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 217,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 53,
+        "callFrame": {
+          "functionName": "status",
+          "scriptId": "184",
+          "url": "packages/app/dist/main/diagnostics/recovery-controller.js",
+          "lineNumber": 133,
+          "columnNumber": 10
+        },
+        "hitCount": 1,
+        "children": [
+          54
+        ],
+        "positionTicks": [
+          {
+            "line": 141,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 54,
+        "callFrame": {
+          "functionName": "now",
+          "scriptId": "184",
+          "url": "packages/app/dist/main/diagnostics/recovery-controller.js",
+          "lineNumber": 864,
+          "columnNumber": 7
+        },
+        "hitCount": 0,
+        "children": [
+          55
+        ]
+      },
+      {
+        "id": 55,
+        "callFrame": {
+          "functionName": "read",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 46,
+          "columnNumber": 19
+        },
+        "hitCount": 0,
+        "children": [
+          56
+        ]
+      },
+      {
+        "id": 56,
+        "callFrame": {
+          "functionName": "read",
+          "scriptId": "179",
+          "url": "packages/app/dist/main/diagnostics/native-clock.js",
+          "lineNumber": 35,
+          "columnNumber": 12
+        },
+        "hitCount": 2,
+        "children": [
+          57
+        ],
+        "positionTicks": [
+          {
+            "line": 40,
+            "ticks": 1
+          },
+          {
+            "line": 45,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 57,
+        "callFrame": {
+          "functionName": "read",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 40,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "callFrame": {
+          "functionName": "emitHook",
+          "scriptId": "11",
+          "url": "node:internal/async_hooks",
+          "lineNumber": 229,
+          "columnNumber": 17
+        },
+        "hitCount": 1,
+        "children": [
+          42
+        ],
+        "positionTicks": [
+          {
+            "line": 230,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 42,
+        "callFrame": {
+          "functionName": "after",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 81,
+          "columnNumber": 191
+        },
+        "hitCount": 0,
+        "children": [
+          43
+        ]
+      },
+      {
+        "id": 43,
+        "callFrame": {
+          "functionName": "sample",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 79,
+          "columnNumber": 35
+        },
+        "hitCount": 1,
+        "children": [
+          44
+        ],
+        "positionTicks": [
+          {
+            "line": 80,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 44,
+        "callFrame": {
+          "functionName": "status",
+          "scriptId": "184",
+          "url": "packages/app/dist/main/diagnostics/recovery-controller.js",
+          "lineNumber": 133,
+          "columnNumber": 10
+        },
+        "hitCount": 0,
+        "children": [
+          45
+        ]
+      },
+      {
+        "id": 45,
+        "callFrame": {
+          "functionName": "now",
+          "scriptId": "184",
+          "url": "packages/app/dist/main/diagnostics/recovery-controller.js",
+          "lineNumber": 864,
+          "columnNumber": 7
+        },
+        "hitCount": 0,
+        "children": [
+          46
+        ]
+      },
+      {
+        "id": 46,
+        "callFrame": {
+          "functionName": "read",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 46,
+          "columnNumber": 19
+        },
+        "hitCount": 0,
+        "children": [
+          47
+        ]
+      },
+      {
+        "id": 47,
+        "callFrame": {
+          "functionName": "read",
+          "scriptId": "179",
+          "url": "packages/app/dist/main/diagnostics/native-clock.js",
+          "lineNumber": 35,
+          "columnNumber": 12
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 40,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "callFrame": {
+          "functionName": "callbackTrampoline",
+          "scriptId": "11",
+          "url": "node:internal/async_hooks",
+          "lineNumber": 118,
+          "columnNumber": 27
+        },
+        "hitCount": 0,
+        "children": [
+          12
+        ]
+      },
+      {
+        "id": 12,
+        "callFrame": {
+          "functionName": "processImmediate",
+          "scriptId": "10",
+          "url": "node:internal/timers",
+          "lineNumber": 524,
+          "columnNumber": 27
+        },
+        "hitCount": 1,
+        "children": [
+          13,
+          23,
+          65,
+          72
+        ],
+        "positionTicks": [
+          {
+            "line": 539,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "callFrame": {
+          "functionName": "emitAfterScript",
+          "scriptId": "11",
+          "url": "node:internal/async_hooks",
+          "lineNumber": 525,
+          "columnNumber": 24
+        },
+        "hitCount": 0,
+        "children": [
+          14
+        ]
+      },
+      {
+        "id": 14,
+        "callFrame": {
+          "functionName": "emitHook",
+          "scriptId": "11",
+          "url": "node:internal/async_hooks",
+          "lineNumber": 229,
+          "columnNumber": 17
+        },
+        "hitCount": 1,
+        "children": [
+          15
+        ],
+        "positionTicks": [
+          {
+            "line": 244,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "callFrame": {
+          "functionName": "after",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 81,
+          "columnNumber": 191
+        },
+        "hitCount": 0,
+        "children": [
+          22,
+          31
+        ]
+      },
+      {
+        "id": 22,
+        "callFrame": {
+          "functionName": "now",
+          "scriptId": "167",
+          "url": "node:internal/perf/performance",
+          "lineNumber": 136,
+          "columnNumber": 5
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 137,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 31,
+        "callFrame": {
+          "functionName": "sample",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 79,
+          "columnNumber": 35
+        },
+        "hitCount": 0,
+        "children": [
+          32,
+          34
+        ]
+      },
+      {
+        "id": 32,
+        "callFrame": {
+          "functionName": "memoryUsage",
+          "scriptId": "31",
+          "url": "node:internal/process/per_thread",
+          "lineNumber": 215,
+          "columnNumber": 22
+        },
+        "hitCount": 0,
+        "children": [
+          33
+        ]
+      },
+      {
+        "id": 33,
+        "callFrame": {
+          "functionName": "memoryUsage",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 2,
+        "positionTicks": [
+          {
+            "line": 217,
+            "ticks": 2
+          }
+        ]
+      },
+      {
+        "id": 34,
+        "callFrame": {
+          "functionName": "status",
+          "scriptId": "184",
+          "url": "packages/app/dist/main/diagnostics/recovery-controller.js",
+          "lineNumber": 133,
+          "columnNumber": 10
+        },
+        "hitCount": 0,
+        "children": [
+          35
+        ]
+      },
+      {
+        "id": 35,
+        "callFrame": {
+          "functionName": "now",
+          "scriptId": "184",
+          "url": "packages/app/dist/main/diagnostics/recovery-controller.js",
+          "lineNumber": 864,
+          "columnNumber": 7
+        },
+        "hitCount": 0,
+        "children": [
+          36
+        ]
+      },
+      {
+        "id": 36,
+        "callFrame": {
+          "functionName": "read",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 46,
+          "columnNumber": 19
+        },
+        "hitCount": 0,
+        "children": [
+          37
+        ]
+      },
+      {
+        "id": 37,
+        "callFrame": {
+          "functionName": "read",
+          "scriptId": "179",
+          "url": "packages/app/dist/main/diagnostics/native-clock.js",
+          "lineNumber": 35,
+          "columnNumber": 12
+        },
+        "hitCount": 2,
+        "children": [
+          52,
+          69
+        ],
+        "positionTicks": [
+          {
+            "line": 40,
+            "ticks": 2
+          }
+        ]
+      },
+      {
+        "id": 52,
+        "callFrame": {
+          "functionName": "read",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 8,
+        "positionTicks": [
+          {
+            "line": 40,
+            "ticks": 8
+          }
+        ]
+      },
+      {
+        "id": 69,
+        "callFrame": {
+          "functionName": "data",
+          "scriptId": "179",
+          "url": "packages/app/dist/main/diagnostics/native-clock.js",
+          "lineNumber": 64,
+          "columnNumber": 13
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 68,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 23,
+        "callFrame": {
+          "functionName": "heartbeat",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 83,
+          "columnNumber": 18
+        },
+        "hitCount": 3,
+        "children": [
+          39,
+          70
+        ],
+        "positionTicks": [
+          {
+            "line": 88,
+            "ticks": 2
+          },
+          {
+            "line": 84,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 39,
+        "callFrame": {
+          "functionName": "now",
+          "scriptId": "167",
+          "url": "node:internal/perf/performance",
+          "lineNumber": 136,
+          "columnNumber": 5
+        },
+        "hitCount": 0,
+        "children": [
+          40
+        ]
+      },
+      {
+        "id": 40,
+        "callFrame": {
+          "functionName": "wrappedFn",
+          "scriptId": "7",
+          "url": "node:internal/errors",
+          "lineNumber": 537,
+          "columnNumber": 20
+        },
+        "hitCount": 0,
+        "children": [
+          41
+        ]
+      },
+      {
+        "id": 41,
+        "callFrame": {
+          "functionName": "now",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 540,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 70,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "129",
+          "url": "node:electron/js2c/browser_init",
+          "lineNumber": 0,
+          "columnNumber": 141426
+        },
+        "hitCount": 0,
+        "children": [
+          71
+        ]
+      },
+      {
+        "id": 71,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 1,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 65,
+        "callFrame": {
+          "functionName": "advance",
+          "scriptId": "189",
+          "url": "packages/app/dist/main/diagnostics/report-work.js",
+          "lineNumber": 12,
+          "columnNumber": 24
+        },
+        "hitCount": 0,
+        "children": [
+          66
+        ]
+      },
+      {
+        "id": 66,
+        "callFrame": {
+          "functionName": "validationTextWork",
+          "scriptId": "190",
+          "url": "packages/app/dist/main/diagnostics/report-validation.js",
+          "lineNumber": 30,
+          "columnNumber": 28
+        },
+        "hitCount": 0,
+        "children": [
+          67
+        ]
+      },
+      {
+        "id": 67,
+        "callFrame": {
+          "functionName": "validationCanonicalTextWork",
+          "scriptId": "190",
+          "url": "packages/app/dist/main/diagnostics/report-validation.js",
+          "lineNumber": 36,
+          "columnNumber": 37
+        },
+        "hitCount": 4,
+        "children": [
+          68
+        ],
+        "positionTicks": [
+          {
+            "line": 122,
+            "ticks": 1
+          },
+          {
+            "line": 92,
+            "ticks": 1
+          },
+          {
+            "line": 85,
+            "ticks": 1
+          },
+          {
+            "line": 47,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 68,
+        "callFrame": {
+          "functionName": "diagnosticEventOffset",
+          "scriptId": "188",
+          "url": "packages/app/dist/main/diagnostics/snapshot.js",
+          "lineNumber": 71,
+          "columnNumber": 37
+        },
+        "hitCount": 21,
+        "positionTicks": [
+          {
+            "line": 85,
+            "ticks": 1
+          },
+          {
+            "line": 98,
+            "ticks": 2
+          },
+          {
+            "line": 75,
+            "ticks": 15
+          },
+          {
+            "line": 74,
+            "ticks": 3
+          }
+        ]
+      },
+      {
+        "id": 72,
+        "callFrame": {
+          "functionName": "emitDestroyScript",
+          "scriptId": "11",
+          "url": "node:internal/async_hooks",
+          "lineNumber": 533,
+          "columnNumber": 26
+        },
+        "hitCount": 0,
+        "children": [
+          73
+        ]
+      },
+      {
+        "id": 73,
+        "callFrame": {
+          "functionName": "queueDestroyAsyncId",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 2,
+        "positionTicks": [
+          {
+            "line": 538,
+            "ticks": 2
+          }
+        ]
+      },
+      {
+        "id": 16,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "129",
+          "url": "node:electron/js2c/browser_init",
+          "lineNumber": 0,
+          "columnNumber": 96155
+        },
+        "hitCount": 0,
+        "children": [
+          17
+        ]
+      },
+      {
+        "id": 17,
+        "callFrame": {
+          "functionName": "invokeInWebContents",
+          "scriptId": "129",
+          "url": "node:electron/js2c/browser_init",
+          "lineNumber": 0,
+          "columnNumber": 120841
+        },
+        "hitCount": 0,
+        "children": [
+          18
+        ]
+      },
+      {
+        "id": 18,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "129",
+          "url": "node:electron/js2c/browser_init",
+          "lineNumber": 0,
+          "columnNumber": 120865
+        },
+        "hitCount": 0,
+        "children": [
+          19
+        ]
+      },
+      {
+        "id": 19,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "129",
+          "url": "node:electron/js2c/browser_init",
+          "lineNumber": 0,
+          "columnNumber": 93838
+        },
+        "hitCount": 0,
+        "children": [
+          20
+        ]
+      },
+      {
+        "id": 20,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "129",
+          "url": "node:electron/js2c/browser_init",
+          "lineNumber": 0,
+          "columnNumber": 108268
+        },
+        "hitCount": 0,
+        "children": [
+          21
+        ]
+      },
+      {
+        "id": 21,
+        "callFrame": {
+          "functionName": "_send",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 1,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 24,
+        "callFrame": {
+          "functionName": "(program)",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 7
+      },
+      {
+        "id": 25,
+        "callFrame": {
+          "functionName": "prepareExport",
+          "scriptId": "184",
+          "url": "packages/app/dist/main/diagnostics/recovery-controller.js",
+          "lineNumber": 285,
+          "columnNumber": 23
+        },
+        "hitCount": 0,
+        "children": [
+          26
+        ]
+      },
+      {
+        "id": 26,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "184",
+          "url": "packages/app/dist/main/diagnostics/recovery-controller.js",
+          "lineNumber": 298,
+          "columnNumber": 22
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 312,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 27,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "174",
+          "url": "packages/app/dist/main/diagnostics/native-storage.js",
+          "lineNumber": 142,
+          "columnNumber": 37
+        },
+        "hitCount": 0,
+        "children": [
+          28
+        ]
+      },
+      {
+        "id": 28,
+        "callFrame": {
+          "functionName": "call",
+          "scriptId": "174",
+          "url": "packages/app/dist/main/diagnostics/native-storage.js",
+          "lineNumber": 45,
+          "columnNumber": 17
+        },
+        "hitCount": 0,
+        "children": [
+          29
+        ]
+      },
+      {
+        "id": 29,
+        "callFrame": {
+          "functionName": "call",
+          "scriptId": "154",
+          "url": "fixture/paired-child.cjs",
+          "lineNumber": 47,
+          "columnNumber": 64
+        },
+        "hitCount": 0,
+        "children": [
+          30
+        ]
+      },
+      {
+        "id": 30,
+        "callFrame": {
+          "functionName": "read",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 48,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 38,
+        "callFrame": {
+          "functionName": "(idle)",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 10
+      },
+      {
+        "id": 51,
+        "callFrame": {
+          "functionName": "(garbage collector)",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 3
+      },
+      {
+        "id": 58,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "180",
+          "url": "packages/app/dist/main/diagnostics/recovery-disk.js",
+          "lineNumber": 667,
+          "columnNumber": 31
+        },
+        "hitCount": 0,
+        "children": [
+          59,
+          60
+        ]
+      },
+      {
+        "id": 59,
+        "callFrame": {
+          "functionName": "createDecipheriv",
+          "scriptId": "136",
+          "url": "node:crypto",
+          "lineNumber": 152,
+          "columnNumber": 25
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 154,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 60,
+        "callFrame": {
+          "functionName": "cryptoText",
+          "scriptId": "180",
+          "url": "packages/app/dist/main/diagnostics/recovery-disk.js",
+          "lineNumber": 96,
+          "columnNumber": 14
+        },
+        "hitCount": 0,
+        "children": [
+          61
+        ]
+      },
+      {
+        "id": 61,
+        "callFrame": {
+          "functionName": "cryptoText",
+          "scriptId": "182",
+          "url": "packages/app/dist/main/diagnostics/payload-scope.js",
+          "lineNumber": 73,
+          "columnNumber": 14
+        },
+        "hitCount": 0,
+        "children": [
+          62
+        ]
+      },
+      {
+        "id": 62,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "180",
+          "url": "packages/app/dist/main/diagnostics/recovery-disk.js",
+          "lineNumber": 696,
+          "columnNumber": 74
+        },
+        "hitCount": 0,
+        "children": [
+          63
+        ]
+      },
+      {
+        "id": 63,
+        "callFrame": {
+          "functionName": "update",
+          "scriptId": "147",
+          "url": "node:internal/crypto/cipher",
+          "lineNumber": 154,
+          "columnNumber": 15
+        },
+        "hitCount": 0,
+        "children": [
+          64
+        ]
+      },
+      {
+        "id": 64,
+        "callFrame": {
+          "functionName": "update",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 163,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 74,
+        "callFrame": {
+          "functionName": "",
+          "scriptId": "184",
+          "url": "packages/app/dist/main/diagnostics/recovery-controller.js",
+          "lineNumber": 298,
+          "columnNumber": 22
+        },
+        "hitCount": 0,
+        "children": [
+          75,
+          79
+        ]
+      },
+      {
+        "id": 75,
+        "callFrame": {
+          "functionName": "dispose",
+          "scriptId": "180",
+          "url": "packages/app/dist/main/diagnostics/recovery-disk.js",
+          "lineNumber": 711,
+          "columnNumber": 84
+        },
+        "hitCount": 0,
+        "children": [
+          76
+        ]
+      },
+      {
+        "id": 76,
+        "callFrame": {
+          "functionName": "release",
+          "scriptId": "181",
+          "url": "packages/app/dist/main/diagnostics/payload-memory.js",
+          "lineNumber": 67,
+          "columnNumber": 21
+        },
+        "hitCount": 0,
+        "children": [
+          77
+        ]
+      },
+      {
+        "id": 77,
+        "callFrame": {
+          "functionName": "fill",
+          "scriptId": "25",
+          "url": "node:buffer",
+          "lineNumber": 1136,
+          "columnNumber": 37
+        },
+        "hitCount": 0,
+        "children": [
+          78
+        ]
+      },
+      {
+        "id": 78,
+        "callFrame": {
+          "functionName": "_fill",
+          "scriptId": "25",
+          "url": "node:buffer",
+          "lineNumber": 1140,
+          "columnNumber": 14
+        },
+        "hitCount": 1,
+        "positionTicks": [
+          {
+            "line": 1201,
+            "ticks": 1
+          }
+        ]
+      },
+      {
+        "id": 79,
+        "callFrame": {
+          "functionName": "digest",
+          "scriptId": "184",
+          "url": "packages/app/dist/main/diagnostics/recovery-controller.js",
+          "lineNumber": 980,
+          "columnNumber": 15
+        },
+        "hitCount": 0,
+        "children": [
+          80
+        ]
+      },
+      {
+        "id": 80,
+        "callFrame": {
+          "functionName": "update",
+          "scriptId": "150",
+          "url": "node:internal/crypto/hash",
+          "lineNumber": 145,
+          "columnNumber": 39
+        },
+        "hitCount": 0,
+        "children": [
+          81
+        ]
+      },
+      {
+        "id": 81,
+        "callFrame": {
+          "functionName": "update",
+          "scriptId": "0",
+          "url": "",
+          "lineNumber": -1,
+          "columnNumber": -1
+        },
+        "hitCount": 3,
+        "positionTicks": [
+          {
+            "line": 158,
+            "ticks": 3
+          }
+        ]
+      }
+    ],
+    "startTime": 60578117477,
+    "endTime": 60578237697,
+    "samples": [
+      5,
+      6,
+      9,
+      10,
+      15,
+      21,
+      22,
+      23,
+      23,
+      24,
+      26,
+      30,
+      33,
+      37,
+      38,
+      41,
+      47,
+      38,
+      50,
+      51,
+      38,
+      52,
+      52,
+      56,
+      57,
+      43,
+      59,
+      64,
+      52,
+      53,
+      67,
+      68,
+      51,
+      67,
+      68,
+      68,
+      68,
+      52,
+      52,
+      38,
+      24,
+      38,
+      12,
+      67,
+      52,
+      68,
+      52,
+      14,
+      51,
+      38,
+      68,
+      68,
+      68,
+      68,
+      38,
+      68,
+      68,
+      68,
+      69,
+      37,
+      68,
+      24,
+      71,
+      68,
+      68,
+      23,
+      68,
+      68,
+      68,
+      38,
+      68,
+      68,
+      73,
+      68,
+      68,
+      67,
+      67,
+      78,
+      81,
+      81,
+      81,
+      56,
+      52,
+      24,
+      24,
+      38,
+      24,
+      38,
+      73,
+      33,
+      24,
+      23,
+      48,
+      82
+    ],
+    "timeDeltas": [
+      38227,
+      812,
+      587,
+      571,
+      266,
+      330,
+      601,
+      578,
+      108,
+      553,
+      572,
+      571,
+      574,
+      584,
+      567,
+      554,
+      566,
+      579,
+      569,
+      571,
+      580,
+      983,
+      995,
+      1016,
+      984,
+      1005,
+      1002,
+      992,
+      1007,
+      1003,
+      996,
+      1026,
+      966,
+      1004,
+      999,
+      1003,
+      666,
+      374,
+      958,
+      998,
+      1002,
+      1003,
+      1005,
+      996,
+      992,
+      1001,
+      1026,
+      976,
+      1000,
+      993,
+      1030,
+      976,
+      1035,
+      967,
+      1000,
+      996,
+      1003,
+      1000,
+      997,
+      1000,
+      1000,
+      1029,
+      971,
+      1001,
+      998,
+      1000,
+      1009,
+      994,
+      1047,
+      954,
+      997,
+      1000,
+      1001,
+      999,
+      1000,
+      249,
+      753,
+      1008,
+      998,
+      994,
+      997,
+      1011,
+      1000,
+      991,
+      998,
+      1036,
+      966,
+      999,
+      1004,
+      997,
+      999,
+      1005,
+      1004,
+      998
+    ]
+  }
+}

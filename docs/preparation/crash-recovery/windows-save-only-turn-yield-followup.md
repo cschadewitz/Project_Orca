@@ -1,5 +1,10 @@
 # Recovered export turn attribution and bounded verification - 9 October 2026
 
+The later [current successful Off/On pair](windows-save-only-paired-followup.md)
+adds exact-source load evidence and preserves broader timing failures. It records
+the user-reported independent source review and the missing Windows C15 oracle;
+remaining-gate wording below describes this earlier verification's disposition.
+
 **The affected recovered-export 4 ms gate now passes at 3.8011 ms.** The tested
 production source is `9ac669fd8b401444576fdbf39057d118d1c0cc90`, on the same draft
 #596 branch. Later publication changes contain documentation/evidence only.
