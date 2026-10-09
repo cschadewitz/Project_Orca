@@ -157,11 +157,7 @@
     }
   },
   "persistedAfterClose": { "enabled": true, "scopeVersion": 1, "minutes": 5 },
-  "nativeSettingReadAfterClose": {
-    "enabled": true,
-    "scopeVersion": 1,
-    "minutes": 5
-  },
+  "nativeSettingReadAfterClose": { "enabled": true, "scopeVersion": 1, "minutes": 5 },
   "restartStatus": {
     "ok": true,
     "value": {
@@ -193,11 +189,7 @@
     "pendingDiagnosticActions": 0
   },
   "persistedAfterRestart": { "enabled": true, "scopeVersion": 1, "minutes": 5 },
-  "disabledSettingAfterOff": {
-    "enabled": false,
-    "scopeVersion": 1,
-    "minutes": 5
-  },
+  "disabledSettingAfterOff": { "enabled": false, "scopeVersion": 1, "minutes": 5 },
   "defaultOffPrivacyPassed": true,
   "packagedConnectionAndRestartPassed": true,
   "allOwnedExitsConfirmed": true,
