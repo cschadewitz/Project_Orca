@@ -1,0 +1,4 @@
+{"format":1,"sourceCommit":"455ac202f7afa00da17dd91a595988b0250003a9","electron":"44.4.5","mode":"unwrap","refusal":"synthetic_check_refused","phase":"unwrap"}
+{"format":1,"sourceCommit":"455ac202f7afa00da17dd91a595988b0250003a9","electron":"44.4.5","mode":"unwrap","refusal":"synthetic_check_refused","phase":"unwrap"}
+{"format":1,"sourceCommit":"455ac202f7afa00da17dd91a595988b0250003a9","electron":"44.4.5","mode":"unwrap","refusal":"synthetic_check_refused","phase":"unwrap","coldProducer":true,"apiFacts":{"decryptInvoked":true,"decryptResolved":false,"shouldReEncrypt":false,"plaintextIsString":false,"plaintextMatchesSynthetic":false}}
+{"format":1,"sourceCommit":"88fc825daaa969675d4d6d06931bceb00ebbacec","electron":"44.4.5","mode":"unwrap","refusal":"synthetic_check_refused","phase":"unwrap","coldProducer":true,"apiFacts":{"decryptInvoked":true,"decryptResolved":false,"shouldReEncrypt":false,"plaintextIsString":false,"plaintextMatchesSynthetic":false}}
