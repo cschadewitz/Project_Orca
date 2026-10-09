@@ -6,7 +6,11 @@ import { DIAGNOSTIC_CODES, type DiagnosticPhase } from "../src/main/diagnostics/
 import { RecoveryController } from "../src/main/diagnostics/recovery-controller.js";
 import { ControlledPayloadMemory } from "../src/main/diagnostics/payload-memory.js";
 import { RECOVERY_LIMITS, type RecoveryDisk } from "../src/main/diagnostics/recovery-contract.js";
-import { validateDiagnosticReportAsync } from "../src/main/diagnostics/report-validation.js";
+import {
+  validateDiagnosticReportAsync,
+  validateOwnedDiagnosticText,
+} from "../src/main/diagnostics/report-validation.js";
+import { scheduleReportWork } from "../src/main/diagnostics/report-work.js";
 import {
   canonicalJson,
   canonicalDiagnosticReportAsync,
@@ -76,6 +80,30 @@ it("freezes all 8192 events before yielding and remains immutable across collect
   expect(snapshot.byteLength).toBe(Buffer.byteLength(snapshot.json));
 });
 
+it("keeps a full-count checkpoint immutable and owned after the live ring stops", async () => {
+  const payload = new ControlledPayloadMemory();
+  let now = 1000;
+  const ring = new PretriggerBuffer({ payload, now: () => now });
+  ring.start();
+  for (let index = 0; index < 8192; index++) {
+    now++;
+    ring.record("run", "run_failed");
+  }
+  const pending = ring.snapshotOwnedAsync();
+  await setImmediate();
+  ring.stop();
+  const owned = (await pending)!;
+  const report = JSON.parse(owned.bytes.toString()) as DiagnosticReport;
+  expect(report.events).toHaveLength(8192);
+  expect(report.events[0]?.offsetMs).toBe(1);
+  expect(report.events.at(-1)?.offsetMs).toBe(8192);
+  expect(owned.bytes.toString()).toBe(canonicalJson(report));
+  expect(payload.stats().leases).toBe(1);
+  owned.release();
+  expect(owned.bytes.every((byte) => byte === 0)).toBe(true);
+  expect(payload.stats().allocatedBytes).toBe(0);
+});
+
 it("validates immutable decoded bytes even if the source Buffer changes during a yielded turn", async () => {
   const json = canonicalJson(fullReport());
   const input = Buffer.from(json);
@@ -102,6 +130,72 @@ it("retains exact rejection of extra/duplicate fields, framing, invalid UTF-8 an
     Buffer.alloc(1_048_577),
   ];
   for (const bytes of corruptions) await expect(validateDiagnosticReportAsync(bytes)).rejects.toThrow();
+});
+
+it("accepts every closed pair at decimal boundaries and rejects noncanonical event spellings", async () => {
+  const pairs = (Object.keys(DIAGNOSTIC_CODES) as DiagnosticPhase[]).flatMap((phase) =>
+    DIAGNOSTIC_CODES[phase].map((code) => ({ phase, code })),
+  );
+  const events = [0, 1, 9, 10, 99, 100, 899_999, 900_000].flatMap((offsetMs) =>
+    pairs.map((pair) => ({ ...pair, offsetMs, entityAlias: "unknown" as const })),
+  );
+  const json = canonicalJson({ ...fullReport(), events });
+  expect((await validateDiagnosticReportAsync(Buffer.from(json))).toString()).toBe(json);
+  for (const offset of [
+    "-0",
+    "00",
+    "01",
+    "+0",
+    "0.0",
+    "0e0",
+    "null",
+    "false",
+    "900001",
+    "99999999999999999999",
+    '"0"',
+    "\u0660",
+  ]) {
+    const corrupted = json.replace('"offsetMs": 0', `"offsetMs": ${offset}`);
+    await expect(validateDiagnosticReportAsync(Buffer.from(corrupted))).rejects.toThrow();
+  }
+  for (const corrupted of [
+    json.replace('"entityAlias": "unknown"', '"entityAlias": "other"'),
+    json.replace('"code": "startup_spawn_failed"', '"code": "startup_spawn_failed", "code": "startup_spawn_failed"'),
+    json.replace('"phase": "startup"', '"phase": "run"'),
+    json.replace('"offsetMs": 0,', '"offsetMs": 0 ,'),
+    json.replace('"offsetMs": 0', '"offsetMs":  0'),
+    json.replace('"phase": "startup"', '"phase": "startup", "path": "CANARY"'),
+  ])
+    await expect(validateDiagnosticReportAsync(Buffer.from(corrupted))).rejects.toThrow();
+});
+
+it("keeps validated immutable text and independently owned exact bytes through disposal", async () => {
+  const json = canonicalJson(fullReport());
+  const payload = new ControlledPayloadMemory();
+  const validated = await validateOwnedDiagnosticText(json, payload);
+  expect(validated.text).toBe(json);
+  expect(validated.payload.bytes.toString()).toBe(json);
+  validated.payload.release();
+  expect(validated.payload.bytes.every((byte) => byte === 0)).toBe(true);
+  expect(payload.stats().allocatedBytes).toBe(0);
+  expect(validated.text).toBe(json);
+});
+
+it("yields each batch with one completion promise and rejects scheduled generator failures", async () => {
+  const turns: string[] = [];
+  function* work() {
+    turns.push("first");
+    yield;
+    turns.push("second");
+    throw new Error("bounded-failure");
+  }
+  const pending = scheduleReportWork(work());
+  const rejected = expect(pending).rejects.toThrow("bounded-failure");
+  expect(turns).toEqual([]);
+  await setImmediate();
+  expect(turns).toEqual(["first"]);
+  await rejected;
+  expect(turns).toEqual(["first", "second"]);
 });
 
 // No filesystem or native authority in these controller schedule regressions.

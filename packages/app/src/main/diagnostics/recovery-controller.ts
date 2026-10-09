@@ -20,7 +20,7 @@ import {
   type ExportState,
   type RecoveryDisk,
 } from "./recovery-contract.js";
-import { validateOwnedDiagnosticReport } from "./report-validation.js";
+import { validateOwnedDiagnosticReport, validateOwnedDiagnosticText } from "./report-validation.js";
 import { ControlledPayloadMemory, type PayloadLease } from "./payload-memory.js";
 
 export interface RecoveryControllerOptions {
@@ -287,12 +287,10 @@ export class RecoveryController {
       if (!this.authorized(epoch)) return;
       this.reserve(3 * RECOVERY_LIMITS.exportBytes);
       try {
-        let snapshot = await this.ring.snapshotAsync();
-        if (!snapshot) throw new Error("unavailable");
-        if (!this.authorized(epoch)) return;
-        const lease = this.payload.from(snapshot.json);
-        snapshot = undefined;
+        const lease = await this.ring.snapshotOwnedAsync();
+        if (!lease) throw new Error("unavailable");
         try {
+          if (!this.authorized(epoch)) return;
           await this.options.disk.checkpoint(lease.bytes, anchor, () => this.authorized(epoch));
         } finally {
           lease.release();
@@ -314,6 +312,7 @@ export class RecoveryController {
     this.busy = true;
     const work = (async (): Promise<DiagnosticsResult<DiagnosticPreview>> => {
       let owned: PayloadLease | undefined;
+      let text: string;
       try {
         const now = this.now();
         if (!now) {
@@ -338,7 +337,9 @@ export class RecoveryController {
             )
               return failure("expired");
             deadline = Math.min(deadline, old.anchor.elapsedMs + RECOVERY_LIMITS.retentionMs);
-            owned = await validateOwnedDiagnosticReport(old.bytes, true, this.payload);
+            const validated = await validateOwnedDiagnosticReport(old.bytes, true, this.payload);
+            owned = validated.payload;
+            text = validated.text;
           } finally {
             old.dispose?.();
           }
@@ -346,15 +347,10 @@ export class RecoveryController {
         } else {
           let snapshot = await this.ring.snapshotAsync();
           if (!snapshot) return failure("unavailable");
-          const input = this.payload.from(snapshot.json);
-          // Validation holds input, decoded text and bounded reconstruction
-          // output. Drop the frozen string first to retain the four-copy charge.
+          const validated = await validateOwnedDiagnosticText(snapshot.json, this.payload);
+          owned = validated.payload;
+          text = validated.text;
           snapshot = undefined;
-          try {
-            owned = await validateOwnedDiagnosticReport(input.bytes, false, this.payload);
-          } finally {
-            input.release();
-          }
           bytes = owned.bytes;
         }
         const after = this.now();
@@ -386,7 +382,7 @@ export class RecoveryController {
         this.previewTimer.unref?.();
         return success({
           handle: this.preview.handle,
-          text: bytes.toString("utf8"),
+          text,
           byteLength: bytes.length,
           source,
           expiresInMs: deadline - after.elapsedMs,

@@ -11,10 +11,12 @@ import {
 import {
   canonicalDiagnosticReport,
   canonicalDiagnosticReportAsync,
+  canonicalOwnedDiagnosticReportAsync,
   diagnosticReport,
   DIAGNOSTIC_ENVELOPE_BYTES,
   eventReservation,
   type DiagnosticReport,
+  type DiagnosticEventSource,
 } from "./snapshot.js";
 import { ControlledPayloadMemory, type PayloadLease } from "./payload-memory.js";
 
@@ -157,13 +159,35 @@ export class PretriggerBuffer {
 
   /** Freeze the ring atomically, then serialize independent bounded batches. */
   async snapshotAsync(): Promise<FrozenDiagnosticSnapshot | undefined> {
+    const json = await this.freezeAsync((report, source) =>
+      canonicalDiagnosticReportAsync(report, this.payload, source),
+    );
+    return json === undefined ? undefined : this.freezeJson(json);
+  }
+
+  /** The checkpoint caller releases owned exact bytes after actual disk settlement. */
+  async snapshotOwnedAsync(): Promise<PayloadLease | undefined> {
+    const owned = await this.freezeAsync((report, source) =>
+      canonicalOwnedDiagnosticReportAsync(report, this.payload, source),
+    );
+    if (owned && owned.bytes.length > this.maxReportBytes) {
+      owned.release();
+      this.stop();
+      return undefined;
+    }
+    return owned;
+  }
+
+  private async freezeAsync<T>(
+    serialize: (report: DiagnosticReport, source?: DiagnosticEventSource) => Promise<T>,
+  ): Promise<T | undefined> {
     const report = this.freezeReport(false);
     if (!report) return undefined;
     const size = this.size,
       historyStart = this.historyStart;
-    if (!size) return this.freezeJson(await canonicalDiagnosticReportAsync(report, this.payload));
-    // Freeze compact owned bytes atomically. Yielded serialization creates one
-    // event at a time instead of retaining another 8192-object report tree.
+    if (!size) return serialize(report);
+    // Freeze compact owned bytes atomically. Yielded serialization consumes one
+    // reusable event cursor instead of retaining another 8192-object report tree.
     const frozen = this.payload.allocate(size * 10);
     const times = new Float64Array(frozen.bytes.buffer, frozen.bytes.byteOffset, size);
     const codes = new Uint16Array(frozen.bytes.buffer, frozen.bytes.byteOffset + size * 8, size);
@@ -173,18 +197,24 @@ export class PretriggerBuffer {
       codes[index] = this.codes![position]!;
     }
     function* events() {
+      // Serialization consumes this cursor synchronously and never retains it.
+      // Frozen scalars remain independent of the live ring across yielded batches.
+      const event = {
+        phase: "unknown" as DiagnosticPhase,
+        code: "unknown" as DiagnosticCode,
+        offsetMs: 0,
+        entityAlias: "unknown" as const,
+      };
       for (let index = 0; index < size; index++) {
         const pair = pairs[codes[index]!]!;
-        yield {
-          phase: pair.phase,
-          code: pair.code,
-          offsetMs: times[index]! - historyStart,
-          entityAlias: "unknown" as const,
-        };
+        event.phase = pair.phase;
+        event.code = pair.code;
+        event.offsetMs = times[index]! - historyStart;
+        yield event;
       }
     }
     try {
-      return this.freezeJson(await canonicalDiagnosticReportAsync(report, this.payload, { size, events: events() }));
+      return await serialize(report, { size, events: events() });
     } finally {
       frozen.release();
     }
