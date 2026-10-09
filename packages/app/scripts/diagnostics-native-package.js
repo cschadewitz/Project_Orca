@@ -18,6 +18,7 @@ import { parseArgs } from "node:util";
 
 const appRoot = fileURLToPath(new URL("../", import.meta.url));
 export const NATIVE_ADDONS = Object.freeze(["diagnostics_clock.node", "diagnostics_storage.node"]);
+const addonsFor = (platform) => (platform === "win32" ? [...NATIVE_ADDONS, "first_run_windows.node"] : NATIVE_ADDONS);
 const nativeSources = ["binding.gyp", "clock-math.h", "clock.c", "storage.c"];
 const maxAddonBytes = 4 * 1024 * 1024;
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -31,7 +32,15 @@ function target(arch, platform = "darwin") {
 function sourceDigest(root, platform = "darwin") {
   const digest = createHash("sha256");
   for (const name of platform === "win32"
-    ? ["binding.gyp", "clock.c", "storage-windows.c", "keys-windows.c", "windows-delay-load.c"]
+    ? [
+        "binding.gyp",
+        "clock.c",
+        "storage-windows.c",
+        "storage-windows-common.h",
+        "first-run-windows.c",
+        "keys-windows.c",
+        "windows-delay-load.c",
+      ]
     : nativeSources) {
     digest.update(name + "\0");
     digest.update(readFileSync(join(root, "native/diagnostics", name)));
@@ -79,7 +88,7 @@ export function checkNativePE(bytes, arch) {
 export function nativePackageManifest(directory, arch, root = appRoot, platform = "darwin") {
   target(arch, platform);
   const files = {};
-  for (const name of NATIVE_ADDONS) {
+  for (const name of addonsFor(platform)) {
     const bytes = boundedFile(join(directory, name), maxAddonBytes);
     if (platform === "win32") checkNativePE(bytes, arch);
     else checkNativeMachO(bytes, arch);
@@ -138,10 +147,10 @@ export function buildNativePackage({ arch, headers, root = appRoot }) {
           windowsHide: true,
         },
       );
-      for (const name of NATIVE_ADDONS)
+      for (const name of addonsFor(platform))
         copyFileSync(join(root, "native/diagnostics/build/Release", name), join(scratch, name));
     } else
-      for (const name of NATIVE_ADDONS) {
+      for (const name of addonsFor(platform)) {
         execFileSync(
           "/usr/bin/xcrun",
           [

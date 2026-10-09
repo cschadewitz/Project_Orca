@@ -1,4 +1,12 @@
 /** Dedicated first-run provisioning. Native selections are reviewed, identity-fenced and never overwritten. */
+import {
+  windowsDirectory,
+  windowsPrivateChild,
+  windowsRead,
+  windowsWrite,
+  windowsFile,
+} from "@orca/protocol/first-run-fence";
+
 import { constants } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { lstat, mkdir, open, readFile, rename } from "node:fs/promises";
@@ -45,6 +53,7 @@ interface Selection {
   review: FirstRunReview;
   project: ProjectIdentity;
   workspace: DirectoryIdentity;
+  parent?: DirectoryIdentity;
 }
 export interface FirstRunDeps {
   home: string;
@@ -113,6 +122,11 @@ export class FirstRunSetup {
   /** Saved paths do not authorize startup until both physical directories and exact files verify. */
   private async readReceipt(allowChangedConfig = false): Promise<Receipt | undefined> {
     try {
+      if (process.platform === "win32") {
+        const receipt = receiptSchema.parse(JSON.parse(windowsRead(this.deps.receiptPath, 64 * 1024)));
+        await this.verify(receipt, allowChangedConfig);
+        return receipt;
+      }
       const info = await lstat(this.deps.receiptPath);
       if (
         !info.isFile() ||
@@ -160,6 +174,18 @@ export class FirstRunSetup {
     if (!assets.isDirectory() || assets.isSymbolicLink()) throw selectionFailure();
     for (const [name, text] of Object.entries(expected)) {
       const path = join(workspace.path, name);
+      if (process.platform === "win32") {
+        const info = windowsFile(path);
+        if (info.dev !== workspace.dev || info.uid !== workspace.uid) throw selectionFailure();
+        const actual = digest(windowsRead(path, 1024 * 1024));
+        if (
+          name === "orca.config.yaml"
+            ? !allowChangedConfig && actual !== receipt.files[name]
+            : actual !== digest(text) || receipt.files[name] !== digest(text)
+        )
+          throw selectionFailure();
+        continue;
+      }
       const info = await lstat(path);
       if (
         !info.isFile() ||
@@ -215,13 +241,17 @@ export class FirstRunSetup {
       const workspacePath = await this.deps.choose("workspace");
       assertCurrent();
       if (!workspacePath) return this.status();
-      const workspace = await ownedDirectory(workspacePath, this.deps.home);
+      const parent = process.platform === "win32" ? windowsDirectory(workspacePath, "parent") : undefined;
+      const workspace = parent
+        ? { ...parent, path: join(parent.path, `orca-workspace-${randomUUID()}`) }
+        : await ownedDirectory(workspacePath, this.deps.home);
       separateDirectories(project.path, workspace.path);
-      await emptyDirectory(workspace.path);
+      if (!parent) await emptyDirectory(workspace.path);
       assertCurrent();
       this.selection = {
         project,
         workspace,
+        ...(parent ? { parent } : {}),
         review: {
           id: randomUUID(),
           project: project.path,
@@ -229,6 +259,7 @@ export class FirstRunSetup {
           branch: project.branch,
           baseCommit: project.baseCommit,
           sample: FIRST_RUN_SAMPLE,
+          ...(parent ? { creation: { parent: parent.path, kind: "private-child" as const } } : {}),
         },
       };
       return this.status();
@@ -240,7 +271,12 @@ export class FirstRunSetup {
       if (!selection || selection.review.id !== id) throw selectionFailure();
       assertCurrent();
       const project = await preparedProject(selection.project.path, this.deps.home);
-      const workspace = await ownedDirectory(selection.workspace.path, this.deps.home);
+      const parent = selection.parent ? windowsDirectory(selection.parent.path, "parent") : undefined;
+      const workspaceBefore = parent
+        ? selection.workspace
+        : await ownedDirectory(selection.workspace.path, this.deps.home);
+      if (parent && !sameDirectory(parent, selection.parent!)) throw selectionFailure();
+      let workspace = workspaceBefore;
       if (
         !sameDirectory(selection.project, project) ||
         !sameDirectory(selection.workspace, workspace) ||
@@ -249,14 +285,16 @@ export class FirstRunSetup {
       )
         throw selectionFailure();
       separateDirectories(project.path, workspace.path);
-      await emptyDirectory(workspace.path);
+      if (!parent) await emptyDirectory(workspace.path);
       assertCurrent();
       await this.deps.enroll?.(workspace.path);
       assertCurrent();
       // Consume before the first write. Any incomplete preparation requires choosing a fresh empty directory.
       this.selection = undefined;
+      if (parent) workspace = windowsPrivateChild(workspace.path, parent);
       const files = this.files(project.path);
-      await mkdir(join(workspace.path, "first-run"), { mode: 0o700 });
+      if (process.platform === "win32") windowsPrivateChild(join(workspace.path, "first-run"));
+      else await mkdir(join(workspace.path, "first-run"), { mode: 0o700 });
       const assetDirectory = await ownedDirectory(join(workspace.path, "first-run"), this.deps.home);
       for (const [name, text] of Object.entries(files)) {
         const current = await ownedDirectory(workspace.path, this.deps.home);
@@ -274,6 +312,13 @@ export class FirstRunSetup {
       };
       await this.verify(receipt);
       assertCurrent();
+      if (process.platform === "win32") {
+        if (absent(dirname(this.deps.receiptPath))) windowsPrivateChild(dirname(this.deps.receiptPath));
+        else windowsDirectory(dirname(this.deps.receiptPath));
+        assertCurrent();
+        windowsWrite(this.deps.receiptPath, JSON.stringify(receipt) + "\n", true);
+        return this.prepared(receipt);
+      }
       await mkdir(dirname(this.deps.receiptPath), { recursive: true, mode: 0o700 });
       const temporary = `${this.deps.receiptPath}.${randomUUID()}`;
       await this.writeExclusive(temporary, JSON.stringify(receipt) + "\n");
@@ -407,6 +452,10 @@ export class FirstRunSetup {
       await this.verify(receipt);
       review.boundary.check();
       assertCurrent();
+      if (process.platform === "win32") {
+        windowsWrite(this.deps.receiptPath, JSON.stringify(receipt) + "\n", true);
+        return this.prepared(receipt);
+      }
       const temporary = `${this.deps.receiptPath}.${randomUUID()}`;
       await this.writeExclusive(temporary, JSON.stringify(receipt) + "\n");
       review.boundary.check();
@@ -469,6 +518,10 @@ export class FirstRunSetup {
     });
   }
   private async writeExclusive(path: string, text: string): Promise<void> {
+    if (process.platform === "win32") {
+      windowsWrite(path, text);
+      return;
+    }
     const file = await open(path, "wx", 0o600);
     try {
       await file.writeFile(text);

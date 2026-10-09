@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
+import { windowsDirectory, windowsFile } from "@orca/protocol/first-run-fence";
 const execute = promisify(execFile);
 export interface DirectoryIdentity {
   path: string;
@@ -21,7 +22,13 @@ export const selectionFailure = () =>
     "Choose owned writable directories with verifiable identity: an existing prepared Git project and a separate empty app workspace. Check access and Git availability, then choose again.",
   );
 
-export async function ownedDirectory(path: string, home: string): Promise<DirectoryIdentity> {
+export async function ownedDirectory(path: string, home: string, project = false): Promise<DirectoryIdentity> {
+  if (process.platform === "win32") {
+    const identity = windowsDirectory(path, project ? "project" : "directory");
+    if (path === dirname(path) || path === (await realpath(home)) || basename(path) === ".orca")
+      throw selectionFailure();
+    return identity;
+  }
   if (!isAbsolute(path) || typeof process.getuid !== "function") throw selectionFailure();
   // Symlink selections are refused rather than silently adopting their destination.
   const lexical = await lstat(path, { bigint: true });
@@ -59,7 +66,7 @@ export async function emptyDirectory(path: string): Promise<void> {
  * This is a bounded observation; concurrent mutation by the same OS principal remains a native gate.
  */
 export async function verifyRuntimeDirectories(workspace: DirectoryIdentity): Promise<void> {
-  if (typeof process.getuid !== "function") throw selectionFailure();
+  if (process.platform !== "win32" && typeof process.getuid !== "function") throw selectionFailure();
   const pending = [join(workspace.path, ".orca"), join(workspace.path, "auth")];
   let remaining = 8192;
   while (pending.length) {
@@ -79,7 +86,12 @@ export async function verifyRuntimeDirectories(workspace: DirectoryIdentity): Pr
         continue;
       throw error;
     }
-    if (
+    if (process.platform === "win32") {
+      if ((path === join(workspace.path, ".orca") || path === join(workspace.path, "auth")) && !info.isDirectory())
+        throw selectionFailure();
+      const identity = info.isDirectory() ? windowsDirectory(path) : windowsFile(path);
+      if (identity.dev !== workspace.dev || identity.uid !== workspace.uid) throw selectionFailure();
+    } else if (
       info.isSymbolicLink() ||
       ((path === join(workspace.path, ".orca") || path === join(workspace.path, "auth")) && !info.isDirectory()) ||
       (!info.isDirectory() && !info.isFile()) ||
@@ -98,7 +110,7 @@ export async function verifyRuntimeDirectories(workspace: DirectoryIdentity): Pr
   }
 }
 export async function preparedProject(path: string, home: string): Promise<ProjectIdentity> {
-  const identity = await ownedDirectory(path, home);
+  const identity = await ownedDirectory(path, home, true);
   const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
   const git = async (...args: string[]) =>
     (
@@ -113,7 +125,7 @@ export async function preparedProject(path: string, home: string): Promise<Proje
   const branch = await git("symbolic-ref", "--short", "HEAD");
   const baseCommit = await git("rev-parse", "--verify", "HEAD");
   if (top !== identity.path || !branch || !/^[a-f0-9]{40,64}$/.test(baseCommit)) throw selectionFailure();
-  const after = await ownedDirectory(identity.path, home);
+  const after = await ownedDirectory(identity.path, home, true);
   if (!sameDirectory(identity, after)) throw selectionFailure();
   return { ...identity, branch, baseCommit };
 }

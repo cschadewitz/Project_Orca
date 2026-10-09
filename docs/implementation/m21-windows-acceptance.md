@@ -101,13 +101,17 @@ performance measurement, packaging, broad CI or Actions dispatch was used.
 
 ## Remaining acceptance and implementation limits
 
-Windows first-run setup is **not implemented as a successful supported path** on this
-source base: `first-run/directories.ts`, `setup.ts` and `ownership.ts` require POSIX
+At the source head recorded above, Windows first-run setup is **not implemented as
+a successful supported path**: `first-run/directories.ts`, `setup.ts` and `ownership.ts` require POSIX
 `process.getuid()` ownership evidence. Windows supplies no such function. The real compiled
 setup refuses the selected project before provisioning or connection, and the source test
 records that refusal. This is an existing platform implementation limitation, not a manual
 acceptance pass. No UID shim or weakened ownership check was added. The configured explicit
 workspace path is evaluated separately.
+
+The subsequent [narrow Windows first-run delta](m21-windows-first-run.md) supplies
+native SID/NTFS support and separate focused evidence. It does not rewrite the
+historical refusal evidence in this acceptance record.
 
 Physical Mac acceptance, packaged signing/update/replacement, real agent execution,
 Narrator/VoiceOver listening, and second-user filesystem attack/manual crash cases remain

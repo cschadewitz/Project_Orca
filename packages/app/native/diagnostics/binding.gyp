@@ -1,5 +1,20 @@
 {
   'targets': [{
+    'target_name': 'first_run_windows',
+    'sources': [],
+    'defines': ['NAPI_VERSION=8'],
+    'conditions': [['OS=="win"', {
+      'sources': ['first-run-windows.c', 'windows-delay-load.c'],
+      'win_delay_load_hook': 'false',
+      'defines': ['_CRT_SECURE_NO_WARNINGS'],
+      'libraries!': ['-l"<(node_lib_file)"'],
+      'libraries': ['<(node_root_dir)/<(target_arch)/node.lib', 'advapi32.lib', 'delayimp.lib'],
+      'msvs_settings': { 'VCCLCompilerTool': {
+        'AdditionalOptions!': ['-std:c++20', '/Zc:__cplusplus'],
+        'AdditionalOptions': ['/std:c11'], 'WarningLevel': 4, 'WarnAsError': 'true'
+      }, 'VCLinkerTool': { 'DelayLoadDLLs': ['node.exe'], 'AdditionalOptions': ['/ignore:4199'] } }
+    }], ['OS!="win"', { 'type': 'none' }]]
+  }, {
     'target_name': 'diagnostics_clock',
     'sources': ['clock.c'],
     'defines': ['NAPI_VERSION=8'],
@@ -12,8 +27,10 @@
       'win_delay_load_hook': 'false',
       'defines': ['_CRT_SECURE_NO_WARNINGS'],
       'sources': ['windows-delay-load.c'],
-      'libraries': ['delayimp.lib'],
+      'libraries!': ['-l"<(node_lib_file)"'],
+      'libraries': ['<(node_root_dir)/<(target_arch)/node.lib', 'delayimp.lib'],
       'msvs_settings': { 'VCCLCompilerTool': {
+        'AdditionalOptions!': ['-std:c++20', '/Zc:__cplusplus'],
         'AdditionalOptions': ['/std:c11'], 'WarningLevel': 4, 'WarnAsError': 'true'
       }, 'VCLinkerTool': { 'DelayLoadDLLs': ['node.exe'], 'AdditionalOptions': ['/ignore:4199'] } }
     }]]
@@ -31,8 +48,10 @@
       'win_delay_load_hook': 'false',
       'defines': ['_CRT_SECURE_NO_WARNINGS'],
       'sources': ['storage-windows.c', 'keys-windows.c', 'windows-delay-load.c'],
-      'libraries': ['advapi32.lib', 'crypt32.lib', 'delayimp.lib'],
+      'libraries!': ['-l"<(node_lib_file)"'],
+      'libraries': ['<(node_root_dir)/<(target_arch)/node.lib', 'advapi32.lib', 'crypt32.lib', 'delayimp.lib'],
       'msvs_settings': { 'VCCLCompilerTool': {
+        'AdditionalOptions!': ['-std:c++20', '/Zc:__cplusplus'],
         'AdditionalOptions': ['/std:c11'], 'WarningLevel': 4, 'WarnAsError': 'true'
       }, 'VCLinkerTool': { 'DelayLoadDLLs': ['node.exe'], 'AdditionalOptions': ['/ignore:4199'] } }
     }]]

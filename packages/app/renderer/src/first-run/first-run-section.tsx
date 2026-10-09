@@ -79,15 +79,25 @@ export function FirstRunSection(): JSX.Element | null {
       <Card>
         <Text style="label-strong">Dedicated project setup</Text>
         <Text style="body">
-          Choose an owned prepared Git project, then a separate empty writable folder for the app workspace. Setup
-          writes a new local configuration and sample assets in that app folder. It leaves the project checkout
-          unchanged. Open a store remains read-only. Cancelling either directory picker keeps the previous selection.
+          Choose an owned prepared Git project, then a separate empty writable folder for the app workspace. Setup on
+          Windows creates a new private child folder after review. Setup writes a new local configuration and sample
+          assets in that app folder. It leaves the project checkout unchanged. Open a store remains read-only.
+          Cancelling either directory picker keeps the previous selection.
         </Text>
         {state?.state === "selection-required" && <Text style="caption">{state.reason}</Text>}
         {state?.state === "review" && (
           <>
             <Well style="mono-id">Project: {state.review.project}</Well>
             <Well style="mono-id">App workspace: {state.review.workspace}</Well>
+            {state.review.creation && (
+              <>
+                <Well style="mono-id">Selected parent: {state.review.creation.parent}</Well>
+                <Text style="body">
+                  Create the displayed new private folder and sample files. Existing parent and project permissions stay
+                  unchanged.
+                </Text>
+              </>
+            )}
             <Well style="mono-id">
               Prepared branch: {state.review.branch} / base {state.review.baseCommit}
             </Well>
@@ -103,7 +113,9 @@ export function FirstRunSection(): JSX.Element | null {
                 )
               }
             >
-              Create reviewed sample files
+              {state.review.creation
+                ? "Create reviewed private workspace and sample files"
+                : "Create reviewed sample files"}
             </Button>
           </>
         )}

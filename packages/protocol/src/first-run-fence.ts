@@ -19,6 +19,15 @@ import { createConnection, createServer, type Server } from "node:net";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { z } from "zod";
+import {
+  windowsDirectory,
+  windowsRead,
+  windowsWrite,
+  windowsPrivateChild,
+  windowsLock,
+  windowsBoot,
+} from "./first-run-windows.js";
+export { windowsDirectory, windowsRead, windowsWrite, windowsPrivateChild, windowsFile } from "./first-run-windows.js";
 
 export const fenceHash = (text: string) => createHash("sha256").update(text).digest("hex");
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -45,6 +54,7 @@ export const WriterSchema = z
   .strict();
 export type FirstRunWriter = z.infer<typeof WriterSchema>;
 export function fenceDirectory(path: string) {
+  if (process.platform === "win32") return windowsDirectory(path);
   const s = lstatSync(path, { bigint: true });
   if (
     !s.isDirectory() ||
@@ -57,6 +67,7 @@ export function fenceDirectory(path: string) {
   return { path, dev: String(s.dev), ino: String(s.ino), uid: String(s.uid) };
 }
 export function fenceRead(path: string, limit = 4096): string {
+  if (process.platform === "win32") return windowsRead(path, limit);
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const s = fstatSync(fd);
@@ -74,6 +85,7 @@ export function fenceRead(path: string, limit = 4096): string {
   }
 }
 export function fenceWrite(path: string, value: unknown) {
+  if (process.platform === "win32") return windowsWrite(path, JSON.stringify(value) + "\n");
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try {
     writeFileSync(fd, JSON.stringify(value) + "\n");
@@ -89,6 +101,10 @@ export function fenceWrite(path: string, value: unknown) {
   }
 }
 export function fenceBoot() {
+  if (process.platform === "win32") {
+    const { bootId, machine } = windowsBoot();
+    return FenceBootSchema.parse({ bootId, hostHash: fenceHash(machine), kernelDomain: "win32:host" });
+  }
   const domain = process.platform === "linux" ? statSync("/proc/self/ns/net", { bigint: true }) : undefined;
   const kernelDomain = domain ? `${domain.dev}:${domain.ino}` : "host";
   if (process.platform === "linux") {
@@ -125,6 +141,10 @@ export function fenceBoot() {
 }
 /** Local single-host volumes only. Overlay permits disposable Linux reference tests. */
 export function assertFenceVolume(path: string) {
+  if (process.platform === "win32") {
+    windowsDirectory(path);
+    return;
+  }
   if (process.platform === "linux" && [0xef53, 0x58465342, 0x9123683e, 0x794c7630].includes(statfsSync(path).type))
     return;
   if (process.platform === "darwin") {
@@ -150,19 +170,29 @@ export function fencePort(workspace: z.infer<typeof FenceDirectorySchema>) {
 export async function acquireFirstRunFence(
   workspace: z.infer<typeof FenceDirectorySchema>,
   observation: () => unknown,
-): Promise<Server> {
+): Promise<Server & { retainLifetime?(): void }> {
+  const lock = process.platform === "win32" ? windowsLock(workspace) : undefined;
   const server = createServer((socket) => {
     socket.on("error", () => {});
     socket.end(JSON.stringify(observation()) + "\n", () => socket.destroy());
   });
   server.maxConnections = 8;
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen({ host: "127.0.0.1", port: fencePort(workspace), exclusive: true, reusePort: false }, () => {
-      server.removeListener("error", reject);
-      resolve();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen({ host: "127.0.0.1", port: fencePort(workspace), exclusive: true, reusePort: false }, () => {
+        server.removeListener("error", reject);
+        resolve();
+      });
     });
-  });
+  } catch (error) {
+    lock?.release();
+    throw error;
+  }
+  if (lock) {
+    server.once("close", () => lock.release());
+    (server as Server & { retainLifetime(): void }).retainLifetime = () => lock.retain();
+  }
   // The writer's socket can never be closed by an RPC or cleanup callback. Kernel releases it at exit.
   // Unref permits one-shot commands to exit naturally after all actual work finishes.
   server.unref();
@@ -280,12 +310,15 @@ export async function enterFirstRunWriter(
     if (claim.store && JSON.stringify(claim.store) !== JSON.stringify(fenceDirectory(storeDir)))
       throw new Error("First-run store identity changed");
     if (!exists(storeDir)) {
-      mkdirSync(storeDir, { mode: 0o700 });
-      const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY);
-      try {
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
+      if (process.platform === "win32") windowsPrivateChild(storeDir);
+      else {
+        mkdirSync(storeDir, { mode: 0o700 });
+        const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY);
+        try {
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
       }
     }
     const store = fenceDirectory(storeDir);
@@ -302,6 +335,7 @@ export async function enterFirstRunWriter(
       ...fenceBoot(),
     });
     fenceWrite(join(attempt, "writer.json"), writer);
+    fence.retainLifetime?.();
     // Do not return a close/release capability to the runtime.
   } catch (error) {
     await new Promise<void>((resolve) => fence.close(() => resolve()));

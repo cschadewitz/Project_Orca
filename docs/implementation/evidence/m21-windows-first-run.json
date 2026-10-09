@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "base": "e1bb345716758176456f5f4bd996ef2168b6dce5",
+  "platform": "win32",
+  "arch": "x64",
+  "node": "24.19.0",
+  "electron": "44.4.5",
+  "nativeSourceSha256": "e573168747f83ba427a63aeb69ebe3312e0828e770fcd11f0d83bb3d5a3750f9",
+  "native": {
+    "failed": 0,
+    "passed": 7,
+    "cases": [
+      "reviewed-child-exact-samples-receipt-recreation",
+      "reviewed-parent-replacement-refusal",
+      "sample-hardlink-reparse-content-refusal",
+      "inherited-private-acl-and-namespace-refusal",
+      "physical-workspace-replacement-and-legacy-receipt-refusal",
+      "temporary-exclusive-lock-native-boot-ownership-reservation",
+      "lifetime-lock-retained-through-release-gc-until-exit"
+    ]
+  },
+  "mountedUI": {
+    "failed": 0,
+    "passed": 6
+  },
+  "packaging": {
+    "failed": 0,
+    "passed": 16
+  },
+  "realElectron": {
+    "version": 1,
+    "scope": "isolated source-built Windows x64 Electron first-run; harmless sample only",
+    "checks": {
+      "isolated-profile": true,
+      "genuine-Windows-principal": true,
+      "real-Electron-runtime": true,
+      "fresh-selection-required": true,
+      "reviewed-private-child": true,
+      "review-has-no-workspace-write": true,
+      "native-files-prepared": true,
+      "tagged-verified-SID": true,
+      "tagged-physical-file-and-volume": true,
+      "owned-authenticated-daemon-live": true,
+      "exactly-one-harmless-sample-admitted": true,
+      "duplicate-writer-refused": true,
+      "receipt-preserved-after-admission": true,
+      "prepared-project-unchanged": true,
+      "restart-verified-selection": true,
+      "restart-retains-original-run": true,
+      "restart-receipt-byte-preservation": true,
+      "restart-project-unchanged": true
+    },
+    "runId": "run_472e6e7b-80f2-4970-aa11-602e6d53d49f",
+    "receiptSha256": "b631c68e58518b05228d6b0501bff1e10cb08ab57a6cc26d03b445f843b0e3ce",
+    "passed": true
+  },
+  "staticChecks": [
+    "MSVC-W4-WX",
+    "GCC-Wall-Wextra-Werror-syntax",
+    "affected-TypeScript-build",
+    "renderer-typecheck",
+    "source-ESLint",
+    "daemon-bundle",
+    "renderer-build",
+    "git-diff-check"
+  ],
+  "fixturePolicy": "Only new disposable fixtures under a read-only verified safe parent; no existing ACL edits.",
+  "remainingProof": [
+    "POSIX runtime regression: no installed Ubuntu Node; parent combined validation pending",
+    "arm64 execution",
+    "packaged signing/update/replacement",
+    "second-user attacks",
+    "power-loss/manual crash"
+  ]
+}

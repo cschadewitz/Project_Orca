@@ -1,4 +1,5 @@
 /** Read-only exact asset check for the reserved harmless sample; no renderer paths or repairs. */
+import { windowsRead } from "@orca/protocol/first-run-fence";
 import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -12,6 +13,10 @@ export async function verifyFirstRunSampleAssets(path: string): Promise<void> {
   const digest = (text: string) => createHash("sha256").update(text).digest("hex");
   for (const [name, expected] of Object.entries(FIRST_RUN_SAMPLE_FILES)) {
     const file = join(root.path, name);
+    if (process.platform === "win32") {
+      if (digest(windowsRead(file, 1024 * 1024)) !== digest(expected)) throw selectionFailure();
+      continue;
+    }
     const info = await lstat(file);
     if (
       !info.isFile() ||

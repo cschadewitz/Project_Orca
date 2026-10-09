@@ -81,6 +81,35 @@ it("keeps the selected review after a refused write and never displays private n
   expect(f.firstRun.connect).not.toHaveBeenCalled();
 });
 
+it("reviews Windows private child creation before passing the exact review to main", async () => {
+  const f = setup();
+  f.firstRun.choose.mockResolvedValueOnce({
+    ok: true,
+    result: {
+      state: "review",
+      review: {
+        id: "windows-review",
+        project: "C:\\Project",
+        workspace: "C:\\Parent\\orca-workspace-new",
+        branch: "prepared",
+        baseCommit: "base",
+        sample: FIRST_RUN_SAMPLE,
+        creation: { parent: "C:\\Parent", kind: "private-child" },
+      },
+    },
+  });
+  await screen.findByText("Explicit owned directories required.");
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
+  expect(screen.getByText("Selected parent: C:\\Parent")).toBeTruthy();
+  expect(screen.getByText(/Existing parent and project permissions stay unchanged/)).toBeTruthy();
+  expect(f.firstRun.prepare).not.toHaveBeenCalled();
+  await act(async () =>
+    fireEvent.click(screen.getByRole("button", { name: "Create reviewed private workspace and sample files" })),
+  );
+  expect(f.firstRun.prepare).toHaveBeenCalledExactlyOnceWith("windows-review");
+  expect(f.firstRun.connect).not.toHaveBeenCalled();
+});
+
 it("requires explicit recovery preparation and reconciliation without connecting or resuming work", async () => {
   const requestId = "11111111-1111-4111-8111-111111111111";
   const prepared: FirstRunStatus = {
