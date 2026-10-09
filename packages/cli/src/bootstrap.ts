@@ -2,6 +2,7 @@
  * Bootstrap: turn `orca.config.yaml` into a wired Orchestrator + ProgramService.
  * The CLI, the ACP facade and embedders all go through here.
  */
+import { assertNoPendingFirstRunRecovery } from "./first-run-recovery-fence.js";
 import { admissionRetryFaults } from "@orca/core";
 import { FileRetryClaimStore } from "@orca/store";
 import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
@@ -232,6 +233,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const { config, configDir, configFile } = opts.config
     ? { config: opts.config, configDir: opts.configDir ?? cwd, configFile: undefined }
     : await loadConfig(cwd, opts.configPath);
+  assertNoPendingFirstRunRecovery(cwd, configDir, resolve(configDir, config.storeDir));
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config);
   const assets = await releaseAssets(config);

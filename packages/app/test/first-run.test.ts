@@ -285,3 +285,188 @@ describe.skipIf(typeof process.getuid !== "function")("dedicated first-run proje
 it.skipIf(typeof process.getuid === "function")("unknown owner identity fails closed", async () => {
   await expect(ownedDirectory(tmpdir(), tmpdir())).rejects.toThrow();
 });
+
+async function configurationRig() {
+  const f = await rig();
+  await f.prepare();
+  const { hash, reserveFirstRunOwnership } = await import("../src/main/first-run/ownership.js");
+  const owner = reserveFirstRunOwnership(f.workspace);
+  let exited = false;
+  owner.attach({
+    pid: 123,
+    url: "http://127.0.0.1:12345",
+    get exited() {
+      return exited;
+    },
+    stop: async () => {
+      exited = true;
+    },
+  });
+  owner.verify(f.hello);
+  const path = join(f.workspace, "orca.config.yaml");
+  const before = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+  const config: Record<string, unknown> & {
+    agents: { id: string; command: string; env: Record<string, string> }[];
+    roles: Record<string, string>;
+  } = {
+    ...before,
+    agents: [{ id: "local-agent", command: process.execPath, env: { SECRET: "synthetic private value" } }],
+    roles: { builder: "local-agent" },
+  };
+  let text = JSON.stringify(config) + "\n";
+  await writeFile(path, text);
+  let wrongTarget = false;
+  const snapshot = () => ({
+    config: { document: "config", path, exists: true, revision: hash(text), text, parsed: config },
+    permissions: {
+      document: "permissions",
+      path: join(f.workspace, "orca.permissions.json"),
+      exists: false,
+      revision: "",
+      text: "",
+    },
+    schema: [],
+    effective: { agents: {} },
+    generation: {
+      savedRevision: hash(text),
+      activeRevision: hash(text),
+      activeGeneration: "fixture-generation",
+      state: "active",
+      restartRequired: [],
+    },
+    asOf: "2026-10-09T00:00:00Z",
+  });
+  const call = vi.fn().mockImplementation(async () => snapshot());
+  const client = { withCapturedAuthentication: () => client, call };
+  const rebind = vi.fn((expected: string, saved: string) => owner.rebindConfig!(expected, saved));
+  const deps = {
+    ...f.deps,
+    configuration: () => ({
+      client: client as unknown as DaemonClient,
+      check: () => {
+        if (wrongTarget) throw new Error("target changed");
+      },
+      rebind,
+    }),
+  };
+  const setup = new FirstRunSetup(deps);
+  return {
+    ...f,
+    deps,
+    setup,
+    path,
+    config,
+    hash,
+    owner,
+    call,
+    rebind,
+    snapshot,
+    exit: () => {
+      exited = true;
+    },
+    changeTarget: () => {
+      wrongTarget = true;
+    },
+    save: async () => {
+      text = JSON.stringify(config) + "\n";
+      await writeFile(path, text);
+    },
+  };
+}
+it("explicitly binds a private saved real-agent config, reopens it and preserves exact sample/store/project identity and old journal", async () => {
+  const f = await configurationRig();
+  expect((await f.setup.status()).state).toBe("selection-required");
+  const before = await readFile(join(f.workspace, ".orca-first-run-ownership", "000001", "claim.json"), "utf8");
+  const reviewed = await f.setup.reviewConfiguration(f.assertCurrent);
+  if (reviewed.state !== "configuration-review") throw new Error("Expected config review");
+  expect(reviewed.review.checks).toEqual([{ agentId: "local-agent", state: "handshake-required" }]);
+  expect(JSON.stringify(reviewed)).not.toContain("synthetic private value");
+  expect(f.call.mock.calls.map((call) => call[0])).toEqual(["config.get"]);
+  const result = await f.setup.bindConfiguration(reviewed.review.id, f.assertCurrent);
+  expect(result.state).toBe("prepared");
+  expect(f.rebind).toHaveBeenCalledOnce();
+  const reopen = new FirstRunSetup(f.deps);
+  expect((await reopen.status()).state).toBe("prepared");
+  expect(await readFile(join(f.project, "sentinel.txt"), "utf8")).toBe("unchanged synthetic project\n");
+  expect(await readFile(join(f.workspace, ".orca-first-run-ownership", "000001", "claim.json"), "utf8")).toBe(before);
+  const binding = await readFile(
+    join(f.workspace, ".orca-first-run-ownership", "000001", "config-rebind-000001.json"),
+    "utf8",
+  );
+  expect(binding).not.toContain("synthetic private value");
+  expect(binding).toContain("reviewed-config-read");
+  f.exit();
+  expect(f.owner.complete()).toBe(true);
+  const { reserveFirstRunOwnership } = await import("../src/main/first-run/ownership.js");
+  expect(() => reserveFirstRunOwnership(f.workspace)).not.toThrow();
+});
+it.each([
+  "root",
+  "store",
+  "host",
+  "plugin",
+  "sample",
+  "outside-workflow",
+  "invalid-generation",
+  "wrong-revision",
+  "wrong-path",
+  "altered-asset",
+])("refuses real-agent configuration rebind failure %s without rewriting receipt or ownership", async (failure) => {
+  const f = await configurationRig();
+  const receiptBefore = await readFile(f.deps.receiptPath, "utf8");
+  if (failure === "root") f.config.workspace = { provider: "local", root: f.home, hostId: "local" };
+  if (failure === "store") f.config.storeDir = "elsewhere";
+  if (failure === "host") f.config.hosts = [{ id: "local", type: "ssh", host: "unrelated" }];
+  if (failure === "plugin") f.config.plugins = ["unrelated-plugin"];
+  if (failure === "sample") f.config.workflows = [];
+  if (failure === "outside-workflow") f.config.workflows = ["first-run/workflow.yaml", "../outside.yaml"];
+  await f.save();
+  if (failure === "invalid-generation" || failure === "wrong-revision" || failure === "wrong-path")
+    f.call.mockImplementation(async () => {
+      const snapshot = f.snapshot();
+      if (failure === "invalid-generation") snapshot.generation.state = "invalid";
+      if (failure === "wrong-revision") snapshot.config.revision = f.hash("stale");
+      if (failure === "wrong-path") snapshot.config.path = join(f.home, "other.yaml");
+      return snapshot;
+    });
+  if (failure === "altered-asset") await writeFile(join(f.workspace, "first-run", "workflow.yaml"), "altered");
+  await expect(f.setup.reviewConfiguration(f.assertCurrent)).rejects.toThrow();
+  expect(f.rebind).not.toHaveBeenCalled();
+  expect(await readFile(f.deps.receiptPath, "utf8")).toBe(receiptBefore);
+  expect(await readdir(join(f.workspace, ".orca-first-run-ownership", "000001"))).not.toContain(
+    "config-rebind-000001.json",
+  );
+});
+it.each(["target", "epoch", "config", "receipt", "stale-review"])(
+  "keeps a reviewed config draft unbound after %s changes",
+  async (failure) => {
+    const f = await configurationRig();
+    const reviewed = await f.setup.reviewConfiguration(f.assertCurrent);
+    if (reviewed.state !== "configuration-review") throw new Error("Expected config review");
+    if (failure === "target") f.changeTarget();
+    if (failure === "epoch") f.changeEpoch();
+    if (failure === "config") {
+      f.config.roles = {};
+      await f.save();
+    }
+    if (failure === "receipt") await writeFile(f.deps.receiptPath, "{}");
+    await expect(
+      f.setup.bindConfiguration(
+        failure === "stale-review" ? "00000000-0000-4000-8000-000000000000" : reviewed.review.id,
+        f.assertCurrent,
+      ),
+    ).rejects.toThrow();
+    expect(f.rebind).not.toHaveBeenCalled();
+  },
+);
+it("reports a Finder PATH miss without starting an agent, auto-installing it, changing permission grants or persisting env values", async () => {
+  const f = await configurationRig();
+  f.config.agents[0]!.command = "unavailable-synthetic-agent";
+  f.config.agents[0]!.env = { PATH: "/unavailable/synthetic/bin", SECRET: "synthetic private value" };
+  await f.save();
+  const reviewed = await f.setup.reviewConfiguration(f.assertCurrent);
+  if (reviewed.state !== "configuration-review") throw new Error("Expected config review");
+  expect(reviewed.review.checks).toEqual([{ agentId: "local-agent", state: "missing" }]);
+  expect(f.rebind).not.toHaveBeenCalled();
+  expect(JSON.stringify(reviewed)).not.toContain("synthetic private value");
+});

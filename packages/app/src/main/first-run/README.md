@@ -1,5 +1,9 @@
 # Dedicated first-run slice
 
+Current follow-up: [recovery and saved-configuration binding](../../../../../docs/implementation/first-run-recovery.md).
+The original limitations below describe the pinned constituent; the follow-up adds explicit
+machine-restart reconciliation and reviewed config rebind, with a separately owned wiring patch.
+
 Base: draft #559 `61ffe6ddebf1e5e0946e8cf237d9d1218bfa6664` over supplied
 main `db579fb7ac9cfce2e4e6901713088a80602311da`. Contracts consumed:
 #386/#390, closed #420/#427 and accepted #440/#542 plus #559's guided-launch README.

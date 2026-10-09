@@ -52,7 +52,7 @@ it.each([true, false])(
       error: {
         code: "AGENT_TRANSPORT",
         message: ownership
-          ? expect.stringContaining("no supported orphan reconciliation")
+          ? expect.stringContaining("Prepare explicit machine-restart recovery")
           : expect.stringContaining("Project setup was refused"),
       },
     });
@@ -139,7 +139,9 @@ it("persists the reservation before startup, and app recreation cannot retry int
       throw new Error("startup result lost");
     },
   });
-  await expect(first.workspace.prepareFirstRunConnection(path)).rejects.toThrow("no supported orphan reconciliation");
+  await expect(first.workspace.prepareFirstRunConnection(path)).rejects.toThrow(
+    "Prepare explicit machine-restart recovery",
+  );
   const before = await evidence(path);
   await first.workspace.close();
   const second = app(path);
@@ -244,7 +246,7 @@ it("app loss before persisting even an otherwise terminal child exit leaves rela
   const before = await evidence(path);
   const relaunched = app(path);
   await expect(relaunched.workspace.prepareFirstRunConnection(path)).rejects.toThrow(
-    "no supported orphan reconciliation",
+    "Prepare explicit machine-restart recovery",
   );
   expect(relaunched.start).not.toHaveBeenCalled();
   expect(before["000001/terminal.json"]).toBeUndefined();

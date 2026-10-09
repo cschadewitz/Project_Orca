@@ -81,6 +81,7 @@ import { RequestSubmissionModel } from "@orca/daemon";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
 import { memoryStores } from "@orca/store";
 import { scriptedAgentSpec } from "@orca/testing";
+import { firstRunRequiresExplicitContinuationRecovery } from "../first-run-recovery-fence.js";
 import { bootstrap, loadConfig, loadPlugins, type OrcaApp } from "../bootstrap.js";
 import { formatEvent, formatPaused, formatPendingInput, formatRunState, stepAgents } from "../format.js";
 import { daemonCall, DaemonRedirectError, isAuthenticationFailure } from "../daemon-client.js";
@@ -995,9 +996,10 @@ export const commands: Record<string, Command> = {
         await daemon.close();
         throw error;
       }
+      const explicitRecovery = firstRunRequiresExplicitContinuationRecovery(app.configDir);
       let recoveringContinuations: Promise<void> | undefined;
       const recoverContinuations = () => {
-        if (!daemon.recoverContinuations || recoveringContinuations) return;
+        if (explicitRecovery || !daemon.recoverContinuations || recoveringContinuations) return;
         recoveringContinuations = daemon
           .recoverContinuations()
           .catch(() => app.logger.warn("Continuation recovery requires explicit attention"))
@@ -1006,7 +1008,8 @@ export const commands: Record<string, Command> = {
           });
       };
       recoverContinuations();
-      const continuationTimer = daemon.recoverContinuations ? setInterval(recoverContinuations, 5_000) : undefined;
+      const continuationTimer =
+        !explicitRecovery && daemon.recoverContinuations ? setInterval(recoverContinuations, 5_000) : undefined;
       continuationTimer?.unref();
       ctx.out(
         `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,

@@ -1,5 +1,9 @@
 # First-run durable startup protection — 8 October
 
+Follow-up: [explicit first-run recovery and saved-configuration binding](first-run-recovery.md)
+implements the bounded operator route requested on 9 October. This document retains the
+original protective-only behavior and evidence of #569.
+
 This bounded protective slice stacks on exact #567
 `40f2ae8a05491884ce1ac8ac5c5d54721c3b6a20`. It preserves all constituent commits
 and branches. It closes loss of the first-run startup/cleanup reservation on app
