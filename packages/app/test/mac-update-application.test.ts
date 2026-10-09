@@ -26,12 +26,24 @@ afterEach(async () => {
 async function fixture(enabled = true) {
   const f = await macUpdateRehearsal();
   const root = await mkdtemp(join(tmpdir(), "orca-mac-app-"));
-  const session = new MacCandidateSession({
-    root,
-    limits: { fileBytes: 100_000, totalBytes: 1_000_000, operationMs: 10_000 },
-    fetch: f.downloadFetch,
-    trust: { catalog: f.catalog, inspect: f.inspect },
-  });
+  const session = new MacCandidateSession(
+    {
+      root,
+      limits: { fileBytes: 100_000, totalBytes: 1_000_000, operationMs: 10_000 },
+      fetch: f.downloadFetch,
+      trust: { catalog: f.catalog, inspect: f.inspect },
+    },
+    {
+      // Synthetic drain owner exercises IPC projection; production construction stays unavailable.
+      drainAdmission: async (expected, token) => ({
+        outcome: "ready",
+        lease: { target: expected, token, observe: async () => "held", release: async () => "released" },
+      }),
+      prepareDrafts: async () => ({ outcome: "blocked", blocker: "candidate" }),
+      prepareAdmission: async () => ({ outcome: "unknown" }),
+      checkPrepared: async () => "unknown",
+    },
+  );
   closers.push(async () => {
     await session.settled();
     await f.close();
@@ -148,6 +160,7 @@ it("routes exact approval/defer and intermediate snapshots through actual sandbo
   });
   expect(changed.mock.calls.map(([state]) => state.phase)).toEqual([
     "available",
+    "preparing",
     "downloading",
     "preparing",
     "waiting",

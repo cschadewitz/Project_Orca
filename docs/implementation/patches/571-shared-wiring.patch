@@ -1,0 +1,339 @@
+diff --git a/packages/app/src/main/workspace.ts b/packages/app/src/main/workspace.ts
+--- a/packages/app/src/main/workspace.ts
++++ b/packages/app/src/main/workspace.ts
+@@ -15,6 +15,8 @@
+ import {
+   MAINTENANCE_RUNTIME_METHOD,
+   RuntimeMaintenanceResultSchema,
++  RuntimeDrainResultSchema,
++  type RuntimeDrainResult,
+   type RuntimeMaintenanceResult,
+   isCompatible,
+   PROTOCOL_VERSION,
+@@ -23,6 +25,7 @@
+ import { resolve, join } from "node:path";
+ import { DaemonClient as AuthenticatedClient } from "../client/daemon-client.js";
+ import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
++import type { MacDrainOwner } from "./mac-update-drain.js";
+ import type { MacUpdateTarget } from "./mac-updates.js";
+ import type { WorkspaceSnapshot, WorkspaceSource } from "../bridge.js";
+ import type { DaemonClient } from "../client/daemon-client.js";
+@@ -45,6 +48,8 @@
+ }
+
+ export interface WorkspaceDeps {
++  /** Main creates this closed before any protected-state bootstrap or producer work. */
++  updateBootstrap?: { readonly ordinaryAllowed: boolean };
+   /** The bundled daemon's entry point, or undefined in a development build. */
+   findEntry: () => string | undefined;
+   /** Start `orca serve` on a workspace. `readOnly` becomes the `--read-only` flag. */
+@@ -136,6 +141,7 @@
+   private candidates = new Set<BundledDaemon>();
+   private connectionPreparations = new Set<symbol>();
+   private macUpdateHold: symbol | undefined;
++  private macUpdateFrozen = false;
+   /** Process-local restart fence. No replacement/admission may reopen after a stop attempt. */
+   private macUpdateStopping = false;
+   private firstRunHold: symbol | undefined;
+@@ -152,6 +158,13 @@
+   async captureMacUpdateTarget(expected: MacUpdateTarget): Promise<
+     | {
+         readonly target: Readonly<MacUpdateTarget>;
++        readonly runtimeTarget: MacDrainOwner["runtimeTarget"];
++        freeze(): boolean;
++        maintenanceDrain?: (
++          action: "drain" | "defer",
++          token: string,
++          signal?: AbortSignal,
++        ) => Promise<RuntimeDrainResult>;
+         check(): boolean;
+         release(): void;
+         stopOwned(
+@@ -218,7 +231,10 @@
+       this.source === "bundled" &&
+       !this.target.readOnly;
+     const release = () => {
+-      if (!this.macUpdateStopping && this.macUpdateHold === hold) this.macUpdateHold = undefined;
++      if (!this.macUpdateStopping && this.macUpdateHold === hold) {
++        this.macUpdateHold = undefined;
++        this.macUpdateFrozen = false;
++      }
+     };
+     let captured = false;
+     try {
+@@ -260,6 +276,30 @@
+           throw new Error("Owned runtime proof target changed");
+         return result;
+       };
++      const runtimeTarget = Object.freeze({
++        workspaceId: target.workspaceId,
++        instanceId: target.instanceId,
++        processId,
++      });
++      const drain = async (action: "drain" | "defer", token: string, signal?: AbortSignal) => {
++        if (!check() || this.macUpdateStopping) throw new Error("Owned drain target changed");
++        const result = await authenticated.call(
++          MAINTENANCE_RUNTIME_METHOD,
++          { action, token, target: runtimeTarget },
++          RuntimeDrainResultSchema,
++          false,
++          signal,
++          false,
++        );
++        if (
++          !check() ||
++          result.target.workspaceId !== target.workspaceId ||
++          result.target.instanceId !== target.instanceId ||
++          result.target.processId !== processId
++        )
++          throw new Error("Owned drain proof changed");
++        return result;
++      };
+       let stop: Promise<MacOwnedStopResult> | undefined;
+       const stopOwned = (
+         signal: AbortSignal,
+@@ -293,12 +333,19 @@
+       };
+       return {
+         target,
++        runtimeTarget,
++        freeze: () => {
++          if (!check()) return false;
++          this.macUpdateFrozen = true;
++          return true;
++        },
+         check,
+         release,
+         stopOwned,
+         ...(hello.methods?.includes(MAINTENANCE_RUNTIME_METHOD)
+           ? {
+               maintenanceRuntime: runtime,
++              maintenanceDrain: drain,
+             }
+           : {}),
+       };
+@@ -307,6 +354,29 @@
+       // when the hello result is lost or refused. Never resume an unverified daemon.
+       if (!captured) release();
+     }
++  }
++
++  /** Capture keeps existing completion IPC usable; final freeze is owned by held drain proof. */
++  async captureMacUpdateDrainTarget(expected: MacUpdateTarget): Promise<MacDrainOwner | undefined> {
++    const owned = await this.captureMacUpdateTarget(expected);
++    if (!owned) return undefined;
++    if (!owned.maintenanceRuntime || !owned.maintenanceDrain) {
++      owned.release();
++      return undefined;
++    }
++    const runtime = owned.maintenanceRuntime,
++      drain = owned.maintenanceDrain;
++    return {
++      target: owned.target,
++      runtimeTarget: owned.runtimeTarget,
++      check: owned.check,
++      release: owned.release,
++      freeze: owned.freeze,
++      runtime: (action, token, signal) =>
++        action === "drain" || action === "defer" ? drain(action, token, signal) : runtime(action, token, signal),
++      stopOwned: (signal, operationMs, token) =>
++        owned.stopOwned(signal, operationMs, () => this.macUpdateFrozen, token),
++    };
+   }
+
+   get connectionTarget(): DaemonTargetSnapshot {
+@@ -329,7 +399,8 @@
+   }
+
+   assertEpoch(epoch: number): void {
+-    if (this.macUpdateStopping) throw new Error("Update restart admission is closed");
++    if (this.macUpdateStopping || this.macUpdateFrozen || this.deps.updateBootstrap?.ordinaryAllowed === false)
++      throw new Error("Update restart admission is closed");
+     if (epoch !== this.epoch) throw new Error("The daemon changed. This operation belongs to the previous connection.");
+   }
+
+@@ -389,9 +460,13 @@
+   }
+
+   /** Stage only a bundled owned child for this exact reviewed workspace; never seek a default port. */
+-  async prepareFirstRunConnection(
+-    path: string,
+-  ): Promise<ConnectionCandidate & { expectedProcessId: number; validateActivation(hello: HelloResult): void }> {
++  async prepareFirstRunConnection(path: string): Promise<
++    ConnectionCandidate & {
++      expectedProcessId: number;
++      validateActivation(hello: HelloResult): void;
++    }
++  > {
++    if (this.deps.updateBootstrap?.ordinaryAllowed === false) throw new Error("Update replacement bootstrap is closed");
+     if (this.deps.explicitUrl) throw new ConnectionRefusal("ORCA_DAEMON_URL controls this launch.");
+     if (
+       this.closed ||
+@@ -767,12 +842,15 @@
+    * when it stops waiting, not the one that was there when it started.
+    */
+   async ready(): Promise<void> {
+-    if (this.macUpdateStopping) throw new Error("Update restart admission is closed");
++    if (this.macUpdateStopping || this.macUpdateFrozen || this.deps.updateBootstrap?.ordinaryAllowed === false)
++      throw new Error("Update restart admission is closed");
+     while (this.pending) await this.pending;
+   }
+
+   /** The first connection, from `whenReady`. Never rejects — see `switchTo`. */
+   connect(): Promise<void> {
++    if (this.deps.updateBootstrap?.ordinaryAllowed === false)
++      return Promise.reject(new Error("Update replacement bootstrap is closed"));
+     if (this.closed || this.macUpdateHold || this.firstRunHold || this.connectionPreparations.size)
+       return Promise.reject(new Error("Workspace is busy"));
+     if (!this.deps.explicitUrl && !this.savedUrl && !this.target.path) {
+@@ -789,6 +867,7 @@
+    * window that silently did nothing.
+    */
+   async open(path: string): Promise<WorkspaceSnapshot> {
++    if (this.deps.updateBootstrap?.ordinaryAllowed === false) throw new Error("Update replacement bootstrap is closed");
+     if (this.closed || this.updating || this.macUpdateHold || this.firstRunHold || this.connectionPreparations.size)
+       throw new Error("Update restart or connection preparation is in progress");
+     if (!this.deps.findEntry()) throw new NoBundledDaemonError(path);
+@@ -801,6 +880,7 @@
+
+   /** The banner's **Connect to a daemon**: back to the daemon the app would have used. */
+   async connectLive(): Promise<WorkspaceSnapshot> {
++    if (this.deps.updateBootstrap?.ordinaryAllowed === false) throw new Error("Update replacement bootstrap is closed");
+     if (this.closed || this.updating || this.macUpdateHold || this.firstRunHold || this.connectionPreparations.size)
+       throw new Error("Update restart or connection preparation is in progress");
+     const { explicitUrl, defaultPath } = this.deps;
+@@ -819,7 +899,7 @@
+     this.stream = undefined;
+     const daemon = this.daemon;
+     this.daemon = undefined;
+-    if (!this.macUpdateStopping && daemon) await this.stopFirstRunOwned(daemon);
++    if (!this.macUpdateStopping && !this.macUpdateHold && daemon) await this.stopFirstRunOwned(daemon);
+     const parked = this.parkedDefault;
+     this.parkedDefault = undefined;
+     if (parked && parked !== daemon) await this.stopFirstRunOwned(parked);
+diff --git a/packages/app/src/main/index.ts b/packages/app/src/main/index.ts
+--- a/packages/app/src/main/index.ts
++++ b/packages/app/src/main/index.ts
+@@ -663,7 +663,12 @@
+   createDeferred: createWindow,
+ });
+ // Trusted candidate/recovery/native owners are absent: production routing stays unavailable.
+-export const macUpdateGuards = new MacUpdateGuards(workspace, macUpdateWindows, () => firstRun.isBusy);
++export const macUpdateGuards = new MacUpdateGuards(
++  workspace,
++  macUpdateWindows,
++  () => firstRun.isBusy,
++  (target) => workspace.captureMacUpdateDrainTarget(target),
++);
+ const macUpdates = new MacUpdateApplication();
+ installMacUpdateIPC(macUpdates, {
+   ipc: ipcMain,
+diff --git a/packages/app/test/mac-update-wiring.test.ts b/packages/app/test/mac-update-wiring.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/app/test/mac-update-wiring.test.ts
+@@ -0,0 +1,104 @@
++/** Only applied with the #571 wiring patch; actual owner RPC, synthetic child/subscription. */
++import { mkdtemp, writeFile, rm } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { randomUUID } from "node:crypto";
++import { afterEach, expect, it, vi } from "vitest";
++import { Workspace } from "../src/main/workspace.js";
++import { DaemonClient } from "../src/client/daemon-client.js";
++import { LocalDaemonToken } from "../src/client/auth.js";
++import type { DaemonSubscription } from "../src/client/subscription.js";
++import { captureMacDrain, prepareMacDrain } from "../src/main/mac-update-drain.js";
++import { runtimeMaintenanceFixture } from "../../daemon/test/runtime-maintenance-fixture.js";
++const closers: (() => Promise<void>)[] = [];
++afterEach(async () => {
++  for (const close of closers.splice(0).reverse()) await close();
++});
++async function fixture(bootstrap?: { ordinaryAllowed: boolean }) {
++  const f = await runtimeMaintenanceFixture({ gated: true });
++  closers.push(f.close);
++  const directory = await mkdtemp(join(tmpdir(), "orca-wiring-token-"));
++  closers.push(() => rm(directory, { recursive: true }));
++  const tokenFile = join(directory, "owner.token");
++  await writeFile(tokenFile, f.owner.token, { mode: 0o600 });
++  const stop = vi.fn(async () => {});
++  const workspace = new Workspace({
++    ...(bootstrap ? { updateBootstrap: bootstrap } : {}),
++    findEntry: () => "fixture",
++    start: async () => ({
++      url: f.daemon.url,
++      pid: process.pid,
++      tokenFile,
++      stop,
++    }),
++    client: (url) =>
++      new DaemonClient(url, fetch, {
++        requireAuthentication: true,
++        auth: new LocalDaemonToken({ url, tokenFile, env: {} }),
++      }),
++    subscribe: () => ({ close: () => {} }) as unknown as DaemonSubscription,
++    onSwitch: () => {},
++    onSnapshot: () => {},
++    onDaemonGone: () => {},
++    defaultUrl: f.daemon.url,
++    defaultPath: () => f.dir,
++  });
++  closers.push(() => workspace.close());
++  return { ...f, workspace, stop };
++}
++it("keeps Workspace completion IPC usable during parked drain, then freezes on the same held owner", async () => {
++  const f = await fixture();
++  await f.workspace.connect();
++  f.workspace.observeHello(f.workspace.client, await f.workspace.client.hello("wiring-test", false));
++  const started = await f.call("runs.start", { workflowId: "flow" });
++  if (!started.ok) throw new Error("Start failed");
++  const runId = (started.result as { runId: string }).runId;
++  const target = { ...f.identity, epoch: f.workspace.connectionTarget.epoch };
++  const drain = await captureMacDrain(
++    (expected) => f.workspace.captureMacUpdateDrainTarget(expected),
++    target,
++    randomUUID(),
++  );
++  if (drain.outcome !== "ready") throw new Error("Capture failed");
++  expect(await drain.lease.observe()).toBe("draining");
++  await expect(f.workspace.ready()).resolves.toBeUndefined();
++  expect(() => f.workspace.assertEpoch(target.epoch)).not.toThrow();
++  const [input] = await f.orc.pendingInputs(runId);
++  expect(
++    await f.call("inputs.answer", {
++      runId,
++      requestId: input!.id,
++      optionId: "finish",
++    }),
++  ).toMatchObject({ ok: true });
++  expect(await drain.lease.observe()).toBe("held");
++  const prepared = await prepareMacDrain(drain.lease, target, drain.lease.token, () => true);
++  expect(prepared.outcome).toBe("ready");
++  await expect(f.workspace.ready()).rejects.toThrow("closed");
++  expect(() => f.workspace.assertEpoch(target.epoch)).toThrow("closed");
++  if (prepared.outcome !== "ready") throw new Error("Prepare failed");
++  expect(await prepared.lease.release()).toBe("released");
++  await expect(f.workspace.ready()).resolves.toBeUndefined();
++});
++it("ordinary quit never invokes forced shutdown for an updater-owned drain reservation", async () => {
++  const f = await fixture();
++  await f.workspace.connect();
++  f.workspace.observeHello(f.workspace.client, await f.workspace.client.hello("wiring-test", false));
++  const target = { ...f.identity, epoch: f.workspace.connectionTarget.epoch };
++  const drain = await captureMacDrain(
++    (expected) => f.workspace.captureMacUpdateDrainTarget(expected),
++    target,
++    randomUUID(),
++  );
++  if (drain.outcome !== "ready") throw new Error("Capture failed");
++  await drain.lease.observe();
++  await f.workspace.close();
++  expect(f.stop).not.toHaveBeenCalled();
++});
++it("a durable bootstrap gate blocks normal and first-run process startup before writer work", async () => {
++  const f = await fixture({ ordinaryAllowed: false });
++  await expect(f.workspace.connect()).rejects.toThrow("closed");
++  await expect(f.workspace.prepareFirstRunConnection(f.dir)).rejects.toThrow("closed");
++  expect(f.stop).not.toHaveBeenCalled();
++  expect(() => f.workspace.assertEpoch(0)).toThrow("closed");
++});

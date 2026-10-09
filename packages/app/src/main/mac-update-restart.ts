@@ -291,37 +291,11 @@ export class MacRestartVerification {
       const owner = stoppedOwners.get(request.stopped);
       if (!owner || owner.claimed || !this.ports.check())
         return this.finish({ outcome: "refused", reason: "ownership" });
-      if (request.manifestBytes.length > MAC_METADATA_LIMIT)
+      try {
+        this.binding = this.captureBinding(request, owner.target);
+      } catch {
         return this.finish({ outcome: "refused", reason: "candidate" });
-      const bytes = Buffer.from(request.manifestBytes);
-      const manifest = freezeMacMetadata(readMacManifest(bytes));
-      const candidate = Object.freeze({
-        manifestSha256: request.candidate.manifestSha256,
-        channel: request.candidate.channel,
-        compatibilityPlanId: request.candidate.compatibilityPlanId,
-        recoveryPlanId: request.candidate.recoveryPlanId,
-      });
-      if (
-        manifest.kind !== "candidate" ||
-        manifest.signing.teamId !== "Q2FP9UY5T4" ||
-        sha256(bytes) !== candidate.manifestSha256 ||
-        ![candidate.channel, candidate.compatibilityPlanId, candidate.recoveryPlanId].every(macContractText) ||
-        !isAbsolute(request.storeDir) ||
-        resolve(request.storeDir) !== request.storeDir ||
-        !request.methods.includes("hello") ||
-        !request.methods.includes("maintenance") ||
-        !request.methods.every(macContractText)
-      )
-        return this.finish({ outcome: "refused", reason: "candidate" });
-      const capabilities = z.array(DaemonCapabilitySchema).parse(request.capabilities);
-      this.binding = freezeMacMetadata({
-        candidate,
-        manifest,
-        previous: owner.target,
-        storeDir: request.storeDir,
-        capabilities,
-        methods: [...request.methods],
-      });
+      }
       owner.claimed = true;
       return await macBounded(signal, this.operationMs, async (bounded) => {
         const launched = await macAbortable(() => this.ports!.startClosed(this.binding!, bounded), bounded);
@@ -362,6 +336,106 @@ export class MacRestartVerification {
         });
         return this.finish(await this.inspect(bounded));
       });
+    } catch {
+      return this.finish({ outcome: "unknown" });
+    }
+  }
+  private captureBinding(
+    request: Omit<MacRestartRequest, "stopped">,
+    previous: RuntimeMaintenanceTarget,
+  ): MacRestartBinding {
+    if (request.manifestBytes.length > MAC_METADATA_LIMIT) throw new Error("Candidate refused");
+    const bytes = Buffer.from(request.manifestBytes);
+    const manifest = freezeMacMetadata(readMacManifest(bytes));
+    const candidate = Object.freeze({
+      manifestSha256: request.candidate.manifestSha256,
+      channel: request.candidate.channel,
+      compatibilityPlanId: request.candidate.compatibilityPlanId,
+      recoveryPlanId: request.candidate.recoveryPlanId,
+    });
+    if (
+      manifest.kind !== "candidate" ||
+      manifest.signing.teamId !== "Q2FP9UY5T4" ||
+      sha256(bytes) !== candidate.manifestSha256 ||
+      ![candidate.channel, candidate.compatibilityPlanId, candidate.recoveryPlanId].every(macContractText) ||
+      !isAbsolute(request.storeDir) ||
+      resolve(request.storeDir) !== request.storeDir ||
+      !request.methods.includes("hello") ||
+      !request.methods.includes("maintenance") ||
+      !request.methods.every(macContractText)
+    )
+      throw new Error("Candidate refused");
+    const capabilities = z.array(DaemonCapabilitySchema).parse(request.capabilities);
+    return freezeMacMetadata({
+      candidate,
+      manifest,
+      previous,
+      storeDir: request.storeDir,
+      capabilities,
+      methods: [...request.methods],
+    });
+  }
+  /** Fresh durable supervisor inspects an ALREADY owned closed replacement. The journal owner
+   * must independently establish the child and exact durable fence before calling. This path
+   * cannot launch, consume/recreate stop receipts, reuse consent or release admission. */
+  inspectExistingClosed(
+    request: Omit<MacRestartRequest, "stopped"> & {
+      readonly previous: RuntimeMaintenanceTarget;
+      readonly process: MacRestartProcess;
+      readonly fenceId: string;
+    },
+    signal: AbortSignal,
+  ): Promise<MacRestartResult> {
+    if (this.operation) return this.operation;
+    if (this.result) return Promise.resolve(this.result);
+    this.operation = this.inspectExisting(request, signal).finally(() => {
+      this.operation = undefined;
+    });
+    return this.operation;
+  }
+  private async inspectExisting(
+    request: Omit<MacRestartRequest, "stopped"> & {
+      readonly previous: RuntimeMaintenanceTarget;
+      readonly process: MacRestartProcess;
+      readonly fenceId: string;
+    },
+    signal: AbortSignal,
+  ): Promise<MacRestartResult> {
+    try {
+      if (!this.ports || !boundMs(this.operationMs) || !this.ports.check())
+        return this.finish({ outcome: "refused", reason: "ownership" });
+      const previous = RuntimeMaintenanceTargetSchema.parse(request.previous);
+      try {
+        this.binding = this.captureBinding(request, previous);
+      } catch {
+        return this.finish({ outcome: "refused", reason: "candidate" });
+      }
+      const process = request.process;
+      if (
+        !alive(process.child) ||
+        process.instanceId === previous.instanceId ||
+        !z.uuid().safeParse(request.fenceId).success ||
+        process.fenceId !== request.fenceId ||
+        ![process.hello, process.image, process.store, process.closed].every((port) => typeof port === "function")
+      )
+        return this.finish({ outcome: "unknown" });
+      this.target = Object.freeze(
+        RuntimeMaintenanceTargetSchema.parse({
+          workspaceId: previous.workspaceId,
+          instanceId: process.instanceId,
+          processId: process.child.pid,
+        }),
+      );
+      this.process = Object.freeze({
+        child: process.child,
+        instanceId: process.instanceId,
+        fenceId: process.fenceId,
+        hello: process.hello,
+        image: process.image,
+        store: process.store,
+        closed: process.closed,
+      });
+      return this.finish(await macBounded(signal, this.operationMs, (bounded) => this.inspect(bounded)));
     } catch {
       return this.finish({ outcome: "unknown" });
     }
