@@ -345,7 +345,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           currentPrincipal: (principal) => {
             if (!principal.credentialId) throw authRequired();
             const current = auth.credentials.current(principal.credentialId);
-            if (!current.ok) throw authRequired();
+            if (!current.ok) throw authInvalid();
             return current.principal;
           },
           resolver: auth.resolver,

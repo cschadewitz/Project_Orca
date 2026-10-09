@@ -106,8 +106,27 @@ A credential holds a list of these permissions:
 | `agents.read`        | Agent health; `agent.changed`.                                             |
 | `agents.ping`        | Spawn an agent to perform a handshake.                                     |
 | `config.read`        | `config.get`, which returns the configuration **unredacted**; `config.changed`. |
-| `config.write`       | `config.set`, `config.apply`.                                                              |
+| `config.write`       | `config.set` (also requires `config.read`), `config.apply`.                                 |
 | `daemon.maintenance` | The update coordinator's admission control.                                |
+
+`config.read` authorizes legacy unredacted editor bytes. Every `config.set` form,
+including empty patch/structured edits and `validateOnly`, returns those bytes and
+therefore requires both `config.write` and `config.read`. Discovery omits Save
+without both grants, and refusal precedes parameter diagnostics. `config.apply`
+retains `config.write` alone: its status/validation result does not include editor
+bytes. Existing named presets retain their grants; custom write-only credentials
+must acquire separately reviewed raw-read authority to use Save. The CLI still
+does not offer arbitrary permission-list provisioning.
+
+Raw reads recheck current authority after disk reads. Saves recheck under the
+document's existing writer lock and after staging, immediately before replacement;
+refusal removes the staged file. Apply rechecks after asset preparation and durable
+candidate persistence, before activating the generation. Missing credentials remain
+`AUTH_REQUIRED`; an already bound credential that becomes expired, revoked or
+unavailable returns the same `AUTH_INVALID` as transport authentication. Reduced
+grants return `AUTH_FORBIDDEN`. A lost acknowledgement after a successful replacement
+still requires reading and reconciling the saved revision; this adds no automatic
+retry or rollback of a committed write.
 
 A **resource scope** limits which resources those permissions apply to:
 
@@ -202,7 +221,7 @@ that the two match. A method that is missing from the table is refused with
 | `templates.assign` | `config.write` | additionally config.read; reviewed YAML node assignment and new workflow version | mutation |
 | `templates.publish` | `config.write` | additionally config.read; guarded catalog and generation Apply | mutation |
 | `config.get` | `config.read` | workspace-wide | — |
-| `config.set` | `config.write` | workspace-wide | mutation |
+| `config.set` | `config.write` | additionally config.read; workspace-wide unredacted Save/validation receipt | mutation |
 | `config.apply` | `config.write` | workspace-wide | mutation |
 | `plans.list` | `plan.read` | workspace-wide | — |
 | `plan.get` | `plan.read` | workspace-wide | — |
@@ -466,3 +485,8 @@ migration proof. Current-main CI passed on Node 22/24 at
 that does not prove an upgraded agent-01 runtime or actual-Cal behavior. Keep
 these remaining [#328 criteria](https://github.com/cschadewitz/Project_Orca/issues/328)
 open until their own evidence exists.
+
+The [9 October bounded contract/evidence review](implementation/m10-security-contract-closure.md)
+maps the remaining configuration, editor and secret-reference criteria separately.
+It retains #180/#336 implementation acceptance and deployed/native checks as open;
+current source security checks do not establish those future surfaces.

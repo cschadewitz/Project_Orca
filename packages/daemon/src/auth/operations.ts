@@ -153,7 +153,13 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   },
   "config.get": { permission: "config.read", resource: "none" },
   "config.apply": { permission: "config.write", resource: "none", audit: "mutation" },
-  "config.set": { permission: "config.write", resource: "none", audit: "mutation" },
+  // Every Save/validation receipt includes unredacted document bytes, even for an empty patch.
+  "config.set": {
+    permission: "config.write",
+    additionalPermissions: ["config.read"],
+    resource: "none",
+    audit: "mutation",
+  },
 
   "plans.list": { permission: "plan.read", resource: "none" },
   "plan.get": { permission: "plan.read", resource: "none" },
