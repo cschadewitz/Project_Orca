@@ -72,6 +72,7 @@ import { describeConfigSchema, validationErrors } from "./config-schema.js";
 import { describeConfigFormSchema } from "./config-form-schema.js";
 import { lowerConfigEdits } from "./config-collection-edits.js";
 import { configReferenceErrors } from "./config-references.js";
+import { TemplateAuthoringService } from "./template-authoring.js";
 
 /** The default name a `config.set` creates when the workspace has no config file yet. */
 export const DEFAULT_CONFIG_FILENAME = "orca.config.yaml";
@@ -127,6 +128,7 @@ export interface ConfigChange {
  * frame has the same shape of life - no run, no cursor, nothing to replay.
  */
 export class ConfigModel {
+  readonly templates: TemplateAuthoringService;
   private readonly generations: ConfigGenerationProvider | undefined;
   private readonly configFile: string;
   private readonly permissionsFile: string;
@@ -138,6 +140,16 @@ export class ConfigModel {
     this.permissionsFile = opts.permissionsFile ?? join(opts.configDir, PERMISSION_POLICY_FILENAME);
     this.clock = opts.clock ?? systemClock;
     this.generations = opts.generations;
+    this.templates = new TemplateAuthoringService({
+      baseDir: opts.configDir,
+      readConfig: () => this.get(),
+      exclusive: async (command) => {
+        await mkdir(dirname(this.configFile), { recursive: true });
+        return withFileLock(`${this.configFile}.lock`, command);
+      },
+      applyLocked: (params, recheck) => this.applyLocked(params, recheck),
+      changed: () => this.announce("config"),
+    });
     this.generations?.onChange((generation, workflows) => {
       const change: ConfigChange = {
         document: "config",
@@ -266,27 +278,31 @@ export class ConfigModel {
 
   /** Explicit manual refresh: reads current file bytes and all candidate assets under the writer lock. */
   async apply(params: ConfigApplyParams): Promise<ConfigApplyResult> {
+    await mkdir(dirname(this.configFile), { recursive: true });
+    return withFileLock(`${this.configFile}.lock`, () => this.applyLocked(params));
+  }
+
+  /** Template publication holds the same lock across catalog verification and generation activation. */
+  private async applyLocked(params: ConfigApplyParams, catalogCheck?: () => Promise<void>): Promise<ConfigApplyResult> {
     const generations = this.generations;
     if (!generations) throw new OrcaError("NOT_SUPPORTED", "configuration activation is not wired");
-    await mkdir(dirname(this.configFile), { recursive: true });
-    return withFileLock(`${this.configFile}.lock`, async () => {
-      const current = await this.read("config");
-      if (current.revision !== params.expectedRevision)
+    const current = await this.read("config");
+    if (current.revision !== params.expectedRevision)
+      throw new ProtocolFault("CONFIG_STALE", "saved configuration changed; refresh before applying");
+    const recheck = async () => {
+      await catalogCheck?.();
+      const latest = await this.read("config");
+      if (latest.revision !== params.expectedRevision)
         throw new ProtocolFault("CONFIG_STALE", "saved configuration changed; refresh before applying");
-      const recheck = async () => {
-        const latest = await this.read("config");
-        if (latest.revision !== params.expectedRevision)
-          throw new ProtocolFault("CONFIG_STALE", "saved configuration changed; refresh before applying");
-      };
-      await recheck();
-      return generations.apply(
-        configurationValue(current),
-        current.revision,
-        params.expectedGeneration,
-        params.validateOnly ?? false,
-        recheck,
-      );
-    });
+    };
+    await recheck();
+    return generations.apply(
+      configurationValue(current),
+      current.revision,
+      params.expectedGeneration,
+      params.validateOnly ?? false,
+      recheck,
+    );
   }
 
   /**

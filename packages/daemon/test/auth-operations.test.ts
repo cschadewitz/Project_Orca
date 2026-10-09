@@ -19,6 +19,7 @@ import {
   PLAN_READ_METHODS,
   READ_METHODS,
   SUBSCRIPTION_METHODS,
+  TEMPLATE_METHOD_CONTRACTS,
 } from "@orca/protocol";
 import { methodsFor, type MethodContext, type MethodTable } from "@orca/daemon";
 import { Maintenance } from "../src/maintenance.js";
@@ -50,6 +51,10 @@ function everyAnsweredMethod(): string[] {
   const full: MethodContext = {
     orcaVersion: "0.0.0",
     capabilities: [],
+    identity: {
+      workspaceId: "11111111-1111-4111-8111-111111111111",
+      instanceId: "22222222-2222-4222-8222-222222222222",
+    },
     maintenance: new Maintenance(),
     revisionInputs: async () => {
       throw new Error("inventory fixture must not execute");
@@ -82,6 +87,7 @@ describe("the operation inventory", () => {
       ...CONTROL_METHODS,
       ...AGENT_METHODS,
       ...SUBSCRIPTION_METHODS,
+      ...Object.keys(TEMPLATE_METHOD_CONTRACTS),
       ...everyAnsweredMethod(),
       WORKFLOWS_VALIDATE_INPUTS_OPERATION,
     ]);

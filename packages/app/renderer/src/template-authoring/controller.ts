@@ -18,6 +18,7 @@ export interface AuthoringState {
   readonly edits: readonly SourceEdit[];
   readonly sequence: number;
   readonly busy: boolean;
+  readonly saving?: boolean;
   readonly blocked?: string;
   readonly message?: string;
   readonly review?: AuthoringReview;
@@ -136,6 +137,7 @@ export class TemplateAuthoringController {
     const base = this.state.base;
     // Read visibility is current authority and can change without any content/write fence.
     const sameIdentity = sameTarget(base.target, snapshot.target);
+    if (!sameIdentity) this.readable = new Set();
     const nextReadable = new Set(
       snapshot.assets.filter((asset) => asset.source.state === "available").map((asset) => asset.key),
     );
@@ -181,6 +183,34 @@ export class TemplateAuthoringController {
     }
   }
 
+  /** Explicit source reconciliation retains edits and always requires a fresh review. */
+  reconcile(snapshot: AuthoringSnapshot, retain: boolean): boolean {
+    if (this.state.busy || !sameTarget(this.state.base.target, snapshot.target) || snapshot.writeReason) return false;
+    if (
+      retain &&
+      this.state.edits.some(
+        (edit) => !snapshot.assets.some((asset) => asset.key === edit.key && asset.source.state === "available"),
+      )
+    )
+      return false;
+    this.operation++;
+    this.pendingPreview = undefined;
+    this.created.clear();
+    this.readable = new Set(
+      snapshot.assets.filter((asset) => asset.source.state === "available").map((asset) => asset.key),
+    );
+    this.update({
+      base: snapshot,
+      edits: retain ? this.state.edits : [],
+      sequence: this.state.sequence + 1,
+      busy: false,
+      message: retain
+        ? "Retained source rebased explicitly. Validate and review before saving."
+        : "Current saved sources loaded. Unsaved changes discarded.",
+    });
+    return true;
+  }
+
   private begin(): { ticket: number; candidate: AuthoringCandidate } | undefined {
     if (this.state.busy || this.state.blocked || this.state.base.writeReason) return undefined;
     const ticket = ++this.operation;
@@ -198,7 +228,10 @@ export class TemplateAuthoringController {
   }
 
   private finish(ticket: number): void {
-    if (ticket === this.operation) this.update({ ...this.state, busy: false });
+    if (ticket === this.operation) {
+      const { saving: _saving, ...rest } = this.state;
+      this.update({ ...rest, busy: false });
+    }
   }
 
   async validate(): Promise<void> {
@@ -287,6 +320,7 @@ export class TemplateAuthoringController {
     if (!review || !publish) return;
     const request = this.begin();
     if (!request) return;
+    this.update({ ...this.state, saving: true });
     try {
       const result = await publish(request.candidate, review.candidateRevision);
       if (request.ticket !== this.operation) return;

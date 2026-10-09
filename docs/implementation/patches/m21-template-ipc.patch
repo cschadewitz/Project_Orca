@@ -1,0 +1,33 @@
+--- a/packages/app/src/main/index.ts
++++ b/packages/app/src/main/index.ts
+@@ -41,6 +41,8 @@
+ import type { NotificationMessage } from "@orca/protocol";
+ import type { AlertItem, AlertsUpdate, BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
+ import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/daemon-client.js";
++import { callTemplate } from "../client/template-client.js";
++import type { TemplateMethod } from "../template-bridge.js";
+ import { daemonEndpoint } from "../daemon-connection.js";
+ import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
+ import { PreferencesFile } from "../preferences/preferences-file.js";
+@@ -317,6 +319,9 @@
+ // `--read-only` daemon answers both, because a workflow is a file and not a run.
+ handle("orca:workflows.list", (params: Parameters<DaemonClient["workflowsList"]>[0]) => client().workflowsList(params));
+ handle("orca:workflows.get", (params: Parameters<DaemonClient["workflowsGet"]>[0]) => client().workflowsGet(params));
++handle("orca:templates", (command: { method: TemplateMethod; params: unknown }) =>
++  callTemplate(client(), command.method, command.params),
++);
+ handle("orca:config.get", (params: Parameters<DaemonClient["configGet"]>[0]) => client().configGet(params));
+ handle("orca:config.apply", (params: Parameters<DaemonClient["configApply"]>[0]) => client().configApply(params));
+ handle("orca:workflows.validateInputs", (params: Parameters<DaemonClient["workflowsValidateInputs"]>[0]) =>
+--- a/packages/app/src/preload/index.cts
++++ b/packages/app/src/preload/index.cts
+@@ -270,6 +270,9 @@
+     validateInputs: (params) => call("orca:workflows.validateInputs", params),
+   },
+   agents: { list: (params = {}) => call("orca:agents.list", params) },
++  templates: {
++    call: (method, params) => call("orca:templates", { method, params }),
++  },
+   config: {
+     get: (params = {}) => call("orca:config.get", params),
+     set: (params) => call("orca:config.set", params),

@@ -1,0 +1,150 @@
+--- a/packages/app/src/bridge.ts
++++ b/packages/app/src/bridge.ts
+@@ -14,6 +14,7 @@
+  * says so. `alerts.update` is the one call in the other direction with nothing to answer:
+  * it states what is waiting, and the main process has no verdict to give back.
+  */
++import type { TemplateBridge } from "./template-bridge.js";
+ import type { DiagnosticsBridge } from "./diagnostics-contract.js";
+ import type { FirstRunBridge } from "./first-run-contract.js";
+ import type { DaemonConnectionBridge } from "./daemon-connection.js";
+@@ -416,6 +417,8 @@
+     /** Saved and active remain separate guarded operations. */
+     apply?: (params: ConfigApplyParams) => Promise<BridgeResult<ConfigApplyResult>>;
+   };
++  /** Optional until the integration owner registers the typed template IPC dispatcher. */
++  templates?: TemplateBridge;
+   notifications: {
+     /**
+      * Daemon-initiated messages: run and step transitions, coalesced agent output, inputs
+--- a/packages/app/renderer/src/config/configuration-studio-surface.tsx
++++ b/packages/app/renderer/src/config/configuration-studio-surface.tsx
+@@ -19,6 +19,9 @@
+ import { agentPolicies } from "./config-model.js";
+ import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
+ import { FirstRunSection } from "../first-run/first-run-section.js";
++import { TemplateStudioSurface } from "../template-authoring/surface.js";
++import { useTemplateStudio } from "../template-authoring/context.js";
++import { configurationReferenceChoices } from "./reference-choices.js";
+
+ export function ConfigurationStudioSurface({
+   connection,
+@@ -34,10 +37,12 @@
+   useSurfaceDensity();
+   const feed = useConfig();
+   const studio = useConfigurationStudio();
++  const templateStudio = useTemplateStudio().studio;
+   const keyboard = useKeyboard();
+   const [replace, setReplace] = useState<"form" | "raw">();
+   const [privatePreview, setPrivatePreview] = useState(false);
+   const [policyConfirmed, setPolicyConfirmed] = useState(false);
++  const [templates, showTemplates] = useState(false);
+   const sequence = studio?.state.sequence;
+   useEffect(() => {
+     setPolicyConfirmed(false);
+@@ -45,6 +50,7 @@
+   }, [sequence]);
+   const switchMode = useCallback(
+     (mode: "form" | "raw") => {
++      showTemplates(false);
+       if (studio && !studio.switchMode(mode)) setReplace(mode);
+     },
+     [studio],
+@@ -60,18 +66,21 @@
+   };
+   const canSave = !launch && studio?.review !== undefined && !studio.busy && studio.reason("save") === undefined;
+   useEffect(() => {
+-    if (!canSave) return;
++    if (!canSave || templates) return;
+     return keyboard.register({
+       scope: "config",
+       key: "Mod+S",
+       label: "Save reviewed configuration",
+       action: () => save.current(),
+     });
+-  }, [canSave, keyboard]);
+-  const data = studio?.source ?? (feed.state.phase === "ready" ? feed.state.data : undefined);
++  }, [canSave, templates, keyboard]);
++  const sourceAuthorized = studio?.readable ?? true;
++  const data = sourceAuthorized
++    ? (studio?.source ?? (feed.state.phase === "ready" ? feed.state.data : undefined))
++    : undefined;
+   // Sidecar notifications remain current while the config session retains its original base.
+   const permissions =
+-    feed.state.phase === "ready" && (!studio || sameEditorTarget(feed.state.target, studio.target))
++    sourceAuthorized && feed.state.phase === "ready" && (!studio || sameEditorTarget(feed.state.target, studio.target))
+       ? feed.state.data
+       : data;
+   const state = studio?.state;
+@@ -89,18 +98,29 @@
+                 Launch work
+               </Button>
+             )}
+-            {!launch &&
+-              (["form", "raw"] as const).map((mode) => (
++            {!launch && (
++              <>
+                 <button
+-                  key={mode}
+                   type="button"
+                   className={`orca-seg__btn ${textClass("label")}`}
+-                  aria-pressed={(studio?.mode ?? "form") === mode}
+-                  onClick={() => switchMode(mode)}
++                  aria-pressed={templates}
++                  onClick={() => showTemplates(true)}
+                 >
+-                  {mode === "form" ? "Form" : "Raw"}
++                  Templates
+                 </button>
+-              ))}
++                {(["form", "raw"] as const).map((mode) => (
++                  <button
++                    key={mode}
++                    type="button"
++                    className={`orca-seg__btn ${textClass("label")}`}
++                    aria-pressed={!templates && (studio?.mode ?? "form") === mode}
++                    onClick={() => switchMode(mode)}
++                  >
++                    {mode === "form" ? "Form" : "Raw"}
++                  </button>
++                ))}
++              </>
++            )}
+           </div>
+         }
+       />
+@@ -109,6 +129,14 @@
+         <DiagnosticsSection key="diagnostics" />
+         {launch ? (
+           launch
++        ) : templates ? (
++          <TemplateStudioSurface />
++        ) : !sourceAuthorized ? (
++          <StateView
++            kind="disconnected"
++            title="Configuration source withheld"
++            body="Source authority or daemon target changed. Retained edits remain private until access is restored and current state is reviewed."
++          />
+         ) : !data ? (
+           feed.state.phase === "error" ? (
+             <StateView
+@@ -159,6 +187,9 @@
+                   access={(edits) => studio.editAccess(edits)}
+                   onEdit={(edits) => studio.edit(edits)}
+                   rowKey={studio.rowKey}
++                  referenceChoices={(path) =>
++                    configurationReferenceChoices(studio.value, templateStudio?.adapter.current, path)
++                  }
+                   onShowRaw={() => switchMode("raw")}
+                 />
+               ) : (
+@@ -284,7 +315,8 @@
+                 {studio.frozen && (
+                   <>
+                     <Text style="caption">
+-                      The original draft remains frozen. Reading does not rebase or retry its edits.
++                      Overlapping edits and raw replacements stay retained. Reading reconciles independent form edits
++                      and requires a fresh review; it never retries a write.
+                     </Text>
+                     <Button
+                       disabled={studio.busy}

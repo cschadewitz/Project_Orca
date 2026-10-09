@@ -193,6 +193,14 @@ that the two match. A method that is missing from the table is refused with
 | `runs.cancel` | `runs.control` | the run | mutation |
 | `inputs.answer` | `inputs.answer` | the exact open gate and its run; `always` also needs `permissions.grant` | decision |
 | `claims.release` | `claims.release` | the claim's owning run | mutation |
+| `templates.get` | `config.read` | workspace-wide authorized source catalog | — |
+| `templates.history` | `config.read` | acknowledged local revision digests and activation IDs; no historical source | — |
+| `templates.validate` | `config.read` | canonical candidate catalog; no writes | — |
+| `templates.preview` | `config.read` | explicit fixture bodies only; no agents or secret resolution | — |
+| `templates.variant` | `config.write` | additionally config.read; derive source only | — |
+| `templates.save` | `config.write` | additionally config.read; one reviewed source under config lock | mutation |
+| `templates.assign` | `config.write` | additionally config.read; reviewed YAML node assignment and new workflow version | mutation |
+| `templates.publish` | `config.write` | additionally config.read; guarded catalog and generation Apply | mutation |
 | `config.get` | `config.read` | workspace-wide | — |
 | `config.set` | `config.write` | workspace-wide | mutation |
 | `config.apply` | `config.write` | workspace-wide | mutation |

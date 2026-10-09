@@ -21,6 +21,18 @@ afterEach(() => {
   while (cleanupFns.length) cleanupFns.pop()?.();
 });
 const meta = { acceptsAbsent: true, acceptsNull: false, visibility: "non-secret", default: { state: "none" } } as const;
+it("withholds current config source after read authority is withdrawn while retaining private edits", async () => {
+  const f = setup();
+  await screen.findByRole("group", { name: "Configuration" });
+  fireEvent.change(command(), { target: { value: "private-retained-command" } });
+  act(() => f.fake.connect({ ...f.fake.connection, methods: [] }));
+  await screen.findByText("Configuration source withheld");
+  expect(screen.queryByDisplayValue("private-retained-command")).toBeNull();
+  expect(screen.queryByLabelText("orca.permissions.json")).toBeNull();
+  act(() => f.fake.connect({ ...f.fake.connection, methods: ["config.get", "config.set", "config.apply"] }));
+  await waitFor(() => expect(command().value).toBe("private-retained-command"));
+  expect(f.writes).toHaveLength(0);
+});
 function setup({ metadata = true, writable = true, deferIdentity = false } = {}) {
   const fake = fakeBridge();
   const bridge: OrcaBridge = fake.bridge;

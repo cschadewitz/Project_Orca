@@ -1,5 +1,11 @@
 /** Build metadata only; all input values are withheld, including artifact references. */
-import type { RunOverrides, WorkflowDefinition } from "@orca/core";
+import {
+  sha256,
+  templateReferences,
+  type RunOverrides,
+  type WorkflowDefinition,
+  type PromptTemplate,
+} from "@orca/core";
 import { workflowRevision } from "./orchestrator.js";
 import type { GenerationMaterial } from "./configuration-generation.js";
 
@@ -13,14 +19,30 @@ export function launchProvenance(
   const config = material.snapshot.config;
   const agents = material.agents.withOverrides(overrides);
   const selections = Object.entries(definition.nodes).flatMap(([nodeId, node]) => {
-    if (node.type !== "agent") return [];
-    const { agent, host } = agents.resolve(node.agent);
-    const role = typeof node.agent === "object" && "role" in node.agent ? node.agent.role : undefined;
+    const instruction =
+      node.type === "agent" ? node : node.type === "decision" && node.source.kind === "agent" ? node.source : undefined;
+    if (!instruction) return [];
+    const { agent, host } = agents.resolve(instruction.agent);
+    const role =
+      typeof instruction.agent === "object" && "role" in instruction.agent ? instruction.agent.role : undefined;
     const overrideModel = typeof overrides?.model === "string" ? overrides.model : overrides?.model?.[agent.id];
     const model = overrideModel ?? agent.defaultModel;
-    const template = node.template
-      ? material.templates.get(node.template, overrides?.templatePack ? { pack: overrides.templatePack } : {})
+    const template = instruction.template
+      ? material.templates.get(instruction.template, overrides?.templatePack ? { pack: overrides.templatePack } : {})
       : undefined;
+    const partials: { id: string; revision: string }[] = [];
+    const seen = new Set<string>();
+    const capture = (asset: PromptTemplate) => {
+      if (seen.has(asset.id)) return;
+      seen.add(asset.id);
+      for (const id of templateReferences(asset.body)) {
+        const partial = material.templates.find(id);
+        if (!partial) continue;
+        if (!seen.has(id)) partials.push({ id, revision: sha256(JSON.stringify(partial)) });
+        capture(partial);
+      }
+    };
+    if (template) capture(template);
     return [
       {
         nodeId,
@@ -46,7 +68,9 @@ export function launchProvenance(
           ? {
               template: {
                 value: template.id,
-                source: template.id === node.template ? "workflow.template" : "run.overrides.templatePack",
+                revision: sha256(JSON.stringify(template)),
+                partials,
+                source: template.id === instruction.template ? "workflow.template" : "run.overrides.templatePack",
               },
             }
           : {}),
