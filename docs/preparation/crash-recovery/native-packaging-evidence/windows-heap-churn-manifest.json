@@ -1,0 +1,179 @@
+{
+  "schema": 1,
+  "base": "5eece6c7f863e7fe833188843355e107fa2ab3a6",
+  "sourceCommit": "e5d6a0a0ae9e14826c531cf1d94e2d2d16aa00ce",
+  "productionEnabled": false,
+  "nativeReused": true,
+  "native": {
+    "format": 1,
+    "stage": "before-signing",
+    "platform": "win32",
+    "arch": "x64",
+    "nodeApi": 8,
+    "sourceSha256": "3b69d61dc07f1366167f8a151c84925a78d5b70bcc74e7835936c1984a26bdd3",
+    "files": {
+      "diagnostics_clock.node": {
+        "bytes": 654848,
+        "sha256": "0b28528e31c92c1e1b70e74aa68206b29a39220075d85bbc8555eca50f6d9107"
+      },
+      "diagnostics_storage.node": {
+        "bytes": 680960,
+        "sha256": "bea31fecd94122af70afe6f5280411d9933b93aef4c9e08240265bcac2c2a5fe"
+      }
+    }
+  },
+  "compiledDiagnostics": [
+    {
+      "name": "initialize.js",
+      "sha256": "cd56d06edc239bbfff39871ad872f730c8a536b04b06387a8c780e55d69bb203"
+    },
+    {
+      "name": "native-adapter.js",
+      "sha256": "c614303e01c86411948f72040ea3a9292569f3544a531c75fee57e5f64190f27"
+    },
+    {
+      "name": "native-addon.js",
+      "sha256": "3c267d9d9b206020ad233fd4e5bfb3b51de7b30f2f2c1891573a1d33606b83f5"
+    },
+    {
+      "name": "native-clock.js",
+      "sha256": "65961f9bd070a8fafe6ed19b03a7dce4a6bc642bfde45ba11f3b548020a6272f"
+    },
+    {
+      "name": "native-storage.js",
+      "sha256": "36364c1b11d6808dd22127b55f8f7fde8a3a5a7a5e03ca17ad62a6d311f526e1"
+    },
+    {
+      "name": "payload-memory.js",
+      "sha256": "c9891ff6f6191ce061b1f3225c1e8b88f39854216137853f8953ced31f550690"
+    },
+    {
+      "name": "payload-scope.js",
+      "sha256": "6fdfaa063f84f8277b9d1f7ce5ceb86e01103cb82405776bdd939a196502e9bb"
+    },
+    {
+      "name": "pretrigger-buffer.js",
+      "sha256": "f56291185a683a9ed0be10ebadf67524485982494f022e751e5607baa6509397"
+    },
+    {
+      "name": "profile.js",
+      "sha256": "78fd1dbad527a74629287e05abf6c60e11b41158f1b263267efe0f8ebb401814"
+    },
+    {
+      "name": "recovery-contract.js",
+      "sha256": "34908374a846e1351fc0463a150d2ece3f0fa10dd0022902fb97dad686beacec"
+    },
+    {
+      "name": "recovery-controller.js",
+      "sha256": "af2c4e4bff85d07ba9ca704005d53a2a7133d145830a6e74730bc311358e380e"
+    },
+    {
+      "name": "recovery-disk.js",
+      "sha256": "f51d0d6957ffc565269fcfa50639ba6e28b979a5977bb43e5d505c8463f4ec31"
+    },
+    {
+      "name": "recovery-files.js",
+      "sha256": "db16caca0656e983aa1afb2ed2e70f1cf4695b842764657f02b4d9f6b3068aae"
+    },
+    {
+      "name": "report-validation.js",
+      "sha256": "f54942c1a8cacd934c718ebffe9a8437ffe447dc389c7ca37f2593f1e7b7be36"
+    },
+    {
+      "name": "report-work.js",
+      "sha256": "b3bc5310b8ab7c04ff3b635ecdaed047974b50884f4de5beeb8bdc541bf53a20"
+    },
+    {
+      "name": "snapshot.js",
+      "sha256": "c464f778d8e61a8a2b5531f1182505b75a6535ca8bc255c93bd9af415f6bfdba"
+    },
+    {
+      "name": "source-producers.js",
+      "sha256": "5f70d2452aed4c38c434dcb7f8ab1f12fb79fb35b0de8ea366bf7d2fb451ca3a"
+    },
+    {
+      "name": "startup-producer.js",
+      "sha256": "cf986d55ad03f1533f38eb23b32e8fdfe33a25aba8389e0d8e0a9aaeb0de7aab"
+    },
+    {
+      "name": "windows-key-adapter.js",
+      "sha256": "d594771823dde5f9799c31799f3949b3bb409a105d851601ccb93890ff083023"
+    }
+  ],
+  "baselineCompiledManifestVerified": true,
+  "managed32MiBGatePassed": false,
+  "strict4msEventLoopTailsPassed": false,
+  "controlled8MiBGatePassed": true,
+  "pairedCurrentLoadGatePassed": false,
+  "allOwnedExitsConfirmed": true,
+  "disposableProfilesRemoved": true,
+  "minimalManagedIncrementBytes": 45129835,
+  "fullActivePreviewLoopGapMs": 4.270199999999932,
+  "files": [
+    {
+      "name": "windows-heap-churn-results.json",
+      "bytes": 34140,
+      "sha256": "8aba9abce68be50578b4db49aabd16a946d74416fe80364a8087fdbd8c9c4a5a",
+      "rawSourceSha256": "f3642ecf48560bf3ef62cffbb3a2dc75618a634e07a03fb82545d67c907db8b6"
+    },
+    {
+      "name": "windows-heap-churn-profile.json",
+      "bytes": 53802,
+      "sha256": "148f9d3085a754735dcae19f90fc2d903d3558d81f371765fd6e306fbb5d748e"
+    },
+    {
+      "name": "windows-heap-churn-tests.json",
+      "bytes": 16022,
+      "sha256": "db5f62ba23cc82e7308ba91e061a3c093782fdc3a888f71fec15fd6c172b34b8",
+      "rawSourceSha256": "ae399482a0f4cfb68bbff69a986bd0e487a5945c515e8885af63d90db935e609"
+    },
+    {
+      "name": "windows-heap-churn-verification.json",
+      "bytes": 596,
+      "sha256": "18e399fa7a1c28d087e134b6d7e6404b3487633eadbc18364a4257b144549d28",
+      "rawSourceSha256": "d1e1694270ac65c5666606d7060f7f4231ac404923ffc90528457588b696c5fa"
+    }
+  ],
+  "localFixtureFiles": [
+    {
+      "name": "resource-child.cjs",
+      "sha256": "86f1288fb837920b1b5383557d106385b8a3d0d9432eac4bce017f4865dce6fc"
+    },
+    {
+      "name": "run-resource.mjs",
+      "sha256": "d2eef377f86c1e75443e44045e268db97921a3db6c2acce23db6aad06eb832bc"
+    },
+    {
+      "name": "private-memory.ps1",
+      "sha256": "018b0d7d1bdc3e6636a1bda10ed3b3c23516229354f5b376919e99253bb194f2"
+    },
+    {
+      "name": "renderer-preload.cjs",
+      "sha256": "ab15468a1b66d6e85f10e807a1ac93f785e308ded3c192ad5abf6acdd4aa6e04"
+    },
+    {
+      "name": "renderer-entry.tsx",
+      "sha256": "cecce25d7c9c0b9a07cd39af2cdc983b05cf50ea0f92436374b977f30c125332"
+    },
+    {
+      "name": "renderer-bundle.js",
+      "sha256": "c554c8f99a62997dae4389a18c6b01053be1bdeaffa57d00b08ab4a5b2d1909a"
+    },
+    {
+      "name": "renderer-bundle.css",
+      "sha256": "f295a296888b60009cac1a3ec59887b573ad76a13067bdebd092a329cc7f9fbb"
+    },
+    {
+      "name": "renderer.html",
+      "sha256": "19de09cf3afdec24954ed35cd451c7267e7c1a99033937747cf6a6db2b0830a7"
+    },
+    {
+      "name": "live-profile-child.cjs",
+      "sha256": "38ef63763424389962daa3de381b08c3bc0f4e33d1bc66be9e9e6e8ce7e511ec"
+    },
+    {
+      "name": "run-live-profile.mjs",
+      "sha256": "be5a003a95c95e029abb1277c79b6d3e4e060d5901e1b00e170af8f8f929f8c5"
+    }
+  ]
+}

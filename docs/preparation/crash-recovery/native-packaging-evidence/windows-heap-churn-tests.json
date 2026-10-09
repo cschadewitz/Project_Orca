@@ -1,0 +1,389 @@
+{
+  "total": 70,
+  "passed": 70,
+  "failed": 0,
+  "pending": 0,
+  "success": true,
+  "files": [
+    {
+      "file": "packages/app/test/diagnostics-payload-memory.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "reuses aligned storage, erases released bytes and refuses before the unchanged ceiling",
+          "status": "passed",
+          "durationMs": 4.4846
+        },
+        {
+          "name": "charges before a provider starts and retains its returned bytes until actual disposal",
+          "status": "passed",
+          "durationMs": 0.6890000000000214
+        },
+        {
+          "name": "bounds maximum checkpoint/open buffers, owns returned plaintext and retires persistent keys",
+          "status": "passed",
+          "durationMs": 382.1293999999999
+        }
+      ]
+    },
+    {
+      "file": "packages/app/test/diagnostics-report-performance.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "preserves the generic canonical oracle for every enum, maximum offsets/count and empty reports",
+          "status": "passed",
+          "durationMs": 104.48719999999997
+        },
+        {
+          "name": "freezes all 8192 events before yielding and remains immutable across collection/stop",
+          "status": "passed",
+          "durationMs": 51.58989999999994
+        },
+        {
+          "name": "keeps a full-count checkpoint immutable and owned after the live ring stops",
+          "status": "passed",
+          "durationMs": 52.07230000000004
+        },
+        {
+          "name": "validates immutable decoded bytes even if the source Buffer changes during a yielded turn",
+          "status": "passed",
+          "durationMs": 2840.0224
+        },
+        {
+          "name": "retains exact rejection of extra/duplicate fields, framing, invalid UTF-8 and event semantics",
+          "status": "passed",
+          "durationMs": 234.83410000000003
+        },
+        {
+          "name": "accepts every closed pair at decimal boundaries and rejects noncanonical event spellings",
+          "status": "passed",
+          "durationMs": 7.2775000000001455
+        },
+        {
+          "name": "keeps validated immutable text and independently owned exact bytes through disposal",
+          "status": "passed",
+          "durationMs": 67.23690000000033
+        },
+        {
+          "name": "yields each batch with one completion promise and rejects scheduled generator failures",
+          "status": "passed",
+          "durationMs": 0.7384999999999309
+        },
+        {
+          "name": "revokes off during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "durationMs": 88.83660000000009
+        },
+        {
+          "name": "revokes document during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "durationMs": 75.07529999999997
+        },
+        {
+          "name": "revokes clock during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "durationMs": 81.09519999999975
+        },
+        {
+          "name": "rechecks authority after checkpoint serialization before any disk dispatch",
+          "status": "passed",
+          "durationMs": 37.97370000000001
+        },
+        {
+          "name": "retains frozen binary bytes until a timeout Save actually settles",
+          "status": "passed",
+          "durationMs": 14.261800000000221
+        },
+        {
+          "name": "retains frozen binary bytes until a off Save actually settles",
+          "status": "passed",
+          "durationMs": 17.670100000000275
+        }
+      ]
+    },
+    {
+      "file": "packages/app/test/diagnostics-startup-consent.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "keeps durable consent when navigation revokes a preview during the startup read",
+          "status": "passed",
+          "durationMs": 6.053500000000014
+        },
+        {
+          "name": "keeps durable consent when renderer-disposal revokes a preview during the startup read",
+          "status": "passed",
+          "durationMs": 0.9274999999999807
+        },
+        {
+          "name": "a newer off fences the pending enabled startup read",
+          "status": "passed",
+          "durationMs": 1.161200000000008
+        },
+        {
+          "name": "a newer shutdown fences the pending enabled startup read",
+          "status": "passed",
+          "durationMs": 0.46590000000000487
+        }
+      ]
+    },
+    {
+      "file": "packages/app/test/pretrigger-buffer.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "volatile diagnostic pre-trigger buffer is off by default, reads nothing while off, and restarts empty/off",
+          "status": "passed",
+          "durationMs": 9.911599999999993
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer expires at five minutes, including without new observations",
+          "status": "passed",
+          "durationMs": 4.057799999999986
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer shortens immediately and never reconstructs history when lengthened",
+          "status": "passed",
+          "durationMs": 5.0916
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer evicts oldest at the count cap, shows loss and coverage, and wraps the ring",
+          "status": "passed",
+          "durationMs": 5.355699999999985
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer enforces complete serialized bytes independently of count and counts unfit events",
+          "status": "passed",
+          "durationMs": 4.864100000000008
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer keeps a frozen complete snapshot above the old 256-event/256-KiB limits",
+          "status": "passed",
+          "durationMs": 24.440799999999967
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer caps a burst at 8192 with visible saturated omissions and bounded snapshots",
+          "status": "passed",
+          "durationMs": 200.575
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer does not reset an active session and refreshes exported identities for every snapshot",
+          "status": "passed",
+          "durationMs": 3.5646000000000413
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer refuses unsupported resource caps {\"maxEvents\":0}",
+          "status": "passed",
+          "durationMs": 1.308300000000031
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer refuses unsupported resource caps {\"maxEvents\":8193}",
+          "status": "passed",
+          "durationMs": 0.5527999999999906
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer refuses unsupported resource caps {\"maxReportBytes\":1114}",
+          "status": "passed",
+          "durationMs": 0.39580000000000837
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer refuses unsupported resource caps {\"maxReportBytes\":1048577}",
+          "status": "passed",
+          "durationMs": 0.3457000000000221
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer invalidates on uncertain clock NaN",
+          "status": "passed",
+          "durationMs": 1.5260999999999854
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer invalidates on uncertain clock Infinity",
+          "status": "passed",
+          "durationMs": 1.227800000000002
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer invalidates on uncertain clock -1",
+          "status": "passed",
+          "durationMs": 1.7176000000000045
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer invalidates on uncertain clock 9007199254740992",
+          "status": "passed",
+          "durationMs": 1.5783999999999878
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer fails closed on backward/throwing clocks and ignores wall-clock jumps",
+          "status": "passed",
+          "durationMs": 4.722000000000037
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer rejects content-bearing objects and strings without reading or coercing them",
+          "status": "passed",
+          "durationMs": 3.016300000000001
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer rejects invalid configuration 0 without changing retention",
+          "status": "passed",
+          "durationMs": 1.7837000000000103
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer rejects invalid configuration 16 without changing retention",
+          "status": "passed",
+          "durationMs": 1.324700000000007
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer rejects invalid configuration 1.5 without changing retention",
+          "status": "passed",
+          "durationMs": 1.9040999999999713
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer rejects invalid configuration NaN without changing retention",
+          "status": "passed",
+          "durationMs": 1.7635999999999399
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer rejects invalid configuration Infinity without changing retention",
+          "status": "passed",
+          "durationMs": 2.9616999999999507
+        },
+        {
+          "name": "volatile diagnostic pre-trigger buffer keeps the draft schema, count/time ceilings and phase/code allowlist coordinated",
+          "status": "passed",
+          "durationMs": 2.0031999999999925
+        }
+      ]
+    },
+    {
+      "file": "packages/app/renderer/test/diagnostics.test.tsx",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "persistent diagnostics choice remains available while legacy configuration is pending and preserves its preview when that read completes",
+          "status": "passed",
+          "durationMs": 146.5713999999998
+        },
+        {
+          "name": "persistent diagnostics choice remains available while studio configuration is pending and preserves its preview when that read completes",
+          "status": "passed",
+          "durationMs": 81.42180000000008
+        },
+        {
+          "name": "persistent diagnostics choice starts off with five minutes and no automatic consent, preview, picker or save",
+          "status": "passed",
+          "durationMs": 18.95049999999992
+        },
+        {
+          "name": "persistent diagnostics choice does not migrate a remembered setting into production capture or automatically preview recovery",
+          "status": "passed",
+          "durationMs": 9.787099999999555
+        },
+        {
+          "name": "persistent diagnostics choice uses the shared menu to explicitly set the approved lookback range",
+          "status": "passed",
+          "durationMs": 51.006099999999606
+        },
+        {
+          "name": "persistent diagnostics choice leaves ordinary UI usable when the bridge is absent or rejects without rendering a raw exception",
+          "status": "passed",
+          "durationMs": 10.089399999999841
+        },
+        {
+          "name": "persistent diagnostics choice does not let an old initial status read replace a newer main push",
+          "status": "passed",
+          "durationMs": 5.602299999999559
+        },
+        {
+          "name": "exact preview and separate local Save keeps all 1 MiB of exact text and the final newline across offscreen layout blocks",
+          "status": "passed",
+          "durationMs": 37.53729999999996
+        },
+        {
+          "name": "exact preview and separate local Save rejects late plaintext when age uncertainty arrives during pending preparation",
+          "status": "passed",
+          "durationMs": 25.12670000000071
+        },
+        {
+          "name": "exact preview and separate local Save renders every exact byte including omissions and newline, then requires picker and separate Save",
+          "status": "passed",
+          "durationMs": 47.064800000000105
+        },
+        {
+          "name": "exact preview and separate local Save removes old destination authority while a new picker is pending and ignores its late reply after close",
+          "status": "passed",
+          "durationMs": 51.94380000000001
+        },
+        {
+          "name": "exact preview and separate local Save acknowledges disposal only after the text is gone and restores no content on a late preview reply",
+          "status": "passed",
+          "durationMs": 55.83780000000024
+        },
+        {
+          "name": "exact preview and separate local Save clears a revoked handle on target/source/key-loss status push, and closes the handle on unmount",
+          "status": "passed",
+          "durationMs": 51.71740000000045
+        },
+        {
+          "name": "exact preview and separate local Save expires the exact preview without renewing it for new checkpoints",
+          "status": "passed",
+          "durationMs": 27.2496000000001
+        },
+        {
+          "name": "exact preview and separate local Save reports a Save admitted before opt-out truthfully when its completion arrives late",
+          "status": "passed",
+          "durationMs": 34.50380000000041
+        },
+        {
+          "name": "exact preview and separate local Save does not carry a prior Save success into a new pending or unknown Save",
+          "status": "passed",
+          "durationMs": 96.22940000000017
+        },
+        {
+          "name": "exact preview and separate local Save allows a fresh explicit Save after known refusal and preview close without changing consent",
+          "status": "passed",
+          "durationMs": 149.95170000000053
+        },
+        {
+          "name": "exact preview and separate local Save allows a fresh explicit Save after known refusal and preview expiry without changing consent",
+          "status": "passed",
+          "durationMs": 1090.513
+        },
+        {
+          "name": "exact preview and separate local Save disposes the view but does not claim Off when revocation is unconfirmed by transport",
+          "status": "passed",
+          "durationMs": 42.9345000000003
+        },
+        {
+          "name": "exact preview and separate local Save disposes the view but does not claim Off when revocation is unconfirmed by stale_preview",
+          "status": "passed",
+          "durationMs": 45.97829999999976
+        },
+        {
+          "name": "exact preview and separate local Save uses authoritative disabled status for failed durable opt-out and clears its feedback on explicit enable",
+          "status": "passed",
+          "durationMs": 65.51229999999941
+        },
+        {
+          "name": "exact preview and separate local Save clears session-only off failure feedback when main reports diagnostics On again",
+          "status": "passed",
+          "durationMs": 27.967999999999847
+        },
+        {
+          "name": "unknown Save, cleanup and explicit acknowledgement blocks unknown work and offers a disabled acknowledgement with a visible cleanup retry",
+          "status": "passed",
+          "durationMs": 19.627599999999802
+        },
+        {
+          "name": "unknown Save, cleanup and explicit acknowledgement acknowledges only, then requires a fresh explicit preview, picker and Save",
+          "status": "passed",
+          "durationMs": 47.98610000000008
+        },
+        {
+          "name": "unknown Save, cleanup and explicit acknowledgement keeps cleanup and unresolved outcome visible while off without offering capture authority",
+          "status": "passed",
+          "durationMs": 12.158699999999953
+        }
+      ]
+    }
+  ]
+}

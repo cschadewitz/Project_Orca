@@ -7,6 +7,10 @@ are below 4 ms in the bounded rerun, but measured event-loop gaps still exceed
 managed/external increment, above 32 MiB. These thresholds are unchanged.
 Production capture remains disabled.
 
+The subsequent [heap-churn follow-up](windows-heap-churn-followup.md) records
+targeted main allocation fixes and a fresh bounded acceptance. The dated
+measurements and original manifests below retain their original pins and limits.
+
 This follows [the original paired acceptance](windows-paired-resource-acceptance.md).
 The exact #590 successful CLI pair, native MSVC/DPAPI evidence and ARM64
 cross-build remain retained evidence with their original limits. No long CLI
