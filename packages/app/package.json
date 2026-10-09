@@ -10,6 +10,7 @@
     "dev": "node scripts/dev.js",
     "build:renderer": "vite build",
     "build:daemon": "node scripts/build-daemon.js",
+    "build:diagnostics-native": "node scripts/diagnostics-native-package.js",
     "start": "electron .",
     "package": "electron-builder --publish never",
     "typecheck:renderer": "tsc -p renderer/tsconfig.json"

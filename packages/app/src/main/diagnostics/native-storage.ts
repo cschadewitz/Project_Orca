@@ -1,8 +1,7 @@
 /** One async native storage session. Paths become validated names beneath held handles. */
 import { constants } from "node:fs";
-import { createRequire } from "node:module";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { loadDiagnosticsAddon } from "./native-addon.js";
 import { createProductionNativeAdapter, sameIdentity, type RecoveryNativeAdapter } from "./native-adapter.js";
 import type { RecoveryFileHandle, RecoveryFileSystem, RecoveryStat } from "./recovery-files.js";
 
@@ -37,9 +36,7 @@ const refusedFiles: RecoveryFileSystem = {
 export function loadNativeDiagnosticsStorage(root: string): NativeDiagnosticsStorage {
   if (process.platform === "darwin") {
     try {
-      const backend: unknown = createRequire(import.meta.url)(
-        fileURLToPath(new URL("../../../native/diagnostics/build/Release/diagnostics_storage.node", import.meta.url)),
-      );
+      const backend = loadDiagnosticsAddon("diagnostics_storage");
       const abi = Object.getOwnPropertyDescriptor(backend, "abi")?.value as unknown;
       const platform = Object.getOwnPropertyDescriptor(backend, "platform")?.value as unknown;
       const call = Object.getOwnPropertyDescriptor(backend, "call")?.value as unknown;

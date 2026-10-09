@@ -1,0 +1,89 @@
+{
+  "date": "2026-10-09",
+  "sourceBase": "9ac19ead4347180e44be6162a41d2d5726b3f929",
+  "scope": "Linux source/native POSIX fixture; synthetic key and clock; no native Mac or Windows acceptance",
+  "hostObservation": {
+    "availableCpus": 4,
+    "memoryBytes": 18882699264,
+    "load1m": 0.15
+  },
+  "nodeHeaders": {
+    "version": "24.19.0",
+    "sha256": "54f14a297d47ea0794fe272363703d9dc419c96ac68f20d890f98b63754a3e4c",
+    "verification": "official nodejs.org SHASUMS256.txt"
+  },
+  "final": {
+    "platform": "linux",
+    "arch": "x64",
+    "node": "24.19.0",
+    "offeredEvents": 8192,
+    "retainedEvents": 8192,
+    "omissions": 0,
+    "serializedBytes": 974807,
+    "exactSaveAndExportSurvivesOptOut": true,
+    "recordMaxMs": 0.8120040000000017,
+    "dispatchMaxMs": 0.242746000000011,
+    "checkpointMs": 48.97248400000001,
+    "previewMs": 40.722298999999964,
+    "eventLoopDelayMaxMs": 38.192994,
+    "idleDelayMaxMs": 0.2576660000000004,
+    "delayByPhase": {
+      "capture": 0.7488660000000209,
+      "checkpoint": 25.649977999999976,
+      "preview": 38.192994,
+      "save": 1.0346869999999626
+    },
+    "managedIncrementBytes": 21414300,
+    "rssIncrementBytes": 32313344,
+    "payloadPeak": 3145728,
+    "diskBytesObservedPeak": 976112,
+    "cpuMicros": {
+      "user": 106352,
+      "system": 66711
+    },
+    "callbackTargetMs": 4,
+    "recordAndInitialDispatchWithin4ms": true,
+    "observedResponsivenessWithin4ms": false,
+    "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+  },
+  "initial": {
+    "platform": "linux",
+    "arch": "x64",
+    "node": "24.19.0",
+    "offeredEvents": 8192,
+    "retainedEvents": 8192,
+    "omissions": 0,
+    "serializedBytes": 974807,
+    "exactSaveAndExportSurvivesOptOut": true,
+    "recordMaxMs": 1.057023000000072,
+    "dispatchMaxMs": 0.2788599999998951,
+    "checkpointMs": 107.86002600000006,
+    "previewMs": 109.75629399999991,
+    "eventLoopDelayMaxMs": 106.738111,
+    "managedIncrementBytes": 19138233,
+    "rssIncrementBytes": 27402240,
+    "payloadPeak": 3145728,
+    "diskBytesObservedPeak": 976112,
+    "cpuMicros": {
+      "user": 135155,
+      "system": 61870
+    },
+    "callbackTargetMs": 4,
+    "callbackTargetMet": true,
+    "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+  },
+  "initialInterpretationCorrection": "callbackTargetMet in the initial output measured only record and initial Promise dispatch. It excludes later synchronous work and does not establish responsiveness. The final instrument retains per-phase event-loop delay and explicitly fails the observed 4 ms gate.",
+  "command": "node --expose-gc --import tsx packages/app/test/recovery-preparation/native-workload-probe.ts",
+  "unproven": [
+    "paired actual runtime execution",
+    "transient disk high-water",
+    "hard managed/external memory bound",
+    "combined main/worker/renderer 32 MiB gate",
+    "Mac native clock/ACL/full-flush",
+    "Keychain/DPAPI",
+    "signed packaged Electron",
+    "Windows privacy",
+    "external network observation",
+    "physical acceptance"
+  ]
+}
