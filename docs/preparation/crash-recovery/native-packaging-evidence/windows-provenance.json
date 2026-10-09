@@ -1,0 +1,90 @@
+{
+  "sourceCommit": "a991fbfea9da6d39dea2f0c513cc5a000d993c14",
+  "branch": "calcifer/windows-diagnostics-acceptance-20261009",
+  "platform": "win32",
+  "arch": "x64",
+  "node": "24.19.0",
+  "osVersion": "10.0.19045.0",
+  "testedAtUtc": "2026-10-09T05:09:00.9406380Z",
+  "capacity": {
+    "logicalProcessors": 12,
+    "physicalMemoryBytes": 34266546176,
+    "initiallyAvailableBytes": 20372090880,
+    "initiallyFreeCBytes": 100764794880,
+    "wmi": "denied; native memory/PS drive fallback used"
+  },
+  "distinctFocusedPassed": 77,
+  "existingPosixCompilerCasesExcluded": 2,
+  "productionSourcesIdenticalToPin": true,
+  "sourcePins": [
+    {
+      "path": "packages/app/src/diagnostics-contract.ts",
+      "gitBlob": "1457b9cb8fec41036841f2cad9d5aa8be2a8ba72",
+      "sha256WorkingBytes": "d9f3376308b50ed378dd7bc3cc94b9ed9729d650e62440dcd897905eeaa34a1e"
+    },
+    {
+      "path": "packages/app/src/main/diagnostics/initialize.ts",
+      "gitBlob": "05bbcc377564ec587023c234544d8686dff0f2cd",
+      "sha256WorkingBytes": "1d18604d09c3cc15cc0bde79d28d8ffe22800e674df15c0c46e03ebc308b1753"
+    },
+    {
+      "path": "packages/app/src/main/diagnostics/native-addon.ts",
+      "gitBlob": "4941ce314388a20e7fb7ed13cdf3231dd7b14730",
+      "sha256WorkingBytes": "436a185c1c5cceb623f5d174b879666e27ef322504dbe0b899cc20ab62dffc74"
+    },
+    {
+      "path": "packages/app/src/main/diagnostics/native-adapter.ts",
+      "gitBlob": "0b94b35c1da7e9af0e93f4a3b82bff8ab2c24ede",
+      "sha256WorkingBytes": "3e7ed3e69b86019c443b4c9aa44bf895aae80e09a6caab904495c9956317c476"
+    },
+    {
+      "path": "packages/app/src/main/diagnostics/native-clock.ts",
+      "gitBlob": "24091541008662e469d7a245e8648da7a35e00ab",
+      "sha256WorkingBytes": "eb364bc3a0d5d420a5b51bae7e179b474d27a97cd983d1cbf51090acc2603664"
+    },
+    {
+      "path": "packages/app/src/main/diagnostics/native-storage.ts",
+      "gitBlob": "450c97d26c73dc4d6d71b2275f3d9c68eccbdfd2",
+      "sha256WorkingBytes": "960bab34df710a57a245bd8113a25bf07fb599aeb54b8ff66db769ba6b51709a"
+    },
+    {
+      "path": "packages/app/src/main/diagnostics/pretrigger-buffer.ts",
+      "gitBlob": "6695fabb503bf8155505a3c46178ed6ff5ccb52d",
+      "sha256WorkingBytes": "20114df9be64d76006c0b8cc42ba526c14c34d470c79a02a85fe70403533f098"
+    },
+    {
+      "path": "packages/app/src/main/diagnostics/recovery-controller.ts",
+      "gitBlob": "d492769abf07608f4aaf5b339f3dc7c21356046e",
+      "sha256WorkingBytes": "dc8c58bcd91e59bae7df951c46d0d80ea5392a88c1b59a20c081be2e5625d625"
+    },
+    {
+      "path": "packages/app/src/main/diagnostics/recovery-disk.ts",
+      "gitBlob": "af83781cc5d4627d937ce5a725f31bf798452e52",
+      "sha256WorkingBytes": "26bb40b978424f30c03227ec00cdbb0522b8a538aa0daf585efce10ed7062b49"
+    },
+    {
+      "path": "packages/app/src/main/diagnostics/report-validation.ts",
+      "gitBlob": "16b98aaeb1a51942e65e1d25393ada8f97bc7eea",
+      "sha256WorkingBytes": "3d30d76e0a5dce8f2c4efbb89ed8b5d530f32219aafce8c6d5a87dc975c74848"
+    },
+    {
+      "path": "packages/app/src/main/diagnostics/report-work.ts",
+      "gitBlob": "8dae5f581dfc809acfa8d3f8f834b9e97d45c000",
+      "sha256WorkingBytes": "be7a1b3b3d4a105ae7eccdadc36764c17b61c7f142914b8cc735789e7557b960"
+    },
+    {
+      "path": "packages/app/src/main/diagnostics/snapshot.ts",
+      "gitBlob": "708f9a274b2baddd10f297b1beb31ddbbb815f8b",
+      "sha256WorkingBytes": "e00b2a708a4ecb7fafe2e13ecb9790740606a508fa5ef03353c5dbb120916b52"
+    }
+  ],
+  "limitations": [
+    "shipping capture disabled",
+    "no packaged Electron candidate/runtime",
+    "Windows native storage/boot clock absent",
+    "no different-user proof",
+    "no combined 32 MiB proof",
+    "4 ms Windows acceptance not established",
+    "no paired actual execution/disk high-water proof"
+  ]
+}

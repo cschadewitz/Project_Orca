@@ -1,0 +1,43 @@
+{
+  "source": "a991fbfea9da6d39dea2f0c513cc5a000d993c14",
+  "platform": "win32",
+  "arch": "x64",
+  "node": "24.19.0",
+  "offeredEvents": 8192,
+  "retainedEvents": 8192,
+  "omissions": { "budget": 0, "expired": 0, "invalid": 0, "unavailable": "unknown" },
+  "serializedBytes": 974807,
+  "exactMemoryPortSaveAndExportSurvivesOptOut": true,
+  "simultaneousFullMemoryPortGenerations": true,
+  "recordCallbackMaxMs": 0.3754999999999882,
+  "asyncCallbackMaxByPhaseMs": {
+    "idle": 0.7917999999999665,
+    "idle->capture": 0.5323999999999955,
+    "capture": 1.0592999999999506,
+    "capture->checkpoint": 0.5821000000000254,
+    "checkpoint": 1.7789999999999964,
+    "checkpoint->preview": 0.2840999999999667,
+    "preview": 3.0416000000000167,
+    "preview->oracle": 0.02390000000002601,
+    "oracle": 0.00329999999996744,
+    "oracle->save": 5.934500000000014,
+    "save": 2.4067999999999756,
+    "save->optOut": 1.3192999999999984,
+    "optOut": 1.0602999999999838
+  },
+  "delayByPhaseMs": {
+    "idle": 14.144600000000025,
+    "capture": 0.8406999999999698,
+    "checkpoint": 2.0609999999999786,
+    "preview": 8.057099999999991,
+    "optOut": 11.37809999999996
+  },
+  "payloadPeak": 4194304,
+  "managedIncrementBytes": 18489989,
+  "rssIncrementBytes": 23797760,
+  "observedTimerSchedulingWithin4ms": false,
+  "combined32MiBGate": "not measured",
+  "actualWindows4msAcceptance": "not established: timer scheduling exceeds 4ms; instrumented callbacks are bounded observations only",
+  "nativeStorageClockCrypto": "not exercised",
+  "method": "One Windows Node process; synthetic clock, memory-only disk/publication; shipping flag unchanged. 1 ms timer plus controller emissions; async_hooks callback duration (instrumentation overhead; microtasks and phase transitions measured separately; full-report harness oracle has its own phase); heapUsed+external, arrayBuffers not double-counted. Idle scheduling retained. No renderer, worker, actual execution, filesystem, DPAPI, hard allocation or native high-water proof."
+}

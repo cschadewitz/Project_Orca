@@ -1,0 +1,36 @@
+{
+  "source": "a991fbfea9da6d39dea2f0c513cc5a000d993c14",
+  "platform": "win32",
+  "arch": "x64",
+  "node": "24.19.0",
+  "offeredEvents": 8192,
+  "retainedEvents": 8192,
+  "omissions": { "budget": 0, "expired": 0, "invalid": 0, "unavailable": "unknown" },
+  "serializedBytes": 974807,
+  "exactMemoryPortSaveAndExportSurvivesOptOut": true,
+  "simultaneousFullMemoryPortGenerations": true,
+  "recordCallbackMaxMs": 0.4686999999999557,
+  "asyncCallbackMaxByPhaseMs": {
+    "idle": 0.8360999999999876,
+    "capture": 1.1200000000000045,
+    "checkpoint": 1.608099999999979,
+    "preview": 5.543399999999963,
+    "save": 2.2433999999999514,
+    "optOut": 1.1657999999999902
+  },
+  "delayByPhaseMs": {
+    "idle": 15.097100000000012,
+    "capture": 0.9046999999999912,
+    "checkpoint": 2.1697999999999524,
+    "preview": 7.145800000000008,
+    "optOut": 10.505899999999997
+  },
+  "payloadPeak": 4194304,
+  "managedIncrementBytes": 18391880,
+  "rssIncrementBytes": 23838720,
+  "observed4msGateMet": false,
+  "combined32MiBGate": "not measured",
+  "actualWindows4msAcceptance": "not established: timer scheduling exceeds 4ms; instrumented callbacks are bounded observations only",
+  "nativeStorageClockCrypto": "not exercised",
+  "method": "One Windows Node process; synthetic clock, memory-only disk/publication; shipping flag unchanged. 1 ms timer plus controller emissions; async_hooks callback duration (instrumentation overhead; microtasks measured separately); heapUsed+external, arrayBuffers not double-counted. Idle scheduling retained. No renderer, worker, actual execution, filesystem, DPAPI, hard allocation or native high-water proof."
+}
