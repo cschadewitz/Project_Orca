@@ -1,0 +1,25 @@
+{
+  "source": "21b615fe278f91888a68198475c6fcc6a791208f",
+  "scope": "compiled Windows Node initializer; not packaged Electron",
+  "noCreatedDiagnosticFiles": true,
+  "keyCalls": 0,
+  "pickerCalls": 0,
+  "status": {
+    "revision": 4,
+    "enabled": false,
+    "productionEnabled": false,
+    "scopeVersion": 1,
+    "minutes": 5,
+    "code": "cleanup_pending",
+    "previous": false,
+    "tailLossPossible": true,
+    "cleanupPending": true,
+    "acknowledgedUnknown": false,
+    "olderUnknowns": false,
+    "payloadReservedBytes": 0,
+    "controlledBinaryAllocatedBytes": 0,
+    "controlledBinaryPeakBytes": 0
+  },
+  "productionSourceUnchanged": true,
+  "probeSha256": "981f28cf1c08d8dd014b6b9e7025ff52bcc1fc4bddddcc0a5a7c3a066023ec28"
+}

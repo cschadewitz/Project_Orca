@@ -34,7 +34,7 @@ const fixture = createDiagnosticsInitializer({
 try {
   await fixture.initialize();
   assert.equal((await fixture.controller.setEnabled(true, 1)).ok, false);
-  assert.equal((await fixture.controller.preparePreview("current")).ok, false);
+  assert.equal((await fixture.controller.prepareExport("current")).ok, false);
   assert.equal(fixture.controller.record("run", "run_failed"), false);
   const status = fixture.controller.status();
   assert.equal(status.enabled, false);

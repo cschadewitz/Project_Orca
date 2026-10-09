@@ -1,5 +1,7 @@
 > Decision 9 (4 October 2026) and the current implementation instruction supersede any pending-owner-review wording below for fixed private plaintext staging, same-filesystem no-replace destinations, content-free key-independent metadata and visible residual plaintext cleanup failures. Acknowledged summaries are removed on opt-out after cleanup completes; unresolved obligations remain until safely resolved. Native/independent acceptance remains separate.
 
+> **Owner-approved save-only scope, 9 October 2026:** Casey directed, "Okay lets skip the in app preview, just let them save and export." The active crash-diagnostics flow prepares a main-owned frozen report, lets the user choose a destination, and requires a separate Save. No report contents, text-selection surface or report-byte transport is exposed to renderer/preload. Earlier viewer requirements below are historical and superseded for this flow; consent, canonical validation/redaction, expiry, exact saved output, privacy and numeric resource gates remain. See [save-only implementation and acceptance](windows-save-only-followup.md). Production capture stays disabled and Mac stays held.
+
 # Crash-recovery diagnostics: UI and bridge boundaries
 
 Preparation for [#469](https://github.com/cschadewitz/Project_Orca/issues/469), within
@@ -59,68 +61,47 @@ With matching consent, it may report a generic previous-session candidate, its t
 availability state and supported actions. Candidate discovery is not authenticated
 content: untrusted headers cannot supply event names, paths or a claimed retention age.
 Authenticate and validate the bounded envelope and age before exposing report-derived
-details. Only an explicit `Preview` action renders the recovered content; startup never
-automatically opens a preview or saves it. `Discard` is available without decrypting the
+details. Only explicit **Export previous session** prepares a recovered report in main;
+startup never automatically prepares or saves it. `Discard` is available without decrypting the
 payload. Recovery never extends expiry or starts execution actions. New capture after
-restart uses the valid persistent choice and remains independent of recovery preview.
+restart uses the valid persistent choice and remains independent of recovered export.
 
 The state model distinguishes `off`, `enabled`, `unavailable`, `candidate`, `preparing`,
 `ready`, `saving`, `saved`, `expired`, `deleting` and `cleanup pending`. A failed diagnostic
 operation does not infer daemon connection state or change execution behavior. Safe
 closed error codes carry no raw exceptions, diagnostic content or filesystem paths.
 
-## Exact preview and export authority
+## Current save-only export authority
 
-Main permits one immutable preview across the application, replacing the previous handle
-only after invalidating it and receiving the renderer's old-view disposal acknowledgment.
-Its nonrenewing lifetime is five minutes; a recovered preview's expiry is
-also clipped to the source checkpoint's remaining retention. A current-memory preview
-uses its own freeze time and TTL. Reopening, destination
-changes and Save retries never renew the original checkpoint lifetime. The handle binds
-the exact canonical UTF-8 bytes, byte count and digest to consent generation, window,
-target epoch and source generation. The renderer cannot submit arbitrary export JSON.
-Its entire read-only exact text, including the final newline, is available without
-ellipsis. The summary derives from those same bytes: included categories, honest unknowns,
-omissions, effective coverage and checkpoint tail loss. Later capture never updates it.
+The user chooses **Export current diagnostics** or **Export previous session**.
+Main authenticates and validates the source and freezes canonical bytes and a
+digest. The UI displays only source, byte count, remaining lifetime and tail-loss
+disclosure. It offers **Cancel export**, **Choose destination** and, after a
+successful picker, **Save report**. Picking a path never writes. The unencrypted
+file and sync/access warning remain visible before Save. No report DOM, selection
+surface, byte-read bridge or preload plaintext owner remains.
 
-Renderer reload, target change, cancel/back, expiry, source deletion or recovered-candidate replacement,
-key loss and opt-out revoke the handle and destination/save authority not yet dispatched
-in main. Already-dispatched publication retains only its pending outcome, not authority
-for new work.
-Current capture can continue independently: its preview pins an immutable snapshot id,
-so routine CURRENT checkpoint refreshes neither revoke the preview nor change its bytes.
-Replacing a recovered candidate invalidates its preview and requires a fresh explicit
-Preview; a new generation can never silently retarget the old handle.
-Releasing plaintext references is not a claim of immediate heap zeroization or forensic
-erasure. A resource failure closes the preview and reports bounded unavailability.
+One report is prepared at a time; its five-minute lifetime is nonrenewing and
+recovered history's original deadline can end it sooner. New observations cannot
+change its bytes. Main binds destination tokens to the frozen report and current
+authority. Changing/cancelling the picker clears the earlier destination. Picker
+cancellation says no file was saved by that selection and offers a retry; late
+replies after cancellation, expiry, unmount, target change or opt-out restore no
+authority. Synchronous pending guards prevent repeated-click races.
 
-The native picker selects a destination only. Main binds an opaque destination token to
-the preview and displays the full selected path locally before a separate final `Save`
-action. The path never enters the report, daemon traffic, settings or diagnostic logs.
-Changing the destination revokes the prior token. No default path or picker completion
-authorizes a write. One export can be in flight; repeated Save is rejected or joins that
-same operation, never creating a second export. This first slice does not overwrite an
-existing destination: `Choose a different filename` explains that limitation before Save.
-
-Capture/checkpoint files and their staging files remain encrypted. In accordance with
-[#470's clarification](https://github.com/cschadewitz/Project_Orca/pull/470#issuecomment-5976092045),
-only explicit final Save may create one operation-owned restricted-access plaintext
-temporary file for the exact reviewed bytes. The proposed
-[export-cleanup correction](export-cleanup-proposal.md) places it in one fixed private
-app-owned slot, with key-independent ownership/identity checks and no durable destination
-path. Its 1 MiB allowance remains separate from the 4 MiB retained-store ceiling.
-Only verified same-filesystem native no-replace publication is supported; explain
-unsupported destinations before creating plaintext. Cleanup needs no retained diagnostics
-key. Failed cleanup can leave plaintext in the private slot and blocks new Save; unknown
-publication is reported separately. Decision 8 permits the explicit acknowledgement
-flow below without changing the earlier unknown result. Remaining storage exceptions
-need Casey and Cal review before
-implementation, including its destination restriction and residual plaintext exposure.
+Cancellation/expiry releases main report storage immediately when no writer is
+live. Pending staging/publication retains its exact input and reservation until
+actual completion; already admitted writes remain honestly pending/saved/refused/
+unknown. Unknown outcomes still require writer cessation, verified owned cleanup,
+explicit acknowledgement, a still-valid prepared report and fresh picker/Save;
+revoked or expired reports require explicit preparation again. Saved files remain user
+owned. Accessible status uses the shared announcer and closed text, never raw
+exceptions or report contents. Destination paths remain local UI-only information.
 
 ## Save, discard, opt-out and replacement races
 
 The lead-owned storage contract supplies the publication primitive and one ordering for
-revocation and publication. Main rechecks the consent, preview, source, destination and
+revocation and publication. Main rechecks consent, frozen report, source, destination and
 deadline immediately before native publication dispatch. A check followed by an unrelated
 asynchronous rename is insufficient: there must be no gap where revocation can be accepted
 and the stale write subsequently publish. Native publication dispatch is the point of no
@@ -130,30 +111,30 @@ filesystem work cannot block execution.
 
 | Ordered outcome | Required UI result |
 | --- | --- |
-| Opt-out, discard, expiry or recovered-candidate replacement wins before publication dispatch | Revoke affected previews and queued writes immediately; cancel publication, remove operation-owned temporary files and show cancellation or cleanup pending. No stale Save success. |
+| Opt-out, discard, expiry or recovered-candidate replacement wins before publication dispatch | Revoke affected prepared reports and queued writes immediately; refuse publication, remove operation-owned temporary files after writers settle and show refusal or cleanup pending. No stale Save success. |
 | Publication dispatch wins before revocation | Show save pending until completion. If successful, report that Save was admitted before revocation and subsequently completed. The user-owned export remains; deletion must not claim to remove it. If publication fails, report failure and cleanup outcome. |
 | Native completion is unknown after deadline or interruption | Show publication outcome unknown. Block while old work or staging remains unresolved; after proven cessation and verified cleanup offer explicit acknowledgement under the contract, then a separate new Save. Acknowledgement does not reconcile the missing outcome or mean no file was written. |
-| A recovered candidate is replaced after its preview was prepared | Invalidate that source generation's preview and destination token. Never substitute new bytes into the old handle. Routine CURRENT checkpoint refreshes leave a pinned current-session preview unchanged. |
+| A recovered candidate is replaced after its report was prepared | Invalidate that source generation's report and destination token. Never substitute new bytes into the old handle. Routine CURRENT checkpoint refreshes leave a pinned current-session report unchanged. |
 | Picker returns after cancel, target change or opt-out | Ignore its destination; no write and no restored authority. |
 
 Opt-out stops capture and advances authority before asynchronous cleanup. It attempts deletion of
-ORCA-owned history, previews and diagnostics-only key material; it never deletes shared
+ORCA-owned history, prepared reports and diagnostics-only key material; it never deletes shared
 app material or user exports. Report durable opt-out success only after the disabled
 setting and revocation are persisted. Only confirmed logical revocation followed by
 a persistence failure says “Off for this session; the setting or cleanup could not
 be completed.” A transport failure or stale request rejected before main accepts
 revocation instead says it could not be confirmed and diagnostics may remain on.
-Local preview disposal provides no revocation evidence; later authoritative On
+Local export cancellation provides no consent-revocation evidence; later authoritative On
 status removes stale Off feedback. An app crash before durable
 disable is a limitation to test, not guaranteed crash-proof revocation. Re-enabling waits
 for old-state cleanup and cannot resurrect an old operation. Discard
-deletes the selected retained source and its preview without silently changing the
+deletes the selected retained source and its prepared report without silently changing the
 persistent setting. The copy must say that new capture continues if enabled. Cleanup
 pending is distinct from success and does not preserve Save authority. Clean exit deletes
 the current session's checkpoint; a recovered previous candidate follows its original
 expiry/discard rule.
 
-## Draft user wording for technical/privacy review
+## Historical viewer wording, superseded by the save-only decision
 
 The reviewed producer allowlist must substantiate every category claim before this copy
 is used. These sentences propose the exact disclosure structure without approving new

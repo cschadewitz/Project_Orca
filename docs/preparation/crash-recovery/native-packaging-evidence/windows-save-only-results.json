@@ -1,0 +1,1305 @@
+{
+  "profiling": false,
+  "schema": 1,
+  "sourceCommit": "21b615fe278f91888a68198475c6fcc6a791208f",
+  "productionEnabled": false,
+  "method": "Owner-approved save-only scope: current and recovered reports via actual production renderer/preload/controller, separate picker and Save, 30 repeated prepare/cancel exports, minimum 7-second cells. Full retains hooks/status/trace/heartbeat and exact-byte file oracles; Minimal has no live full-report oracle. Same 32 MiB combined sampled managed process gate, 8 MiB controlled binary gate and affected strict 4ms responsiveness gate. This does not pass or rerun the removed viewer/selection requirement. OS and heap sampling are observed costs, not a continuous managed/OS peak guarantee.",
+  "runs": [
+    {
+      "ok": true,
+      "mode": "on",
+      "electron": "44.4.5",
+      "node": "24.21.0",
+      "productionEnabled": false,
+      "fixtureCaptureOverride": true,
+      "pairedExecution": false,
+      "observer": "full",
+      "measurementOnly": true,
+      "elapsedMs": 9708.6682,
+      "periodicBusyRefusals": 0,
+      "events": 8192,
+      "previousEvents": 8192,
+      "bytes": 950295,
+      "saveExact": true,
+      "exports": {
+        "previous": {
+          "byteLength": 950458,
+          "sha256": "e679faa702e4c309be4014ec6090e5d4394f284cd78680e0063e59e7f48ca1d3",
+          "source": "previous",
+          "descriptorOnly": true,
+          "exactFrozenBytes": true,
+          "events": 8192
+        },
+        "current": {
+          "byteLength": 950295,
+          "sha256": "81648dcb6dd618e03f9dc010a928907e698fc23c25ff1b20f8d8b47caf5dd723",
+          "source": "current",
+          "descriptorOnly": true,
+          "exactFrozenBytes": true,
+          "events": 8192
+        }
+      },
+      "a11y": [],
+      "repetitions": 30,
+      "callbacks": {
+        "setup": 16.316400000000044,
+        "setup->paired-idle": 0.09699999999997999,
+        "paired-idle": 0.028999999999996362,
+        "paired-idle->initialize-promotion": 1.1067000000000462,
+        "initialize-promotion": 1.9313999999999396,
+        "initialize-promotion->capture": 0.45249999999987267,
+        "capture": 1.5411000000001422,
+        "capture->checkpoint": 1.0470000000000255,
+        "checkpoint": 1.4752999999998337,
+        "checkpoint->previous-export": 0.15650000000005093,
+        "previous-export": 3.2286999999998898,
+        "previous-export->previous-picker": 0.05089999999995598,
+        "previous-picker": 0.06480000000010477,
+        "previous-picker->previous-save": 0.1290999999998803,
+        "previous-save": 2.5338000000001557,
+        "previous-save->previous-cancel-export": 5.26909999999998,
+        "previous-cancel-export": 0.03999999999996362,
+        "previous-cancel-export->current-export": 0.03150000000005093,
+        "current-export": 2.342200000000048,
+        "current-export->current-picker": 0.044499999999970896,
+        "current-picker": 0.07560000000012224,
+        "current-picker->current-save": 0.13380000000006476,
+        "current-save": 2.4182999999998174,
+        "current-save->current-cancel-export": 5.03229999999985,
+        "current-cancel-export": 0.03780000000006112,
+        "current-cancel-export->checkpoint-repeat": 0.06260000000020227,
+        "checkpoint-repeat": 0.3801999999996042,
+        "checkpoint-repeat->export-repeat": 0.03699999999980719,
+        "export-repeat": 2.5135999999993146,
+        "export-repeat->cancel-export-repeat": 0.027100000001155422,
+        "cancel-export-repeat": 0.0466999999998734,
+        "cancel-export-repeat->checkpoint-repeat": 0.06040000000029977,
+        "cancel-export-repeat->opt-out": 0.03709999999955471,
+        "opt-out": 1.2864000000008673,
+        "opt-out->comparable-wait": 0.035799999999653664,
+        "comparable-wait": 0.009799999999813735
+      },
+      "gaps": {
+        "setup": 16.550200000000018,
+        "paired-idle": 0.36360000000013315,
+        "initialize-promotion": 2.531600000000026,
+        "capture": 1.6607000000001335,
+        "checkpoint": 1.710800000000063,
+        "previous-export": 5.2331000000001495,
+        "previous-picker": 0.5354999999999563,
+        "previous-save": 2.6929000000000087,
+        "previous-cancel-export": 0.43260000000009313,
+        "current-export": 2.775699999999688,
+        "current-picker": 0.3518000000003667,
+        "current-save": 2.577299999999923,
+        "current-cancel-export": 0.31970000000001164,
+        "checkpoint-repeat": 1.6273000000001048,
+        "export-repeat": 2.9307000000007974,
+        "cancel-export-repeat": 1.181800000000294,
+        "opt-out": 1.5442999999995664,
+        "comparable-wait": 0.05520000000069558
+      },
+      "transitions": {
+        "setup->paired-idle": 0.3887999999999465,
+        "paired-idle->initialize-promotion": 2.574100000000044,
+        "initialize-promotion->capture": 1.183699999999817,
+        "capture->checkpoint": 1.4666000000001986,
+        "checkpoint->previous-export": 0.3897999999999229,
+        "previous-export->previous-picker": 0.22919999999999163,
+        "previous-picker->previous-save": 0.3389999999999418,
+        "previous-save->previous-cancel-export": 6.44820000000027,
+        "previous-cancel-export->current-export": 0.19660000000021682,
+        "current-export->current-picker": 0.24969999999984793,
+        "current-picker->current-save": 0.3273999999996704,
+        "current-save->current-cancel-export": 5.254599999999755,
+        "current-cancel-export->checkpoint-repeat": 0.29240000000027067,
+        "checkpoint-repeat->export-repeat": 0.6559999999999491,
+        "export-repeat->cancel-export-repeat": 0.32920000000012806,
+        "cancel-export-repeat->checkpoint-repeat": 0.32480000000032305,
+        "cancel-export-repeat->opt-out": 0.19419999999990978,
+        "opt-out->comparable-wait": 0.17069999999876018
+      },
+      "gc": [
+        {
+          "phase": "setup",
+          "durationMs": 0.3482999950647354,
+          "kind": 1
+        },
+        {
+          "phase": "setup",
+          "durationMs": 0.49069999903440475,
+          "kind": 1
+        },
+        {
+          "phase": "setup",
+          "durationMs": 0.2476000040769577,
+          "kind": 1
+        },
+        {
+          "phase": "setup",
+          "durationMs": 0.21469999849796295,
+          "kind": 1
+        },
+        {
+          "phase": "setup",
+          "durationMs": 0.1882999986410141,
+          "kind": 1
+        },
+        {
+          "phase": "setup",
+          "durationMs": 0.21530000120401382,
+          "kind": 1
+        },
+        {
+          "phase": "setup",
+          "durationMs": 0.17220000177621841,
+          "kind": 1
+        },
+        {
+          "phase": "paired-idle",
+          "durationMs": 0.1655000001192093,
+          "kind": 1
+        },
+        {
+          "phase": "paired-idle",
+          "durationMs": 0.19779999554157257,
+          "kind": 1
+        },
+        {
+          "phase": "initialize-promotion",
+          "durationMs": 0.4307999983429909,
+          "kind": 1
+        },
+        {
+          "phase": "initialize-promotion",
+          "durationMs": 0.4156000018119812,
+          "kind": 1
+        },
+        {
+          "phase": "initialize-promotion",
+          "durationMs": 0.2410999983549118,
+          "kind": 1
+        },
+        {
+          "phase": "capture",
+          "durationMs": 0.2832999974489212,
+          "kind": 1
+        },
+        {
+          "phase": "capture",
+          "durationMs": 0.15640000253915787,
+          "kind": 1
+        },
+        {
+          "phase": "capture",
+          "durationMs": 0.13030000030994415,
+          "kind": 1
+        },
+        {
+          "phase": "capture",
+          "durationMs": 0.11410000175237656,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint",
+          "durationMs": 0.44749999791383743,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint",
+          "durationMs": 0.2578999996185303,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint",
+          "durationMs": 0.3119000047445297,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint",
+          "durationMs": 0.3621000051498413,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint",
+          "durationMs": 0.38030000030994415,
+          "kind": 1
+        },
+        {
+          "phase": "previous-export",
+          "durationMs": 0.36879999935626984,
+          "kind": 1
+        },
+        {
+          "phase": "previous-export",
+          "durationMs": 0.2615000009536743,
+          "kind": 1
+        },
+        {
+          "phase": "previous-export",
+          "durationMs": 0.15650000423192978,
+          "kind": 1
+        },
+        {
+          "phase": "previous-export",
+          "durationMs": 0.24949999898672104,
+          "kind": 1
+        },
+        {
+          "phase": "previous-export",
+          "durationMs": 0.18489999324083328,
+          "kind": 1
+        },
+        {
+          "phase": "previous-save",
+          "durationMs": 0.38019999861717224,
+          "kind": 1
+        },
+        {
+          "phase": "previous-save",
+          "durationMs": 0.5513999983668327,
+          "kind": 1
+        },
+        {
+          "phase": "previous-save",
+          "durationMs": 0.49799999594688416,
+          "kind": 1
+        },
+        {
+          "phase": "previous-cancel-export",
+          "durationMs": 0.7783000022172928,
+          "kind": 1
+        },
+        {
+          "phase": "current-save",
+          "durationMs": 0.8935000002384186,
+          "kind": 1
+        },
+        {
+          "phase": "current-save",
+          "durationMs": 0.5491000041365623,
+          "kind": 1
+        },
+        {
+          "phase": "current-save",
+          "durationMs": 0.4716999977827072,
+          "kind": 1
+        },
+        {
+          "phase": "current-save",
+          "durationMs": 0.5309000015258789,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.785300001502037,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 1.0141999945044518,
+          "kind": 1
+        },
+        {
+          "phase": "export-repeat",
+          "durationMs": 0.4299999997019768,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.7650999948382378,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.5291999951004982,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.5807999968528748,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.48730000108480453,
+          "kind": 1
+        },
+        {
+          "phase": "export-repeat",
+          "durationMs": 0.42659999430179596,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.7035999968647957,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.5291000008583069,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.557499997317791,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.5539999976754189,
+          "kind": 1
+        },
+        {
+          "phase": "export-repeat",
+          "durationMs": 0.5487999990582466,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.725600004196167,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.5610000044107437,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.527999997138977,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.48829999566078186,
+          "kind": 1
+        },
+        {
+          "phase": "export-repeat",
+          "durationMs": 0.5320999994874,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 1.0830999985337257,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.9153999984264374,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.9849000051617622,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.9680000022053719,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.7631999999284744,
+          "kind": 1
+        },
+        {
+          "phase": "export-repeat",
+          "durationMs": 0.9959999993443489,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 1.2397999987006187,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.9778000041842461,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 1.003100000321865,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.9750000014901161,
+          "kind": 1
+        },
+        {
+          "phase": "cancel-export-repeat",
+          "durationMs": 0.7672000005841255,
+          "kind": 1
+        },
+        {
+          "phase": "export-repeat",
+          "durationMs": 1.062399998307228,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 1.0333999991416931,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.9407999962568283,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.9980999976396561,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.9778999984264374,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.7937000021338463,
+          "kind": 1
+        },
+        {
+          "phase": "export-repeat",
+          "durationMs": 0.9591000005602837,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 1.0095999985933304,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 1.0855000019073486,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.9891999959945679,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.9381999969482422,
+          "kind": 1
+        },
+        {
+          "phase": "export-repeat",
+          "durationMs": 0.7493000030517578,
+          "kind": 1
+        },
+        {
+          "phase": "export-repeat",
+          "durationMs": 1.0989999994635582,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.967399999499321,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.9114999994635582,
+          "kind": 1
+        },
+        {
+          "phase": "checkpoint-repeat",
+          "durationMs": 0.9518999978899956,
+          "kind": 1
+        },
+        {
+          "phase": "opt-out",
+          "durationMs": 0.9939999952912331,
+          "kind": 1
+        }
+      ],
+      "clockMaxMs": 0.18529999999987012,
+      "clockCalls": 220722,
+      "nativeIOElapsedMaxMs": {
+        "openRoot": 1.238399999999956,
+        "rootStat": 1.7779000000009546,
+        "openRead": 8.605000000000018,
+        "fileStat": 1.52599999999984,
+        "read": 0.748299999999972,
+        "closeFile": 0.3794000000000324,
+        "list": 0.45060000000012224,
+        "stat": 1.5270000000000437,
+        "stopped": 0.4614000000001397,
+        "acquire": 2.041800000000194,
+        "openCreate": 7.185999999999694,
+        "write": 1.7659000000003289,
+        "sync": 42.22190000000046,
+        "replace": 84.12220000000002,
+        "validateDestination": 1.185399999999845,
+        "publish": 26.89300000000003,
+        "remove": 1.146600000000035
+      },
+      "nativeIOReferencedBufferPeakBytes": 950784,
+      "payloadReservationPeakBytes": 4194304,
+      "controlledBinary": {
+        "allocatedBytes": 0,
+        "peakBytes": 5406720,
+        "arenaBytes": 0,
+        "externalAllowanceBytes": 0,
+        "leases": 0,
+        "allocations": 839
+      },
+      "rendererSamples": [
+        {
+          "phase": "checkpoint",
+          "backingStorageSize": 877692,
+          "embedderHeapUsedSize": 1843568,
+          "totalSize": 3670016,
+          "usedSize": 2574312
+        },
+        {
+          "phase": "previous-export",
+          "backingStorageSize": 879580,
+          "embedderHeapUsedSize": 1843568,
+          "totalSize": 3670016,
+          "usedSize": 2757164
+        },
+        {
+          "phase": "previous-save",
+          "backingStorageSize": 881706,
+          "embedderHeapUsedSize": 1843568,
+          "totalSize": 4980736,
+          "usedSize": 2653080
+        },
+        {
+          "phase": "current-export",
+          "backingStorageSize": 882844,
+          "embedderHeapUsedSize": 1843568,
+          "totalSize": 5242880,
+          "usedSize": 2792672
+        },
+        {
+          "phase": "current-save",
+          "backingStorageSize": 884520,
+          "embedderHeapUsedSize": 2089888,
+          "totalSize": 5242880,
+          "usedSize": 3046112
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 885643,
+          "embedderHeapUsedSize": 2089888,
+          "totalSize": 5767168,
+          "usedSize": 2774860
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 886766,
+          "embedderHeapUsedSize": 2089888,
+          "totalSize": 5767168,
+          "usedSize": 2903152
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 887889,
+          "embedderHeapUsedSize": 2089888,
+          "totalSize": 5767168,
+          "usedSize": 3043492
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 889012,
+          "embedderHeapUsedSize": 2089888,
+          "totalSize": 5767168,
+          "usedSize": 3152208
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 890135,
+          "embedderHeapUsedSize": 2089888,
+          "totalSize": 5767168,
+          "usedSize": 3261816
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 891258,
+          "embedderHeapUsedSize": 2089888,
+          "totalSize": 5767168,
+          "usedSize": 3371788
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 892381,
+          "embedderHeapUsedSize": 2089888,
+          "totalSize": 5767168,
+          "usedSize": 3488040
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 893507,
+          "embedderHeapUsedSize": 2089888,
+          "totalSize": 4718592,
+          "usedSize": 2858948
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 894630,
+          "embedderHeapUsedSize": 2082856,
+          "totalSize": 4718592,
+          "usedSize": 2965460
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 895753,
+          "embedderHeapUsedSize": 2090944,
+          "totalSize": 4718592,
+          "usedSize": 3096072
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 896876,
+          "embedderHeapUsedSize": 2220400,
+          "totalSize": 4718592,
+          "usedSize": 3211840
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 897999,
+          "embedderHeapUsedSize": 2220400,
+          "totalSize": 4718592,
+          "usedSize": 3319244
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 899122,
+          "embedderHeapUsedSize": 2220400,
+          "totalSize": 4718592,
+          "usedSize": 3433064
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 900245,
+          "embedderHeapUsedSize": 2226424,
+          "totalSize": 4718592,
+          "usedSize": 3556768
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 901374,
+          "embedderHeapUsedSize": 2226424,
+          "totalSize": 3932160,
+          "usedSize": 2977980
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 902497,
+          "embedderHeapUsedSize": 2226424,
+          "totalSize": 3932160,
+          "usedSize": 3083104
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 903620,
+          "embedderHeapUsedSize": 2354216,
+          "totalSize": 4194304,
+          "usedSize": 3201576
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 904743,
+          "embedderHeapUsedSize": 2354216,
+          "totalSize": 4194304,
+          "usedSize": 3308064
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 905866,
+          "embedderHeapUsedSize": 2354216,
+          "totalSize": 4456448,
+          "usedSize": 3416744
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 906989,
+          "embedderHeapUsedSize": 2481920,
+          "totalSize": 4718592,
+          "usedSize": 3535392
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 908112,
+          "embedderHeapUsedSize": 2613320,
+          "totalSize": 4718592,
+          "usedSize": 3640576
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 909235,
+          "embedderHeapUsedSize": 2613432,
+          "totalSize": 4194304,
+          "usedSize": 3024228
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 910358,
+          "embedderHeapUsedSize": 2614544,
+          "totalSize": 4194304,
+          "usedSize": 3135136
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 911481,
+          "embedderHeapUsedSize": 2612920,
+          "totalSize": 4456448,
+          "usedSize": 3242360
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 912604,
+          "embedderHeapUsedSize": 2612920,
+          "totalSize": 4456448,
+          "usedSize": 3353680
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 913727,
+          "embedderHeapUsedSize": 2613008,
+          "totalSize": 4456448,
+          "usedSize": 3461244
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 914850,
+          "embedderHeapUsedSize": 2613008,
+          "totalSize": 4718592,
+          "usedSize": 3567784
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 915973,
+          "embedderHeapUsedSize": 2613008,
+          "totalSize": 4718592,
+          "usedSize": 3675468
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 917096,
+          "embedderHeapUsedSize": 2613008,
+          "totalSize": 4980736,
+          "usedSize": 3790464
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 918219,
+          "embedderHeapUsedSize": 2609608,
+          "totalSize": 5505024,
+          "usedSize": 3196876
+        },
+        {
+          "phase": "opt-out",
+          "backingStorageSize": 919130,
+          "embedderHeapUsedSize": 2738824,
+          "totalSize": 5767168,
+          "usedSize": 3333432
+        },
+        {
+          "phase": "comparable-wait",
+          "backingStorageSize": 919130,
+          "embedderHeapUsedSize": 2738824,
+          "totalSize": 5767168,
+          "usedSize": 3333432
+        }
+      ],
+      "mainAtPeak": {
+        "phase": "checkpoint-repeat",
+        "rss": 131866624,
+        "heapTotal": 28364800,
+        "heapUsed": 20091840,
+        "external": 10936919,
+        "arrayBuffers": 0
+      },
+      "mainHeapExternalIncrementBytes": 22979217,
+      "mainRssIncrementBytes": 38359040,
+      "rendererBase": {
+        "backingStorageSize": 877456,
+        "embedderHeapUsedSize": 1843568,
+        "totalSize": 3670016,
+        "usedSize": 2392484
+      },
+      "rendererHeapBackingEmbedderIncrementBytes": 2207060,
+      "legacyCalls": 0,
+      "traceWritten": true,
+      "memory": {
+        "sampleCount": 624,
+        "baseline": [
+          [
+            47509504,
+            49717248,
+            103714816,
+            105385984
+          ],
+          [
+            31154176,
+            31158272,
+            85176320,
+            85180416
+          ]
+        ],
+        "fields": [
+          "privateCommit",
+          "processLifetimePeakCommit",
+          "workingSet",
+          "processLifetimePeakWorkingSet"
+        ],
+        "schema": 1,
+        "max": [
+          [
+            111951872,
+            113836032,
+            135196672,
+            135426048
+          ],
+          [
+            38678528,
+            38678528,
+            94859264,
+            94863360
+          ]
+        ],
+        "combinedPrivateCommitPeak": 148996096,
+        "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed."
+      },
+      "combinedManagedIncrementBytes": 25186277,
+      "privateCommitIncrementBytes": 70332416,
+      "supervisorPostExitExports": [
+        {
+          "source": "previous",
+          "bytes": 950458,
+          "events": 8192,
+          "sha256": "e679faa702e4c309be4014ec6090e5d4394f284cd78680e0063e59e7f48ca1d3",
+          "exactFrozenDigest": true,
+          "finalLF": true
+        },
+        {
+          "source": "current",
+          "bytes": 950295,
+          "events": 8192,
+          "sha256": "81648dcb6dd618e03f9dc010a928907e698fc23c25ff1b20f8d8b47caf5dd723",
+          "exactFrozenDigest": true,
+          "finalLF": true
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "mode": "on",
+      "electron": "44.4.5",
+      "node": "24.21.0",
+      "productionEnabled": false,
+      "fixtureCaptureOverride": true,
+      "pairedExecution": false,
+      "observer": "minimal",
+      "measurementOnly": true,
+      "elapsedMs": 8551.3857,
+      "periodicBusyRefusals": 8,
+      "events": 8192,
+      "bytes": 950603,
+      "saveExact": false,
+      "exports": {
+        "previous": {
+          "byteLength": 950421,
+          "sha256": "99888ef363e066cd0810300c2209f3dfc9ed04b95eb8fd27b96843ace2b55ded",
+          "source": "previous",
+          "descriptorOnly": true
+        },
+        "current": {
+          "byteLength": 950603,
+          "sha256": "cfb38fdadbd85c7279c48be1ebfc4c86df538aee05a20a30398a26aab12437fc",
+          "source": "current",
+          "descriptorOnly": true
+        }
+      },
+      "a11y": [],
+      "repetitions": 30,
+      "callbacks": {},
+      "gaps": {},
+      "transitions": {},
+      "gc": [],
+      "clockMaxMs": 0.1612999999999829,
+      "clockCalls": 8701,
+      "nativeIOElapsedMaxMs": {},
+      "nativeIOReferencedBufferPeakBytes": 0,
+      "payloadReservationPeakBytes": 4194304,
+      "controlledBinary": {
+        "allocatedBytes": 0,
+        "peakBytes": 5406720,
+        "arenaBytes": 0,
+        "externalAllowanceBytes": 0,
+        "leases": 0,
+        "allocations": 853
+      },
+      "rendererSamples": [
+        {
+          "phase": "checkpoint",
+          "backingStorageSize": 877692,
+          "embedderHeapUsedSize": 1846920,
+          "totalSize": 3670016,
+          "usedSize": 2512072
+        },
+        {
+          "phase": "previous-export",
+          "backingStorageSize": 879338,
+          "embedderHeapUsedSize": 1846920,
+          "totalSize": 3670016,
+          "usedSize": 2675224
+        },
+        {
+          "phase": "previous-save",
+          "backingStorageSize": 881059,
+          "embedderHeapUsedSize": 1846920,
+          "totalSize": 5242880,
+          "usedSize": 2540328
+        },
+        {
+          "phase": "current-export",
+          "backingStorageSize": 882073,
+          "embedderHeapUsedSize": 1846920,
+          "totalSize": 5505024,
+          "usedSize": 2686216
+        },
+        {
+          "phase": "current-save",
+          "backingStorageSize": 883317,
+          "embedderHeapUsedSize": 1846920,
+          "totalSize": 5505024,
+          "usedSize": 2831652
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 884192,
+          "embedderHeapUsedSize": 1967896,
+          "totalSize": 5767168,
+          "usedSize": 2976832
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 885070,
+          "embedderHeapUsedSize": 1975544,
+          "totalSize": 6029312,
+          "usedSize": 2693980
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 885945,
+          "embedderHeapUsedSize": 2110920,
+          "totalSize": 6029312,
+          "usedSize": 2900304
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 886820,
+          "embedderHeapUsedSize": 2110920,
+          "totalSize": 6029312,
+          "usedSize": 3035644
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 887695,
+          "embedderHeapUsedSize": 2110920,
+          "totalSize": 6029312,
+          "usedSize": 3141088
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 888570,
+          "embedderHeapUsedSize": 2110920,
+          "totalSize": 6029312,
+          "usedSize": 3248556
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 889445,
+          "embedderHeapUsedSize": 2110920,
+          "totalSize": 6029312,
+          "usedSize": 3364808
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 890320,
+          "embedderHeapUsedSize": 2110920,
+          "totalSize": 6029312,
+          "usedSize": 3468716
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 891195,
+          "embedderHeapUsedSize": 2110920,
+          "totalSize": 4980736,
+          "usedSize": 2832268
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 892070,
+          "embedderHeapUsedSize": 2110920,
+          "totalSize": 4980736,
+          "usedSize": 2943856
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 892945,
+          "embedderHeapUsedSize": 2110920,
+          "totalSize": 4980736,
+          "usedSize": 3055856
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 893820,
+          "embedderHeapUsedSize": 2099128,
+          "totalSize": 4980736,
+          "usedSize": 3161128
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 894695,
+          "embedderHeapUsedSize": 2099128,
+          "totalSize": 4980736,
+          "usedSize": 3270172
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 895570,
+          "embedderHeapUsedSize": 2223856,
+          "totalSize": 5242880,
+          "usedSize": 3385988
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 896445,
+          "embedderHeapUsedSize": 2223856,
+          "totalSize": 5242880,
+          "usedSize": 3495400
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 897320,
+          "embedderHeapUsedSize": 2223856,
+          "totalSize": 4718592,
+          "usedSize": 2876052
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 900454,
+          "embedderHeapUsedSize": 2226552,
+          "totalSize": 4980736,
+          "usedSize": 3313428
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 901329,
+          "embedderHeapUsedSize": 2351792,
+          "totalSize": 5242880,
+          "usedSize": 3424420
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 902204,
+          "embedderHeapUsedSize": 2351792,
+          "totalSize": 5242880,
+          "usedSize": 3527656
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 903079,
+          "embedderHeapUsedSize": 2351792,
+          "totalSize": 5505024,
+          "usedSize": 3635856
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 903954,
+          "embedderHeapUsedSize": 2351792,
+          "totalSize": 4718592,
+          "usedSize": 3017588
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 904829,
+          "embedderHeapUsedSize": 2351792,
+          "totalSize": 4718592,
+          "usedSize": 3130188
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 905704,
+          "embedderHeapUsedSize": 2478320,
+          "totalSize": 4980736,
+          "usedSize": 3235588
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 906579,
+          "embedderHeapUsedSize": 2604176,
+          "totalSize": 4980736,
+          "usedSize": 3341100
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 907454,
+          "embedderHeapUsedSize": 2609016,
+          "totalSize": 5242880,
+          "usedSize": 3443164
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 908329,
+          "embedderHeapUsedSize": 2609016,
+          "totalSize": 5242880,
+          "usedSize": 3552100
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 909204,
+          "embedderHeapUsedSize": 2609016,
+          "totalSize": 5242880,
+          "usedSize": 3670184
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 910079,
+          "embedderHeapUsedSize": 2605584,
+          "totalSize": 5767168,
+          "usedSize": 3025128
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 910960,
+          "embedderHeapUsedSize": 2605584,
+          "totalSize": 5767168,
+          "usedSize": 3126900
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 911835,
+          "embedderHeapUsedSize": 2609344,
+          "totalSize": 6029312,
+          "usedSize": 3230484
+        },
+        {
+          "phase": "opt-out",
+          "backingStorageSize": 912638,
+          "embedderHeapUsedSize": 2609344,
+          "totalSize": 6029312,
+          "usedSize": 3370248
+        },
+        {
+          "phase": "comparable-wait",
+          "backingStorageSize": 912638,
+          "embedderHeapUsedSize": 2609344,
+          "totalSize": 6029312,
+          "usedSize": 3370248
+        }
+      ],
+      "mainAtPeak": {
+        "phase": "checkpoint-repeat",
+        "rss": 112435200,
+        "heapTotal": 19283968,
+        "heapUsed": 13852516,
+        "external": 9033122,
+        "arrayBuffers": 0
+      },
+      "mainHeapExternalIncrementBytes": 14840572,
+      "mainRssIncrementBytes": 23322624,
+      "rendererBase": {
+        "backingStorageSize": 877456,
+        "embedderHeapUsedSize": 1846920,
+        "totalSize": 3670016,
+        "usedSize": 2392508
+      },
+      "rendererHeapBackingEmbedderIncrementBytes": 2071520,
+      "legacyCalls": 0,
+      "traceWritten": false,
+      "memory": {
+        "schema": 1,
+        "fields": [
+          "privateCommit",
+          "processLifetimePeakCommit",
+          "workingSet",
+          "processLifetimePeakWorkingSet"
+        ],
+        "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed.",
+        "max": [
+          [
+            91160576,
+            94969856,
+            115462144,
+            115466240
+          ],
+          [
+            38858752,
+            38858752,
+            91856896,
+            91869184
+          ]
+        ],
+        "combinedPrivateCommitPeak": 130019328,
+        "baseline": [
+          [
+            38215680,
+            38535168,
+            91508736,
+            91619328
+          ],
+          [
+            30851072,
+            30851072,
+            82386944,
+            82391040
+          ]
+        ],
+        "sampleCount": 554
+      },
+      "combinedManagedIncrementBytes": 16912092,
+      "privateCommitIncrementBytes": 60952576,
+      "supervisorPostExitExports": [
+        {
+          "source": "previous",
+          "bytes": 950421,
+          "events": 8192,
+          "sha256": "99888ef363e066cd0810300c2209f3dfc9ed04b95eb8fd27b96843ace2b55ded",
+          "exactFrozenDigest": true,
+          "finalLF": true
+        },
+        {
+          "source": "current",
+          "bytes": 950603,
+          "events": 8192,
+          "sha256": "cfb38fdadbd85c7279c48be1ebfc4c86df538aee05a20a30398a26aab12437fc",
+          "exactFrozenDigest": true,
+          "finalLF": true
+        }
+      ]
+    }
+  ],
+  "allOwnedExitsConfirmed": true,
+  "disposableStateRemoved": true,
+  "acceptance": {
+    "cellExecution": "completed",
+    "reportAndEventLimitsUnchanged": true,
+    "managedMemoryGateBytes": 33554432,
+    "controlledBinaryGateBytes": 8388608,
+    "affectedResponsivenessGateMs": 4,
+    "memory": "passed_both_observers",
+    "exactSavedOutput": "passed_current_and_recovered_both_observers",
+    "affectedResponsiveness": "failed",
+    "failure": {
+      "observer": "full",
+      "phase": "previous-export",
+      "heartbeatGapMs": 5.2331000000001495
+    },
+    "oldViewerRequirement": "retired_by_owner_scope_change_not_passed",
+    "activationAuthorized": false
+  }
+}

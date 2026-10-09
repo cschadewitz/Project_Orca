@@ -1,5 +1,7 @@
 # Preview allocation attribution and observer correction - 9 October 2026
 
+> Casey subsequently approved removing the in-app preview and keeping explicit Save/export. The [save-only implementation and acceptance](windows-save-only-followup.md) supersede the viewer requirement and next-step choice below. These original viewer measurements and failed Full gate remain historical evidence; they are not reclassified as passing.
+
 **Minimal now passes 32 MiB; Full remains blocked.** The corrected final cells at
 `05b651add9b88609eef617e29d67d873843af177` measure **28,311,570 bytes** in Minimal
 and **101,839,014 bytes** in Full versus the unchanged **33,554,432-byte** gate.

@@ -6,6 +6,8 @@ this slice's engineering parameters; companion storage, UI and test notes explai
 it. It supersedes this directory's policy-neutral seam. It does not silently revise
 or approve the older D1–D8 schema, one-shot flow or producer inventory.
 
+> **Owner-approved save-only scope, 9 October 2026:** Casey directed, "Okay lets skip the in app preview, just let them save and export." The active crash-diagnostics flow prepares a main-owned frozen report, lets the user choose a destination, and requires a separate Save. No report contents, text-selection surface or report-byte transport is exposed to renderer/preload. Earlier viewer requirements below are historical and superseded for this flow; consent, canonical validation/redaction, expiry, exact saved output, privacy and numeric resource gates remain. See [save-only implementation and acceptance](windows-save-only-followup.md). Production capture stays disabled and Mac stays held.
+
 ## Recorded choices and review boundary
 
 Read the consolidated [decision 6 and engineering gates](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976190374)
@@ -70,17 +72,17 @@ prove elapsed age across app restart. Native clock adapter conformance is a gate
 
 At snapshot start, freeze the checkpoint's elapsed anchor. Expiry is that anchor
 plus 86,400,000 ms, conservatively earlier than an unknowable crash time. At every
-recovery/preview/save check, require matching boot identity, finite nonnegative
+recovery/prepared report/save check, require matching boot identity, finite nonnegative
 safe-integer readings and no elapsed rollback; age must be strictly less than 24h.
 A later completed write retains the snapshot anchor, not its completion time.
-Reopen, preview, export, rename, retry, promotion to previous, key rewrap and cleanup
+Reopen, prepared report, export, rename, retry, promotion to previous, key rewrap and cleanup
 never renew it. A fresh checkpoint of the current live ring gets a new anchor and
 must already exclude events outside the configured live horizon. A copied recovery
 report is never recaptured as current history.
 
 Wall time is optional local display data and cannot extend eligibility. If native
 elapsed continuity is unavailable, boot changes, age regresses, a suspend cannot be
-accounted for or arithmetic overflows: invalidate affected previews, refuse recovery
+accounted for or arithmetic overflows: invalidate affected prepared reports, refuse recovery
 with `age_uncertain`, and attempt owned-file cleanup. No wall-only fallback. Thus
 reboot recovery is not promised by RC1; retaining across untrusted time would require
 a reviewed new mechanism and, if it changes user-visible retention, Casey and Cal.
@@ -103,17 +105,17 @@ results. MiB means 1,048,576 bytes; KiB means 1,024 bytes.
 
 | Resource | RC1 bound and accounting |
 | --- | --- |
-| Complete report | 1 MiB uncompressed canonical UTF-8, including envelope, coverage, omissions, formatting and final newline; 8,192 events independently; no smaller preview/save cutoff |
+| Complete report | 1 MiB uncompressed canonical UTF-8, including envelope, coverage, omissions, formatting and final newline; 8,192 events independently; no smaller prepared report/save cutoff |
 | Retained workspace | 4 MiB aggregate logical file bytes, including current, previous, staging, old files, wrapped keys, control records, cleanup remnants and reservations |
 | Record slot | At most 1 MiB report plus 16 KiB framing/authentication/key overhead; at most three ciphertext slots (previous, committed current, replacement staging) |
 | Control/key files | At most 64 KiB aggregate, including their replacement copies; at most 16 directory entries; reject unexpected entries without recursive scans |
 | Export staging | Approved fixed private export slot: one plaintext temporary file, at most 1 MiB, only after explicit final Save; aggregate unsaved owned file ceiling 5 MiB |
-| Retained payload memory | At most 8 MiB explicitly reserved byte buffers across ingress, ring, serialization, seal/open, IPC and frozen preview; reserve before allocating; release only when underlying work settles |
-| Preview copies | One app-wide main frozen report and one renderer text view; no second parsed report tree, hidden preview cache or retained IPC history; old view must acknowledge disposal before replacement |
+| Retained payload memory | At most 8 MiB explicitly reserved byte buffers across ingress, ring, serialization, seal/open, frozen report and pending Save; no report-payload IPC copies; reserve before allocating; release only when underlying work settles |
+| Prepared report ownership | One app-wide main frozen report; renderer/preload hold only its bounded descriptor and no report bytes, strings, parsed trees or hidden cache. Cancellation erases main bytes immediately unless a still-live writer owns them; retain its charge until actual settlement. No renderer text-disposal acknowledgement is required. |
 | Measured memory gate | At most 32 MiB incremental diagnostics managed/external memory across main/worker/renderer versus paired idle baseline; sample transient peaks and report method/limitations separately from RSS |
 | Work queue | One checkpoint, one expensive prepare/decrypt/serialize operation and one Save maximum; checkpoint work coalesces into a dirty bit, never queues snapshots; bounded 256 enum-pair ingress queue drops on pressure |
 | Deadlines | Two seconds preparation/validation; ten seconds each key or file operation; five-second checkpoint target; one background cleanup attempt per launch plus explicit user retry |
-| Preview lifetime | Five minutes from freeze, nonrenewing, also clipped by source retention expiry and revocation; destination changes do not renew it |
+| Prepared report lifetime | Five minutes from freeze, nonrenewing, also clipped by source retention expiry and revocation; destination changes do not renew it |
 
 Three maximum record slots plus the 64 KiB control allowance fit below 4 MiB;
 remaining room is not permission for a fourth slot. Logical-byte bounds exclude
@@ -129,7 +131,7 @@ across processes (arrayBuffers is a subset of external, reported separately, not
 added twice); report renderer equivalents, RSS and native allocation limitations
 separately. It is not a bound on all OS/native allocations;
 a heap sampler is not a hard allocator limit. Use compact ring entries, transfer
-ownership where possible, bounded serialization and one renderer string. If fresh
+ownership where possible, bounded serialization and descriptor-only renderer IPC. If fresh
 8,192-event tests cannot meet the target, revise the engineering budget as one
 reviewed contract; never silently reduce approved report/event limits. Keep main
 callbacks short (target 4 ms chunks), move expensive work off the execution path,
@@ -175,9 +177,9 @@ data binds format/schema/scope revision, internal session ID, key ID, generation
 snapshot/expiry anchors, boot identity and exact plaintext byte length. Authenticate
 control manifests with the separate control key; fixed-length/bounded parsing precedes
 allocation, authentication precedes report parsing, and schema/canonical-byte/secret
-scan validation precedes preview. Do not export internal IDs, clock anchors, wrapped
+scan validation precedes prepared report. Do not export internal IDs, clock anchors, wrapped
 keys, ciphertext or authentication fields. Each newly prepared public report gets
-fresh independent report/session IDs; saving a preview preserves those exact IDs.
+fresh independent report/session IDs; saving a prepared report preserves those exact IDs.
 
 On unavailable or lost keys, refuse affected recovery; no execution-key lookup,
 regeneration-over-old-history, plaintext retry or forced security-setting change.
@@ -224,7 +226,7 @@ commit is treated as unclean; after it, leftover bytes are cleanup only. Exit do
 not block ordinary execution indefinitely: unfinished cleanup is reported next launch.
 
 Opt-out immediately advances the in-memory epoch, clears the ring, revokes all
-previews/pickers/saves and marks the persistent setting disabled. Durable disable and
+prepared reports/pickers/saves and marks the persistent setting disabled. Durable disable and
 revocation must precede reporting a completed opt-out; if either write fails, report
 “off for this session; could not save setting/finish cleanup,” never durable success.
 A valid durable disabled setting takes precedence over any old manifest. In-flight
@@ -234,16 +236,16 @@ re-enable recovery. A later opt-in waits for old-state cleanup before allocating
 An app crash before disable can be persisted is an explicitly tested limitation,
 not a claim of crash-proof consent revocation.
 
-Discarding the previous candidate revokes that source and its previews without
+Discarding the previous candidate revokes that source and its prepared reports without
 turning the persistent capture setting off; UI says current capture continues. A
 “delete all and turn off” action follows opt-out. Expiry and recovered-candidate replacement invalidate
 source-bound handles. Normal current-checkpoint replacement does not invalidate a
-pinned current-memory preview; its snapshot identity is distinct from the writer
-generation and its original preview deadline remains unchanged. No action removes a successfully published user export. Whole-profile rollback of
+pinned current-memory prepared report; its snapshot identity is distinct from the writer
+generation and its original prepared report deadline remains unchanged. No action removes a successfully published user export. Whole-profile rollback of
 settings, manifests and key wrappers together is outside this threat model; local
 authentication is not a trusted anti-rollback service.
 
-## Consent, bridge and preview/save races
+## Consent, bridge and prepared report/save races
 
 Persist `{enabled, scopeVersion}` only through an explicit main-validated choice;
 missing/invalid/unknown scope is off. Same approved scope survives restart without
@@ -256,25 +258,30 @@ Main owns a process epoch, target/window authority, source generation and opaque
 single-use operation handles. A read-only status method returns closed safe enums
 and bounded counts, never exception text or private paths. Under valid opt-in it may
 show a generic recovery candidate after bounded envelope/control checks; full report
-decryption/validation/display requires explicit Preview. Off/invalid scope exposes
+decryption/validation/preparation requires explicit Export. No report content is displayed in-app. Off/invalid scope exposes
 only off/cleanup status. No recovery action resumes agents or waits for daemon hello.
 
 Conceptual bridge methods: `status`, `setEnabled(choice, scopeVersion)`,
-`preparePreview(current|previous)`, `closePreview(handle)`,
+`prepareExport(current|previous)`, `cancelExport(handle)`,
 `chooseDestination(handle)`, `save(handle, destinationToken)`,
 `discardPrevious`, `retryCleanup` and `acknowledgeUnknown(operationHandle)`. Main validates the current sender/window/target
 and epoch for each. Renderer never supplies report JSON, ciphertext, key, source path
 or arbitrary writable path; the native picker owns the destination token. These are the implemented main-owned bridge seams; production capture remains gated off.
 
-The preview freezes one canonical buffer and its digest/length. The renderer displays
-that entire exact text, including omissions and final newline, with summary derived
-from the same bytes. No live refresh, parse/reserialize on save or secret rescan that
-silently edits bytes. A failed scan refuses the entire preview. Reload, target change,
-close/back, timeout, opt-out, source expiry/delete, recovered-candidate replacement and authority failure
-revoke the handle; renderer disposal acknowledges removal before a new preview is
-admitted. New current events alone do not mutate an existing preview. For a current
-memory snapshot, expiry derives from freeze time plus the five-minute preview TTL;
-for recovery it also cannot outlive the checkpoint's original deadline.
+Export preparation freezes one canonical main-owned buffer with its digest and length.
+Only a descriptor (opaque handle, status revision, source, length, SHA-256,
+remaining lifetime and tail-loss flag) crosses the bridge. Canonical validation and
+redaction remain authoritative in main; a failed scan refuses the entire report.
+Save uses those frozen bytes without parse/reserialize or recollection. Report
+contents, omissions and coverage are available in the exported file.
+
+Reload, target change, cancellation, timeout, opt-out, source expiry/delete,
+recovered-candidate replacement and authority failure revoke the handle and
+destination token. Main releases and erases its bytes without waiting for a
+renderer report-view acknowledgement. If a native/staging writer remains live,
+its frozen input and resource reservation survive cancellation until actual
+settlement. New current events do not mutate a prepared report. Its five-minute
+TTL is nonrenewing and recovered reports cannot outlive the original checkpoint.
 
 Select destination, show its path and sharing warning, then require a separate Save.
 The approved [export-cleanup correction](export-cleanup-proposal.md) requires one fixed,
@@ -298,7 +305,7 @@ Temporary plaintext can survive failed cleanup or app exit until a safe retry;
 there is no forensic erasure guarantee. Decision 9 approves the same-filesystem restriction, residual plaintext exposure and bounded key-independent metadata. Cleanup failures remain visible. Exact-copy verification and native proof remain acceptance gates.
 
 Serialize final publication admission with all revocations. Immediately before native
-no-replace publication dispatch, recheck epoch, source/preview deadline, sender,
+no-replace publication dispatch, recheck epoch, source/prepared report deadline, sender,
 destination identity and frozen digest. **Dispatch is the point of no return for
 ordering**, not evidence of successful publication. Revocation ordered before dispatch
 prevents it and cleans staging. Revocation ordered after dispatch cannot promise
@@ -324,7 +331,7 @@ opt-in or user click can prove that native work stopped or staging was removed s
 | `unknown_blocked` | Hold the old operation slot/reservations. Old native/process work may still write, or staging safety/cleanup is unresolved. Acknowledge and new Save are refused. Late known completion is reported honestly before acknowledgement; it cannot restore revoked authority. |
 | `unknown_ready` | Main proves all old writers cannot write, validates the bounded recorded staging identity and safe parent/ownership, and confirms the owned file removed or safely absent. Keep the outcome unknown and block a new Save until acknowledgement commits. |
 | Explicit `Acknowledge and save again` → `acknowledged_unknown` | Under the serialized gate recheck evidence, sender/epoch and exact old-operation handle; durably replace the bounded record with acknowledgement plus the unchanged unknown outcome. Only after commit release the old reservation/slot. Failure or uncertain commit stays blocked; no picker, write, consent change or Save is triggered by this action. |
-| Separate new Save | Require current consent/scope and unexpired exact-byte preview; explicitly choose destination again and show it, then require a new Save action. Allocate a fresh operation ID and atomically replace current intent while preserving the bounded unknown-history record. No old destination/save token or old effect is reused. |
+| Separate new Save | Require current consent/scope and unexpired exact-byte prepared report; explicitly choose destination again and show it, then require a new Save action. Allocate a fresh operation ID and atomically replace current intent while preserving the bounded unknown-history record. No old destination/save token or old effect is reused. |
 
 Proof of cessation must cover every process/worker/native handle capable of writing:
 a settled native completion or confirmed termination plus reviewed platform evidence
@@ -337,15 +344,15 @@ blocks: the summary is not a bypass. Unknown or malformed identity/state, a move
 root, failed unlink or uncertain writer cessation fails closed.
 Absence is checked through verified native directory/identity state; it never establishes
 a Save outcome. Lost keys do not bypass any check and are not required for locating the
-approved fixed slot. Opt-out, expiry and consent/preview revocation remain independent.
+approved fixed slot. Opt-out, expiry and consent/prepared report revocation remain independent.
 
 Before acknowledgement show: “The earlier export may already exist. ORCA cannot
 confirm its result and will not find, change or delete that file. After safe cleanup,
 you can acknowledge the unknown result and choose to save again.” The button is
 **Acknowledge and save again**; adjacent copy says it does not save a file. Disable
-it with a safe reason while work or cleanup is unresolved. Offer current Preview if
+it with a safe reason while work or cleanup is unresolved. Offer Export current diagnostics if
 needed, then a fresh picker and separate final Save; acknowledgement never renews a
-preview or grants consent. Repeat the earlier-export warning before the new Save.
+prepared report or grants consent. Repeat the earlier-export warning before the new Save.
 Exact wording/accessibility remain for review; the behavior is approved.
 
 “New destination” means freshly selected and currently nonexistent, not proven
@@ -406,7 +413,7 @@ the ring. Unknown evidence stays unknown. No uploads, network endpoint, raw logs
 crash dumps, execution repair/retry or credential/access change is introduced.
 
 Use closed diagnostics result codes such as `off`, `unavailable`, `age_uncertain`,
-`expired`, `capacity_limited`, `stale_preview`, `publication_pending`, `saved`, and
+`expired`, `capacity_limited`, `stale_export`, `cancelled`, `publication_pending`, `saved`, and
 `cleanup_pending`. Failures cannot throw into execution, hold execution locks, retry
 admission/resume or change durable run state. No free-form errors in UI or logs.
 
@@ -415,7 +422,7 @@ clock adapter and conservative reboot refusal; total logical and measured resour
 limits; authenticated format/control-key lifecycle; publication/cleanup linearization;
 consent scope/version and exact UI/support copy; closed producer provenance. Any
 material change returns to Casey and Cal. In particular do not quietly add cross-boot
-retention, broader producers, automatic preview, longer preview leases, overwrite,
+retention, broader producers, automatic export preparation, longer prepared report leases, overwrite,
 weaker provider/ACL fallback or uploads to solve an implementation inconvenience.
 
 Then run the [test matrix](test-matrix.md) against the actual implementation, including
