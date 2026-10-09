@@ -663,7 +663,12 @@ const macUpdateWindows = new MacUpdateWindows({
   createDeferred: createWindow,
 });
 // Trusted candidate/recovery/native owners are absent: production routing stays unavailable.
-export const macUpdateGuards = new MacUpdateGuards(workspace, macUpdateWindows, () => firstRun.isBusy);
+export const macUpdateGuards = new MacUpdateGuards(
+  workspace,
+  macUpdateWindows,
+  () => firstRun.isBusy,
+  (target) => workspace.captureMacUpdateDrainTarget(target),
+);
 const macUpdates = new MacUpdateApplication();
 installMacUpdateIPC(macUpdates, {
   ipc: ipcMain,
