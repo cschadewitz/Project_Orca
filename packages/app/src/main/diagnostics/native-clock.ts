@@ -6,7 +6,7 @@ const unavailable: DiagnosticsClock = Object.freeze({ read: () => undefined });
 
 /** Fixed local addon only; absent, incompatible and unsupported builds fail closed. */
 export function loadNativeDiagnosticsClock(): DiagnosticsClock {
-  if (process.platform !== "darwin") return unavailable;
+  if (process.platform !== "darwin" && process.platform !== "win32") return unavailable;
   try {
     return createNativeDiagnosticsClock(loadDiagnosticsAddon("diagnostics_clock"));
   } catch {
@@ -16,12 +16,12 @@ export function loadNativeDiagnosticsClock(): DiagnosticsClock {
 
 /** Injectable conformance seam. Shipping callers use the fixed loader above. */
 export function createNativeDiagnosticsClock(backend: unknown, platform: string = process.platform): DiagnosticsClock {
-  if (platform !== "darwin") return unavailable;
+  if (platform !== "darwin" && platform !== "win32") return unavailable;
   let read: () => unknown;
   try {
     if (
       data(backend, "abi") !== 1 ||
-      data(backend, "platform") !== "darwin" ||
+      data(backend, "platform") !== platform ||
       data(backend, "suspendInclusive") !== true
     )
       return unavailable;

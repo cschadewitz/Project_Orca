@@ -90,8 +90,24 @@ describe("private native clock boundary", () => {
     },
   );
 
-  it.runIf(process.platform !== "darwin")("fixed shipping loader stays unavailable here", () => {
-    expect(loadNativeDiagnosticsClock().read()).toBeUndefined();
+  it.runIf(process.platform !== "darwin" && process.platform !== "win32")(
+    "fixed shipping loader stays unavailable here",
+    () => {
+      expect(loadNativeDiagnosticsClock().read()).toBeUndefined();
+    },
+  );
+
+  it("admits only matching Windows capabilities and latches a rollback", () => {
+    const read = vi
+      .fn<() => unknown>()
+      .mockReturnValueOnce(value())
+      .mockReturnValueOnce(value(999))
+      .mockReturnValue(value(2000));
+    const clock = createNativeDiagnosticsClock({ ...backend(read), platform: "win32" }, "win32");
+    expect(clock.read()).toEqual(value());
+    expect(clock.read()).toBeUndefined();
+    expect(clock.read()).toBeUndefined();
+    expect(read).toHaveBeenCalledTimes(2);
   });
 });
 

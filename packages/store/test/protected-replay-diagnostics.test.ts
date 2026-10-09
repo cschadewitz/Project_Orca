@@ -16,6 +16,7 @@ const dirs: string[] = [];
 const generic = "protected execution record or key is missing, invalid or unreadable";
 const secret = "synthetic-protected-value";
 const invalid = "protected execution record is missing or invalid";
+const projection = { diagnostics: { protectedState: "unavailable" } };
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
@@ -47,7 +48,7 @@ it.each([1, 2])("preserves the fixed validator diagnostic for %i record(s)", asy
   await expect(f.store.getPayloads(refs)).rejects.toMatchObject({
     code: "RUN_STATE",
     message: invalid,
-    details: undefined,
+    details: projection,
   });
 });
 
@@ -57,7 +58,11 @@ async function failure(work: Promise<unknown>, message: string) {
   expect(output).not.toHaveBeenCalled();
   expect(error).toBeInstanceOf(OrcaError);
   const fault = error as OrcaError;
-  expect(fault.toJSON()).toEqual({ code: "RUN_STATE", message });
+  expect(fault.toJSON()).toEqual({
+    code: "RUN_STATE",
+    message,
+    ...(message === generic || message === invalid ? { details: projection } : {}),
+  });
   expect(fault.cause).toBeUndefined();
   expect(String(error)).not.toContain(secret);
   expect(JSON.stringify(error)).not.toContain(secret);

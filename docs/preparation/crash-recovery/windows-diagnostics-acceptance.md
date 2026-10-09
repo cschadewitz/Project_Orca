@@ -1,5 +1,10 @@
 # Windows diagnostics observations - 9 October 2026
 
+Historical pre-implementation evidence at `6ff89c9`. The substantive Windows follow-up
+is documented in [Windows native implementation and acceptance](windows-native-implementation.md).
+That follow-up supersedes the source-capability gaps below; these original observations
+and unsuccessful measurements remain intact.
+
 This narrow #416/#469 slice tests combined [#584](https://github.com/cschadewitz/Project_Orca/pull/584)
 at `a991fbfea9da6d39dea2f0c513cc5a000d993c14`. Its ancestry retains
 [#574](https://github.com/cschadewitz/Project_Orca/pull/574) packaging and

@@ -1,7 +1,7 @@
-/** Unsupported Windows diagnostics refuse before key, file, picker or network authority. */
+/** Shipping Windows capture gate refuses before key, file, picker or network authority. */
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import net from "node:net";
 import tls from "node:tls";
 import http from "node:http";
@@ -15,13 +15,12 @@ import { diagnosticsAddonPath } from "../src/main/diagnostics/native-addon.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["x64", "arm64"])("Windows %s has no repository or packaged native addon authority", (arch) => {
-  for (const electron of [false, true]) {
-    for (const addon of ["diagnostics_clock", "diagnostics_storage"] as const) {
-      expect(
-        diagnosticsAddonPath(addon, { platform: "win32", arch, electron, resourcesPath: tmpdir() }),
-      ).toBeUndefined();
-    }
+it.each(["x64", "arm64"])("Windows %s native capability has one fixed packaged location", (arch) => {
+  const resourcesPath = resolve("synthetic-resources");
+  for (const addon of ["diagnostics_clock", "diagnostics_storage"] as const) {
+    expect(diagnosticsAddonPath(addon, { platform: "win32", arch, electron: true, resourcesPath })).toBe(
+      join(resourcesPath, "native", "diagnostics", `win32-${arch}`, `${addon}.node`),
+    );
   }
 });
 

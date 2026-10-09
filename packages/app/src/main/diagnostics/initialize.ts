@@ -5,6 +5,7 @@ import { createSafeStorageKeyAdapter } from "./native-adapter.js";
 import { loadNativeDiagnosticsClock } from "./native-clock.js";
 import { loadNativeDiagnosticsStorage } from "./native-storage.js";
 import { startupDiagnosticObserver } from "./startup-producer.js";
+import { ownedDiagnosticObserver } from "./source-producers.js";
 
 export interface DiagnosticsInitializerOptions {
   root: string;
@@ -29,6 +30,7 @@ export function createDiagnosticsInitializer(options: DiagnosticsInitializerOpti
   return {
     controller,
     startupObserver: startupDiagnosticObserver(controller),
+    observer: ownedDiagnosticObserver(controller),
     initialize: () => controller.initialize(),
     async close() {
       await controller.cleanExit();

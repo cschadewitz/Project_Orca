@@ -46,7 +46,7 @@ describe("native diagnostics resource loading", () => {
   );
 
   it.each([
-    ["win32", "x64"],
+    ["win32", "ia32"],
     ["linux", "arm64"],
     ["darwin", "ia32"],
     ["unknown", "arm64"],
@@ -54,6 +54,13 @@ describe("native diagnostics resource loading", () => {
     expect(
       diagnosticsAddonPath("diagnostics_storage", { platform, arch, electron: true, resourcesPath: "/tmp/resources" }),
     ).toBeUndefined();
+  });
+
+  it.each(["x64", "arm64"])("selects fixed external Windows %s resources", (arch) => {
+    const resourcesPath = resolve("synthetic-windows-resources");
+    expect(
+      diagnosticsAddonPath("diagnostics_storage", { platform: "win32", arch, electron: true, resourcesPath }),
+    ).toBe(join(resourcesPath, "native", "diagnostics", `win32-${arch}`, "diagnostics_storage.node"));
   });
 
   it("keeps the explicit Node source build path separate", () => {

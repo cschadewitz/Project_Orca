@@ -46,7 +46,7 @@ try {
   assert.equal(pickerCalls, 0);
   process.stdout.write(
     JSON.stringify({
-      source: "a991fbfea9da6d39dea2f0c513cc5a000d993c14",
+      source: "compiled isolated worktree; commit pinned in accompanying acceptance report",
       scope: "compiled Windows Node initializer; not packaged Electron",
       noCreatedDiagnosticFiles: true,
       keyCalls,

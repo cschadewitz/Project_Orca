@@ -14,7 +14,7 @@ const backend = createRequire(import.meta.url)(
   "../../native/diagnostics/build/Release/diagnostics_storage.node",
 ) as NativeStorageBackend;
 assert.equal(backend.abi, 1);
-assert.equal(backend.platform, process.platform === "darwin" ? "darwin" : "posix-fixture");
+assert.equal(backend.platform, ["darwin", "win32"].includes(process.platform) ? process.platform : "posix-fixture");
 await assert.rejects(backend.call("rootStat", {}, undefined, "", "", undefined, 0, 0, 0), /unavailable/);
 const directory = await mkdtemp(join(process.argv[2] ?? tmpdir(), "orca-native-node-probe-"));
 const root = join(directory, "private");

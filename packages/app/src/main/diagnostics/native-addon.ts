@@ -14,11 +14,11 @@ export interface NativeAddonRuntime {
 /** Pure location seam for source/compiled/packaged acceptance. No caller-selected filename. */
 export function diagnosticsAddonPath(addon: Addon, runtime: NativeAddonRuntime): string | undefined {
   if (addon !== "diagnostics_clock" && addon !== "diagnostics_storage") return undefined;
-  if (runtime.platform !== "darwin" || !["arm64", "x64"].includes(runtime.arch)) return undefined;
+  if (!["darwin", "win32"].includes(runtime.platform) || !["arm64", "x64"].includes(runtime.arch)) return undefined;
   if (runtime.electron) {
     const root = runtime.resourcesPath;
     if (!root || !isAbsolute(root) || resolve(root) !== root) return undefined;
-    return join(root, "native", "diagnostics", `darwin-${runtime.arch}`, `${addon}.node`);
+    return join(root, "native", "diagnostics", `${runtime.platform}-${runtime.arch}`, `${addon}.node`);
   }
   // src/main/diagnostics and dist/main/diagnostics have the same depth.
   return fileURLToPath(new URL(`../../../native/diagnostics/build/Release/${addon}.node`, import.meta.url));
