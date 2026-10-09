@@ -9,6 +9,7 @@ import type { DaemonClient } from "../src/client/daemon-client.js";
 import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_FILES } from "../src/first-run-sample.js";
 import { FirstRunSetup, type FirstRunDeps } from "../src/main/first-run/setup.js";
 import { ownedDirectory } from "../src/main/first-run/directories.js";
+import { FirstRunOwnershipRefusal } from "../src/main/first-run/ownership.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -109,6 +110,27 @@ async function rig() {
 }
 
 describe.skipIf(typeof process.getuid !== "function")("dedicated first-run project selection", () => {
+  it.each(["current", "prepare", "hello", "dispose"] as const)(
+    "preserves ownership reconciliation refusal from %s through the setup wrapper",
+    async (stage) => {
+      const f = await rig();
+      await f.prepare();
+      const refusal = new FirstRunOwnershipRefusal();
+      const fail = () => {
+        throw refusal;
+      };
+      if (stage === "current") f.deps.current = fail;
+      if (stage === "prepare") f.prepareConnection.mockRejectedValueOnce(refusal);
+      if (stage === "hello") f.handshake.mockRejectedValueOnce(refusal);
+      if (stage === "dispose") {
+        f.handshake.mockRejectedValueOnce(new Error("synthetic handshake failure"));
+        f.dispose.mockImplementationOnce(fail);
+      }
+      await expect(f.setup.connect(f.assertCurrent)).rejects.toBe(refusal);
+      expect(f.activate).not.toHaveBeenCalled();
+      expect(f.setup.isBusy).toBe(false);
+    },
+  );
   it.each([".orca", "auth", ".orca/nested"])(
     "refuses redirected %s before spawning and preserves the external directory",
     async (name) => {

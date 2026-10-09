@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { BridgeResult } from "../../bridge.js";
 import type { FirstRunStatus } from "../../first-run-contract.js";
 import type { FirstRunSetup } from "./setup.js";
+import { FirstRunOwnershipRefusal } from "./ownership.js";
 
 export function installFirstRunIPC(
   setup: FirstRunSetup,
@@ -35,13 +36,15 @@ export function installFirstRunIPC(
           const result = await run(value, check);
           if (method !== "connect") check();
           return { ok: true, result };
-        } catch {
+        } catch (error) {
           return {
             ok: false,
             error: {
               code: "AGENT_TRANSPORT",
               message:
-                "Project setup was refused. Check the current window, directory ownership, access and Git before retrying. Existing files were preserved.",
+                error instanceof FirstRunOwnershipRefusal
+                  ? error.message
+                  : "Project setup was refused. Check the current window, directory ownership, access and Git before retrying. Existing files were preserved.",
             },
           };
         }

@@ -1,5 +1,10 @@
 # First-run native composition — 8 October
 
+Follow-up on exact #567: [durable first-run ownership](first-run-durable-ownership.md)
+adds restart-persistent startup protection and records the unresolved orphan
+reconciliation authority. The process-local limitation below describes #567's
+original head; restart protection is not complete first-run recovery.
+
 The integration preserves exact #563 `732d85d92a5270bcebe10132b0ba27aac90c3862`
 and #564 `6d16ddd3ab5d0abd5bbe938256b2d2eaeee96c4f` as ancestors over main
 `db579fb7ac9cfce2e4e6901713088a80602311da`. The merge preserves every constituent

@@ -29,6 +29,12 @@ import type { DaemonClient } from "../client/daemon-client.js";
 import type { DaemonSubscription } from "../client/subscription.js";
 import type { BundledDaemon, DaemonExit } from "./daemon-process.js";
 import type { MacOwnedStopResult } from "./mac-update-restart.js";
+import {
+  assertNoFirstRunOwnership,
+  FirstRunOwnershipRefusal,
+  reserveFirstRunOwnership,
+  type FirstRunOwnership,
+} from "./first-run/ownership.js";
 
 /** Where a workspace to serve comes from, and whether it is read-only. */
 export interface WorkspaceTarget {
@@ -83,6 +89,8 @@ export interface WorkspaceDeps {
   /** Explicit environment workspace only. No home-directory bootstrap. */
   defaultPath: () => string | undefined;
   setupBusy?: () => boolean;
+  /** Test seam; production uses the store-local durable reservation. */
+  reserveFirstRunOwnership?: (path: string) => FirstRunOwnership;
 }
 
 /**
@@ -131,6 +139,7 @@ export class Workspace {
   /** Process-local restart fence. No replacement/admission may reopen after a stop attempt. */
   private macUpdateStopping = false;
   private firstRunHold: symbol | undefined;
+  private durableFirstRunOwners = new WeakMap<BundledDaemon, FirstRunOwnership>();
   private firstRunOwners = new WeakMap<
     BundledDaemon,
     { path: string; identity: NonNullable<HelloResult["identity"]> }
@@ -353,6 +362,11 @@ export class Workspace {
   /** Receipt verification belongs to FirstRunSetup; this checks the exact live child and identity. */
   currentFirstRun(path: string): boolean {
     const owner = this.daemon && this.firstRunOwners.get(this.daemon);
+    if (owner?.path === path && this.daemon) {
+      const reservation = this.durableFirstRunOwners.get(this.daemon);
+      if (!reservation) throw new FirstRunOwnershipRefusal();
+      reservation.check();
+    }
     return Boolean(
       !this.closed &&
       !this.macUpdateStopping &&
@@ -397,6 +411,7 @@ export class Workspace {
     let settled = false;
     let reuse = false;
     let startupAttempted = false;
+    let ownership: FirstRunOwnership | undefined;
     const release = () => {
       if (this.firstRunHold === hold) this.firstRunHold = undefined;
     };
@@ -407,6 +422,9 @@ export class Workspace {
         if (owner?.path === path) {
           daemon = owned;
           reuse = true;
+          ownership = this.durableFirstRunOwners.get(owned);
+          if (!ownership) throw new FirstRunOwnershipRefusal();
+          ownership.check();
           break;
         }
         // Never start a competing writer for an active store of unknown first-run identity.
@@ -418,6 +436,8 @@ export class Workspace {
       if (!daemon) {
         const entry = this.deps.findEntry();
         if (!entry) throw new NoBundledDaemonError(path);
+        ownership = (this.deps.reserveFirstRunOwnership ?? reserveFirstRunOwnership)(path);
+        ownership.check();
         startupAttempted = true;
         daemon = await this.deps.start({
           entry,
@@ -426,11 +446,14 @@ export class Workspace {
           configPath: join(path, "orca.config.yaml"),
           onExit: () => {
             exited = true;
+            if (daemon) this.recordFirstRunExit(daemon);
             if (this.daemon === daemon) this.daemonExited();
             if (this.parkedDefault === daemon) this.parkedDefault = undefined;
           },
         });
         this.candidates.add(daemon);
+        this.durableFirstRunOwners.set(daemon, ownership);
+        ownership.attach(daemon);
       }
       const owned = daemon;
       const processId = owned.pid;
@@ -444,6 +467,7 @@ export class Workspace {
         throw new ConnectionRefusal("The bundled daemon did not supply owned process and authentication metadata.");
       const client = this.deps.client(owned.url, { workspace: path, bundled: true, tokenFile: owned.tokenFile });
       const check = () => {
+        ownership?.check();
         this.assertEpoch(epoch);
         if (
           settled ||
@@ -463,6 +487,7 @@ export class Workspace {
         check();
         if (!hello.identity || hello.processId !== processId || hello.storeDir !== join(path, ".orca"))
           throw new ConnectionRefusal("Owned first-run identity changed.");
+        ownership?.verify(hello);
         const previousOwner = this.firstRunOwners.get(owned);
         if (
           reuse &&
@@ -481,16 +506,15 @@ export class Workspace {
           if (settled) return;
           settled = true;
           try {
-            if (!reuse) await owned.stop();
+            if (!reuse) await this.stopFirstRunOwned(owned);
           } finally {
             // A timeout/throw is not exit proof. Keep unknown ownership reserved.
-            if (reuse || owned.exited === true) {
+            if (reuse || (owned.exited === true && ownership?.complete())) {
               this.candidates.delete(owned);
               release();
             }
           }
-          if (!reuse && owned.exited !== true)
-            throw new ConnectionRefusal("Owned candidate exit is unconfirmed; connection preparation remains blocked.");
+          if (!reuse && owned.exited !== true) throw new FirstRunOwnershipRefusal();
         },
         activate: (hello) => {
           validateActivation(hello);
@@ -524,14 +548,32 @@ export class Workspace {
       };
     } catch (error) {
       try {
-        if (daemon && !reuse) await daemon.stop();
+        if (daemon && !reuse) await this.stopFirstRunOwned(daemon);
       } finally {
-        if (!startupAttempted || (daemon && daemon.exited === true)) {
+        if (!startupAttempted || (daemon && daemon.exited === true && ownership?.complete())) {
           if (daemon) this.candidates.delete(daemon);
           release();
         }
       }
+      if (startupAttempted && !daemon) throw new FirstRunOwnershipRefusal(error);
       throw error;
+    }
+  }
+
+  private recordFirstRunExit(daemon: BundledDaemon): void {
+    try {
+      this.durableFirstRunOwners.get(daemon)?.complete();
+    } catch (error) {
+      this.deps.onError?.("First-run ownership evidence could not be settled; startup remains blocked", error);
+    }
+  }
+
+  private async stopFirstRunOwned(daemon: BundledDaemon): Promise<void> {
+    try {
+      await daemon.stop();
+    } finally {
+      // Ordinary termination proves only this child ended, never safe updater installation.
+      if (daemon.exited === true) this.durableFirstRunOwners.get(daemon)?.complete();
     }
   }
 
@@ -590,6 +632,7 @@ export class Workspace {
               ...(reuse.tokenFile ? { tokenFile: reuse.tokenFile } : {}),
             });
     } else if (url === null) {
+      assertNoFirstRunOwnership(storeRoot(path));
       const entry = this.deps.findEntry();
       if (entry)
         daemon = await this.deps.start({
@@ -751,6 +794,7 @@ export class Workspace {
     if (!this.deps.findEntry()) throw new NoBundledDaemonError(path);
     if (this.parkedDefault && this.firstRunOwners.get(this.parkedDefault)?.path === path)
       throw new ConnectionRefusal("This workspace has a parked owned daemon. Return to it before opening its store.");
+    assertNoFirstRunOwnership(storeRoot(path));
     await this.switchTo({ path, readOnly: true, source: "chosen" });
     return this.snapshot;
   }
@@ -775,11 +819,11 @@ export class Workspace {
     this.stream = undefined;
     const daemon = this.daemon;
     this.daemon = undefined;
-    if (!this.macUpdateStopping) await daemon?.stop();
+    if (!this.macUpdateStopping && daemon) await this.stopFirstRunOwned(daemon);
     const parked = this.parkedDefault;
     this.parkedDefault = undefined;
-    if (parked !== daemon) await parked?.stop();
-    await Promise.all([...this.candidates].map((candidate) => candidate.stop()));
+    if (parked && parked !== daemon) await this.stopFirstRunOwned(parked);
+    await Promise.all([...this.candidates].map((candidate) => this.stopFirstRunOwned(candidate)));
     this.candidates.clear();
   }
 
@@ -810,6 +854,13 @@ export class Workspace {
    * client, no stream, and the connection left down with the reason.
    */
   private switchTo(target: WorkspaceTarget): Promise<void> {
+    // Check before detaching the current target, and again immediately before spawn.
+    try {
+      if (target.readOnly || (!this.deps.explicitUrl && !this.savedUrl))
+        assertNoFirstRunOwnership(storeRoot(target.path));
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new FirstRunOwnershipRefusal(error));
+    }
     const run = this.performSwitch(target);
     this.pending = run;
     return run.finally(() => {
@@ -823,7 +874,7 @@ export class Workspace {
     this.target = target;
     this.deps.onSwitch(target.readOnly);
 
-    const stopping = this.daemon?.stop();
+    const stopping = this.daemon && this.stopFirstRunOwned(this.daemon);
     this.daemon = undefined;
     await stopping;
 
@@ -832,6 +883,7 @@ export class Workspace {
     let url = override ?? this.deps.defaultUrl;
     if (entry) {
       try {
+        assertNoFirstRunOwnership(storeRoot(target.path));
         const starting: { daemon?: BundledDaemon } = {};
         const started = await this.deps.start({
           entry,
@@ -846,6 +898,7 @@ export class Workspace {
         this.daemon = started;
         url = started.url;
       } catch (e) {
+        if (e instanceof FirstRunOwnershipRefusal) throw e;
         if (target.readOnly) {
           const reason = `the store at ${target.path} could not be opened: the bundled daemon did not start`;
           this.deps.onError?.(reason, e);
