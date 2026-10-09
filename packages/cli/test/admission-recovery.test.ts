@@ -18,7 +18,7 @@ it("discovers, inspects and reconciles a file-backed prepared admission after re
   const configPath = join(cwd, "orca.config.json");
   await writeFile(
     configPath,
-    JSON.stringify({ workflows: ["flow.yaml"], templates: [], program: { workflow: "flow" } }),
+    JSON.stringify({ workflows: ["flow.yaml"], templates: [], program: { workflow: "flow", itemWorkflow: "flow" } }),
   );
   await writeFile(
     join(cwd, "flow.yaml"),

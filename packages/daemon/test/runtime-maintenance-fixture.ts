@@ -50,7 +50,11 @@ export async function runtimeMaintenanceFixture(
   );
   const app = await bootstrap({
     configDir: dir,
-    config: parseOrcaConfig({ workflows: ["*.yaml"], templates: [], program: { workflow: "flow" } }),
+    config: parseOrcaConfig({
+      workflows: ["*.yaml"],
+      templates: [],
+      program: { workflow: "flow", itemWorkflow: "flow" },
+    }),
     logger: silentLogger,
     ...(options.lease ? { lease: options.lease } : {}),
   });

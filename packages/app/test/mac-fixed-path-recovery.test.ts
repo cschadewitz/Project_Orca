@@ -1,5 +1,19 @@
 /** Real disposable fixed-path copies and interrupted restore; no signing/continuity fiction. */
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile, symlink, link, rename } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  readlink,
+  rm,
+  writeFile,
+  symlink,
+  link,
+  rename,
+  lstat,
+  chmod,
+  utimes,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ClosedUpdateWindow, enterUpdateWriter, provisionUpdateWindow } from "@orca/protocol/update-window";
@@ -56,6 +70,39 @@ async function fixture(candidateHash = candidate) {
   };
   return { base, control, data, binary, window, ports, trees, recovery, changed, fresh };
 }
+it.each([1, 123, 199, 999])("preserves millisecond %i through fixed-path copy and restore", async (fraction) => {
+  const f = await fixture(),
+    file = join(f.binary, "manifest"),
+    copy = join(f.base, "timestamp-copy"),
+    mtime = 1_700_000_000_000 + fraction,
+    seconds = (mtime + 0.25) / 1000;
+  await utimes(file, seconds, seconds);
+  await symlink("manifest", join(f.binary, "current"));
+  const original = await lstat(file),
+    root = await lstat(f.binary),
+    digest = await f.trees.digest(f.binary, signal());
+  expect(Math.trunc(original.mtimeMs)).toBe(mtime);
+  await f.trees.copy(f.binary, copy, signal());
+  const verify = async (path: string) => {
+    const stat = await lstat(join(path, "manifest"));
+    expect(stat).toMatchObject({ mode: original.mode, uid: original.uid, gid: original.gid, size: original.size });
+    expect(Math.trunc(stat.mtimeMs)).toBe(mtime);
+    expect(await readFile(join(path, "manifest"), "utf8")).toBe(old);
+    expect(await readlink(join(path, "current"))).toBe("manifest");
+    expect(await f.trees.digest(path, signal())).toBe(digest);
+  };
+  await verify(copy);
+  await verify(f.binary);
+  // A real millisecond change must still be detected independently of bytes and modes.
+  await utimes(file, (mtime + 1.5) / 1000, (mtime + 1.5) / 1000);
+  expect(await f.trees.digest(f.binary, signal())).not.toBe(digest);
+  await writeFile(file, "migration-write");
+  await chmod(file, 0o640);
+  await f.trees.restore(copy, f.binary, signal());
+  expect(await lstat(f.binary)).toMatchObject({ dev: root.dev, ino: root.ino });
+  await verify(f.binary);
+  await verify(copy);
+});
 it("verifies every root and matching binary before replacement and restores migration writes while closed", async () => {
   const f = await fixture();
   const previous = await f.recovery.backupPrevious(old, signal());

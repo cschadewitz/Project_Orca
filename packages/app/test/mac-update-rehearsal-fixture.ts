@@ -78,6 +78,7 @@ export interface MacUpdateRehearsal extends Pick<
   revalidate: Mock<() => Promise<"unknown">>;
   activate: Mock<() => Promise<never>>;
   download: Mock<MacUpdatePorts["download"]>;
+  drainAdmission: Mock<NonNullable<MacUpdatePorts["drainAdmission"]>>;
   prepareDrafts: Mock<MacUpdateGuards["prepareDrafts"]>;
   ownRelease(release: () => void): void;
   fault(value: ProofFault): void;
@@ -158,21 +159,17 @@ export async function macUpdateRehearsal(
       };
       if (request.method !== "maintenance.runtime") return actualFetch(input, init);
       const action = request.params.action!;
-      // These fixtures inject proof/lost-response faults at final prepare. The current
-      // coordinator's earlier real drain/defer calls must retain their own contract.
-      if (action === "drain" || action === "defer") return actualFetch(input, init);
       runtimeEvents.push({ action });
-      // Never reopen fixture admission. A release attempt can only fail before dispatch.
-      if (action === "resume") {
-        if (releaseFailure) throw new Error("Synthetic release transport failure");
-        throw new Error("Rehearsal stops before admission reopening");
-      }
-      beforePrepare?.();
+      // Known untouched cleanup uses only this disposable daemon's authentic owner.
+      if (action === "resume" && releaseFailure) throw new Error("Synthetic release transport failure");
+      if (action === "prepare") beforePrepare?.();
       const response = await actualFetch(input, init);
       const envelope = (await response.json()) as {
         result: { proof: string; outcome: string; active: string[]; target: { processId: number; instanceId: string } };
       };
       runtimeEvents.at(-1)!.outcome = envelope.result.outcome;
+      // Faults belong to final prepare, never the preceding real drain observations.
+      if (action !== "prepare") return new Response(JSON.stringify(envelope), { status: response.status });
       await afterPrepare?.();
       if (proofFault === "lost") throw new Error("Synthetic response loss after actual acquisition");
       if (proofFault === "proof") envelope.result.proof = "legacy";
@@ -303,7 +300,12 @@ export async function macUpdateRehearsal(
     };
     const a = makeWindow(1);
     const b = makeWindow(2, false);
-    const guards = new MacUpdateGuards(workspace, windows);
+    const guards = new MacUpdateGuards(
+      workspace,
+      windows,
+      () => false,
+      (target) => workspace!.captureMacUpdateDrainTarget(target),
+    );
     const manifest = readMacManifest(
       processFixture?.manifestBytes ?? (await readFile(new URL("delivery/native-mac-artifact.json", artifacts))),
     );
@@ -388,14 +390,18 @@ export async function macUpdateRehearsal(
       return result.outcome === "verified" ? ("verified" as const) : ("failed" as const);
     });
     const prepareDrafts = vi.fn(() => guards.prepareDrafts());
+    const drainAdmission = vi.fn<NonNullable<MacUpdatePorts["drainAdmission"]>>((target, token) =>
+      guards.drainAdmission(target, token),
+    );
     const admissionTokens: string[] = [];
     let admissionReady = false;
     const updates = new MacUpdates({
       download,
+      drainAdmission,
       prepareDrafts,
-      prepareAdmission: async (target, token) => {
+      prepareAdmission: async (target, token, drain) => {
         admissionTokens.push(token);
-        const result = await guards.prepareAdmission(target, token);
+        const result = await guards.prepareAdmission(target, token, drain);
         admissionReady = result.outcome === "ready";
         return result;
       },
@@ -439,6 +445,7 @@ export async function macUpdateRehearsal(
       revalidate,
       activate,
       download,
+      drainAdmission,
       prepareDrafts,
       ownRelease: (release: () => void) => {
         releases.push(release);

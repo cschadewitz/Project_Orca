@@ -65,7 +65,10 @@ edges:
     admission: orc,
     validateCustomNode: (node) => executors.validateNode(node),
   });
-  await generations.initialize(parseOrcaConfig({ program: { workflow: definition.id } }), "fixture-revision");
+  await generations.initialize(
+    parseOrcaConfig({ program: { workflow: definition.id, itemWorkflow: definition.id } }),
+    "fixture-revision",
+  );
   orc.generations = generations;
   const admit = async (kind: "direct" | "request" = "direct", publish = true, workflowVersion?: string) => {
     const runId = `run_${randomUUID()}`;

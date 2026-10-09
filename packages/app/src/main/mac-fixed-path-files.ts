@@ -273,7 +273,10 @@ export function createPairTreePort(
             await output.close();
           }
           await chmod(to, entry.mode);
-          await utimes(to, entry.mtime / 1000, entry.mtime / 1000);
+          // Inventory retains integer milliseconds. Target the middle of that millisecond
+          // so floating seconds and syscall precision cannot round into the previous one.
+          const seconds = (entry.mtime + 0.5) / 1000;
+          await utimes(to, seconds, seconds);
         }
       }
     }
