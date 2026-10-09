@@ -1,0 +1,2040 @@
+{
+  "schema": 1,
+  "diagnosticOnly": true,
+  "method": "Separate bounded attribution probes, never acceptance. Sampling includes objects collected by minor/major GC at 32768-byte intervals; cumulative estimates are not retained memory or physical peaks. No forced GC or heap snapshot.",
+  "probes": [
+    {
+      "mode": "transport",
+      "diagnosticOnly": true,
+      "productionSourceCommit": "2346bc539ae25a3448d21e86448546b6c905c7c4",
+      "mainBytes": 19316264,
+      "rendererBytes": 9374851,
+      "combinedBytes": 28691115,
+      "repetitions": 30,
+      "rendererSamples": [
+        {
+          "phase": "checkpoint",
+          "backingStorageSize": 883626,
+          "embedderHeapUsedSize": 1848936,
+          "totalSize": 3670016,
+          "usedSize": 2546704,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 162,
+            "nodes": 71
+          }
+        },
+        {
+          "phase": "renderer-preview",
+          "backingStorageSize": 1836007,
+          "embedderHeapUsedSize": 1848936,
+          "totalSize": 4980736,
+          "usedSize": 2830448,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 187,
+            "nodes": 209
+          }
+        },
+        {
+          "phase": "save",
+          "backingStorageSize": 1837527,
+          "embedderHeapUsedSize": 1848936,
+          "totalSize": 5767168,
+          "usedSize": 2715752,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 215,
+            "nodes": 218
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1838571,
+          "embedderHeapUsedSize": 1971808,
+          "totalSize": 5767168,
+          "usedSize": 3240028,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 245,
+            "nodes": 247
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1839741,
+          "embedderHeapUsedSize": 2119584,
+          "totalSize": 6029312,
+          "usedSize": 3150712,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 280,
+            "nodes": 276
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1840908,
+          "embedderHeapUsedSize": 2119584,
+          "totalSize": 6029312,
+          "usedSize": 3641328,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 310,
+            "nodes": 305
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1841955,
+          "embedderHeapUsedSize": 2119584,
+          "totalSize": 6291456,
+          "usedSize": 3539832,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 340,
+            "nodes": 334
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1843122,
+          "embedderHeapUsedSize": 2119584,
+          "totalSize": 6291456,
+          "usedSize": 4088536,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 370,
+            "nodes": 363
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1844163,
+          "embedderHeapUsedSize": 2245304,
+          "totalSize": 6553600,
+          "usedSize": 4562716,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 400,
+            "nodes": 392
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1845330,
+          "embedderHeapUsedSize": 2374216,
+          "totalSize": 7077888,
+          "usedSize": 5033016,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 430,
+            "nodes": 421
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1846497,
+          "embedderHeapUsedSize": 2374216,
+          "totalSize": 8126464,
+          "usedSize": 4290268,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 460,
+            "nodes": 450
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1847538,
+          "embedderHeapUsedSize": 2501944,
+          "totalSize": 8388608,
+          "usedSize": 4758852,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 490,
+            "nodes": 479
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1848705,
+          "embedderHeapUsedSize": 2501944,
+          "totalSize": 8650752,
+          "usedSize": 5216768,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 520,
+            "nodes": 508
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1849755,
+          "embedderHeapUsedSize": 2628768,
+          "totalSize": 9175040,
+          "usedSize": 4578664,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 550,
+            "nodes": 537
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1850796,
+          "embedderHeapUsedSize": 2628768,
+          "totalSize": 9175040,
+          "usedSize": 5052300,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 580,
+            "nodes": 566
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1851963,
+          "embedderHeapUsedSize": 2628768,
+          "totalSize": 9175040,
+          "usedSize": 5509916,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 610,
+            "nodes": 595
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1853004,
+          "embedderHeapUsedSize": 2628768,
+          "totalSize": 9437184,
+          "usedSize": 4813712,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 640,
+            "nodes": 624
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1854423,
+          "embedderHeapUsedSize": 2753744,
+          "totalSize": 9437184,
+          "usedSize": 5282864,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 670,
+            "nodes": 653
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1855464,
+          "embedderHeapUsedSize": 2753744,
+          "totalSize": 9437184,
+          "usedSize": 5739760,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 700,
+            "nodes": 682
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1856505,
+          "embedderHeapUsedSize": 3010288,
+          "totalSize": 9437184,
+          "usedSize": 6200364,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 730,
+            "nodes": 711
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1857546,
+          "embedderHeapUsedSize": 3010288,
+          "totalSize": 9961472,
+          "usedSize": 5533764,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 760,
+            "nodes": 740
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1858587,
+          "embedderHeapUsedSize": 3136616,
+          "totalSize": 9961472,
+          "usedSize": 5989716,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 790,
+            "nodes": 769
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1859628,
+          "embedderHeapUsedSize": 3136616,
+          "totalSize": 9961472,
+          "usedSize": 6441952,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 820,
+            "nodes": 798
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1860675,
+          "embedderHeapUsedSize": 3136616,
+          "totalSize": 10485760,
+          "usedSize": 5795840,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 850,
+            "nodes": 827
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1861842,
+          "embedderHeapUsedSize": 3136616,
+          "totalSize": 10485760,
+          "usedSize": 6262396,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 880,
+            "nodes": 856
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1863009,
+          "embedderHeapUsedSize": 3136616,
+          "totalSize": 10485760,
+          "usedSize": 6726080,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 910,
+            "nodes": 885
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1864050,
+          "embedderHeapUsedSize": 3266280,
+          "totalSize": 10485760,
+          "usedSize": 7181556,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 940,
+            "nodes": 914
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1865217,
+          "embedderHeapUsedSize": 3397272,
+          "totalSize": 10747904,
+          "usedSize": 7640124,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 970,
+            "nodes": 943
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1866384,
+          "embedderHeapUsedSize": 3397272,
+          "totalSize": 11010048,
+          "usedSize": 8096956,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1000,
+            "nodes": 972
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1867551,
+          "embedderHeapUsedSize": 3529688,
+          "totalSize": 11534336,
+          "usedSize": 8551780,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1030,
+            "nodes": 1001
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1868592,
+          "embedderHeapUsedSize": 3658264,
+          "totalSize": 11796480,
+          "usedSize": 9006844,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1060,
+            "nodes": 1030
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1869759,
+          "embedderHeapUsedSize": 3658264,
+          "totalSize": 13369344,
+          "usedSize": 7039272,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1090,
+            "nodes": 1059
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 1870926,
+          "embedderHeapUsedSize": 3660464,
+          "totalSize": 13369344,
+          "usedSize": 7491812,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1120,
+            "nodes": 1088
+          }
+        },
+        {
+          "phase": "opt-out",
+          "backingStorageSize": 921242,
+          "embedderHeapUsedSize": 3660464,
+          "totalSize": 13631488,
+          "usedSize": 7650044,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1152,
+            "nodes": 1105
+          }
+        },
+        {
+          "phase": "comparable-wait",
+          "backingStorageSize": 921242,
+          "embedderHeapUsedSize": 3660464,
+          "totalSize": 13631488,
+          "usedSize": 7650044,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1152,
+            "nodes": 1105
+          }
+        }
+      ],
+      "allOwnedExitsConfirmed": true,
+      "disposableStateRemoved": true
+    },
+    {
+      "mode": "decoder",
+      "diagnosticOnly": true,
+      "productionSourceCommit": "2346bc539ae25a3448d21e86448546b6c905c7c4",
+      "mainBytes": 15940055,
+      "rendererBytes": 11902738,
+      "combinedBytes": 27842793,
+      "repetitions": 30,
+      "rendererSamples": [
+        {
+          "phase": "checkpoint",
+          "backingStorageSize": 883862,
+          "embedderHeapUsedSize": 1846112,
+          "totalSize": 3670016,
+          "usedSize": 2545244,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 162,
+            "nodes": 71
+          }
+        },
+        {
+          "phase": "renderer-preview",
+          "backingStorageSize": 2786938,
+          "embedderHeapUsedSize": 1846112,
+          "totalSize": 5242880,
+          "usedSize": 2831232,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 187,
+            "nodes": 209
+          }
+        },
+        {
+          "phase": "save",
+          "backingStorageSize": 2788485,
+          "embedderHeapUsedSize": 1969088,
+          "totalSize": 6029312,
+          "usedSize": 2737292,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 215,
+            "nodes": 218
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3576701,
+          "embedderHeapUsedSize": 1978480,
+          "totalSize": 6291456,
+          "usedSize": 3264564,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 245,
+            "nodes": 247
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3596134,
+          "embedderHeapUsedSize": 2120064,
+          "totalSize": 6291456,
+          "usedSize": 3143628,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 275,
+            "nodes": 276
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3615564,
+          "embedderHeapUsedSize": 2120064,
+          "totalSize": 6291456,
+          "usedSize": 3649584,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 305,
+            "nodes": 305
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3635000,
+          "embedderHeapUsedSize": 2120064,
+          "totalSize": 6553600,
+          "usedSize": 3568172,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 335,
+            "nodes": 334
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3654430,
+          "embedderHeapUsedSize": 2120064,
+          "totalSize": 6553600,
+          "usedSize": 4051000,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 365,
+            "nodes": 363
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3673734,
+          "embedderHeapUsedSize": 2374760,
+          "totalSize": 6815744,
+          "usedSize": 4586040,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 395,
+            "nodes": 392
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3693038,
+          "embedderHeapUsedSize": 2374760,
+          "totalSize": 8126464,
+          "usedSize": 3861356,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 425,
+            "nodes": 421
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3712468,
+          "embedderHeapUsedSize": 2374760,
+          "totalSize": 8126464,
+          "usedSize": 4336648,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 455,
+            "nodes": 450
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3731772,
+          "embedderHeapUsedSize": 2503360,
+          "totalSize": 8388608,
+          "usedSize": 4805348,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 485,
+            "nodes": 479
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3751076,
+          "embedderHeapUsedSize": 2503360,
+          "totalSize": 8650752,
+          "usedSize": 5262136,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 515,
+            "nodes": 508
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3770515,
+          "embedderHeapUsedSize": 2628888,
+          "totalSize": 8912896,
+          "usedSize": 4587776,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 545,
+            "nodes": 537
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3789945,
+          "embedderHeapUsedSize": 2628888,
+          "totalSize": 8912896,
+          "usedSize": 5062804,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 575,
+            "nodes": 566
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3809249,
+          "embedderHeapUsedSize": 2628888,
+          "totalSize": 8912896,
+          "usedSize": 5519044,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 605,
+            "nodes": 595
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3828679,
+          "embedderHeapUsedSize": 2628888,
+          "totalSize": 9699328,
+          "usedSize": 4886272,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 635,
+            "nodes": 624
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3847983,
+          "embedderHeapUsedSize": 2753576,
+          "totalSize": 9699328,
+          "usedSize": 5347452,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 665,
+            "nodes": 653
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3867413,
+          "embedderHeapUsedSize": 3147040,
+          "totalSize": 9699328,
+          "usedSize": 5810132,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 695,
+            "nodes": 682
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3886843,
+          "embedderHeapUsedSize": 3154248,
+          "totalSize": 9699328,
+          "usedSize": 6271812,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 725,
+            "nodes": 711
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3906273,
+          "embedderHeapUsedSize": 3154248,
+          "totalSize": 9961472,
+          "usedSize": 5593404,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 755,
+            "nodes": 740
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3925577,
+          "embedderHeapUsedSize": 3150352,
+          "totalSize": 9961472,
+          "usedSize": 6049256,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 785,
+            "nodes": 769
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3944881,
+          "embedderHeapUsedSize": 3410488,
+          "totalSize": 9961472,
+          "usedSize": 6501428,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 815,
+            "nodes": 798
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3964185,
+          "embedderHeapUsedSize": 3410488,
+          "totalSize": 10485760,
+          "usedSize": 5818084,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 845,
+            "nodes": 827
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3983615,
+          "embedderHeapUsedSize": 3409400,
+          "totalSize": 10485760,
+          "usedSize": 6286804,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 875,
+            "nodes": 856
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4002919,
+          "embedderHeapUsedSize": 3410576,
+          "totalSize": 10485760,
+          "usedSize": 6744536,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 905,
+            "nodes": 885
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4022349,
+          "embedderHeapUsedSize": 3671776,
+          "totalSize": 10485760,
+          "usedSize": 7204072,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 935,
+            "nodes": 914
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4041779,
+          "embedderHeapUsedSize": 3671776,
+          "totalSize": 10747904,
+          "usedSize": 7662564,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 965,
+            "nodes": 943
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4061209,
+          "embedderHeapUsedSize": 3671776,
+          "totalSize": 11272192,
+          "usedSize": 8120540,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 995,
+            "nodes": 972
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4080639,
+          "embedderHeapUsedSize": 3673120,
+          "totalSize": 11534336,
+          "usedSize": 8573900,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1025,
+            "nodes": 1001
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4099943,
+          "embedderHeapUsedSize": 3928664,
+          "totalSize": 12058624,
+          "usedSize": 9029016,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1055,
+            "nodes": 1030
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4119253,
+          "embedderHeapUsedSize": 4056944,
+          "totalSize": 13369344,
+          "usedSize": 7031924,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1085,
+            "nodes": 1059
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4138683,
+          "embedderHeapUsedSize": 4056944,
+          "totalSize": 13369344,
+          "usedSize": 7484980,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1115,
+            "nodes": 1088
+          }
+        },
+        {
+          "phase": "opt-out",
+          "backingStorageSize": 3188907,
+          "embedderHeapUsedSize": 4056944,
+          "totalSize": 13631488,
+          "usedSize": 7642920,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1147,
+            "nodes": 1105
+          }
+        },
+        {
+          "phase": "comparable-wait",
+          "backingStorageSize": 3188907,
+          "embedderHeapUsedSize": 4056944,
+          "totalSize": 13631488,
+          "usedSize": 7642920,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1147,
+            "nodes": 1105
+          }
+        }
+      ],
+      "allOwnedExitsConfirmed": true,
+      "disposableStateRemoved": true
+    },
+    {
+      "mode": "dom",
+      "diagnosticOnly": true,
+      "productionSourceCommit": "2346bc539ae25a3448d21e86448546b6c905c7c4",
+      "mainBytes": 20107590,
+      "rendererBytes": 11571574,
+      "combinedBytes": 31679164,
+      "repetitions": 30,
+      "rendererSamples": [
+        {
+          "phase": "checkpoint",
+          "backingStorageSize": 883542,
+          "embedderHeapUsedSize": 1845784,
+          "totalSize": 3670016,
+          "usedSize": 2544704,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 162,
+            "nodes": 71
+          }
+        },
+        {
+          "phase": "renderer-preview",
+          "backingStorageSize": 2786640,
+          "embedderHeapUsedSize": 1845784,
+          "totalSize": 5242880,
+          "usedSize": 2796476,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 187,
+            "nodes": 209
+          }
+        },
+        {
+          "phase": "save",
+          "backingStorageSize": 2788106,
+          "embedderHeapUsedSize": 1845784,
+          "totalSize": 5767168,
+          "usedSize": 3040064,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 215,
+            "nodes": 218
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3559977,
+          "embedderHeapUsedSize": 1975752,
+          "totalSize": 5767168,
+          "usedSize": 3210452,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 245,
+            "nodes": 247
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3579410,
+          "embedderHeapUsedSize": 2119272,
+          "totalSize": 5767168,
+          "usedSize": 3102244,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 275,
+            "nodes": 276
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3598714,
+          "embedderHeapUsedSize": 2119272,
+          "totalSize": 6029312,
+          "usedSize": 3605660,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 305,
+            "nodes": 305
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3618024,
+          "embedderHeapUsedSize": 2119272,
+          "totalSize": 6291456,
+          "usedSize": 3541184,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 335,
+            "nodes": 334
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3637328,
+          "embedderHeapUsedSize": 2119272,
+          "totalSize": 6291456,
+          "usedSize": 4023148,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 365,
+            "nodes": 363
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3656632,
+          "embedderHeapUsedSize": 2374000,
+          "totalSize": 6553600,
+          "usedSize": 4493028,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 395,
+            "nodes": 392
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3675936,
+          "embedderHeapUsedSize": 2374000,
+          "totalSize": 7077888,
+          "usedSize": 5032488,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 425,
+            "nodes": 421
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3695366,
+          "embedderHeapUsedSize": 2374000,
+          "totalSize": 8126464,
+          "usedSize": 4279476,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 455,
+            "nodes": 450
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3714796,
+          "embedderHeapUsedSize": 2501624,
+          "totalSize": 8388608,
+          "usedSize": 4749496,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 485,
+            "nodes": 479
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3734100,
+          "embedderHeapUsedSize": 2501624,
+          "totalSize": 8912896,
+          "usedSize": 5206504,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 515,
+            "nodes": 508
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3753539,
+          "embedderHeapUsedSize": 2630248,
+          "totalSize": 9175040,
+          "usedSize": 4538032,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 545,
+            "nodes": 537
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3772843,
+          "embedderHeapUsedSize": 2630248,
+          "totalSize": 9175040,
+          "usedSize": 5012260,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 575,
+            "nodes": 566
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3792273,
+          "embedderHeapUsedSize": 2630248,
+          "totalSize": 9175040,
+          "usedSize": 5469912,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 605,
+            "nodes": 595
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3811577,
+          "embedderHeapUsedSize": 2630248,
+          "totalSize": 9961472,
+          "usedSize": 4822380,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 635,
+            "nodes": 624
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3830881,
+          "embedderHeapUsedSize": 2753080,
+          "totalSize": 9961472,
+          "usedSize": 5283804,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 665,
+            "nodes": 653
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3850185,
+          "embedderHeapUsedSize": 2753080,
+          "totalSize": 9961472,
+          "usedSize": 5745352,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 695,
+            "nodes": 682
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3869489,
+          "embedderHeapUsedSize": 3009504,
+          "totalSize": 9961472,
+          "usedSize": 6206056,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 725,
+            "nodes": 711
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3888793,
+          "embedderHeapUsedSize": 3009504,
+          "totalSize": 10485760,
+          "usedSize": 5552128,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 755,
+            "nodes": 740
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3908223,
+          "embedderHeapUsedSize": 3135944,
+          "totalSize": 10485760,
+          "usedSize": 6009384,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 785,
+            "nodes": 769
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3927653,
+          "embedderHeapUsedSize": 3135944,
+          "totalSize": 10485760,
+          "usedSize": 6462904,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 815,
+            "nodes": 798
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3947083,
+          "embedderHeapUsedSize": 3135944,
+          "totalSize": 10747904,
+          "usedSize": 5775156,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 845,
+            "nodes": 827
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3966513,
+          "embedderHeapUsedSize": 3135944,
+          "totalSize": 10747904,
+          "usedSize": 6241932,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 875,
+            "nodes": 856
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 3985817,
+          "embedderHeapUsedSize": 3135944,
+          "totalSize": 10747904,
+          "usedSize": 6701824,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 905,
+            "nodes": 885
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4005247,
+          "embedderHeapUsedSize": 3262216,
+          "totalSize": 10747904,
+          "usedSize": 7161408,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 935,
+            "nodes": 914
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4024677,
+          "embedderHeapUsedSize": 3392816,
+          "totalSize": 11010048,
+          "usedSize": 7618920,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 965,
+            "nodes": 943
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4044107,
+          "embedderHeapUsedSize": 3392816,
+          "totalSize": 11272192,
+          "usedSize": 8077012,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 995,
+            "nodes": 972
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4063537,
+          "embedderHeapUsedSize": 3521592,
+          "totalSize": 11796480,
+          "usedSize": 8532264,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1025,
+            "nodes": 1001
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4082967,
+          "embedderHeapUsedSize": 3653592,
+          "totalSize": 12058624,
+          "usedSize": 8988676,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1055,
+            "nodes": 1030
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4102397,
+          "embedderHeapUsedSize": 3653592,
+          "totalSize": 13369344,
+          "usedSize": 7034708,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1085,
+            "nodes": 1059
+          }
+        },
+        {
+          "phase": "renderer-preview-repeat",
+          "backingStorageSize": 4121701,
+          "embedderHeapUsedSize": 3787480,
+          "totalSize": 13369344,
+          "usedSize": 7487012,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1115,
+            "nodes": 1088
+          }
+        },
+        {
+          "phase": "opt-out",
+          "backingStorageSize": 3171914,
+          "embedderHeapUsedSize": 3787480,
+          "totalSize": 13369344,
+          "usedSize": 7645268,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1147,
+            "nodes": 1105
+          }
+        },
+        {
+          "phase": "comparable-wait",
+          "backingStorageSize": 3171914,
+          "embedderHeapUsedSize": 3787480,
+          "totalSize": 13369344,
+          "usedSize": 7645268,
+          "dom": {
+            "documents": 2,
+            "jsEventListeners": 1147,
+            "nodes": 1105
+          }
+        }
+      ],
+      "allOwnedExitsConfirmed": true,
+      "disposableStateRemoved": true
+    }
+  ],
+  "selection": {
+    "diagnosticOnly": true,
+    "productionSourceCommit": "2346bc539ae25a3448d21e86448546b6c905c7c4",
+    "rendererBase": {
+      "backingStorageSize": 883504,
+      "embedderHeapUsedSize": 1849072,
+      "totalSize": 3670016,
+      "usedSize": 2424648
+    },
+    "stages": {
+      "beforeRange": {
+        "backingStorageSize": 3740048,
+        "embedderHeapUsedSize": 1972872,
+        "totalSize": 5767168,
+        "usedSize": 2798872
+      },
+      "rangeCharacters": 950614,
+      "afterRange": {
+        "backingStorageSize": 3740201,
+        "embedderHeapUsedSize": 1972872,
+        "totalSize": 5767168,
+        "usedSize": 2812620
+      },
+      "afterFocus": {
+        "backingStorageSize": 3740259,
+        "embedderHeapUsedSize": 2220216,
+        "totalSize": 5767168,
+        "usedSize": 2813964
+      },
+      "afterNative": {
+        "backingStorageSize": 4691823,
+        "embedderHeapUsedSize": 67960096,
+        "totalSize": 5767168,
+        "usedSize": 2848604
+      }
+    },
+    "selection": {
+      "exact": false,
+      "rangeExact": true,
+      "visibleExact": true,
+      "trailingNewlineSuppressed": true,
+      "focus": true,
+      "actualLength": 950613,
+      "expectedLength": 950614,
+      "mismatch": 950613,
+      "actualCode": null,
+      "expectedCode": 10
+    },
+    "focusEmbedderBytes": 247344,
+    "additionalEmbedderBytes": 65739880,
+    "rendererOnlyIncrementAfterNativeBytes": 70343299,
+    "allOwnedExitsConfirmed": true,
+    "disposableStateRemoved": true
+  },
+  "profiles": [
+    {
+      "process": "main",
+      "sampledCumulativeBytes": 160382092,
+      "top": [
+        {
+          "bytes": 26260332,
+          "stack": [
+            {
+              "function": "cryptoText",
+              "file": "recovery-disk.js",
+              "line": 96
+            },
+            {
+              "function": "cryptoText",
+              "file": "payload-scope.js",
+              "line": 73
+            },
+            {
+              "function": "(anonymous)",
+              "file": "recovery-disk.js",
+              "line": 643
+            },
+            {
+              "function": "update",
+              "file": "cipher",
+              "line": 154
+            },
+            {
+              "function": "write",
+              "file": "node:string_decoder",
+              "line": 75
+            }
+          ]
+        },
+        {
+          "bytes": 16159996,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "processImmediate",
+              "file": "timers",
+              "line": 524
+            },
+            {
+              "function": "diagnosticReportWork",
+              "file": "snapshot.js",
+              "line": 102
+            },
+            {
+              "function": "toString",
+              "file": "node:buffer",
+              "line": 917
+            }
+          ]
+        },
+        {
+          "bytes": 12357644,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "processImmediate",
+              "file": "timers",
+              "line": 524
+            },
+            {
+              "function": "advance",
+              "file": "report-work.js",
+              "line": 12
+            },
+            {
+              "function": "diagnosticReportWork",
+              "file": "snapshot.js",
+              "line": 102
+            },
+            {
+              "function": "toString",
+              "file": "node:buffer",
+              "line": 917
+            }
+          ]
+        },
+        {
+          "bytes": 9440464,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "processImmediate",
+              "file": "timers",
+              "line": 524
+            },
+            {
+              "function": "work",
+              "file": "snapshot.js",
+              "line": 115
+            },
+            {
+              "function": "diagnosticSerializationWork",
+              "file": "snapshot.js",
+              "line": 131
+            }
+          ]
+        },
+        {
+          "bytes": 9277076,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "processImmediate",
+              "file": "timers",
+              "line": 524
+            },
+            {
+              "function": "diagnosticReportWork",
+              "file": "snapshot.js",
+              "line": 102
+            },
+            {
+              "function": "diagnosticSerializationWork",
+              "file": "snapshot.js",
+              "line": 131
+            }
+          ]
+        },
+        {
+          "bytes": 8559284,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "(V8 API)",
+              "file": "",
+              "line": -1
+            }
+          ]
+        },
+        {
+          "bytes": 6457436,
+          "stack": [
+            {
+              "function": "next",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "validationTextWork",
+              "file": "report-validation.js",
+              "line": 30
+            },
+            {
+              "function": "next",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "validationCanonicalTextWork",
+              "file": "report-validation.js",
+              "line": 36
+            },
+            {
+              "function": "diagnosticEventOffset",
+              "file": "snapshot.js",
+              "line": 71
+            }
+          ]
+        },
+        {
+          "bytes": 3835156,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "processImmediate",
+              "file": "timers",
+              "line": 524
+            },
+            {
+              "function": "advance",
+              "file": "report-work.js",
+              "line": 12
+            },
+            {
+              "function": "work",
+              "file": "snapshot.js",
+              "line": 115
+            },
+            {
+              "function": "diagnosticSerializationWork",
+              "file": "snapshot.js",
+              "line": 131
+            }
+          ]
+        },
+        {
+          "bytes": 3737440,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "processImmediate",
+              "file": "timers",
+              "line": 524
+            },
+            {
+              "function": "advance",
+              "file": "report-work.js",
+              "line": 12
+            },
+            {
+              "function": "diagnosticReportWork",
+              "file": "snapshot.js",
+              "line": 102
+            },
+            {
+              "function": "diagnosticSerializationWork",
+              "file": "snapshot.js",
+              "line": 131
+            }
+          ]
+        },
+        {
+          "bytes": 3048360,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "processImmediate",
+              "file": "timers",
+              "line": 524
+            },
+            {
+              "function": "diagnosticReportWork",
+              "file": "snapshot.js",
+              "line": 102
+            },
+            {
+              "function": "diagnosticSerializationWork",
+              "file": "snapshot.js",
+              "line": 131
+            },
+            {
+              "function": "events",
+              "file": "pretrigger-buffer.js",
+              "line": 139
+            }
+          ]
+        },
+        {
+          "bytes": 2687800,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "processImmediate",
+              "file": "timers",
+              "line": 524
+            },
+            {
+              "function": "work",
+              "file": "snapshot.js",
+              "line": 115
+            },
+            {
+              "function": "diagnosticSerializationWork",
+              "file": "snapshot.js",
+              "line": 131
+            },
+            {
+              "function": "events",
+              "file": "pretrigger-buffer.js",
+              "line": 139
+            }
+          ]
+        },
+        {
+          "bytes": 2261688,
+          "stack": [
+            {
+              "function": "processImmediate",
+              "file": "timers",
+              "line": 524
+            },
+            {
+              "function": "advance",
+              "file": "report-work.js",
+              "line": 12
+            },
+            {
+              "function": "work",
+              "file": "snapshot.js",
+              "line": 115
+            },
+            {
+              "function": "next",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "diagnosticSerializationWork",
+              "file": "snapshot.js",
+              "line": 131
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "sampledCumulativeBytes": 14726520,
+      "top": [
+        {
+          "bytes": 3542492,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "(anonymous)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "read",
+              "file": "renderer-bundle.js",
+              "line": 15104
+            },
+            {
+              "function": "bridge.<computed>",
+              "file": "renderer-bundle.js",
+              "line": 15633
+            }
+          ]
+        },
+        {
+          "bytes": 2494332,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "(V8 API)",
+              "file": "",
+              "line": -1
+            }
+          ]
+        },
+        {
+          "bytes": 1017060,
+          "stack": [
+            {
+              "function": "read",
+              "file": "renderer-bundle.js",
+              "line": 15104
+            },
+            {
+              "function": "bridge.<computed>",
+              "file": "renderer-bundle.js",
+              "line": 15633
+            },
+            {
+              "function": "releasePreviewBlock",
+              "file": "index.cjs",
+              "line": 184
+            },
+            {
+              "function": "diagnosticCall",
+              "file": "index.cjs",
+              "line": 15
+            },
+            {
+              "function": "invoke",
+              "file": "sandbox_bundle",
+              "line": 1
+            }
+          ]
+        },
+        {
+          "bytes": 590720,
+          "stack": [
+            {
+              "function": "(anonymous)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "read",
+              "file": "renderer-bundle.js",
+              "line": 15104
+            },
+            {
+              "function": "bridge.<computed>",
+              "file": "renderer-bundle.js",
+              "line": 15633
+            },
+            {
+              "function": "releasePreviewBlock",
+              "file": "index.cjs",
+              "line": 184
+            },
+            {
+              "function": "diagnosticCall",
+              "file": "index.cjs",
+              "line": 15
+            }
+          ]
+        },
+        {
+          "bytes": 590668,
+          "stack": [
+            {
+              "function": "read",
+              "file": "renderer-bundle.js",
+              "line": 15104
+            },
+            {
+              "function": "bridge.<computed>",
+              "file": "renderer-bundle.js",
+              "line": 15633
+            },
+            {
+              "function": "readDiagnosticBlock",
+              "file": "index.cjs",
+              "line": 52
+            },
+            {
+              "function": "diagnosticCall",
+              "file": "index.cjs",
+              "line": 15
+            },
+            {
+              "function": "invoke",
+              "file": "sandbox_bundle",
+              "line": 1
+            }
+          ]
+        },
+        {
+          "bytes": 426568,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "(anonymous)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "read",
+              "file": "renderer-bundle.js",
+              "line": 15104
+            },
+            {
+              "function": "bridge.<computed>",
+              "file": "renderer-bundle.js",
+              "line": 15633
+            },
+            {
+              "function": "readDiagnosticBlock",
+              "file": "index.cjs",
+              "line": 52
+            }
+          ]
+        },
+        {
+          "bytes": 360960,
+          "stack": [
+            {
+              "function": "(anonymous)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "read",
+              "file": "renderer-bundle.js",
+              "line": 15104
+            },
+            {
+              "function": "bridge.<computed>",
+              "file": "renderer-bundle.js",
+              "line": 15633
+            },
+            {
+              "function": "readDiagnosticBlock",
+              "file": "index.cjs",
+              "line": 52
+            },
+            {
+              "function": "diagnosticCall",
+              "file": "index.cjs",
+              "line": 15
+            }
+          ]
+        },
+        {
+          "bytes": 360748,
+          "stack": [
+            {
+              "function": "beginWork",
+              "file": "renderer-bundle.js",
+              "line": 6685
+            },
+            {
+              "function": "updateFunctionComponent",
+              "file": "renderer-bundle.js",
+              "line": 6050
+            },
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4406
+            },
+            {
+              "function": "DiagnosticsSection",
+              "file": "renderer-bundle.js",
+              "line": 15455
+            },
+            {
+              "function": "useDiagnostics",
+              "file": "renderer-bundle.js",
+              "line": 15151
+            }
+          ]
+        },
+        {
+          "bytes": 295140,
+          "stack": [
+            {
+              "function": "workLoopSync",
+              "file": "renderer-bundle.js",
+              "line": 10133
+            },
+            {
+              "function": "beginWork",
+              "file": "renderer-bundle.js",
+              "line": 6685
+            },
+            {
+              "function": "updateFunctionComponent",
+              "file": "renderer-bundle.js",
+              "line": 6050
+            },
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4406
+            },
+            {
+              "function": "Text",
+              "file": "renderer-bundle.js",
+              "line": 14584
+            }
+          ]
+        },
+        {
+          "bytes": 229652,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "onMessage",
+              "file": "sandbox_bundle",
+              "line": 1
+            },
+            {
+              "function": "emit",
+              "file": "sandbox_bundle",
+              "line": 1
+            },
+            {
+              "function": "(anonymous)",
+              "file": "sandbox_bundle",
+              "line": 1
+            }
+          ]
+        },
+        {
+          "bytes": 163988,
+          "stack": [
+            {
+              "function": "(root)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "(anonymous)",
+              "file": "",
+              "line": -1
+            },
+            {
+              "function": "read",
+              "file": "renderer-bundle.js",
+              "line": 15104
+            },
+            {
+              "function": "turn",
+              "file": "renderer-bundle.js",
+              "line": 15113
+            },
+            {
+              "function": "Promise",
+              "file": "",
+              "line": -1
+            }
+          ]
+        },
+        {
+          "bytes": 163936,
+          "stack": [
+            {
+              "function": "beginWork",
+              "file": "renderer-bundle.js",
+              "line": 6685
+            },
+            {
+              "function": "updateFunctionComponent",
+              "file": "renderer-bundle.js",
+              "line": 6050
+            },
+            {
+              "function": "renderWithHooks",
+              "file": "renderer-bundle.js",
+              "line": 4406
+            },
+            {
+              "function": "DiagnosticsSection",
+              "file": "renderer-bundle.js",
+              "line": 15455
+            },
+            {
+              "function": "jsxProd",
+              "file": "renderer-bundle.js",
+              "line": 14539
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "decision": "The current DOM native-selection step has an observed renderer-only cost above 32 MiB even with main excluded. Do not remove it from Full or change the threshold. A different exact-text rendering surface needs a bounded feasibility prototype and accessibility/selection approval."
+}

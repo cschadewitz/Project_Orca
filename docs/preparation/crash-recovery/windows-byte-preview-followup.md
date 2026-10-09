@@ -1,5 +1,10 @@
 # Windows byte-backed diagnostics preview - 9 October 2026
 
+**Historical first receipt.** The
+[observer attribution follow-up](windows-byte-preview-observer-followup.md)
+corrects unintended whole-report polling copies and supersedes this Minimal
+allocation interpretation. Original receipts and failed iterations remain below.
+
 **Acceptance remains incomplete.** The approved architecture is implemented at
 `2346bc539ae25a3448d21e86448546b6c905c7c4`, starting from exact #593
 `2167df73bd531a39c290818dfde04eafde31b167` and preserving #591
