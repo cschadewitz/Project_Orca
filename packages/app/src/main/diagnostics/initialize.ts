@@ -1,4 +1,5 @@
 /** Main-owned composition only. IPC/window/power/lifecycle registration belongs to callers. */
+import { ControlledPayloadMemory } from "./payload-memory.js";
 import { RecoveryController } from "./recovery-controller.js";
 import { NodeRecoveryDisk } from "./recovery-disk.js";
 import { createSafeStorageKeyAdapter } from "./native-adapter.js";
@@ -16,9 +17,11 @@ export interface DiagnosticsInitializerOptions {
 
 /** Call initialize after app readiness. No injectable production-enablement option. */
 export function createDiagnosticsInitializer(options: DiagnosticsInitializerOptions) {
+  const payload = new ControlledPayloadMemory();
   const storage = loadNativeDiagnosticsStorage(options.root);
   const legacyKeys = createSafeStorageKeyAdapter(options.safeStorage);
   const disk = new NodeRecoveryDisk({
+    payload,
     root: options.root,
     keys: process.platform === "win32" ? loadWindowsDiagnosticsKeyAdapter(legacyKeys) : legacyKeys,
     native: storage.native,
@@ -26,6 +29,7 @@ export function createDiagnosticsInitializer(options: DiagnosticsInitializerOpti
   });
   const controller = new RecoveryController({
     disk,
+    payload,
     clock: loadNativeDiagnosticsClock(),
     chooseDestination: options.chooseDestination,
   });

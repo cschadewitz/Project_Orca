@@ -17,6 +17,7 @@
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 /* The scroll is here and not on the root, so the save bar stays against the bottom of the
@@ -28,6 +29,7 @@
   gap: var(--space-5);
   padding: var(--space-4);
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
 }
 

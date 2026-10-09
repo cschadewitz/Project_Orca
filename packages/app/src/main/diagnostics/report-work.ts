@@ -17,4 +17,4 @@ export async function scheduleReportWork<T>(work: Generator<void, T>): Promise<T
 }
 
 // CPU scheduling granularity only; event/report/consent/resource policy is unchanged.
-export const REPORT_BATCH_EVENTS = 128;
+export const REPORT_BATCH_EVENTS = 32;

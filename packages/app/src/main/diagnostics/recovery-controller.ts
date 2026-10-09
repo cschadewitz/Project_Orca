@@ -20,7 +20,8 @@ import {
   type ExportState,
   type RecoveryDisk,
 } from "./recovery-contract.js";
-import { validateDiagnosticReportAsync } from "./report-validation.js";
+import { validateOwnedDiagnosticReport } from "./report-validation.js";
+import { ControlledPayloadMemory, type PayloadLease } from "./payload-memory.js";
 
 export interface RecoveryControllerOptions {
   disk: RecoveryDisk;
@@ -29,6 +30,7 @@ export interface RecoveryControllerOptions {
   productionEnabled?: boolean;
   chooseDestination?: () => Promise<string | undefined>;
   operationTimeoutMs?: number;
+  payload?: ControlledPayloadMemory;
 }
 interface Preview {
   handle: string;
@@ -38,6 +40,7 @@ interface Preview {
   source: "current" | "previous";
   boot: string;
   deadline: number;
+  payload: PayloadLease;
 }
 const success = <T>(value: T): DiagnosticsResult<T> => ({ ok: true, value });
 const failure = <T>(code: DiagnosticResultCode): DiagnosticsResult<T> => ({ ok: false, code });
@@ -77,10 +80,13 @@ export class RecoveryController {
   private readonly listeners = new Set<(status: DiagnosticsStatus) => void>();
   private readonly productionEnabled: boolean;
   private readonly timeoutMs: number;
+  private readonly payload: ControlledPayloadMemory;
+  private savingPayload: PayloadLease | undefined;
 
   constructor(private readonly options: RecoveryControllerOptions) {
     this.productionEnabled = options.productionEnabled ?? DIAGNOSTICS_PRODUCTION_ENABLED;
     this.timeoutMs = options.operationTimeoutMs ?? RECOVERY_LIMITS.operationMs;
+    this.payload = options.payload ?? new ControlledPayloadMemory();
     this.ring = this.newRing();
   }
   subscribe(listener: (status: DiagnosticsStatus) => void): () => void {
@@ -177,6 +183,8 @@ export class RecoveryController {
       acknowledgedUnknown: this.exportState.summary !== undefined,
       olderUnknowns: this.exportState.summary?.olderUnknowns ?? false,
       payloadReservedBytes: this.payloadReservedBytes,
+      controlledBinaryAllocatedBytes: this.payload.stats().allocatedBytes,
+      controlledBinaryPeakBytes: this.payload.stats().peakBytes,
       ...(this.lastSaveOutcome
         ? { lastSaveOutcome: this.lastSaveOutcome, saveAdmittedBeforeRevocation: this.saveAdmittedBeforeRevocation }
         : {}),
@@ -282,8 +290,12 @@ export class RecoveryController {
         const snapshot = await this.ring.snapshotAsync();
         if (!snapshot) throw new Error("unavailable");
         if (!this.authorized(epoch)) return;
-        const bytes = Buffer.from(snapshot.json);
-        await this.options.disk.checkpoint(bytes, anchor, () => this.authorized(epoch));
+        const lease = this.payload.from(snapshot.json);
+        try {
+          await this.options.disk.checkpoint(lease.bytes, anchor, () => this.authorized(epoch));
+        } finally {
+          lease.release();
+        }
         if (this.authorized(epoch)) this.lastCheckpoint = anchor;
       } finally {
         this.release(3 * RECOVERY_LIMITS.exportBytes);
@@ -300,6 +312,7 @@ export class RecoveryController {
     this.reserve(4 * RECOVERY_LIMITS.exportBytes);
     this.busy = true;
     const work = (async (): Promise<DiagnosticsResult<DiagnosticPreview>> => {
+      let owned: PayloadLease | undefined;
       try {
         const now = this.now();
         if (!now) {
@@ -316,23 +329,32 @@ export class RecoveryController {
             this.previousAvailable = false;
             return failure("expired");
           }
-          if (
-            !old ||
-            old.anchor.bootId !== now.bootId ||
-            old.anchor.elapsedMs > now.elapsedMs ||
-            now.elapsedMs - old.anchor.elapsedMs >= RECOVERY_LIMITS.retentionMs
-          )
-            return failure("expired");
-          deadline = Math.min(deadline, old.anchor.elapsedMs + RECOVERY_LIMITS.retentionMs);
-          bytes = await validateDiagnosticReportAsync(old.bytes, true);
+          try {
+            if (
+              old.anchor.bootId !== now.bootId ||
+              old.anchor.elapsedMs > now.elapsedMs ||
+              now.elapsedMs - old.anchor.elapsedMs >= RECOVERY_LIMITS.retentionMs
+            )
+              return failure("expired");
+            deadline = Math.min(deadline, old.anchor.elapsedMs + RECOVERY_LIMITS.retentionMs);
+            owned = await validateOwnedDiagnosticReport(old.bytes, true, this.payload);
+          } finally {
+            old.dispose?.();
+          }
+          bytes = owned.bytes;
         } else {
           let snapshot = await this.ring.snapshotAsync();
           if (!snapshot) return failure("unavailable");
-          const input = Buffer.from(snapshot.json);
+          const input = this.payload.from(snapshot.json);
           // Validation holds input, decoded text and bounded reconstruction
           // output. Drop the frozen string first to retain the four-copy charge.
           snapshot = undefined;
-          bytes = await validateDiagnosticReportAsync(input);
+          try {
+            owned = await validateOwnedDiagnosticReport(input.bytes, false, this.payload);
+          } finally {
+            input.release();
+          }
+          bytes = owned.bytes;
         }
         const after = this.now();
         if (
@@ -351,6 +373,7 @@ export class RecoveryController {
           source,
           boot: now.bootId,
           deadline,
+          payload: owned,
         };
         this.previewTimer = setTimeout(
           () => {
@@ -372,6 +395,7 @@ export class RecoveryController {
         if (source === "previous") this.previousAvailable = false;
         return failure("unavailable");
       } finally {
+        if (owned && this.preview?.payload !== owned) owned.release();
         this.release(4 * RECOVERY_LIMITS.exportBytes);
         if (this.preview) {
           this.reserve(2 * RECOVERY_LIMITS.exportBytes);
@@ -520,6 +544,8 @@ export class RecoveryController {
         } else this.code = "refused";
       } finally {
         this.liveExport = false;
+        this.savingPayload?.release();
+        this.savingPayload = undefined;
         if (!this.setting.enabled) {
           try {
             await this.cleanupOwned();
@@ -785,6 +811,8 @@ export class RecoveryController {
   }
   private dropPreview(): void {
     if (this.preview) {
+      if (this.liveExport) this.savingPayload = this.preview.payload;
+      else this.preview.payload.release();
       this.retiredPreview = this.preview.handle;
       if (this.previewCharged) {
         this.release(RECOVERY_LIMITS.exportBytes);
@@ -814,6 +842,7 @@ export class RecoveryController {
   private newRing(): PretriggerBuffer {
     return new PretriggerBuffer({
       minutes: this.setting.minutes,
+      payload: this.payload,
       now: () => {
         const now = this.now();
         return now?.elapsedMs ?? NaN;

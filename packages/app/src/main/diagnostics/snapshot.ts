@@ -7,6 +7,7 @@ import {
   type DiagnosticPhase,
 } from "./profile.js";
 import { completeReportWork, REPORT_BATCH_EVENTS, scheduleReportWork } from "./report-work.js";
+import type { ControlledPayloadMemory } from "./payload-memory.js";
 
 export interface DiagnosticEvent {
   readonly offsetMs: number;
@@ -107,7 +108,16 @@ for (const phase of Object.keys(DIAGNOSTIC_CODES) as DiagnosticPhase[]) {
 }
 
 /** Internally constructed reports only; authenticated input must be rebuilt first. */
-export function* diagnosticReportWork(report: DiagnosticReport): Generator<void, string> {
+export function diagnosticEventText(event: DiagnosticEvent): string {
+  const framing = eventFraming.get(`${event.phase}:${event.code}`);
+  if (!framing) throw new Error("unavailable");
+  return framing[0] + String(event.offsetMs) + framing[1];
+}
+
+export function* diagnosticReportWork(
+  report: DiagnosticReport,
+  payload?: ControlledPayloadMemory,
+): Generator<void, string> {
   // The envelope is small/fixed. Never send the growing event array through the
   // generic per-object sort/replacer or serialize the whole report in one turn.
   const envelope = canonicalJson({ ...report, events: [] });
@@ -117,32 +127,38 @@ export function* diagnosticReportWork(report: DiagnosticReport): Generator<void,
   if (start < 0) throw new Error("unavailable");
   // One bounded output allocation avoids retaining tens of thousands of string
   // fragments and flattening them together in the final main-process callback.
-  const output = Buffer.allocUnsafe(DIAGNOSTIC_LIMITS.maxReportBytes);
-  let offset = 0;
-  const append = (part: string): void => {
-    if (offset + Buffer.byteLength(part) > output.length) throw new Error("capacity_limited");
-    offset += output.write(part, offset, "utf8");
-  };
-  append(envelope.slice(0, start));
-  append('  "events": [\n');
-  for (let index = 0; index < report.events.length; index++) {
-    const event = report.events[index]!;
-    const framing = eventFraming.get(`${event.phase}:${event.code}`);
-    if (!framing) throw new Error("unavailable");
-    append((index === 0 ? "" : ",\n") + framing[0] + String(event.offsetMs) + framing[1]);
-    if ((index + 1) % REPORT_BATCH_EVENTS === 0) yield;
+  const lease = payload?.allocate(DIAGNOSTIC_LIMITS.maxReportBytes);
+  const output = lease?.bytes ?? Buffer.allocUnsafe(DIAGNOSTIC_LIMITS.maxReportBytes);
+  try {
+    let offset = 0;
+    const append = (part: string): void => {
+      if (offset + Buffer.byteLength(part) > output.length) throw new Error("capacity_limited");
+      offset += output.write(part, offset, "utf8");
+    };
+    append(envelope.slice(0, start));
+    append('  "events": [\n');
+    for (let index = 0; index < report.events.length; index++) {
+      const event = report.events[index]!;
+      append((index === 0 ? "" : ",\n") + diagnosticEventText(event));
+      if ((index + 1) % REPORT_BATCH_EVENTS === 0) yield;
+    }
+    append("\n  ]");
+    append(envelope.slice(start + marker.length));
+    return output.toString("utf8", 0, offset);
+  } finally {
+    lease?.release();
   }
-  append("\n  ]");
-  append(envelope.slice(start + marker.length));
-  return output.toString("utf8", 0, offset);
 }
 
 export function canonicalDiagnosticReport(report: DiagnosticReport): string {
   return completeReportWork(diagnosticReportWork(report));
 }
 
-export function canonicalDiagnosticReportAsync(report: DiagnosticReport): Promise<string> {
-  return scheduleReportWork(diagnosticReportWork(report));
+export function canonicalDiagnosticReportAsync(
+  report: DiagnosticReport,
+  payload?: ControlledPayloadMemory,
+): Promise<string> {
+  return scheduleReportWork(diagnosticReportWork(report, payload));
 }
 
 // Reserve the maximum complete envelope, including future offset digits, saturation

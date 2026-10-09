@@ -1,4 +1,6 @@
 /** Bounded encrypted recovery files; no execution store, logger, or network dependencies. */
+import { ControlledPayloadMemory, type PayloadLease } from "./payload-memory.js";
+import { PayloadScope } from "./payload-scope.js";
 import { constants } from "node:fs";
 import { join, resolve } from "node:path";
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -69,6 +71,8 @@ export interface RecoveryDiskOptions {
   /** Native composition supplies a handle-relative port; fixtures retain Node I/O. */
   files?: RecoveryFileSystem;
   scopeVersion?: number;
+  /** Production composition shares the controller/ring binary owner. */
+  payload?: ControlledPayloadMemory;
 }
 
 /** One disk object/profile writer. Outstanding native calls retain its mutation gate.
@@ -96,6 +100,8 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   private lastReading: BootReading | undefined;
   private rootIdentity: StageIdentity | undefined;
   private readonly files: RecoveryFileSystem;
+  private binary: PayloadScope | undefined;
+  private readonly persistent = new Map<Buffer, PayloadLease>();
 
   constructor(private readonly options: RecoveryDiskOptions) {
     this.root = resolve(options.root);
@@ -106,12 +112,59 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
 
   private serialized<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.tail.then(work);
+    const run = this.tail.then(async () => {
+      const binary = this.options.payload ? new PayloadScope(this.options.payload) : undefined;
+      this.binary = binary;
+      try {
+        return await work();
+      } finally {
+        binary?.dispose();
+        this.binary = undefined;
+      }
+    });
     this.tail = run.then(
       () => undefined,
       () => undefined,
     );
     return run;
+  }
+  private allocate(length: number): Buffer {
+    return this.binary?.allocate(length) ?? Buffer.alloc(length);
+  }
+  private from(input: string | Buffer, encoding: BufferEncoding = "utf8"): Buffer {
+    return (
+      this.binary?.from(input, encoding) ??
+      (typeof input === "string" ? Buffer.from(input, encoding) : Buffer.from(input))
+    );
+  }
+  private random(length: number): Buffer {
+    return this.binary?.random(length) ?? randomBytes(length);
+  }
+  private concat(parts: Buffer[]): Buffer {
+    return this.binary?.concat(parts) ?? Buffer.concat(parts);
+  }
+  private json(value: unknown): Buffer {
+    return this.from(JSON.stringify(value));
+  }
+  private crypto(maximum: number, work: () => Buffer): Buffer {
+    return this.binary?.crypto(maximum, work) ?? work();
+  }
+  private provider(work: () => Promise<Buffer>): Promise<Buffer> {
+    // DPAPI's closed <=4096-byte wrapper and <=2048-byte plaintext include native
+    // input/output and adapter copies; reserve their conservative 32 KiB bound.
+    return this.binary?.provider(32_768, work) ?? work();
+  }
+  private keep(bytes: Buffer): Buffer {
+    if (this.binary) this.persistent.set(bytes, this.binary.take(bytes));
+    return bytes;
+  }
+  private forget(bytes: Buffer | undefined): void {
+    if (!bytes) return;
+    const lease = this.persistent.get(bytes);
+    if (lease) {
+      this.persistent.delete(bytes);
+      lease.release();
+    } else bytes.fill(0);
   }
   /** Native composition retains handles/lease beyond logical controller timeouts. */
   waitForSettlement(): Promise<void> {
@@ -221,7 +274,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       )
         throw new Error("unavailable");
       // Preallocate only the already bounded size; reject growth/shrink while reading.
-      const bytes = Buffer.alloc(stat.size);
+      const bytes = this.allocate(stat.size);
       let position = 0;
       while (position < bytes.length) {
         const result = await file.read(bytes, position, bytes.length - position, position);
@@ -312,7 +365,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       await this.acquire();
       const stopped = await this.options.native.writersStopped(this.root);
       if (stopped) await this.remove("setting.json.tmp");
-      await this.atomic("setting.json", json(setting), !setting.enabled && stopped);
+      await this.atomic("setting.json", this.json(setting), !setting.enabled && stopped);
       if (!setting.enabled) this.active = false;
     });
   }
@@ -336,9 +389,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
   private async protect(envelope: KeyEnvelope, key: Buffer): Promise<Buffer> {
     if (!(await this.options.keys.available())) throw new Error("unavailable");
-    const plaintext = json({ ...envelope, key: key.toString("base64") });
+    const plaintext = this.json({ ...envelope, key: key.toString("base64") });
     try {
-      const wrapped = await this.options.keys.wrap(plaintext);
+      const wrapped = await this.provider(() => this.options.keys.wrap(plaintext));
       if (wrapped.length > CONTROL_LIMIT) throw new Error("capacity_limited");
       return wrapped;
     } finally {
@@ -355,7 +408,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     if (!(await this.options.keys.available())) throw new Error("unavailable");
     const wrapped = await this.read(name);
     if (!wrapped) throw new Error("unavailable");
-    const plaintext = await this.options.keys.unwrap(wrapped);
+    const plaintext = await this.provider(() => this.options.keys.unwrap(wrapped));
     try {
       if (plaintext.length > 2048) throw new Error("unavailable");
       const value: unknown = JSON.parse(plaintext.toString("utf8"));
@@ -371,7 +424,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         !/^[A-Za-z0-9+/]{43}=$/.test(value.key)
       )
         throw new Error("unavailable");
-      const key = Buffer.from(value.key, "base64");
+      const key = this.from(value.key, "base64");
       if (key.length !== 32) throw new Error("unavailable");
       return key;
     } finally {
@@ -380,8 +433,11 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
   private async commit(manifest: Manifest, admit: () => boolean = () => true): Promise<void> {
     if (!this.control) throw new Error("unavailable");
-    const payload = json(manifest);
-    const bytes = json({ payload: manifest, mac: createHmac("sha256", this.control).update(payload).digest("hex") });
+    const payload = this.json(manifest);
+    const bytes = this.json({
+      payload: manifest,
+      mac: createHmac("sha256", this.control).update(payload).digest("hex"),
+    });
     await this.create("manifest.json.tmp", bytes);
     if (!admit()) {
       await this.remove("manifest.json.tmp");
@@ -410,21 +466,21 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       throw new Error("unavailable");
     const manifest = envelope.payload;
     const control = await this.unprotect("control.key", "control", manifest.epoch, manifest.epoch, "");
-    const mac = createHmac("sha256", control).update(json(manifest)).digest();
-    if (!timingSafeEqual(mac, Buffer.from(envelope.mac, "hex"))) {
+    const mac = this.crypto(32, () => createHmac("sha256", control).update(this.json(manifest)).digest());
+    if (!timingSafeEqual(mac, this.from(envelope.mac, "hex"))) {
       control.fill(0);
       throw new Error("unavailable");
     }
     return { manifest, control };
   }
   private async verifyRecordEnvelope(record: RecordHeader): Promise<void> {
-    const expected = json(record);
+    const expected = this.json(record);
     if (expected.length > CONTROL_LIMIT) throw new Error("unavailable");
     const file = await this.files.open(this.path(`slot-${record.slot}.bin`), constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const stat = await file.stat();
       if (stat.size !== record.bytes + expected.length + 32) throw new Error("unavailable");
-      const prefix = Buffer.alloc(expected.length + 4);
+      const prefix = this.allocate(expected.length + 4);
       let position = 0;
       while (position < prefix.length) {
         const { bytesRead } = await file.read(prefix, position, prefix.length - position, position);
@@ -454,7 +510,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         if (names.some((name) => /^(slot-|session-|control\.key|manifest\.)/.test(name)))
           throw new Error("unavailable");
         const epoch = randomUUID();
-        this.control = randomBytes(32);
+        this.control = this.keep(this.random(32));
         await this.atomic(
           "control.key",
           await this.protect(
@@ -465,8 +521,8 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         await this.commit({ version: 1, scopeVersion: this.scope, epoch, generation: 0 }, admit);
       } else {
         const { manifest, control } = await this.authenticatedManifest(bytes);
-        this.control?.fill(0);
-        this.control = control;
+        this.forget(this.control);
+        this.control = this.keep(control);
         this.manifest = manifest;
         // Only the authenticated predecessor can survive interrupted replacement.
         await this.remove("manifest.json.tmp");
@@ -499,7 +555,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       if (!admit()) throw new Error("off");
       this.revoked = false;
       this.closed = false;
-      this.session?.key.fill(0);
+      this.forget(this.session?.key);
       this.session = undefined;
       this.captureOpened = true;
       this.active = true;
@@ -558,8 +614,8 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         control.fill(0);
         throw new Error("off");
       }
-      this.control?.fill(0);
-      this.control = control;
+      this.forget(this.control);
+      this.control = this.keep(control);
       this.manifest = manifest;
       const certain = this.reading(now);
       const { current, previous, ...authority } = manifest;
@@ -603,7 +659,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       if (bytes.length > RECOVERY_LIMITS.exportBytes || bytes.length === 0) throw new Error("capacity_limited");
       if (!this.reading(anchor)) throw new Error("age_uncertain");
       await this.inspect();
-      if (!this.session) this.session = { key: randomBytes(32), id: randomUUID(), keyId: randomUUID() };
+      if (!this.session) this.session = { key: this.keep(this.random(32)), id: randomUUID(), keyId: randomUUID() };
       const manifest = this.manifest;
       const slot = ([0, 1, 2] as const).find(
         (slot) => slot !== manifest.current?.slot && slot !== manifest.previous?.slot,
@@ -620,15 +676,15 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         anchor: { ...anchor },
         bytes: bytes.length,
       };
-      const aad = json(record);
-      const nonce = randomBytes(12);
+      const aad = this.json(record);
+      const nonce = this.random(12);
       const cipher = createCipheriv("aes-256-gcm", this.session.key, nonce);
       cipher.setAAD(aad);
       const encrypted = cipher.update(bytes);
       cipher.final();
-      const prefix = Buffer.alloc(4);
+      const prefix = this.allocate(4);
       prefix.writeUInt32BE(aad.length);
-      const sealed = Buffer.concat([prefix, aad, nonce, cipher.getAuthTag(), encrypted]);
+      const sealed = this.concat([prefix, aad, nonce, this.crypto(16, () => cipher.getAuthTag()), encrypted]);
       if (sealed.length > RECOVERY_LIMITS.exportBytes + RECORD_OVERHEAD) throw new Error("capacity_limited");
       await this.create(
         `session-${slot}.key`,
@@ -663,7 +719,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       const size = bytes.readUInt32BE(0);
       if (size > CONTROL_LIMIT || size + 32 + record.bytes !== bytes.length) throw new Error("unavailable");
       const aad = bytes.subarray(4, 4 + size);
-      if (!aad.equals(json(record))) throw new Error("unavailable");
+      if (!aad.equals(this.json(record))) throw new Error("unavailable");
       const key = await this.unprotect(
         `session-${record.slot}.key`,
         "session",
@@ -675,14 +731,16 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         const decipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(4 + size, 16 + size));
         decipher.setAAD(aad);
         decipher.setAuthTag(bytes.subarray(16 + size, 32 + size));
-        const plaintext = decipher.update(bytes.subarray(32 + size));
+        const plaintext = this.crypto(record.bytes, () => decipher.update(bytes.subarray(32 + size)));
         try {
-          decipher.final();
+          this.crypto(16, () => decipher.final());
         } catch {
           plaintext.fill(0);
           throw new Error("unavailable");
         }
-        return { bytes: plaintext, anchor: { ...record.anchor } };
+        if (!this.binary) return { bytes: plaintext, anchor: { ...record.anchor } };
+        const owned = this.binary.take(this.from(plaintext));
+        return { bytes: owned.bytes, anchor: { ...record.anchor }, dispose: () => owned.release() };
       } finally {
         key.fill(0);
       }
@@ -709,9 +767,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         await this.commit(next);
         await this.cleanUnreferenced();
       }
-      this.session?.key.fill(0);
+      this.forget(this.session?.key);
       this.session = undefined;
-      this.control?.fill(0);
+      this.forget(this.control);
       this.control = undefined;
       this.manifest = undefined;
       this.captureOpened = false;
@@ -745,9 +803,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         "control.key.tmp",
       ])
         await this.remove(name);
-      this.session?.key.fill(0);
+      this.forget(this.session?.key);
       this.session = undefined;
-      this.control?.fill(0);
+      this.forget(this.control);
       this.control = undefined;
       this.manifest = undefined;
       this.captureOpened = false;
@@ -781,7 +839,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
   private async exportCommit(state: ExportState): Promise<void> {
     if (!validExportState(state)) throw new Error("cleanup_pending");
-    await this.atomic("export.json", json(state));
+    await this.atomic("export.json", this.json(state));
   }
   writeExportState(state: ExportState): Promise<void> {
     return this.serialized(async () => {
@@ -813,7 +871,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         try {
           const observed = await check.stat();
           if (!sameIdentity(observed, identity) || observed.size !== bytes.length) throw new Error("cleanup_pending");
-          const chunk = Buffer.alloc(Math.min(65_536, bytes.length));
+          const chunk = this.allocate(Math.min(65_536, bytes.length));
           for (let offset = 0; offset < bytes.length; offset += chunk.length) {
             const length = Math.min(chunk.length, bytes.length - offset);
             const result = await check.read(chunk, 0, length, offset);
@@ -890,9 +948,6 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
 }
 
-function json(value: unknown): Buffer {
-  return Buffer.from(JSON.stringify(value));
-}
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

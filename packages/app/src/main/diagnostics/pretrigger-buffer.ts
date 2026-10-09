@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import {
   allowedEvent,
+  DIAGNOSTIC_CODES,
   DIAGNOSTIC_LIMITS,
   omissionCount,
   type DiagnosticCode,
@@ -15,13 +16,12 @@ import {
   eventReservation,
   type DiagnosticReport,
 } from "./snapshot.js";
+import { ControlledPayloadMemory, type PayloadLease } from "./payload-memory.js";
 
-interface RetainedEvent {
-  readonly at: number;
-  readonly phase: DiagnosticPhase;
-  readonly code: DiagnosticCode;
-  readonly bytes: number;
-}
+const pairs = (Object.keys(DIAGNOSTIC_CODES) as DiagnosticPhase[]).flatMap((phase) =>
+  DIAGNOSTIC_CODES[phase].map((code) => ({ phase, code, bytes: eventReservation(phase, code) })),
+);
+const pairIndex = new Map(pairs.map((pair, index) => [`${pair.phase}:${pair.code}`, index]));
 
 export interface PretriggerOptions {
   readonly minutes?: number;
@@ -30,6 +30,7 @@ export interface PretriggerOptions {
   readonly maxReportBytes?: number;
   /** Trusted monotonic clock in ms. Suspend/uncertain elapsed time must call stop(). */
   readonly now?: () => number;
+  readonly payload?: ControlledPayloadMemory;
 }
 
 export interface FrozenDiagnosticSnapshot {
@@ -42,7 +43,10 @@ export class PretriggerBuffer {
   private readonly now: () => number;
   private readonly maxEvents: number;
   private readonly maxReportBytes: number;
-  private readonly ring: (RetainedEvent | undefined)[];
+  private readonly payload: ControlledPayloadMemory;
+  private ring: PayloadLease | undefined;
+  private times: Float64Array | undefined;
+  private codes: Uint16Array | undefined;
   private minutes: number;
   private head = 0;
   private size = 0;
@@ -69,7 +73,7 @@ export class PretriggerBuffer {
       DIAGNOSTIC_LIMITS.maxReportBytes,
     );
     this.now = options.now ?? (() => performance.now());
-    this.ring = new Array<RetainedEvent | undefined>(this.maxEvents);
+    this.payload = options.payload ?? new ControlledPayloadMemory();
   }
 
   get enabled(): boolean {
@@ -81,6 +85,13 @@ export class PretriggerBuffer {
     if (this.enabled) return true;
     const now = this.readTime();
     if (now === undefined) return false;
+    this.ring = this.payload.allocate(this.maxEvents * 10);
+    this.times = new Float64Array(this.ring.bytes.buffer, this.ring.bytes.byteOffset, this.maxEvents);
+    this.codes = new Uint16Array(
+      this.ring.bytes.buffer,
+      this.ring.bytes.byteOffset + this.maxEvents * 8,
+      this.maxEvents,
+    );
     this.historyStart = now;
     this.collecting = true;
     return true;
@@ -89,7 +100,8 @@ export class PretriggerBuffer {
   /** Opt-out, close, suspend or clock uncertainty: discard all retained references. */
   stop(): void {
     this.disarm();
-    this.ring.fill(undefined);
+    this.ring?.release();
+    this.ring = this.times = this.codes = undefined;
     this.head = this.size = 0;
     this.bytes = DIAGNOSTIC_ENVELOPE_BYTES;
     this.collecting = false;
@@ -125,10 +137,12 @@ export class PretriggerBuffer {
     }
     while (this.size >= this.maxEvents || this.bytes + bytes > this.maxReportBytes) {
       const removed = this.removeOldest();
-      this.lastCapacityLoss = Math.max(this.lastCapacityLoss, removed.at);
+      this.lastCapacityLoss = Math.max(this.lastCapacityLoss, removed);
       this.budget = increment(this.budget);
     }
-    this.ring[(this.head + this.size) % this.maxEvents] = { at: now, phase, code, bytes };
+    const position = (this.head + this.size) % this.maxEvents;
+    this.times![position] = now;
+    this.codes![position] = pairIndex.get(`${phase}:${code}`)!;
     this.size += 1;
     this.bytes += bytes;
     this.arm(now);
@@ -144,13 +158,13 @@ export class PretriggerBuffer {
   /** Freeze the ring atomically, then serialize independent bounded batches. */
   async snapshotAsync(): Promise<FrozenDiagnosticSnapshot | undefined> {
     const report = this.freezeReport();
-    return report && this.freezeJson(await canonicalDiagnosticReportAsync(report));
+    return report && this.freezeJson(await canonicalDiagnosticReportAsync(report, this.payload));
   }
 
   private freezeReport(): DiagnosticReport | undefined {
     const now = this.tick();
     if (now === undefined) return undefined;
-    const oldest = this.ring[this.head];
+    const oldest = this.size ? this.times![this.head] : undefined;
     // Exported identities belong only to this snapshot, including preparation retries.
     return diagnosticReport(
       randomUUID(),
@@ -158,7 +172,7 @@ export class PretriggerBuffer {
       {
         requestedWindowMs: this.minutes * 60_000,
         observedWindowMs: now - this.historyStart,
-        retainedWindowMs: oldest === undefined ? 0 : now - oldest.at,
+        retainedWindowMs: oldest === undefined ? 0 : now - oldest,
         capacityLimited:
           this.lastCapacityLoss >= this.historyStart && this.lastCapacityLoss > now - this.minutes * 60_000,
       },
@@ -168,11 +182,12 @@ export class PretriggerBuffer {
         invalid: omissionCount(this.invalid),
       },
       Array.from({ length: this.size }, (_, index) => {
-        const event = this.ring[(this.head + index) % this.maxEvents]!;
+        const position = (this.head + index) % this.maxEvents;
+        const event = pairs[this.codes![position]!]!;
         return {
           phase: event.phase,
           code: event.code,
-          offsetMs: event.at - this.historyStart,
+          offsetMs: this.times![position]! - this.historyStart,
           entityAlias: "unknown" as const,
         };
       }),
@@ -213,19 +228,20 @@ export class PretriggerBuffer {
 
   private expire(now: number): void {
     this.historyStart = Math.max(this.historyStart, now - this.minutes * 60_000);
-    while (this.size > 0 && this.ring[this.head]!.at <= now - this.minutes * 60_000) {
+    while (this.size > 0 && this.times![this.head]! <= now - this.minutes * 60_000) {
       this.removeOldest();
       this.expired = increment(this.expired);
     }
   }
 
-  private removeOldest(): RetainedEvent {
-    const event = this.ring[this.head]!;
-    this.ring[this.head] = undefined;
+  private removeOldest(): number {
+    const at = this.times![this.head]!;
+    this.bytes -= pairs[this.codes![this.head]!]!.bytes;
+    this.times![this.head] = 0;
+    this.codes![this.head] = 0;
     this.head = (this.head + 1) % this.maxEvents;
     this.size -= 1;
-    this.bytes -= event.bytes;
-    return event;
+    return at;
   }
 
   private disarm(): void {
@@ -235,7 +251,7 @@ export class PretriggerBuffer {
 
   private arm(now: number): void {
     this.disarm();
-    const oldest = this.ring[this.head];
+    const oldest = this.size ? this.times![this.head] : undefined;
     if (oldest === undefined) return;
     this.timer = setTimeout(
       () => {
@@ -243,7 +259,7 @@ export class PretriggerBuffer {
         const current = this.tick();
         if (current !== undefined) this.arm(current);
       },
-      Math.max(1, oldest.at + this.minutes * 60_000 - now),
+      Math.max(1, oldest + this.minutes * 60_000 - now),
     );
     this.timer.unref?.();
   }

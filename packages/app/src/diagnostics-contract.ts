@@ -32,6 +32,8 @@ export interface DiagnosticsStatus {
   olderUnknowns: boolean;
   activePreviewHandle?: string;
   payloadReservedBytes: number;
+  controlledBinaryAllocatedBytes?: number;
+  controlledBinaryPeakBytes?: number;
   lastSaveOutcome?: "saved" | "refused" | "unknown";
   saveAdmittedBeforeRevocation?: boolean;
 }

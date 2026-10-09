@@ -3,11 +3,13 @@ import { randomUUID } from "node:crypto";
 import { allowedEvent, DIAGNOSTIC_LIMITS, type DiagnosticCount } from "./profile.js";
 import {
   diagnosticReport,
-  diagnosticReportWork,
+  canonicalJson,
+  diagnosticEventText,
   DIAGNOSTIC_ENVELOPE_BYTES,
   type DiagnosticReport,
   type DiagnosticEvent,
 } from "./snapshot.js";
+import type { ControlledPayloadMemory, PayloadLease } from "./payload-memory.js";
 import { completeReportWork, REPORT_BATCH_EVENTS, scheduleReportWork } from "./report-work.js";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -22,7 +24,21 @@ export function validateDiagnosticReportAsync(bytes: Buffer, freshIds = false): 
   return scheduleReportWork(validationWork(bytes, freshIds));
 }
 
+/** Production profile owns the returned lease through preview disposal. */
+export async function validateOwnedDiagnosticReport(
+  bytes: Buffer,
+  freshIds: boolean,
+  payload: ControlledPayloadMemory,
+): Promise<PayloadLease> {
+  const text = await scheduleReportWork(validationTextWork(bytes, freshIds));
+  return payload.from(text);
+}
+
 function* validationWork(bytes: Buffer, freshIds: boolean): Generator<void, Buffer> {
+  return Buffer.from(yield* validationTextWork(bytes, freshIds));
+}
+
+function* validationTextWork(bytes: Buffer, freshIds: boolean): Generator<void, string> {
   if (bytes.length > DIAGNOSTIC_LIMITS.maxReportBytes) throw new Error("capacity_limited");
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   // Read only canonical framing, then parse the small envelope and individual
@@ -65,10 +81,11 @@ function* validationWork(bytes: Buffer, freshIds: boolean): Generator<void, Buff
   )
     throw new Error("unavailable");
   let last = 0;
-  const events: DiagnosticEvent[] = [];
+  let countEvents = 0;
+  let firstOffset: number | undefined;
   let cursor = contentStart;
   while (cursor < contentEnd) {
-    if (events.length >= DIAGNOSTIC_LIMITS.maxEvents) throw new Error("unavailable");
+    if (countEvents >= DIAGNOSTIC_LIMITS.maxEvents) throw new Error("unavailable");
     const separator = text.indexOf(",\n    {", cursor);
     const end = separator < 0 || separator >= contentEnd ? contentEnd : separator;
     // The vocabulary is ASCII. A character cap bounds each parse, while the
@@ -86,12 +103,15 @@ function* validationWork(bytes: Buffer, freshIds: boolean): Generator<void, Buff
     )
       throw new Error("unavailable");
     last = e.offsetMs;
-    events.push({ offsetMs: e.offsetMs, phase: e.phase, code: e.code, entityAlias: "unknown" });
+    // Compare each bounded canonical event immediately. Never retain a second
+    // parsed report tree or reconstruct another full-size report buffer.
+    if (text.slice(cursor, end) !== "\n" + diagnosticEventText(e)) throw new Error("unavailable");
+    firstOffset ??= e.offsetMs;
+    countEvents++;
     cursor = end + 1;
-    if (events.length % REPORT_BATCH_EVENTS === 0) yield;
+    if (countEvents % REPORT_BATCH_EVENTS === 0) yield;
   }
-  const first = events[0];
-  const retainedWindowMs = first ? r.coverage.observedWindowMs - first.offsetMs : 0;
+  const retainedWindowMs = firstOffset === undefined ? 0 : r.coverage.observedWindowMs - firstOffset;
   if (r.coverage.retainedWindowMs !== retainedWindowMs) throw new Error("unavailable");
   const rebuilt = diagnosticReport(
     r.reportId,
@@ -103,13 +123,15 @@ function* validationWork(bytes: Buffer, freshIds: boolean): Generator<void, Buff
       capacityLimited: r.coverage.capacityLimited,
     },
     { budget: r.omissions.budget, expired: r.omissions.expired, invalid: r.omissions.invalid },
-    events,
+    [],
   );
   // Exact reconstruction rejects unknown fields, secret-bearing metadata, duplicate keys,
   // noncanonical representations and content-bearing nested input, without editing a preview.
-  if ((yield* diagnosticReportWork(rebuilt)) !== text) throw new Error("unavailable");
+  if (canonicalJson(rebuilt) !== envelope) throw new Error("unavailable");
   // Text is immutable across yielded turns. Return its validated bytes rather
   // than a caller-owned Buffer that could have changed during reconstruction.
-  if (!freshIds) return Buffer.from(text);
-  return Buffer.from(yield* diagnosticReportWork({ ...rebuilt, reportId: randomUUID(), sessionId: randomUUID() }));
+  if (!freshIds) return text;
+  const reportText = text.replace(`"reportId": "${r.reportId}"`, `"reportId": "${randomUUID()}"`);
+  yield;
+  return reportText.replace(`"sessionId": "${r.sessionId}"`, `"sessionId": "${randomUUID()}"`);
 }

@@ -1,7 +1,7 @@
 /** Explicit local consent, exact-byte preview and separate picker/Save controls. */
 import type { JSX } from "react";
 import type { DiagnosticsBridge } from "../../../src/diagnostics-contract.js";
-import { Button, ConfigField, Menu, Text } from "../ui/index.js";
+import { Button, ConfigField, Menu, Text, textClass } from "../ui/index.js";
 import { DIAGNOSTICS_MESSAGES, EARLIER_EXPORT_WARNING, SAVE_WARNING } from "./diagnostics-model.js";
 import { useDiagnostics } from "./use-diagnostics.js";
 import "./diagnostics.css";
@@ -266,16 +266,12 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
               </Button>
             </>
           )}
-          <Text
-            style="mono-body"
-            as="pre"
-            tabIndex={0}
-            role="region"
+          <textarea
+            readOnly
             aria-label="Complete exact diagnostic report"
-            className="orca-diagnostics__exact"
-          >
-            {state.preview.text}
-          </Text>
+            className={`orca-diagnostics__exact ${textClass("mono-body")}`}
+            value={state.preview.text}
+          />
         </section>
       )}
     </section>

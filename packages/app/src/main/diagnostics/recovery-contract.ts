@@ -11,6 +11,7 @@ export interface DiagnosticsSetting {
 export interface StoredCheckpoint {
   bytes: Buffer;
   anchor: BootReading;
+  dispose?(): void;
 }
 export interface StageIdentity {
   device: string;

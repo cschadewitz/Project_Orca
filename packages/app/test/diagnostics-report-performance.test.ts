@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { PretriggerBuffer } from "../src/main/diagnostics/pretrigger-buffer.js";
 import { DIAGNOSTIC_CODES, type DiagnosticPhase } from "../src/main/diagnostics/profile.js";
 import { RecoveryController } from "../src/main/diagnostics/recovery-controller.js";
+import { ControlledPayloadMemory } from "../src/main/diagnostics/payload-memory.js";
 import { RECOVERY_LIMITS, type RecoveryDisk } from "../src/main/diagnostics/recovery-contract.js";
 import { validateDiagnosticReportAsync } from "../src/main/diagnostics/report-validation.js";
 import {
@@ -125,8 +126,15 @@ function fixture() {
     publishStage: async () => "refused",
     writersStopped: async () => true,
   };
-  const controller = new RecoveryController({ disk, clock: { read: () => reading }, productionEnabled: true });
-  return { controller, disk, reading };
+  const payload = new ControlledPayloadMemory();
+  const controller = new RecoveryController({
+    disk,
+    payload,
+    clock: { read: () => reading },
+    productionEnabled: true,
+    chooseDestination: async () => "/synthetic-report.json",
+  });
+  return { controller, disk, reading, payload };
 }
 
 it.each(["off", "document", "clock"])(
@@ -178,4 +186,51 @@ it("rechecks authority after checkpoint serialization before any disk dispatch",
   } finally {
     await controller.cleanExit();
   }
+});
+
+it.each(["timeout", "off"])("retains frozen binary bytes until a %s Save actually settles", async (revocation) => {
+  const { controller, disk, payload } = fixture();
+  let entered!: () => void, settle!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  let frozen: Buffer | undefined, exact: Buffer | undefined;
+  vi.spyOn(disk, "stageExport").mockImplementation(async (_id, bytes) => {
+    frozen = bytes;
+    exact = Buffer.from(bytes);
+    entered();
+    await held;
+    expect(bytes).toEqual(exact);
+    return { device: "1", inode: "2" };
+  });
+  await controller.initialize();
+  value(await controller.setEnabled(true, 1));
+  controller.record("run", "run_failed");
+  const preview = value(await controller.preparePreview("current"));
+  const destination = value(await controller.chooseDestination(preview.handle));
+  if (revocation === "timeout") vi.useFakeTimers();
+  const saving = controller.save(preview.handle, destination.token);
+  await started;
+  let off: Promise<unknown> | undefined;
+  try {
+    if (revocation === "timeout") {
+      await vi.advanceTimersByTimeAsync(RECOVERY_LIMITS.operationMs + 1);
+      expect((await saving).ok).toBe(false);
+    } else off = controller.setEnabled(false, 1);
+    expect(controller.status().activePreviewHandle).toBeUndefined();
+    expect(payload.stats().leases).toBeGreaterThan(0);
+    expect(frozen).toEqual(exact);
+  } finally {
+    settle();
+    vi.useRealTimers();
+    await saving;
+    await off;
+    for (let turn = 0; turn < 10 && controller.status().payloadReservedBytes; turn++) await setImmediate();
+    await controller.cleanExit();
+  }
+  expect(frozen?.every((byte) => byte === 0)).toBe(true);
+  expect(payload.stats().allocatedBytes).toBe(0);
 });

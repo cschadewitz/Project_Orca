@@ -146,12 +146,12 @@ describe("persistent diagnostics choice", () => {
       await screen.findByText("Local diagnostics: On");
       expect(screen.getByText(route === "studio" ? "Read configuration" : "Loading the configuration")).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Preview current diagnostics" }));
-      const report = await screen.findByRole("region", { name: "Complete exact diagnostic report" });
+      const report = await screen.findByRole("textbox", { name: "Complete exact diagnostic report" });
       await act(async () => release());
       if (route === "studio") await screen.findByText("Structured metadata unavailable");
       else await screen.findByRole("region", { name: "Agents" });
-      expect(screen.getByRole("region", { name: "Complete exact diagnostic report" })).toBe(report);
-      expect(report.textContent).toBe(exact);
+      expect(screen.getByRole("textbox", { name: "Complete exact diagnostic report" })).toBe(report);
+      expect((report as HTMLTextAreaElement).value).toBe(exact);
       expect(f.bridge.subscribe).toHaveBeenCalledTimes(1);
       expect(f.bridge.closePreview).not.toHaveBeenCalled();
     },
@@ -220,7 +220,7 @@ async function open(f: ReturnType<typeof fakeBridge>) {
   mount(f.bridge);
   await screen.findByText("Local diagnostics: On");
   fireEvent.click(screen.getByRole("button", { name: "Preview current diagnostics" }));
-  return screen.findByRole("region", { name: "Complete exact diagnostic report" });
+  return screen.findByRole("textbox", { name: "Complete exact diagnostic report" });
 }
 const enabled = { enabled: true, productionEnabled: true, code: "ready" as const };
 
@@ -234,7 +234,7 @@ describe("exact preview and separate local Save", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview current diagnostics" }));
     act(() => f.emit({ ...f.state(), code: "age_uncertain", cleanupPending: true }));
     await act(async () => prepared.resolve(ok(preview)));
-    expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Complete exact diagnostic report" })).toBeNull();
     expect(document.body.textContent).not.toContain(exact);
     expect(f.bridge.closePreview).toHaveBeenCalledWith(preview.handle);
     expect(f.bridge.chooseDestination).not.toHaveBeenCalled();
@@ -244,18 +244,18 @@ describe("exact preview and separate local Save", () => {
   it("renders every exact byte including omissions and newline, then requires picker and separate Save", async () => {
     const f = fakeBridge(enabled);
     const report = await open(f);
-    expect(report.textContent).toBe(exact);
+    expect((report as HTMLTextAreaElement).value).toBe(exact);
     expect(screen.getByText(/Checkpoint tail loss is possible/)).toBeTruthy();
     expect(f.bridge.chooseDestination).not.toHaveBeenCalled();
     act(() => f.emit({ ...f.state(), minutes: 10, checkpointAgeMs: 7 }));
-    expect(report.textContent).toBe(exact);
+    expect((report as HTMLTextAreaElement).value).toBe(exact);
     fireEvent.click(screen.getByRole("button", { name: "Choose destination" }));
     await screen.findByText("Destination: /local/report.json");
     expect(f.bridge.save).not.toHaveBeenCalled();
     expect(screen.getByText(/file will be unencrypted/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save exact content" }));
     await waitFor(() => expect(f.bridge.save).toHaveBeenCalledWith("opaque-preview", "destination-token"));
-    expect(report.textContent).toBe(exact);
+    expect((report as HTMLTextAreaElement).value).toBe(exact);
   });
 
   it("removes old destination authority while a new picker is pending and ignores its late reply after close", async () => {
@@ -270,7 +270,7 @@ describe("exact preview and separate local Save", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
     await act(async () => selected.resolve(ok({ token: "late", displayPath: "/late/private-path.json" })));
     expect(document.body.textContent).not.toContain("/late/private-path.json");
-    expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Complete exact diagnostic report" })).toBeNull();
     expect(f.bridge.save).not.toHaveBeenCalled();
   });
 
@@ -283,15 +283,15 @@ describe("exact preview and separate local Save", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview current diagnostics" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete all and turn off" }));
     await act(async () => prepared.resolve(ok(preview)));
-    expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Complete exact diagnostic report" })).toBeNull();
     expect(f.bridge.closePreview).toHaveBeenCalledWith(preview.handle);
 
     fireEvent.click(screen.getByRole("button", { name: "Enable local diagnostics" }));
     await screen.findByText("Local diagnostics: On");
     fireEvent.click(screen.getByRole("button", { name: "Preview current diagnostics" }));
-    await screen.findByRole("region", { name: "Complete exact diagnostic report" });
+    await screen.findByRole("textbox", { name: "Complete exact diagnostic report" });
     vi.mocked(f.bridge.closePreview).mockImplementationOnce(async () => {
-      expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Complete exact diagnostic report" })).toBeNull();
       return ok(f.state());
     });
     fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
@@ -301,12 +301,12 @@ describe("exact preview and separate local Save", () => {
   it("clears a revoked handle on target/source/key-loss status push, and closes the handle on unmount", async () => {
     const f = fakeBridge(enabled);
     const report = await open(f);
-    expect(report.textContent).toBe(exact);
+    expect((report as HTMLTextAreaElement).value).toBe(exact);
     act(() => {
       const { activePreviewHandle: _active, ...rest } = f.state();
       f.emit({ ...rest, code: "stale_preview" });
     });
-    expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Complete exact diagnostic report" })).toBeNull();
     await waitFor(() => expect(f.bridge.closePreview).toHaveBeenCalledWith(preview.handle));
     cleanup();
     const second = fakeBridge(enabled);
@@ -323,7 +323,7 @@ describe("exact preview and separate local Save", () => {
       return ok({ ...preview, expiresInMs: 10 });
     });
     await open(f);
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Complete exact diagnostic report" })).toBeNull());
     expect(f.bridge.closePreview).toHaveBeenCalledWith(preview.handle);
   });
 
@@ -334,7 +334,7 @@ describe("exact preview and separate local Save", () => {
     await screen.findByText("Local diagnostics: Off");
     act(() => f.emit({ ...f.state(), code: "off", lastSaveOutcome: "saved", saveAdmittedBeforeRevocation: true }));
     expect(screen.getByText(/Save was admitted before revocation and completed/)).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Complete exact diagnostic report" })).toBeNull();
   });
 
   it("does not carry a prior Save success into a new pending or unknown Save", async () => {
@@ -394,7 +394,7 @@ describe("exact preview and separate local Save", () => {
       await screen.findAllByText("This diagnostics action was refused. Review the current status before trying again.");
       if (dismissal === "close") fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
       await waitFor(
-        () => expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull(),
+        () => expect(screen.queryByRole("textbox", { name: "Complete exact diagnostic report" })).toBeNull(),
         { timeout: 2000 },
       );
       await waitFor(() => expect(f.bridge.closePreview).toHaveBeenCalledWith(preview.handle));
@@ -406,7 +406,7 @@ describe("exact preview and separate local Save", () => {
       expect(f.bridge.chooseDestination).toHaveBeenCalledOnce();
       expect(f.bridge.save).toHaveBeenCalledOnce();
       fireEvent.click(screen.getByRole("button", { name: "Preview current diagnostics" }));
-      await screen.findByRole("region", { name: "Complete exact diagnostic report" });
+      await screen.findByRole("textbox", { name: "Complete exact diagnostic report" });
       expect(f.bridge.save).toHaveBeenCalledOnce();
       fireEvent.click(screen.getByRole("button", { name: "Choose destination" }));
       await screen.findByText("Destination: /local/report.json");
@@ -429,7 +429,7 @@ describe("exact preview and separate local Save", () => {
         vi.mocked(f.bridge.setEnabled).mockRejectedValueOnce(new Error("PRIVATE transport detail"));
       else vi.mocked(f.bridge.setEnabled).mockResolvedValueOnce({ ok: false, code: "stale_preview" });
       fireEvent.click(screen.getByRole("button", { name: "Delete all and turn off" }));
-      expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Complete exact diagnostic report" })).toBeNull();
       await screen.findByText("Revocation could not be confirmed. Local diagnostics may remain on.");
       expect(screen.getByText("Local diagnostics: On")).toBeTruthy();
       expect(screen.queryByText("Local diagnostics: Off")).toBeNull();
@@ -456,7 +456,7 @@ describe("exact preview and separate local Save", () => {
     expect(screen.getByText("Local diagnostics: Off")).toBeTruthy();
     act(() => f.emit({ ...f.state(), enabled: false, code: "off", cleanupPending: false }));
     expect(screen.getByText("Off for this session; the setting or cleanup could not be completed.")).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Complete exact diagnostic report" })).toBeNull();
     expect(f.bridge.save).not.toHaveBeenCalled();
     expect(f.bridge.closePreview).toHaveBeenCalledWith(preview.handle);
     await waitFor(() =>
@@ -515,7 +515,7 @@ describe("unknown Save, cleanup and explicit acknowledgement", () => {
     expect(f.bridge.chooseDestination).not.toHaveBeenCalled();
     expect(f.bridge.save).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Preview current diagnostics" }));
-    await screen.findByRole("region", { name: "Complete exact diagnostic report" });
+    await screen.findByRole("textbox", { name: "Complete exact diagnostic report" });
     fireEvent.click(screen.getByRole("button", { name: "Choose destination" }));
     await screen.findByRole("button", { name: "Save exact content" });
     expect(screen.getByText(/The earlier export may already exist/)).toBeTruthy();
