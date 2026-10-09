@@ -244,7 +244,7 @@ it("admits exact byte ownership, one ordered transport block and a complete-read
   expect((await controller.chooseDestination(preview.handle)).ok).toBe(false);
   expect((await controller.readPreviewBlock(preview.handle, 1)).ok).toBe(false);
   const first = value(await controller.readPreviewBlock(preview.handle, 0));
-  expect(first.bytes.buffer.byteLength).toBe(first.bytes.length);
+  expect(first.bytes.buffer.byteLength).toBe(DIAGNOSTIC_PREVIEW_BLOCK_BYTES);
   expect(first.bytes.length).toBeLessThanOrEqual(DIAGNOSTIC_PREVIEW_BLOCK_BYTES);
   expect(first.bytes.at(-1)).toBe(10);
   expect((await controller.readPreviewBlock(preview.handle, 0)).ok).toBe(false);
@@ -254,6 +254,7 @@ it("admits exact byte ownership, one ordered transport block and a complete-read
   let offset = first.bytes.length;
   while (offset < preview.byteLength) {
     const block = value(await controller.readPreviewBlock(preview.handle, offset));
+    expect(block.bytes.buffer).toBe(first.bytes.buffer);
     offset += block.bytes.length;
     value(await controller.releasePreviewBlock(preview.handle, block.offset));
   }

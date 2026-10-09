@@ -62,9 +62,15 @@ let diagnosticBlock: DiagnosticPreviewBlock | undefined;
 let diagnosticBlockPending = false;
 let diagnosticPendingHandle: string | undefined;
 let diagnosticBlockEpoch = 0;
+function eraseDiagnosticBytes(bytes: Uint8Array): void {
+  if (!bytes.byteLength) return;
+  bytes.fill(0);
+  const buffer = bytes.buffer as ArrayBuffer & { transferToFixedLength?: (length: number) => ArrayBuffer };
+  if (typeof buffer.transferToFixedLength === "function") buffer.transferToFixedLength(0);
+}
 function eraseDiagnosticBlock(): void {
   diagnosticBlockEpoch++;
-  diagnosticBlock?.bytes.fill(0);
+  if (diagnosticBlock) eraseDiagnosticBytes(diagnosticBlock.bytes);
   diagnosticBlock = undefined;
 }
 ipcRenderer.on("orca:diagnostics.changed", (_event: unknown, status: DiagnosticsStatus) => {
@@ -80,7 +86,7 @@ async function readDiagnosticBlock(handle: string, offset: number): Promise<Diag
     const result = await diagnosticCall<DiagnosticPreviewBlock>("readPreviewBlock", { handle, offset });
     if (result.ok) {
       if (epoch !== diagnosticBlockEpoch) {
-        result.value.bytes.fill(0);
+        eraseDiagnosticBytes(result.value.bytes);
         await diagnosticCall("releasePreviewBlock", { handle, offset });
         return { ok: false, code: "stale_preview" };
       }
@@ -196,7 +202,7 @@ const bridge: OrcaBridge = {
     readPreviewBlock: readDiagnosticBlock,
     releasePreviewBlock: (handle, offset) => {
       if (diagnosticBlock?.handle === handle && diagnosticBlock.offset === offset) {
-        diagnosticBlock.bytes.fill(0);
+        eraseDiagnosticBytes(diagnosticBlock.bytes);
         diagnosticBlock = undefined;
       }
       return diagnosticCall("releasePreviewBlock", { handle, offset });

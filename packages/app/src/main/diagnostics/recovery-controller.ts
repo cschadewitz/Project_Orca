@@ -61,6 +61,7 @@ export class RecoveryController {
   private retiredPreviewCharged = false;
   private transportRelease: (() => void) | undefined;
   private block: DiagnosticPreviewBlock | undefined;
+  private blockStorage: Uint8Array | undefined;
   private destination: { token: string; handle: string; path: string; epoch: number } | undefined;
   private exportState: ExportState = {};
   private previousAvailable = false;
@@ -432,7 +433,8 @@ export class RecoveryController {
       if (newline < offset) return Promise.resolve(failure("unavailable"));
       length = newline + 1 - offset;
     }
-    const bytes = new Uint8Array(length);
+    this.blockStorage ??= new Uint8Array(DIAGNOSTIC_PREVIEW_BLOCK_BYTES);
+    const bytes = this.blockStorage.subarray(0, length);
     bytes.set(preview.bytes.subarray(offset, offset + bytes.length));
     this.block = { handle, offset, bytes };
     return Promise.resolve(success(this.block));
@@ -842,6 +844,8 @@ export class RecoveryController {
   private dropPreview(): void {
     this.block?.bytes.fill(0);
     this.block = undefined;
+    this.blockStorage?.fill(0);
+    this.blockStorage = undefined;
     if (this.preview) {
       if (this.liveExport) this.savingPayload = this.preview.payload;
       else this.preview.payload.release();

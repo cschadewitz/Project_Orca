@@ -22,7 +22,7 @@ it("keeps exact UTF-8 and newline, erases each transport copy and disposes retai
   const owner = new DiagnosticPreviewOwner(preview(bytes.length));
   const copy = bytes.slice();
   const releasePreviewBlock = vi.fn(async () => {
-    expect(copy.every((byte) => byte === 0)).toBe(true);
+    expect(copy.byteLength).toBe(0);
     return ok(true);
   });
   await owner.read({
@@ -33,8 +33,30 @@ it("keeps exact UTF-8 and newline, erases each transport copy and disposes retai
   expect(owner.blocks.join("")).toBe(text);
   expect(releasePreviewBlock).toHaveBeenCalledOnce();
   owner.dispose();
-  expect(owner.bytes.every((byte) => byte === 0)).toBe(true);
+  expect(owner.bytes.byteLength).toBe(0);
   expect(owner.blocks).toEqual([]);
+  expect(() => owner.dispose()).not.toThrow();
+});
+
+it("erases plaintext before retiring its backing store and retains zeroed fallback storage", () => {
+  const owner = new DiagnosticPreviewOwner(preview(4));
+  owner.bytes.fill(120);
+  const backing = owner.bytes.buffer as ArrayBuffer & { transferToFixedLength: (length: number) => ArrayBuffer };
+  const transfer = backing.transferToFixedLength.bind(backing);
+  const retire = vi.spyOn(backing, "transferToFixedLength").mockImplementation((length) => {
+    expect(owner.bytes.every((byte) => byte === 0)).toBe(true);
+    return transfer(length);
+  });
+  owner.dispose();
+  expect(retire).toHaveBeenCalledWith(0);
+  expect(owner.bytes.byteLength).toBe(0);
+  retire.mockRestore();
+  const fallback = new DiagnosticPreviewOwner(preview(4));
+  fallback.bytes.fill(120);
+  Object.defineProperty(fallback.bytes.buffer, "transferToFixedLength", { value: undefined });
+  fallback.dispose();
+  expect(fallback.bytes.every((byte) => byte === 0)).toBe(true);
+  expect(fallback.blocks).toEqual([]);
 });
 
 it.each(["offset", "handle", "length", "utf8"])("erases owner and transport on malformed %s replies", async (kind) => {
@@ -46,8 +68,8 @@ it.each(["offset", "handle", "length", "utf8"])("erases owner and transport on m
   };
   const releasePreviewBlock = vi.fn(async () => ok(true));
   await expect(owner.read({ readPreviewBlock: async () => ok(block), releasePreviewBlock })).rejects.toThrow();
-  expect(block.bytes.every((byte) => byte === 0)).toBe(true);
-  expect(owner.bytes.every((byte) => byte === 0)).toBe(true);
+  expect(block.bytes.byteLength).toBe(0);
+  expect(owner.bytes.byteLength).toBe(0);
   expect(owner.blocks).toEqual([]);
   expect(releasePreviewBlock).toHaveBeenCalledOnce();
 });
@@ -68,7 +90,7 @@ it("disposes a late copy after cancellation without restoring text or reading a 
   const bytes = new Uint8Array([120, 10]);
   resolve(ok({ handle: "synthetic", offset: 0, bytes }));
   await rejected;
-  expect(bytes.every((byte) => byte === 0)).toBe(true);
+  expect(bytes.byteLength).toBe(0);
   expect(owner.blocks).toEqual([]);
   expect(readPreviewBlock).toHaveBeenCalledOnce();
   expect(releasePreviewBlock).toHaveBeenCalledOnce();

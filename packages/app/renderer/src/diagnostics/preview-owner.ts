@@ -7,6 +7,14 @@ import {
   type DiagnosticsResult,
 } from "../../../src/diagnostics-contract.js";
 
+/** Zero before detaching owned backing storage; this is disposal, never a GC request. */
+function eraseBytes(bytes: Uint8Array): void {
+  if (!bytes.byteLength) return;
+  bytes.fill(0);
+  const buffer = bytes.buffer as ArrayBuffer & { transferToFixedLength?: (length: number) => ArrayBuffer };
+  if (typeof buffer.transferToFixedLength === "function") buffer.transferToFixedLength(0);
+}
+
 export class DiagnosticPreviewOwner {
   readonly bytes: Uint8Array;
   readonly blocks: string[] = [];
@@ -21,8 +29,9 @@ export class DiagnosticPreviewOwner {
     this.bytes = new Uint8Array(preview.byteLength);
   }
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
-    this.bytes.fill(0);
+    eraseBytes(this.bytes);
     this.blocks.length = 0;
   }
   async read(bridge: Pick<DiagnosticsBridge, "readPreviewBlock" | "releasePreviewBlock">): Promise<void> {
@@ -64,7 +73,7 @@ export class DiagnosticPreviewOwner {
           this.blocks.push(decoder.decode(block.bytes, { stream: offset + block.bytes.length < this.bytes.length }));
           offset += block.bytes.length;
         } finally {
-          block.bytes.fill(0);
+          eraseBytes(block.bytes);
           released = await bridge.releasePreviewBlock(this.preview.handle, block.offset);
         }
         if (!released.ok && !this.disposed) throw new Error(released.code);

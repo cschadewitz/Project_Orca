@@ -6,8 +6,8 @@ Main retains the validated, frozen UTF-8 report in its shared binary arena. The
 and exact Save digest remain unchanged. Production capture stays disabled.
 
 One sequential `readPreviewBlock(handle, offset)` may be outstanding. The block
-contains at most 16,384 bytes and ends at an existing newline. It has an exact
-independent backing store: returning an arena subarray would expose/copy the whole
+contains at most 16,384 bytes and ends at an existing newline. It reuses an
+independent 16,384-byte backing store with zeroed padding: returning an arena subarray would expose/copy the whole
 5 MiB arena. The next offset is admitted only after `releasePreviewBlock` erases
 the prior main copy. Reads require current document/target/preview authority;
 erasure acknowledgements can cross a revoked target epoch only from the same
@@ -29,7 +29,12 @@ pagination or preview reconstruction is used for Save.
 The picker is refused until every byte is acknowledged. Renderer exposes the
 preview and picker only after loading the complete owner. Save stages the original
 main bytes, independent of the renderer's decoded view. Close, Off, expiry,
-source/target invalidation and unmount clear byte and text references. Disposal
+source/target invalidation and unmount clear byte and text references. Preload and
+renderer zero each retired owned ArrayBuffer before `transferToFixedLength(0)`
+detaches it and retires its backing storage. This is an ordinary ownership disposal
+operation, not a GC request. A runtime without that primitive retains the zeroed
+fallback until collection; its resource gate still requires actual measurement.
+Disposal
 acknowledgement waits for pending renderer reads and DOM removal. Main keeps the
 retired renderer/transport allowance until that acknowledgement or verified
 document/process disposal. Already admitted Save work retains its frozen payload
