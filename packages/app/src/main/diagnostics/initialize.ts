@@ -2,6 +2,7 @@
 import { RecoveryController } from "./recovery-controller.js";
 import { NodeRecoveryDisk } from "./recovery-disk.js";
 import { createSafeStorageKeyAdapter } from "./native-adapter.js";
+import { loadWindowsDiagnosticsKeyAdapter } from "./windows-key-adapter.js";
 import { loadNativeDiagnosticsClock } from "./native-clock.js";
 import { loadNativeDiagnosticsStorage } from "./native-storage.js";
 import { startupDiagnosticObserver } from "./startup-producer.js";
@@ -16,9 +17,10 @@ export interface DiagnosticsInitializerOptions {
 /** Call initialize after app readiness. No injectable production-enablement option. */
 export function createDiagnosticsInitializer(options: DiagnosticsInitializerOptions) {
   const storage = loadNativeDiagnosticsStorage(options.root);
+  const legacyKeys = createSafeStorageKeyAdapter(options.safeStorage);
   const disk = new NodeRecoveryDisk({
     root: options.root,
-    keys: createSafeStorageKeyAdapter(options.safeStorage),
+    keys: process.platform === "win32" ? loadWindowsDiagnosticsKeyAdapter(legacyKeys) : legacyKeys,
     native: storage.native,
     files: storage.files,
   });

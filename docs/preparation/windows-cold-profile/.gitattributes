@@ -1,0 +1,3 @@
+# Keep the bounded receipts byte-for-byte, including historical Windows line endings.
+*.json -text whitespace=cr-at-eol
+*.jsonl -text whitespace=cr-at-eol

@@ -584,13 +584,14 @@ invalid:
   if(owns_busy)atomic_store(&j->root->busy,0);
   napi_reject_deferred(env,j->deferred,failure(env,j->error?j->error:EACCES)); cleanup(j); return promise;
 }
+bool register_windows_keys(napi_env env,napi_value exports);
 static napi_value initialize(napi_env env,napi_value exports) {
   napi_value abi,platform,call;
   const char *name="win32";
   if(napi_create_uint32(env,1,&abi)!=napi_ok || napi_create_string_utf8(env,name,NAPI_AUTO_LENGTH,&platform)!=napi_ok ||
       napi_create_function(env,"call",NAPI_AUTO_LENGTH,dispatch,NULL,&call)!=napi_ok || napi_set_named_property(env,exports,"abi",abi)!=napi_ok ||
       napi_set_named_property(env,exports,"platform",platform)!=napi_ok || napi_set_named_property(env,exports,"call",call)!=napi_ok ||
-      napi_object_freeze(env,exports)!=napi_ok)return NULL;
+      !register_windows_keys(env,exports) || napi_object_freeze(env,exports)!=napi_ok)return NULL;
   return exports;
 }
 NAPI_MODULE(NODE_GYP_MODULE_NAME,initialize)
