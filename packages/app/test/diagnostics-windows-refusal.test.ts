@@ -61,8 +61,8 @@ it.runIf(process.platform === "win32")(
           expect((await fixture.controller.setEnabled(true, 1)).ok).toBe(false);
           fixture.startupObserver("startup_spawn_failed");
           expect(fixture.controller.record("run", "run_failed")).toBe(false);
-          expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
-          expect((await fixture.controller.preparePreview("previous")).ok).toBe(false);
+          expect((await fixture.controller.prepareExport("current")).ok).toBe(false);
+          expect((await fixture.controller.prepareExport("previous")).ok).toBe(false);
           expect((await fixture.controller.chooseDestination("synthetic-stale")).ok).toBe(false);
           expect((await fixture.controller.save("synthetic-stale", "synthetic-stale")).ok).toBe(false);
           await fixture.controller.checkpoint();

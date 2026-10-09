@@ -1,15 +1,13 @@
-/** Consent, exact preview and bounded local export authority independent of execution. */
+/** Consent, frozen reports and bounded local export authority independent of execution. */
 import { createHash, randomUUID } from "node:crypto";
 import {
   DIAGNOSTICS_PRODUCTION_ENABLED,
   DIAGNOSTICS_SCOPE,
-  DIAGNOSTIC_PREVIEW_BLOCK_BYTES,
   type DiagnosticsResult,
   type DiagnosticsStatus,
   type DiagnosticResultCode,
-  type DiagnosticPreview,
+  type DiagnosticExport,
   type DiagnosticDestination,
-  type DiagnosticPreviewBlock,
 } from "../../diagnostics-contract.js";
 import { PretriggerBuffer } from "./pretrigger-buffer.js";
 import { type DiagnosticPhase, type DiagnosticCode } from "./profile.js";
@@ -34,7 +32,7 @@ export interface RecoveryControllerOptions {
   operationTimeoutMs?: number;
   payload?: ControlledPayloadMemory;
 }
-interface Preview {
+interface PreparedReport {
   handle: string;
   epoch: number;
   bytes: Buffer;
@@ -43,7 +41,6 @@ interface Preview {
   boot: string;
   deadline: number;
   payload: PayloadLease;
-  delivered: number;
 }
 const success = <T>(value: T): DiagnosticsResult<T> => ({ ok: true, value });
 const failure = <T>(code: DiagnosticResultCode): DiagnosticsResult<T> => ({ ok: false, code });
@@ -56,13 +53,8 @@ export class RecoveryController {
   private authorityEpoch = 0;
   private statusRevision = 0;
   private reading: BootReading | undefined;
-  private preview: Preview | undefined;
-  private previewCharged = false;
-  private retiredPreview: string | undefined;
-  private retiredPreviewCharged = false;
-  private transportRelease: (() => void) | undefined;
-  private block: DiagnosticPreviewBlock | undefined;
-  private blockStorage: Uint8Array | undefined;
+  private preparedReport: PreparedReport | undefined;
+  private exportCharged = false;
   private destination: { token: string; handle: string; path: string; epoch: number } | undefined;
   private exportState: ExportState = {};
   private previousAvailable = false;
@@ -75,7 +67,7 @@ export class RecoveryController {
   private initialized = false;
   private initialization?: Promise<void>;
   private timer: ReturnType<typeof setInterval> | undefined;
-  private previewTimer: ReturnType<typeof setTimeout> | undefined;
+  private exportTimer: ReturnType<typeof setTimeout> | undefined;
   private liveExport = false;
   private disableWrite: Promise<void> | undefined;
   private disableFailed = false;
@@ -89,6 +81,7 @@ export class RecoveryController {
   private readonly timeoutMs: number;
   private readonly payload: ControlledPayloadMemory;
   private savingPayload: PayloadLease | undefined;
+  private savingCharged = false;
 
   constructor(private readonly options: RecoveryControllerOptions) {
     this.productionEnabled = options.productionEnabled ?? DIAGNOSTICS_PRODUCTION_ENABLED;
@@ -109,7 +102,7 @@ export class RecoveryController {
       () => {
         this.code = "unavailable";
         this.cleanupPending = true;
-        this.revokePreviewAuthority();
+        this.revokeExportAuthority();
       },
     ).then(() => undefined);
     return this.initialization;
@@ -121,7 +114,7 @@ export class RecoveryController {
     try {
       const setting = await this.options.disk.readSetting();
       if (
-        // A new window document revokes previews, not the durable consent choice.
+        // A new window document revokes prepared reports, not the durable consent choice.
         // Off/shutdown still fence an older setting read before its first await.
         authorityEpoch === this.authorityEpoch &&
         setting.scopeVersion === DIAGNOSTICS_SCOPE &&
@@ -173,7 +166,7 @@ export class RecoveryController {
   }
   status(): DiagnosticsStatus {
     const now = this.now();
-    this.checkPreview(now);
+    this.checkExport(now);
     return {
       revision: ++this.statusRevision,
       enabled: this.setting.enabled,
@@ -196,7 +189,7 @@ export class RecoveryController {
       ...(this.lastSaveOutcome
         ? { lastSaveOutcome: this.lastSaveOutcome, saveAdmittedBeforeRevocation: this.saveAdmittedBeforeRevocation }
         : {}),
-      ...(this.preview ? { activePreviewHandle: this.preview.handle } : {}),
+      ...(this.preparedReport ? { activeExportHandle: this.preparedReport.handle } : {}),
     };
   }
   async setEnabled(enabled: boolean, scopeVersion: number): Promise<DiagnosticsResult<DiagnosticsStatus>> {
@@ -309,16 +302,16 @@ export class RecoveryController {
       }
     });
   }
-  async preparePreview(source: "current" | "previous"): Promise<DiagnosticsResult<DiagnosticPreview>> {
+  async prepareExport(source: "current" | "previous"): Promise<DiagnosticsResult<DiagnosticExport>> {
     const epoch = this.epoch;
     await this.initialize();
-    if (epoch !== this.epoch) return failure("stale_preview");
+    if (epoch !== this.epoch) return failure("stale_export");
     if (source !== "current" && source !== "previous") return failure("refused");
     if (!this.authorized()) return failure(this.setting.enabled ? "unavailable" : "off");
-    if (this.busy || this.preview || this.retiredPreview) return failure("publication_pending");
+    if (this.busy || this.preparedReport) return failure("publication_pending");
     this.reserve(4 * RECOVERY_LIMITS.exportBytes);
     this.busy = true;
-    const work = (async (): Promise<DiagnosticsResult<DiagnosticPreview>> => {
+    const work = (async (): Promise<DiagnosticsResult<DiagnosticExport>> => {
       let owned: PayloadLease | undefined;
       try {
         const now = this.now();
@@ -329,7 +322,7 @@ export class RecoveryController {
           return failure("age_uncertain");
         }
         let bytes: Buffer;
-        let deadline = now.elapsedMs + RECOVERY_LIMITS.previewMs;
+        let deadline = now.elapsedMs + RECOVERY_LIMITS.exportMs;
         if (source === "previous") {
           const old = await this.options.disk.previous(now);
           if (!old) {
@@ -366,13 +359,9 @@ export class RecoveryController {
           after.elapsedMs >= deadline ||
           after.elapsedMs - now.elapsedMs > RECOVERY_LIMITS.prepareMs
         )
-          return failure("stale_preview");
-        // Reserve the renderer owner and all three block copies before transport.
-        // IPC/contextBridge are copying boundaries, never assumed zero-copy.
-        this.transportRelease = this.payload.allowance(
-          RECOVERY_LIMITS.exportBytes + 3 * DIAGNOSTIC_PREVIEW_BLOCK_BYTES,
-        );
-        this.preview = {
+          return failure("stale_export");
+        // Only main retains canonical bytes. The bridge receives a bounded descriptor.
+        this.preparedReport = {
           handle: randomUUID(),
           epoch,
           bytes,
@@ -381,20 +370,20 @@ export class RecoveryController {
           boot: now.bootId,
           deadline,
           payload: owned,
-          delivered: 0,
         };
-        this.previewTimer = setTimeout(
+        this.exportTimer = setTimeout(
           () => {
-            this.dropPreview();
+            this.dropExport();
             this.emit();
           },
           Math.max(1, deadline - after.elapsedMs),
         );
-        this.previewTimer.unref?.();
+        this.exportTimer.unref?.();
         return success({
           statusRevision: this.statusRevision,
-          handle: this.preview.handle,
+          handle: this.preparedReport.handle,
           byteLength: bytes.length,
+          sha256: this.preparedReport.digest,
           source,
           expiresInMs: deadline - after.elapsedMs,
           tailLossPossible: source === "previous",
@@ -403,63 +392,31 @@ export class RecoveryController {
         if (source === "previous") this.previousAvailable = false;
         return failure("unavailable");
       } finally {
-        if (owned && this.preview?.payload !== owned) owned.release();
+        if (owned && this.preparedReport?.payload !== owned) owned.release();
         this.release(4 * RECOVERY_LIMITS.exportBytes);
-        if (this.preview) {
-          this.reserve(2 * RECOVERY_LIMITS.exportBytes);
-          this.previewCharged = true;
+        if (this.preparedReport) {
+          this.reserve(RECOVERY_LIMITS.exportBytes);
+          this.exportCharged = true;
         }
         this.busy = false;
         this.emit();
       }
     })();
     const result = await this.bound(work, "unavailable", () => {
-      this.revokePreviewAuthority();
+      this.revokeExportAuthority();
     });
-    // The final emission (and any listener) can revoke while evaluating status.
-    // Reject revoked plaintext and release its untransferred renderer reservation.
-    if (result.ok && !this.currentPreview(result.value.handle)) {
-      if (this.retiredPreview === result.value.handle) this.releaseRetiredPreview();
-      return failure("stale_preview");
-    }
+    // Final status observation or a listener may revoke the prepared report.
+    if (result.ok && !this.currentExport(result.value.handle)) return failure("stale_export");
     return result.ok ? success({ ...result.value, statusRevision: this.statusRevision }) : result;
   }
-  readPreviewBlock(handle: string, offset: number): Promise<DiagnosticsResult<DiagnosticPreviewBlock>> {
-    const preview = this.currentPreview(handle);
-    if (!preview) return Promise.resolve(failure("stale_preview"));
-    if (!Number.isSafeInteger(offset) || offset !== preview.delivered || offset >= preview.bytes.length || this.block)
-      return Promise.resolve(failure("refused"));
-    // Never expose a subarray's 5 MiB arena backing store to structured clone.
-    let length = Math.min(DIAGNOSTIC_PREVIEW_BLOCK_BYTES, preview.bytes.length - offset);
-    if (offset + length < preview.bytes.length) {
-      const newline = preview.bytes.lastIndexOf(10, offset + length - 1);
-      if (newline < offset) return Promise.resolve(failure("unavailable"));
-      length = newline + 1 - offset;
-    }
-    this.blockStorage ??= new Uint8Array(DIAGNOSTIC_PREVIEW_BLOCK_BYTES);
-    const bytes = this.blockStorage.subarray(0, length);
-    bytes.set(preview.bytes.subarray(offset, offset + bytes.length));
-    this.block = { handle, offset, bytes };
-    return Promise.resolve(success(this.block));
-  }
-  releasePreviewBlock(handle: string, offset: number): Promise<DiagnosticsResult<boolean>> {
-    const block = this.block;
-    if (block?.handle !== handle || block.offset !== offset) return Promise.resolve(failure("stale_preview"));
-    if (this.preview?.handle === handle) this.preview.delivered += block.bytes.length;
-    block.bytes.fill(0);
-    this.block = undefined;
-    return Promise.resolve(success(true));
-  }
-  async closePreview(handle: string): Promise<DiagnosticsResult<DiagnosticsStatus>> {
-    if (this.preview?.handle === handle) this.dropPreview();
-    if (this.retiredPreview === handle) this.releaseRetiredPreview();
+  async cancelExport(handle: string): Promise<DiagnosticsResult<DiagnosticsStatus>> {
+    if (this.preparedReport?.handle === handle) this.dropExport();
     this.emit();
     return success(this.status());
   }
   async chooseDestination(handle: string): Promise<DiagnosticsResult<DiagnosticDestination>> {
-    const preview = this.currentPreview(handle);
-    if (!preview) return failure("stale_preview");
-    if (this.block || preview.delivered !== preview.bytes.length) return failure("refused");
+    const report = this.currentExport(handle);
+    if (!report) return failure("stale_export");
     if (this.busy || this.exportState.current)
       return failure(this.exportState.current ? this.code : "publication_pending");
     this.busy = true;
@@ -467,12 +424,12 @@ export class RecoveryController {
     const work = (async (): Promise<DiagnosticsResult<DiagnosticDestination>> => {
       try {
         const path = await this.options.chooseDestination?.();
-        if (!path) return failure("refused");
+        if (!path) return failure("cancelled");
         if (
           path.length > 4096 ||
-          !this.currentPreview(handle) ||
+          !this.currentExport(handle) ||
           !(await this.options.disk.validateDestination(path)) ||
-          !this.currentPreview(handle)
+          !this.currentExport(handle)
         )
           return failure("refused");
         this.destination = { path, handle, token: randomUUID(), epoch: this.epoch };
@@ -486,31 +443,31 @@ export class RecoveryController {
     })();
     const result = await this.bound(work, "refused", () => {
       this.destination = undefined;
-      this.revokePreviewAuthority();
+      this.revokeExportAuthority();
     });
-    if (result.ok && (!this.currentPreview(handle) || this.currentDestinationToken(handle) !== result.value.token))
-      return failure("stale_preview");
+    if (result.ok && (!this.currentExport(handle) || this.currentDestinationToken(handle) !== result.value.token))
+      return failure("stale_export");
     return result;
   }
   save(handle: string, destinationToken: string): Promise<DiagnosticsResult<DiagnosticsStatus>> {
     if (this.saveOperation?.handle === handle && this.saveOperation.token === destinationToken)
       return this.saveOperation.promise;
-    const preview = this.currentPreview(handle);
+    const report = this.currentExport(handle);
     const destination = this.destination;
     if (
-      !preview ||
+      !report ||
       !destination ||
       destination.token !== destinationToken ||
       destination.handle !== handle ||
       destination.epoch !== this.epoch
     )
-      return Promise.resolve(failure("stale_preview"));
+      return Promise.resolve(failure("stale_export"));
     if (this.busy || this.exportState.current || this.cleanupPending) return Promise.resolve(failure(this.code));
-    const promise = this.doSave(preview, destination.path);
+    const promise = this.doSave(report, destination.path);
     this.saveOperation = { handle, token: destinationToken, promise };
     return promise;
   }
-  private async doSave(preview: Preview, path: string): Promise<DiagnosticsResult<DiagnosticsStatus>> {
+  private async doSave(report: PreparedReport, path: string): Promise<DiagnosticsResult<DiagnosticsStatus>> {
     this.busy = this.liveExport = true;
     this.reserve(RECOVERY_LIMITS.exportBytes);
     const id = randomUUID();
@@ -523,12 +480,12 @@ export class RecoveryController {
     const work = (async (): Promise<DiagnosticsResult<DiagnosticsStatus>> => {
       let dispatched = false;
       try {
-        if (!(await this.options.disk.validateDestination(path)) || !this.currentPreview(preview.handle))
+        if (!(await this.options.disk.validateDestination(path)) || !this.currentExport(report.handle))
           return failure("refused");
         this.exportState = { ...this.exportState, current: { id, phase: "intent" } };
         await this.options.disk.writeExportState(this.exportState);
-        if (!this.currentPreview(preview.handle)) throw new Error("stale_preview");
-        const stage = await this.options.disk.stageExport(id, preview.bytes);
+        if (!this.currentExport(report.handle)) throw new Error("stale_export");
+        const stage = await this.options.disk.stageExport(id, report.bytes);
         this.exportState.current = { id, stage, phase: "staged" };
         // Adapter has already recorded identity before plaintext. Persist dispatch intent
         // before the point of no return; a crash here stays conservatively unknown.
@@ -537,16 +494,16 @@ export class RecoveryController {
         const result = await this.options.disk.publishStage(stage, path, () => {
           const candidate =
             this.authorized(epoch) &&
-            this.currentPreview(preview.handle) !== undefined &&
-            digest(preview.bytes) === preview.digest;
+            this.currentExport(report.handle) !== undefined &&
+            digest(report.bytes) === report.digest;
           if (candidate) {
             this.code = "publication_pending";
             this.emit();
           }
           // Status observes the clock and listeners may revoke. Admission is
-          // decided only after that emission and the final preview/clock check;
+          // decided only after that emission and the final report/clock check;
           // nothing that can revoke runs between this decision and native dispatch.
-          const admitted = candidate && this.currentPreview(preview.handle) !== undefined && this.authorized(epoch);
+          const admitted = candidate && this.currentExport(report.handle) !== undefined && this.authorized(epoch);
           if (admitted) dispatched = true;
           return admitted;
         });
@@ -581,6 +538,8 @@ export class RecoveryController {
         this.liveExport = false;
         this.savingPayload?.release();
         this.savingPayload = undefined;
+        if (this.savingCharged) this.release(RECOVERY_LIMITS.exportBytes);
+        this.savingCharged = false;
         if (!this.setting.enabled) {
           try {
             await this.cleanupOwned();
@@ -604,7 +563,7 @@ export class RecoveryController {
       // Work remains charged/busy until underlying completion; no new Save/ack.
       // A timed-out operation must never gain publication admission later.
       // Already admitted native work can still finish and report its real result.
-      this.revokePreviewAuthority();
+      this.revokeExportAuthority();
     });
   }
   async acknowledgeUnknown(id: string): Promise<DiagnosticsResult<DiagnosticsStatus>> {
@@ -678,22 +637,22 @@ export class RecoveryController {
   }
   async discardPrevious(): Promise<DiagnosticsResult<DiagnosticsStatus>> {
     await this.initialize();
-    if (this.preview?.source === "previous") this.dropPreview();
+    if (this.preparedReport?.source === "previous") this.dropExport();
     this.previousAvailable = false;
     this.emit();
     return this.mutate(async () => {
       await this.options.disk.discardPrevious();
     });
   }
-  revokePreviewAuthority(): void {
+  revokeExportAuthority(): void {
     this.epoch++;
-    this.dropPreview();
+    this.dropExport();
     this.emit();
   }
   revokeAuthority(): void {
     this.authorityEpoch++;
     this.options.disk.revoke();
-    this.revokePreviewAuthority();
+    this.revokeExportAuthority();
     this.ring.stop();
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
@@ -825,60 +784,49 @@ export class RecoveryController {
       this.setting.enabled && this.productionEnabled && !this.ageUncertain && epoch === this.epoch && this.ring.enabled
     );
   }
-  private currentPreview(handle: string): Preview | undefined {
-    this.checkPreview(this.now());
-    return this.preview?.handle === handle && this.authorized(this.preview.epoch) ? this.preview : undefined;
+  private currentExport(handle: string): PreparedReport | undefined {
+    this.checkExport(this.now());
+    return this.preparedReport?.handle === handle && this.authorized(this.preparedReport.epoch)
+      ? this.preparedReport
+      : undefined;
   }
   private currentDestinationToken(handle: string): string | undefined {
     return this.destination?.handle === handle && this.destination.epoch === this.epoch
       ? this.destination.token
       : undefined;
   }
-  private checkPreview(now: BootReading | undefined): void {
+  private checkExport(now: BootReading | undefined): void {
     if (
-      this.preview &&
+      this.preparedReport &&
       (!now ||
-        now.bootId !== this.preview.boot ||
-        now.elapsedMs >= this.preview.deadline ||
-        !this.authorized(this.preview.epoch))
+        now.bootId !== this.preparedReport.boot ||
+        now.elapsedMs >= this.preparedReport.deadline ||
+        !this.authorized(this.preparedReport.epoch))
     )
-      this.dropPreview();
+      this.dropExport();
   }
-  private dropPreview(): void {
-    this.block?.bytes.fill(0);
-    this.block = undefined;
-    this.blockStorage?.fill(0);
-    this.blockStorage = undefined;
-    if (this.preview) {
-      if (this.liveExport) this.savingPayload = this.preview.payload;
-      else this.preview.payload.release();
-      this.retiredPreview = this.preview.handle;
-      if (this.previewCharged) {
-        this.release(RECOVERY_LIMITS.exportBytes);
-        this.retiredPreviewCharged = true;
+  private dropExport(): void {
+    if (this.preparedReport) {
+      if (this.liveExport) {
+        // Cancellation cannot erase a native writer's input before it settles.
+        this.savingPayload = this.preparedReport.payload;
+        this.savingCharged = this.exportCharged;
+      } else {
+        this.preparedReport.payload.release();
+        if (this.exportCharged) this.release(RECOVERY_LIMITS.exportBytes);
       }
     }
-    this.previewCharged = false;
-    this.preview = undefined;
+    this.exportCharged = false;
+    this.preparedReport = undefined;
     this.destination = undefined;
-    if (this.previewTimer) clearTimeout(this.previewTimer);
-    this.previewTimer = undefined;
+    if (this.exportTimer) clearTimeout(this.exportTimer);
+    this.exportTimer = undefined;
   }
-  /** Called only by main after verified old document/process disposal, never renderer IPC. */
+  /** Main verifies disposal of the old document; pending jobs retain their charge. */
   rendererDisposed(): void {
-    // Pending preparation/pickers have no preview to drop yet. Fence them too,
-    // without revoking consent or releasing their still-live payload charge.
     this.epoch++;
-    this.dropPreview();
-    this.releaseRetiredPreview();
+    this.dropExport();
     this.emit();
-  }
-  private releaseRetiredPreview(): void {
-    this.transportRelease?.();
-    this.transportRelease = undefined;
-    if (this.retiredPreviewCharged) this.release(RECOVERY_LIMITS.exportBytes);
-    this.retiredPreviewCharged = false;
-    this.retiredPreview = undefined;
   }
   private newRing(): PretriggerBuffer {
     return new PretriggerBuffer({
@@ -915,7 +863,7 @@ export class RecoveryController {
     this.previousAvailable = false;
     this.ring.stop();
     this.epoch++;
-    this.dropPreview();
+    this.dropExport();
     this.cleanupPending = true;
     if (!this.exportState.current) this.code = "age_uncertain";
     this.uncertaintyMaintenancePending = true;
@@ -946,7 +894,7 @@ export class RecoveryController {
     this.timer.unref?.();
   }
   private async tick(): Promise<void> {
-    // Expiry is independent of opening a preview or a pending cleanup/export.
+    // Expiry is independent of opening a report or a pending cleanup/export.
     // Keep one mutation in flight; a stalled adapter remains visible and fenced.
     if (!this.setting.enabled || !this.productionEnabled || this.busy) return;
     await this.mutate(async () => {

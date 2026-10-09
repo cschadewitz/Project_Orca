@@ -209,19 +209,19 @@ const diagnosticHandle = (
         event.senderFrame === event.sender.mainFrame &&
         frame === event.sender.mainFrame &&
         generation === (diagnosticWindowGenerations.get(event.sender.id) ?? 0);
-      if (!currentSender()) return { ok: false, code: "stale_preview" } satisfies DiagnosticsResult<never>;
+      if (!currentSender()) return { ok: false, code: "stale_export" } satisfies DiagnosticsResult<never>;
       if (
         !win ||
         win.isDestroyed() ||
         event.senderFrame !== event.sender.mainFrame ||
         (!disposalOnly && epoch !== workspace.connectionTarget.epoch)
       )
-        return { ok: false, code: "stale_preview" } satisfies DiagnosticsResult<never>;
+        return { ok: false, code: "stale_export" } satisfies DiagnosticsResult<never>;
       const parsed = schema.safeParse(params);
       if (!parsed.success) return { ok: false, code: "refused" } satisfies DiagnosticsResult<never>;
       // Exact-handle disposal grants no capture, content, picker or Save authority.
-      // A workspace switch may revoke its old target epoch before DOM removal;
-      // acknowledge removal from this same verified document without initialization.
+      // A workspace switch may revoke its old target epoch before export cancellation;
+      // cancel the frozen report from this same verified document without initialization.
       if (disposalOnly) return await appWriters.run(() => run(parsed.data));
       // Opt-out revokes in the controller before any initialization wait. Its
       // current sender, target and strict consent parameters were verified above.
@@ -236,7 +236,7 @@ const diagnosticHandle = (
           epoch !== workspace.connectionTarget.epoch ||
           (method === "setEnabled" && consentGeneration !== diagnosticConsentGeneration)
         )
-          return { ok: false, code: "stale_preview" } satisfies DiagnosticsResult<never>;
+          return { ok: false, code: "stale_export" } satisfies DiagnosticsResult<never>;
         return await run(parsed.data);
       });
     } catch {
@@ -254,29 +254,13 @@ diagnosticHandle("setEnabled", z.object({ enabled: z.boolean(), scopeVersion: z.
 diagnosticHandle("setMinutes", z.object({ minutes: z.number().int().min(1).max(15) }).strict(), (params) =>
   diagnostics.setMinutes((params as { minutes: number }).minutes),
 );
-diagnosticHandle("preparePreview", z.object({ source: z.enum(["current", "previous"]) }).strict(), (params) =>
-  diagnostics.preparePreview((params as { source: "current" | "previous" }).source),
-);
-const diagnosticBlockParams = z
-  .object({ handle: opaqueDiagnosticHandle, offset: z.number().int().min(0).max(1_048_575) })
-  .strict();
-diagnosticHandle("readPreviewBlock", diagnosticBlockParams, (params) => {
-  const block = params as { handle: string; offset: number };
-  return diagnostics.readPreviewBlock(block.handle, block.offset);
-});
-diagnosticHandle(
-  "releasePreviewBlock",
-  diagnosticBlockParams,
-  (params) => {
-    const block = params as { handle: string; offset: number };
-    return diagnostics.releasePreviewBlock(block.handle, block.offset);
-  },
-  true,
+diagnosticHandle("prepareExport", z.object({ source: z.enum(["current", "previous"]) }).strict(), (params) =>
+  diagnostics.prepareExport((params as { source: "current" | "previous" }).source),
 );
 diagnosticHandle(
-  "closePreview",
+  "cancelExport",
   z.object({ handle: opaqueDiagnosticHandle }).strict(),
-  (params) => diagnostics.closePreview((params as { handle: string }).handle),
+  (params) => diagnostics.cancelExport((params as { handle: string }).handle),
   true,
 );
 diagnosticHandle("chooseDestination", z.object({ handle: opaqueDiagnosticHandle }).strict(), (params) =>
@@ -691,7 +675,7 @@ const workspace = new Workspace({
     // The first verified hello enriches the current epoch. It must not erase alerts
     // already supplied by that epoch's renderer while verification was in flight.
     if (target.epoch !== alertsEpoch) {
-      diagnostics.revokePreviewAuthority();
+      diagnostics.revokeExportAuthority();
       alertsEpoch = target.epoch;
       alerts.update({ waiting: 0, items: [] });
     }
@@ -1194,7 +1178,7 @@ function createWindow(): void {
   };
   win.webContents.on("did-start-loading", () => {
     advanceDiagnosticDocument();
-    diagnostics.revokePreviewAuthority();
+    diagnostics.revokeExportAuthority();
   });
   win.webContents.on("did-navigate", () => diagnostics.rendererDisposed());
   win.webContents.on("render-process-gone", () => {
@@ -1203,7 +1187,7 @@ function createWindow(): void {
   });
   win.on("closed", () => {
     diagnosticWindowGenerations.delete(diagnosticsWindowId);
-    diagnostics.revokePreviewAuthority();
+    diagnostics.revokeExportAuthority();
     diagnostics.rendererDisposed();
   });
   macUpdateWindows.track(win);

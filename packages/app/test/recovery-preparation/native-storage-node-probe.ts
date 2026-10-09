@@ -1,4 +1,4 @@
-import { previewText } from "./preview-text.js";
+import { frozenReportText } from "./frozen-report-text.js";
 /** Explicit disposable Node-API/controller probe. Synthetic keys/clock are not native acceptance. */
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -36,7 +36,7 @@ try {
   assert.equal(await second.native.acquire(root), false);
   startupDiagnosticObserver(controller)("startup_spawn_failed");
   await controller.checkpoint();
-  const preview = await previewText(controller, value(await controller.preparePreview("current")));
+  const preview = await frozenReportText(controller, value(await controller.prepareExport("current")));
   assert.ok(preview.text.includes("startup_spawn_failed"));
   assert.ok(!preview.text.includes(directory));
   assert.ok(!preview.text.includes(boot.bootId));

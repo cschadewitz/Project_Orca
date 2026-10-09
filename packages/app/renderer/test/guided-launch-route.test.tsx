@@ -163,10 +163,8 @@ function setup({ disconnected = false, lose = false, prepared = false, sample = 
     subscribe: vi.fn(() => () => {}),
     setEnabled: vi.fn(async () => ({ ok: true as const, value: status })),
     setMinutes: async () => ({ ok: true as const, value: status }),
-    readPreviewBlock: vi.fn(async () => ({ ok: false as const, code: "unavailable" as const })),
-    releasePreviewBlock: vi.fn(async () => ({ ok: true as const, value: true })),
-    preparePreview: vi.fn(async () => ({ ok: false as const, code: "unavailable" as const })),
-    closePreview: async () => ({ ok: true as const, value: status }),
+    prepareExport: vi.fn(async () => ({ ok: false as const, code: "unavailable" as const })),
+    cancelExport: async () => ({ ok: true as const, value: status }),
     chooseDestination: async () => ({ ok: false as const, code: "unavailable" as const }),
     save: async () => ({ ok: false as const, code: "unavailable" as const }),
     discardPrevious: async () => ({ ok: true as const, value: status }),
@@ -310,7 +308,7 @@ describe("mounted guided launch route", () => {
     await screen.findByText(/Admission admission-original \/ prepared/);
     expect(screen.getByRole("heading", { name: "Launch work" })).toBeTruthy();
     expect(f.diagnostics.setEnabled).not.toHaveBeenCalled();
-    expect(f.diagnostics.preparePreview).not.toHaveBeenCalled();
+    expect(f.diagnostics.prepareExport).not.toHaveBeenCalled();
   });
   it("binds Request title/body to the guarded Request command and navigates from its distinct accepted receipt", async () => {
     const f = setup();

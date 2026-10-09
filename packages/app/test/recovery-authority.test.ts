@@ -1,4 +1,4 @@
-import { previewText } from "./recovery-preparation/preview-text.js";
+import { frozenReportText } from "./recovery-preparation/frozen-report-text.js";
 /** Deterministic controller fences on disposable Linux storage; no native acceptance claim. */
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { access, readFile } from "node:fs/promises";
@@ -10,7 +10,7 @@ import { barrier, inspectPrivateRoot } from "./recovery-preparation/filesystem-e
 import {
   cleanupFixtureHelper,
   implementationFixture,
-  enableAndPreview,
+  enableAndExport,
   moveNoReplace,
   value,
 } from "./recovery-preparation/implementation-fixture.js";
@@ -44,7 +44,7 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
   it("acknowledgement cannot reopen uncertain history after real maintenance fails before manifest revocation", async () => {
     await withSyntheticProfile(async (profile) => {
       const f = await implementationFixture(profile);
-      const preview = await enableAndPreview(f);
+      const preview = await enableAndExport(f);
       await f.controller.checkpoint();
       const manifest = await readFile(join(f.root, "manifest.json"));
       const selected = value(await f.controller.chooseDestination(preview.handle));
@@ -73,13 +73,13 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
       expect(wrapped).not.toHaveBeenCalled();
       expect((await f.disk.readExportState()).current).toBeUndefined();
       expect((await f.disk.readExportState()).summary?.id).toBe(unknown);
-      value(await f.controller.closePreview(preview.handle));
+      value(await f.controller.cancelExport(preview.handle));
       value(await f.controller.acknowledgeUnknown(unknown));
-      expect((await f.controller.preparePreview("previous")).ok).toBe(false);
+      expect((await f.controller.prepareExport("previous")).ok).toBe(false);
       expect(f.controller.record("run", "run_failed")).toBe(false);
       value(await f.controller.retryCleanup());
       value(await f.controller.acknowledgeUnknown(unknown));
-      expect((await f.controller.preparePreview("previous")).ok).toBe(false);
+      expect((await f.controller.prepareExport("previous")).ok).toBe(false);
       expect(f.controller.record("run", "run_failed")).toBe(false);
       expect(opened).not.toHaveBeenCalled();
       expect(wrapped).not.toHaveBeenCalled();
@@ -95,7 +95,7 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
     async (boundary) => {
       await withSyntheticProfile(async (profile) => {
         const f = await implementationFixture(profile);
-        const preview = await enableAndPreview(f);
+        const preview = await enableAndExport(f);
         const selected = value(await f.controller.chooseDestination(preview.handle));
         const settled = maintenanceSettled(f);
         const move = vi.fn(moveNoReplace);
@@ -116,8 +116,8 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
           lastSaveOutcome: "refused",
           saveAdmittedBeforeRevocation: false,
         });
-        expect(f.controller.status().activePreviewHandle).toBeUndefined();
-        value(await f.controller.closePreview(preview.handle));
+        expect(f.controller.status().activeExportHandle).toBeUndefined();
+        value(await f.controller.cancelExport(preview.handle));
         await settled;
         await f.controller.cleanExit();
       });
@@ -148,7 +148,7 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
     async (action) => {
       await withSyntheticProfile(async (profile) => {
         const f = await implementationFixture(profile);
-        const old = action === "destination" ? await enableAndPreview(f) : undefined;
+        const old = action === "destination" ? await enableAndExport(f) : undefined;
         if (!old) {
           value(await f.controller.setEnabled(true, 1));
           f.controller.record("connection", "connection_lost");
@@ -161,11 +161,11 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
         });
         const result = old
           ? await f.controller.chooseDestination(old.handle)
-          : await f.controller.preparePreview("current");
+          : await f.controller.prepareExport("current");
         expect(observed).toHaveBeenCalled();
-        expect(result).toEqual({ ok: false, code: "stale_preview" });
-        expect(f.controller.status().activePreviewHandle).toBeUndefined();
-        if (old) value(await f.controller.closePreview(old.handle));
+        expect(result).toEqual({ ok: false, code: "stale_export" });
+        expect(f.controller.status().activeExportHandle).toBeUndefined();
+        if (old) value(await f.controller.cancelExport(old.handle));
         // Failed preparation never transferred a renderer reference requiring acknowledgement.
         expect(f.controller.status().payloadReservedBytes).toBe(0);
         await settled;
@@ -205,7 +205,7 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
       expect((await f.disk.readSetting()).enabled).toBe(false);
       expect(writes.mock.calls.every(([setting]) => !setting.enabled)).toBe(true);
       expect(f.controller.record("run", "run_failed")).toBe(false);
-      expect((await f.controller.preparePreview("current")).ok).toBe(false);
+      expect((await f.controller.prepareExport("current")).ok).toBe(false);
       expect(open).not.toHaveBeenCalled();
       expect(wrapped).not.toHaveBeenCalled();
       expect(
@@ -258,22 +258,22 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
         await pending.wait();
         return old;
       });
-      const preparing = f.controller.preparePreview("previous");
+      const preparing = f.controller.prepareExport("previous");
       await pending.entered;
       // This is the controller entry point called by main's render-process-gone handler.
       f.controller.rendererDisposed();
       expect(f.controller.status().payloadReservedBytes).toBe(4 * RECOVERY_LIMITS.exportBytes);
-      expect(f.controller.status().activePreviewHandle).toBeUndefined();
-      expect((await f.controller.preparePreview("current")).ok).toBe(false);
+      expect(f.controller.status().activeExportHandle).toBeUndefined();
+      expect((await f.controller.prepareExport("current")).ok).toBe(false);
       pending.release();
-      expect(await preparing).toEqual({ ok: false, code: "stale_preview" });
-      expect(f.controller.status().activePreviewHandle).toBeUndefined();
+      expect(await preparing).toEqual({ ok: false, code: "stale_export" });
+      expect(f.controller.status().activeExportHandle).toBeUndefined();
       expect(f.controller.status().payloadReservedBytes).toBe(0);
       expect(f.controller.status().enabled).toBe(true);
       expect((await f.disk.readSetting()).enabled).toBe(true);
       expect(f.controller.record("run", "run_failed")).toBe(true);
-      const fresh = await previewText(f.controller, value(await f.controller.preparePreview("previous")));
-      value(await f.controller.closePreview(fresh.handle));
+      const fresh = await frozenReportText(f.controller, value(await f.controller.prepareExport("previous")));
+      value(await f.controller.cancelExport(fresh.handle));
       await f.controller.cleanExit();
     });
   });
@@ -309,7 +309,7 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
       unsubscribe();
       expect(maintenance).toHaveBeenCalledExactlyOnceWith(undefined);
       expect(f.controller.status().cleanupPending).toBe(true);
-      expect((await f.controller.preparePreview("current")).ok).toBe(false);
+      expect((await f.controller.prepareExport("current")).ok).toBe(false);
       expect([...(await inspectPrivateRoot(f.root)).files.keys()].some((name) => /^slot-/.test(name))).toBe(true);
       value(await f.controller.retryCleanup());
       expect(maintenance).toHaveBeenLastCalledWith(undefined);
@@ -322,9 +322,9 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
       value(await f.controller.setEnabled(false, 1));
       value(await f.controller.setEnabled(true, 1));
       expect(f.controller.record("connection", "connection_lost")).toBe(true);
-      const fresh = await previewText(f.controller, value(await f.controller.preparePreview("current")));
+      const fresh = await frozenReportText(f.controller, value(await f.controller.prepareExport("current")));
       expect(fresh.text).not.toContain("run_failed");
-      value(await f.controller.closePreview(fresh.handle));
+      value(await f.controller.cancelExport(fresh.handle));
       await f.controller.cleanExit();
     });
   });
@@ -340,7 +340,7 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
           await f.controller.checkpoint();
           const preview =
             observer === "preview"
-              ? await previewText(f.controller, value(await f.controller.preparePreview("current")))
+              ? await frozenReportText(f.controller, value(await f.controller.prepareExport("current")))
               : undefined;
           const pending = barrier();
           const settled = barrier();
@@ -373,7 +373,7 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
           expect(f.controller.status().code).toBe("age_uncertain");
           expect(f.controller.status().previous).toBe(false);
           expect(f.controller.record("run", "run_failed")).toBe(false);
-          expect((await f.controller.preparePreview("current")).ok).toBe(false);
+          expect((await f.controller.prepareExport("current")).ok).toBe(false);
           await pending.entered;
           expect(maintenance).toHaveBeenCalledWith(undefined);
           pending.release();
@@ -381,9 +381,9 @@ describe.runIf(process.platform === "linux")("diagnostics request authority", ()
           const evidence = await inspectPrivateRoot(f.root);
           expect([...evidence.files.keys()].some((name) => /^(slot-|session-)/.test(name))).toBe(false);
           expect(wrapped).not.toHaveBeenCalled();
-          expect(f.controller.status().activePreviewHandle).toBeUndefined();
+          expect(f.controller.status().activeExportHandle).toBeUndefined();
           expect(f.controller.status().enabled).toBe(true);
-          if (preview) value(await f.controller.closePreview(preview.handle));
+          if (preview) value(await f.controller.cancelExport(preview.handle));
           await f.controller.cleanExit();
         });
       },

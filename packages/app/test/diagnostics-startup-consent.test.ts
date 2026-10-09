@@ -49,7 +49,7 @@ it.each(["navigation", "renderer-disposal"])(
     const f = fixture();
     const initialization = f.controller.initialize();
     await f.readEntered;
-    if (boundary === "navigation") f.controller.revokePreviewAuthority();
+    if (boundary === "navigation") f.controller.revokeExportAuthority();
     else f.controller.rendererDisposed();
     f.release();
     await initialization;
@@ -63,7 +63,7 @@ it.each(["navigation", "renderer-disposal"])(
     expect(f.disk.writeSetting).not.toHaveBeenCalled();
     expect(f.disk.open).not.toHaveBeenCalled();
     expect(f.controller.record("run", "run_failed")).toBe(false);
-    expect(await f.controller.preparePreview("current")).toEqual({ ok: false, code: "unavailable" });
+    expect(await f.controller.prepareExport("current")).toEqual({ ok: false, code: "unavailable" });
     await f.controller.cleanExit();
   },
 );

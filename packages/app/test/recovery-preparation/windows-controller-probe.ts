@@ -1,4 +1,4 @@
-import { previewText } from "./preview-text.js";
+import { frozenReportText } from "./frozen-report-text.js";
 /** Windows Node observation with a memory-only disk/clock; never native or Electron acceptance. */
 import assert from "node:assert/strict";
 import { createHook } from "node:async_hooks";
@@ -127,7 +127,7 @@ try {
   previous = { bytes: Buffer.from(stored.bytes), anchor: { ...stored.anchor } };
   await setTimeout(2);
   phase = "preview";
-  const preview = await previewText(controller, value(await controller.preparePreview("current")));
+  const preview = await frozenReportText(controller, value(await controller.prepareExport("current")));
   await setTimeout(2);
   phase = "oracle";
   await setImmediate();

@@ -1,7 +1,8 @@
-/** Bounded renderer references and authority fencing for asynchronous diagnostic actions. */
+/** Descriptor-only export actions; canonical report bytes never enter this document. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DiagnosticDestination,
+  DiagnosticExport,
   DiagnosticResultCode,
   DiagnosticsBridge,
   DiagnosticsResult,
@@ -10,17 +11,11 @@ import type {
 import { DIAGNOSTICS_SCOPE } from "../../../src/diagnostics-contract.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { DIAGNOSTICS_MESSAGES } from "./diagnostics-model.js";
-import { DiagnosticPreviewOwner } from "./preview-owner.js";
 
-/** One view owns one exact report reference. Late replies cannot restore disposed content. */
 export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
   const [status, setStatus] = useState<DiagnosticsStatus>();
-  const [owner, setOwner] = useState<DiagnosticPreviewOwner>();
-  const preview = owner?.preview;
-  const owned = useRef<DiagnosticPreviewOwner | undefined>(undefined);
-  const loading = useRef<Promise<void> | undefined>(undefined);
+  const [report, setReport] = useState<DiagnosticExport>();
   const [destination, setDestination] = useState<DiagnosticDestination>();
-  const [disposal, setDisposal] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
   const authoritativeStatus = useRef<DiagnosticsStatus | undefined>(undefined);
@@ -28,12 +23,20 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
   const offFeedback = useRef(false);
   const authority = useRef(0);
   const handle = useRef<string | undefined>(undefined);
-  const disposalHandle = useRef<string | undefined>(undefined);
   const mounted = useRef(false);
   const preparing = useRef(false);
+  const pending = useRef(0);
   const pushed = useRef(0);
   const announce = useAnnounce();
 
+  const begin = useCallback(() => {
+    pending.current++;
+    setBusy(true);
+  }, []);
+  const finish = useCallback(() => {
+    pending.current--;
+    if (mounted.current) setBusy(pending.current > 0);
+  }, []);
   const say = useCallback(
     (code: DiagnosticResultCode) => {
       const text = DIAGNOSTICS_MESSAGES[code];
@@ -44,27 +47,30 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
     [announce],
   );
 
+  // Cancellation grants no authority and may run while a picker/write is pending.
   const clear = useCallback(() => {
-    authority.current += 1;
+    authority.current++;
     preparing.current = false;
     const old = handle.current;
     handle.current = undefined;
-    owned.current?.dispose();
-    owned.current = undefined;
-    setOwner(undefined);
+    setReport(undefined);
     setDestination(undefined);
-    if (old !== undefined) {
-      disposalHandle.current = old;
-      setDisposal(old);
+    if (old !== undefined && bridge !== undefined) {
+      begin();
+      void bridge
+        .cancelExport(old)
+        .catch(() => {
+          if (mounted.current) say("unavailable");
+        })
+        .finally(finish);
     }
-    setBusy(disposalHandle.current !== undefined);
-  }, []);
+  }, [begin, bridge, finish, say]);
 
   const receive = useCallback(
     (next: DiagnosticsStatus) => {
       if (!mounted.current || next.revision < statusRevision.current) return false;
       statusRevision.current = next.revision;
-      pushed.current += 1;
+      pushed.current++;
       authoritativeStatus.current = next;
       setStatus(next);
       if (next.enabled && offFeedback.current) {
@@ -72,9 +78,9 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
         setMessage(undefined);
       }
       if (
-        (handle.current !== undefined && (!next.enabled || next.activePreviewHandle !== handle.current)) ||
+        (handle.current !== undefined && (!next.enabled || next.activeExportHandle !== handle.current)) ||
         (preparing.current &&
-          (!next.enabled || next.code === "stale_preview" || next.code === "expired" || next.code === "age_uncertain"))
+          (!next.enabled || next.code === "stale_export" || next.code === "expired" || next.code === "age_uncertain"))
       )
         clear();
       return true;
@@ -105,52 +111,22 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
     }
     return () => {
       mounted.current = false;
-      authority.current += 1;
+      authority.current++;
       unsubscribe();
-      const old = handle.current ?? disposalHandle.current;
+      const old = handle.current;
       handle.current = undefined;
-      owned.current?.dispose();
-      owned.current = undefined;
-      if (old !== undefined) {
-        if (loading.current)
-          void loading.current
-            .catch(() => {})
-            .then(() => bridge?.closePreview(old))
-            .catch(() => {});
-        else void bridge?.closePreview(old).catch(() => {});
-      }
+      if (old !== undefined) void bridge?.cancelExport(old).catch(() => {});
     };
   }, [bridge, receive, say]);
 
-  // Effect cleanup/commit removes the old text before main receives disposal acknowledgement.
-  useEffect(() => {
-    if (disposal === undefined || bridge === undefined) return;
-    void Promise.resolve(loading.current)
-      .catch(() => {})
-      .then(() => bridge.closePreview(disposal))
-      .then((result) => {
-        if (mounted.current && result.ok) receive(result.value);
-      })
-      .catch(() => {
-        if (mounted.current) say("unavailable");
-      })
-      .finally(() => {
-        if (!mounted.current || disposalHandle.current !== disposal) return;
-        disposalHandle.current = undefined;
-        setDisposal(undefined);
-        setBusy(false);
-      });
-  }, [bridge, disposal, receive, say]);
-
   const runStatus = useCallback(
     async (action: () => Promise<DiagnosticsResult<DiagnosticsStatus>>, turningOff = false) => {
+      if (pending.current && !turningOff) return;
       const epoch = authority.current;
-      // Feedback belongs to the explicit action that produced it, not its successor.
       offFeedback.current = false;
       setMessage(undefined);
-      setBusy(true);
+      begin();
       const reportOffFailure = () => {
-        // Local text disposal does not prove that main accepted consent revocation.
         const text =
           authoritativeStatus.current?.enabled === false
             ? "Off for this session; the setting or cleanup could not be completed."
@@ -172,79 +148,67 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
           else say("unavailable");
         }
       } finally {
-        if (mounted.current && epoch === authority.current) setBusy(disposalHandle.current !== undefined);
+        finish();
       }
     },
-    [announce, receive, say],
+    [announce, begin, finish, receive, say],
   );
 
-  const close = useCallback(() => {
+  const cancel = useCallback(() => {
     setMessage(undefined);
     clear();
   }, [clear]);
-
   useEffect(() => {
-    if (preview === undefined) return;
+    if (report === undefined) return;
     const timer = setTimeout(
       () => {
-        close();
+        cancel();
         say("expired");
       },
-      Math.max(0, preview.expiresInMs),
+      Math.max(0, report.expiresInMs),
     );
     return () => clearTimeout(timer);
-  }, [close, preview, say]);
+  }, [cancel, report, say]);
 
   const prepare = async (source: "current" | "previous") => {
-    if (bridge === undefined || busy || handle.current !== undefined || disposalHandle.current !== undefined) return;
+    if (bridge === undefined || pending.current || handle.current !== undefined) return;
     const epoch = authority.current;
     preparing.current = true;
     setMessage(undefined);
-    setBusy(true);
+    begin();
     try {
-      const result = await bridge.preparePreview(source);
-      if (!mounted.current || epoch !== authority.current) {
-        if (result.ok) void bridge.closePreview(result.value.handle).catch(() => {});
+      const result = await bridge.prepareExport(source);
+      if (
+        !mounted.current ||
+        epoch !== authority.current ||
+        (result.ok &&
+          result.value.statusRevision < statusRevision.current &&
+          authoritativeStatus.current?.activeExportHandle !== result.value.handle)
+      ) {
+        if (result.ok) void bridge.cancelExport(result.value.handle).catch(() => {});
         return;
       }
       if (result.ok) {
-        // A small descriptor reply can overtake a pushed snapshot at the proxy
-        // boundary. Older status cannot retire this newer report's authority.
         statusRevision.current = Math.max(statusRevision.current, result.value.statusRevision);
         handle.current = result.value.handle;
-        const next = new DiagnosticPreviewOwner(result.value);
-        owned.current = next;
-        const pending = next.read(bridge);
-        loading.current = pending;
-        try {
-          await pending;
-        } finally {
-          if (loading.current === pending) loading.current = undefined;
-        }
-        if (!mounted.current || epoch !== authority.current) return;
-        setOwner(next);
-        setMessage(undefined);
+        setReport(result.value);
+        say("export_ready");
       } else say(result.code);
     } catch {
-      if (mounted.current && epoch === authority.current) {
-        clear();
-        say("unavailable");
-      }
+      if (mounted.current && epoch === authority.current) say("unavailable");
     } finally {
-      if (mounted.current && epoch === authority.current) {
-        preparing.current = false;
-        setBusy(false);
-      }
+      if (epoch === authority.current) preparing.current = false;
+      finish();
     }
   };
 
   const choose = async () => {
     const old = handle.current;
-    if (bridge === undefined || old === undefined || busy) return;
+    if (bridge === undefined || old === undefined || pending.current) return;
     const epoch = authority.current;
     setMessage(undefined);
     setDestination(undefined);
-    setBusy(true);
+    begin();
     try {
       const result = await bridge.chooseDestination(old);
       if (!mounted.current || epoch !== authority.current || handle.current !== old) return;
@@ -253,20 +217,19 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
     } catch {
       if (mounted.current && epoch === authority.current) say("unavailable");
     } finally {
-      if (mounted.current && epoch === authority.current) setBusy(false);
+      finish();
     }
   };
 
   return {
     status,
-    preview,
-    reportBlocks: owner?.blocks ?? [],
+    report,
     destination,
     busy,
     message,
     prepare,
     choose,
-    close,
+    cancel,
     enable: () => bridge && runStatus(() => bridge.setEnabled(true, DIAGNOSTICS_SCOPE)),
     off: () => {
       clear();
@@ -274,19 +237,17 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
     },
     minutes: (value: number) => bridge && runStatus(() => bridge.setMinutes(value)),
     retryCleanup: () => bridge && runStatus(() => bridge.retryCleanup()),
-    discard: () => {
-      if (preview?.source === "previous") clear();
-      return bridge && runStatus(() => bridge.discardPrevious());
-    },
+    discard: () => bridge && runStatus(() => bridge.discardPrevious()),
     acknowledge: () => {
       const operation = status?.unknownOperation;
-      clear();
       return bridge && operation && runStatus(() => bridge.acknowledgeUnknown(operation));
     },
     save: () => {
-      const old = handle.current;
-      const token = destination?.token;
-      if (bridge === undefined || old === undefined || token === undefined || busy) return;
+      const old = handle.current,
+        token = destination?.token;
+      if (bridge === undefined || old === undefined || token === undefined || pending.current) return;
+      // Consume the destination for saved, refused and unknown outcomes alike.
+      setDestination(undefined);
       return runStatus(() => bridge.save(old, token));
     },
   };

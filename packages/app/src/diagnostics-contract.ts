@@ -2,18 +2,17 @@
 export const DIAGNOSTICS_SCOPE = 1;
 /** Shipping capture requires a separate independent/native acceptance change. */
 export const DIAGNOSTICS_PRODUCTION_ENABLED = false;
-/** One in-flight block; main, IPC/preload and context-bridge copies are admitted. */
-export const DIAGNOSTIC_PREVIEW_BLOCK_BYTES = 16_384;
-export const DIAGNOSTIC_PREVIEW_MAX_BYTES = 1_048_576;
 export type DiagnosticResultCode =
   | "off"
   | "ready"
+  | "export_ready"
   | "unavailable"
   | "age_uncertain"
   | "expired"
   | "capacity_limited"
-  | "stale_preview"
+  | "stale_export"
   | "publication_pending"
+  | "cancelled"
   | "saved"
   | "refused"
   | "cleanup_pending"
@@ -34,7 +33,7 @@ export interface DiagnosticsStatus {
   unknownOperation?: string;
   acknowledgedUnknown: boolean;
   olderUnknowns: boolean;
-  activePreviewHandle?: string;
+  activeExportHandle?: string;
   payloadReservedBytes: number;
   controlledBinaryAllocatedBytes?: number;
   controlledBinaryPeakBytes?: number;
@@ -42,18 +41,14 @@ export interface DiagnosticsStatus {
   saveAdmittedBeforeRevocation?: boolean;
 }
 export type DiagnosticsResult<T> = { ok: true; value: T } | { ok: false; code: DiagnosticResultCode };
-export interface DiagnosticPreview {
+export interface DiagnosticExport {
   statusRevision: number;
   handle: string;
   byteLength: number;
+  sha256: string;
   source: "current" | "previous";
   expiresInMs: number;
   tailLossPossible: boolean;
-}
-export interface DiagnosticPreviewBlock {
-  handle: string;
-  offset: number;
-  bytes: Uint8Array;
 }
 export interface DiagnosticDestination {
   token: string;
@@ -64,10 +59,8 @@ export interface DiagnosticsBridge {
   status(): Promise<DiagnosticsResult<DiagnosticsStatus>>;
   setEnabled(enabled: boolean, scopeVersion: number): Promise<DiagnosticsResult<DiagnosticsStatus>>;
   setMinutes(minutes: number): Promise<DiagnosticsResult<DiagnosticsStatus>>;
-  preparePreview(source: "current" | "previous"): Promise<DiagnosticsResult<DiagnosticPreview>>;
-  readPreviewBlock(handle: string, offset: number): Promise<DiagnosticsResult<DiagnosticPreviewBlock>>;
-  releasePreviewBlock(handle: string, offset: number): Promise<DiagnosticsResult<boolean>>;
-  closePreview(handle: string): Promise<DiagnosticsResult<DiagnosticsStatus>>;
+  prepareExport(source: "current" | "previous"): Promise<DiagnosticsResult<DiagnosticExport>>;
+  cancelExport(handle: string): Promise<DiagnosticsResult<DiagnosticsStatus>>;
   chooseDestination(handle: string): Promise<DiagnosticsResult<DiagnosticDestination>>;
   save(handle: string, destinationToken: string): Promise<DiagnosticsResult<DiagnosticsStatus>>;
   discardPrevious(): Promise<DiagnosticsResult<DiagnosticsStatus>>;

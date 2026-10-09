@@ -1,4 +1,4 @@
-import { previewText } from "./preview-text.js";
+import { frozenReportText } from "./frozen-report-text.js";
 /** Actual encrypted-disk/controller fixtures with synthetic key protection and Linux publication. */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
@@ -196,9 +196,9 @@ export async function implementationFixture(
   return { controller, disk, root, clock, native, keys, picker };
 }
 
-export async function enableAndPreview(fixture: Awaited<ReturnType<typeof implementationFixture>>) {
+export async function enableAndExport(fixture: Awaited<ReturnType<typeof implementationFixture>>) {
   value(await fixture.controller.setEnabled(true, 1));
   fixture.controller.record("connection", "connection_lost");
   fixture.clock.reading.elapsedMs += 100;
-  return await previewText(fixture.controller, value(await fixture.controller.preparePreview("current")));
+  return await frozenReportText(fixture.controller, value(await fixture.controller.prepareExport("current")));
 }

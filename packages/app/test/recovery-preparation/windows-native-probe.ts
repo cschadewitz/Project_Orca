@@ -1,4 +1,4 @@
-import { previewText } from "./preview-text.js";
+import { frozenReportText } from "./frozen-report-text.js";
 /** Native x64 Windows evidence in a caller-selected disposable parent, never app consent. */
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
@@ -60,7 +60,7 @@ if (process.argv[2] === "child-clock") {
     assert.equal(controller.record("run", "run_failed"), true);
   await controller.checkpoint();
   if (exportProbe) {
-    const preview = await previewText(controller, value(await controller.preparePreview("current")));
+    const preview = await frozenReportText(controller, value(await controller.prepareExport("current")));
     const selected = value(await controller.chooseDestination(preview.handle));
     void controller.save(preview.handle, selected.token);
   } else process.send?.("checkpoint-committed");
@@ -261,7 +261,7 @@ if (process.argv[2] === "child-clock") {
     try {
       await controller.initialize();
       assert.equal(controller.status().previous, true);
-      const previous = await previewText(controller, value(await controller.preparePreview("previous")));
+      const previous = await frozenReportText(controller, value(await controller.prepareExport("previous")));
       const report = JSON.parse(previous.text) as { events: unknown[] };
       assert.equal(report.events.length, 8192);
       assert.ok(!previous.text.includes(base) && !previous.text.includes(before.bootId));
@@ -317,7 +317,7 @@ if (process.argv[2] === "child-clock") {
       await unknownController.initialize();
       const id = unknownController.status().unknownOperation;
       assert.ok(id);
-      assert.equal((await unknownController.preparePreview("current")).ok, false);
+      assert.equal((await unknownController.prepareExport("current")).ok, false);
       value(await unknownController.acknowledgeUnknown(id));
       assert.equal(unknownController.status().acknowledgedUnknown, true);
       assert.equal(unknownController.status().lastSaveOutcome, undefined);

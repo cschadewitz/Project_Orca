@@ -1,10 +1,10 @@
-/** Execute the actual preload with synthetic IPC to verify isolated copy ownership. */
+/** Execute the actual preload with synthetic IPC to verify descriptor-only export calls. */
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
 import { expect, it, vi } from "vitest";
 import type { OrcaBridge } from "../src/bridge.js";
-import type { DiagnosticPreviewBlock, DiagnosticsResult, DiagnosticsStatus } from "../src/diagnostics-contract.js";
+import type { DiagnosticsResult, DiagnosticsStatus } from "../src/diagnostics-contract.js";
 
 const ok = <T>(value: T): DiagnosticsResult<T> => ({ ok: true, value });
 function fixture() {
@@ -52,47 +52,69 @@ function fixture() {
       acknowledgedUnknown: false,
       olderUnknowns: false,
       payloadReservedBytes: 0,
-      ...(handle ? { activePreviewHandle: handle } : {}),
+      ...(handle ? { activeExportHandle: handle } : {}),
     };
     for (const listener of listeners.get("orca:diagnostics.changed") ?? []) listener(undefined, status);
   };
   return { bridge: bridge.diagnostics, invoke, emit };
 }
 
-it("ignores stale status and old closes while a successor owns an isolated-world copy", async () => {
+it("exposes only export descriptors and removes every preview-content capability", async () => {
   const f = fixture();
-  const bytes = new Uint8Array([120, 10]);
-  f.invoke.mockImplementation(async (channel) => {
-    if (channel.endsWith("preparePreview")) return ok({ handle: "new", statusRevision: 5 });
-    if (channel.endsWith("readPreviewBlock")) return ok({ handle: "new", offset: 0, bytes });
-    return ok(true);
-  });
-  await f.bridge.preparePreview("current");
-  expect((await f.bridge.readPreviewBlock("new", 0)).ok).toBe(true);
-  f.emit(4, false);
-  await f.bridge.closePreview("old");
-  expect(bytes.byteLength).toBe(2);
-  await f.bridge.releasePreviewBlock("new", 0);
-  expect(bytes.byteLength).toBe(0);
+  expect(Object.keys(f.bridge).sort()).toEqual([
+    "acknowledgeUnknown",
+    "cancelExport",
+    "chooseDestination",
+    "discardPrevious",
+    "prepareExport",
+    "retryCleanup",
+    "save",
+    "setEnabled",
+    "setMinutes",
+    "status",
+    "subscribe",
+  ]);
+  const report = {
+    handle: "frozen",
+    statusRevision: 5,
+    byteLength: 12,
+    sha256: "a".repeat(64),
+    source: "previous",
+    expiresInMs: 1000,
+    tailLossPossible: true,
+  };
+  f.invoke.mockResolvedValueOnce(ok(report));
+  expect(await f.bridge.prepareExport("previous")).toEqual(ok(report));
+  expect(f.invoke).toHaveBeenCalledWith("orca:diagnostics.prepareExport", { source: "previous" }, 0);
+  expect(f.bridge).not.toHaveProperty("readPreviewBlock");
+  expect(f.bridge).not.toHaveProperty("releasePreviewBlock");
+  expect(f.bridge).not.toHaveProperty("preparePreview");
 });
 
-it("erases and refuses a late block after a newer consent revocation while acknowledging main disposal", async () => {
+it("sends only opaque handle and destination token for explicit picker, Save and cancellation", async () => {
   const f = fixture();
-  let resolve!: (value: DiagnosticsResult<DiagnosticPreviewBlock>) => void;
-  const held = new Promise<DiagnosticsResult<DiagnosticPreviewBlock>>((r) => {
-    resolve = r;
-  });
-  f.invoke.mockImplementation(async (channel) => {
-    if (channel.endsWith("preparePreview")) return ok({ handle: "new", statusRevision: 5 });
-    if (channel.endsWith("readPreviewBlock")) return held;
-    return ok(true);
-  });
-  await f.bridge.preparePreview("current");
-  const pending = f.bridge.readPreviewBlock("new", 0);
+  f.invoke.mockResolvedValue(ok(true));
+  await f.bridge.chooseDestination("frozen");
+  await f.bridge.save("frozen", "destination");
+  await f.bridge.cancelExport("frozen");
+  expect(f.invoke.mock.calls).toEqual([
+    ["orca:diagnostics.chooseDestination", { handle: "frozen" }, 0],
+    ["orca:diagnostics.save", { handle: "frozen", destinationToken: "destination" }, 0],
+    ["orca:diagnostics.cancelExport", { handle: "frozen" }, 0],
+  ]);
+});
+
+it("forwards authoritative status without report contents or automatic export actions", async () => {
+  const f = fixture();
+  const received = vi.fn();
+  f.bridge.subscribe(received);
   f.emit(6, false);
-  const bytes = new Uint8Array([120, 10]);
-  resolve(ok({ handle: "new", offset: 0, bytes }));
-  expect(await pending).toEqual({ ok: false, code: "stale_preview" });
-  expect(bytes.byteLength).toBe(0);
-  expect(f.invoke).toHaveBeenCalledWith("orca:diagnostics.releasePreviewBlock", { handle: "new", offset: 0 }, 0);
+  expect(received).toHaveBeenCalledWith(expect.objectContaining({ revision: 6, enabled: false }));
+  expect(f.invoke).not.toHaveBeenCalled();
+});
+
+it("maps rejected transport to closed actionable status without exposing native exception text", async () => {
+  const f = fixture();
+  f.invoke.mockRejectedValue(new Error("PRIVATE report and path"));
+  expect(await f.bridge.prepareExport("current")).toEqual({ ok: false, code: "unavailable" });
 });

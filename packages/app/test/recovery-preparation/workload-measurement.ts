@@ -1,4 +1,4 @@
-import { previewText } from "./preview-text.js";
+import { frozenReportText } from "./frozen-report-text.js";
 /** Single-process 8,192-event empirical probe, separate from allocator/native acceptance. */
 import { performance } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
@@ -56,7 +56,10 @@ export async function measureRecoveryWorkload(profile: string) {
     const started = performance.now();
     await fixture.controller.checkpoint();
     const checkpointMs = performance.now() - started;
-    const preview = await previewText(fixture.controller, value(await fixture.controller.preparePreview("current")));
+    const preview = await frozenReportText(
+      fixture.controller,
+      value(await fixture.controller.prepareExport("current")),
+    );
     sample();
     await fixture.controller.checkpoint();
     const destination = value(await fixture.controller.chooseDestination(preview.handle));

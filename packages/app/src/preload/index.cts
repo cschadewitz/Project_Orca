@@ -31,12 +31,7 @@ import type {
 } from "../bridge.js";
 import type { UpdateSnapshot } from "../update-contract.js";
 import type { MacUpdateView } from "../mac-update-contract.js";
-import type {
-  DiagnosticPreviewBlock,
-  DiagnosticPreview,
-  DiagnosticsResult,
-  DiagnosticsStatus,
-} from "../diagnostics-contract.js";
+import type { DiagnosticsResult, DiagnosticsStatus } from "../diagnostics-contract.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
 
@@ -60,52 +55,6 @@ const diagnosticCall = async <T,>(method: string, params?: unknown): Promise<Dia
     return { ok: false, code: "unavailable" };
   }
 };
-
-// Keep the isolated-world IPC copy until the renderer has copied/erased its copy.
-// Revocation also fences a reply that has not arrived in this world yet.
-let diagnosticBlock: DiagnosticPreviewBlock | undefined;
-let diagnosticBlockPending = false;
-let diagnosticPendingHandle: string | undefined;
-let diagnosticBlockEpoch = 0;
-let diagnosticStatusRevision = 0;
-function eraseDiagnosticBytes(bytes: Uint8Array): void {
-  if (!bytes.byteLength) return;
-  bytes.fill(0);
-  const buffer = bytes.buffer as ArrayBuffer & { transferToFixedLength?: (length: number) => ArrayBuffer };
-  if (typeof buffer.transferToFixedLength === "function") buffer.transferToFixedLength(0);
-}
-function eraseDiagnosticBlock(): void {
-  diagnosticBlockEpoch++;
-  if (diagnosticBlock) eraseDiagnosticBytes(diagnosticBlock.bytes);
-  diagnosticBlock = undefined;
-}
-ipcRenderer.on("orca:diagnostics.changed", (_event: unknown, status: DiagnosticsStatus) => {
-  if (status.revision < diagnosticStatusRevision) return;
-  diagnosticStatusRevision = status.revision;
-  const handle = diagnosticBlock?.handle ?? diagnosticPendingHandle;
-  if (!status.enabled || (handle !== undefined && status.activePreviewHandle !== handle)) eraseDiagnosticBlock();
-});
-async function readDiagnosticBlock(handle: string, offset: number): Promise<DiagnosticsResult<DiagnosticPreviewBlock>> {
-  if (diagnosticBlockPending || diagnosticBlock) return { ok: false, code: "refused" };
-  const epoch = diagnosticBlockEpoch;
-  diagnosticBlockPending = true;
-  diagnosticPendingHandle = handle;
-  try {
-    const result = await diagnosticCall<DiagnosticPreviewBlock>("readPreviewBlock", { handle, offset });
-    if (result.ok) {
-      if (epoch !== diagnosticBlockEpoch) {
-        eraseDiagnosticBytes(result.value.bytes);
-        await diagnosticCall("releasePreviewBlock", { handle, offset });
-        return { ok: false, code: "stale_preview" };
-      }
-      diagnosticBlock = result.value;
-    }
-    return result;
-  } finally {
-    diagnosticBlockPending = false;
-    diagnosticPendingHandle = undefined;
-  }
-}
 
 /** Ownership survives renderer subscription replacement within this document. */
 let updateGuardListener: ((locked: boolean) => boolean) | undefined;
@@ -201,29 +150,10 @@ const bridge: OrcaBridge = {
   operator: { preflight: (params) => call("orca:operator.preflight", params) },
   diagnostics: {
     status: () => diagnosticCall("status"),
-    setEnabled: (enabled, scopeVersion) => {
-      if (!enabled) eraseDiagnosticBlock();
-      return diagnosticCall("setEnabled", { enabled, scopeVersion });
-    },
+    setEnabled: (enabled, scopeVersion) => diagnosticCall("setEnabled", { enabled, scopeVersion }),
     setMinutes: (minutes) => diagnosticCall("setMinutes", { minutes }),
-    preparePreview: async (source) => {
-      const result = await diagnosticCall<DiagnosticPreview>("preparePreview", { source });
-      if (result.ok) diagnosticStatusRevision = Math.max(diagnosticStatusRevision, result.value.statusRevision);
-      return result;
-    },
-    readPreviewBlock: readDiagnosticBlock,
-    releasePreviewBlock: (handle, offset) => {
-      if (diagnosticBlock?.handle === handle && diagnosticBlock.offset === offset) {
-        eraseDiagnosticBytes(diagnosticBlock.bytes);
-        diagnosticBlock = undefined;
-      }
-      return diagnosticCall("releasePreviewBlock", { handle, offset });
-    },
-    closePreview: (handle) => {
-      // A late old descriptor may close itself while a successor owns a block.
-      if (diagnosticBlock?.handle === handle || diagnosticPendingHandle === handle) eraseDiagnosticBlock();
-      return diagnosticCall("closePreview", { handle });
-    },
+    prepareExport: (source) => diagnosticCall("prepareExport", { source }),
+    cancelExport: (handle) => diagnosticCall("cancelExport", { handle }),
     chooseDestination: (handle) => diagnosticCall("chooseDestination", { handle }),
     save: (handle, destinationToken) => diagnosticCall("save", { handle, destinationToken }),
     discardPrevious: () => diagnosticCall("discardPrevious"),

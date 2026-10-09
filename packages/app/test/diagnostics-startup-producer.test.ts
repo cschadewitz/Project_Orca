@@ -1,4 +1,4 @@
-import { previewText } from "./recovery-preparation/preview-text.js";
+import { frozenReportText } from "./recovery-preparation/frozen-report-text.js";
 /** Closed producer and existing consent fences; disk/key fixtures are synthetic. */
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { startupDiagnosticObserver } from "../src/main/diagnostics/startup-producer.js";
@@ -31,15 +31,15 @@ describe.runIf(process.platform === "linux")("startup producer/controller integr
       observe("startup_spawn_failed");
       value(await f.controller.setEnabled(true, 1));
       observe("startup_exited_before_handshake");
-      const preview = await previewText(f.controller, value(await f.controller.preparePreview("current")));
+      const preview = await frozenReportText(f.controller, value(await f.controller.prepareExport("current")));
       expect(JSON.parse(preview.text).events.map((event: { code: string }) => event.code)).toEqual([
         "startup_exited_before_handshake",
       ]);
-      value(await f.controller.closePreview(preview.handle));
+      value(await f.controller.cancelExport(preview.handle));
       value(await f.controller.setEnabled(false, 1));
       observe("startup_handshake_timeout");
       value(await f.controller.setEnabled(true, 1));
-      const fresh = await previewText(f.controller, value(await f.controller.preparePreview("current")));
+      const fresh = await frozenReportText(f.controller, value(await f.controller.prepareExport("current")));
       expect(JSON.parse(fresh.text).events).toEqual([]);
       await f.controller.cleanExit();
     });
@@ -56,7 +56,7 @@ describe.runIf(process.platform === "linux")("startup producer/controller integr
       });
       observe("startup_spawn_failed");
       expect(f.controller.record("startup", "startup_spawn_failed")).toBe(false);
-      expect((await f.controller.preparePreview("current")).ok).toBe(false);
+      expect((await f.controller.prepareExport("current")).ok).toBe(false);
       await f.controller.cleanExit();
     });
   });

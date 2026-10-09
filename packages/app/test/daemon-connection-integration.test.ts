@@ -307,7 +307,7 @@ it("a verified newer Off fences an older Enable waiting at the main initializati
   expect(choices).not.toHaveBeenCalled();
   await invoke(false);
   release();
-  expect(await enabling).toEqual({ ok: false, code: "stale_preview" });
+  expect(await enabling).toEqual({ ok: false, code: "stale_export" });
   expect(choices).toHaveBeenCalledTimes(1);
   expect(choices).toHaveBeenCalledWith(false, 1);
   expect(await readdir(directory)).toEqual([]);
@@ -331,10 +331,10 @@ it("renderer-process-gone fences a preview waiting at main initialization withou
     release = resolve;
   });
   vi.spyOn(RecoveryController.prototype, "initialize").mockReturnValue(waiting);
-  const prepare = vi.spyOn(RecoveryController.prototype, "preparePreview");
+  const prepare = vi.spyOn(RecoveryController.prototype, "prepareExport");
   const disposed = vi.spyOn(RecoveryController.prototype, "rendererDisposed");
   const sender = shell.webContents!;
-  const preparing = shell.handlers.get("orca:diagnostics.preparePreview")!(
+  const preparing = shell.handlers.get("orca:diagnostics.prepareExport")!(
     { sender, senderFrame: sender.mainFrame },
     { source: "previous" },
     workspace.connectionTarget.epoch,
@@ -342,7 +342,7 @@ it("renderer-process-gone fences a preview waiting at main initialization withou
   shell.rendererEvents.get("render-process-gone")!();
   expect(disposed).toHaveBeenCalledOnce();
   release();
-  expect(await preparing).toEqual({ ok: false, code: "stale_preview" });
+  expect(await preparing).toEqual({ ok: false, code: "stale_export" });
   expect(prepare).not.toHaveBeenCalled();
 });
 
@@ -376,38 +376,34 @@ it("permits old-target preview disposal only from the current window document wi
   const invoke = (method: string, params: unknown, epoch = oldEpoch, caller: unknown = event) =>
     shell.handlers.get(`orca:diagnostics.${method}`)!(caller, params, epoch);
 
-  expect(await invoke("closePreview", { handle })).toMatchObject({
+  expect(await invoke("cancelExport", { handle })).toMatchObject({
     ok: true,
     value: { enabled: false, productionEnabled: false },
   });
   for (const [method, params] of [
     ["status", undefined],
     ["setEnabled", { enabled: false, scopeVersion: 1 }],
-    ["preparePreview", { source: "current" }],
-    ["readPreviewBlock", { handle, offset: 0 }],
+    ["prepareExport", { source: "current" }],
     ["save", { handle, destinationToken: token }],
   ] as const) {
-    expect(await invoke(method, params)).toEqual({ ok: false, code: "stale_preview" });
+    expect(await invoke(method, params)).toEqual({ ok: false, code: "stale_export" });
   }
   expect(
-    await invoke("closePreview", { handle }, currentEpoch, {
+    await invoke("cancelExport", { handle }, currentEpoch, {
       sender: { id: sender.id, mainFrame: sender.mainFrame },
       senderFrame: sender.mainFrame,
     }),
-  ).toEqual({ ok: false, code: "stale_preview" });
+  ).toEqual({ ok: false, code: "stale_export" });
   expect(
-    await invoke("closePreview", { handle }, currentEpoch, {
+    await invoke("cancelExport", { handle }, currentEpoch, {
       sender,
       senderFrame: {},
     }),
-  ).toEqual({ ok: false, code: "stale_preview" });
-  expect(await invoke("closePreview", { handle: "invalid-handle" })).toEqual({ ok: false, code: "refused" });
-  // Erasure acknowledgement can cross an old target epoch, never sender/document authority.
-  expect(await invoke("releasePreviewBlock", { handle, offset: 0 })).toEqual({ ok: false, code: "stale_preview" });
-  expect(await invoke("releasePreviewBlock", { handle, offset: -1 })).toEqual({ ok: false, code: "refused" });
-  expect(await invoke("releasePreviewBlock", { handle, offset: 0 }, currentEpoch, { sender, senderFrame: {} })).toEqual(
-    { ok: false, code: "stale_preview" },
-  );
+  ).toEqual({ ok: false, code: "stale_export" });
+  expect(await invoke("cancelExport", { handle: "invalid-handle" })).toEqual({ ok: false, code: "refused" });
+  // Cancellation crosses a stale target only for the same verified document.
+  for (const removed of ["preparePreview", "readPreviewBlock", "releasePreviewBlock", "closePreview"])
+    expect(shell.handlers.has("orca:diagnostics." + removed)).toBe(false);
   expect(initialize).not.toHaveBeenCalled();
   expect(choices).not.toHaveBeenCalled();
   expect(shell.keyWrap).not.toHaveBeenCalled();

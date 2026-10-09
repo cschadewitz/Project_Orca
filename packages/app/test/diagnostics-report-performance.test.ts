@@ -1,4 +1,4 @@
-import { previewText } from "./recovery-preparation/preview-text.js";
+import { frozenReportText } from "./recovery-preparation/frozen-report-text.js";
 /** Canonical compatibility and authority at cooperative report turns; no device acceptance. */
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
@@ -7,7 +7,6 @@ import { DIAGNOSTIC_CODES, type DiagnosticPhase } from "../src/main/diagnostics/
 import { RecoveryController } from "../src/main/diagnostics/recovery-controller.js";
 import { ControlledPayloadMemory } from "../src/main/diagnostics/payload-memory.js";
 import { RECOVERY_LIMITS, type RecoveryDisk } from "../src/main/diagnostics/recovery-contract.js";
-import { DIAGNOSTIC_PREVIEW_BLOCK_BYTES } from "../src/diagnostics-contract.js";
 import {
   validateDiagnosticReportAsync,
   validateOwnedDiagnosticText,
@@ -233,64 +232,77 @@ function fixture() {
   return { controller, disk, reading, payload };
 }
 
-it("admits exact byte ownership, one ordered transport block and a complete-read picker fence", async () => {
+it("prepares only a descriptor with frozen bytes/digest and no renderer transport allowance", async () => {
   const { controller, payload } = fixture();
   await controller.initialize();
   value(await controller.setEnabled(true, 1));
   for (let i = 0; i < 8192; i++) controller.record("run", "run_failed");
-  const preview = value(await controller.preparePreview("current"));
-  expect(preview).not.toHaveProperty("text");
-  expect(payload.stats().externalAllowanceBytes).toBe(RECOVERY_LIMITS.exportBytes + 3 * DIAGNOSTIC_PREVIEW_BLOCK_BYTES);
-  expect((await controller.chooseDestination(preview.handle)).ok).toBe(false);
-  expect((await controller.readPreviewBlock(preview.handle, 1)).ok).toBe(false);
-  const first = value(await controller.readPreviewBlock(preview.handle, 0));
-  expect(first.bytes.buffer.byteLength).toBe(DIAGNOSTIC_PREVIEW_BLOCK_BYTES);
-  expect(first.bytes.length).toBeLessThanOrEqual(DIAGNOSTIC_PREVIEW_BLOCK_BYTES);
-  expect(first.bytes.at(-1)).toBe(10);
-  expect((await controller.readPreviewBlock(preview.handle, 0)).ok).toBe(false);
-  expect((await controller.releasePreviewBlock("stale", 0)).ok).toBe(false);
-  value(await controller.releasePreviewBlock(preview.handle, 0));
-  expect(first.bytes.every((byte) => byte === 0)).toBe(true);
-  let offset = first.bytes.length;
-  while (offset < preview.byteLength) {
-    const block = value(await controller.readPreviewBlock(preview.handle, offset));
-    expect(block.bytes.buffer).toBe(first.bytes.buffer);
-    offset += block.bytes.length;
-    value(await controller.releasePreviewBlock(preview.handle, block.offset));
-  }
-  expect((await controller.chooseDestination(preview.handle)).ok).toBe(true);
-  value(await controller.closePreview(preview.handle));
-  expect((await controller.readPreviewBlock(preview.handle, 0)).ok).toBe(false);
+  const report = value(await controller.prepareExport("current"));
+  expect(Object.keys(report).sort()).toEqual([
+    "byteLength",
+    "expiresInMs",
+    "handle",
+    "sha256",
+    "source",
+    "statusRevision",
+    "tailLossPossible",
+  ]);
+  expect(controller).not.toHaveProperty("readPreviewBlock");
+  expect(payload.stats().externalAllowanceBytes).toBe(0);
+  expect(controller.status().payloadReservedBytes).toBe(RECOVERY_LIMITS.exportBytes);
+  const exact = await frozenReportText(controller, report);
+  controller.record("connection", "connection_lost");
+  expect((await frozenReportText(controller, report)).text).toBe(exact.text);
+  expect((await controller.chooseDestination(report.handle)).ok).toBe(true);
+  value(await controller.cancelExport("old"));
+  expect(controller.status().activeExportHandle).toBe(report.handle);
+  value(await controller.cancelExport(report.handle));
+  expect(controller.status().payloadReservedBytes).toBe(0);
   value(await controller.setEnabled(false, 1));
   expect(payload.stats().allocatedBytes).toBe(0);
   await controller.cleanExit();
 });
 
 it.each(["off", "expiry", "document"])(
-  "erases a transported block on %s and charges retirement until disposal",
+  "erases main-owned report bytes immediately on %s without a renderer disposal acknowledgement",
   async (reason) => {
     const { controller, payload, reading } = fixture();
     await controller.initialize();
     value(await controller.setEnabled(true, 1));
-    const preview = value(await controller.preparePreview("current"));
-    const block = value(await controller.readPreviewBlock(preview.handle, 0));
+    const report = value(await controller.prepareExport("current"));
+    const bytes = (controller as unknown as { preparedReport: { bytes: Buffer } }).preparedReport.bytes;
     if (reason === "off") value(await controller.setEnabled(false, 1));
     else if (reason === "expiry") {
-      reading.elapsedMs += RECOVERY_LIMITS.previewMs;
+      reading.elapsedMs += RECOVERY_LIMITS.exportMs;
       controller.status();
-    } else controller.revokePreviewAuthority();
-    expect(block.bytes.every((byte) => byte === 0)).toBe(true);
-    expect((await controller.readPreviewBlock(preview.handle, 0)).ok).toBe(false);
-    expect(payload.stats().externalAllowanceBytes).toBeGreaterThan(0);
-    value(await controller.closePreview("stale"));
-    expect(payload.stats().externalAllowanceBytes).toBeGreaterThan(0);
-    value(await controller.closePreview(preview.handle));
+    } else controller.revokeExportAuthority();
+    expect(bytes.every((byte) => byte === 0)).toBe(true);
+    expect(controller.status().activeExportHandle).toBeUndefined();
+    expect(controller.status().payloadReservedBytes).toBe(0);
     expect(payload.stats().externalAllowanceBytes).toBe(0);
+    expect((await controller.chooseDestination(report.handle)).ok).toBe(false);
     value(await controller.setEnabled(false, 1));
     expect(payload.stats().allocatedBytes).toBe(0);
     await controller.cleanExit();
   },
 );
+
+it("cancels a picker without publication and requires a fresh destination", async () => {
+  const { controller, disk } = fixture();
+  const stage = vi.spyOn(disk, "stageExport");
+  await controller.initialize();
+  value(await controller.setEnabled(true, 1));
+  const report = value(await controller.prepareExport("current"));
+  const chosen = value(await controller.chooseDestination(report.handle));
+  const picker = (controller as unknown as { options: { chooseDestination: () => Promise<string | undefined> } })
+    .options;
+  picker.chooseDestination = async () => undefined;
+  expect(await controller.chooseDestination(report.handle)).toEqual({ ok: false, code: "cancelled" });
+  expect((await controller.save(report.handle, chosen.token)).ok).toBe(false);
+  expect(stage).not.toHaveBeenCalled();
+  value(await controller.cancelExport(report.handle));
+  await controller.cleanExit();
+});
 
 it.each(["off", "document", "clock"])(
   "revokes %s during report preparation without returning plaintext or early reservation release",
@@ -303,7 +315,7 @@ it.each(["off", "document", "clock"])(
       controller.record("unknown", "unknown");
     }
     try {
-      const pending = controller.preparePreview("current");
+      const pending = controller.prepareExport("current");
       await setImmediate();
       let off: Promise<unknown> | undefined;
       if (revocation === "off") off = controller.setEnabled(false, 1);
@@ -315,7 +327,7 @@ it.each(["off", "document", "clock"])(
       expect(controller.status().payloadReservedBytes).toBe(4 * RECOVERY_LIMITS.exportBytes);
       expect((await pending).ok).toBe(false);
       await off;
-      expect(controller.status().activePreviewHandle).toBeUndefined();
+      expect(controller.status().activeExportHandle).toBeUndefined();
       expect(controller.status().payloadReservedBytes).toBe(0);
     } finally {
       await controller.cleanExit();
@@ -343,50 +355,134 @@ it("rechecks authority after checkpoint serialization before any disk dispatch",
   }
 });
 
-it.each(["timeout", "off"])("retains frozen binary bytes until a %s Save actually settles", async (revocation) => {
-  const { controller, disk, payload } = fixture();
-  let entered!: () => void, settle!: () => void;
-  const started = new Promise<void>((resolve) => {
-    entered = resolve;
-  });
+it.each(["timeout", "off", "cancel", "document"])(
+  "retains frozen binary bytes until a %s Save actually settles",
+  async (revocation) => {
+    const { controller, disk, payload } = fixture();
+    let entered!: () => void, settle!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    let frozen: Buffer | undefined, exact: Buffer | undefined;
+    vi.spyOn(disk, "stageExport").mockImplementation(async (_id, bytes) => {
+      frozen = bytes;
+      exact = Buffer.from(bytes);
+      entered();
+      await held;
+      expect(bytes).toEqual(exact);
+      return { device: "1", inode: "2" };
+    });
+    await controller.initialize();
+    value(await controller.setEnabled(true, 1));
+    controller.record("run", "run_failed");
+    const preview = await frozenReportText(controller, value(await controller.prepareExport("current")));
+    const destination = value(await controller.chooseDestination(preview.handle));
+    if (revocation === "timeout") vi.useFakeTimers();
+    const saving = controller.save(preview.handle, destination.token);
+    await started;
+    let off: Promise<unknown> | undefined;
+    try {
+      if (revocation === "timeout") {
+        await vi.advanceTimersByTimeAsync(RECOVERY_LIMITS.operationMs + 1);
+        expect((await saving).ok).toBe(false);
+      } else if (revocation === "off") off = controller.setEnabled(false, 1);
+      else if (revocation === "cancel") value(await controller.cancelExport(preview.handle));
+      else controller.rendererDisposed();
+      expect(controller.status().activeExportHandle).toBeUndefined();
+      expect(payload.stats().leases).toBeGreaterThan(0);
+      expect(frozen).toEqual(exact);
+    } finally {
+      settle();
+      vi.useRealTimers();
+      await saving;
+      await off;
+      controller.rendererDisposed();
+      for (let turn = 0; turn < 10 && controller.status().payloadReservedBytes; turn++) await setImmediate();
+      await controller.cleanExit();
+    }
+    expect(frozen?.every((byte) => byte === 0)).toBe(true);
+    expect(payload.stats().allocatedBytes).toBe(0);
+  },
+);
+
+it("joins repeated Save clicks and publishes only the frozen report despite later capture", async () => {
+  const { controller, disk } = fixture();
+  let release!: () => void;
   const held = new Promise<void>((resolve) => {
-    settle = resolve;
+    release = resolve;
   });
-  let frozen: Buffer | undefined, exact: Buffer | undefined;
-  vi.spyOn(disk, "stageExport").mockImplementation(async (_id, bytes) => {
-    frozen = bytes;
-    exact = Buffer.from(bytes);
-    entered();
+  const staged = vi.spyOn(disk, "stageExport").mockImplementation(async (_id, bytes) => {
     await held;
-    expect(bytes).toEqual(exact);
+    expect(bytes.toString()).toBe(exact.text);
     return { device: "1", inode: "2" };
   });
+  const publish = vi
+    .spyOn(disk, "publishStage")
+    .mockImplementation(async (_id, _path, admit) => (admit() ? "saved" : "refused"));
   await controller.initialize();
   value(await controller.setEnabled(true, 1));
   controller.record("run", "run_failed");
-  const preview = await previewText(controller, value(await controller.preparePreview("current")));
-  const destination = value(await controller.chooseDestination(preview.handle));
-  if (revocation === "timeout") vi.useFakeTimers();
-  const saving = controller.save(preview.handle, destination.token);
-  await started;
-  let off: Promise<unknown> | undefined;
-  try {
-    if (revocation === "timeout") {
-      await vi.advanceTimersByTimeAsync(RECOVERY_LIMITS.operationMs + 1);
-      expect((await saving).ok).toBe(false);
-    } else off = controller.setEnabled(false, 1);
-    expect(controller.status().activePreviewHandle).toBeUndefined();
-    expect(payload.stats().leases).toBeGreaterThan(0);
-    expect(frozen).toEqual(exact);
-  } finally {
-    settle();
-    vi.useRealTimers();
-    await saving;
-    await off;
-    controller.rendererDisposed();
-    for (let turn = 0; turn < 10 && controller.status().payloadReservedBytes; turn++) await setImmediate();
-    await controller.cleanExit();
-  }
-  expect(frozen?.every((byte) => byte === 0)).toBe(true);
-  expect(payload.stats().allocatedBytes).toBe(0);
+  const report = value(await controller.prepareExport("current"));
+  const exact = await frozenReportText(controller, report);
+  const destination = value(await controller.chooseDestination(report.handle));
+  controller.record("connection", "connection_lost");
+  const first = controller.save(report.handle, destination.token);
+  expect(controller.save(report.handle, destination.token)).toBe(first);
+  expect((await controller.save(report.handle, "stale-token")).ok).toBe(false);
+  release();
+  expect(value(await first).lastSaveOutcome).toBe("saved");
+  expect(staged).toHaveBeenCalledOnce();
+  expect(publish).toHaveBeenCalledOnce();
+  value(await controller.cancelExport(report.handle));
+  await controller.cleanExit();
 });
+
+it("refuses altered frozen bytes at the last publication admission check", async () => {
+  const { controller, disk } = fixture();
+  await controller.initialize();
+  value(await controller.setEnabled(true, 1));
+  const report = value(await controller.prepareExport("current"));
+  const selected = value(await controller.chooseDestination(report.handle));
+  const publish = vi.spyOn(disk, "publishStage").mockImplementation(async (_id, _path, admit) => {
+    const bytes = (controller as unknown as { preparedReport: { bytes: Buffer } }).preparedReport.bytes;
+    bytes[0] = 0;
+    expect(admit()).toBe(false);
+    return "refused";
+  });
+  expect(value(await controller.save(report.handle, selected.token)).lastSaveOutcome).toBe("refused");
+  expect(publish).toHaveBeenCalledOnce();
+  value(await controller.cancelExport(report.handle));
+  await controller.cleanExit();
+});
+
+it.each(["before", "after"])(
+  "orders consent revocation %s publication admission without inventing an unsaved outcome",
+  async (order) => {
+    const { controller, disk, payload } = fixture();
+    let off: Promise<unknown> | undefined;
+    vi.spyOn(disk, "publishStage").mockImplementation(async (_id, _path, admit) => {
+      if (order === "before") off = controller.setEnabled(false, 1);
+      const admitted = admit();
+      if (order === "after") off = controller.setEnabled(false, 1);
+      expect(admitted).toBe(order === "after");
+      return admitted ? "saved" : "refused";
+    });
+    await controller.initialize();
+    value(await controller.setEnabled(true, 1));
+    const report = value(await controller.prepareExport("current"));
+    const selected = value(await controller.chooseDestination(report.handle));
+    await controller.save(report.handle, selected.token);
+    await off;
+    expect(controller.status()).toMatchObject({
+      enabled: false,
+      lastSaveOutcome: order === "after" ? "saved" : "refused",
+      saveAdmittedBeforeRevocation: order === "after",
+      payloadReservedBytes: 0,
+    });
+    expect(payload.stats().allocatedBytes).toBe(0);
+    await controller.cleanExit();
+  },
+);

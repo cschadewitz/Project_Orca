@@ -1,4 +1,4 @@
-import { previewText } from "./preview-text.js";
+import { frozenReportText } from "./frozen-report-text.js";
 /** Real Windows native I/O + controller. Single-process observation, not combined Electron acceptance. */
 import assert from "node:assert/strict";
 import { createHook } from "node:async_hooks";
@@ -111,13 +111,13 @@ try {
   await controller.checkpoint();
   await setTimeout(20);
   setPhase("preview-previous");
-  const previous = await previewText(controller, value(await controller.preparePreview("previous")));
+  const previous = await frozenReportText(controller, value(await controller.prepareExport("previous")));
   await setTimeout(20);
   setPhase("oracle");
   assert.equal((JSON.parse(previous.text) as { events: unknown[] }).events.length, 8192);
-  value(await controller.closePreview(previous.handle));
+  value(await controller.cancelExport(previous.handle));
   setPhase("preview-current");
-  const preview = await previewText(controller, value(await controller.preparePreview("current")));
+  const preview = await frozenReportText(controller, value(await controller.prepareExport("current")));
   await setTimeout(20);
   setPhase("picker");
   const selected = value(await controller.chooseDestination(preview.handle));
