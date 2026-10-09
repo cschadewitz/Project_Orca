@@ -1,0 +1,181 @@
+{
+  "numTotalTestSuites": 2,
+  "numPassedTestSuites": 2,
+  "numFailedTestSuites": 0,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 12,
+  "numPassedTests": 12,
+  "numFailedTests": 0,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "snapshot": {
+    "added": 0,
+    "failure": false,
+    "filesAdded": 0,
+    "filesRemoved": 0,
+    "filesRemovedList": [],
+    "filesUnmatched": 0,
+    "filesUpdated": 0,
+    "matched": 0,
+    "total": 0,
+    "unchecked": 0,
+    "uncheckedKeysByFile": [],
+    "unmatched": 0,
+    "updated": 0,
+    "didUpdate": false
+  },
+  "startTime": 1791542056457,
+  "success": true,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "preserves the generic canonical oracle for every enum, maximum offsets/count and empty reports",
+          "status": "passed",
+          "title": "preserves the generic canonical oracle for every enum, maximum offsets/count and empty reports",
+          "duration": 114.7713,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "freezes all 8192 events before yielding and remains immutable across collection/stop",
+          "status": "passed",
+          "title": "freezes all 8192 events before yielding and remains immutable across collection/stop",
+          "duration": 53.491600000000005,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "validates immutable decoded bytes even if the source Buffer changes during a yielded turn",
+          "status": "passed",
+          "title": "validates immutable decoded bytes even if the source Buffer changes during a yielded turn",
+          "duration": 3119.5175,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "retains exact rejection of extra/duplicate fields, framing, invalid UTF-8 and event semantics",
+          "status": "passed",
+          "title": "retains exact rejection of extra/duplicate fields, framing, invalid UTF-8 and event semantics",
+          "duration": 181.09220000000005,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "revokes off during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "title": "revokes off during report preparation without returning plaintext or early reservation release",
+          "duration": 54.92839999999978,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "revokes document during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "title": "revokes document during report preparation without returning plaintext or early reservation release",
+          "duration": 41.18939999999975,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "revokes clock during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "title": "revokes clock during report preparation without returning plaintext or early reservation release",
+          "duration": 38.8134,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "rechecks authority after checkpoint serialization before any disk dispatch",
+          "status": "passed",
+          "title": "rechecks authority after checkpoint serialization before any disk dispatch",
+          "duration": 19.672399999999925,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        }
+      ],
+      "startTime": 1791542057292,
+      "endTime": 1791542060915.6724,
+      "status": "passed",
+      "message": "",
+      "name": "<workspace>/packages/app/test/diagnostics-report-performance.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "keeps durable consent when navigation revokes a preview during the startup read",
+          "status": "passed",
+          "title": "keeps durable consent when navigation revokes a preview during the startup read",
+          "duration": 7.133100000000013,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "keeps durable consent when renderer-disposal revokes a preview during the startup read",
+          "status": "passed",
+          "title": "keeps durable consent when renderer-disposal revokes a preview during the startup read",
+          "duration": 1.2555000000000405,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "a newer off fences the pending enabled startup read",
+          "status": "passed",
+          "title": "a newer off fences the pending enabled startup read",
+          "duration": 1.3149999999999977,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "a newer shutdown fences the pending enabled startup read",
+          "status": "passed",
+          "title": "a newer shutdown fences the pending enabled startup read",
+          "duration": 0.5485999999999649,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        }
+      ],
+      "startTime": 1791542056914,
+      "endTime": 1791542056924.5486,
+      "status": "passed",
+      "message": "",
+      "name": "<workspace>/packages/app/test/diagnostics-startup-consent.test.ts"
+    }
+  ]
+}

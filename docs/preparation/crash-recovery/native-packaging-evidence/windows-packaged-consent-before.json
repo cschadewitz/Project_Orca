@@ -1,0 +1,221 @@
+{
+  "schema": 1,
+  "sourceCommit": "49a21254dfb02dfce5182902a317298a644bc560",
+  "productionEnabled": false,
+  "method": "Actual builder-packaged main/preload/production renderer, isolated instrumented bootstrap suppressing protocol registration/window showing/outside connections. Token-authenticated owned loopback daemon. No installer or first-run/update operation.",
+  "a11y": [
+    { "theme": "light", "violations": [], "passes": 8, "incomplete": [] },
+    { "theme": "dark", "violations": [], "passes": 8, "incomplete": [] }
+  ],
+  "runs": [
+    {
+      "defaultOffNoRoot": true,
+      "enabledChoiceStillNoCapture": true,
+      "refusals": {
+        "current": { "ok": false, "code": "unavailable" },
+        "previous": { "ok": false, "code": "unavailable" },
+        "picker": { "ok": false, "code": "stale_preview" },
+        "save": { "ok": false, "code": "stale_preview" }
+      },
+      "rootOnlySettingAndLease": true,
+      "facts": {
+        "packaged": true,
+        "protocolRegistrationSuppressed": 1,
+        "windowShowsSuppressed": 1,
+        "legacyKeyCalls": 0,
+        "pickerCalls": 0,
+        "chromiumExternalRequests": 0,
+        "chromiumLoopbackRequests": 0,
+        "nodeExternalConnects": 0,
+        "nodeLoopbackConnects": 7,
+        "diagnosticIPC": 8,
+        "nativePresent": true,
+        "pendingDiagnosticActions": 0,
+        "diskReads": [
+          {
+            "rootMatches": true,
+            "value": { "enabled": false, "scopeVersion": 1, "minutes": 5 },
+            "fileErrors": [
+              "unavailable",
+              "unavailable",
+              "unavailable",
+              "unavailable",
+              "unavailable",
+              "unavailable",
+              "unavailable",
+              "unavailable",
+              "unavailable",
+              "unavailable"
+            ]
+          }
+        ],
+        "lastEnableResponse": {
+          "ok": true,
+          "value": {
+            "enabled": true,
+            "productionEnabled": false,
+            "scopeVersion": 1,
+            "minutes": 5,
+            "code": "unavailable",
+            "previous": false,
+            "tailLossPossible": true,
+            "cleanupPending": false,
+            "acknowledgedUnknown": false,
+            "olderUnknowns": false,
+            "payloadReservedBytes": 0
+          }
+        }
+      }
+    }
+  ],
+  "syntheticRunCompleted": true,
+  "firstStartDefaultOffNoRoot": true,
+  "nativePresent": true,
+  "menuFocusRestored": true,
+  "keyboardFocusVisible": { "outlineStyle": "solid", "outlineWidth": "1.6px" },
+  "zoomScroll": {
+    "scale": 1,
+    "diagnosticsWidth": 403.9375,
+    "ancestors": [
+      {
+        "className": "orca-config__body",
+        "clientHeight": 24,
+        "scrollHeight": 4991,
+        "scrollTop": 4966.39990234375
+      }
+    ],
+    "zoomFactor": 2
+  },
+  "enabledStatus": {
+    "ok": true,
+    "value": {
+      "enabled": true,
+      "productionEnabled": false,
+      "scopeVersion": 1,
+      "minutes": 5,
+      "code": "unavailable",
+      "previous": false,
+      "tailLossPossible": true,
+      "cleanupPending": false,
+      "acknowledgedUnknown": false,
+      "olderUnknowns": false,
+      "payloadReservedBytes": 0
+    }
+  },
+  "enableFilesBeforeRefusal": ["setting.json", "writer.lock"],
+  "enableFilesAfterRefusal": ["setting.json", "writer.lock"],
+  "enableFacts": {
+    "packaged": true,
+    "protocolRegistrationSuppressed": 1,
+    "windowShowsSuppressed": 1,
+    "legacyKeyCalls": 0,
+    "pickerCalls": 0,
+    "chromiumExternalRequests": 0,
+    "chromiumLoopbackRequests": 0,
+    "nodeExternalConnects": 0,
+    "nodeLoopbackConnects": 7,
+    "diagnosticIPC": 8,
+    "nativePresent": true,
+    "pendingDiagnosticActions": 0,
+    "diskReads": [
+      {
+        "rootMatches": true,
+        "value": { "enabled": false, "scopeVersion": 1, "minutes": 5 },
+        "fileErrors": [
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable"
+        ]
+      }
+    ],
+    "lastEnableResponse": {
+      "ok": true,
+      "value": {
+        "enabled": true,
+        "productionEnabled": false,
+        "scopeVersion": 1,
+        "minutes": 5,
+        "code": "unavailable",
+        "previous": false,
+        "tailLossPossible": true,
+        "cleanupPending": false,
+        "acknowledgedUnknown": false,
+        "olderUnknowns": false,
+        "payloadReservedBytes": 0
+      }
+    }
+  },
+  "persistedAfterClose": { "enabled": true, "scopeVersion": 1, "minutes": 5 },
+  "nativeSettingReadAfterClose": {
+    "enabled": true,
+    "scopeVersion": 1,
+    "minutes": 5
+  },
+  "restartStatus": {
+    "ok": true,
+    "value": {
+      "enabled": false,
+      "productionEnabled": false,
+      "scopeVersion": 1,
+      "minutes": 5,
+      "code": "off",
+      "previous": false,
+      "tailLossPossible": true,
+      "cleanupPending": false,
+      "acknowledgedUnknown": false,
+      "olderUnknowns": false,
+      "payloadReservedBytes": 0
+    }
+  },
+  "restartFacts": {
+    "packaged": true,
+    "protocolRegistrationSuppressed": 1,
+    "windowShowsSuppressed": 1,
+    "legacyKeyCalls": 0,
+    "pickerCalls": 0,
+    "chromiumExternalRequests": 0,
+    "chromiumLoopbackRequests": 0,
+    "nodeExternalConnects": 0,
+    "nodeLoopbackConnects": 7,
+    "diagnosticIPC": 2,
+    "nativePresent": true,
+    "pendingDiagnosticActions": 0,
+    "diskReads": [
+      {
+        "rootMatches": true,
+        "value": { "enabled": true, "scopeVersion": 1, "minutes": 5 },
+        "fileErrors": [
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable"
+        ]
+      }
+    ]
+  },
+  "persistedAfterRestart": { "enabled": true, "scopeVersion": 1, "minutes": 5 },
+  "suiteCompleted": false,
+  "phase": "restart",
+  "code": "packaged-fixture-refused",
+  "errorName": "AssertionError",
+  "safeMessage": "Expected values to be strictly equal:\n\nfalse !== true\n",
+  "allOwnedExitsConfirmed": true,
+  "disposableStateRemoved": true
+}

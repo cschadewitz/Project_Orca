@@ -9,7 +9,7 @@ function fixture() {
   const readEntered = new Promise<void>((resolve) => (entered = resolve));
   const pending = new Promise<void>((resolve) => (release = resolve));
   let setting: DiagnosticsSetting = { enabled: true, scopeVersion: 1, minutes: 10 };
-  const disk: RecoveryDisk = {
+  const disk = {
     revoke: vi.fn(),
     readSetting: vi.fn(async () => {
       const observed = { ...setting };
@@ -34,7 +34,7 @@ function fixture() {
     validateDestination: async () => false,
     publishStage: async () => "refused",
     writersStopped: async () => true,
-  };
+  } satisfies RecoveryDisk;
   const controller = new RecoveryController({
     disk,
     clock: { read: () => ({ bootId: "synthetic-startup-consent", elapsedMs: 1000 }) },

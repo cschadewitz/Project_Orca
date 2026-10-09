@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "candidate": "49a21254dfb02dfce5182902a317298a644bc560",
+  "consentFix": "d1e3e7b78d046d334be20365c4ff4e45c33ea152",
+  "shippingProductionEnabled": false,
+  "allResourceGatesClosed": false,
+  "pairedExecutionSuccessfulSemanticEquality": true,
+  "pairedFailureStallOracle": false,
+  "completeControlledAllocationAccounting": false,
+  "allOwnedExitsConfirmed": true,
+  "fixturesRemoved": true,
+  "files": [
+    {
+      "name": "windows-paired-49a2125.json",
+      "sha256": "4c88631018e23981fb944fcc4d6b7fa6a20eb1b7a30ae222dd102585bf9e59b9",
+      "bytes": 55560
+    },
+    {
+      "name": "windows-packaged-consent-before.json",
+      "sha256": "f4f91d80ef48e564d1fae6dd21aa02e4c6fdad402853161d408cd85df1dab227",
+      "bytes": 6322
+    },
+    {
+      "name": "windows-packaged-consent-after.json",
+      "sha256": "a825891c8dd356a011d750c9a29412ab1ce011f4305839588b73f12399f142fb",
+      "bytes": 6087
+    },
+    {
+      "name": "windows-package-49a2125-identity.json",
+      "sha256": "85b3162750f6abc208a83c47541be8bfc58a7232f2e78f738194f25a83f43768",
+      "bytes": 921
+    },
+    {
+      "name": "windows-package-consent-fix-identity.json",
+      "sha256": "226478fd9d50dccf42c04957ad0ac3ce671a6f07f41e56f9b382034219e2a105",
+      "bytes": 921
+    },
+    {
+      "name": "windows-startup-consent-baseline-tests.json",
+      "sha256": "b1b869680f1c1d58f755b37db3d50cc87a841951676ed6e7bc442eb22ca15e85",
+      "bytes": 4524
+    },
+    {
+      "name": "windows-startup-consent-fixed-tests.json",
+      "sha256": "cb3f1d05d416bb44072dec2abb65e12b32e7d84b68f3ca8351cc1561793a8302",
+      "bytes": 6421
+    }
+  ]
+}
