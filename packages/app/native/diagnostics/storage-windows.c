@@ -23,6 +23,8 @@
 #define NT_SYNCHRONOUS 32
 #define NT_NON_DIRECTORY 64
 #define NT_OPEN_REPARSE 0x00200000
+/* Public SDK winternl.h omits this WDK enum member; the documented NT ABI is 10. */
+#define NT_RENAME_INFORMATION ((FILE_INFORMATION_CLASS)10)
 /* Windows Interlocked is available in both MSVC C11 and the local GNU toolchain. */
 #define atomic_init(target,value) (*(target)=(value))
 #define atomic_load(target) InterlockedCompareExchange((target),0,0)
@@ -309,7 +311,7 @@ static int rename_handle(HANDLE file,HANDLE parent,const wchar_t *name,int repla
   memcpy(&set,&address,sizeof(set));
   if(!set) { errno=EACCES; return 0; }
   IO_STATUS_BLOCK result;
-  NTSTATUS status=set(file,&result,rename,(ULONG)(sizeof(FILE_RENAME_INFO)+size),FileRenameInformation);
+  NTSTATUS status=set(file,&result,rename,(ULONG)(sizeof(FILE_RENAME_INFO)+size),NT_RENAME_INFORMATION);
   if(status<0) { errno=status==(NTSTATUS)0xc0000035?EEXIST:EACCES; return 0; }
   return 1;
 }
@@ -404,7 +406,7 @@ publish_done:
   }
   if(!strcmp(j->operation,"fileStat") || !strcmp(j->operation,"read") || !strcmp(j->operation,"write") || !strcmp(j->operation,"sync")) {
     HANDLE current=child(j->root,j->file->name,FILE_READ_ATTRIBUTES,NT_OPEN,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE);
-    win_stat held;
+    win_stat held={0};
     int safe=current!=INVALID_HANDLE_VALUE && file_safe(j->file->fd,&held) && info(current,&j->stat) && identity(&held,&j->stat);
     if(current!=INVALID_HANDLE_VALUE)CloseHandle(current);
     if(!safe) { j->error=EACCES; return; }

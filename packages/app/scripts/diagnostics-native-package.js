@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
+  cpSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -120,6 +121,13 @@ export function buildNativePackage({ arch, headers, root = appRoot }) {
     if (platform === "win32") {
       // Explicit installed toolchain and local headers/import library; no node-gyp download.
       boundedFile(join(resolve(headers), arch, "node.lib"), 16 * 1024 * 1024);
+      // node-gyp's explicit --nodedir Windows contract links Release/node.lib.
+      // Isolate the selected target's verified import library; never mutate the
+      // caller's shared header tree or reuse another architecture's library.
+      const selectedHeaders = join(scratch, "headers");
+      cpSync(join(resolve(headers), "include"), join(selectedHeaders, "include"), { recursive: true });
+      mkdirSync(join(selectedHeaders, "Release"), { recursive: true });
+      copyFileSync(join(resolve(headers), arch, "node.lib"), join(selectedHeaders, "Release/node.lib"));
       const appRequire = createRequire(join(root, "package.json"));
       const builderRequire = createRequire(appRequire.resolve("electron-builder"));
       execFileSync(
@@ -128,7 +136,7 @@ export function buildNativePackage({ arch, headers, root = appRoot }) {
           builderRequire.resolve("node-gyp/bin/node-gyp.js"),
           "rebuild",
           `--arch=${arch}`,
-          `--nodedir=${resolve(headers)}`,
+          `--nodedir=${selectedHeaders}`,
         ],
         {
           cwd: join(root, "native/diagnostics"),
@@ -140,6 +148,7 @@ export function buildNativePackage({ arch, headers, root = appRoot }) {
       );
       for (const name of NATIVE_ADDONS)
         copyFileSync(join(root, "native/diagnostics/build/Release", name), join(scratch, name));
+      rmSync(selectedHeaders, { recursive: true, force: true });
     } else
       for (const name of NATIVE_ADDONS) {
         execFileSync(

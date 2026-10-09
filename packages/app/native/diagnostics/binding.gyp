@@ -14,6 +14,7 @@
       'sources': ['windows-delay-load.c'],
       'libraries': ['delayimp.lib'],
       'msvs_settings': { 'VCCLCompilerTool': {
+        'AdditionalOptions!': ['-std:c++20', '/Zc:__cplusplus'],
         'AdditionalOptions': ['/std:c11'], 'WarningLevel': 4, 'WarnAsError': 'true'
       }, 'VCLinkerTool': { 'DelayLoadDLLs': ['node.exe'], 'AdditionalOptions': ['/ignore:4199'] } }
     }]]
@@ -33,6 +34,7 @@
       'sources': ['storage-windows.c', 'keys-windows.c', 'windows-delay-load.c'],
       'libraries': ['advapi32.lib', 'crypt32.lib', 'delayimp.lib'],
       'msvs_settings': { 'VCCLCompilerTool': {
+        'AdditionalOptions!': ['-std:c++20', '/Zc:__cplusplus'],
         'AdditionalOptions': ['/std:c11'], 'WarningLevel': 4, 'WarnAsError': 'true'
       }, 'VCLinkerTool': { 'DelayLoadDLLs': ['node.exe'], 'AdditionalOptions': ['/ignore:4199'] } }
     }]]

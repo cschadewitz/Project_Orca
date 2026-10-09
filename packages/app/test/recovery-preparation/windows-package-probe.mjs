@@ -57,7 +57,7 @@ if (process.argv[2] !== "child") {
   try {
     mkdirSync(join(base, "native/diagnostics"), { recursive: true });
     mkdirSync(directory, { recursive: true });
-    for (const name of ["binding.gyp", "clock.c", "storage-windows.c", "windows-delay-load.c"])
+    for (const name of ["binding.gyp", "clock.c", "storage-windows.c", "keys-windows.c", "windows-delay-load.c"])
       copyFileSync(join(appRoot, "native/diagnostics", name), join(base, "native/diagnostics", name));
     for (const name of NATIVE_ADDONS)
       copyFileSync(join(appRoot, "native/diagnostics/build/Release", name), join(directory, name));
@@ -106,8 +106,7 @@ if (process.argv[2] !== "child") {
         fixedExternalNodeLoad: true,
         wrongArchitectureRefused: true,
         missingResourcesRefusedWithoutRepositoryFallback: true,
-        electronRuntimeLoad:
-          "unrun; GNU Node probe binaries have static node.exe imports; shipping node-gyp uses Windows delay-load hook",
+        electronRuntimeLoad: "unrun by this Node-hosted copy probe; exact Electron acceptance is separate",
         arm64NativeBuild: "unrun",
       }) + "\n",
     );
