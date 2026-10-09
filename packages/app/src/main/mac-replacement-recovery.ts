@@ -266,11 +266,19 @@ export type MacBootstrapDecision =
 export class MacReplacementBootstrap {
   private decision: MacBootstrapDecision | undefined;
   private operation: Promise<MacBootstrapDecision> | undefined;
+  private sealed = false;
   constructor(private readonly journal: Pick<MacRecoveryJournal, "read">) {}
   get ordinaryAllowed(): boolean {
-    return this.decision?.outcome === "ordinary";
+    return !this.sealed && this.decision?.outcome === "ordinary";
+  }
+  /** Close synchronously before dispatching a replacement intention or releasing journal
+   * ownership. An earlier clear read (including a late result) cannot authorize writers. */
+  seal(): void {
+    this.sealed = true;
+    this.decision = freezeMacMetadata({ outcome: "unknown" });
   }
   inspect(): Promise<MacBootstrapDecision> {
+    if (this.sealed) return Promise.resolve(freezeMacMetadata({ outcome: "unknown" }));
     if (this.operation) return this.operation;
     this.operation = Promise.resolve()
       .then(async (): Promise<MacBootstrapDecision> => {
@@ -286,7 +294,7 @@ export class MacReplacementBootstrap {
         }
       })
       .then((value) => {
-        this.decision = freezeMacMetadata(value);
+        this.decision = freezeMacMetadata(this.sealed && value.outcome === "ordinary" ? { outcome: "unknown" } : value);
         return this.decision;
       });
     return this.operation;
