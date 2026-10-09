@@ -9,7 +9,7 @@ and targets `calcifer/m10-m21-m22-same-boot-config-integration`. It preserves th
 | Issue | Corrections in this branch | Focused evidence |
 | --- | --- | --- |
 | #333 | Reference-selector focus after structural operations; narrow shell/Config field and review-action layout. | Renderer form, route and existing Config tests; daemon Save/Apply, reference and authority tests. |
-| #334 | Mounted authorized Request overrides; exact captured input declaration and descriptor; revision/generation/grant fences; verified selection provenance; independent protected recovery grants; typed navigation drafts; pending and accepted receipt guards. | Main adapter/journal, mounted route/controller/restore, daemon preflight/projection, protocol and captured-generation tests. |
+| #334 | Mounted authorized Request overrides; exact captured input declaration and descriptor; revision/generation/grant fences; verified selection provenance; independent protected recovery grants; typed navigation drafts; pending and accepted receipt guards; confirmed abandonment across same-target authority refresh. | Main adapter/journal, mounted route/controller/restore, daemon preflight/projection, protocol and captured-generation tests. |
 | #355 | Authoritative catalog errors; clean read-only refresh/preview; exact partial consumers; blank-ID refusal; applied history from reviewed source digests. | Mounted route/controller/editor tests and file-backed template authoring tests. |
 
 Request preflight and admission share the defaulted in-memory Request descriptor. Declared
@@ -38,7 +38,9 @@ The combined focused invocation selected 24 existing/new test files and passed 3
 two supported-platform sample skips; the existing Config surface's 31 tests passed
 separately. The final captured Request default guard added three passing preflight cases;
 its 41-test backend/protocol check, 59 existing Request submission cases and 23 generation
-cases passed after the guard. Final distinct coverage: **25 files, 425 passed, 2 skipped**,
+cases passed after the guard. Native acceptance exposed a confirmed-abandonment race during
+same-target authority refresh. Its seven new refresh/identity cases and all 52 controller
+cases passed after correction. Final distinct coverage: **25 files, 432 passed, 2 skipped**,
 one worker at a time. This was not a
 full suite, coverage run, CI run or Actions dispatch.
 
@@ -71,7 +73,31 @@ The receipt uses public IDs, digests, method names and check booleans. It exclud
 sources, command parameters, credentials, paths, screenshots and protected journal bytes.
 Cleanup verifies the exact disposable root and awaits owned application/daemon exits.
 
-Native run results and the sanitized receipt are recorded after acceptance completes.
+The complete native invocation exited **0** on implementation head
+`82380f961edb3b9da546910d6245890d509d631b`: all 12 phases and 193 check booleans
+passed. The final evidence-only commit does not change product sources. The sanitized
+[receipt](evidence/m21-windows-acceptance.json) records that implementation head, exact
+harness digest, runtime versions and hashes of the built main, preload, renderer and daemon
+artifacts. `acceptance.hashes.baseCommit` is the disposable prepared-project commit, not
+the integration base.
+
+| Issue | Native configured-workspace result |
+| --- | --- |
+| #333 | Mounted structured edit/validation; invalid-review fencing; comment/default preservation; Save separate from Apply; structural restart and live role Apply; saved/active persistence after restart. |
+| #334 | Typed invalid-input fencing and close/focus/draft retention; keyboard choices and permission review; real Windows confirmation and same-target abandonment; exactly one direct and one Request admission; captured descriptor/overrides and mounted/persisted provenance; no agent scheduled; protected restart recovery mounts the original Request with one reconciliation and no new submission. |
+| #355 | Base/strict catalog and exact partial composition using explicit fixtures; private navigation draft; validation without writes; source Save separate from catalog Apply; comment/metadata and applied-digest history persistence across restart. |
+
+Automated axe, control geometry and bounded scrolling passed 14 checks: Config, Templates
+and Guided launch in both themes at wide and 200% narrow widths, plus direct and Request
+review states. Native storage and the same physical profile were verified across real
+graceful app/bundled-daemon restarts. The encrypted journal did not contain the synthetic
+descriptor text. Canonical `runs.get` contracts and settled public events proved the human
+gate stopped both runs before agent scheduling. An earlier optional standalone `inputs.list`
+probe refused without a classified code; it is not claimed as positive acceptance here.
+
+Owned process identity checks, awaited exits and exact disposable-directory cleanup all
+passed. No live connector, agent-01 service, real agent executable, diagnostics addon,
+performance measurement, packaging, broad CI or Actions dispatch was used.
 
 ## Remaining acceptance and implementation limits
 
