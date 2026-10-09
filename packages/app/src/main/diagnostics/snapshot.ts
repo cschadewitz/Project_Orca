@@ -6,6 +6,7 @@ import {
   type DiagnosticCount,
   type DiagnosticPhase,
 } from "./profile.js";
+import { completeReportWork, REPORT_BATCH_EVENTS, scheduleReportWork } from "./report-work.js";
 
 export interface DiagnosticEvent {
   readonly offsetMs: number;
@@ -92,6 +93,56 @@ export function canonicalJson(value: unknown): string {
       2,
     ) + "\n"
   );
+}
+
+/** Fixed event framing for the closed vocabulary, identical to canonicalJson. */
+const eventFraming = new Map<string, readonly [string, string]>();
+for (const phase of Object.keys(DIAGNOSTIC_CODES) as DiagnosticPhase[]) {
+  for (const code of DIAGNOSTIC_CODES[phase]) {
+    eventFraming.set(`${phase}:${code}`, [
+      `    {\n      "code": ${JSON.stringify(code)},\n      "entityAlias": "unknown",\n      "offsetMs": `,
+      `,\n      "phase": ${JSON.stringify(phase)}\n    }`,
+    ]);
+  }
+}
+
+/** Internally constructed reports only; authenticated input must be rebuilt first. */
+export function* diagnosticReportWork(report: DiagnosticReport): Generator<void, string> {
+  // The envelope is small/fixed. Never send the growing event array through the
+  // generic per-object sort/replacer or serialize the whole report in one turn.
+  const envelope = canonicalJson({ ...report, events: [] });
+  if (report.events.length === 0) return envelope;
+  const marker = '  "events": []';
+  const start = envelope.indexOf(marker);
+  if (start < 0) throw new Error("unavailable");
+  // One bounded output allocation avoids retaining tens of thousands of string
+  // fragments and flattening them together in the final main-process callback.
+  const output = Buffer.allocUnsafe(DIAGNOSTIC_LIMITS.maxReportBytes);
+  let offset = 0;
+  const append = (part: string): void => {
+    if (offset + Buffer.byteLength(part) > output.length) throw new Error("capacity_limited");
+    offset += output.write(part, offset, "utf8");
+  };
+  append(envelope.slice(0, start));
+  append('  "events": [\n');
+  for (let index = 0; index < report.events.length; index++) {
+    const event = report.events[index]!;
+    const framing = eventFraming.get(`${event.phase}:${event.code}`);
+    if (!framing) throw new Error("unavailable");
+    append((index === 0 ? "" : ",\n") + framing[0] + String(event.offsetMs) + framing[1]);
+    if ((index + 1) % REPORT_BATCH_EVENTS === 0) yield;
+  }
+  append("\n  ]");
+  append(envelope.slice(start + marker.length));
+  return output.toString("utf8", 0, offset);
+}
+
+export function canonicalDiagnosticReport(report: DiagnosticReport): string {
+  return completeReportWork(diagnosticReportWork(report));
+}
+
+export function canonicalDiagnosticReportAsync(report: DiagnosticReport): Promise<string> {
+  return scheduleReportWork(diagnosticReportWork(report));
 }
 
 // Reserve the maximum complete envelope, including future offset digits, saturation

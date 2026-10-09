@@ -7,7 +7,14 @@ import {
   type DiagnosticCode,
   type DiagnosticPhase,
 } from "./profile.js";
-import { canonicalJson, diagnosticReport, DIAGNOSTIC_ENVELOPE_BYTES, eventReservation } from "./snapshot.js";
+import {
+  canonicalDiagnosticReport,
+  canonicalDiagnosticReportAsync,
+  diagnosticReport,
+  DIAGNOSTIC_ENVELOPE_BYTES,
+  eventReservation,
+  type DiagnosticReport,
+} from "./snapshot.js";
 
 interface RetainedEvent {
   readonly at: number;
@@ -130,11 +137,22 @@ export class PretriggerBuffer {
 
   /** Freeze one complete canonical report synchronously; later collection cannot change it. */
   snapshot(): FrozenDiagnosticSnapshot | undefined {
+    const report = this.freezeReport();
+    return report && this.freezeJson(canonicalDiagnosticReport(report));
+  }
+
+  /** Freeze the ring atomically, then serialize independent bounded batches. */
+  async snapshotAsync(): Promise<FrozenDiagnosticSnapshot | undefined> {
+    const report = this.freezeReport();
+    return report && this.freezeJson(await canonicalDiagnosticReportAsync(report));
+  }
+
+  private freezeReport(): DiagnosticReport | undefined {
     const now = this.tick();
     if (now === undefined) return undefined;
     const oldest = this.ring[this.head];
     // Exported identities belong only to this snapshot, including preparation retries.
-    const report = diagnosticReport(
+    return diagnosticReport(
       randomUUID(),
       randomUUID(),
       {
@@ -159,7 +177,9 @@ export class PretriggerBuffer {
         };
       }),
     );
-    const json = canonicalJson(report);
+  }
+
+  private freezeJson(json: string): FrozenDiagnosticSnapshot | undefined {
     const byteLength = Buffer.byteLength(json);
     // Defense against future envelope edits invalidating the reservation proof.
     if (byteLength > this.maxReportBytes) {

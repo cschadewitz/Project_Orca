@@ -1,0 +1,181 @@
+/** Canonical compatibility and authority at cooperative report turns; no device acceptance. */
+import { setImmediate } from "node:timers/promises";
+import { afterEach, expect, it, vi } from "vitest";
+import { PretriggerBuffer } from "../src/main/diagnostics/pretrigger-buffer.js";
+import { DIAGNOSTIC_CODES, type DiagnosticPhase } from "../src/main/diagnostics/profile.js";
+import { RecoveryController } from "../src/main/diagnostics/recovery-controller.js";
+import { RECOVERY_LIMITS, type RecoveryDisk } from "../src/main/diagnostics/recovery-contract.js";
+import { validateDiagnosticReportAsync } from "../src/main/diagnostics/report-validation.js";
+import {
+  canonicalJson,
+  canonicalDiagnosticReportAsync,
+  diagnosticReport,
+  type DiagnosticReport,
+} from "../src/main/diagnostics/snapshot.js";
+import { value } from "./recovery-preparation/implementation-fixture.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+function fullReport(): DiagnosticReport {
+  const pairs = (Object.keys(DIAGNOSTIC_CODES) as DiagnosticPhase[]).flatMap((phase) =>
+    DIAGNOSTIC_CODES[phase].map((code) => ({ phase, code })),
+  );
+  return diagnosticReport(
+    "00000000-0000-4000-8000-000000000000",
+    "00000000-0000-4000-8000-000000000001",
+    { requestedWindowMs: 900_000, observedWindowMs: 900_000, retainedWindowMs: 900_000, capacityLimited: true },
+    { budget: "at_least_65535", expired: 3, invalid: 2 },
+    Array.from({ length: 8192 }, (_, index) => ({
+      ...(pairs[index] ?? { phase: "unknown", code: "unknown" }),
+      offsetMs: index === 8191 ? 900_000 : index,
+      entityAlias: "unknown" as const,
+    })),
+  );
+}
+
+it("preserves the generic canonical oracle for every enum, maximum offsets/count and empty reports", async () => {
+  const report = fullReport();
+  for (const sample of [report, { ...report, events: [], coverage: { ...report.coverage, retainedWindowMs: 0 } }]) {
+    const json = await canonicalDiagnosticReportAsync(sample);
+    expect(json).toBe(canonicalJson(sample));
+    expect(json.endsWith("\n")).toBe(true);
+    const refreshed = await validateDiagnosticReportAsync(Buffer.from(json), true);
+    const parsed = JSON.parse(refreshed.toString()) as DiagnosticReport;
+    expect(parsed.reportId).not.toBe(sample.reportId);
+    expect(parsed.sessionId).not.toBe(sample.sessionId);
+    expect({ ...parsed, reportId: sample.reportId, sessionId: sample.sessionId }).toEqual(sample);
+  }
+});
+
+it("freezes all 8192 events before yielding and remains immutable across collection/stop", async () => {
+  let now = 1000;
+  const ring = new PretriggerBuffer({ now: () => now });
+  ring.start();
+  for (let index = 0; index < 8192; index++) {
+    now++;
+    ring.record("unknown", "unknown");
+  }
+  let settled = false;
+  const pending = ring.snapshotAsync().then((snapshot) => {
+    settled = true;
+    return snapshot!;
+  });
+  await setImmediate();
+  expect(settled).toBe(false);
+  now++;
+  ring.record("run", "run_failed");
+  ring.stop();
+  const snapshot = await pending;
+  const report = JSON.parse(snapshot.json) as DiagnosticReport;
+  expect(report.events).toHaveLength(8192);
+  expect(report.events[0]?.offsetMs).toBe(1);
+  expect(report.events.at(-1)?.offsetMs).toBe(8192);
+  expect(report.omissions.budget).toBe(0);
+  expect(snapshot.json).toBe(canonicalJson(report));
+  expect(snapshot.byteLength).toBe(Buffer.byteLength(snapshot.json));
+});
+
+it("validates immutable decoded bytes even if the source Buffer changes during a yielded turn", async () => {
+  const json = canonicalJson(fullReport());
+  const input = Buffer.from(json);
+  const pending = validateDiagnosticReportAsync(input);
+  await setImmediate();
+  input.fill(0);
+  expect(await pending).toEqual(Buffer.from(json));
+});
+
+it("retains exact rejection of extra/duplicate fields, framing, invalid UTF-8 and event semantics", async () => {
+  const report = fullReport();
+  const json = canonicalJson(report);
+  const corruptions = [
+    Buffer.from(json.replace('"schemaVersion": 1', '"schemaVersion": 1, "schemaVersion": 1')),
+    Buffer.from(json.replace('"entityAlias": "unknown"', '"entityAlias": "unknown", "prompt": "CANARY"')),
+    Buffer.from(json.replace('"app": "unknown"', '"app": "CANARY"')),
+    Buffer.from(json.trimEnd()),
+    Buffer.from(json.replace('"offsetMs": 0', '"offsetMs": -1')),
+    Buffer.from(json.replace('"phase": "startup"', '"phase": "run"')),
+    Buffer.from(json.replace('"events": [', '"events": [[], ')),
+    Buffer.from(json.replace('"expired": 3', '"expired": 65535')),
+    Buffer.from(canonicalJson({ ...report, events: [...report.events, report.events.at(-1)] })),
+    Buffer.concat([Buffer.from([0xff]), Buffer.from(json)]),
+    Buffer.alloc(1_048_577),
+  ];
+  for (const bytes of corruptions) await expect(validateDiagnosticReportAsync(bytes)).rejects.toThrow();
+});
+
+// No filesystem or native authority in these controller schedule regressions.
+function fixture() {
+  const reading = { bootId: "synthetic-report-turns", elapsedMs: 1000 };
+  const disk: RecoveryDisk = {
+    revoke: vi.fn(),
+    readSetting: async () => ({ enabled: false, scopeVersion: 1, minutes: 5 }),
+    writeSetting: vi.fn(async () => undefined),
+    open: async () => false,
+    maintain: async () => false,
+    checkpoint: vi.fn(async () => undefined),
+    previous: async () => undefined,
+    discardPrevious: async () => undefined,
+    cleanExit: async () => undefined,
+    cleanup: async () => undefined,
+    readExportState: async () => ({}),
+    writeExportState: async () => undefined,
+    stageExport: async () => ({ device: "1", inode: "2" }),
+    clearStage: async () => undefined,
+    validateDestination: async () => true,
+    publishStage: async () => "refused",
+    writersStopped: async () => true,
+  };
+  const controller = new RecoveryController({ disk, clock: { read: () => reading }, productionEnabled: true });
+  return { controller, disk, reading };
+}
+
+it.each(["off", "document", "clock"])(
+  "revokes %s during report preparation without returning plaintext or early reservation release",
+  async (revocation) => {
+    const { controller, reading } = fixture();
+    await controller.initialize();
+    value(await controller.setEnabled(true, 1));
+    for (let index = 0; index < 8192; index++) {
+      reading.elapsedMs++;
+      controller.record("unknown", "unknown");
+    }
+    try {
+      const pending = controller.preparePreview("current");
+      await setImmediate();
+      let off: Promise<unknown> | undefined;
+      if (revocation === "off") off = controller.setEnabled(false, 1);
+      else if (revocation === "document") controller.rendererDisposed();
+      else {
+        reading.elapsedMs--;
+        controller.status();
+      }
+      expect(controller.status().payloadReservedBytes).toBe(4 * RECOVERY_LIMITS.exportBytes);
+      expect((await pending).ok).toBe(false);
+      await off;
+      expect(controller.status().activePreviewHandle).toBeUndefined();
+      expect(controller.status().payloadReservedBytes).toBe(0);
+    } finally {
+      await controller.cleanExit();
+    }
+  },
+);
+
+it("rechecks authority after checkpoint serialization before any disk dispatch", async () => {
+  const { controller, disk, reading } = fixture();
+  const checkpoint = vi.spyOn(disk, "checkpoint");
+  await controller.initialize();
+  value(await controller.setEnabled(true, 1));
+  for (let index = 0; index < 8192; index++) controller.record("unknown", "unknown");
+  try {
+    const pending = controller.checkpoint();
+    await setImmediate();
+    expect(controller.status().payloadReservedBytes).toBe(3 * RECOVERY_LIMITS.exportBytes);
+    reading.elapsedMs--;
+    controller.status();
+    await pending;
+    expect(checkpoint).not.toHaveBeenCalled();
+    expect(controller.status().payloadReservedBytes).toBe(0);
+  } finally {
+    await controller.cleanExit();
+  }
+});
