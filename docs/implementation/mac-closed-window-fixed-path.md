@@ -72,6 +72,9 @@ secrets or production enablement have been added to manufacture that authority.
   from preserved copies without recapturing partially restored live data. Both complete
   pairs survive restoration. Final binary/state/continuity verification keeps the
   result closed until the owner explicitly reopens.
+  A broken candidate is preserved with an explicit `binaryVerified: false` receipt;
+  this is byte-preservation evidence, never executable/signature acceptance. Only the
+  previous matching binary is signature-accepted and eligible for restored execution.
 - Native copy/restore uses held descriptor-relative traversal, pre-mutation inode
   bindings and no-follow opens. Restore preserves each live root inode and update anchor.
   It preserves regular bytes, uid/gid/modes/file mtimes and supported ACL/xattr metadata.
@@ -105,6 +108,14 @@ protected dispatch before inspection and supplies an app-write pause/drain hook.
 It preserves #584's same-boot first-run reservation gates. Main's update application
 remains sessionless until all actual production ports are bound.
 
+The exact input blobs are main `c9a4143a02e8cdb340840948571f3ed806978c29` and IPC
+regression `0f2142c59a01e2c8a62ad388434b0753d9c13a87`. `git apply --check` passes
+against the source branch's unchanged #584 files. In a disposable detached worktree,
+the applied patch passed **18 actual-main IPC tests**, typecheck and scoped ESLint.
+The symlinked workspace lint package needed only its `tsconfigRootDir` rebound to
+that worktree; no lint rules were disabled. The patch is supplied as a file, not
+applied to the integration owner's shared checkout.
+
 The startup patch enrolls **only the app root** for its disabled bootstrap slice. Before
 enabling updates, the integration owner must supply the complete trusted configured
 config/store root set before their producers start, reject overlapping roots, and bind:
@@ -132,6 +143,10 @@ TypeScript 7.0.2. Native conformance uses official Node 24.19.0 headers whose ar
 SHA-256 is `54f14a297d47ea0794fe272363703d9dc419c96ac68f20d890f98b63754a3e4c`.
 Set `ORCA_REPLACEMENT_NATIVE_TEST_HEADERS` to its `include/node` directory and run:
 
+The final run passed **100 tests in 10 files, zero skips**, in 19.22 seconds on Linux.
+Root typecheck, scoped ESLint and formatting checks also passed. The applied main patch
+has its separate 18-test evidence above; those tests are not counted twice here.
+
 ```sh
 node_modules/.bin/vitest run \
   packages/protocol/test/update-window.test.ts \
@@ -158,6 +173,12 @@ does not prove Darwin compilation, native loading, signed application identity, 
 continuity or power-loss durability. Reuse valid #584/#581 constituent checks without
 calling them physical acceptance for this new path. Scoped typecheck, lint, formatting,
 author diff review and the separately applied IPC patch checks accompany the focused run.
+
+Author review specifically corrected approval/defer versus shutdown ordering, immediate
+diagnostics opt-out semantics, tracking of control receipts as dispatched work, retaining
+slots until actual settlement, exact failed-candidate identity, and preservation of broken
+candidate bytes without inventing signature acceptance. Fixed-path restore and native
+fault tests were rerun after those changes.
 
 ## Remaining real-Mac gates
 

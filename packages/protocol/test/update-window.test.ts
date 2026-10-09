@@ -73,6 +73,23 @@ it("does not permit two supervisors or concurrent capture", async () => {
   closers.push(() => other.detach());
   expect(await other.capture()).toBe(false);
 });
+it("detach seals immediately but retains all kernel slots until dispatched writes actually settle", async () => {
+  const f = await fixture();
+  f.window.closeAdmission("a".repeat(64));
+  await f.window.capture();
+  let finish!: () => void;
+  const write = f.window.track(() => new Promise<void>((resolve) => (finish = resolve)));
+  await Promise.resolve();
+  const detached = f.window.detach();
+  expect(f.window.check()).toBe(false);
+  const fresh = new ClosedUpdateWindow(f.control);
+  closers.push(() => fresh.detach());
+  expect(await fresh.capture()).toBe(false);
+  finish();
+  await write;
+  await detached;
+  expect(await fresh.capture()).toBe(true);
+});
 it("only the original untouched approval may defer; durable stopping excludes defer", async () => {
   const f = await fixture();
   const candidate = "a".repeat(64);

@@ -14,6 +14,7 @@ const PairSchema = z.strictObject({
   version: z.literal(1),
   attempt: z.uuid(),
   manifestSha256: digest,
+  binaryVerified: z.boolean(),
   continuitySha256: digest,
   roots: z.array(RootSchema).min(1).max(32),
   binary: RootSchema,
@@ -101,7 +102,9 @@ export class MacFixedPathRecovery {
     this.busy = true;
     try {
       this.check(signal);
-      const result = await work();
+      // Control receipts and directory flushes are dispatched writes too. Detach must
+      // await the entire operation, including work between tree calls, before releasing.
+      const result = await this.window.track(work);
       this.check(signal);
       return result;
     } catch (error) {
@@ -178,7 +181,8 @@ export class MacFixedPathRecovery {
         pair.roots.map((r) => r.path),
         this.roots,
       ) ||
-      pair.binary.path !== this.binary
+      pair.binary.path !== this.binary ||
+      pair.binaryVerified !== (kind === "previous")
     )
       return false;
     const directory = join(this.base, kind);
@@ -196,9 +200,10 @@ export class MacFixedPathRecovery {
     return (
       (await this.inspect(signal, () => this.ports.trees.digest(join(directory, "binary"), signal))) ===
         pair.binary.sha256 &&
-      (await this.inspect(signal, () =>
-        this.ports.verifyBinary(join(directory, "binary"), pair.manifestSha256, signal),
-      ))
+      (kind === "current" ||
+        (await this.inspect(signal, () =>
+          this.ports.verifyBinary(join(directory, "binary"), pair.manifestSha256, signal),
+        )))
     );
   }
   private async capture(
@@ -235,7 +240,10 @@ export class MacFixedPathRecovery {
     }
     await this.createDirectory(directory);
     const continuitySha256 = digest.parse(await this.inspect(signal, () => this.ports.continuity(signal)));
-    if (!(await this.inspect(signal, () => this.ports.verifyBinary(this.binary, manifestSha256, signal))))
+    if (
+      kind === "previous" &&
+      !(await this.inspect(signal, () => this.ports.verifyBinary(this.binary, manifestSha256, signal)))
+    )
       throw unavailable();
     const roots: FixedProtectedPair["roots"] = [];
     for (let i = 0; i < this.roots.length; i++) {
@@ -247,16 +255,25 @@ export class MacFixedPathRecovery {
     }
     const binarySha256 = await this.inspect(signal, () => this.ports.trees.digest(this.binary, signal));
     await this.inspect(signal, () => this.ports.trees.copy(this.binary, join(directory, "binary"), signal));
+    if ((await this.inspect(signal, () => this.ports.trees.digest(this.binary, signal))) !== binarySha256)
+      throw unavailable();
     const pair = PairSchema.parse({
       version: 1,
       attempt: this.window.snapshot.attempt,
       manifestSha256,
+      // A failed candidate can contain incomplete bytes. Preserve its exact tree as
+      // evidence without claiming it is a verified executable. Only the previous
+      // matching binary is signature-accepted and eligible for execution/restoration.
+      binaryVerified: kind === "previous",
       continuitySha256,
       roots,
       binary: { path: this.binary, sha256: binarySha256 },
     });
     if (
-      !(await this.inspect(signal, () => this.ports.verifyBinary(join(directory, "binary"), manifestSha256, signal))) ||
+      (kind === "previous" &&
+        !(await this.inspect(signal, () =>
+          this.ports.verifyBinary(join(directory, "binary"), manifestSha256, signal),
+        ))) ||
       (await this.inspect(signal, () => this.ports.continuity(signal))) !== continuitySha256
     )
       throw unavailable();
@@ -319,7 +336,10 @@ export class MacFixedPathRecovery {
     signal: AbortSignal,
   ): Promise<"restored-closed"> {
     return this.operation(signal, async () => {
-      if (!["closed", "migrating", "validating", "restoring", "restored"].includes(this.window.snapshot.phase))
+      if (
+        candidateManifestSha256 !== this.window.snapshot.candidate ||
+        !["closed", "migrating", "validating", "restoring", "restored"].includes(this.window.snapshot.phase)
+      )
         throw unavailable();
       const previous = await this.record(join(this.base, "previous", "pair.json"), PairSchema);
       if (

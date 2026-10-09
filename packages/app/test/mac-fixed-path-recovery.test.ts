@@ -186,17 +186,24 @@ it("resumes a partial multi-root restore on the same boot without recapturing pa
   const current = join(f.control, "pairs", fresh.owner.snapshot.attempt!, "current");
   expect(await readFile(join(current, "root-1", "history.json"), "utf8")).toBe("migration-write");
 });
-it("preserves a failed candidate before any restore mutation", async () => {
+it("preserves exact broken candidate bytes without claiming signature acceptance before restoring the matching previous binary", async () => {
   const f = await fixture();
   await f.recovery.backupPrevious(old, signal());
   await f.changed();
+  await writeFile(join(f.binary, "manifest"), "partial-broken-candidate", { mode: 0o600 });
   const denied = new MacFixedPathRecovery(f.window, f.control, f.binary, {
     ...f.ports,
     verifyBinary: async (path, hash, s) => hash !== candidate && (await f.ports.verifyBinary(path, hash, s)),
   });
-  await expect(denied.restore(old, candidate, signal())).rejects.toThrow();
-  expect(await readFile(join(f.data[1]!, "history.json"), "utf8")).toBe("migration-write");
-  expect(f.window.snapshot.phase).toBe("closed");
+  expect(await denied.restore(old, candidate, signal())).toBe("restored-closed");
+  const current = join(f.control, "pairs", f.window.snapshot.attempt!, "current");
+  expect(await readFile(join(current, "binary", "manifest"), "utf8")).toBe("partial-broken-candidate");
+  expect(JSON.parse(await readFile(join(current, "pair.json"), "utf8"))).toMatchObject({
+    binaryVerified: false,
+    manifestSha256: candidate,
+  });
+  expect(await readFile(join(f.binary, "manifest"), "utf8")).toBe(old);
+  expect(f.window.snapshot.phase).toBe("restored");
 });
 it("refuses changed continuity, corrupt original and stale manifest without modifying live state", async () => {
   const f = await fixture();
@@ -222,6 +229,15 @@ it("categorically refuses restoration after admission has reopened", async () =>
   await expect(f.recovery.restore(old, candidate, signal())).rejects.toThrow();
   expect(await readdir(join(f.control, "pairs", f.window.snapshot.attempt ?? "missing")).catch(() => [])).toEqual([]);
 });
+it("refuses a different candidate identity before preserving or changing any live state", async () => {
+  const f = await fixture();
+  await f.recovery.backupPrevious(old, signal());
+  await f.changed();
+  await expect(f.recovery.restore(old, "d".repeat(64), signal())).rejects.toThrow();
+  expect(await readdir(join(f.control, "pairs", f.window.snapshot.attempt!))).toEqual(["previous"]);
+  expect(await readFile(join(f.binary, "manifest"), "utf8")).toBe(candidate);
+  expect(f.window.snapshot.phase).toBe("closed");
+});
 it("retains incomplete copies and refuses backup acknowledgement after writer owner loss", async () => {
   const f = await fixture();
   const trees: PairTreePort = {
@@ -237,21 +253,24 @@ it("retains incomplete copies and refuses backup acknowledgement after writer ow
   await expect(fresh.recovery.backupPrevious(old, signal())).rejects.toThrow();
   expect(await readdir(join(f.control, "pairs", fresh.owner.snapshot.attempt!, "previous"))).toEqual(["root-0"]);
 });
-it("detects mutation between inspection and copying and keeps its failed receipt absent", async () => {
-  const f = await fixture();
-  const trees: PairTreePort = {
-    ...f.trees,
-    copy: async (from, to, s) => {
-      await f.trees.copy(from, to, s);
-      await writeFile(join(from, "extra"), "unexpected");
-    },
-  };
-  const broken = new MacFixedPathRecovery(f.window, f.control, f.binary, { ...f.ports, trees });
-  await expect(broken.backupPrevious(old, signal())).rejects.toThrow();
-  await expect(
-    readFile(join(f.control, "pairs", f.window.snapshot.attempt!, "previous", "pair.json")),
-  ).rejects.toThrow();
-});
+it.each(["state", "binary"])(
+  "detects %s mutation between inspection and copying and keeps its failed receipt absent",
+  async (kind) => {
+    const f = await fixture();
+    const trees: PairTreePort = {
+      ...f.trees,
+      copy: async (from, to, s) => {
+        await f.trees.copy(from, to, s);
+        if ((kind === "binary") === (from === f.binary)) await writeFile(join(from, "extra"), "unexpected");
+      },
+    };
+    const broken = new MacFixedPathRecovery(f.window, f.control, f.binary, { ...f.ports, trees });
+    await expect(broken.backupPrevious(old, signal())).rejects.toThrow();
+    await expect(
+      readFile(join(f.control, "pairs", f.window.snapshot.attempt!, "previous", "pair.json")),
+    ).rejects.toThrow();
+  },
+);
 it("refuses external symlinks and hardlinks before producing a complete backup", async () => {
   const f = await fixture();
   await symlink(f.binary, join(f.data[0]!, "external"));

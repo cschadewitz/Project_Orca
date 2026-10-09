@@ -9,8 +9,17 @@ export class MacAppWriterBarrier {
   run<T>(work: () => T | Promise<T>): Promise<T> {
     if (this.sealed) return Promise.reject(new Error("App writers are paused for replacement"));
     // Reserve before dispatch so a synchronous callback cannot pause past this work.
-    const operation = Promise.resolve().then(work);
+    let resolve!: (value: T | PromiseLike<T>) => void, reject!: (error: unknown) => void;
+    const operation = new Promise<T>((done, failed) => {
+      resolve = done;
+      reject = failed;
+    });
     this.pending.add(operation);
+    try {
+      resolve(work());
+    } catch (error) {
+      reject(error);
+    }
     void operation.then(
       () => this.pending.delete(operation),
       () => this.pending.delete(operation),
