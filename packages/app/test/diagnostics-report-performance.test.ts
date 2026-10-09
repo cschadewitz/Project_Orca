@@ -305,6 +305,53 @@ it("cancels a picker without publication and requires a fresh destination", asyn
 });
 
 it.each(["off", "document", "clock"])(
+  "fences %s between recovered input disposal and report digest publication",
+  async (revocation) => {
+    const { controller, disk, payload, reading } = fixture();
+    const source = Buffer.from(canonicalJson(fullReport()));
+    let frozen: Buffer | undefined;
+    let boundary: Promise<void> | undefined;
+    let off: Promise<unknown> | undefined;
+    const originalFrom = payload.from.bind(payload);
+    vi.spyOn(payload, "from").mockImplementation((input) => {
+      const lease = originalFrom(input);
+      frozen = lease.bytes;
+      return lease;
+    });
+    const dispose = vi.fn(() => {
+      source.fill(0);
+      boundary = setImmediate().then(() => {
+        expect(controller.status().activeExportHandle).toBeUndefined();
+        expect(controller.status().payloadReservedBytes).toBe(4 * RECOVERY_LIMITS.exportBytes);
+        if (revocation === "off") off = controller.setEnabled(false, 1);
+        else if (revocation === "document") controller.rendererDisposed();
+        else {
+          reading.elapsedMs--;
+          controller.status();
+        }
+        // Revocation does not erase input or release still-running preparation.
+        expect(frozen?.some((byte) => byte !== 0)).toBe(true);
+        expect(controller.status().payloadReservedBytes).toBe(4 * RECOVERY_LIMITS.exportBytes);
+      });
+    });
+    vi.spyOn(disk, "previous").mockResolvedValue({ bytes: source, anchor: { ...reading }, dispose });
+    await controller.initialize();
+    value(await controller.setEnabled(true, 1));
+    try {
+      expect((await controller.prepareExport("previous")).ok).toBe(false);
+      await boundary;
+      await off;
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(controller.status().activeExportHandle).toBeUndefined();
+      expect(controller.status().payloadReservedBytes).toBe(0);
+      expect(frozen?.every((byte) => byte === 0)).toBe(true);
+    } finally {
+      await controller.cleanExit();
+    }
+  },
+);
+
+it.each(["off", "document", "clock"])(
   "revokes %s during report preparation without returning plaintext or early reservation release",
   async (revocation) => {
     const { controller, reading } = fixture();

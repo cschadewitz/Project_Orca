@@ -1,5 +1,6 @@
 /** Consent, frozen reports and bounded local export authority independent of execution. */
 import { createHash, randomUUID } from "node:crypto";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import {
   DIAGNOSTICS_PRODUCTION_ENABLED,
   DIAGNOSTICS_SCOPE,
@@ -343,6 +344,11 @@ export class RecoveryController {
             old.dispose?.();
           }
           bytes = owned.bytes;
+          // Encoding and erasing the recovered input complete in consecutive
+          // microtasks. Yield before hashing so their work cannot accumulate in
+          // one main-loop turn. Keep the lease/reservation and recheck authority
+          // below after the yield; cancellation cannot return a descriptor.
+          await nextTurn();
         } else {
           let snapshot = await this.ring.snapshotAsync();
           if (!snapshot) return failure("unavailable");
