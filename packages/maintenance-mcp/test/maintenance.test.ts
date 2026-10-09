@@ -7,7 +7,6 @@ import { PassThrough } from "node:stream";
 import { readFile, readdir } from "node:fs/promises";
 import { MaintenanceBackend } from "../src/backend.js";
 import { createMaintenanceServer } from "../src/server.js";
-import { serveMaintenanceStdio } from "../src/stdio.js";
 import { serveLinuxMaintenanceStdio } from "../src/observer-stdio.js";
 import { INPUTS } from "../src/contracts.js";
 import { LIMITS, OPERATIONS, POLICY_ID } from "../src/policy.js";
@@ -306,37 +305,6 @@ describe("SDK transport and package boundary", () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result)).toContain("response_limit");
     expect(JSON.stringify(result)).not.toContain(secret);
-  });
-  it("serves the refusal backend over SDK stdio without any network or ORCA runtime", async () => {
-    const input = new PassThrough();
-    const output = new PassThrough();
-    const handle = serveMaintenanceStdio({ input, output });
-    const client = new Client({ name: "stdio-fixture", version: "1" });
-    cleanup.push(async () => {
-      await client.close();
-      await handle.close();
-      input.destroy();
-      output.destroy();
-    });
-    await client.connect(new StdioServerTransport(output, input));
-    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(OPERATIONS);
-    expect((await client.callTool({ name: "get_host_health", arguments: host })).structuredContent).toMatchObject({
-      status: "unavailable",
-    });
-  });
-  it("closes an oversized stdio frame without echoing its body", async () => {
-    const input = new PassThrough();
-    const output = new PassThrough();
-    const handle = serveMaintenanceStdio({ input, output });
-    const chunks: Buffer[] = [];
-    output.on("data", (chunk: Buffer) => chunks.push(chunk));
-    input.write(secret.repeat(LIMITS.wireBufferBytes));
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(input.listenerCount("data")).toBe(0);
-    expect(Buffer.concat(chunks).toString()).not.toContain(secret);
-    await handle.close();
-    input.destroy();
-    output.destroy();
   });
   it("opens the explicit observer interface without host I/O for discovery or unconfigured services", async () => {
     const input = new PassThrough();

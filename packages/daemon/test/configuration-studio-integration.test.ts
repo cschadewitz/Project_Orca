@@ -10,11 +10,6 @@ import { ConfigurationGenerations, type GenerationSnapshot } from "../../engine/
 import { ConfigModel } from "../src/config-model.js";
 import type { OrcaBridge, BridgeResult } from "../../app/src/bridge.js";
 import { ConfigurationStudio } from "../../app/renderer/src/config/configuration-studio.js";
-import {
-  configurationPolicyChanged,
-  safeConfigurationErrors,
-  richShape,
-} from "../../app/renderer/src/config/configuration-adapter.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -383,21 +378,6 @@ describe("the wired structured editor and daemon boundary", () => {
     expect(f.studio.state.phase).toBe("saved");
     expect((await f.model.get()).config.text).toBe(raw);
   });
-  it("moves transient row identity with rows and nested collections, independently of domain IDs", async () => {
-    const f = await fixture(
-      "agents:\n  - id: a\n    command: test-command\n    roles: [one]\n  - id: b\n    command: test-command\n    roles: [two]\n",
-    );
-    const a = f.studio.rowKey(["agents"], 0),
-      b = f.studio.rowKey(["agents"], 1);
-    const nested = f.studio.rowKey(["agents", 0, "roles"], 0);
-    f.studio.edit([
-      { kind: "set", path: ["agents", 0, "id"], value: "changed" },
-      { kind: "move", path: ["agents"], from: 0, to: 1 },
-    ]);
-    expect(f.studio.rowKey(["agents"], 0)).toBe(b);
-    expect(f.studio.rowKey(["agents"], 1)).toBe(a);
-    expect(f.studio.rowKey(["agents", 1, "roles"], 0)).toBe(nested);
-  });
   it("keeps authority refusals and missing metadata unavailable while preserving raw access", async () => {
     const f = await fixture();
     f.bridge.connection.read = () => ({ state: "live", since: "now", methods: ["config.get"] });
@@ -415,24 +395,5 @@ describe("the wired structured editor and daemon boundary", () => {
     await studio.save();
     expect(studio.state.phase).toBe("saved");
     expect(g.applies).toHaveLength(0);
-  });
-  it("does not drop validation failures hidden by metadata, and recognizes ancestor policy removal", async () => {
-    const f = await fixture("agents:\n  - id: a\n    command: test-command\n    env: {TOKEN: private}\n");
-    const errors = safeConfigurationErrors(
-      richShape(f.data),
-      [f.data.config.parsed],
-      [
-        { path: "agents.0.env.TOKEN", message: "private invalid value" },
-        { path: "agents.0.command", message: "private invalid value" },
-        { path: "unknown.private", message: "private invalid value" },
-      ],
-    );
-    expect(errors.map((e) => e.path)).toEqual([[], ["agents", 0, "command"], []]);
-    expect(JSON.stringify(errors)).not.toContain("private");
-    expect(errors).toHaveLength(3);
-    expect(configurationPolicyChanged({ agents: [{ id: "a", permissions: { default: "deny", rules: [] } }] }, {})).toBe(
-      true,
-    );
-    expect(configurationPolicyChanged({}, { agents: [{ id: "a", command: "x" }] })).toBe(false);
   });
 });

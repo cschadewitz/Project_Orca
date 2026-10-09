@@ -1,4 +1,4 @@
-/** Platform-branch tests are simulated; the native case uses real host handles and sync. */
+/** Real journal files exercise simulated platform and sync-error branches; native sync is covered separately. */
 import { mkdtemp, open, readdir, readFile, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -55,19 +55,6 @@ function trackHandles(file: string, simulated = false) {
   syncs.mockResolvedValue(undefined);
   return { handles, syncs, writes };
 }
-
-it("natively synchronizes an existing marker without changing bytes, inode, mode or leaving handles or locks", async () => {
-  const { dir, file, log } = await fixture();
-  const before = await snapshot(file);
-  const { handles, writes } = trackHandles(file);
-  await log.synchronizeExisting("run", matches);
-  expect(await snapshot(file)).toEqual(before);
-  expect(open).toHaveBeenCalledWith(file, process.platform === "win32" ? "r+" : "r");
-  expect(handles.length).toBeGreaterThan(0);
-  expect(handles.every((handle) => handle.fd === -1)).toBe(true);
-  expect(writes).not.toHaveBeenCalled();
-  expect(await readdir(dir)).toEqual(["run.jsonl"]);
-});
 
 describe("simulated journal synchronization platform branches", () => {
   it.each([

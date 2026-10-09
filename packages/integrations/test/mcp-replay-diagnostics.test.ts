@@ -4,8 +4,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { lockMetadata, ReplayDiagnostics, transportObserverSource } from "./mcp-replay-diagnostics.js";
-import { ProductionFixture } from "./mcp-operator-production-fixture.js";
+import { lockMetadata, transportObserverSource } from "./mcp-replay-diagnostics.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -79,37 +78,6 @@ it("observes allowlisted transport causes and HTTP status without inspecting sen
   expect(records[7]).toMatchObject({ outcome: "error", causes: [{ name: "OTHER", code: "OTHER" }] });
   expect(records).toHaveLength(68); // At most 64 starts, plus the four completed requests.
   expect(records.every((record) => record.elapsedMs >= 0)).toBe(true);
-});
-
-it("drops raw, malformed, oversized and forged child stderr; retains only the last 16 safe observations", async () => {
-  const diagnostics = new ReplayDiagnostics();
-  const emit = (record: unknown) => diagnostics.capture(Buffer.from(`ORCA_TEST_TRANSPORT ${JSON.stringify(record)}\n`));
-  diagnostics.capture(Buffer.from("SECRET_TOKEN\nORCA_TEST_TRANSPORT not-json\n"));
-  diagnostics.capture(Buffer.from("X".repeat(3000) + "ORCA_TEST_TRANSPORT {}\n"));
-  emit({ request: 1, outcome: "error", elapsedMs: 1, causes: [{ name: "Error", code: "SECRET_CODE" }] });
-  emit({ request: 1, outcome: "headers", elapsedMs: 1, status: 503, secret: "SECRET_PATH" });
-  for (let request = 1; request <= 20; request++) {
-    const line = `ORCA_TEST_TRANSPORT ${JSON.stringify({ request, outcome: "started", elapsedMs: 0 })}\n`;
-    diagnostics.capture(Buffer.from(line.slice(0, 10)));
-    diagnostics.capture(Buffer.from(line.slice(10)));
-  }
-  const fixture = new ProductionFixture();
-  fixture.dir = await temporary();
-  fixture.daemon = { exitCode: null, signalCode: null, pid: process.pid } as ProductionFixture["daemon"];
-  const previous = { exitCode: null, signalCode: "SIGKILL", pid: process.pid } as ProductionFixture["daemon"];
-  const failure = new Error("SECRET_FAILURE");
-  await expect(
-    diagnostics.measure("replay", async () => {
-      throw failure;
-    }),
-  ).rejects.toBe(failure);
-  const evidence = await diagnostics.evidence(fixture, previous, "retry_synthetic", "run_synthetic");
-  expect(evidence.transport).toHaveLength(16);
-  expect(evidence.transport[0]?.request).toBe(5);
-  expect(evidence.previousDaemon).toEqual({ exitCode: null, signal: "SIGKILL" });
-  expect(evidence.currentDaemon).toEqual({ exitCode: null, signal: null });
-  expect(evidence.stages).toMatchObject([{ stage: "replay" }]);
-  expect(JSON.stringify(evidence)).not.toMatch(/SECRET|retry_synthetic|run_synthetic|orca-replay-diagnostics/);
 });
 
 it("observes real fetch socket and abort failures and non-auth HTTP status without replacing fetch", () => {

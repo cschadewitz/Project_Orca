@@ -3,11 +3,9 @@ import { PROTOCOL_VERSION } from "@orca/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
-import { PassThrough } from "node:stream";
-import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { DaemonOperatorBackend } from "../src/mcp/backend.js";
 import { createOperatorServer } from "../src/mcp/server.js";
-import { createOperatorHttpHandler, serveOperatorStdio } from "../src/mcp/transport.js";
+import { createOperatorHttpHandler } from "../src/mcp/transport.js";
 import {
   MCP_OPERATIONS,
   type AuthenticatedOperatorBackend,
@@ -203,33 +201,6 @@ describe("MCP operator adapter", () => {
     const result = await client.callTool({ name: "get_events", arguments: { target, runId: "run" } });
     expect(output(result)).toContain("Connection changed");
     expect(output(result)).not.toContain("Ignore the user");
-  });
-  it("serves actual newline-delimited stdio discovery without logging credentials to stdout", async () => {
-    const f = fixture();
-    const input = new PassThrough();
-    const stdout = new PassThrough();
-    let text = "";
-    stdout.on("data", (chunk: Buffer) => (text += chunk.toString()));
-    const handle = serveOperatorStdio(f.backend, new StdioServerTransport(input, stdout));
-    cleanup.push(() => handle.close());
-    input.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "reference", version: "1" } },
-      }) + "\n",
-    );
-    await vi.waitFor(() => expect(text).toContain('"id":1'));
-    input.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
-    input.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) + "\n");
-    await vi.waitFor(() => expect(text).toContain("discover_orca"));
-    expect(
-      text
-        .trim()
-        .split("\n")
-        .every((line) => JSON.parse(line).jsonrpc === "2.0"),
-    ).toBe(true);
   });
 });
 

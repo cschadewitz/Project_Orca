@@ -1,0 +1,189 @@
+{
+  "base": "0de7693e50cd130d9d67bdcd5654747a4fce6deb",
+  "auditedFiles": 23,
+  "splitOriginalFiles": 20,
+  "resultingSplitFiles": 40,
+  "unchangedOriginalFiles": 3,
+  "casesAcrossAuditedFiles": 578,
+  "splitCases": 474,
+  "registrationExpressions": 297,
+  "identityCheck": "Bodies, parameter tables, registration conditions, enclosing loops and suite paths are unchanged; expanded full-name/status multiset matches.",
+  "splitInventory": [
+    {
+      "source": "packages/agents/test/handshake.test.ts",
+      "destination": "packages/agents/test/handshake.unit.test.ts",
+      "before": 10,
+      "retained": 2,
+      "moved": 8
+    },
+    {
+      "source": "packages/agents/test/hosts.test.ts",
+      "destination": "packages/agents/test/hosts.unit.test.ts",
+      "before": 6,
+      "retained": 3,
+      "moved": 3
+    },
+    {
+      "source": "packages/app/test/daemon-client.test.ts",
+      "destination": "packages/app/test/daemon-client.unit.test.ts",
+      "before": 18,
+      "retained": 15,
+      "moved": 3
+    },
+    {
+      "source": "packages/app/test/daemon-connection.test.ts",
+      "destination": "packages/app/test/daemon-connection.integration.test.ts",
+      "before": 30,
+      "retained": 27,
+      "moved": 3
+    },
+    {
+      "source": "packages/app/test/mac-update-guards.test.ts",
+      "destination": "packages/app/test/mac-update-guards.integration.test.ts",
+      "before": 23,
+      "retained": 12,
+      "moved": 11
+    },
+    {
+      "source": "packages/app/test/notifications.test.ts",
+      "destination": "packages/app/test/notifications.integration.test.ts",
+      "before": 9,
+      "retained": 8,
+      "moved": 1
+    },
+    {
+      "source": "packages/app/test/report-validation.test.ts",
+      "destination": "packages/app/test/report-validation.integration.test.ts",
+      "before": 8,
+      "retained": 6,
+      "moved": 2
+    },
+    {
+      "source": "packages/cli/test/commands.test.ts",
+      "destination": "packages/cli/test/commands.unit.test.ts",
+      "before": 27,
+      "retained": 26,
+      "moved": 1
+    },
+    {
+      "source": "packages/cli/test/runtime-launch.test.ts",
+      "destination": "packages/cli/test/runtime-launch.unit.test.ts",
+      "before": 8,
+      "retained": 4,
+      "moved": 4
+    },
+    {
+      "source": "packages/daemon/test/config-methods.test.ts",
+      "destination": "packages/daemon/test/config-methods.unit.test.ts",
+      "before": 27,
+      "retained": 22,
+      "moved": 5
+    },
+    {
+      "source": "packages/daemon/test/configuration-studio-integration.test.ts",
+      "destination": "packages/daemon/test/configuration-studio-integration.unit.test.ts",
+      "before": 19,
+      "retained": 17,
+      "moved": 2
+    },
+    {
+      "source": "packages/daemon/test/server.test.ts",
+      "destination": "packages/daemon/test/server.unit.test.ts",
+      "before": 6,
+      "retained": 4,
+      "moved": 2
+    },
+    {
+      "source": "packages/engine/test/restoration-acceptance.test.ts",
+      "destination": "packages/engine/test/restoration-acceptance.unit.test.ts",
+      "before": 118,
+      "retained": 117,
+      "moved": 1
+    },
+    {
+      "source": "packages/integrations/test/acp-facade.test.ts",
+      "destination": "packages/integrations/test/acp-facade.unit.test.ts",
+      "before": 10,
+      "retained": 8,
+      "moved": 2
+    },
+    {
+      "source": "packages/integrations/test/jev-eval.test.ts",
+      "destination": "packages/integrations/test/jev-eval.unit.test.ts",
+      "before": 38,
+      "retained": 13,
+      "moved": 25
+    },
+    {
+      "source": "packages/integrations/test/jev-restoration.test.ts",
+      "destination": "packages/integrations/test/jev-restoration.integration.test.ts",
+      "before": 40,
+      "retained": 23,
+      "moved": 17
+    },
+    {
+      "source": "packages/integrations/test/mcp-operator.test.ts",
+      "destination": "packages/integrations/test/mcp-operator.integration.test.ts",
+      "before": 15,
+      "retained": 14,
+      "moved": 1
+    },
+    {
+      "source": "packages/integrations/test/mcp-replay-diagnostics.test.ts",
+      "destination": "packages/integrations/test/mcp-replay-diagnostics.unit.test.ts",
+      "before": 6,
+      "retained": 5,
+      "moved": 1
+    },
+    {
+      "source": "packages/maintenance-mcp/test/maintenance.test.ts",
+      "destination": "packages/maintenance-mcp/test/maintenance.integration.test.ts",
+      "before": 42,
+      "retained": 40,
+      "moved": 2
+    },
+    {
+      "source": "packages/store/test/windows-sync-journal.test.ts",
+      "destination": "packages/store/test/windows-sync-journal.integration.test.ts",
+      "before": 14,
+      "retained": 13,
+      "moved": 1
+    }
+  ],
+  "unchangedInventory": [
+    {
+      "source": "packages/app/test/mac-updates.test.ts",
+      "cases": 78,
+      "unchanged": true
+    },
+    {
+      "source": "packages/cli/test/selection.test.ts",
+      "cases": 15,
+      "unchanged": true
+    },
+    {
+      "source": "packages/daemon/test/host-resources-native.test.ts",
+      "cases": 11,
+      "unchanged": true
+    }
+  ],
+  "focused": {
+    "files": 35,
+    "cases": 339,
+    "passed": 334,
+    "failed": 3,
+    "skipped": 2,
+    "failuresReproducedOnUnchangedBase": true
+  },
+  "cleanupRecheck": {
+    "cases": 14,
+    "passed": 14
+  },
+  "deferred": [
+    "packages/engine/test/restoration-acceptance.test.ts",
+    "packages/agents/test/handshake.test.ts",
+    "packages/agents/test/hosts.test.ts",
+    "packages/integrations/test/acp-facade.test.ts",
+    "packages/integrations/test/mcp-replay-diagnostics.test.ts"
+  ]
+}

@@ -397,9 +397,3 @@ describe("orca kepler", () => {
     }
   });
 });
-
-describe("the command table", () => {
-  it("gives every command a help line starting with its own name", () => {
-    for (const [name, command] of Object.entries(commands)) expect(command.help.startsWith(name)).toBe(true);
-  });
-});
