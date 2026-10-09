@@ -68,7 +68,10 @@ export function TemplateAuthoringEditor({
   const source = controller.exportSource(selected);
   const fixtures = parseFixtures(fixtureText);
   const resolved = asset ? resolveTemplate(state.base.assets, asset.id, pack || undefined) : undefined;
-  const errors = [...catalogErrors(state.base.assets), ...(state.review?.errors ?? []), ...(state.errors ?? [])];
+  const errors = [
+    ...(state.review?.errors ?? state.base.errors ?? catalogErrors(state.base.assets)),
+    ...(state.errors ?? []),
+  ];
   const writeReason = state.blocked ?? state.base.writeReason;
   const publicationReason = controller.publicationReason();
   const keyboard = useKeyboard();
@@ -255,7 +258,7 @@ export function TemplateAuthoringEditor({
         )}
       </ConfigField>
       <Button
-        disabled={!previewId || source === undefined || !fixtures || state.busy || writeReason !== undefined}
+        disabled={!previewId || source === undefined || !fixtures || state.busy || state.blocked !== undefined}
         onClick={() => {
           if (previewId && fixtures)
             void controller.preview(previewId, asset ? pack || undefined : undefined, fixtures);

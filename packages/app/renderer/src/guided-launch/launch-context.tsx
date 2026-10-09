@@ -15,7 +15,7 @@ import { useNotifications } from "../notifications-context.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { useUpdateDraft } from "../update-drafts.js";
 import { runUrl } from "../route-table.js";
-import { GuidedLaunchController } from "./controller.js";
+import { GuidedLaunchController, launchReceipt } from "./controller.js";
 import type { LaunchContext } from "./contracts.js";
 import { CONFIGURED_ROOT, launchContext, productionPorts, unwrap } from "./production-bindings.js";
 
@@ -129,9 +129,14 @@ export function GuidedLaunchProvider({
   const controller = owned.current;
   useEffect(() => controller?.subscribe(change), [controller]);
   const state = controller?.read();
+  const receipt = state?.result === undefined ? undefined : launchReceipt(state.result);
+  const admitted = receipt?.state === "accepted" && (state?.draft.mode === "request") === "requestId" in receipt;
   useUpdateDraft(
     !!state &&
-      (state.busy || state.unresolvedReview !== undefined || (state.intent === undefined && state.sequence > 0)),
+      (state.busy ||
+        state.unresolvedReview !== undefined ||
+        (state.intent !== undefined && !admitted) ||
+        (state.intent === undefined && state.sequence > 0)),
   );
   const select = (id: string) => {
     selection.current = id;

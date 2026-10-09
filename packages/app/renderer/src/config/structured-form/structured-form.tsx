@@ -229,7 +229,7 @@ function ArrayEntries({
       index < 0
         ? root.current?.querySelector(":scope > [data-add-entry]")
         : root.current?.querySelectorAll(":scope > [data-entry-row]")[index];
-    ((row?.querySelector("input") ?? row?.querySelector("button")) as HTMLElement | null)?.focus();
+    ((row?.querySelector("input, select") ?? row?.querySelector("button")) as HTMLElement | null)?.focus();
   }, [entries]);
   const displayPath = pathLabel(form.path);
   return (
@@ -413,7 +413,7 @@ function RecordEntries({
       (row) => row.dataset.recordEntry === destination,
     );
     const control =
-      row?.querySelector<HTMLInputElement>("input") ??
+      row?.querySelector<HTMLInputElement | HTMLSelectElement>("input, select") ??
       row?.querySelector<HTMLButtonElement>("button") ??
       keyInput.current;
     control?.focus();

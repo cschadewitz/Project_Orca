@@ -105,6 +105,52 @@ describe("template catalog and source", () => {
 });
 
 describe("reviewed template publication", () => {
+  it("reconciles a clean read-only refresh before previewing the current revision and generation", async () => {
+    const { ports, base } = setup();
+    const preview = vi.fn<AuthoringPorts["preview"]>(ports.preview);
+    const controller = new TemplateAuthoringController(
+      { ...base, writeReason: "Read-only connection" },
+      { ...ports, preview },
+    );
+    const current = { ...base, revision: "r2", generation: "g2", writeReason: "Read-only connection" };
+    controller.observe(current);
+    expect(controller.getSnapshot().blocked).toBeDefined();
+    expect(controller.reconcile(current, false)).toBe(true);
+    expect(controller.getSnapshot().blocked).toBeUndefined();
+    await controller.preview("sdlc/review", undefined, { values: {}, artifacts: {} });
+    expect(preview.mock.calls[0]?.[0]).toMatchObject({ expectedRevision: "r2", expectedGeneration: "g2", edits: [] });
+    expect(controller.getSnapshot().preview?.text).toBe("Sample fixture prompt");
+    expect(controller.edit("sdlc/review", "forbidden")).toBe(false);
+    expect(controller.publicationReason()).toBe("Read-only connection");
+  });
+
+  it("preserves dirty edits when read-only reconciliation cannot authorize them", () => {
+    const { controller, base } = setup();
+    controller.edit("sdlc/review", "Retained draft");
+    const current = { ...base, revision: "r2", writeReason: "Read-only connection" };
+    controller.observe(current);
+    expect(controller.reconcile(current, false)).toBe(false);
+    expect(controller.reconcile(current, true)).toBe(false);
+    expect(controller.getSnapshot().edits).toEqual([{ key: "sdlc/review", text: "Retained draft" }]);
+    expect(controller.getSnapshot().blocked).toBeDefined();
+    expect(controller.publicationReason()).toMatch(/reconcile/i);
+  });
+
+  it("previews explicit fixtures with read authority while source mutation remains unavailable", async () => {
+    const { ports, base } = setup();
+    const preview = vi.fn<AuthoringPorts["preview"]>(ports.preview);
+    const controller = new TemplateAuthoringController(
+      { ...base, writeReason: "Read-only connection" },
+      { ...ports, preview },
+    );
+    const fixtures = { values: { title: "Synthetic request" }, artifacts: { spec: "Synthetic body" } };
+    expect(controller.edit("sdlc/review", "forbidden")).toBe(false);
+    await controller.preview("sdlc/review", undefined, fixtures);
+    expect(preview).toHaveBeenCalledWith(controller.candidate(), "sdlc/review", undefined, fixtures);
+    expect(controller.getSnapshot().preview?.text).toBe("Sample fixture prompt");
+    expect(controller.publicationReason()).toBe("Read-only connection");
+  });
+
   it("does not cancel a pending source save when only preview inputs are invalidated", async () => {
     const pending = deferred<Awaited<ReturnType<NonNullable<AuthoringPorts["publish"]>>>>();
     const { controller, base } = setup({ publish: () => pending.promise });

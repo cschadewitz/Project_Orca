@@ -53,9 +53,12 @@ export function sharedLaunchReview(review: LaunchReview, checkout: CheckoutEvide
     expectedWorkflowRevision: review.workflowRevision,
     expectedConfigGeneration: review.generation,
     checkout: structuredClone(checkout),
+    ...(review.selectionProvenance === undefined
+      ? {}
+      : { selectionProvenance: structuredClone(review.selectionProvenance) }),
   };
 }
-/** Operator preflight has no override validation field. Any additional validation seam is explicit. */
+/** Guarded operator preflight owns selection validation; legacy adapters require an explicit validator. */
 export function sharedPreflight(
   shared: Pick<GuidedLaunchPorts, "preflight" | "checkout">,
   binding: {
@@ -67,8 +70,7 @@ export function sharedPreflight(
   return async (candidate) => {
     binding.assertCurrent(candidate.target);
     if (candidate.rootId !== binding.configuredRootId) throw new LaunchPortFailure("unavailable");
-    if (candidate.overrides !== undefined && binding.validateOverrides === undefined)
-      throw new LaunchPortFailure("unavailable");
+    if (candidate.mode === "direct" && candidate.overrides !== undefined) throw new LaunchPortFailure("validation");
     const target = editorTarget(candidate.target);
     const result = await shared.preflight(
       {
@@ -76,16 +78,26 @@ export function sharedPreflight(
         purpose: candidate.mode === "direct" ? "workflow" : "request",
         workflowId: candidate.workflowId,
         workflowVersion: candidate.workflowVersion,
+        ...(candidate.expectedWorkflowRevision === undefined
+          ? {}
+          : { expectedWorkflowRevision: candidate.expectedWorkflowRevision }),
+        ...(candidate.expectedConfigGeneration === undefined
+          ? {}
+          : { expectedConfigGeneration: candidate.expectedConfigGeneration }),
         vars: candidate.vars,
+        ...(candidate.overrides === undefined ? {} : { overrides: candidate.overrides }),
+        ...(candidate.request === undefined ? {} : { request: candidate.request }),
       },
       target,
     );
     binding.assertCurrent(candidate.target);
-    if (candidate.overrides !== undefined)
-      await binding.validateOverrides!(
+    if (candidate.overrides !== undefined && result.validation.ok && result.selections === undefined) {
+      if (binding.validateOverrides === undefined) throw new LaunchPortFailure("unavailable");
+      await binding.validateOverrides(
         { overrides: candidate.overrides, workflowId: candidate.workflowId },
         result.expectedConfigGeneration,
       );
+    }
     const checkout = await shared.checkout(target, result.expectedConfigGeneration);
     binding.assertCurrent(candidate.target);
     if (

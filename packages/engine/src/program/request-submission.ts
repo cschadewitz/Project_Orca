@@ -26,8 +26,27 @@ import {
   type SubmissionCommand,
   type SubmissionResult,
   type SubmissionService,
+  type Clock,
 } from "@orca/core";
 import type { Orchestrator } from "../orchestrator.js";
+
+/** In-memory Request input shared by preflight and admission; constructing it writes no state. */
+export function submissionRequest(
+  command: Pick<SubmissionCommand, "title" | "body" | "source" | "labels">,
+  clock: Clock,
+  requestId = newId("req", clock.now()),
+): Request {
+  return RequestSchema.parse({
+    id: requestId,
+    title: command.title,
+    body: command.body,
+    source: command.source,
+    labels: command.labels,
+    status: "decomposing",
+    createdAt: clock.isoNow(),
+    updatedAt: clock.isoNow(),
+  });
+}
 import { RequestAdmissionCorrelationSchema } from "./request-admission-event.js";
 import { AdmissionSchema, type Admission, type AdmissionStore } from "./submission-store.js";
 import {
@@ -233,16 +252,7 @@ export class RequestSubmissionService implements SubmissionService {
     await authority.authorize(resolved);
     this.requireCorrelation(captured);
     const id = reservation?.admissionId ?? `admission_${randomUUID()}`;
-    const request = RequestSchema.parse({
-      id: reservation?.requestId ?? newId("req", this.opts.orchestrator.clock.now()),
-      title: command.title,
-      body: command.body,
-      source: command.source,
-      labels: command.labels,
-      status: "decomposing",
-      createdAt: this.opts.orchestrator.clock.isoNow(),
-      updatedAt: this.opts.orchestrator.clock.isoNow(),
-    });
+    const request = submissionRequest(command, this.opts.orchestrator.clock, reservation?.requestId);
     const reservedRunId =
       "admissionRunIds" in captured && captured.admissionRunIds === true ? `run_${randomUUID()}` : undefined;
     const options = this.options(command, request, authority, id, reservedRunId);

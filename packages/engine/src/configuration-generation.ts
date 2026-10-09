@@ -371,12 +371,27 @@ export class ConfigurationGenerations {
           Object.hasOwn(definition.vars, "itemWorkflow"))
           ? { itemWorkflow: material.snapshot.config.program.itemWorkflow, ...options.vars }
           : options.vars;
+      const itemWorkflow =
+        overrides?.itemWorkflow ??
+        vars?.itemWorkflow ??
+        definition.vars.itemWorkflow ??
+        definition.inputSchema?.fields.itemWorkflow?.default;
+      if (
+        selection.purpose === "request" &&
+        typeof itemWorkflow === "string" &&
+        itemWorkflow.length > 0 &&
+        !material.workflows.has(itemWorkflow)
+      )
+        throw new OrcaError("WORKFLOW_NOT_FOUND", "Selected item workflow is unavailable");
       return {
         workflowId: workflow.id,
         workflowVersion: workflow.version,
         expectedWorkflowRevision: workflow.revision,
         ...(actor ? { actor } : {}),
         ...(vars ? { vars: structuredClone(vars) } : {}),
+        ...(vars && vars !== options.vars && !Object.hasOwn(options.vars ?? {}, "itemWorkflow")
+          ? { itemWorkflowSource: "config.program.itemWorkflow" as const }
+          : {}),
         ...(workspace ? { workspace: structuredClone(workspace) } : {}),
         ...(requestId ? { requestId } : {}),
         ...(requestAdmissionId ? { requestAdmissionId } : {}),

@@ -46,6 +46,7 @@ export class TemplateAdapter implements AuthoringPorts {
       generation: catalog.generation,
       contextRevision: catalog.contextRevision,
       assets: catalog.assets,
+      errors: catalog.errors.map(({ key, ...error }) => ({ ...error, ...(key === undefined ? {} : { key }) })),
       ...(!this.bridge.connection.read().methods?.includes("templates.save")
         ? { writeReason: "This daemon does not offer template source saves." }
         : {}),

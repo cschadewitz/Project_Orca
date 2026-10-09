@@ -18,7 +18,14 @@ afterEach(() => {
   cleanup();
   while (teardown.length) teardown.pop()?.();
 });
-function setup({ disconnected = false, lose = false, prepared = false, sample = false } = {}) {
+function setup({
+  disconnected = false,
+  lose = false,
+  prepared = false,
+  sample = false,
+  choices = false,
+  requestInput = false,
+} = {}) {
   const workflowId = sample ? FIRST_RUN_SAMPLE.id : "safe-fixture";
   const workflowRevision = sample ? FIRST_RUN_SAMPLE.revision : "digest-1";
   const fake = fakeBridge({ deepLink: "orca://config" });
@@ -34,6 +41,7 @@ function setup({ disconnected = false, lose = false, prepared = false, sample = 
     },
   };
   const listeners = new Set<(value: DaemonTargetSnapshot) => void>();
+  let operations = ["operator.admitRun", "operator.submitRequest", "operator.admission", "operator.reconcileAdmission"];
   bridge.daemonConnection = {
     read: () => target,
     subscribe: (fn) => {
@@ -51,7 +59,18 @@ function setup({ disconnected = false, lose = false, prepared = false, sample = 
     endpointId: "bundled:/synthetic/project",
     principalId: "operator",
     activeGeneration: "generation-1",
-    operations: ["operator.admitRun", "operator.submitRequest", "operator.admission", "operator.reconcileAdmission"],
+    operations,
+    ...(choices
+      ? {
+          choices: [
+            { id: "agent-1", kind: "agent", agentId: "agent-1", configGeneration: "generation-1" },
+            { id: "build", kind: "role", agentId: "agent-1", configGeneration: "generation-1" },
+            { id: "model-1", kind: "model", agentId: "agent-1", modelId: "model-1", configGeneration: "generation-1" },
+            { id: "item-1", kind: "item-workflow", workflowId: "item-1", configGeneration: "generation-1" },
+            { id: "pack-1", kind: "template-pack", templatePack: "pack-1", configGeneration: "generation-1" },
+          ],
+        }
+      : {}),
     checkout: {
       state: "verified",
       target: { ...target.identity!, epoch: target.epoch },
@@ -78,6 +97,7 @@ function setup({ disconnected = false, lose = false, prepared = false, sample = 
                 count: { type: "integer" },
                 enabled: { type: "boolean" },
                 token: { type: "string", sensitive: true },
+                ...(requestInput ? { request: { type: "object", required: true } } : {}),
               },
             },
           },
@@ -122,6 +142,28 @@ function setup({ disconnected = false, lose = false, prepared = false, sample = 
           expectedWorkflowRevision: workflowRevision,
           expectedConfigGeneration: "generation-1",
           validation: { ok: true, errors: [], warnings: [] },
+          inputSchema: snapshot().workflows[0]?.inputSchema ?? null,
+          ...(choices
+            ? {
+                selections: [
+                  {
+                    nodeId: "build",
+                    role: "build",
+                    agent: { value: "agent-1", source: params.overrides?.roles?.build ? "override" : "configuration" },
+                    model: { value: "model-1", source: params.overrides?.model ? "override" : "configuration" },
+                    template: { value: "instruction-1", revision: "instruction-digest-1", source: "workflow" },
+                  },
+                ],
+                itemWorkflow: {
+                  value: "item-1",
+                  source: params.overrides?.itemWorkflow ? "override" : "configuration",
+                },
+                templatePack: {
+                  value: "pack-1",
+                  source: params.overrides?.templatePack ? "override" : "configuration",
+                },
+              }
+            : {}),
           asOf: "2026-10-08T00:00:00Z",
         },
       },
@@ -199,6 +241,9 @@ function setup({ disconnected = false, lose = false, prepared = false, sample = 
     diagnostics,
     bridge,
     review: () => retainedReview,
+    grants: (next: string[]) => {
+      operations = next;
+    },
     seed: (review: LaunchReview) => {
       retainedReview = review;
       catalogMissing = true;
@@ -225,6 +270,47 @@ async function preview() {
   await screen.findByRole("checkbox", { name: /I reviewed the configured permission policy/ });
 }
 describe("mounted guided launch route", () => {
+  it("uses authorized Request selectors and reviews exact provenance without exposing a service-owned Request input", async () => {
+    const f = setup({ choices: true, requestInput: true });
+    await enter();
+    fireEvent.click(screen.getByRole("button", { name: "Launch mode" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Submit a Request" }));
+    expect(screen.queryByLabelText(/^request\b/)).toBeNull();
+    expect(screen.getByText(/submission service supplies the declared Request input/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/^Request title/), { target: { value: "Reviewed title" } });
+    fireEvent.change(screen.getByLabelText(/^Request body/), { target: { value: "Reviewed body" } });
+    for (const [label, id] of [
+      ["Agent for build", "agent-1"],
+      ["Model for agent-1", "model-1"],
+      ["Item workflow", "item-1"],
+      ["Template pack", "pack-1"],
+    ]) {
+      fireEvent.click(screen.getByRole("button", { name: label! }));
+      fireEvent.click(screen.getByRole("menuitem", { name: id! }));
+    }
+    await preview();
+    expect(f.guided.preflight.mock.calls.at(-1)?.[0]).toMatchObject({
+      purpose: "request",
+      request: { title: "Reviewed title", body: "Reviewed body" },
+      expectedConfigGeneration: "generation-1",
+      expectedWorkflowRevision: "digest-1",
+      vars: { task: "Make a safe change" },
+      overrides: {
+        roles: { build: "agent-1" },
+        model: { "agent-1": "model-1" },
+        itemWorkflow: "item-1",
+        templatePack: "pack-1",
+      },
+    });
+    expect(screen.getByText(/build: agent agent-1 \(override\)/)).toBeTruthy();
+    expect(screen.getByText(/build: instruction instruction-1 \/ instruction-digest-1/)).toBeTruthy();
+    expect(screen.getByText(/Cwd \/synthetic\/project \/ branch prepared/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("checkbox", { name: /I reviewed/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+    await waitFor(() => expect(f.guided.submit).toHaveBeenCalledTimes(1));
+    expect(f.review()?.selectionProvenance?.selections?.[0]?.agent).toEqual({ value: "agent-1", source: "override" });
+    expect(f.review()?.command.params.vars).not.toHaveProperty("request");
+  });
   it("selects the exact smoke-check task without launching and still requires explicit permission review", async () => {
     const f = setup({ sample: true, prepared: true });
     fireEvent.click(await screen.findByRole("button", { name: "Launch work" }));
@@ -306,6 +392,7 @@ describe("mounted guided launch route", () => {
     expect(f.review()?.command.params.vars).toEqual({ task: "Make a safe change", count: 0, enabled: false });
     expect(f.review()?.command.params).not.toHaveProperty("idempotencyKey");
     await screen.findByText(/Admission admission-original \/ prepared/);
+    expect(hasUpdateDrafts()).toBe(true);
     expect(screen.getByRole("heading", { name: "Launch work" })).toBeTruthy();
     expect(f.diagnostics.setEnabled).not.toHaveBeenCalled();
     expect(f.diagnostics.prepareExport).not.toHaveBeenCalled();
@@ -331,6 +418,39 @@ describe("mounted guided launch route", () => {
         (call) => call.method === "runs.get" && (call.params as { runId?: string }).runId === "run-parent",
       ),
     ).toBe(true);
+    expect(hasUpdateDrafts()).toBe(false);
+    act(() =>
+      f.h.keyboard
+        .list()
+        .find((command) => command.label === "Launch or recover work")!
+        .action(),
+    );
+    await screen.findByRole("heading", { name: "Launch work" });
+    await screen.findByText("Configuration or connection changed. Review the draft again.", { selector: "span" });
+    expect(hasUpdateDrafts()).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+    expect(f.guided.submit).toHaveBeenCalledTimes(1);
+  });
+  it("retains invalid typed editor text and its error across Close and palette navigation", async () => {
+    const f = setup();
+    await enter();
+    fireEvent.change(screen.getByLabelText(/^count/), { target: { value: "unfinished-json" } });
+    expect(screen.getByLabelText<HTMLInputElement>(/^count/).getAttribute("aria-invalid")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await screen.findByRole("button", { name: "Launch work" });
+    act(() =>
+      f.h.keyboard
+        .list()
+        .find((command) => command.label === "Launch or recover work")!
+        .action(),
+    );
+    await screen.findByRole("heading", { name: "Launch work" });
+    const count = screen.getByLabelText<HTMLInputElement>(/^count/);
+    expect(count.value).toBe("unfinished-json");
+    expect(count.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByRole("button", { name: "Preview launch" }).getAttribute("aria-disabled")).toBe("true");
+    expect(f.guided.preflight).not.toHaveBeenCalled();
+    expect(f.guided.submit).not.toHaveBeenCalled();
   });
   it("recovers exact lost acknowledgement through main lookup after target review, without a second submission", async () => {
     const f = setup({ lose: true });
@@ -395,6 +515,23 @@ describe("mounted guided launch route", () => {
     );
     expect(f.guided.submit).not.toHaveBeenCalled();
     expect(f.guided.preflight).not.toHaveBeenCalled();
+  });
+  it("inspects an original retained launch with recovery-only authority", async () => {
+    const f = setup({ prepared: true });
+    await enter();
+    await preview();
+    fireEvent.click(screen.getByRole("checkbox", { name: /I reviewed/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+    await screen.findByText(/Admission admission-original \/ prepared/);
+    f.grants(["operator.admission"]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Read current launch context" })[0]!);
+    await waitFor(() => expect(f.guided.snapshot).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Recover original launch" }));
+    await waitFor(() =>
+      expect(f.guided.recover).toHaveBeenCalledWith({ id: "opaque-exact-intent", action: "inspect" }),
+    );
+    expect(f.guided.submit).toHaveBeenCalledTimes(1);
+    expect(hasUpdateDrafts()).toBe(true);
   });
   it("offers setup and palette navigation before handshake without enabling capture or launch", async () => {
     const f = setup({ disconnected: true });

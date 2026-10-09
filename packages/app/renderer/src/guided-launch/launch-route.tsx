@@ -69,15 +69,19 @@ export function GuidedLaunchRoute({
         onClick={() => {
           const controller = session.controller;
           if (!controller) return;
-          controller.edit({
-            ...controller.read().draft,
-            mode: "direct",
-            rootId: CONFIGURED_ROOT,
-            workflowId: FIRST_RUN_SAMPLE.id,
-            vars: { task: FIRST_RUN_SAMPLE_TASK },
-            title: "",
-            body: "",
-          });
+          controller.edit(
+            {
+              ...controller.read().draft,
+              mode: "direct",
+              rootId: CONFIGURED_ROOT,
+              workflowId: FIRST_RUN_SAMPLE.id,
+              vars: { task: FIRST_RUN_SAMPLE_TASK },
+              title: "",
+              body: "",
+              overrides: undefined,
+            },
+            {},
+          );
         }}
       >
         Choose harmless launch smoke check
@@ -108,6 +112,9 @@ export function GuidedLaunchRoute({
             requirePermissionReview
             protectedDraftsAvailable={false}
             restoreAvailable={session.selected !== ""}
+            {...(launchState?.context.overrideChoices === undefined
+              ? {}
+              : { overrideChoices: launchState.context.overrideChoices })}
             onConfiguration={onConfiguration}
             onConnections={() => window.orca.daemonConnection?.show()}
             onClose={close}

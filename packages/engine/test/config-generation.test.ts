@@ -82,6 +82,29 @@ async function fixture(agents?: AgentRegistry, runtimeFingerprint?: string) {
 const recheck = async () => {};
 
 describe("configuration generations", () => {
+  it("attributes only trusted injected Request item-workflow defaults", async () => {
+    const { generations, calls } = await fixture();
+    const launch = await generations.captureLaunch({ purpose: "request" });
+    await launch.validateStartRun({ vars: {} });
+    expect(calls.at(-1)?.options).toMatchObject({
+      vars: { itemWorkflow: "flow" },
+      itemWorkflowSource: "config.program.itemWorkflow",
+    });
+    await launch.validateStartRun({ vars: { itemWorkflow: "flow" } });
+    expect(calls.at(-1)?.options).toMatchObject({ vars: { itemWorkflow: "flow" } });
+    expect(calls.at(-1)?.options).not.toHaveProperty("itemWorkflowSource");
+    const admitted = calls.length;
+    await expect(launch.validateStartRun({ vars: { itemWorkflow: "missing" } })).rejects.toMatchObject({
+      code: "WORKFLOW_NOT_FOUND",
+    });
+    await expect(launch.startRun({ vars: { itemWorkflow: "missing" } })).rejects.toMatchObject({
+      code: "WORKFLOW_NOT_FOUND",
+    });
+    expect(calls).toHaveLength(admitted);
+    const direct = await generations.captureLaunch({ purpose: "workflow", workflowId: "flow" });
+    await direct.validateStartRun({ vars: { itemWorkflow: "caller" } });
+    expect(calls.at(-1)?.options).not.toHaveProperty("itemWorkflowSource");
+  });
   it("distinguishes saved, validated, activated and restart-only changes", async () => {
     const { generations, writes } = await fixture();
     const initial = generations.current.snapshot.id;
@@ -193,7 +216,9 @@ describe("configuration generations", () => {
     expect(calls[0]?.options).toHaveProperty("workflowId", "flow");
   });
   it("captures Request item-workflow defaults while preserving explicit vars", async () => {
-    const { generations, calls } = await fixture();
+    const { generations, calls, setAssets } = await fixture();
+    setAssets({ workflows: [definition(), { ...definition(), id: "caller-choice" }], templates: [] });
+    await generations.apply(config(), "registered-choice", generations.current.snapshot.id, false, recheck);
     const captured = await generations.captureLaunch({ purpose: "request" });
     await captured.startRun({});
     await captured.startRun({ vars: { itemWorkflow: "caller-choice" } });

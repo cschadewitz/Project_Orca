@@ -2,6 +2,7 @@
 import { RequestsSubmitParamsSchema, RunsAdmitParamsSchema } from "@orca/protocol";
 import { LaunchPortFailure } from "./contracts.js";
 import { inputSensitive } from "./input-model.js";
+import { launchSelectionProvenance } from "../../../src/launch-provenance.js";
 import type {
   LaunchContext,
   LaunchDraft,
@@ -80,6 +81,7 @@ export class GuidedLaunchController {
       draft: structuredClone(draft),
       sequence: 0,
       inputEpoch: 0,
+      inputText: {},
       busy: false,
       withheldInputs: protectedInputs(context, draft),
       phase: "editing",
@@ -115,11 +117,19 @@ export class GuidedLaunchController {
         : "Target changed. Return to the original target to recover pending work, or explicitly review this draft for the new target.",
     );
   }
-  edit(draft: LaunchDraft): boolean {
+  edit(draft: LaunchDraft, inputText?: Readonly<Record<string, string>>): boolean {
     if (this.pending || this.state.intent !== undefined || this.state.unresolvedReview !== undefined) return false;
     this.fence += 1;
     this.update({
       draft: structuredClone(draft),
+      inputText: structuredClone(
+        inputText ??
+          Object.fromEntries(
+            Object.entries(this.state.inputText).filter(
+              ([name]) => Object.hasOwn(draft.vars, name) && draft.vars[name] === this.state.draft.vars[name],
+            ),
+          ),
+      ),
       sequence: this.state.sequence + 1,
       phase: "editing",
       review: undefined,
@@ -194,8 +204,11 @@ export class GuidedLaunchController {
         rootId: root.id,
         workflowId: workflow.id,
         workflowVersion: workflow.version,
+        expectedWorkflowRevision: workflow.revision,
+        expectedConfigGeneration: context.activeGeneration,
         vars: draft.vars,
         ...(draft.overrides === undefined ? {} : { overrides: draft.overrides }),
+        ...(draft.mode === "request" ? { request: { title: draft.title, body: draft.body } } : {}),
       });
       if (fence !== this.fence) return;
       if (
@@ -223,6 +236,17 @@ export class GuidedLaunchController {
         expectedConfigGeneration: result.expectedConfigGeneration,
         vars: draft.vars,
       };
+      const fields = result.inputSchema?.fields ?? {};
+      const withheldInputs = [
+        ...new Set([
+          ...this.state.withheldInputs,
+          ...Object.keys(draft.vars).filter((name) => !Object.hasOwn(fields, name)),
+          ...Object.entries(fields)
+            .filter(([, field]) => inputSensitive(field))
+            .map(([name]) => name),
+        ]),
+      ];
+      const selectionProvenance = launchSelectionProvenance(result);
       const command =
         draft.mode === "direct"
           ? {
@@ -249,14 +273,14 @@ export class GuidedLaunchController {
         generation: context.activeGeneration,
         command,
         warnings: result.validation.warnings,
-        visibleInputs: Object.keys(workflow.inputSchema?.fields ?? {}).filter(
-          (name) => !this.state.withheldInputs.includes(name),
-        ),
+        visibleInputs: Object.keys(fields).filter((name) => !withheldInputs.includes(name)),
+        ...(selectionProvenance === undefined ? {} : { selectionProvenance }),
         ...(result.checkout === undefined ? {} : { checkout: result.checkout }),
       };
       this.update({
         phase: "review",
         review,
+        withheldInputs,
         message: "Review the exact target, workflow and inputs before launching.",
       });
     } catch (error) {
@@ -323,7 +347,8 @@ export class GuidedLaunchController {
         if (
           !sameScope(review.target, this.state.context.target) ||
           !sameLaunchTarget(this.state.draftTarget, this.state.context.target) ||
-          this.state.context.unavailableReason
+          this.state.context.unavailableReason ||
+          this.state.context.recoveryReason
         ) {
           this.block("Review the original authorized target before recovering the exact protected launch.");
           return;
@@ -388,9 +413,8 @@ export class GuidedLaunchController {
     )
       return;
     // Recovery must not depend on changed workflow/configuration choices; only current authority/target.
-    const { context, draft } = this.state;
-    const authority =
-      context.unavailableReason ?? (draft.mode === "direct" ? context.directReason : context.requestReason);
+    const { context } = this.state;
+    const authority = context.unavailableReason ?? context.recoveryReason;
     if (authority !== undefined) {
       this.block(authority);
       return;
@@ -447,6 +471,7 @@ export class GuidedLaunchController {
     return messages[error.reason];
   }
   async saveDraft(): Promise<void> {
+    if (this.pending || this.state.intent !== undefined || this.state.unresolvedReview !== undefined) return;
     if (!jsonValue(this.state.draft.vars)) {
       this.block("Correct invalid typed values before saving a protected draft. The draft remains in this session.");
       return;
@@ -457,11 +482,14 @@ export class GuidedLaunchController {
     }
     const fence = this.fence;
     const { draftTarget, draft } = this.state;
+    this.pending = true;
     try {
       await this.ports.drafts.save(draftTarget, draft);
       if (fence === this.fence) this.update({ message: "Draft saved through protected storage." });
     } catch {
       if (fence === this.fence) this.block("Protected draft storage failed. Your draft is retained in this session.");
+    } finally {
+      this.pending = false;
     }
   }
   async loadDraft(): Promise<void> {
@@ -485,6 +513,7 @@ export class GuidedLaunchController {
         draft: structuredClone(draft),
         sequence: this.state.sequence + 1,
         inputEpoch: this.state.inputEpoch + 1,
+        inputText: {},
         withheldInputs: [...new Set([...this.state.withheldInputs, ...Object.keys(draft.vars)])],
         review: undefined,
         phase: "editing",
@@ -526,6 +555,7 @@ export class GuidedLaunchController {
         draftTarget: structuredClone(target),
         sequence: saved.review.draftSequence,
         inputEpoch: this.state.inputEpoch + 1,
+        inputText: {},
         withheldInputs: [
           ...new Set([
             ...this.state.withheldInputs,

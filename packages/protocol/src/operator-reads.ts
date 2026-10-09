@@ -1,6 +1,7 @@
 /** Bounded, allowlisted operator projections. Registration is an integrator-owned seam. */
 import { z } from "zod";
-import { ValidationResultSchema } from "./workflow-inputs.js";
+import { RunOverridesSchema, SubmissionCommandSchema } from "@orca/core/schemas";
+import { ValidationResultSchema, WorkflowInputSchemaViewSchema } from "./workflow-inputs.js";
 import { LiveInputViewSchema } from "./live-input.js";
 
 export const OPERATOR_PAGE_SIZE = 50;
@@ -73,6 +74,7 @@ export const OperatorRowSchema = z.object({
   agentId: OperatorIdSchema.optional(),
   modelId: OperatorIdSchema.optional(),
   templateId: OperatorIdSchema.optional(),
+  templatePack: OperatorIdSchema.optional(),
   source: z.string().max(100).optional(),
   from: OperatorIdSchema.optional(),
   to: OperatorIdSchema.optional(),
@@ -117,8 +119,23 @@ export const OperatorPreflightParamsSchema = z.strictObject({
   purpose: z.enum(["request", "workflow"]),
   workflowId: OperatorIdSchema.optional(),
   workflowVersion: OperatorIdSchema.optional(),
+  expectedWorkflowRevision: OperatorIdSchema.optional(),
+  expectedConfigGeneration: OperatorIdSchema.optional(),
   vars: z.record(z.string(), z.unknown()).default({}),
+  overrides: RunOverridesSchema.optional(),
+  /** Public draft fields; the server supplies the provisional Request identity and defaults. */
+  request: SubmissionCommandSchema.pick({ title: true, body: true, source: true, labels: true }).optional(),
 });
+const OperatorLaunchChoiceSchema = z.object({ value: OperatorIdSchema, source: z.string().min(1).max(100) });
+/** Resolved metadata only: no host, prompt, partial body, input value or executable configuration. */
+export const OperatorLaunchSelectionSchema = z.object({
+  nodeId: OperatorIdSchema,
+  role: OperatorIdSchema.optional(),
+  agent: OperatorLaunchChoiceSchema,
+  model: OperatorLaunchChoiceSchema.optional(),
+  template: OperatorLaunchChoiceSchema.extend({ revision: OperatorIdSchema.optional() }).optional(),
+});
+export type OperatorLaunchSelection = z.infer<typeof OperatorLaunchSelectionSchema>;
 export const OperatorPreflightResultSchema = z.object({
   target: OperatorTargetSchema,
   workflowId: OperatorIdSchema,
@@ -126,6 +143,11 @@ export const OperatorPreflightResultSchema = z.object({
   expectedWorkflowRevision: OperatorIdSchema,
   expectedConfigGeneration: OperatorIdSchema,
   validation: ValidationResultSchema,
+  /** Exact checked declaration; null confirms no declaration, absent is a legacy peer. */
+  inputSchema: WorkflowInputSchemaViewSchema.nullable().optional(),
+  selections: z.array(OperatorLaunchSelectionSchema).max(1000).optional(),
+  itemWorkflow: OperatorLaunchChoiceSchema.optional(),
+  templatePack: OperatorLaunchChoiceSchema.optional(),
   asOf: z.iso.datetime(),
 });
 export const OperatorArtifactParamsSchema = z.strictObject({

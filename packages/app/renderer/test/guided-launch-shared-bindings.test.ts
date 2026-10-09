@@ -147,8 +147,60 @@ describe("shared guided-launch declaration bindings", () => {
     await expect(
       call({ ...candidate, mode: "request", overrides: { model: "unsupported-projection" } }),
     ).rejects.toThrow();
-    expect(preflight).toHaveBeenCalledTimes(1);
+    expect(preflight).toHaveBeenCalledTimes(2);
     expect(assertCurrent).toHaveBeenCalled();
+  });
+  it("consumes authoritative Request override validation and preserves validation errors without a second selection validator", async () => {
+    const preflight = vi.fn<GuidedLaunchPorts["preflight"]>().mockResolvedValue({
+      target: editorTarget(launchContext().target),
+      workflowId: "synthetic-work",
+      workflowVersion: "1",
+      expectedWorkflowRevision: "digest-1",
+      expectedConfigGeneration: "generation-1",
+      validation: { ok: true, errors: [], warnings: [] },
+      selections: [],
+      inputSchema: null,
+      asOf: "2026-10-08T00:00:00Z",
+    });
+    const call = sharedPreflight(
+      { preflight, checkout: vi.fn<GuidedLaunchPorts["checkout"]>().mockResolvedValue(checkout()) },
+      {
+        assertCurrent: () => {},
+        configuredRootId: "disposable-root",
+      },
+    );
+    const candidate = {
+      target: launchContext().target,
+      mode: "request" as const,
+      rootId: "disposable-root",
+      workflowId: "synthetic-work",
+      workflowVersion: "1",
+      expectedWorkflowRevision: "digest-1",
+      expectedConfigGeneration: "generation-1",
+      vars: {},
+      request: { title: "Reviewed Request", body: "Reviewed body" },
+      overrides: { model: { "agent-1": "declared-model" } },
+    };
+    expect((await call(candidate)).selections).toEqual([]);
+    expect(preflight.mock.calls[0]?.[0]).toMatchObject({
+      overrides: candidate.overrides,
+      request: candidate.request,
+      expectedConfigGeneration: "generation-1",
+    });
+    preflight.mockResolvedValue({
+      target: editorTarget(launchContext().target),
+      workflowId: "synthetic-work",
+      workflowVersion: "1",
+      expectedWorkflowRevision: "digest-1",
+      expectedConfigGeneration: "generation-1",
+      validation: {
+        ok: false,
+        errors: [{ path: "overrides.model.agent-1", message: "Model is unavailable" }],
+        warnings: [],
+      },
+      asOf: "2026-10-08T00:00:00Z",
+    });
+    expect((await call(candidate)).validation.errors[0]?.path).toBe("overrides.model.agent-1");
   });
   it("uses canonical atomic submission and retains the returned durable handle", async () => {
     const ownerSubmit = vi.fn<GuidedLaunchPorts["submit"]>().mockResolvedValue({

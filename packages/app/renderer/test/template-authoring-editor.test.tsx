@@ -120,6 +120,33 @@ async function paletteCommand(label: string) {
 }
 
 describe("template authoring editor", () => {
+  it("shows saved catalog diagnostics before editing and replaces them with the exact draft review", async () => {
+    mount(
+      {},
+      {
+        ...base,
+        errors: [{ code: "reference", message: "A configured workflow references a missing template." }],
+      },
+    );
+    expect(screen.getByText("A configured workflow references a missing template.")).toBeTruthy();
+    fireEvent.change(sourceControl(), { target: { value: source + "Repaired draft\n" } });
+    fireEvent.click(screen.getByRole("button", { name: "Validate and review" }));
+    await screen.findByText("Review body changed");
+    expect(screen.queryByText("A configured workflow references a missing template.")).toBeNull();
+  });
+
+  it("allows fixture preview on an authorized read-only catalog while disabling source changes", async () => {
+    const { preview, publish } = mount({}, { ...base, writeReason: "Read-only connection" });
+    expect(sourceControl().readOnly).toBe(true);
+    expect(screen.getByRole("button", { name: "Import into draft" }).getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByRole("button", { name: "Publish revision" }).getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByRole("button", { name: "Preview prompt" }).getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Preview prompt" }));
+    await screen.findByLabelText("Rendered prompt");
+    expect(preview).toHaveBeenCalledTimes(1);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it("honors same-revision source withholding, retains the hidden draft and ignores its pending preview", async () => {
     const pending = pendingPreview();
     const preview = vi.fn<AuthoringPorts["preview"]>(() => pending.promise);

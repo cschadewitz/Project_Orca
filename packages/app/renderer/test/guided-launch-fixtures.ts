@@ -56,6 +56,7 @@ export function launchPorts(context = launchContext()) {
       rootId: "disposable-root",
       rootRevision: "root-evidence-1",
       validation: { ok: true, errors: [], warnings: [] },
+      inputSchema: context.workflows[0]!.inputSchema!,
     }),
     retain: vi.fn<NonNullable<LaunchPorts["retain"]>>().mockResolvedValue({ id: "protected-intent-1" }),
     submit: vi.fn<NonNullable<LaunchPorts["submit"]>>().mockResolvedValue({

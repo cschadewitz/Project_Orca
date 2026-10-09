@@ -22,5 +22,7 @@ export const RunProvenanceSchema = z.object({
     }),
   ),
   templatePack: ChoiceSchema.optional(),
+  /** Effective dispatch default; individual node pins may select another workflow. */
+  itemWorkflow: ChoiceSchema.optional(),
 });
 export type RunProvenance = z.infer<typeof RunProvenanceSchema>;
