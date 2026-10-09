@@ -1,6 +1,5 @@
 /** Private recovery clock. Native capability is not consent or platform acceptance. */
-import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { loadDiagnosticsAddon } from "./native-addon.js";
 import type { BootReading, DiagnosticsClock } from "./recovery-contract.js";
 
 const unavailable: DiagnosticsClock = Object.freeze({ read: () => undefined });
@@ -9,11 +8,7 @@ const unavailable: DiagnosticsClock = Object.freeze({ read: () => undefined });
 export function loadNativeDiagnosticsClock(): DiagnosticsClock {
   if (process.platform !== "darwin") return unavailable;
   try {
-    const path = fileURLToPath(
-      new URL("../../../native/diagnostics/build/Release/diagnostics_clock.node", import.meta.url),
-    );
-    const backend: unknown = createRequire(import.meta.url)(path);
-    return createNativeDiagnosticsClock(backend);
+    return createNativeDiagnosticsClock(loadDiagnosticsAddon("diagnostics_clock"));
   } catch {
     return unavailable;
   }
