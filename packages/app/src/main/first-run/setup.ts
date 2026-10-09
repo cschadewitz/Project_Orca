@@ -1,12 +1,23 @@
 /** Dedicated first-run provisioning. Native selections are reviewed, identity-fenced and never overwritten. */
+import { constants } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { lstat, mkdir, open, readFile, rename } from "node:fs/promises";
-import { FirstRunOwnershipRefusal } from "./ownership.js";
-import { dirname, join } from "node:path";
+import { FirstRunOwnershipRefusal, inspectFirstRunOwnership, absent } from "./ownership.js";
+import { parse as parseYaml } from "yaml";
+import { FirstRunRecovery, bindQuiescentConfiguration } from "./recovery.js";
+import { inspectLocalTool } from "./agent-preflight.js";
+import type { DaemonClient } from "../../client/daemon-client.js";
+import { dirname, join, isAbsolute } from "node:path";
 import { z } from "zod";
 import type { FirstRunReview, FirstRunStatus } from "../../first-run-contract.js";
 import type { ConnectionCandidate } from "../connection-target.js";
-import { isCompatible, PROTOCOL_VERSION, OperatorDiscoverySchema } from "@orca/protocol";
+import {
+  isCompatible,
+  PROTOCOL_VERSION,
+  OperatorDiscoverySchema,
+  ConfigGetResultSchema,
+  FirstRunConfigSchema,
+} from "@orca/protocol";
 import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_FILES } from "../../first-run-sample.js";
 import {
   type DirectoryIdentity,
@@ -42,11 +53,26 @@ export interface FirstRunDeps {
   /** Must return a bundled, token-file authenticated candidate and its owned child PID. */
   prepareConnection(path: string): Promise<ConnectionCandidate & { expectedProcessId: number }>;
   current(path: string): boolean;
+  /** Exact surviving owned daemon, captured in main. Does not start or adopt a daemon. */
+  configuration?(path: string): {
+    client: DaemonClient;
+    check(): void;
+    rebind(expectedHash: string, savedHash: string): void | Promise<void>;
+  };
 }
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 export class FirstRunSetup {
   private selection: Selection | undefined;
   private busy = false;
+  private configReview:
+    | {
+        id: string;
+        receipt: Receipt;
+        revision: string;
+        expires: number;
+        boundary: Pick<ReturnType<NonNullable<FirstRunDeps["configuration"]>>, "check" | "rebind">;
+      }
+    | undefined;
   constructor(private readonly deps: FirstRunDeps) {}
   get isBusy(): boolean {
     return this.busy;
@@ -62,6 +88,18 @@ export class FirstRunSetup {
   async status(): Promise<FirstRunStatus> {
     if (this.selection) return { state: "review", review: this.selection.review };
     const receipt = await this.readReceipt();
+    if (receipt && !absent(join(receipt.workspace.path, ".orca-first-run-ownership"))) {
+      try {
+        const latest = inspectFirstRunOwnership(receipt.workspace.path, true).latest;
+        if (latest?.texts["recovery-request.json"] && !latest.settled) {
+          const request: unknown = JSON.parse(latest.texts["recovery-request.json"]);
+          if (typeof request === "object" && request && "requestId" in request && typeof request.requestId === "string")
+            return { state: "recovery", recovery: { state: "ready", requestId: request.requestId } };
+        }
+      } catch {
+        /* Connect/recovery retains the concrete refusal; status never repairs evidence. */
+      }
+    }
     return receipt
       ? this.prepared(receipt)
       : {
@@ -71,18 +109,36 @@ export class FirstRunSetup {
         };
   }
   /** Saved paths do not authorize startup until both physical directories and exact files verify. */
-  private async readReceipt(): Promise<Receipt | undefined> {
+  private async readReceipt(allowChangedConfig = false): Promise<Receipt | undefined> {
     try {
       const info = await lstat(this.deps.receiptPath);
-      if (!info.isFile() || info.isSymbolicLink() || info.size > 64 * 1024) throw selectionFailure();
-      const receipt = receiptSchema.parse(JSON.parse(await readFile(this.deps.receiptPath, "utf8")));
-      await this.verify(receipt);
+      if (
+        !info.isFile() ||
+        info.isSymbolicLink() ||
+        info.nlink !== 1 ||
+        info.size > 64 * 1024 ||
+        typeof process.getuid !== "function" ||
+        info.uid !== process.getuid()
+      )
+        throw selectionFailure();
+      const file = await open(this.deps.receiptPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      let text: string;
+      try {
+        const current = await file.stat();
+        if (current.ino !== info.ino || current.dev !== info.dev || current.size > 64 * 1024 || current.nlink !== 1)
+          throw selectionFailure();
+        text = await file.readFile("utf8");
+      } finally {
+        await file.close();
+      }
+      const receipt = receiptSchema.parse(JSON.parse(text));
+      await this.verify(receipt, allowChangedConfig);
       return receipt;
     } catch {
       return undefined;
     }
   }
-  private async verify(receipt: Receipt): Promise<void> {
+  private async verify(receipt: Receipt, allowChangedConfig = false): Promise<void> {
     const project = await preparedProject(receipt.project.path, this.deps.home);
     const workspace = await ownedDirectory(receipt.workspace.path, this.deps.home);
     if (
@@ -106,13 +162,24 @@ export class FirstRunSetup {
       if (
         !info.isFile() ||
         info.isSymbolicLink() ||
+        info.nlink !== 1 ||
+        String(info.dev) !== workspace.dev ||
+        String(info.uid) !== workspace.uid ||
+        info.size > 1024 * 1024
+      )
+        throw selectionFailure();
+      const actual = digest(await readFile(path, "utf8"));
+      if (name === "orca.config.yaml") {
+        if (!allowChangedConfig && actual !== receipt.files[name]) throw selectionFailure();
+      } else if (
         info.size !== Buffer.byteLength(text) ||
         receipt.files[name] !== digest(text) ||
-        digest(await readFile(path, "utf8")) !== digest(text)
+        actual !== digest(text)
       )
         throw selectionFailure();
     }
   }
+
   private files(project: string): Record<string, string> {
     return {
       ...FIRST_RUN_SAMPLE_FILES,
@@ -137,6 +204,7 @@ export class FirstRunSetup {
   }
   async choose(assertCurrent: () => void): Promise<FirstRunStatus> {
     return this.exclusive(async () => {
+      this.configReview = undefined;
       assertCurrent();
       const projectPath = await this.deps.choose("project");
       assertCurrent();
@@ -207,6 +275,138 @@ export class FirstRunSetup {
       await this.writeExclusive(temporary, JSON.stringify(receipt) + "\n");
       assertCurrent();
       // This is our own selection receipt; replacing it follows the explicit reviewed new selection.
+      await rename(temporary, this.deps.receiptPath);
+      return this.prepared(receipt);
+    });
+  }
+  async prepareRecovery(assertCurrent: () => void): Promise<FirstRunStatus> {
+    return this.exclusive(async () => {
+      const receipt = await this.readReceipt();
+      if (!receipt) throw selectionFailure();
+      await this.verify(receipt);
+      assertCurrent();
+      return {
+        state: "recovery",
+        recovery: new FirstRunRecovery(receipt.workspace.path).prepare(assertCurrent),
+      };
+    });
+  }
+  async reconcileRecovery(id: string, assertCurrent: () => void): Promise<FirstRunStatus> {
+    return this.exclusive(async () => {
+      const receipt = await this.readReceipt();
+      if (!receipt) throw selectionFailure();
+      await this.verify(receipt);
+      assertCurrent();
+      const recovery = await new FirstRunRecovery(receipt.workspace.path).reconcile(id, assertCurrent);
+      return recovery.state === "reconciled" ? this.prepared(receipt) : { state: "recovery", recovery };
+    });
+  }
+  async reviewConfiguration(assertCurrent: () => void): Promise<FirstRunStatus> {
+    return this.exclusive(async () => {
+      this.configReview = undefined;
+      const receipt = await this.readReceipt(true);
+      if (!receipt) throw selectionFailure();
+      assertCurrent();
+      let boundary:
+        | (Pick<ReturnType<NonNullable<FirstRunDeps["configuration"]>>, "check" | "rebind"> & { client?: DaemonClient })
+        | undefined;
+      try {
+        boundary = this.deps.configuration?.(receipt.workspace.path);
+      } catch (error) {
+        if (!(error instanceof FirstRunOwnershipRefusal)) throw error;
+      }
+      let snapshot;
+      if (boundary?.client) {
+        boundary.check();
+        snapshot = await boundary.client
+          .withCapturedAuthentication()
+          .call("config.get", {}, ConfigGetResultSchema, false);
+      } else {
+        const path = join(receipt.workspace.path, "orca.config.yaml");
+        const text = await readFile(path, "utf8");
+        const revision = digest(text);
+        // Review is read-only. The binding action acquires the fence and rechecks this exact revision.
+        snapshot = {
+          config: { exists: true, path, text, revision, parsed: parseYaml(text) },
+          generation: { savedRevision: revision, state: "active" },
+        };
+        boundary = {
+          check: assertCurrent,
+          rebind: (expected, saved) =>
+            bindQuiescentConfiguration(receipt.workspace.path, expected, saved, assertCurrent),
+        };
+      }
+      boundary.check();
+      assertCurrent();
+      const doc = snapshot.config;
+      const config = FirstRunConfigSchema.parse(doc.parsed);
+      const diskHash = digest(await readFile(join(receipt.workspace.path, "orca.config.yaml"), "utf8"));
+      if (
+        !doc.exists ||
+        doc.path !== join(receipt.workspace.path, "orca.config.yaml") ||
+        doc.revision !== digest(doc.text) ||
+        diskHash !== doc.revision ||
+        !snapshot.generation ||
+        snapshot.generation.savedRevision !== doc.revision ||
+        config.storeDir !== ".orca" ||
+        config.workspace.provider !== "local" ||
+        config.workspace.root !== receipt.project.path ||
+        config.workspace.hostId !== "local" ||
+        config.hosts.length !== 1 ||
+        config.hosts[0]?.id !== "local" ||
+        config.hosts[0]?.type !== "local" ||
+        config.plugins.length !== 0 ||
+        snapshot.generation.state === "invalid" ||
+        [...config.workflows, ...config.templates].some(
+          (path) => isAbsolute(path) || path.split(/[\\/]/).includes("..") || path.includes(":"),
+        ) ||
+        config.humanInput.mode !== "pause" ||
+        !config.workflows.includes("first-run/workflow.yaml") ||
+        config.agents.some((agent) => agent.hostId !== "local")
+      )
+        throw selectionFailure();
+      const checks = [];
+      if (config.agents.length > 32) throw selectionFailure();
+      for (const agent of config.agents) checks.push(await inspectLocalTool(agent));
+      await this.verify(receipt, true);
+      boundary.check();
+      assertCurrent();
+      if (digest(await readFile(doc.path, "utf8")) !== doc.revision) throw selectionFailure();
+      const id = randomUUID();
+      this.configReview = { id, receipt, revision: doc.revision, expires: Date.now() + 5 * 60_000, boundary };
+      return {
+        state: "configuration-review",
+        review: { id, revision: doc.revision, agentCount: config.agents.length, checks },
+      };
+    });
+  }
+  async bindConfiguration(id: string, assertCurrent: () => void): Promise<FirstRunStatus> {
+    return this.exclusive(async () => {
+      const review = this.configReview;
+      if (!review || review.id !== id || Date.now() > review.expires) throw selectionFailure();
+      review.boundary.check();
+      assertCurrent();
+      await this.verify(review.receipt, true);
+      const current = await this.readReceipt(true);
+      if (
+        !current ||
+        JSON.stringify(current) !== JSON.stringify(review.receipt) ||
+        digest(await readFile(join(current.workspace.path, "orca.config.yaml"), "utf8")) !== review.revision
+      )
+        throw selectionFailure();
+      review.boundary.check();
+      assertCurrent();
+      // Consume before the journal append. If receipt publication fails, uncertainty remains visible.
+      this.configReview = undefined;
+      await review.boundary.rebind(current.files["orca.config.yaml"]!, review.revision);
+      const receipt = { ...current, files: { ...current.files, "orca.config.yaml": review.revision } };
+      await this.verify(receipt);
+      review.boundary.check();
+      assertCurrent();
+      const temporary = `${this.deps.receiptPath}.${randomUUID()}`;
+      await this.writeExclusive(temporary, JSON.stringify(receipt) + "\n");
+      review.boundary.check();
+      assertCurrent();
       await rename(temporary, this.deps.receiptPath);
       return this.prepared(receipt);
     });

@@ -151,3 +151,10 @@ Production updater/native capture stay disabled. #568 drain/runtime work at
 wiring has a separate owner. No full suite/coverage, workflow dispatch, installation,
 merge, release, host deployment, new access/credentials or provider operation occurs.
 Root owns independent review and exact-head CI.
+
+## Same-boot successor
+
+New fenced generations have an explicit same-boot route in
+[first-run-same-boot-recovery.md](first-run-same-boot-recovery.md). Legacy uncertain
+claims described above remain preserved/refused without independent lifetime authority.
+The reboot prerequisite in #577 was rejected and is not part of that successor.

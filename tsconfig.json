@@ -14,6 +14,7 @@
       "@orca/integrations/mcp": ["./packages/integrations/src/mcp/index.ts"],
       "@orca/integrations": ["./packages/integrations/src/index.ts"],
       "@orca/cli": ["./packages/cli/src/index.ts"],
+      "@orca/protocol/first-run-fence": ["./packages/protocol/src/first-run-fence.ts"],
       "@orca/protocol": ["./packages/protocol/src/index.ts"],
       "@orca/daemon": ["./packages/daemon/src/index.ts"],
       "@orca/design": ["./packages/design/src/index.ts"]

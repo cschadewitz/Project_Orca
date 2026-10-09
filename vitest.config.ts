@@ -20,6 +20,7 @@ export default defineConfig({
       "@orca/testing": pkg("testing"),
       "@orca/integrations/mcp": src("integrations", "mcp/index"),
       "@orca/integrations": pkg("integrations"),
+      "@orca/protocol/first-run-fence": src("protocol", "first-run-fence"),
       "@orca/protocol": pkg("protocol"),
       "@orca/daemon": pkg("daemon"),
       "@orca/design": pkg("design"),
