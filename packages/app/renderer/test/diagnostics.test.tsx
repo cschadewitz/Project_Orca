@@ -10,6 +10,7 @@ import type {
   DiagnosticsStatus,
 } from "../../src/diagnostics-contract.js";
 import { DiagnosticsSection } from "../src/diagnostics/diagnostics-section.js";
+import { DiagnosticReportView } from "../src/diagnostics/report-view.js";
 import { ConfigProvider } from "../src/config/config-context.js";
 import { ConfigSurface } from "../src/config/config-surface.js";
 import { harness, installBridge } from "./harness.js";
@@ -113,6 +114,25 @@ afterEach(() => {
   cleanup();
   while (disposals.length) disposals.pop()?.();
   vi.useRealTimers();
+});
+
+it("reuses exact DOM text nodes while clearing Close, shorter successors and unmount", () => {
+  const view = render(<DiagnosticReportView blocks={["first\n", "second\n"]} shown />);
+  const report = screen.getByRole("region", { name: "Complete exact diagnostic report" });
+  const nodes = [...report.querySelectorAll("span")];
+  const first = nodes[0]!.firstChild!;
+  expect(report.textContent).toBe("first\nsecond\n");
+  view.rerender(<DiagnosticReportView blocks={[]} shown={false} />);
+  expect(report.textContent).toBe("");
+  expect(nodes.every((span) => span.textContent === "")).toBe(true);
+  expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+  view.rerender(<DiagnosticReportView blocks={["successor\n"]} shown />);
+  expect(report.textContent).toBe("successor\n");
+  expect(report.firstChild).toBe(nodes[0]);
+  expect(report.firstChild!.firstChild).toBe(first);
+  expect(nodes[1]!.parentNode).toBeNull();
+  view.unmount();
+  expect(first.textContent).toBe("");
 });
 
 describe("persistent diagnostics choice", () => {

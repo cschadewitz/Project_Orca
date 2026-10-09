@@ -31,6 +31,12 @@ is rendered in one focusable, labelled `pre` with all blocks in document order;
 offscreen layout uses the existing content-visibility rules. No omitted text,
 pagination or preview reconstruction is used for Save.
 
+The view reuses a bounded pool of text nodes across previews. A layout effect
+clears each node's data and removes it from the hidden view on Close/Off before
+the disposal acknowledgement. Shorter successors leave excess nodes empty;
+unmount clears the pool. This avoids retaining entire retired reports through
+uncollected DOM nodes, while preserving ordinary readable/selectable text.
+
 The picker is refused until every byte is acknowledged. Renderer exposes the
 preview and picker only after loading the complete owner. Save stages the original
 main bytes, independent of the renderer's decoded view. Close, Off, expiry,

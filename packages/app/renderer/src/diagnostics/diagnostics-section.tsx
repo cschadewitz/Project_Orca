@@ -4,6 +4,7 @@ import type { DiagnosticsBridge } from "../../../src/diagnostics-contract.js";
 import { Button, ConfigField, Menu, Text } from "../ui/index.js";
 import { DIAGNOSTICS_MESSAGES, EARLIER_EXPORT_WARNING, SAVE_WARNING } from "./diagnostics-model.js";
 import { useDiagnostics } from "./use-diagnostics.js";
+import { DiagnosticReportView } from "./report-view.js";
 import "./diagnostics.css";
 
 /** Local main-owned settings do not depend on daemon connection or execution writability. */
@@ -267,22 +268,9 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
               </Button>
             </>
           )}
-          <Text
-            style="mono-body"
-            as="pre"
-            tabIndex={0}
-            role="region"
-            aria-label="Complete exact diagnostic report"
-            className="orca-diagnostics__exact"
-          >
-            {reportBlocks.map((block, index) => (
-              <span className="orca-diagnostics__block" key={index}>
-                {block}
-              </span>
-            ))}
-          </Text>
         </section>
       )}
+      <DiagnosticReportView blocks={reportBlocks} shown={state.preview !== undefined} />
     </section>
   );
 }

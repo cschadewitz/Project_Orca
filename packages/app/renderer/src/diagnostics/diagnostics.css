@@ -26,6 +26,11 @@
 }
 
 /* type: mono-body */
+.orca-diagnostics__report {
+  margin-top: var(--space-2);
+}
+
+/* type: mono-body */
 .orca-diagnostics__exact {
   width: 100%;
   box-sizing: border-box;
