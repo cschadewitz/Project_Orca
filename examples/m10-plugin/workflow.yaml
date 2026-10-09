@@ -1,0 +1,14 @@
+id: m10-owned
+name: M10 owned plugin restart fixture
+version: "1"
+start: start
+nodes:
+  start: { type: start }
+  gate: { type: gate, question: Continue the owned M10 test?, options: [go, stop] }
+  custom: { type: "custom:m10-owned" }
+  done: { type: end }
+edges:
+  - { from: start, to: gate }
+  - { from: gate, to: custom, when: "choice == 'go'" }
+  - { from: gate, to: done }
+  - { from: custom, to: done }

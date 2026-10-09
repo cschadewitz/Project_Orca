@@ -68,9 +68,17 @@ import {
   type LoadedRestorationPlugin,
 } from "./plugin-runtime.js";
 
+import {
+  loadInstalledPluginRelease,
+  type InstalledPluginRelease,
+  type VerifiedPluginRelease,
+} from "./plugin-release.js";
+
 export const CONFIG_FILENAMES = ["orca.config.yaml", "orca.config.yml", "orca.config.json"];
 
 export interface BootstrapOptions {
+  /** Trusted composition supplies an independently approved closed-bundle release pin; never read from config/RPC/env. */
+  installedPluginRelease?: InstalledPluginRelease;
   /** Required for plugin restart opt-in. Verify full code/dependency identities using trusted installed release evidence. */
   verifyPluginRestorationIdentity?: PluginRestorationIdentityVerifier;
   /** Trusted production composition, created over these exact stores before any interpreter runs. */
@@ -328,7 +336,13 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   // Direct method/prototype/nested replacements are unsupported even without extractor registration.
   const runtimeMutated = captureRuntimeObjects([...agents.listHosts(), ...configuredExecutors.values(), plan]);
   const pluginEntries = await pluginEntryDigests(config, configDir);
-  const loadedPlugins = await loadPlugins(config, configDir, api, logger);
+  if (opts.installedPluginRelease && opts.verifyPluginRestorationIdentity)
+    throw pluginRestorationRefusal("identity_unverified");
+  const installedRelease = opts.installedPluginRelease
+    ? await loadInstalledPluginRelease(opts.installedPluginRelease, pluginEntries ?? [])
+    : undefined;
+  const verifyPluginIdentity = installedRelease?.verify ?? opts.verifyPluginRestorationIdentity;
+  const loadedPlugins = await loadPlugins(config, configDir, api, logger, installedRelease, pluginEntries);
   for (const loaded of loadedPlugins) {
     const entry = pluginEntries?.find((entry) => entry.spec === loaded.spec);
     if (entry) loaded.entry = entry;
@@ -357,11 +371,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     runtimeMutated() ||
     pluginHumanInput ||
     pluginExecutors.some((type) => !type.startsWith("custom:"));
-  const pluginRestoration = await capturePluginRestoration(
-    loadedPlugins,
-    unsupportedRestoration,
-    opts.verifyPluginRestorationIdentity,
-  );
+  const pluginRestoration = await capturePluginRestoration(loadedPlugins, unsupportedRestoration, verifyPluginIdentity);
   const runtimeFingerprint = pluginEntries
     ? createHash("sha256")
         .update(
@@ -437,7 +447,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     validateCustomNode: (node) => executors.validateNode(node),
     restorePluginExecutors: (snapshot) => {
       if (unsupportedRestoration) throw pluginRestorationRefusal("unsupported_registration");
-      return restorePluginExecutors(snapshot.pluginRestoration, loadedPlugins, opts.verifyPluginRestorationIdentity);
+      return restorePluginExecutors(snapshot.pluginRestoration, loadedPlugins, verifyPluginIdentity);
     },
   });
   // Verify bytes still represent the config bootstrap loaded before labelling them active.
@@ -561,14 +571,24 @@ export async function loadPlugins(
   configDir: string,
   api: PluginApi,
   logger: Logger,
+  installedRelease?: VerifiedPluginRelease,
+  entries?: readonly { spec: string; url: string; digest: string }[],
 ): Promise<LoadedRestorationPlugin[]> {
   const loaded: LoadedRestorationPlugin[] = [];
   for (const spec of config.plugins) {
-    const mod = (await import(pluginSpecifier(spec, configDir))) as { default?: OrcaPlugin };
+    const identity = installedRelease?.identityFor(spec);
+    const entry = entries?.find((candidate) => candidate.spec === spec);
+    if (installedRelease && (!identity || !entry)) throw pluginRestorationRefusal("identity_unverified");
+    // A digest-qualified URL cannot adopt an earlier module-cache entry after bytes change at the same path.
+    const importUrl =
+      installedRelease && entry ? `${entry.url}?orca-plugin-release=${entry.digest}` : pluginSpecifier(spec, configDir);
+    const mod = (await import(importUrl)) as { default?: OrcaPlugin };
     if (!mod.default?.register)
       throw new OrcaError("CONFIG_INVALID", `plugin ${spec} has no default OrcaPlugin export`);
     const before = new Map(api.executors.types().map((type) => [type, api.executors.get(type)]));
-    await mod.default.register(api);
+    const pluginApi = installedRelease ? { ...api } : api;
+    if (identity) Object.defineProperty(pluginApi, "restorationIdentity", { value: identity, enumerable: true });
+    await mod.default.register(pluginApi);
     loaded.push({
       spec,
       plugin: mod.default,

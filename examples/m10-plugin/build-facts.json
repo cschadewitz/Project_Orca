@@ -1,0 +1,37 @@
+{
+  "approved": false,
+  "sourceBase": "ec915f4f47ffec87270879c74e9bce1c4cd1bca9",
+  "stackedBase": "a56692c51eb7b99ca9941772dc71dde847004fd3",
+  "runtime": {
+    "node": "24.21.0",
+    "platform": "linux",
+    "arch": "x64",
+    "nodeBinarySha256": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c"
+  },
+  "build": {
+    "pnpm": "12.4.2",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "syntaxParserTypeScript": "6.0.3",
+    "lockfileSha256": "bdec771cc085b76018231b0ad1911791936a084193b17d401413ea5a19fa5e92",
+    "producerSha256": "76613ecce2226d7522c4fa2f562c327e0d1781d6f6727667dda0cdc90d5fd6d3",
+    "command": "pnpm exec tsc -b tsconfig.build.json",
+    "compiledRuntimeFiles": 251,
+    "compiledRuntimeCatalogueSha256": "18397298e277df2c0af45f5d3cbf0f99eb5fd203015539f416c0d9591bffb699"
+  },
+  "source": {
+    "path": "examples/m10-plugin/plugin.mjs",
+    "sha256": "440a778aeb20fd25032f6888ea1be67149425fcbe7867f9f73d92427db823cc1",
+    "dependencies": [],
+    "externalImports": []
+  },
+  "candidate": {
+    "manifestSha256": "9ac49cd3b320421fa465bfce8b6876d43fff132c8c7a1ede389b25d25ea9c9ed",
+    "bundleSha256": "8bb8dbe456f8d24b68a762e389c0ce650e2958a831cd436dec96340448b20152"
+  },
+  "operatorLauncher": {
+    "path": "tools/m10-operator/launch.mjs",
+    "sha256": "4fa6ba9dedcc36ec14293604249c0b87c54f00e0250a243179590d4524f6127a",
+    "approved": false
+  }
+}
