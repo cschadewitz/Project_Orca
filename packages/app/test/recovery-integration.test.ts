@@ -542,13 +542,15 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
       await enteredWithin(pending.entered);
       const second = fixture.controller.save(preview.handle, destination.token);
       fixture.controller.revokeExportAuthority();
+      // Revocation invalidates captured authority, and pending publication still
+      // prevents fresh authority even though durable collection consent stays On.
+      expect((await fixture.controller.prepareExport("current")).ok).toBe(false);
       pending.release();
       await Promise.all([first, second]);
       expect(fixture.native.publishCalls).toBe(1);
       await expect(access(fixture.picker.destination)).rejects.toMatchObject({ code: "ENOENT" });
       fixture.native.beforePublish = undefined;
-      expect((await fixture.controller.prepareExport("current")).ok).toBe(false);
-      value(await fixture.controller.cancelExport(preview.handle));
+      expect((await fixture.disk.readSetting()).enabled).toBe(true);
       const fresh = await frozenReportText(
         fixture.controller,
         value(await fixture.controller.prepareExport("current")),

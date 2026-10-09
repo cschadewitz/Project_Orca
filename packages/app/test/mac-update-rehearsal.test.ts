@@ -18,6 +18,15 @@ async function fixture() {
   fixtures.push(f);
   return f;
 }
+/** An unreachable coordinator checkpoint must fail immediately with its settled state. */
+async function reached(checkpoint: ReturnType<typeof barrier>, operation: Promise<unknown>) {
+  await Promise.race([
+    checkpoint.promise,
+    operation.then((state) => {
+      throw new Error(`Coordinator settled before rehearsal checkpoint: ${JSON.stringify(state)}`);
+    }),
+  ]);
+}
 afterEach(async () => {
   vi.useRealTimers();
   try {
@@ -43,7 +52,7 @@ async function restartRehearsal(options: Parameters<typeof restartFixture>[0] = 
   const f = await macUpdateRehearsal(r);
   fixtures.push(f);
   const approval = f.updates.approve(f.present());
-  await f.validated.promise;
+  await reached(f.validated, approval);
   expect(f.ownerHeld()).toBe(true);
   expect(f.binding.candidate).toEqual(r.candidate);
   expect(f.bytes).toEqual(r.manifestBytes);
@@ -126,7 +135,7 @@ it("extends approved downloaded bytes and both real guards through one owned sto
     expect(h.start).toHaveBeenCalledOnce();
     expect(h.f.ownerHeld()).toBe(true);
     expect(h.f.windows.active).toBe(true);
-    expect(h.f.runtimeEvents.map((event) => event.action)).toEqual(["prepare"]);
+    expect(h.f.runtimeEvents.map((event) => event.action)).toEqual(["drain", "drain", "prepare", "drain"]);
   } finally {
     await h.finish();
   }
@@ -230,7 +239,7 @@ it.each(["image", "identity", "lost-final-hello", "lost-launch"] as const)(
       await replacementStillClosed(h.r);
       expect(h.f.ownerHeld()).toBe(true);
       expect(h.f.windows.active).toBe(true);
-      expect(h.f.runtimeEvents.map((event) => event.action)).toEqual(["prepare"]);
+      expect(h.f.runtimeEvents.map((event) => event.action)).toEqual(["drain", "drain", "prepare", "drain"]);
     } finally {
       await h.finish();
     }
@@ -274,8 +283,8 @@ it("waits for a real pending live callback before reaching pre-restart validatio
     await ask;
   }
   const pending = f.updates.reconsider();
-  await f.validated.promise;
-  expect(f.runtimeEvents.map((event) => event.outcome)).toEqual(["blocked", "held"]);
+  await reached(f.validated, pending);
+  expect(f.runtimeEvents.map((event) => event.outcome)).toEqual(["draining", "draining", "held", "held", "held"]);
   f.finishValidation.release();
   expect((await pending).phase).toBe("recovery-required");
 });
@@ -295,14 +304,17 @@ it.each(["prepare", "release"] as const)("retains the composed window owner afte
     return pending;
   });
   const pending = f.updates.approve(f.present());
-  await entered.promise;
+  await reached(entered, pending);
   await vi.advanceTimersByTimeAsync(5000);
   if (phase === "prepare") await vi.advanceTimersByTimeAsync(5000);
   expect((await pending).phase).toBe("recovery-required");
   vi.useRealTimers();
   expect(f.windows.active).toBe(true);
   expect(f.a.enabled()).toBe(false);
-  expect(f.runtimeEvents).toEqual([]);
+  expect(f.runtimeEvents).toEqual([
+    { action: "drain", outcome: "held" },
+    { action: "drain", outcome: "held" },
+  ]);
   expect(f.revalidate).not.toHaveBeenCalled();
   // Late ACKs cannot let a sealed coordinator retry or silently release the held boundary.
   f.a.ack({ ...f.a.messages[0], ready: true });
@@ -324,7 +336,12 @@ it("binds approval to bytes, waits for real producer work, then acquires both le
   expect(await approval).toEqual({ phase: "waiting", offerId: id, blocker: "activity" });
   expect(f.download).toHaveBeenCalledOnce();
   expect(f.revalidate).not.toHaveBeenCalled();
-  expect(f.runtimeEvents).toEqual([{ action: "prepare", outcome: "blocked" }]);
+  expect(f.runtimeEvents).toEqual([
+    { action: "drain", outcome: "draining" },
+    { action: "drain", outcome: "draining" },
+  ]);
+  expect(f.prepareDrafts).not.toHaveBeenCalled();
+  expect(f.drainAdmission.mock.invocationCallOrder[0]).toBeLessThan(f.download.mock.invocationCallOrder[0]!);
   expect(f.windows.active).toBe(false);
   expect(f.a.enabled()).toBe(true);
   expect(f.b.enabled()).toBe(false);
@@ -332,10 +349,12 @@ it("binds approval to bytes, waits for real producer work, then acquires both le
   expect(await readFile(`${f.owned[0]!.directory}/native-mac-artifact.json`)).toEqual(f.bytes);
   finish();
   const preparing = f.updates.reconsider();
-  await f.validated.promise;
+  await reached(f.validated, preparing);
   expect(f.updates.state.phase).toBe("preparing");
   expect(f.revalidate).toHaveBeenCalledWith(f.binding.candidate, f.target);
   expect(f.guards.draftsValid()).toBe(true);
+  expect(f.drainAdmission).toHaveBeenCalledOnce();
+  expect(f.admissionTokens).toEqual([f.drainAdmission.mock.calls[0]![1]]);
   expect(f.a.frozen()).toBe(true);
   expect(f.b.frozen()).toBe(true);
   expect(f.a.freezeOrder.every(Boolean)).toBe(true);
@@ -348,35 +367,50 @@ it("binds approval to bytes, waits for real producer work, then acquires both le
   f.finishValidation.release();
   expect((await preparing).phase).toBe("recovery-required");
   expect(f.runtimeEvents).toEqual([
-    { action: "prepare", outcome: "blocked" },
+    { action: "drain", outcome: "draining" },
+    { action: "drain", outcome: "draining" },
+    { action: "drain", outcome: "held" },
     { action: "prepare", outcome: "held" },
+    { action: "drain", outcome: "held" },
   ]);
   expect(f.windows.active).toBe(true);
   expect(f.updates.defer(id)).toBe(false);
   expect((await f.updates.approve(id)).phase).toBe("recovery-required");
 });
 
-it("observes work entering after the window ACKs but before runtime acquisition and safely defers/reapproves", async () => {
+it("held drain refuses producer entry after window ACKs and explicit defer permits a fresh approval", async () => {
   const f = await fixture();
-  let finish: (() => void) | undefined;
+  const held = barrier();
+  const deliver = barrier();
+  f.ownRelease(deliver.release);
   f.beforePrepare(() => {
     expect(f.a.frozen()).toBe(true);
-    finish = f.runtime.activity.enter("dispatch");
-    f.ownRelease(finish);
+    expect(() => f.runtime.activity.enter("dispatch")).toThrow();
+  });
+  f.afterPrepare(async () => {
+    held.release();
+    await deliver.promise;
   });
   const old = f.present();
-  expect((await f.updates.approve(old)).blocker).toBe("activity");
+  const approval = f.updates.approve(old);
+  await reached(held, approval);
   expect(f.updates.defer(old)).toBe(true);
+  deliver.release();
+  expect((await approval).phase).toBe("deferred");
+  expect(f.runtimeEvents.map((event) => event.action)).toEqual(["drain", "drain", "prepare", "resume"]);
+  expect(f.windows.active).toBe(false);
+  expect(f.a.frozen()).toBe(false);
   await f.discard();
   expect(await f.downloadEntries()).toEqual([]);
   const fresh = f.present();
   expect(fresh).not.toBe(old);
   await f.updates.approve(old);
   expect(f.download).toHaveBeenCalledOnce();
-  finish!();
-  f.beforePrepare(() => {});
+  f.afterPrepare(async () => {});
   const pending = f.updates.approve(fresh);
-  await f.validated.promise;
+  await reached(f.validated, pending);
+  expect(f.drainAdmission).toHaveBeenCalledTimes(2);
+  expect(f.admissionTokens[1]).not.toBe(f.admissionTokens[0]);
   expect(f.download).toHaveBeenCalledTimes(2);
   expect(f.catalog).toHaveBeenCalledTimes(4);
   expect(f.inspect).toHaveBeenCalledTimes(2);
@@ -399,7 +433,7 @@ it("ignores stale nonce, phase, generation and frame ACKs across approval, then 
     return result;
   });
   const pending = f.updates.approve(id);
-  await entered.promise;
+  await reached(entered, pending);
   const message = f.a.messages[0]!;
   const invalid = [
     ["nonce", () => f.a.ack({ ...message, nonce: "stale", ready: true })],
@@ -415,7 +449,10 @@ it("ignores stale nonce, phase, generation and frame ACKs across approval, then 
     expect(preparationSettled, `Invalid ${kind} ACK settled preparation`).toBe(false);
     expect(f.guards.draftsValid()).toBe(false);
     expect(f.updates.state.phase).toBe("preparing");
-    expect(f.runtimeEvents).toEqual([]);
+    expect(f.runtimeEvents).toEqual([
+      { action: "drain", outcome: "held" },
+      { action: "drain", outcome: "held" },
+    ]);
   }
   expect(f.updates.defer(id)).toBe(true);
   f.a.auto(true);
@@ -426,7 +463,11 @@ it("ignores stale nonce, phase, generation and frame ACKs across approval, then 
   expect(f.a.enabled()).toBe(true);
   expect(f.b.enabled()).toBe(false);
   expect(f.ipc.listenerCount("orca:macUpdate.prepared")).toBe(0);
-  expect(f.runtimeEvents).toEqual([]);
+  expect(f.runtimeEvents).toEqual([
+    { action: "drain", outcome: "held" },
+    { action: "drain", outcome: "held" },
+    { action: "resume", outcome: "released" },
+  ]);
 });
 
 it("retains window and target ownership when a document is replaced during actual runtime acquisition", async () => {
@@ -439,7 +480,11 @@ it("retains window and target ownership when a document is replaced during actua
   expect(f.guards.draftsValid()).toBe(false);
   expect(f.windows.active).toBe(true);
   expect(f.a.enabled()).toBe(false);
-  expect(f.runtimeEvents).toEqual([{ action: "prepare", outcome: "held" }]);
+  expect(f.runtimeEvents).toEqual([
+    { action: "drain", outcome: "held" },
+    { action: "drain", outcome: "held" },
+    { action: "prepare", outcome: "held" },
+  ]);
   expect(await f.call("runs.start", { workflowId: "flow" })).toMatchObject({ ok: false });
   await expect(f.workspace.prepareConnection("http://localhost:7890")).rejects.toThrow("busy");
   expect(f.revalidate).not.toHaveBeenCalled();
@@ -454,12 +499,16 @@ it.each<ProofFault>(["lost", "proof", "pid", "instance", "active"])(
     expect((await f.updates.approve(id)).phase).toBe("recovery-required");
     expect(f.windows.active).toBe(true);
     expect(f.a.frozen()).toBe(true);
-    expect(f.runtimeEvents).toEqual([{ action: "prepare", outcome: "held" }]);
+    expect(f.runtimeEvents).toEqual([
+      { action: "drain", outcome: "held" },
+      { action: "drain", outcome: "held" },
+      { action: "prepare", outcome: "held" },
+    ]);
     expect(f.revalidate).not.toHaveBeenCalled();
     expect(await f.call("runs.start", { workflowId: "flow" })).toMatchObject({ ok: false });
     await expect(f.workspace.prepareConnection("http://localhost:7890")).rejects.toThrow("busy");
     await f.updates.reconsider();
-    expect(f.runtimeEvents).toHaveLength(1);
+    expect(f.runtimeEvents).toHaveLength(3);
     expect(f.updates.defer(id)).toBe(false);
   },
 );
@@ -476,29 +525,33 @@ it("cancellation after acquisition retains both owners when release fails, witho
   f.failRelease();
   const id = f.present();
   const pending = f.updates.approve(id);
-  await held.promise;
+  await reached(held, pending);
   expect(f.updates.defer(id)).toBe(true);
   deliver.release();
   expect((await pending).phase).toBe("recovery-required");
-  expect(f.runtimeEvents.map((event) => event.action)).toEqual(["prepare", "resume"]);
+  expect(f.runtimeEvents.map((event) => event.action)).toEqual(["drain", "drain", "prepare", "resume"]);
   expect(f.windows.active).toBe(true);
   expect(f.a.frozen()).toBe(true);
   expect(await f.call("runs.start", { workflowId: "flow" })).toMatchObject({ ok: false });
   await expect(f.workspace.prepareConnection("http://localhost:7890")).rejects.toThrow("busy");
   await f.updates.reconsider();
-  expect(f.runtimeEvents).toHaveLength(2);
+  expect(f.runtimeEvents).toHaveLength(4);
   expect(f.revalidate).not.toHaveBeenCalled();
 });
 
-it("keeps native/user draft state on draft refusal, then rejects download failure before acquiring guards", async () => {
+it("keeps native/user drafts on refusal, then releases the authentic drain on download failure before window freeze", async () => {
   const f = await fixture();
   f.a.dirty(true);
   const id = f.present();
   expect((await f.updates.approve(id)).blocker).toBe("drafts");
   expect(f.a.frozen()).toBe(false);
   expect(f.a.enabled()).toBe(true);
-  expect(f.runtimeEvents).toEqual([]);
+  expect(f.runtimeEvents).toEqual([
+    { action: "drain", outcome: "held" },
+    { action: "drain", outcome: "held" },
+  ]);
   f.updates.defer(id);
+  await f.updates.settled();
   await f.discard();
   f.a.dirty(false);
   f.downloadFetch.mockImplementationOnce(async (url) => {
@@ -511,6 +564,7 @@ it("keeps native/user draft state on draft refusal, then rejects download failur
   expect(await f.downloadEntries()).toEqual([]);
   expect(f.prepareDrafts).toHaveBeenCalledOnce();
   expect(f.windows.active).toBe(false);
+  expect(f.runtimeEvents.map((event) => event.action)).toEqual(["drain", "drain", "resume", "drain", "resume"]);
 });
 
 it("cancels a stalled real download before freeze and rejects its late transport result", async () => {
@@ -536,37 +590,51 @@ it("cancels a stalled real download before freeze and rejects its late transport
   });
   const id = f.present();
   const pending = f.updates.approve(id);
-  await entered.promise;
+  await reached(entered, pending);
   expect(f.updates.defer(id)).toBe(true);
   expect((await pending).phase).toBe("deferred");
   expect(await f.downloadEntries()).toEqual([]);
   deliver.release();
   await cancelled.promise;
   expect(f.prepareDrafts).not.toHaveBeenCalled();
-  expect(f.runtimeEvents).toEqual([]);
+  expect(f.runtimeEvents).toEqual([
+    { action: "drain", outcome: "held" },
+    { action: "resume", outcome: "released" },
+  ]);
   expect(f.windows.active).toBe(false);
 });
 
-it("uses the real candidate session for disposed-offer and malformed native-proof gates while its guard seam stays disabled", async () => {
+it("the real candidate session refuses before download while its drain guard seam stays disabled", async () => {
   const f = await fixture();
   const input = { manifestBytes: f.bytes, source: f.binding.source, ...f.binding.candidate };
   const signal = new AbortController().signal;
   const offered = await f.session.offer(input, f.target, signal);
   if (offered.outcome !== "available") throw new Error("Expected available synthetic offer");
-  expect((await f.session.approve(offered.offerId)).blocker).toBe("candidate");
-  expect(f.session.verification).toBe("verified");
+  expect(await f.session.approve(offered.offerId)).toMatchObject({ phase: "failed", blocker: "activity" });
+  expect(f.session.verification).toBeUndefined();
   expect(f.session.defer(offered.offerId)).toBe(true);
-  // Session cleanup is asynchronous; bounded observation, with no timeout increase.
-  await vi.waitFor(async () => expect(await f.downloadEntries()).toEqual([]));
+  await f.session.settled();
+  expect(await f.downloadEntries()).toEqual([]);
   await f.session.approve(offered.offerId);
-  expect(f.inspect).toHaveBeenCalledOnce();
+  expect(f.inspect).not.toHaveBeenCalled();
+  expect(f.downloadFetch).not.toHaveBeenCalled();
   const fresh = await f.session.offer(input, f.target, signal);
   if (fresh.outcome !== "available") throw new Error("Expected fresh synthetic offer");
   expect(fresh.offerId).not.toBe(offered.offerId);
+  expect(await f.session.approve(fresh.offerId)).toMatchObject({ phase: "failed", blocker: "activity" });
+  expect(f.inspect).not.toHaveBeenCalled();
+  expect(f.runtimeEvents).toEqual([]);
+  expect(f.windows.active).toBe(false);
+});
+
+it("real candidate download rejects malformed native proof without acquiring any guard", async () => {
+  const f = await fixture();
   f.inspect.mockResolvedValueOnce({ outcome: "verified" } as MacNativeInspection);
-  expect((await f.session.approve(fresh.offerId)).phase).toBe("failed");
-  expect(f.session.verification).toBe("unknown");
-  expect(await f.session.offer(input, f.target, signal)).toEqual({ outcome: "unknown" });
+  expect(await f.download(f.binding.candidate, signal())).toBe("failed");
+  expect(f.verification).toEqual(["unknown"]);
+  expect(f.inspect).toHaveBeenCalledOnce();
+  expect(await f.downloadEntries()).toEqual([]);
+  expect(f.drainAdmission).not.toHaveBeenCalled();
   expect(f.runtimeEvents).toEqual([]);
   expect(f.windows.active).toBe(false);
 });
