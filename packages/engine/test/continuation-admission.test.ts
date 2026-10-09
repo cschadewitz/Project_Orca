@@ -63,6 +63,11 @@ async function fixture() {
     await rename(`${file}.tmp`, file);
   };
   const journal: ContinuationJournal = {
+    // This fixture has no run lease; production ordering is covered by daemon tests.
+    withAdmission: (_runId, work) => work(),
+    validateFresh: async (value) => {
+      if (value.expectedBoundary !== command.expectedBoundary) throw new OrcaError("RUN_STATE", "stale");
+    },
     read: async (id) => {
       const entry = await read();
       return entry?.receipt.continuationId === id ? entry : undefined;
@@ -259,14 +264,18 @@ describe("continuation service with explicitly simulated journal/runtime adapter
     expect((await admit(f.boot().service)).result.continuationId).toBe(firstId);
     expect(f.counts().answers).toBe(1);
   });
-  it("rejects changed intent and a stale boundary without another answer", async () => {
+  it("rejects a fresh stale boundary without consuming its key, and preserves changed-intent conflicts", async () => {
     const f = await fixture();
-    const { service } = f.boot();
+    const { service, claimStore } = f.boot();
     await expect(admit(service, { ...command, expectedBoundary: "old" })).rejects.toThrow("stale");
     expect(f.counts().appends).toBe(0);
-    await expect(admit(service)).rejects.toMatchObject({ code: "RETRY_CONFLICT" });
-    const result = await service.admit(command, { idempotencyKey: "new" }, authority);
-    expect(result.state).toBe("resolved");
+    expect(await claimStore.batch()).toEqual([]);
+    const result = await admit(service);
+    expect(result).toMatchObject({ state: "resolved", replayed: false });
+    await expect(admit(service, { ...command, expectedBoundary: "old" })).rejects.toMatchObject({
+      code: "RETRY_CONFLICT",
+    });
+    expect(await admit(service)).toEqual({ ...result, replayed: true });
     expect(f.counts().answers).toBe(1);
   });
   it("reauthorizes immediately before commit and refuses revoked replay", async () => {

@@ -100,6 +100,8 @@ export class ContinuationAdmissionModel {
     return this.tasks.size;
   }
   private readonly scope = new AsyncLocalStorage<Scope>();
+  private readonly admissionFence = new AsyncLocalStorage<{ runId: string; active: boolean }>();
+  private readonly freshFenceRequired = new Error("Fresh continuation requires run ownership");
   private readonly service: ContinuationAdmissionService;
   private readonly tasks = new Set<Promise<void>>();
   constructor(
@@ -122,7 +124,18 @@ export class ContinuationAdmissionModel {
   ) {
     this.service = new ContinuationAdmissionService({
       retries: options.claims,
-      journal: { read: (id) => this.read(id), commit: (input, check) => this.commit(input, check) },
+      journal: {
+        read: (id) => this.read(id),
+        withAdmission: (runId, work) => this.withAdmission(runId, work),
+        validateFresh: async (command) => {
+          const fence = this.admissionFence.getStore();
+          // Never acquire run ownership while holding the retry catalog mutex.
+          // Existing keys bypass this callback, preserving replay during execution.
+          if (!fence?.active || fence.runId !== command.runId) throw this.freshFenceRequired;
+          await this.validateCurrent(command);
+        },
+        commit: (input, check) => this.commit(input, check),
+      },
       runtime: {
         authorizeRead: (entry) => this.authorize(entry.receipt.runId, "runs.read"),
         reconcile: (entry, authority) => this.attach(entry, authority),
@@ -278,11 +291,14 @@ export class ContinuationAdmissionModel {
       }
     });
   }
-  private async key(): Promise<Buffer> {
+  private async key(allowCreate = true): Promise<Buffer> {
     const workspaceId = this.context().access.workspaceId;
     const id = `continuation-boundary-key-${createHash("sha256").update(workspaceId).digest("hex")}`;
     let record = await this.stores.execution.getGeneration(id);
     if (record === undefined) {
+      // A supplied token cannot have been issued without this key. Fresh intent
+      // validation must not provision or repair boundary authority on a refusal.
+      if (!allowCreate) throw stale();
       try {
         await this.stores.execution.putGeneration(id, {
           schemaVersion: 1,
@@ -304,8 +320,8 @@ export class ContinuationAdmissionModel {
       throw unavailable();
     return Buffer.from(value.key, "hex");
   }
-  private async token(runId: string, boundary: Boundary): Promise<string> {
-    return `cb1_${createHmac("sha256", await this.key())
+  private async token(runId: string, boundary: Boundary, allowCreate = true): Promise<string> {
+    return `cb1_${createHmac("sha256", await this.key(allowCreate))
       .update(canonicalJson({ workspaceId: this.context().access.workspaceId, runId, boundary }))
       .digest("base64url")}`;
   }
@@ -440,6 +456,8 @@ export class ContinuationAdmissionModel {
     return entry as ContinuationEntry;
   }
   private async fenced<T>(runId: string, work: () => Promise<T>): Promise<T> {
+    const admission = this.admissionFence.getStore();
+    if (admission?.active && admission.runId === runId) return work();
     const holder = `ct_${randomUUID()}`;
     const lease = await this.stores.leases.acquire({ resource: `run:${runId}`, holder });
     if (!ownsLease(lease, holder)) throw new OrcaError("RUN_LEASED", "Run is already attached");
@@ -448,6 +466,58 @@ export class ContinuationAdmissionModel {
     } finally {
       await this.stores.leases.release(lease);
     }
+  }
+  private async withAdmission<T>(runId: string, work: () => Promise<T>): Promise<T> {
+    try {
+      // A retained claim keeps its existing authorization, conflict and recovery path.
+      return await work();
+    } catch (error) {
+      if (error !== this.freshFenceRequired) throw error;
+    }
+    // The lookup-miss callback refused before any claim publication. Both retry
+    // mutexes are now released, so acquire run ownership in the established order.
+    let entered = false;
+    try {
+      return await this.fenced(runId, () => {
+        entered = true;
+        const fence = { runId, active: true };
+        return this.admissionFence.run(fence, async () => {
+          try {
+            return await work();
+          } finally {
+            fence.active = false;
+          }
+        });
+      });
+    } catch (error) {
+      if (entered || !(error instanceof OrcaError) || !["RUN_LEASED", "STORE_LOCK_TIMEOUT"].includes(error.code))
+        throw error;
+      // Another same-key caller may have published while we waited for ownership.
+      // Adopt that existing claim through the ordinary replay/recovery path. A
+      // second miss still cannot publish and retains the original fence refusal.
+      try {
+        return await work();
+      } catch (retryError) {
+        if (retryError === this.freshFenceRequired) throw error;
+        throw retryError;
+      }
+    }
+  }
+  /** Shared by pre-claim validation and commit; no identity, answer or locator publication. */
+  private async validateCurrent(command: ContinuationCommand) {
+    const snapshot = await this.boundary(command.runId);
+    if ((await this.token(command.runId, snapshot.boundary, false)) !== command.expectedBoundary) throw stale();
+    const decision = command.decision;
+    if (decision) {
+      if (
+        decision.requestId !== snapshot.input.id ||
+        snapshot.input.answer !== undefined ||
+        !snapshot.input.options.some((option) => option.id === decision.optionId) ||
+        snapshot.node.revision?.actionId === decision.optionId
+      )
+        throw stale();
+    } else if (snapshot.input.answer === undefined) throw stale();
+    return snapshot;
   }
   private async write(entry: ContinuationEntry, expectedSeq: number, decision = false): Promise<OrcaEvent> {
     const append = this.stores.events.appendDurableUnique?.bind(this.stores.events);
@@ -506,18 +576,8 @@ export class ContinuationAdmissionModel {
         });
         return prior;
       }
-      const snapshot = await this.boundary(input.command.runId);
-      if ((await this.token(input.command.runId, snapshot.boundary)) !== input.command.expectedBoundary) throw stale();
+      const snapshot = await this.validateCurrent(input.command);
       const decision = input.command.decision;
-      if (decision) {
-        if (
-          decision.requestId !== snapshot.input.id ||
-          snapshot.input.answer !== undefined ||
-          !snapshot.input.options.some((option) => option.id === decision.optionId) ||
-          snapshot.node.revision?.actionId === decision.optionId
-        )
-          throw stale();
-      } else if (snapshot.input.answer === undefined) throw stale();
       const principal = await this.context().access.current();
       const entry: ContinuationEntry = {
         schemaVersion: 1,

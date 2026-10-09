@@ -1,6 +1,6 @@
 import { RuntimeActivity } from "../src/runtime-activity.js";
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentRegistry } from "@orca/agents";
@@ -191,6 +191,149 @@ edges:
 }
 type ContinuationConstructor = ConstructorParameters<typeof ContinuationAdmissionModel>[0];
 
+/** Independent disk oracle: include sealed retry material, lookup/quota records and run markers. */
+async function intentFiles(dir: string) {
+  const files: Record<string, string> = {};
+  for (const area of ["admission-retries", "private-execution", "runs"]) {
+    let entries;
+    try {
+      entries = await readdir(join(dir, area), { recursive: true, withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (entry.isFile()) {
+        const path = join(entry.parentPath, entry.name);
+        files[path] = (await readFile(path)).toString("base64");
+      }
+    }
+  }
+  return files;
+}
+
+/** Read sealed operations through an independent store; never use a refused client projection. */
+async function reservations(dir: string) {
+  const records = new FileRetryClaimStore({ storeDir: dir, execution: fileStores(dir).execution, faults });
+  const files = (await readdir(join(dir, "admission-retries"))).filter((name) =>
+    /^retry_[a-f0-9-]{36}\.json$/.test(name),
+  );
+  return Promise.all(
+    files.sort().map(async (name) => {
+      const record = await records.read(name.slice(0, -5));
+      return {
+        operationId: record!.operationId,
+        phase: record!.phase,
+        continuationId: record!.binding?.continuationId,
+      };
+    }),
+  );
+}
+
+it("revalidates a fresh boundary after waiting for run ownership without reserving stale intent", async () => {
+  const f = await fixture();
+  const waiting = latch(),
+    release = latch();
+  const acquire = f.stores.leases.acquire.bind(f.stores.leases);
+  vi.spyOn(f.stores.leases, "acquire").mockImplementationOnce(async (...args) => {
+    waiting.release();
+    await release.wait;
+    return acquire(...args);
+  });
+  const admission = expect(f.admit()).rejects.toMatchObject({ code: "CONTINUATION_STALE" });
+  try {
+    await waiting.wait;
+    // The lookup miss has released its catalog mutex and published no operation.
+    expect(await readdir(join(f.dir, "admission-retries"))).toEqual([]);
+    await f.orc.cancel(f.runId);
+    expect((await f.orc.getState(f.runId)).run.status).toBe("cancelled");
+    const before = await intentFiles(f.dir);
+    release.release();
+    await admission;
+    expect(await intentFiles(f.dir)).toEqual(before);
+    expect(f.effects).not.toHaveBeenCalled();
+    expect(f.executionRuntime.withResumeAuthority).not.toHaveBeenCalled();
+  } finally {
+    release.release();
+    await admission;
+  }
+});
+
+it.each(["same-key", "different-key"] as const)(
+  "preserves %s semantics when another caller accepts and attaches before fresh ownership acquisition",
+  async (kind) => {
+    const f = await fixture();
+    const winner = f.boot();
+    const waiting = latch(),
+      release = latch();
+    const acquire = f.stores.leases.acquire.bind(f.stores.leases);
+    vi.spyOn(f.stores.leases, "acquire").mockImplementationOnce(async (...args) => {
+      waiting.release();
+      await release.wait;
+      return acquire(...args);
+    });
+    const request = f.model.admit(
+      f.command,
+      { idempotencyKey: kind === "same-key" ? "intent" : "other-intent" },
+      f.access,
+    );
+    const observed =
+      kind === "same-key"
+        ? expect(request).resolves.toMatchObject({ state: "resolved", replayed: true })
+        : expect(request).rejects.toMatchObject({ code: "RUN_LEASED" });
+    try {
+      await waiting.wait;
+      const receipt = await f.admit(winner);
+      await winner.reconcile(receipt.continuationId, f.access);
+      await f.entered.wait;
+      const before = await intentFiles(f.dir);
+      release.release();
+      await observed;
+      if (kind === "same-key") expect(await request).toMatchObject({ result: receipt });
+      expect(await intentFiles(f.dir)).toEqual(before);
+      expect(f.effects).toHaveBeenCalledTimes(1);
+    } finally {
+      release.release();
+      f.finish.release();
+      await observed;
+      await winner.drain();
+      await f.model.drain();
+    }
+  },
+);
+
+it.each(["keyed", "unkeyed"] as const)(
+  "rejects fresh %s terminal intent without durable reservation, publication, attachment or execution",
+  async (kind) => {
+    const f = await fixture();
+    const original = await f.admit();
+    await f.model.reconcile(original.continuationId, f.access);
+    await f.entered.wait;
+    f.finish.release();
+    await f.model.drain();
+    expect((await f.orc.getState(f.runId)).run.status).toBe("completed");
+    expect(await f.model.inspect(original.continuationId, f.access)).toEqual({ ...original, state: "settled" });
+    const before = await intentFiles(f.dir);
+    const operations = await reservations(f.dir);
+    const state = await f.orc.getState(f.runId);
+    const retry = kind === "keyed" ? { idempotencyKey: "fresh-terminal" } : {};
+    const resume = vi.mocked(f.executionRuntime.withResumeAuthority).mock.calls.length;
+    for (const model of [f.model, f.boot()]) {
+      await expect(model.admit(f.command, retry, f.access)).rejects.toMatchObject({ code: "CONTINUATION_STALE" });
+      expect(await reservations(f.dir)).toEqual(operations);
+      expect(await intentFiles(f.dir)).toEqual(before);
+      expect(await f.orc.getState(f.runId)).toEqual(state);
+      expect(await f.stores.leases.get(`run:${f.runId}`)).toBeUndefined();
+      expect(model.taskCount).toBe(0);
+    }
+    expect(f.effects).toHaveBeenCalledTimes(1);
+    expect(f.executionRuntime.withResumeAuthority).toHaveBeenCalledTimes(resume);
+    // A retained successful intent still returns its original acceptance on a completed run.
+    expect(await f.admit(f.boot())).toEqual(original);
+    expect(await intentFiles(f.dir)).toEqual(before);
+  },
+);
+
 it("commits one sealed answer and acceptance, and restart/retry returns the original identity", async () => {
   const f = await fixture();
   expect(await f.boot().expectedBoundary(f.runId, f.access)).toBe(f.token);
@@ -229,15 +372,40 @@ it("acknowledges fenced attachment before executor settlement and retains resume
   expect(events.filter((event) => event.type === "continuation.recorded" && event.payload.decision)).toHaveLength(1);
 });
 
-it("refuses stale tokens and exact input/option mismatches without answering", async () => {
+it("refuses stale tokens and exact input/option mismatches without answering or consuming the key", async () => {
   const f = await fixture();
-  await expect(f.model.admit({ ...f.command, expectedBoundary: "forged" }, {}, f.access)).rejects.toMatchObject({
-    code: "CONTINUATION_STALE",
-  });
-  await expect(
-    f.model.admit({ ...f.command, decision: { requestId: "other", optionId: "go" } }, {}, f.access),
-  ).rejects.toMatchObject({ code: "CONTINUATION_STALE" });
+  const retry = { idempotencyKey: "invalid-then-corrected" };
+  for (const command of [
+    { ...f.command, expectedBoundary: "forged" },
+    { ...f.command, decision: { requestId: "other", optionId: "go" } },
+    { ...f.command, decision: { requestId: f.command.decision.requestId, optionId: "other" } },
+    { runId: f.runId, expectedBoundary: f.token },
+  ]) {
+    await expect(f.model.admit(command, retry, f.access)).rejects.toMatchObject({ code: "CONTINUATION_STALE" });
+    expect(await readdir(join(f.dir, "admission-retries"))).toEqual([]);
+  }
   expect((await f.orc.getState(f.runId)).humanInputs[f.command.decision.requestId]?.answer).toBeUndefined();
+  expect(await f.model.admit(f.command, retry, f.access)).toMatchObject({ state: "resolved", replayed: false });
+  expect(f.effects).not.toHaveBeenCalled();
+});
+
+it("refuses fresh intent with a missing boundary key without provisioning replacement authority", async () => {
+  const f = await fixture();
+  const read = f.stores.execution.getGeneration.bind(f.stores.execution);
+  const missing = vi.spyOn(f.stores.execution, "getGeneration").mockImplementation(async (id) => {
+    return id.startsWith("continuation-boundary-key-") ? undefined : read(id);
+  });
+  const writes = vi.spyOn(f.stores.execution, "putGeneration");
+  try {
+    await expect(f.admit()).rejects.toMatchObject({ code: "CONTINUATION_STALE" });
+    expect(writes.mock.calls.filter(([id]) => id.startsWith("continuation-boundary-key-"))).toEqual([]);
+    expect(await readdir(join(f.dir, "admission-retries"))).toEqual([]);
+    expect((await f.orc.getState(f.runId)).humanInputs[f.command.decision.requestId]?.answer).toBeUndefined();
+  } finally {
+    missing.mockRestore();
+  }
+  expect((await f.admit()).state).toBe("accepted");
+  expect(f.effects).not.toHaveBeenCalled();
 });
 
 it("checks current grants and owner/workspace before receipt diagnostics; control does not imply input answer", async () => {
