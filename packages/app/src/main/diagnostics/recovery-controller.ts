@@ -47,6 +47,7 @@ export class RecoveryController {
   private setting: DiagnosticsSetting = { enabled: false, scopeVersion: DIAGNOSTICS_SCOPE, minutes: 5 };
   private ring: PretriggerBuffer;
   private epoch = 0;
+  private authorityEpoch = 0;
   private reading: BootReading | undefined;
   private preview: Preview | undefined;
   private previewCharged = false;
@@ -103,10 +104,13 @@ export class RecoveryController {
   private async initializeOnce(): Promise<void> {
     this.busy = true;
     const epoch = this.epoch;
+    const authorityEpoch = this.authorityEpoch;
     try {
       const setting = await this.options.disk.readSetting();
       if (
-        epoch === this.epoch &&
+        // A new window document revokes previews, not the durable consent choice.
+        // Off/shutdown still fence an older setting read before its first await.
+        authorityEpoch === this.authorityEpoch &&
         setting.scopeVersion === DIAGNOSTICS_SCOPE &&
         typeof setting.enabled === "boolean" &&
         Number.isInteger(setting.minutes) &&
@@ -626,6 +630,7 @@ export class RecoveryController {
     this.emit();
   }
   revokeAuthority(): void {
+    this.authorityEpoch++;
     this.options.disk.revoke();
     this.revokePreviewAuthority();
     this.ring.stop();
