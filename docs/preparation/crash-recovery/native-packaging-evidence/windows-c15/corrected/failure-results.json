@@ -1,0 +1,1675 @@
+{
+  "schema": 1,
+  "schedule": "failure",
+  "sourceCommit": "7d7d503317c9bc2ae5bb3e3ec972e59f28a2e849",
+  "harnessHead": "74a3ef441449523d110849c9d1c92aa0f61fdf83",
+  "productionSource": "5fac1a05a56152861ca08168da0b052f56e8cbae",
+  "productionEnabled": false,
+  "macHeld": true,
+  "timingDeferred": true,
+  "attempts": 1,
+  "runs": [
+    {
+      "mode": "off",
+      "completed": true,
+      "executionElapsedMs": 35890.6157,
+      "executionExitCode": 0,
+      "outputBytes": 3134,
+      "diagnosticExitCode": 0,
+      "diagnostic": {
+        "schema": 1,
+        "mode": "off",
+        "schedule": "failure",
+        "cells": [
+          {
+            "target": "readSetting",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "readExportState",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "writeSetting",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "open",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "maintain",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "checkpoint",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "previous",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "discardPrevious",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "cleanExit",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "cleanup",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "writeExportState",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "stageExport",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "clearStage",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "validateDestination",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "publishStage",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "writersStopped",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "picker",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "completionRecord",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "nativePublish",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          },
+          {
+            "target": "nativeWrite",
+            "syntheticFault": true,
+            "checks": {
+              "defaultOff": true
+            },
+            "faultObserved": false
+          }
+        ],
+        "unhandledRejections": 0,
+        "regressionOnly": false,
+        "expectedCells": [
+          "readSetting",
+          "readExportState",
+          "writeSetting",
+          "open",
+          "maintain",
+          "checkpoint",
+          "previous",
+          "discardPrevious",
+          "cleanExit",
+          "cleanup",
+          "writeExportState",
+          "stageExport",
+          "clearStage",
+          "validateDestination",
+          "publishStage",
+          "writersStopped",
+          "picker",
+          "completionRecord",
+          "nativePublish",
+          "nativeWrite"
+        ],
+        "faultCampaignElapsedMs": 5.908600000000007,
+        "memory": {
+          "method": "Electron main heapUsed+external sampled every 2ms and boundaries; arrayBuffers not added twice; no renderer in writer fixture; native allocator/RSS separate",
+          "managedIncrementBytes": 1624693,
+          "managedLimitBytes": 33554432,
+          "rssIncrementBytes": 10383360,
+          "controlledBinaryPeakBytes": 0,
+          "binaryLimitBytes": 8388608,
+          "reservationPeakBytes": 0,
+          "zeroAfterEveryCell": true,
+          "managedPass": true,
+          "binaryPass": true
+        },
+        "legacyCalls": 0,
+        "ok": true,
+        "callbacksMs": {
+          "setup": 0.2512999999999863,
+          "setup->readSetting:setup": 0.6129999999999995,
+          "readSetting:setup": 0.6189999999999998,
+          "readSetting:setup->readExportState:setup": 0.06120000000001369,
+          "readExportState:setup": 0.05850000000000932,
+          "readExportState:setup->writeSetting:setup": 0.04189999999999827,
+          "writeSetting:setup": 0.09540000000001214,
+          "writeSetting:setup->open:setup": 0.03149999999999409,
+          "open:setup": 0.03440000000000509,
+          "open:setup->maintain:setup": 0.03300000000001546,
+          "maintain:setup": 0.044999999999987494,
+          "maintain:setup->checkpoint:setup": 0.02389999999999759,
+          "checkpoint:setup": 0.032399999999995543,
+          "checkpoint:setup->previous:setup": 0.02009999999998513,
+          "previous:setup": 0.06219999999999004,
+          "previous:setup->discardPrevious:setup": 0.023099999999999454,
+          "discardPrevious:setup": 0.029899999999997817,
+          "discardPrevious:setup->cleanExit:setup": 0.03799999999998249,
+          "cleanExit:setup": 0.08010000000001583,
+          "cleanExit:setup->cleanup:setup": 0.05180000000001428,
+          "cleanup:setup": 0.04959999999999809,
+          "cleanup:setup->writeExportState:setup": 0.017400000000009186,
+          "writeExportState:setup": 0.02750000000000341,
+          "writeExportState:setup->stageExport:setup": 0.014199999999988222,
+          "stageExport:setup": 0.026199999999988677,
+          "stageExport:setup->clearStage:setup": 0.010600000000010823,
+          "clearStage:setup": 0.022199999999998,
+          "clearStage:setup->validateDestination:setup": 0.009900000000016007,
+          "validateDestination:setup": 0.023300000000006094,
+          "validateDestination:setup->publishStage:setup": 0.011199999999973898,
+          "publishStage:setup": 0.022799999999989495,
+          "publishStage:setup->writersStopped:setup": 0.011099999999999,
+          "writersStopped:setup": 0.022899999999992815,
+          "writersStopped:setup->picker:setup": 0.015799999999984493,
+          "picker:setup": 0.02379999999999427,
+          "picker:setup->completionRecord:setup": 0.015500000000002956,
+          "completionRecord:setup": 0.022899999999992815,
+          "completionRecord:setup->nativePublish:setup": 0.01120000000000232,
+          "nativePublish:setup": 0.0257000000000005,
+          "nativePublish:setup->nativeWrite:setup": 0.018100000000004002,
+          "nativeWrite:setup": 0.02189999999998804,
+          "nativeWrite:setup->execution-wait": 0.21979999999999222,
+          "execution-wait": 0.32929999999998927
+        },
+        "heartbeatGapsMs": {
+          "setup": 15.67410000000001,
+          "execution-wait": 16.662500000000364
+        },
+        "timingDisposition": "4ms target deferred by owner; all observations retained; no timing pass or Layout attribution claimed",
+        "nativeElapsedMaxMs": {},
+        "nativeOutstandingPeak": 0,
+        "electron": "44.4.5",
+        "node": "24.21.0",
+        "productionEnabled": false
+      },
+      "executionOracle": {
+        "artifactCount": 29,
+        "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+        "semanticByKind": [
+          {
+            "kind": "decision-matrix",
+            "name": "decisionMatrix",
+            "sha256": "788506a154dee82e5b00d167a41e2ed2b15817b1f84425fe5553db29288081d6"
+          },
+          {
+            "kind": "decomposition",
+            "name": "decomposition",
+            "sha256": "88299e6febb5e42d0908b8340fb79b9eed40c7d3e843e14e3db2a8ae7f15db63"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "600ddb38040239891a9d1cb7e38540be67e4117fe4598e56f7d52f0fe767bd23"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "2f51f54a704308e9f3f853e90a5af1d2e2e4899989a3d290e4821c29c27d5f7c"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "a2bb0762a4236a3fdf6a58027c7389bd7a036f227c9082b0e43bbbf82785bdaa"
+          },
+          {
+            "kind": "generic",
+            "name": "programSummary",
+            "sha256": "43d3e99ee5ed2f5de8aa52adfbab9d070d5ca21e1d9d61ea23500296a2b1aaef"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "991b5eb2a6320c619383371008c1e3bb97f4ea77b4dd82cd544d93bdcc2182b8"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "954971cc5f9f37e0afd544b04113af27c7ffbe1bebfcf9a5ebbf53ef99f45688"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "b694ec0a75c1318beaef7e65f20a228d736c6c9fb7a0636576dc3ef12e8b4e81"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "10941a49ffd22602fa6c0547c9c02426d7141a8a056e38f8dd02f89f8cd3d099"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6f042d063246e1c0291894a29ddd59462d2261572707270f823953a947f6ad2d"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6b609d237677cf6b73f6515c4601a070a3c76ef68e6fe02ff13c3b02edf0352c"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "0eefe76aebb09d46a44c0dd8a4a6326f35ac7884fcc5d1590c9df11c0e8fec07"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "risk-register",
+            "name": "riskRegister",
+            "sha256": "574503e6d64b9edaea05d2b4c5b776d88c4c199a093255314a0b68cb7a301031"
+          },
+          {
+            "kind": "schedule",
+            "name": "schedule",
+            "sha256": "73795c8f0f884a042f5d0855879a43d9d27360a3bbdf7bde6f5c2b93cb9a0332"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "0123d7127018317099bb9060225de811d062f4a9ec6264e6a7b1641129924e53"
+          }
+        ],
+        "workItems": [
+          {
+            "slug": "docs",
+            "status": "done"
+          },
+          {
+            "slug": "login-api",
+            "status": "done"
+          },
+          {
+            "slug": "schema",
+            "status": "done"
+          }
+        ],
+        "normalization": "Reused successful-pair oracle: generated identities/provenance/times removed, semantic front matter/prose/kind/name/multiplicity retained. Not complete execution graph equivalence."
+      },
+      "sentinelUnchanged": true,
+      "allFaultsEnteredDuringExecution": true
+    },
+    {
+      "mode": "on",
+      "completed": true,
+      "executionElapsedMs": 40564.6891,
+      "executionExitCode": 0,
+      "outputBytes": 3124,
+      "diagnosticExitCode": 0,
+      "diagnostic": {
+        "schema": 1,
+        "mode": "on",
+        "schedule": "failure",
+        "cells": [
+          {
+            "target": "readSetting",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 148.94379999999998,
+            "publicElapsedMs": 0.9037999999999897,
+            "publicOutcome": "void",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.367999999999995,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 0
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "readExportState",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 555.8611000000001,
+            "publicElapsedMs": 5.423999999999978,
+            "publicOutcome": "void",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.11320000000000618,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 0
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "writeSetting",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 1133.6056999999998,
+            "publicElapsedMs": 0.24850000000014916,
+            "publicOutcome": "cleanup_pending",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.21440000000006876,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "open",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 1734.0421,
+            "publicElapsedMs": 148.73489999999993,
+            "publicOutcome": "cleanup_pending",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.07350000000019463,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 0
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "maintain",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 2458.9786000000004,
+            "publicElapsedMs": 0.3532000000000153,
+            "publicOutcome": "void",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.07560000000012224,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "checkpoint",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 3171.1895,
+            "publicElapsedMs": 43.620400000000245,
+            "publicOutcome": "void",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.043800000000373984,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "previous",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 4017.5888000000004,
+            "publicElapsedMs": 0.3838999999998123,
+            "publicOutcome": "unavailable",
+            "pendingBeforeRevocation": false,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.06810000000041327,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "discardPrevious",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 4619.3861,
+            "publicElapsedMs": 0.2293999999992593,
+            "publicOutcome": "cleanup_pending",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.06480000000010477,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "cleanExit",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 5358.863600000001,
+            "publicElapsedMs": 0.36200000000008004,
+            "publicOutcome": "void",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.07710000000042783,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "cleanup",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 6370.0829,
+            "publicElapsedMs": 137.58110000000033,
+            "publicOutcome": "cleanup_pending",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.05349999999998545,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "writeExportState",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 7309.6051,
+            "publicElapsedMs": 1.3280000000004293,
+            "publicOutcome": "status",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 1048576,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.12049999999999272,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "stageExport",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 8037.615,
+            "publicElapsedMs": 140.23169999999936,
+            "publicOutcome": "status",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 1048576,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.09479999999894062,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "unknown_ready",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "clearStage",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 8991.4649,
+            "publicElapsedMs": 19.03490000000056,
+            "publicOutcome": "cleanup_pending",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.07320000000072469,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "validateDestination",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 9728.3492,
+            "publicElapsedMs": 0.11719999999877473,
+            "publicOutcome": "refused",
+            "pendingBeforeRevocation": false,
+            "reservationBeforeRevocation": 1048576,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.08700000000135333,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "publishStage",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 10737.5031,
+            "publicElapsedMs": 369.6352000000006,
+            "publicOutcome": "status",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 1048576,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.09509999999863794,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "unknown_ready",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "writersStopped",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 11612.0238,
+            "publicElapsedMs": 0.1265000000003056,
+            "publicOutcome": "unknown_blocked",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.050600000000486034,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 0
+            },
+            "offOutcome": "unknown_ready",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "picker",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 12530.2832,
+            "publicElapsedMs": 0.09419999999954598,
+            "publicOutcome": "refused",
+            "pendingBeforeRevocation": false,
+            "reservationBeforeRevocation": 1048576,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.0820000000003347,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "completionRecord",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "exactSavedBytes": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 13764.768900000001,
+            "publicElapsedMs": 479.25930000000153,
+            "publicOutcome": "status",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 1048576,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.09879999999975553,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "cleanup_pending",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "nativePublish",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 15123.1382,
+            "publicElapsedMs": 489.15610000000015,
+            "publicOutcome": "status",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 1048576,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.13990000000012515,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "unknown_ready",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "nativeWrite",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 10000,
+            "enteredMs": 16230.6317,
+            "publicElapsedMs": 101.57389999999941,
+            "publicOutcome": "void",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.05199999999967986,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          }
+        ],
+        "unhandledRejections": 0,
+        "regressionOnly": false,
+        "expectedCells": [
+          "readSetting",
+          "readExportState",
+          "writeSetting",
+          "open",
+          "maintain",
+          "checkpoint",
+          "previous",
+          "discardPrevious",
+          "cleanExit",
+          "cleanup",
+          "writeExportState",
+          "stageExport",
+          "clearStage",
+          "validateDestination",
+          "publishStage",
+          "writersStopped",
+          "picker",
+          "completionRecord",
+          "nativePublish",
+          "nativeWrite"
+        ],
+        "faultCampaignElapsedMs": 16781.2657,
+        "memory": {
+          "method": "Electron main heapUsed+external sampled every 2ms and boundaries; arrayBuffers not added twice; no renderer in writer fixture; native allocator/RSS separate",
+          "managedIncrementBytes": 64061697,
+          "managedLimitBytes": 33554432,
+          "rssIncrementBytes": 71188480,
+          "controlledBinaryPeakBytes": 5373952,
+          "binaryLimitBytes": 8388608,
+          "reservationPeakBytes": 4194304,
+          "zeroAfterEveryCell": true,
+          "managedPass": false,
+          "binaryPass": true
+        },
+        "legacyCalls": 0,
+        "ok": true,
+        "callbacksMs": {
+          "setup": 0.29520000000002256,
+          "setup->readSetting:setup": 0.9294000000000153,
+          "readSetting:setup": 2.107499999999959,
+          "readSetting:setup->readSetting:fault": 0.708500000000015,
+          "readSetting:fault": 2.1567000000000007,
+          "readSetting:fault->readSetting:settlement": 0.09019999999998163,
+          "readSetting:settlement": 2.0506000000000313,
+          "readSetting:settlement->readExportState:setup": 1.7269000000000005,
+          "readExportState:setup": 1.8327000000000453,
+          "readExportState:setup->readExportState:fault": 0.12739999999996598,
+          "readExportState:fault": 2.2602999999999156,
+          "readExportState:fault->readExportState:settlement": 0.02760000000000673,
+          "readExportState:settlement": 2.148900000000026,
+          "readExportState:settlement->writeSetting:setup": 0.8309000000000424,
+          "writeSetting:setup": 1.909900000000107,
+          "writeSetting:setup->writeSetting:fault": 0.07649999999989632,
+          "writeSetting:fault": 2.0614999999997963,
+          "writeSetting:fault->writeSetting:settlement": 0.025100000000065847,
+          "writeSetting:settlement": 2.0553999999999633,
+          "writeSetting:settlement->open:setup": 0.7709000000002106,
+          "open:setup": 2.020999999999958,
+          "open:setup->open:fault": 0.03700000000003456,
+          "open:fault": 2.0829000000001088,
+          "open:fault->open:settlement": 0.02690000000029613,
+          "open:settlement": 2.451999999999771,
+          "open:settlement->maintain:setup": 0.8294000000000779,
+          "maintain:setup": 2.0534999999999854,
+          "maintain:setup->maintain:fault": 0.2980999999999767,
+          "maintain:fault": 2.0471999999999753,
+          "maintain:fault->maintain:settlement": 0.02959999999984575,
+          "maintain:settlement": 2.192099999999755,
+          "maintain:settlement->checkpoint:setup": 0.7939000000001215,
+          "checkpoint:setup": 2.1318999999998596,
+          "checkpoint:setup->checkpoint:fault": 0.7758999999996377,
+          "checkpoint:fault": 1.4651999999996406,
+          "checkpoint:fault->checkpoint:settlement": 0.025099999999838474,
+          "checkpoint:settlement": 2.245800000000145,
+          "checkpoint:settlement->previous:setup": 0.775000000000091,
+          "previous:setup": 2.1912999999999556,
+          "previous:setup->previous:fault": 0.273099999999431,
+          "previous:fault": 1.9259000000001834,
+          "previous:fault->previous:settlement": 0.02430000000003929,
+          "previous:settlement": 2.0494999999991705,
+          "previous:settlement->discardPrevious:setup": 0.8379999999997381,
+          "discardPrevious:setup": 2.0608000000001994,
+          "discardPrevious:setup->discardPrevious:fault": 0.10780000000067957,
+          "discardPrevious:fault": 1.9400000000005093,
+          "discardPrevious:fault->discardPrevious:settlement": 0.027099999999336433,
+          "discardPrevious:settlement": 3.1067000000002736,
+          "discardPrevious:settlement->cleanExit:setup": 1.1098000000001775,
+          "cleanExit:setup": 3.2976999999991676,
+          "cleanExit:setup->cleanExit:fault": 0.2529999999997017,
+          "cleanExit:fault": 3.0938999999998487,
+          "cleanExit:fault->cleanExit:settlement": 0.037699999999858846,
+          "cleanExit:settlement": 4.071200000000317,
+          "cleanExit:settlement->cleanup:setup": 1.0653000000002066,
+          "cleanup:setup": 2.952299999999923,
+          "cleanup:setup->cleanup:fault": 0.16890000000057626,
+          "cleanup:fault": 2.4265999999997803,
+          "cleanup:fault->cleanup:settlement": 0.03660000000036234,
+          "cleanup:settlement": 3.1588000000001557,
+          "cleanup:settlement->writeExportState:setup": 1.1401000000005297,
+          "writeExportState:setup": 3.9490999999998166,
+          "writeExportState:setup->writeExportState:fault": 0.25349999999980355,
+          "writeExportState:fault": 1.5914000000002488,
+          "writeExportState:fault->writeExportState:settlement": 0.02540000000044529,
+          "writeExportState:settlement": 2.302599999999984,
+          "writeExportState:settlement->stageExport:setup": 0.8029999999998836,
+          "stageExport:setup": 2.1989000000003216,
+          "stageExport:setup->stageExport:fault": 0.04129999999986467,
+          "stageExport:fault": 1.924300000000585,
+          "stageExport:fault->stageExport:settlement": 0.029099999999743886,
+          "stageExport:settlement": 2.6807000000007974,
+          "stageExport:settlement->clearStage:setup": 0.7409999999999854,
+          "clearStage:setup": 2.2224000000005617,
+          "clearStage:setup->clearStage:fault": 0.027400000000852742,
+          "clearStage:fault": 1.8078999999997905,
+          "clearStage:fault->clearStage:settlement": 0.02380000000084692,
+          "clearStage:settlement": 1.975799999998344,
+          "clearStage:settlement->validateDestination:setup": 0.7626000000000204,
+          "validateDestination:setup": 1.914199999999255,
+          "validateDestination:setup->validateDestination:fault": 0.03600000000005821,
+          "validateDestination:fault": 1.621900000000096,
+          "validateDestination:fault->validateDestination:settlement": 0.023700000001554145,
+          "validateDestination:settlement": 2.1332000000002154,
+          "validateDestination:settlement->publishStage:setup": 0.8179000000000087,
+          "publishStage:setup": 2.0856999999996333,
+          "publishStage:setup->publishStage:fault": 0.056300000000192085,
+          "publishStage:fault": 2.2765999999992346,
+          "publishStage:fault->publishStage:settlement": 0.0272000000004482,
+          "publishStage:settlement": 2.454699999998411,
+          "publishStage:settlement->writersStopped:setup": 0.7595000000001164,
+          "writersStopped:setup": 2.079200000000128,
+          "writersStopped:setup->writersStopped:fault": 0.02479999999923166,
+          "writersStopped:fault": 2.232899999999063,
+          "writersStopped:fault->writersStopped:settlement": 0.02380000000084692,
+          "writersStopped:settlement": 2.273699999999735,
+          "writersStopped:settlement->picker:setup": 0.7958000000016909,
+          "picker:setup": 2.2062999999998283,
+          "picker:setup->picker:fault": 0.06040000000029977,
+          "picker:fault": 1.675599999998667,
+          "picker:fault->picker:settlement": 0.024500000001353328,
+          "picker:settlement": 2.1473000000005413,
+          "picker:settlement->completionRecord:setup": 0.8094999999993888,
+          "completionRecord:setup": 2.409399999998641,
+          "completionRecord:setup->completionRecord:fault": 0.051499999999577994,
+          "completionRecord:fault": 2.2291999999997643,
+          "completionRecord:fault->completionRecord:settlement": 0.02659999999923457,
+          "completionRecord:settlement": 2.1617999999998574,
+          "completionRecord:settlement->nativePublish:setup": 0.7610999999997148,
+          "nativePublish:setup": 1.8988999999983207,
+          "nativePublish:setup->nativePublish:fault": 0.059600000000500586,
+          "nativePublish:fault": 2.3004000000000815,
+          "nativePublish:fault->nativePublish:settlement": 0.025900000000547152,
+          "nativePublish:settlement": 2.3313000000016473,
+          "nativePublish:settlement->nativeWrite:setup": 0.7929000000003725,
+          "nativeWrite:setup": 2.0131000000001222,
+          "nativeWrite:setup->nativeWrite:fault": 0.7056000000011409,
+          "nativeWrite:fault": 1.2923000000009779,
+          "nativeWrite:fault->nativeWrite:settlement": 0.021899999999732245,
+          "nativeWrite:settlement": 2.123700000000099,
+          "nativeWrite:settlement->execution-wait": 1.0036000000000058,
+          "execution-wait": 0.3109000000040396
+        },
+        "heartbeatGapsMs": {
+          "setup": 4.922500000000014,
+          "readSetting:setup": 18.6164,
+          "readSetting:fault": 16.00279999999998,
+          "readSetting:settlement": 16.006699999999967,
+          "readExportState:setup": 15.65790000000004,
+          "readExportState:fault": 16.082200000000057,
+          "readExportState:settlement": 16.02959999999996,
+          "writeSetting:setup": 16.18360000000007,
+          "writeSetting:fault": 16.005899999999883,
+          "writeSetting:settlement": 16.032200000000103,
+          "open:setup": 16.8128999999999,
+          "open:fault": 16.61329999999998,
+          "open:settlement": 15.977000000000317,
+          "maintain:setup": 16.567000000000007,
+          "maintain:fault": 16.053100000000086,
+          "maintain:settlement": 16.0612000000001,
+          "checkpoint:setup": 17.643800000000283,
+          "checkpoint:fault": 15.847499999999854,
+          "checkpoint:settlement": 16.660300000000007,
+          "previous:setup": 16.07659999999987,
+          "previous:fault": 15.490200000000186,
+          "previous:settlement": 16.10320000000047,
+          "discardPrevious:setup": 16.07259999999951,
+          "discardPrevious:fault": 16.857899999999972,
+          "discardPrevious:settlement": 16.07639999999992,
+          "cleanExit:setup": 16.116500000000087,
+          "cleanExit:fault": 15.284999999999854,
+          "cleanExit:settlement": 16.46230000000014,
+          "cleanup:setup": 17.790500000000065,
+          "cleanup:fault": 16.1270999999997,
+          "cleanup:settlement": 15.99119999999948,
+          "writeExportState:setup": 17.354099999999562,
+          "writeExportState:fault": 16.07129999999961,
+          "writeExportState:settlement": 15.528999999999542,
+          "stageExport:setup": 16.856000000000677,
+          "stageExport:fault": 16.06630000000041,
+          "stageExport:settlement": 16.731799999999566,
+          "clearStage:setup": 16.740700000000288,
+          "clearStage:fault": 15.953199999999924,
+          "clearStage:settlement": 16.030500000000757,
+          "validateDestination:setup": 16.06079999999929,
+          "validateDestination:fault": 16.01520000000164,
+          "validateDestination:settlement": 16.03149999999914,
+          "publishStage:setup": 16.081900000001042,
+          "publishStage:fault": 16.075000000000728,
+          "publishStage:settlement": 16.056099999999788,
+          "writersStopped:setup": 16.997000000001208,
+          "writersStopped:fault": 15.966099999999642,
+          "writersStopped:settlement": 16.06209999999919,
+          "picker:setup": 16.04659999999967,
+          "picker:fault": 16.049599999998463,
+          "picker:settlement": 16.25500000000102,
+          "completionRecord:setup": 16.10360000000037,
+          "completionRecord:fault": 16.07889999999861,
+          "completionRecord:settlement": 17.269200000000637,
+          "nativePublish:setup": 17.024199999999837,
+          "nativePublish:fault": 17.026499999999942,
+          "nativePublish:settlement": 16.039200000001074,
+          "nativeWrite:setup": 16.142100000000937,
+          "nativeWrite:fault": 16.035500000001775,
+          "nativeWrite:settlement": 16.129399999997986,
+          "execution-wait": 16.68829999999798
+        },
+        "timingDisposition": "4ms target deferred by owner; all observations retained; no timing pass or Layout attribution claimed",
+        "nativeElapsedMaxMs": {
+          "openRoot": 9.090900000001056,
+          "rootStat": 3.455300000000534,
+          "acquire": 30.35740000000078,
+          "stopped": 0.6185999999997875,
+          "stat": 2.790899999999965,
+          "list": 2.4648999999999432,
+          "openCreate": 23.922000000000025,
+          "write": 1.0451999999995678,
+          "sync": 80.10230000000229,
+          "closeFile": 13.31639999999993,
+          "replace": 155.15279999999984,
+          "openRead": 6.556200000000899,
+          "fileStat": 3.023200000000543,
+          "read": 0.9639999999999418,
+          "release": 16.174800000000687,
+          "closeRoot": 0.409099999999853,
+          "remove": 15.955000000001746,
+          "validateDestination": 1.027699999998731,
+          "publish": 17.25880000000143
+        },
+        "nativeOutstandingPeak": 1,
+        "electron": "44.4.5",
+        "node": "24.21.0",
+        "productionEnabled": false
+      },
+      "executionOracle": {
+        "artifactCount": 29,
+        "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+        "semanticByKind": [
+          {
+            "kind": "decision-matrix",
+            "name": "decisionMatrix",
+            "sha256": "788506a154dee82e5b00d167a41e2ed2b15817b1f84425fe5553db29288081d6"
+          },
+          {
+            "kind": "decomposition",
+            "name": "decomposition",
+            "sha256": "88299e6febb5e42d0908b8340fb79b9eed40c7d3e843e14e3db2a8ae7f15db63"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "600ddb38040239891a9d1cb7e38540be67e4117fe4598e56f7d52f0fe767bd23"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "2f51f54a704308e9f3f853e90a5af1d2e2e4899989a3d290e4821c29c27d5f7c"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "a2bb0762a4236a3fdf6a58027c7389bd7a036f227c9082b0e43bbbf82785bdaa"
+          },
+          {
+            "kind": "generic",
+            "name": "programSummary",
+            "sha256": "43d3e99ee5ed2f5de8aa52adfbab9d070d5ca21e1d9d61ea23500296a2b1aaef"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "991b5eb2a6320c619383371008c1e3bb97f4ea77b4dd82cd544d93bdcc2182b8"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "954971cc5f9f37e0afd544b04113af27c7ffbe1bebfcf9a5ebbf53ef99f45688"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "b694ec0a75c1318beaef7e65f20a228d736c6c9fb7a0636576dc3ef12e8b4e81"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "10941a49ffd22602fa6c0547c9c02426d7141a8a056e38f8dd02f89f8cd3d099"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6f042d063246e1c0291894a29ddd59462d2261572707270f823953a947f6ad2d"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6b609d237677cf6b73f6515c4601a070a3c76ef68e6fe02ff13c3b02edf0352c"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "0eefe76aebb09d46a44c0dd8a4a6326f35ac7884fcc5d1590c9df11c0e8fec07"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "risk-register",
+            "name": "riskRegister",
+            "sha256": "574503e6d64b9edaea05d2b4c5b776d88c4c199a093255314a0b68cb7a301031"
+          },
+          {
+            "kind": "schedule",
+            "name": "schedule",
+            "sha256": "73795c8f0f884a042f5d0855879a43d9d27360a3bbdf7bde6f5c2b93cb9a0332"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "0123d7127018317099bb9060225de811d062f4a9ec6264e6a7b1641129924e53"
+          }
+        ],
+        "workItems": [
+          {
+            "slug": "docs",
+            "status": "done"
+          },
+          {
+            "slug": "login-api",
+            "status": "done"
+          },
+          {
+            "slug": "schema",
+            "status": "done"
+          }
+        ],
+        "normalization": "Reused successful-pair oracle: generated identities/provenance/times removed, semantic front matter/prose/kind/name/multiplicity retained. Not complete execution graph equivalence."
+      },
+      "sentinelUnchanged": true,
+      "allFaultsEnteredDuringExecution": true
+    }
+  ],
+  "method": "One failure or stall schedule compares sequential Off/On CLI demos; 20 fixed fault cells inside On, no performance retry. Synthetic seams with real Windows x64 Electron/native disk, DPAPI and clock.",
+  "semanticEqual": true,
+  "workEqual": true,
+  "correctnessPass": true,
+  "memoryPass": false,
+  "allOwnedExitsConfirmed": true,
+  "disposableStateRemoved": true
+}

@@ -1,5 +1,11 @@
 # Windows C15 fault/stall fixture and stopped comparisons - 9 October 2026
 
+This is the preserved first-run record. The later
+[corrected comparison follow-up](windows-c15-corrected-followup.md) verifies the
+fixture fixes and completes both 20-cell synthetic schedules once. C15 remains
+held on the newly measured aggregate On managed-memory failures. Historical
+stopped receipts and runtime-unrun source identities below remain unchanged.
+
 **C15 remains held.** A focused Windows harness now exists, but its single failure
 and single stall comparisons stopped at fixture defects. All four CLI members
 finished with 29 identical semantic artifacts; this does not accept the unrun

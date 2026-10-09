@@ -1,0 +1,1404 @@
+{
+  "schema": 1,
+  "outcome": "Corrected synthetic correctness complete; C15 held on measured managed-memory failure",
+  "sourceHead": "74a3ef441449523d110849c9d1c92aa0f61fdf83",
+  "productionSource": "5fac1a05a56152861ca08168da0b052f56e8cbae",
+  "productionEnabled": false,
+  "macHeld": true,
+  "priorEvidencePreserved": true,
+  "priorRecord": "../manifest.json",
+  "pairedCorrectionsAuthorized": true,
+  "unmodifiedLuckyRetries": 0,
+  "regressions": {
+    "functionalPass": true,
+    "pairedExecution": false,
+    "cases": [
+      {
+        "name": "startup-guard-destination-and-known-save",
+        "functionalPass": true,
+        "exitCode": 0,
+        "memory": {
+          "method": "Electron main heapUsed+external sampled every 2ms and boundaries; arrayBuffers not added twice; no renderer in writer fixture; native allocator/RSS separate",
+          "managedIncrementBytes": 55350665,
+          "managedLimitBytes": 33554432,
+          "rssIncrementBytes": 59289600,
+          "controlledBinaryPeakBytes": 5275712,
+          "binaryLimitBytes": 8388608,
+          "reservationPeakBytes": 4194304,
+          "zeroAfterEveryCell": true,
+          "managedPass": false,
+          "binaryPass": true
+        },
+        "ownedExitConfirmed": true,
+        "disposableStateRemoved": true
+      },
+      {
+        "name": "accounting-on-controlled-stop",
+        "functionalPass": true,
+        "exitCode": 1,
+        "expectedStop": "synthetic-regression-stop",
+        "memory": {
+          "method": "Electron main heapUsed+external sampled every 2ms and boundaries; arrayBuffers not added twice; no renderer in writer fixture; native allocator/RSS separate",
+          "managedIncrementBytes": 37111361,
+          "managedLimitBytes": 33554432,
+          "rssIncrementBytes": 41508864,
+          "controlledBinaryPeakBytes": 5242880,
+          "binaryLimitBytes": 8388608,
+          "reservationPeakBytes": 0,
+          "zeroAfterEveryCell": true,
+          "managedPass": false,
+          "binaryPass": true
+        },
+        "ownedExitConfirmed": true,
+        "disposableStateRemoved": true
+      }
+    ]
+  },
+  "pairs": [
+    {
+      "schedule": "failure",
+      "comparisonCount": 1,
+      "harnessHead": "74a3ef441449523d110849c9d1c92aa0f61fdf83",
+      "semanticEqual": true,
+      "workEqual": true,
+      "correctnessPass": true,
+      "memoryPass": false,
+      "cli": [
+        {
+          "mode": "off",
+          "exitCode": 0,
+          "diagnosticExitCode": 0,
+          "elapsedMs": 35890.6157,
+          "artifactCount": 29,
+          "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+          "workItems": [
+            {
+              "slug": "docs",
+              "status": "done"
+            },
+            {
+              "slug": "login-api",
+              "status": "done"
+            },
+            {
+              "slug": "schema",
+              "status": "done"
+            }
+          ],
+          "memory": {
+            "method": "Electron main heapUsed+external sampled every 2ms and boundaries; arrayBuffers not added twice; no renderer in writer fixture; native allocator/RSS separate",
+            "managedIncrementBytes": 1624693,
+            "managedLimitBytes": 33554432,
+            "rssIncrementBytes": 10383360,
+            "controlledBinaryPeakBytes": 0,
+            "binaryLimitBytes": 8388608,
+            "reservationPeakBytes": 0,
+            "zeroAfterEveryCell": true,
+            "managedPass": true,
+            "binaryPass": true
+          }
+        },
+        {
+          "mode": "on",
+          "exitCode": 0,
+          "diagnosticExitCode": 0,
+          "elapsedMs": 40564.6891,
+          "artifactCount": 29,
+          "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+          "workItems": [
+            {
+              "slug": "docs",
+              "status": "done"
+            },
+            {
+              "slug": "login-api",
+              "status": "done"
+            },
+            {
+              "slug": "schema",
+              "status": "done"
+            }
+          ],
+          "memory": {
+            "method": "Electron main heapUsed+external sampled every 2ms and boundaries; arrayBuffers not added twice; no renderer in writer fixture; native allocator/RSS separate",
+            "managedIncrementBytes": 64061697,
+            "managedLimitBytes": 33554432,
+            "rssIncrementBytes": 71188480,
+            "controlledBinaryPeakBytes": 5373952,
+            "binaryLimitBytes": 8388608,
+            "reservationPeakBytes": 4194304,
+            "zeroAfterEveryCell": true,
+            "managedPass": false,
+            "binaryPass": true
+          }
+        }
+      ],
+      "cells": [
+        {
+          "target": "readSetting",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 0.9037999999999897,
+          "publicOutcome": "void",
+          "logicalOffMs": 0.367999999999995,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 0
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "readExportState",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 5.423999999999978,
+          "publicOutcome": "void",
+          "logicalOffMs": 0.11320000000000618,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 0
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "writeSetting",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 0.24850000000014916,
+          "publicOutcome": "cleanup_pending",
+          "logicalOffMs": 0.21440000000006876,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "open",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 148.73489999999993,
+          "publicOutcome": "cleanup_pending",
+          "logicalOffMs": 0.07350000000019463,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 0
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "maintain",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 0.3532000000000153,
+          "publicOutcome": "void",
+          "logicalOffMs": 0.07560000000012224,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "checkpoint",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 43.620400000000245,
+          "publicOutcome": "void",
+          "logicalOffMs": 0.043800000000373984,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "previous",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 0.3838999999998123,
+          "publicOutcome": "unavailable",
+          "logicalOffMs": 0.06810000000041327,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "discardPrevious",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 0.2293999999992593,
+          "publicOutcome": "cleanup_pending",
+          "logicalOffMs": 0.06480000000010477,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "cleanExit",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 0.36200000000008004,
+          "publicOutcome": "void",
+          "logicalOffMs": 0.07710000000042783,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "cleanup",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 137.58110000000033,
+          "publicOutcome": "cleanup_pending",
+          "logicalOffMs": 0.05349999999998545,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "writeExportState",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1.3280000000004293,
+          "publicOutcome": "status",
+          "logicalOffMs": 0.12049999999999272,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "stageExport",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 140.23169999999936,
+          "publicOutcome": "status",
+          "logicalOffMs": 0.09479999999894062,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "unknown_ready",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "clearStage",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 19.03490000000056,
+          "publicOutcome": "cleanup_pending",
+          "logicalOffMs": 0.07320000000072469,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "validateDestination",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 0.11719999999877473,
+          "publicOutcome": "refused",
+          "logicalOffMs": 0.08700000000135333,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "publishStage",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 369.6352000000006,
+          "publicOutcome": "status",
+          "logicalOffMs": 0.09509999999863794,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "unknown_ready",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "writersStopped",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 0.1265000000003056,
+          "publicOutcome": "unknown_blocked",
+          "logicalOffMs": 0.050600000000486034,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 0
+          },
+          "offOutcome": "unknown_ready",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "picker",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 0.09419999999954598,
+          "publicOutcome": "refused",
+          "logicalOffMs": 0.0820000000003347,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "completionRecord",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 479.25930000000153,
+          "publicOutcome": "status",
+          "logicalOffMs": 0.09879999999975553,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "exactSavedBytes": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "nativePublish",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 489.15610000000015,
+          "publicOutcome": "status",
+          "logicalOffMs": 0.13990000000012515,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "unknown_ready",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "nativeWrite",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 10000,
+          "publicElapsedMs": 101.57389999999941,
+          "publicOutcome": "void",
+          "logicalOffMs": 0.05199999999967986,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "offOutcome": "off",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        }
+      ],
+      "completedCells": 20,
+      "expectedCells": [
+        "readSetting",
+        "readExportState",
+        "writeSetting",
+        "open",
+        "maintain",
+        "checkpoint",
+        "previous",
+        "discardPrevious",
+        "cleanExit",
+        "cleanup",
+        "writeExportState",
+        "stageExport",
+        "clearStage",
+        "validateDestination",
+        "publishStage",
+        "writersStopped",
+        "picker",
+        "completionRecord",
+        "nativePublish",
+        "nativeWrite"
+      ],
+      "totalPressureAttempts": 0,
+      "totalPressureRefused": 0,
+      "nativeOutstandingPeak": 1,
+      "unhandledRejections": 0,
+      "legacyCalls": 0,
+      "allFaultsEnteredDuringExecution": true,
+      "allOwnedExitsConfirmed": true,
+      "disposableStateRemoved": true,
+      "maxPublicElapsedMs": 489.15610000000015,
+      "maxLogicalOffMs": 0.367999999999995,
+      "timingDisposition": "4ms target deferred by owner; all observations retained; no timing pass or Layout attribution claimed"
+    },
+    {
+      "schedule": "stall",
+      "comparisonCount": 1,
+      "harnessHead": "74a3ef441449523d110849c9d1c92aa0f61fdf83",
+      "semanticEqual": true,
+      "workEqual": true,
+      "correctnessPass": true,
+      "memoryPass": false,
+      "cli": [
+        {
+          "mode": "off",
+          "exitCode": 0,
+          "diagnosticExitCode": 0,
+          "elapsedMs": 37988.8603,
+          "artifactCount": 29,
+          "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+          "workItems": [
+            {
+              "slug": "docs",
+              "status": "done"
+            },
+            {
+              "slug": "login-api",
+              "status": "done"
+            },
+            {
+              "slug": "schema",
+              "status": "done"
+            }
+          ],
+          "memory": {
+            "method": "Electron main heapUsed+external sampled every 2ms and boundaries; arrayBuffers not added twice; no renderer in writer fixture; native allocator/RSS separate",
+            "managedIncrementBytes": 1615513,
+            "managedLimitBytes": 33554432,
+            "rssIncrementBytes": 10129408,
+            "controlledBinaryPeakBytes": 0,
+            "binaryLimitBytes": 8388608,
+            "reservationPeakBytes": 0,
+            "zeroAfterEveryCell": true,
+            "managedPass": true,
+            "binaryPass": true
+          }
+        },
+        {
+          "mode": "on",
+          "exitCode": 0,
+          "diagnosticExitCode": 0,
+          "elapsedMs": 42225.44560000001,
+          "artifactCount": 29,
+          "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+          "workItems": [
+            {
+              "slug": "docs",
+              "status": "done"
+            },
+            {
+              "slug": "login-api",
+              "status": "done"
+            },
+            {
+              "slug": "schema",
+              "status": "done"
+            }
+          ],
+          "memory": {
+            "method": "Electron main heapUsed+external sampled every 2ms and boundaries; arrayBuffers not added twice; no renderer in writer fixture; native allocator/RSS separate",
+            "managedIncrementBytes": 59414981,
+            "managedLimitBytes": 33554432,
+            "rssIncrementBytes": 68890624,
+            "controlledBinaryPeakBytes": 5373952,
+            "binaryLimitBytes": 8388608,
+            "reservationPeakBytes": 4194304,
+            "zeroAfterEveryCell": true,
+            "managedPass": false,
+            "binaryPass": true
+          }
+        }
+      ],
+      "cells": [
+        {
+          "target": "readSetting",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1010.2204999999999,
+          "publicOutcome": "void",
+          "logicalOffMs": 0.5501999999999043,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 0
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "readExportState",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1009.8102999999999,
+          "publicOutcome": "void",
+          "logicalOffMs": 0.06479999999965003,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 0
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "writeSetting",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1011.8655000000003,
+          "publicOutcome": "cleanup_pending",
+          "logicalOffMs": 0.14439999999922293,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "open",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1014.8458,
+          "publicOutcome": "cleanup_pending",
+          "logicalOffMs": 0.13550000000032014,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 0
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "maintain",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1012.7669999999998,
+          "publicOutcome": "void",
+          "logicalOffMs": 0.1265000000003056,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "checkpoint",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1010.9323000000004,
+          "publicOutcome": "void",
+          "logicalOffMs": 0.07150000000001455,
+          "retainedWhileParked": {
+            "reservation": 3145728,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "previous",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1010.5728999999992,
+          "publicOutcome": "unavailable",
+          "logicalOffMs": 0.10449999999946158,
+          "retainedWhileParked": {
+            "reservation": 4194304,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "discardPrevious",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1004.5410999999986,
+          "publicOutcome": "cleanup_pending",
+          "logicalOffMs": 0.10360000000036962,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "cleanExit",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1001.5324,
+          "publicOutcome": "void",
+          "logicalOffMs": 0.05860000000029686,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "cleanup",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1157.7201999999997,
+          "publicOutcome": "cleanup_pending",
+          "logicalOffMs": 0.05410000000119908,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "writeExportState",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1012.3201999999983,
+          "publicOutcome": "publication_pending",
+          "logicalOffMs": 0.15309999999954016,
+          "retainedWhileParked": {
+            "reservation": 2097152,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "publication_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "stageExport",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 999.6067999999977,
+          "publicOutcome": "publication_pending",
+          "logicalOffMs": 0.11460000000079162,
+          "retainedWhileParked": {
+            "reservation": 2097152,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "publication_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "clearStage",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1002.512999999999,
+          "publicOutcome": "cleanup_pending",
+          "logicalOffMs": 0.10000000000218279,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "validateDestination",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1011.5020999999979,
+          "publicOutcome": "refused",
+          "logicalOffMs": 0.11119999999937136,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "publishStage",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1002.3356999999996,
+          "publicOutcome": "publication_pending",
+          "logicalOffMs": 0.18620000000009895,
+          "retainedWhileParked": {
+            "reservation": 2097152,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "publication_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "writersStopped",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 999.7956000000013,
+          "publicOutcome": "cleanup_pending",
+          "logicalOffMs": 0.06159999999727006,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 0
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "picker",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 1,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1001.3960000000006,
+          "publicOutcome": "refused",
+          "logicalOffMs": 0.10299999999915599,
+          "retainedWhileParked": {
+            "reservation": 0,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "completionRecord",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1006.4657000000007,
+          "publicOutcome": "publication_pending",
+          "logicalOffMs": 0.2444999999970605,
+          "retainedWhileParked": {
+            "reservation": 2097152,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "publication_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "exactSavedBytes": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "nativePublish",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 1000,
+          "publicElapsedMs": 1006.5097999999962,
+          "publicOutcome": "publication_pending",
+          "logicalOffMs": 0.12039999999979045,
+          "retainedWhileParked": {
+            "reservation": 2097152,
+            "binary": 5242880
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        },
+        {
+          "target": "nativeWrite",
+          "faultObserved": true,
+          "faultHits": 1,
+          "faultPeak": 1,
+          "diskOutstandingPeak": 2,
+          "operationTimeoutMs": 10000,
+          "publicElapsedMs": 10015.477400000003,
+          "publicOutcome": "void",
+          "logicalOffMs": 0.4121000000013737,
+          "retainedWhileParked": {
+            "reservation": 3145728,
+            "binary": 5275664
+          },
+          "pressure": {
+            "attempts": 128,
+            "refused": 128,
+            "diskCallsAdded": 0,
+            "dispatchesAdded": 0,
+            "payloadAllocationsAdded": 0
+          },
+          "offOutcome": "cleanup_pending",
+          "checks": {
+            "zeroReservation": true,
+            "zeroControlledBinary": true,
+            "noLateDestination": true,
+            "writerSettled": true,
+            "noHistoryOrStage": true,
+            "diskBound": true
+          }
+        }
+      ],
+      "completedCells": 20,
+      "expectedCells": [
+        "readSetting",
+        "readExportState",
+        "writeSetting",
+        "open",
+        "maintain",
+        "checkpoint",
+        "previous",
+        "discardPrevious",
+        "cleanExit",
+        "cleanup",
+        "writeExportState",
+        "stageExport",
+        "clearStage",
+        "validateDestination",
+        "publishStage",
+        "writersStopped",
+        "picker",
+        "completionRecord",
+        "nativePublish",
+        "nativeWrite"
+      ],
+      "totalPressureAttempts": 2560,
+      "totalPressureRefused": 2560,
+      "nativeOutstandingPeak": 1,
+      "unhandledRejections": 0,
+      "legacyCalls": 0,
+      "allFaultsEnteredDuringExecution": true,
+      "allOwnedExitsConfirmed": true,
+      "disposableStateRemoved": true,
+      "maxPublicElapsedMs": 10015.477400000003,
+      "maxLogicalOffMs": 0.5501999999999043,
+      "timingDisposition": "4ms target deferred by owner; all observations retained; no timing pass or Layout attribution claimed"
+    }
+  ],
+  "managedMemoryDisposition": "Both aggregate On observations exceed unchanged 33,554,432-byte limit; failure retained. This fixture contains repeated fresh controller/payload/native setup; available sampled aggregate evidence does not attribute product versus fixture contribution. No forced GC, subtraction, threshold waiver, optimization or retry.",
+  "layout": {
+    "maxMs": 6.986,
+    "rawTraceRetained": false,
+    "attribution": "Retained process/name aggregates lack ts/tid/phase. Cannot attribute without targeted capture; no OS-noise or product-cause claim.",
+    "timingDisposition": "Meeting 4ms target deferred in issue597; no numeric threshold edited."
+  },
+  "limitations": [
+    "Synthetic rejection/barrier seams; nativePublish/nativeWrite interception precedes actual backend dispatch, not wedged native worker or hardware proof.",
+    "Headless diagnostic child and CLI are separate processes; semantic normalization does not establish complete execution-graph, retry/gate/credential-call equivalence.",
+    "Sampled heapUsed+external is diagnostic-main aggregate; no renderer, continuous native allocation or CLI-memory proof. Controlled binary accounting is separate.",
+    "Native/crash/expiry/network, accessibility, second-user, ARM64/physical, exact-source Linux crash and Mac acceptance retain prior status."
+  ]
+}
