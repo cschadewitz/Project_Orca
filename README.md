@@ -41,7 +41,7 @@ it does not require a collaborator to install ORCA or make code changes.
 ## Quick start
 
 ```bash
-mise install            # Node 24 + pnpm 12; Node 22 is the supported floor
+mise install            # Node 24 + pnpm 12; Node 24 is the supported floor
 pnpm install --frozen-lockfile
 pnpm test               # unit + end-to-end tests (scripted ACP agent, no LLM needed)
 pnpm run orca validate --mermaid        # validate + draw the shipped workflows

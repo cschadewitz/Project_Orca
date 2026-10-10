@@ -222,6 +222,6 @@ all four states and connection changes. Adapter tests cover explicit negotiation
 The claim facility and execution-fence adapters in service tests are faithful fixtures.
 They do not prove multi-process #331 durability, production attempt reservation or a real
 Electron flow. The reserved patch is apply-checked and typechecked in a separate scratch
-copy. Final combined Node 22/24 tests/coverage, HTTP/WebSocket contract tests, compiled
+copy. Final combined Node 24 tests/coverage, HTTP/WebSocket contract tests, compiled
 runtime smoke, Electron smoke and independent review remain required on the integrated
 head. Feature-only checks must not close #356's combined acceptance criteria.

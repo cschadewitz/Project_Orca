@@ -89,6 +89,12 @@ it into the app's resources as `extraResources`, which means beside `app.asar` r
 inside it — a file inside an asar archive is not a real file to the operating system, and
 this one has to be spawned.
 
+The standalone daemon requires Node.js 24 or newer, matching the root `engines`
+and esbuild target. The packaged app spawns it with `process.execPath` and
+`ELECTRON_RUN_AS_NODE=1`, using Electron's bundled Node rather than a system install.
+The pinned Electron 44.4.5 already embeds Node 24.21.0; this floor change needs no
+Electron upgrade.
+
 It is spawned, not imported. `packages/app` may only import `@orca/protocol` and
 `@orca/design` from the workspace (ADR 0008), and the daemon's dependency graph — the
 engine, the stores, the agents — is exactly what that boundary exists to keep out. A

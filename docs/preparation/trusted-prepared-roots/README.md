@@ -11,7 +11,7 @@ are this directory and `tools/test/trusted-prepared-roots.test.js`.
 
 ## Run without installed dependencies
 
-From the repository root, using an already installed Node 22 or 24:
+From the repository root, using an already installed Node 24 or newer:
 
 ```sh
 node --test-reporter=tap docs/preparation/trusted-prepared-roots/contract.test.mjs

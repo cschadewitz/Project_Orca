@@ -3,7 +3,7 @@
 **Current main, 4 October 2026:** commit `94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`
 mounts the authenticated MCP reads and ten mutation/receipt aliases. `orca mcp` provides
 stdio; `createOperatorHttpHandler` provides the authenticated Streamable HTTP reference
-handler. The compiled production matrix runs with required mounts in CI on Node 22/24.
+handler. The compiled production matrix runs with required mounts in CI on Node 24.
 See the [current evidence map](runtime-operator-integration.md#current-main-evidence-map)
 and [production matrix](mcp-operator-production-acceptance.md). The earlier A/B/C
 handoff and unapplied patch descriptions are historical design evidence, not
@@ -57,7 +57,7 @@ fixture pin, ownership split and remaining production/actual-agent integration g
 
 ## Local setup on current main
 
-Use Node 22 or 24, build ORCA, and use an **already approved, explicit ORCA credential**:
+Use Node 24 or newer, build ORCA, and use an **already approved, explicit ORCA credential**:
 
 ```sh
 # Inject ORCA_MCP_TOKEN through the client's secret/environment mechanism.

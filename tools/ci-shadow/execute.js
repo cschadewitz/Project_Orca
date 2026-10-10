@@ -1,15 +1,15 @@
-/** Enforce exact-candidate selected PR tests on both Nodes; main retains full coverage. */
+/** Enforce exact-candidate selected PR tests on Node 24; main retains full coverage. */
 import { spawnSync } from "node:child_process";
 import { appendFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { atomicJSON, normalizeVitest, readJSON } from "./evidence.js";
+import { atomicJSON, CI_NODES, normalizeVitest, readJSON } from "./evidence.js";
 import { git } from "./git.js";
 import { createPlan, validateExecution, validatePlan } from "./selector.js";
 
 export function executionPlan(input, event, node, manifest) {
-  const forceFull = event !== "pull_request" || ![22, 24].includes(node);
+  const forceFull = event !== "pull_request" || !CI_NODES.includes(node);
   const plan = createPlan({ ...input, forceFull }, manifest);
   validatePlan(plan, { ...input, forceFull }, manifest);
   if (event === "pull_request") {
@@ -20,11 +20,11 @@ export function executionPlan(input, event, node, manifest) {
     throw new Error("checkout_candidate_mismatch");
   // Even an advisory docs plan cannot skip a test job admitted by the existing classifier.
   const mode =
-    event === "pull_request" && [22, 24].includes(node) && plan.wouldRun.tier === "targeted" ? "targeted" : "full";
+    event === "pull_request" && CI_NODES.includes(node) && plan.wouldRun.tier === "targeted" ? "targeted" : "full";
   return { plan, mode };
 }
 
-export function selectedResult(plan, raw, root, node = 22) {
+export function selectedResult(plan, raw, root, node = 24) {
   const report = normalizeVitest(raw, root);
   if (report.files.some((file) => file.todo !== 0)) throw new Error("selected_todo");
   return validateExecution(plan, {
@@ -110,7 +110,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     appendFileSync(process.env.GITHUB_OUTPUT, `mode=${selection}\n`);
   } else if (mode === "run") {
     if (
-      ![22, 24].includes(Number(process.versions.node.split(".")[0])) ||
+      !CI_NODES.includes(Number(process.versions.node.split(".")[0])) ||
       Number(process.env.SHADOW_NODE) !== Number(process.versions.node.split(".")[0]) ||
       process.env.ORCA_MCP_REQUIRE_PRODUCTION !== "1"
     )

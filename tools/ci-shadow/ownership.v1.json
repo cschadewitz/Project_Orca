@@ -295,10 +295,6 @@
     }
   ],
   "fullChecks": [
-    "node22:build-before-tests",
-    "node22:retry-cli-acp-no-skips",
-    "node22:full-suite-production-required",
-    "node22:compiled-cli-demo",
     "node24:typecheck",
     "node24:lint",
     "node24:format",
@@ -309,10 +305,6 @@
     "node24:compiled-cli-demo"
   ],
   "targetedChecks": [
-    "node22:build-before-tests",
-    "node22:retry-cli-acp-no-skips",
-    "node22:selected-exact-files",
-    "node22:compiled-cli-demo",
     "node24:typecheck",
     "node24:lint",
     "node24:format",

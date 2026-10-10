@@ -30,7 +30,7 @@ ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mc
 
 ## Execution
 
-Use Node >=22 and the repository's pinned pnpm. Install the frozen lockfile, then
+Use Node >=24 and the repository's pinned pnpm. Install the frozen lockfile, then
 build in this checkout. The fixture intentionally launches the compiled CLI in
 separate Node processes, bypassing Vitest's source aliases for the runtime under test.
 It fails if compiled entry points are absent. Rebuild after integrating runtime changes;

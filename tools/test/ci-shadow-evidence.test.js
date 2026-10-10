@@ -40,7 +40,7 @@ const plan = (selected = discovered) => ({
   graphs: [{}, { discoveredVitestFiles: discovered }],
   wouldRun: { tier: "targeted", vitestFiles: selected, runners: [{ id: "resources-browser" }] },
 });
-const evidence = (node = 22) => ({
+const evidence = (node = 24) => ({
   artifact: "orca-ci-full-evidence",
   schemaVersion: 1,
   identity: { ...source, base: candidate, head: candidate, candidate, node },
@@ -53,22 +53,21 @@ const evidence = (node = 22) => ({
   },
   retry: { success: true, files: RETRY_FILES.map(file) },
 });
-const job = (node) => ({
+const job = () => ({
   conclusion: "success",
   steps: [
     "Build",
     "Retry admission acceptance (CLI and ACP)",
-    node === 24 ? "Test with coverage" : "Test",
+    "Test with coverage",
     "Smoke test the compiled build",
-    ...(node === 24 ? ["Typecheck", "Design tokens are current", "Format", "Lint"] : []),
+    "Typecheck",
+    "Design tokens are current",
+    "Format",
+    "Lint",
   ].map((name) => ({ name, conclusion: "success" })),
 });
-const compare = (e = evidence(), j = job(22), p = plan(), options = {}) =>
-  compareFullEvidence(
-    p,
-    { 22: { evidence: e, job: j }, 24: { evidence: evidence(24), job: job(24) } },
-    { repo, trusted: candidate, source, ...options },
-  );
+const compare = (e = evidence(), j = job(), p = plan(), options = {}) =>
+  compareFullEvidence(p, { 24: { evidence: e, job: j } }, { repo, trusted: candidate, source, ...options });
 const raw = () => ({
   success: true,
   numTotalTests: 2,
@@ -94,12 +93,10 @@ const raw = () => ({
   ],
 });
 
-const selectedJob = (node = 22) => ({
-  ...job(node),
+const selectedJob = () => ({
+  ...job(),
   steps: [
-    ...job(node).steps.map((step) =>
-      step.name === (node === 24 ? "Test with coverage" : "Test") ? { ...step, conclusion: "skipped" } : step,
-    ),
+    ...job().steps.map((step) => (step.name === "Test with coverage" ? { ...step, conclusion: "skipped" } : step)),
     { name: "Plan test execution", conclusion: "success" },
     { name: "Test selected files", conclusion: "success" },
   ],
@@ -108,15 +105,15 @@ const selectedPlan = () => ({
   ...plan([ordinary]),
   graphs: [{ complete: true }, { complete: true, discoveredVitestFiles: discovered }],
 });
-const selectedEvidence = (node = 22) => ({ ...evidence(node), suite: { success: true, files: [file(ordinary)] } });
+const selectedEvidence = (node = 24) => ({ ...evidence(node), suite: { success: true, files: [file(ordinary)] } });
 
-it("authenticates reduced Node 22 separately alongside genuine same-candidate full Node 24", () => {
+it("authenticates selected Node 24 without claiming full/global coverage or omitted-test equivalence", () => {
   const result = compare(selectedEvidence(), selectedJob(), selectedPlan());
-  expect(result.lanes.map((lane) => lane.status)).toEqual(["selected_verified", "compared"]);
-  expect(result.lanes.map((lane) => lane.execution)).toEqual(["selected", "full"]);
+  expect(result.lanes.map((lane) => lane.status)).toEqual(["selected_verified"]);
+  expect(result.lanes.map((lane) => lane.execution)).toEqual(["selected"]);
   expect(result.lanes[0].reasons).toEqual([]);
   expect(result.lanes[0].intentionalSkips).toEqual([]);
-  expect(result.lanes[1].intentionalSkips).toHaveLength(3);
+  expect(result.fullBaseline).toMatchObject({ status: "not_run", nodes: [] });
 });
 
 it.each([
@@ -136,7 +133,7 @@ it.each([
   if (kind === "push") input = { source: { ...source, event: "push" } };
   if (kind === "full_plan") p.wouldRun.tier = "full";
   if (kind === "incomplete_graph") p.graphs[0].complete = false;
-  if (kind === "both_steps") j.steps.find((step) => step.name === "Test").conclusion = "success";
+  if (kind === "both_steps") j.steps.find((step) => step.name === "Test with coverage").conclusion = "success";
   if (kind === "missing_plan_step") j.steps = j.steps.filter((step) => step.name !== "Plan test execution");
   if (kind === "duplicate_selected_step") j.steps.push({ name: "Test selected files", conclusion: "success" });
   if (kind === "extra_file") e.suite.files.push(file("extra.test.ts"));
@@ -145,49 +142,42 @@ it.each([
 });
 
 it.each(["missing", "failed", "stale", "cancelled"])(
-  "verifies selected execution without claiming an absent full baseline: %s",
+  "does not claim an unavailable full Node 24 baseline: %s",
   (kind) => {
     const baseline = evidence(24);
-    const baselineJob = job(24);
+    const baselineJob = job();
     if (kind === "failed") baseline.suite.success = false;
     if (kind === "stale") baseline.identity.candidate = "0".repeat(40);
     if (kind === "cancelled") baselineJob.conclusion = "cancelled";
     const result = compareFullEvidence(
       selectedPlan(),
       {
-        22: { evidence: selectedEvidence(), job: selectedJob() },
         24: { evidence: kind === "missing" ? null : baseline, job: baselineJob },
       },
       { repo, trusted: candidate, source },
     );
-    expect(result.lanes[0].status).toBe("selected_verified");
+    expect(result.lanes[0].status).toBe(kind === "cancelled" ? "cancelled" : "unknown");
     expect(result.fullBaseline).toMatchObject({ status: "not_run", nodes: [] });
   },
 );
 
-it("verifies selected Node 24 without claiming full/global coverage or omitted-test equivalence", () => {
-  const result = compareFullEvidence(
-    selectedPlan(),
-    {
-      22: { evidence: selectedEvidence(22), job: selectedJob(22) },
-      24: { evidence: selectedEvidence(24), job: selectedJob(24) },
-    },
-    { repo, trusted: candidate, source },
-  );
-  expect(result.lanes.map((lane) => lane.status)).toEqual(["selected_verified", "selected_verified"]);
-  expect(result.fullBaseline).toMatchObject({ status: "not_run", nodes: [] });
+it("rejects retired Node 22 evidence and does not consume it as a CI lane", () => {
   const wrongRuntime = selectedEvidence(22);
+  expect(() => validateEvidence(wrongRuntime, wrongRuntime.identity)).toThrow("invalid_evidence_identity");
   const stale = compareFullEvidence(
     selectedPlan(),
     {
-      24: { evidence: wrongRuntime, job: selectedJob(24) },
+      22: { evidence: evidence(22), job: job() },
+      24: { evidence: wrongRuntime, job: selectedJob() },
     },
     { repo, trusted: candidate, source },
   );
-  expect(stale.lanes[1].reasons).toContain("stale_or_malformed_evidence");
+  expect(stale.lanes.map((lane) => lane.node)).toEqual([24]);
+  expect(stale.lanes[0].reasons).toContain("stale_or_malformed_evidence");
+  expect(stale.fullBaseline).toMatchObject({ status: "not_run", nodes: [] });
 });
 
-it.each([22, 24])("requires explicit successful documentation execution on Node %s", (node) => {
+it.each([24])("requires explicit successful documentation execution on Node %s", (node) => {
   const p = { ...plan([]), wouldRun: { ...plan([]).wouldRun, tier: "docs" } };
   const e = { ...evidence(node), suite: null, retry: null };
   const j = {
@@ -196,7 +186,6 @@ it.each([22, 24])("requires explicit successful documentation execution on Node 
       { name: "Check ordinary documentation", conclusion: "success" },
       ...[
         "Build",
-        "Test",
         "Test selected files",
         "Test with coverage",
         "Retry admission acceptance (CLI and ACP)",
@@ -205,9 +194,7 @@ it.each([22, 24])("requires explicit successful documentation execution on Node 
     ],
   };
   const check = () =>
-    compareFullEvidence(p, { [node]: { evidence: e, job: j } }, { repo, trusted: candidate, source }).lanes[
-      node === 22 ? 0 : 1
-    ];
+    compareFullEvidence(p, { [node]: { evidence: e, job: j } }, { repo, trusted: candidate, source }).lanes[0];
   expect(check()).toMatchObject({ status: "docs_verified", execution: "docs" });
   j.steps[0].conclusion = "failure";
   expect(check().status).toBe("unknown");
@@ -259,9 +246,10 @@ it.runIf(process.platform === "win32")("refuses report paths on another Windows 
   expect(() => normalizeVitest(report, root)).toThrow("invalid_vitest_path");
 });
 
-it("compares both full lanes and records exact intentional skips separately from passes", () => {
+it("compares full Node 24 and records exact intentional skips separately from passes", () => {
   const result = compare();
-  expect(result.lanes.map((lane) => lane.status)).toEqual(["compared", "compared"]);
+  expect(result.lanes.map((lane) => lane.status)).toEqual(["compared"]);
+  expect(result.fullBaseline).toMatchObject({ status: "available", nodes: [24] });
   expect(result.lanes[0].intentionalSkips).toHaveLength(3);
   expect(result.lanes[0].intentionalSkips.every((skip) => skip.status === "skipped")).toBe(true);
   expect(result.separateRunners[0].status).toBe("unknown");
@@ -286,7 +274,7 @@ it("rejects unknown fields, duplicate files and empty claimed discovery", () => 
   extra.admission = "passed";
   expect(() => validateEvidence(extra, extra.identity)).toThrow("invalid_evidence_schema");
   expect(
-    compare(evidence(), job(22), { ...plan(), graphs: [{}, { discoveredVitestFiles: [] }] }).lanes[0].reasons,
+    compare(evidence(), job(), { ...plan(), graphs: [{}, { discoveredVitestFiles: [] }] }).lanes[0].reasons,
   ).toContain("full_discovery_mismatch");
 });
 
@@ -303,7 +291,7 @@ it("requires the independently passing retry lane and frozen skipped test source
   const e = evidence();
   e.retry.files[0].skips = [hash(INTENTIONAL_SKIPS[0].name)];
   expect(compare(e).lanes[0].reasons).toContain("retry_acceptance_not_proven");
-  expect(compare(evidence(), job(22), plan(), { trusted: "0".repeat(40) }).lanes[0].reasons).toContain(
+  expect(compare(evidence(), job(), plan(), { trusted: "0".repeat(40) }).lanes[0].reasons).toContain(
     "unexpected_skip_failure_or_empty_file",
   );
 });
@@ -312,11 +300,7 @@ it("retains a seeded failure in an omitted file", () => {
   const e = evidence();
   e.suite.success = false;
   e.suite.files[0] = { ...file(ordinary), status: "failed", passed: 0, failed: 1 };
-  const result = compare(
-    e,
-    { ...job(22), conclusion: "failure" },
-    plan(discovered.filter((path) => path !== ordinary)),
-  );
+  const result = compare(e, { ...job(), conclusion: "failure" }, plan(discovered.filter((path) => path !== ordinary)));
   expect(result.lanes[0].omittedFailures).toEqual([ordinary]);
   expect(result.lanes[0].reasons).toContain("failure_in_omitted_file");
   expect(result.lanes[0].status).not.toBe("compared");
@@ -325,7 +309,7 @@ it("retains a seeded failure in an omitted file", () => {
 it.each(["cancelled", "skipped", "failure", null])(
   "records full job outcome %s without claiming a comparison",
   (conclusion) => {
-    const result = compare(evidence(), { ...job(22), conclusion });
+    const result = compare(evidence(), { ...job(), conclusion });
     expect(result.lanes[0].status).toBe(conclusion === "cancelled" ? "cancelled" : "unknown");
   },
 );
@@ -333,7 +317,7 @@ it.each(["cancelled", "skipped", "failure", null])(
 it("missing artifact, job or required step remains explicit unknown", () => {
   expect(compare(null).lanes[0].reasons).toContain("missing_evidence");
   expect(compare(evidence(), null).lanes[0].reasons).toContain("missing_job");
-  const j = job(22);
+  const j = job();
   j.steps.pop();
   expect(compare(evidence(), j).lanes[0].reasons).toContain("missing_or_unsuccessful_required_step");
   const e = evidence();
@@ -523,13 +507,13 @@ it.each(["complete", "stale_after_read", "malformed_artifact"])(
       if (path === "/pulls/1") return p;
       if (path.endsWith("/jobs"))
         return {
-          total_count: 2,
-          jobs: [22, 24].map((node) => ({ ...job(node), name: `check (node ${node})`, run_id: 123, run_attempt: 1 })),
+          total_count: 1,
+          jobs: [24].map((node) => ({ ...job(), name: `check (node ${node})`, run_id: 123, run_attempt: 1 })),
         };
       if (path.endsWith("/artifacts"))
         return {
-          total_count: 2,
-          artifacts: [22, 24].map((node) => ({ id: node, name: `ci-full-evidence-123-1-node-${node}` })),
+          total_count: 1,
+          artifacts: [24].map((node) => ({ id: node, name: `ci-full-evidence-123-1-node-${node}` })),
         };
       throw new Error("unexpected_api_path");
     };
@@ -558,9 +542,10 @@ it.each(["complete", "stale_after_read", "malformed_artifact"])(
     } else {
       const comparison = await promise;
       expect(comparison.identities.candidate).toBe(merge);
-      expect(comparison.lanes.map((lane) => lane.status)).toEqual(
-        mode === "complete" ? ["compared", "compared"] : ["unknown", "unknown"],
-      );
+      expect(comparison.lanes.map((lane) => lane.status)).toEqual(mode === "complete" ? ["compared"] : ["unknown"]);
+      expect(comparison.artifacts).toEqual([
+        { node: 24, state: mode === "complete" ? "validated" : "unknown_or_stale" },
+      ]);
       expect(readJSON(join(output, "plan.json"))).toEqual(full);
       expect(readJSON(join(output, "comparison.json"))).toEqual(comparison);
     }
@@ -642,7 +627,7 @@ it("keeps existing full checks and limits while isolating workflow_run from cand
   const ci = readFileSync(join(repo, ".github/workflows/ci.yml"), "utf8");
   const consumer = readFileSync(join(repo, ".github/workflows/ci-shadow.yml"), "utf8");
   for (const invariant of [
-    "node: [22, 24]",
+    "node: [24]",
     "max-parallel: 1",
     "fail-fast: false",
     "timeout-minutes: 3",
@@ -653,8 +638,12 @@ it("keeps existing full checks and limits while isolating workflow_run from cand
     "needs.changes.outputs.code != 'false'",
   ])
     expect(ci).toContain(invariant);
-  expect(ci.match(/--reporter=default --reporter=json/g)).toHaveLength(3);
-  expect(ci).toContain("run: pnpm run test --reporter=default --reporter=json");
+  expect(ci.match(/--reporter=default --reporter=json/g)).toHaveLength(2);
+  expect(ci).toContain("run: pnpm run test:coverage --reporter=default --reporter=json");
+  expect(ci).not.toContain("matrix.node != 24");
+  expect(ci).not.toContain("name: Test\n");
+  for (const name of ["Typecheck", "Design tokens are current", "Format", "Lint", "Build", "Test with coverage"])
+    expect(ci).toContain(`name: ${name}`);
   expect(ci).not.toContain("actions: write");
   expect(consumer).toContain("ref: ${{ github.sha }}");
   expect(consumer).toContain("persist-credentials: false");

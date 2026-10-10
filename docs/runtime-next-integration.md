@@ -56,7 +56,7 @@ See [configuration generations](configuration-generations.md#reloadability),
 ## Verification
 
 Feature CI is not combined acceptance. The exact combined head requires typechecks,
-format/lint/design checks, Node 22/24 tests and coverage, builds, compiled smoke and
+format/lint/design checks, Node 24 tests and coverage, builds, compiled smoke and
 independent review. Real Electron-window App smoke is a separate required gate.
 Runner prerequisite/runtime-library failure is blocked, never a pass. Final combined
 validation and performance review remain required before release.
@@ -129,5 +129,5 @@ recorded under the same setup above. Demo workspaces were on tmpfs; these are no
 physical-disk durability measurements. This latest comparison is the current performance
 evidence. Remaining overhead requires explicit acceptance; parity is not established.
 
-Exact-head Node 22/24 CI, coverage, native App smoke and
+Exact-head Node 24 CI, coverage, native App smoke and
 independent re-review remain required. The former 60 s demo bounds are unchanged.

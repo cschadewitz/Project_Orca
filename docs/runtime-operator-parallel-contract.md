@@ -1043,7 +1043,7 @@ Required combined tests include:
 - Existing CLI/ACP/app compatibility plus HTTP/WebSocket parity and tool discovery
   only for implemented authorized operations
 
-Run final combined `typecheck`, `format:check`, `lint`, `design:check`, Node 22/24
+Run final combined `typecheck`, `format:check`, `lint`, `design:check`, Node 24
 tests and coverage, build and compiled CLI/runtime smoke. Run real Electron App
 smoke on that exact combined head; platform prerequisites or runtime-library
 failures are blocked checks, never passes. Record independent review and exact CI

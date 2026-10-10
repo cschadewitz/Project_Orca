@@ -60,7 +60,7 @@ Passed, failed, blocked, skipped and not-run are separate categories. No skipped
 case counts as a pass. No unsupported-host capacity refusal becomes a successful
 copy. No failed production check is hidden behind a fixture pass. CI still
 classifies executable documentation and the tools bridge as code and runs its
-normal Node 22/24 matrix with dependencies on the published PR.
+normal Node 24 CI lane with dependencies on the published PR.
 
 ## Fixture coverage
 

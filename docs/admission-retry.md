@@ -200,7 +200,7 @@ conflicts, revocation, quotas, JSON limits, binding CAS, escaped contexts, lost
 acknowledgements and Request/direct recovery. Tests gated by
 `ORCA_RETRY_INTEGRATION=1` exercise real bootstrap/HTTP/WebSocket/legacy-start/ACP
 wiring in an isolated checkout with the named patch applied. They deliberately
-skip on the feature branch. Final merged Node 22/24 coverage, compiled smoke,
+skip on the feature branch. Final merged Node 24 coverage, compiled smoke,
 Electron App smoke, peer-story acceptance and independent review remain the
 integrator's exact-head gates; feature checks do not substitute for them.
 

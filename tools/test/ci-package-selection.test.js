@@ -65,7 +65,7 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
-it.each([22, 24])("selects engine plus downstream CLI domains on Node %s, without unrelated app tests", (node) => {
+it.each([24])("selects engine plus downstream CLI domains on Node %s, without unrelated app tests", (node) => {
   reset();
   write("packages/engine/src/index.ts", "/** Changed feature behavior. */\nexport const value = 2;\n");
   const input = candidate();

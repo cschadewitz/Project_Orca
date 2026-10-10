@@ -9,7 +9,7 @@ using this with a tester.
 
 ## Offline first
 
-Prerequisites for the **coordinator**: already available Node.js >=22 and Git >=2.28.
+Prerequisites for the **coordinator**: already available Node.js >=24 and Git >=2.28.
 Missing tools are a blocker; these scripts never install anything. From the ORCA
 checkout root:
 
