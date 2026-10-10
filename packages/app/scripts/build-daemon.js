@@ -62,9 +62,8 @@ const result = await build({
   bundle: true,
   platform: "node",
   format: "esm",
-  // The floor in the root package.json's `engines`. The desktop build runs it under
-  // Electron's Node, which is newer; the standalone artifact may not.
-  target: "node22",
+  // The floor in the root package.json's `engines`, also met by Electron's bundled Node.
+  target: "node24",
   // An ESM bundle has no `require`, and a CommonJS dependency inlined into one can still
   // reach for it (`ws` does, for its optional native speedups). This is the documented
   // shim: a real `require` resolved relative to the bundle.

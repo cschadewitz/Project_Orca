@@ -49,7 +49,7 @@ export interface SocketHandlers {
 export type SocketFactory = (url: string, handlers: SocketHandlers, protocols?: string[]) => SocketHandle;
 
 /**
- * The default: Node 22's own `WebSocket`, which is also Electron's. No `ws` on this side -
+ * The default: Node's own `WebSocket`, which is also Electron's. No `ws` on this side -
  * the daemon needs a WebSocket *server* and the platform has none, but a client it has.
  */
 export const webSocketFactory: SocketFactory = (url, handlers, protocols) => {

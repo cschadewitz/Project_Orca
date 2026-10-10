@@ -15,7 +15,7 @@
  * with `NOT_SUPPORTED`, so that `hello.methods` can advertise them honestly and a client
  * that calls them over `/rpc` is told why rather than getting "unknown method".
  *
- * `ws` is the dependency. Node 22 has a WebSocket *client* (`globalThis.WebSocket`, which is
+ * `ws` is the dependency. Node has a WebSocket *client* (`globalThis.WebSocket`, which is
  * what `@orca/app` uses) but no server, and `ws` is the one everything else in the ecosystem
  * has settled on. It is a leaf with no dependencies of its own, and only the daemon has it -
  * the app side stays on the platform.

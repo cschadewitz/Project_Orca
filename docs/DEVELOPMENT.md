@@ -7,7 +7,7 @@ The commands below are contributor recipes, not native beta installation instruc
 
 ## Toolchain and command effects
 
-`package.json` supports Node >=22 and pins pnpm 12.4.2; `mise.toml` selects Node 24
+`package.json` supports Node >=24 and pins pnpm 12.4.2; `mise.toml` selects Node 24
 and pnpm 12. The 7 October cloud reconciliation used Node 24.21.0/pnpm 12.4.2.
 Use a frozen install for ordinary setup; do not regenerate the lockfile to make a
 documentation check pass. `pnpm install` runs the existing dependency policy/build
@@ -54,22 +54,22 @@ security/storage boundaries. Run the combined suite and App smoke on the exact i
 head before treating the independent story slices as accepted.
 
 The CI check matrix runs the two `ORCA_RETRY_INTEGRATION=1` CLI/ACP cases explicitly on
-Node 22 and 24, with at most two Vitest workers and a three-minute step limit. It checks
+Node 24, with at most two Vitest workers and a three-minute step limit. It checks
 the test report so a skipped case fails the lane. The CLI case uses a local authenticated
 HTTP/WebSocket daemon and a synthetic workflow; the ACP case uses an in-process SDK client
 and file-backed claims. Neither needs a provider credential. These cases do not prove
 Electron keychain restart or the full cross-client key lifecycle in #331.
 
 Current `ci.yml` routes its jobs to standard `ubuntu-24.04` hosted runners (#525).
-The two Node jobs still run sequentially. Every Vitest
+The Node 24 lane retains the existing worker bound. Every Vitest
 step uses at most two workers (one where Node reports at most two available CPUs),
 including the full suite and coverage. This limits contention for subprocess-heavy
 tests such as the demo while retaining their existing assertions and 60-second bounds.
 
-PRs and main pushes admit both named CI matrix checks. Audited ordinary prose runs
+PRs and main pushes admit the named `check (node 24)` CI check. Audited ordinary prose runs
 lightweight text/local-file-link checks; consumed or unknown Markdown, structural changes
 and mixed inputs retain necessary runtime checks. Supported package source/test changes
-select whole affected package domains and downstream consumers on both Node 22 and 24.
+select whole affected package domains and downstream consumers on Node 24.
 Core/store/protocol/testing, security, configuration, non-import dependency triggers and
 missing graph evidence retain full testing. Every code lane still builds, runs mandatory
 no-skip retry acceptance and compiled smoke, with statics on Node 24.
@@ -421,11 +421,11 @@ CI measures coverage on one Node version (24), writes the per-package table into
 job summary, and uploads `coverage/` as an artifact — including when the thresholds
 fail, which is when the numbers are worth reading.
 
-CI admits the whole matrix for every PR/main event, including all Markdown,
-consumed documentation, unknown inputs, both sides of renames and deletions.
-There is no extension-based or docs-only skip. Only the exact reviewed time-formatting
-island can reduce Node 22 after complete SHA-bound recomputation; Node 24 remains
-full coverage. Missing or ambiguous diff/discovery evidence cannot suppress checks.
+CI admits the Node 24 check for every PR/main event. Audited ordinary prose runs
+lightweight documentation checks; eligible package changes run exact selected files
+after complete SHA-bound recomputation. Every main push and full/fallback PR retains
+full coverage. Consumed or unknown documentation, mixed changes and missing or ambiguous
+diff/discovery evidence retain runtime checks. See [selection policy](ci-shadow-selection.md#current-pr-execution).
 
 Only `.github/workflows/ci.yml` runs automatically before a pull request merges. Desktop
 packaging and App smoke remain available by manual dispatch and as reusable release checks;

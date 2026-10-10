@@ -4,7 +4,7 @@ import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { atomicJSON, compareFullEvidence, readJSON, validateEvidence } from "./evidence.js";
+import { atomicJSON, CI_NODES, compareFullEvidence, readJSON, validateEvidence } from "./evidence.js";
 import { createPlan, validatePlan } from "./selector.js";
 import { git, hash } from "./git.js";
 
@@ -225,7 +225,7 @@ export async function consume({ repo, out, event, trusted, apiRead = api, artifa
   const jobs = await listWith(apiRead, `/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, "jobs");
   const artifacts = await listWith(apiRead, `/actions/runs/${run.id}/artifacts`, "artifacts");
   const lanes = {};
-  for (const node of [22, 24]) {
+  for (const node of CI_NODES) {
     const matchingJobs = jobs.filter(
       (job) => job.name === `check (node ${node})` && job.run_id === run.id && job.run_attempt === run.run_attempt,
     );
@@ -262,7 +262,7 @@ export async function consume({ repo, out, event, trusted, apiRead = api, artifa
   ].includes(run.conclusion)
     ? run.conclusion
     : "unknown";
-  comparison.artifacts = [22, 24].map((node) => ({ node, state: lanes[node].artifactState }));
+  comparison.artifacts = CI_NODES.map((node) => ({ node, state: lanes[node].artifactState }));
   atomicJSON(join(out, "plan.json"), plan);
   atomicJSON(join(out, "comparison.json"), comparison);
   return comparison;
@@ -288,7 +288,7 @@ export function summary(comparison) {
           `Node ${lane.node}: **${lane.status}**; ${lane.intentionalSkips.length} explicitly recorded intentional skips; ${lane.omittedFailures.length} omitted failures.`,
       ),
       `Full same-candidate baseline: **${comparison.fullBaseline?.status ?? "unknown"}**.`,
-      "Browser/native runners: unknown (outside the CI workflow). Selected execution is partial on either Node; a full baseline is reported only when actually run on this candidate.",
+      "Browser/native runners: unknown (outside the CI workflow). Selected execution is partial; a full baseline is reported only when actually run on this candidate.",
     ].join("\n\n") + "\n"
   );
 }

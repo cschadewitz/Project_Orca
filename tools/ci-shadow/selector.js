@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { changes, digest, hash, identities, sorted, snapshot, validPath } from "./git.js";
 import { consumers, graph, imports, MANIFEST_PATH, TOOL_PATHS, validateManifest } from "./graph.js";
 import { docsOnly, loadDocs } from "./docs.js";
-import { INTENTIONAL_SKIPS } from "./evidence.js";
+import { CI_NODES, INTENTIONAL_SKIPS } from "./evidence.js";
 
 export const ARTIFACT = "orca-ci-shadow-plan";
 export const SCHEMA_VERSION = 1;
@@ -234,7 +234,7 @@ export function createPlan({ repo, base, head, candidate, forceFull = false }, m
             ...records.map((record) => record.path).filter((path) => graphs[1].tests.includes(path)),
           ])
         : [];
-  // Retry opt-ins run independently on both Nodes; provider-live is outside credential-free CI.
+  // Retry opt-ins run independently on Node 24; provider-live is outside credential-free CI.
   // Changed skip sources force full above, so new assertions cannot disappear behind this policy.
   if (manifest.packagePolicy && tier === "targeted")
     vitestFiles = vitestFiles.filter(
@@ -296,7 +296,7 @@ export function validateExecution(plan, report) {
   // Evidence is separate from the immutable proposal. This helper never emits an admission verdict.
   if (
     report.candidate !== plan.identities.candidate ||
-    ![22, 24].includes(report.node) ||
+    !CI_NODES.includes(report.node) ||
     !["suite", "retry"].includes(report.lane) ||
     report.success !== true ||
     !Array.isArray(report.files)

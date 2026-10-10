@@ -166,7 +166,7 @@ function validate() {
   return { ...report, evidence };
 }
 try {
-  assert.ok(Number(process.versions.node.split(".")[0]) >= 22, "Node.js >=22 required; do not auto-install");
+  assert.ok(Number(process.versions.node.split(".")[0]) >= 24, "Node.js >=24 required; do not auto-install");
   const [command, target, ...extra] = process.argv.slice(2);
   assert.equal(extra.length, 0, "Unexpected arguments");
   let result;

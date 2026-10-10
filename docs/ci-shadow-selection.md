@@ -1,10 +1,11 @@
 # SHA-bound PR selection and advisory evidence (#509)
 
 This implements [#509](https://github.com/cschadewitz/Project_Orca/issues/509).
-Casey authorized practical pre-beta reductions on **both Node 22 and 24**, including
-ordinary documentation and affected feature packages. The current policy supersedes
+The supported Node floor and CI lane are **Node 24**. Casey authorized practical
+pre-beta reductions, including ordinary documentation and affected feature packages.
+The current policy supersedes
 the earlier two-literal island certificate described in the historical sections below.
-Required check names, worker limits, serial matrix, retry acceptance, test assertions
+The `check (node 24)` name, worker limits, retry acceptance, test assertions
 and timeouts, credentials, release/deployment behavior and production fixtures stay
 unchanged. The separate [#510](https://github.com/cschadewitz/Project_Orca/issues/510)
 worker continues to own fixture optimization.
@@ -47,13 +48,13 @@ Selector **1.2.0** uses the versioned `packagePolicy` in `ownership.v1.json`:
   any newly consumed prose path from the positive inventory; that maintenance obligation
   is explicit rather than a claim of automatic semantic detection of arbitrary readers.
 - Ordinary prose runs UTF-8/LF/whitespace/fence and local **file-target** link checks on
-  both named matrix jobs without dependency installation or runtime suites. Remote links
+  the named Node 24 job without dependency installation or runtime suites. Remote links
   and heading fragments are outside this check. Missing classification runs runtime
   checks; failed classification cannot turn the named checks into green skipped jobs.
 - Every code lane keeps build-before-tests, production-required environment, bounded
   workers, mandatory CLI/ACP retry acceptance with every assertion passing, compiled
   CLI smoke and Node 24 whole-repository typecheck/lint/format/design checks.
-- Eligible PRs run the exact selected files on both Nodes **without global coverage**.
+- Eligible PRs run the exact selected files on Node 24 **without global coverage**.
   Full/fallback PRs and every main push keep the complete suite and unchanged global/app
   coverage ratchets. This accepts a pre-beta tradeoff: an omitted-test failure or global
   coverage regression may be detected on main after merge. Partial tests do not prove
@@ -70,7 +71,7 @@ results fail the job. Reports bind the actual Node major and candidate.
 
 The three intentional opt-in skips retain their exact assertion/hash and unchanged-blob
 policy in full reports. Selected execution omits those unchanged opt-ins: the two retry
-cases run independently on both Nodes; the provider-live test remains outside credential-free
+cases run independently on Node 24; the provider-live test remains outside credential-free
 CI. A changed opt-in source forces full so new assertions cannot disappear behind this rule.
 
 ## Reporting, adoption and rollback
@@ -80,7 +81,7 @@ untrusted artifacts; it never executes PR code. Source/runner parity, immutable 
 run attempt, required step outcomes and exact report discovery remain independently checked.
 A selected lane is **selected_verified**, a prose lane **docs_verified**, and only genuine
 full execution is **compared**. Missing, failed, stale and cancelled evidence remains explicit.
-`fullBaseline` is **not_run** when both lanes are selected or prose; it never invents
+`fullBaseline` is **not_run** when the Node 24 lane is selected or prose; it never invents
 same-candidate full-suite evidence. Browser/native runners remain unknown.
 
 Existing PRs need the merged workflow/selector main incorporated in their heads before
@@ -92,7 +93,7 @@ Run `37728976418` at `d0b699ab7c03fb854b414d2f1c6844cdc1d09d26` validates the pr
 `aaa6a7322595d0bdc2e83d29b92185f510a3f0e2` source tree, not this policy.
 
 Rollback is an ordinary workflow PR that disables selected/prose shortcuts and restores
-full Node 22 testing/full Node 24 coverage on every PR. No required-check migration,
+full Node 24 coverage on every PR. No required-check migration,
 branch protection, host or credential changes are involved. Nightly/release/pilot remain
 later scope. There has been no new dispatch or merge.
 
@@ -222,7 +223,7 @@ Use the pinned package manager (`pnpm@12.4.2`) and the task's Node `24.21.0` for
 local evidence, preserving frozen-lockfile installation and supply-chain policies.
 The TypeScript parser is the existing ESLint tool package dependency; no new
 dependency or lockfile modification is needed. Supported runtime verification
-continues to include Node 22 and 24.
+uses Node 24.
 
 Run the selector from a trusted checkout, using full immutable 40-character commit
 SHAs resolved by the eventual workflow from its event/candidate, never PR-supplied
@@ -291,7 +292,7 @@ The event adapter below grants no merge/release authority.
 Observed execution belongs in a separately versioned evidence sidecar linked to
 the same candidate and plan digest. The exported `validateExecution` checks a strict
 normalized file report: `{candidate,node,lane,success,files}` with lane `suite` or
-`retry`, Node 22/24 and each file `{path,status,passed,failed,skipped}`. It rejects
+`retry`, Node 24 and each file `{path,status,passed,failed,skipped}`. It rejects
 missing/extra/duplicate files, zero assertions, failure/cancellation, skips and stale
 identity. The retry lane requires both named CLI/ACP files to pass with no skips.
 The report adapter derives counts/statuses from actual runner results;
@@ -386,15 +387,16 @@ Nightly, release parity, freshness, platform adapters and pilot are later #509 w
 
 ## Existing authority and remaining integration gates
 
-The full/fallback PR and main contract remains build-before-tests on Node 22/24, explicit
+The full/fallback PR and main contract remains build-before-tests on Node 24, explicit
 CLI/ACP retry acceptance with no skips, `ORCA_MCP_REQUIRE_PRODUCTION=1`, emitted
 CLI demo, Node 24 whole-repository typecheck/lint/format/design freshness and full
-coverage with unchanged global/app ratchets. Worker bounds and serial matrix stay
-unchanged. Selected PRs defer full coverage to main under the current pre-beta policy above;
-partial results are never reported as global coverage. Existing checks
-`check (node 22)` and `check (node 24)` remain unchanged. Branch-protection/ruleset
-reads returned `Forbidden` in this environment; actual required-check settings
-are unverified. No migration is implied.
+coverage with unchanged global/app ratchets. Worker bounds stay unchanged. Selected PRs
+defer full coverage to main under the current pre-beta policy above;
+partial results are never reported as global coverage. `check (node 24)` retains its
+name; `check (node 22)` is retired. Any branch-protection/ruleset requirement for
+`check (node 22)` must be removed externally while retaining `check (node 24)`.
+Protection reads returned `Forbidden` in this environment, so actual required-check
+settings are unverified. This PR does not change repository access or settings.
 
 Later owned workflow work must:
 

@@ -1,5 +1,5 @@
-# Full main verification and conservative affected-package PR testing on both Nodes.
-# Audited ordinary prose retains named matrix verdicts with lightweight documentation checks.
+# Full main verification and conservative affected-package PR testing on Node 24.
+# Audited ordinary prose retains the named verdict with lightweight documentation checks.
 name: CI
 
 on:
@@ -43,12 +43,10 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
-      # Do not overlap the two jobs or their subprocess-heavy suites:
-      # the demo launches 24 scripted ACP children and has a fixed 60s operation bound.
       max-parallel: 1
       matrix:
-        # 22 is the floor declared in package.json engines; 24 is what mise.toml pins.
-        node: [22, 24]
+        # 24 is the floor declared in package.json engines and selected by mise.toml.
+        node: [24]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -116,7 +114,7 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
-      # Exact-candidate affected-package proposals reduce both Nodes. Main and unknowns stay full.
+      # Exact-candidate affected-package proposals reduce PR tests. Main and unknowns stay full.
       - name: Plan test execution
         id: selection
         if: needs.changes.outputs.code != 'false'
@@ -128,27 +126,22 @@ jobs:
           rm -f "$RUNNER_TEMP/ci-selection-plan.json" "$RUNNER_TEMP/ci-selection-plan.json.tmp"
           node tools/ci-shadow/execute.js plan
 
-      # The Node 22 leg proves runtime compatibility through the tests, build and compiled
-      # smoke below. TypeScript's result is independent of the Node version running it, so
-      # doing the same standalone typecheck twice buys no additional compatibility signal.
       - name: Typecheck
-        if: needs.changes.outputs.code != 'false' && matrix.node == 24
+        if: needs.changes.outputs.code != 'false'
         run: pnpm run typecheck
 
       # tokens.css and tokens.ts are committed so nothing needs a build to read a token;
       # this fails when someone edited tokens.json and forgot to regenerate them.
       - name: Design tokens are current
-        if: needs.changes.outputs.code != 'false' && matrix.node == 24
+        if: needs.changes.outputs.code != 'false'
         run: pnpm run design:check
 
-      # Style and lint are Node-version independent, so one leg is enough: running them on
-      # both would annotate the same finding twice on the PR.
       - name: Format
-        if: needs.changes.outputs.code != 'false' && matrix.node == 24
+        if: needs.changes.outputs.code != 'false'
         run: pnpm run format:check
 
       - name: Lint
-        if: needs.changes.outputs.code != 'false' && matrix.node == 24
+        if: needs.changes.outputs.code != 'false'
         env:
           NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm run lint
@@ -166,7 +159,7 @@ jobs:
         run: pnpm run build
 
       # These two opt-in cases are skipped by the ordinary suite. Run them against the
-      # merged runtime on both supported Nodes and reject a green result with skips.
+      # merged runtime on Node 24 and reject a green result with skips.
       - name: Retry admission acceptance (CLI and ACP)
         if: needs.changes.outputs.code != 'false'
         timeout-minutes: 3
@@ -206,14 +199,6 @@ jobs:
 
       # Full/fallback PRs and every main push retain global/app coverage ratchets.
       # Selected PRs do not produce or claim global coverage; main catches regressions.
-      - name: Test
-        if: needs.changes.outputs.code != 'false' && matrix.node != 24 && steps.selection.outputs.mode != 'targeted'
-        # Explicit `run` forwards reporter flags to Vitest; pnpm's `test` shortcut
-        # otherwise interprets --reporter as a pnpm option before any script args.
-        run: pnpm run test --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
-        env:
-          ORCA_MCP_REQUIRE_PRODUCTION: "1"
-
       - name: Test selected files
         if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode == 'targeted'
         run: node tools/ci-shadow/execute.js run
@@ -224,7 +209,8 @@ jobs:
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       - name: Test with coverage
-        if: needs.changes.outputs.code != 'false' && matrix.node == 24 && steps.selection.outputs.mode != 'targeted'
+        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
+        # Explicit `run` forwards reporter flags to Vitest through pnpm.
         run: pnpm run test:coverage --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
         env:
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
@@ -232,14 +218,14 @@ jobs:
       # Both still run when the thresholds fail: a red build is exactly when the numbers
       # are worth reading. `hashFiles` keeps them quiet when coverage never ran at all.
       - name: Report coverage
-        if: ${{ !cancelled() && matrix.node == 24 && hashFiles('coverage/coverage-summary.json') != '' }}
+        if: ${{ !cancelled() && hashFiles('coverage/coverage-summary.json') != '' }}
         run: node tools/coverage-summary.js >> "$GITHUB_STEP_SUMMARY"
 
       # Artifact storage is best effort; test and coverage failures above remain blocking.
       - name: Upload coverage report
         id: upload-coverage
         continue-on-error: true
-        if: ${{ !cancelled() && matrix.node == 24 && hashFiles('coverage/coverage-summary.json') != '' }}
+        if: ${{ !cancelled() && hashFiles('coverage/coverage-summary.json') != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: coverage

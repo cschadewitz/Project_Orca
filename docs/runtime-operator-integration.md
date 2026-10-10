@@ -200,7 +200,7 @@ use explicitly injected journal/runtime fixtures and do not prove production
 adapter durability. Protocol tests exercise production handshake code with 1.10
 peer envelopes, not historical executable binaries.
 
-Exact-head remote CI, final Node 22/24 tests and coverage, format/lint/design/build,
+Exact-head remote CI, final Node 24 tests and coverage, format/lint/design/build,
 compiled CLI/runtime smoke, real Electron smoke, independent review, combined
 crash/restart acceptance and actual-Cal tests remain required. No threshold,
 authorization, key or durability check is relaxed by this checkpoint.
@@ -731,7 +731,7 @@ The bounded boundary-row hook is integration-owned, but its consumer remains A-o
 
 ## Combined MCP production validation
 
-The combined CI workflow builds the current source before tests on Node 22 and Node 24. Both test steps set `ORCA_MCP_REQUIRE_PRODUCTION=1`, so the production MCP acceptance suites must use the compiled daemon and transport with the real mounted services. Missing composition is a failure, not a dependency skip. Coverage thresholds and compiled smoke checks remain unchanged; separately opted-in acceptance scenarios and actual-Cal evidence retain their own gates.
+The combined CI workflow builds the current source before tests on Node 24. Full and selected test steps set `ORCA_MCP_REQUIRE_PRODUCTION=1`, so the production MCP acceptance suites must use the compiled daemon and transport with the real mounted services. Missing composition is a failure, not a dependency skip. Coverage thresholds and compiled smoke checks remain unchanged; separately opted-in acceptance scenarios and actual-Cal evidence retain their own gates.
 
 Fresh direct and Request admission now run the existing pure launch validation before publishing a new retry claim. Existing-key lookup, conflict detection and accepted replay still precede fresh validation, and preparation validates again after publication. Deterministic fresh refusals therefore do not consume the key; movement or failure after claim publication remains uncertain or recoverable according to the existing receipt. This change does not repair, delete or rebind older ambiguous claims.
 

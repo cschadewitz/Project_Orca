@@ -128,16 +128,16 @@ const selectedRaw = (paths, root = directory) => ({
   })),
 });
 
-it("enforces a useful exact-file PR path on both Nodes while main remains full", () => {
+it("enforces a useful exact-file PR path on Node 24 while main remains full", () => {
   const input = eligibleCandidate();
-  const result = executionPlan(input, "pull_request", 22, manifest);
+  const result = executionPlan(input, "pull_request", 24, manifest);
   expect(result.mode).toBe("targeted");
   expect(result.plan.graphs.every((entry) => entry.complete)).toBe(true);
   expect(result.plan.wouldRun.vitestFiles.length).toBeLessThan(result.plan.graphs[1].discoveredVitestFiles.length);
   expect(result.plan.wouldRun.vitestFiles).toContain(manifest.islands[0].paths[1]);
-  expect(executionPlan(input, "pull_request", 24, manifest).mode).toBe("targeted");
-  expect(executionPlan(input, "push", 22, manifest).mode).toBe("full");
-  expect(executionPlan(input, "unknown", 22, manifest).mode).toBe("full");
+  expect(executionPlan(input, "pull_request", 22, manifest).mode).toBe("full");
+  expect(executionPlan(input, "push", 24, manifest).mode).toBe("full");
+  expect(executionPlan(input, "unknown", 24, manifest).mode).toBe("full");
   const artifact = join(tmpdir(), `orca-selection-${input.candidate}.json`);
   const reportPath = join(tmpdir(), `orca-selection-result-${input.candidate}.json`);
   writeFileSync(artifact, JSON.stringify(result.plan));
@@ -185,7 +185,7 @@ it.each(["different_tree", "same_tree"])(
   "rejects a fresh passing report after execution moves to a clean %s commit",
   (kind) => {
     const input = eligibleCandidate();
-    const { plan } = executionPlan(input, "pull_request", 22, manifest);
+    const { plan } = executionPlan(input, "pull_request", 24, manifest);
     expect(plan.wouldRun.tier).toBe("targeted");
     const artifact = join(tmpdir(), `orca-moved-selection-${input.candidate}.json`);
     const reportPath = join(tmpdir(), `orca-moved-result-${input.candidate}.json`);
@@ -217,7 +217,7 @@ it.each(["different_tree", "same_tree"])(
 
 it("cannot reduce a head-only checkout or a candidate with swapped parents", () => {
   const input = eligibleCandidate();
-  expect(() => executionPlan({ ...input, candidate: input.head }, "pull_request", 22, manifest)).toThrow(
+  expect(() => executionPlan({ ...input, candidate: input.head }, "pull_request", 24, manifest)).toThrow(
     "candidate_parents_mismatch",
   );
   const swapped = git(
@@ -227,11 +227,11 @@ it("cannot reduce a head-only checkout or a candidate with swapped parents", () 
   )
     .toString()
     .trim();
-  expect(() => executionPlan({ ...input, candidate: swapped }, "pull_request", 22, manifest)).toThrow(
+  expect(() => executionPlan({ ...input, candidate: swapped }, "pull_request", 24, manifest)).toThrow(
     "candidate_parents_mismatch",
   );
   command("checkout", "-q", "--detach", input.head);
-  expect(() => executionPlan(input, "pull_request", 22, manifest)).toThrow("checkout_candidate_mismatch");
+  expect(() => executionPlan(input, "pull_request", 24, manifest)).toThrow("checkout_candidate_mismatch");
 });
 
 it.each(["missing", "extra", "duplicate", "failed", "skipped", "todo", "empty", "wrong_path", "bad_totals"])(
@@ -797,7 +797,7 @@ it("keeps a seeded failing app-side consumer in the selection and refuses its su
   expect(result.wouldRun.vitestFiles).toContain(seededPath);
   const report = {
     candidate: result.identities.candidate,
-    node: 22,
+    node: 24,
     lane: "suite",
     success: true,
     files: result.wouldRun.vitestFiles.map((path) => ({
@@ -853,6 +853,9 @@ it("rejects missing/duplicate/failed/skipped file results and stale result ident
     },
     (copy) => {
       copy.node = 20;
+    },
+    (copy) => {
+      copy.node = 22;
     },
     (copy) => {
       copy.success = false;

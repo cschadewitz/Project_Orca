@@ -4,6 +4,7 @@ import { isAbsolute, relative, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { digest, git, hash, sorted, validPath } from "./git.js";
 
+export const CI_NODES = [24];
 export const RETRY_FILES = [
   "packages/cli/test/admission-retry-wiring.test.ts",
   "packages/integrations/test/admission-retry-acp.test.ts",
@@ -100,7 +101,7 @@ export function validateIdentity(identity) {
     !count(identity.attempt) ||
     identity.attempt < 1 ||
     !["pull_request", "push"].includes(identity.event) ||
-    ![22, 24].includes(identity.node) ||
+    !CI_NODES.includes(identity.node) ||
     ![identity.base, identity.head, identity.candidate].every(sha)
   )
     throw new Error("invalid_evidence_identity");
@@ -189,7 +190,6 @@ export function compareLane(plan, evidence, { repo, trusted, node, job, source }
       job?.steps?.filter((entry) =>
         [
           "Build",
-          "Test",
           "Test selected files",
           "Test with coverage",
           "Retry admission acceptance (CLI and ACP)",
@@ -199,7 +199,7 @@ export function compareLane(plan, evidence, { repo, trusted, node, job, source }
     if (
       step.length !== 1 ||
       step[0].conclusion !== "success" ||
-      runtime.length !== 6 ||
+      runtime.length !== 5 ||
       runtime.some((entry) => entry.conclusion !== "skipped") ||
       evidence.suite !== null ||
       evidence.retry !== null
@@ -212,12 +212,12 @@ export function compareLane(plan, evidence, { repo, trusted, node, job, source }
   const required = [
     "Build",
     "Retry admission acceptance (CLI and ACP)",
-    selected ? "Test selected files" : node === 24 ? "Test with coverage" : "Test",
+    selected ? "Test selected files" : "Test with coverage",
     "Smoke test the compiled build",
   ];
   if (selected) {
     required.push("Plan test execution");
-    const fullSteps = job.steps.filter((step) => step.name === (node === 24 ? "Test with coverage" : "Test"));
+    const fullSteps = job.steps.filter((step) => step.name === "Test with coverage");
     if (
       source.event !== "pull_request" ||
       plan.wouldRun.tier !== "targeted" ||
@@ -228,7 +228,7 @@ export function compareLane(plan, evidence, { repo, trusted, node, job, source }
     )
       add("unproven_or_ambiguous_reduced_execution");
   }
-  if (node === 24) required.push("Typecheck", "Design tokens are current", "Format", "Lint");
+  required.push("Typecheck", "Design tokens are current", "Format", "Lint");
   for (const name of required) {
     const steps = job?.steps?.filter((step) => step.name === name) ?? [];
     result.checks.push({
@@ -284,7 +284,7 @@ export function compareLane(plan, evidence, { repo, trusted, node, job, source }
 }
 
 export function compareFullEvidence(plan, lanes, input) {
-  const compared = [22, 24].map((node) =>
+  const compared = CI_NODES.map((node) =>
     compareLane(plan, lanes[node]?.evidence, { ...input, node, job: lanes[node]?.job }),
   );
   // Selected execution can be verified without claiming evidence about omitted tests.
