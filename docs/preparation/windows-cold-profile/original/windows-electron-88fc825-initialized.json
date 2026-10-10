@@ -1,1 +1,20 @@
-{"format":1,"sourceCommit":"88fc825daaa969675d4d6d06931bceb00ebbacec","electron":"44.4.5","electronExeSha256":"bd14928e0728366fd3f41499cb398ff3f4304dab259a3e605077899a6f8c748e","compiledAdapterSha256":"c614303e01c86411948f72040ea3a9292569f3544a531c75fee57e5f64190f27","currentUserAsyncAdapterSeparateProcess":true,"tamperRefused":true,"sameDisposableProfileAcrossProcesses":true,"coldProducerTerminationExercised":false,"flushedWrapperSurvivesObservedProducerTermination":true,"syntheticBytes":32,"differentUser":"unrun","providerRotation":"unrun","physicalPowerLoss":"unrun","diagnosticsRecovery":"not exercised","combinedResourceGate":"not measured","captureActivated":false,"installedSoftwareOrChangedSecurity":false}
+{
+  "format": 1,
+  "sourceCommit": "88fc825daaa969675d4d6d06931bceb00ebbacec",
+  "electron": "44.4.5",
+  "electronExeSha256": "bd14928e0728366fd3f41499cb398ff3f4304dab259a3e605077899a6f8c748e",
+  "compiledAdapterSha256": "c614303e01c86411948f72040ea3a9292569f3544a531c75fee57e5f64190f27",
+  "currentUserAsyncAdapterSeparateProcess": true,
+  "tamperRefused": true,
+  "sameDisposableProfileAcrossProcesses": true,
+  "coldProducerTerminationExercised": false,
+  "flushedWrapperSurvivesObservedProducerTermination": true,
+  "syntheticBytes": 32,
+  "differentUser": "unrun",
+  "providerRotation": "unrun",
+  "physicalPowerLoss": "unrun",
+  "diagnosticsRecovery": "not exercised",
+  "combinedResourceGate": "not measured",
+  "captureActivated": false,
+  "installedSoftwareOrChangedSecurity": false
+}

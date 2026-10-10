@@ -120,14 +120,14 @@
     },
     {
       "name": "regressions.json",
-      "bytes": 12010,
-      "sha256": "2d7f90b155c4385b17ffca77fd3fb72da8c7a6001719a1dbf6dbb523716ba7f6",
+      "bytes": 11950,
+      "sha256": "bf5f5b8e188af3aa935a6ca892f5072ad1962f172270b7bfb8db97de748d2e0d",
       "original": {
         "name": "regressions.json",
         "bytes": 12010,
         "sha256": "2d7f90b155c4385b17ffca77fd3fb72da8c7a6001719a1dbf6dbb523716ba7f6"
       },
-      "normalization": "CRLF to LF only for text publication; metric/content bytes unchanged otherwise"
+      "normalization": "Prettier whitespace normalization for publication; parsed JSON equals original producer receipt"
     },
     {
       "name": "failure-capacity.json",

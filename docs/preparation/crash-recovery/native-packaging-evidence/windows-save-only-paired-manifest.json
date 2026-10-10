@@ -87,13 +87,13 @@
   "receipts": [
     {
       "name": "windows-save-only-paired-results.json",
-      "bytes": 142284,
-      "sha256": "f5e160ef6549913d47d43d904ab5701eb03d59fd3c0f3a93b0e71e7eea4ae0e2"
+      "bytes": 141704,
+      "sha256": "6fd5aada9f1b6a9796cb0108d93f29ef3520f38089a5c1f6cd08e6151c4fbbea"
     },
     {
       "name": "windows-save-only-paired-cpu.json",
-      "bytes": 30943,
-      "sha256": "0cb8dc727f6a03b5c76908ec87a44d619748741d966080099be58e204974df5d"
+      "bytes": 28469,
+      "sha256": "44f39d29cca3325ba556b9b72c0486bdfc3a2457e207f9e59a59ea13081964b8"
     },
     {
       "name": "windows-save-only-paired-summary.json",

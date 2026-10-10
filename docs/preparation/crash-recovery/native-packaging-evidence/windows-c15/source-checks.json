@@ -172,12 +172,7 @@
       ]
     }
   ],
-  "finalHarnessSourceChecks": [
-    "node --check (both files)",
-    "scoped ESLint",
-    "scoped Prettier",
-    "git diff --check"
-  ],
+  "finalHarnessSourceChecks": ["node --check (both files)", "scoped ESLint", "scoped Prettier", "git diff --check"],
   "retainedPreflightFailures": [
     {
       "stage": "Vitest config startup",

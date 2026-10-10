@@ -1,1 +1,27 @@
-{"format":1,"sourceCommit":"24cf52dc18f97f981cafcdc8e71d640e8672de8c","electron":"44.4.5","electronExeSha256":"bd14928e0728366fd3f41499cb398ff3f4304dab259a3e605077899a6f8c748e","compiledAdapterSha256":"c614303e01c86411948f72040ea3a9292569f3544a531c75fee57e5f64190f27","durableDpapi":false,"nativeBuild":"Electron async control","nativeBinarySha256":null,"firstProducerLocalStateKeyPresent":false,"preservedElectronV10ReadExercised":false,"nativeInputBoundsAndSnapshotExercised":false,"compiledWindowsAdapterSha256":"f5cd70d146c8866dcc01223d9eaa904ba09a3be69cb8a57334df23917816ec71","currentUserAsyncAdapterSeparateProcess":true,"tamperRefused":true,"sameDisposableProfileAcrossProcesses":true,"coldProducerTerminationExercised":false,"flushedWrapperSurvivesObservedProducerTermination":true,"syntheticBytes":32,"differentUser":"unrun","providerRotation":"unrun","physicalPowerLoss":"unrun","diagnosticsRecovery":"not exercised","combinedResourceGate":"not measured","captureActivated":false,"installedSoftwareOrChangedSecurity":false}
+{
+  "format": 1,
+  "sourceCommit": "24cf52dc18f97f981cafcdc8e71d640e8672de8c",
+  "electron": "44.4.5",
+  "electronExeSha256": "bd14928e0728366fd3f41499cb398ff3f4304dab259a3e605077899a6f8c748e",
+  "compiledAdapterSha256": "c614303e01c86411948f72040ea3a9292569f3544a531c75fee57e5f64190f27",
+  "durableDpapi": false,
+  "nativeBuild": "Electron async control",
+  "nativeBinarySha256": null,
+  "firstProducerLocalStateKeyPresent": false,
+  "preservedElectronV10ReadExercised": false,
+  "nativeInputBoundsAndSnapshotExercised": false,
+  "compiledWindowsAdapterSha256": "f5cd70d146c8866dcc01223d9eaa904ba09a3be69cb8a57334df23917816ec71",
+  "currentUserAsyncAdapterSeparateProcess": true,
+  "tamperRefused": true,
+  "sameDisposableProfileAcrossProcesses": true,
+  "coldProducerTerminationExercised": false,
+  "flushedWrapperSurvivesObservedProducerTermination": true,
+  "syntheticBytes": 32,
+  "differentUser": "unrun",
+  "providerRotation": "unrun",
+  "physicalPowerLoss": "unrun",
+  "diagnosticsRecovery": "not exercised",
+  "combinedResourceGate": "not measured",
+  "captureActivated": false,
+  "installedSoftwareOrChangedSecurity": false
+}

@@ -2142,40 +2142,15 @@
         "combinedPrivateCommitPeak": 87552000,
         "sampleCount": 2667,
         "schema": 1,
-        "fields": [
-          "privateCommit",
-          "processLifetimePeakCommit",
-          "workingSet",
-          "processLifetimePeakWorkingSet"
-        ],
+        "fields": ["privateCommit", "processLifetimePeakCommit", "workingSet", "processLifetimePeakWorkingSet"],
         "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed.",
         "max": [
-          [
-            51888128,
-            52203520,
-            107606016,
-            107900928
-          ],
-          [
-            35663872,
-            36700160,
-            87576576,
-            87580672
-          ]
+          [51888128, 52203520, 107606016, 107900928],
+          [35663872, 36700160, 87576576, 87580672]
         ],
         "baseline": [
-          [
-            47030272,
-            49213440,
-            100880384,
-            102625280
-          ],
-          [
-            35119104,
-            35663872,
-            86335488,
-            86339584
-          ]
+          [47030272, 49213440, 100880384, 102625280],
+          [35119104, 35663872, 86335488, 86339584]
         ]
       },
       "trace": [
@@ -4712,39 +4687,14 @@
         "sampleCount": 2653,
         "combinedPrivateCommitPeak": 142815232,
         "max": [
-          [
-            106590208,
-            107900928,
-            134488064,
-            134893568
-          ],
-          [
-            36401152,
-            37765120,
-            89903104,
-            89907200
-          ]
+          [106590208, 107900928, 134488064, 134893568],
+          [36401152, 37765120, 89903104, 89907200]
         ],
-        "fields": [
-          "privateCommit",
-          "processLifetimePeakCommit",
-          "workingSet",
-          "processLifetimePeakWorkingSet"
-        ],
+        "fields": ["privateCommit", "processLifetimePeakCommit", "workingSet", "processLifetimePeakWorkingSet"],
         "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed.",
         "baseline": [
-          [
-            42131456,
-            42131456,
-            98529280,
-            98533376
-          ],
-          [
-            28819456,
-            29052928,
-            81203200,
-            81207296
-          ]
+          [42131456, 42131456, 98529280, 98533376],
+          [28819456, 29052928, 81203200, 81207296]
         ],
         "schema": 1
       },

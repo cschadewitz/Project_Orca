@@ -137,11 +137,7 @@
         ],
         "unhandledRejections": 0,
         "regressionOnly": true,
-        "expectedCells": [
-          "open",
-          "writeExportState",
-          "completionRecord"
-        ],
+        "expectedCells": ["open", "writeExportState", "completionRecord"],
         "faultCampaignElapsedMs": 2199.2864,
         "memory": {
           "method": "Electron main heapUsed+external sampled every 2ms and boundaries; arrayBuffers not added twice; no renderer in writer fixture; native allocator/RSS separate",
@@ -270,9 +266,7 @@
         ],
         "unhandledRejections": 0,
         "regressionOnly": true,
-        "expectedCells": [
-          "open"
-        ],
+        "expectedCells": ["open"],
         "ok": false,
         "failureCode": "synthetic-regression-stop",
         "memory": {

@@ -73,11 +73,7 @@
         "nativeWrite",
         "nativePublish"
       ],
-      "completedCells": [
-        "readSetting",
-        "readExportState",
-        "writeSetting"
-      ],
+      "completedCells": ["readSetting", "readExportState", "writeSetting"],
       "stoppedAt": "open",
       "error": "fault-not-reached",
       "remainingCells": [

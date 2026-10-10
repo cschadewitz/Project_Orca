@@ -1,1 +1,9 @@
-{"format":1,"sourceCommit":"24cf52dc18f97f981cafcdc8e71d640e8672de8c","electron":"44.4.5","mode":"cold","outcome":"refused","positiveAcceptance":false,"captureActivated":false}
+{
+  "format": 1,
+  "sourceCommit": "24cf52dc18f97f981cafcdc8e71d640e8672de8c",
+  "electron": "44.4.5",
+  "mode": "cold",
+  "outcome": "refused",
+  "positiveAcceptance": false,
+  "captureActivated": false
+}

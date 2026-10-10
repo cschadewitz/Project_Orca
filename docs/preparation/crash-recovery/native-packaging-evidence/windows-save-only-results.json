@@ -835,39 +835,14 @@
       "memory": {
         "sampleCount": 624,
         "baseline": [
-          [
-            47509504,
-            49717248,
-            103714816,
-            105385984
-          ],
-          [
-            31154176,
-            31158272,
-            85176320,
-            85180416
-          ]
+          [47509504, 49717248, 103714816, 105385984],
+          [31154176, 31158272, 85176320, 85180416]
         ],
-        "fields": [
-          "privateCommit",
-          "processLifetimePeakCommit",
-          "workingSet",
-          "processLifetimePeakWorkingSet"
-        ],
+        "fields": ["privateCommit", "processLifetimePeakCommit", "workingSet", "processLifetimePeakWorkingSet"],
         "schema": 1,
         "max": [
-          [
-            111951872,
-            113836032,
-            135196672,
-            135426048
-          ],
-          [
-            38678528,
-            38678528,
-            94859264,
-            94863360
-          ]
+          [111951872, 113836032, 135196672, 135426048],
+          [38678528, 38678528, 94859264, 94863360]
         ],
         "combinedPrivateCommitPeak": 148996096,
         "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed."
@@ -1223,41 +1198,16 @@
       "traceWritten": false,
       "memory": {
         "schema": 1,
-        "fields": [
-          "privateCommit",
-          "processLifetimePeakCommit",
-          "workingSet",
-          "processLifetimePeakWorkingSet"
-        ],
+        "fields": ["privateCommit", "processLifetimePeakCommit", "workingSet", "processLifetimePeakWorkingSet"],
         "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed.",
         "max": [
-          [
-            91160576,
-            94969856,
-            115462144,
-            115466240
-          ],
-          [
-            38858752,
-            38858752,
-            91856896,
-            91869184
-          ]
+          [91160576, 94969856, 115462144, 115466240],
+          [38858752, 38858752, 91856896, 91869184]
         ],
         "combinedPrivateCommitPeak": 130019328,
         "baseline": [
-          [
-            38215680,
-            38535168,
-            91508736,
-            91619328
-          ],
-          [
-            30851072,
-            30851072,
-            82386944,
-            82391040
-          ]
+          [38215680, 38535168, 91508736, 91619328],
+          [30851072, 30851072, 82386944, 82391040]
         ],
         "sampleCount": 554
       },

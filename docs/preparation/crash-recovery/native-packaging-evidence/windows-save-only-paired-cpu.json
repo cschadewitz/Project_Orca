@@ -19,20 +19,7 @@
           "columnNumber": -1
         },
         "hitCount": 0,
-        "children": [
-          2,
-          7,
-          10,
-          11,
-          16,
-          24,
-          25,
-          27,
-          38,
-          51,
-          58,
-          74
-        ]
+        "children": [2, 7, 10, 11, 16, 24, 25, 27, 38, 51, 58, 74]
       },
       {
         "id": 2,
@@ -44,10 +31,7 @@
           "columnNumber": 21
         },
         "hitCount": 0,
-        "children": [
-          3,
-          6
-        ]
+        "children": [3, 6]
       },
       {
         "id": 3,
@@ -59,9 +43,7 @@
           "columnNumber": 16
         },
         "hitCount": 0,
-        "children": [
-          4
-        ]
+        "children": [4]
       },
       {
         "id": 4,
@@ -73,9 +55,7 @@
           "columnNumber": 48
         },
         "hitCount": 0,
-        "children": [
-          5
-        ]
+        "children": [5]
       },
       {
         "id": 5,
@@ -87,9 +67,7 @@
           "columnNumber": 6
         },
         "hitCount": 0,
-        "children": [
-          82
-        ]
+        "children": [82]
       },
       {
         "id": 82,
@@ -135,9 +113,7 @@
           "columnNumber": 25
         },
         "hitCount": 0,
-        "children": [
-          8
-        ]
+        "children": [8]
       },
       {
         "id": 8,
@@ -149,9 +125,7 @@
           "columnNumber": 17
         },
         "hitCount": 0,
-        "children": [
-          9
-        ]
+        "children": [9]
       },
       {
         "id": 9,
@@ -163,9 +137,7 @@
           "columnNumber": 191
         },
         "hitCount": 1,
-        "children": [
-          48
-        ],
+        "children": [48],
         "positionTicks": [
           {
             "line": 82,
@@ -183,10 +155,7 @@
           "columnNumber": 35
         },
         "hitCount": 1,
-        "children": [
-          49,
-          53
-        ],
+        "children": [49, 53],
         "positionTicks": [
           {
             "line": 80,
@@ -204,9 +173,7 @@
           "columnNumber": 22
         },
         "hitCount": 0,
-        "children": [
-          50
-        ]
+        "children": [50]
       },
       {
         "id": 50,
@@ -235,9 +202,7 @@
           "columnNumber": 10
         },
         "hitCount": 1,
-        "children": [
-          54
-        ],
+        "children": [54],
         "positionTicks": [
           {
             "line": 141,
@@ -255,9 +220,7 @@
           "columnNumber": 7
         },
         "hitCount": 0,
-        "children": [
-          55
-        ]
+        "children": [55]
       },
       {
         "id": 55,
@@ -269,9 +232,7 @@
           "columnNumber": 19
         },
         "hitCount": 0,
-        "children": [
-          56
-        ]
+        "children": [56]
       },
       {
         "id": 56,
@@ -283,9 +244,7 @@
           "columnNumber": 12
         },
         "hitCount": 2,
-        "children": [
-          57
-        ],
+        "children": [57],
         "positionTicks": [
           {
             "line": 40,
@@ -324,9 +283,7 @@
           "columnNumber": 17
         },
         "hitCount": 1,
-        "children": [
-          42
-        ],
+        "children": [42],
         "positionTicks": [
           {
             "line": 230,
@@ -344,9 +301,7 @@
           "columnNumber": 191
         },
         "hitCount": 0,
-        "children": [
-          43
-        ]
+        "children": [43]
       },
       {
         "id": 43,
@@ -358,9 +313,7 @@
           "columnNumber": 35
         },
         "hitCount": 1,
-        "children": [
-          44
-        ],
+        "children": [44],
         "positionTicks": [
           {
             "line": 80,
@@ -378,9 +331,7 @@
           "columnNumber": 10
         },
         "hitCount": 0,
-        "children": [
-          45
-        ]
+        "children": [45]
       },
       {
         "id": 45,
@@ -392,9 +343,7 @@
           "columnNumber": 7
         },
         "hitCount": 0,
-        "children": [
-          46
-        ]
+        "children": [46]
       },
       {
         "id": 46,
@@ -406,9 +355,7 @@
           "columnNumber": 19
         },
         "hitCount": 0,
-        "children": [
-          47
-        ]
+        "children": [47]
       },
       {
         "id": 47,
@@ -437,9 +384,7 @@
           "columnNumber": 27
         },
         "hitCount": 0,
-        "children": [
-          12
-        ]
+        "children": [12]
       },
       {
         "id": 12,
@@ -451,12 +396,7 @@
           "columnNumber": 27
         },
         "hitCount": 1,
-        "children": [
-          13,
-          23,
-          65,
-          72
-        ],
+        "children": [13, 23, 65, 72],
         "positionTicks": [
           {
             "line": 539,
@@ -474,9 +414,7 @@
           "columnNumber": 24
         },
         "hitCount": 0,
-        "children": [
-          14
-        ]
+        "children": [14]
       },
       {
         "id": 14,
@@ -488,9 +426,7 @@
           "columnNumber": 17
         },
         "hitCount": 1,
-        "children": [
-          15
-        ],
+        "children": [15],
         "positionTicks": [
           {
             "line": 244,
@@ -508,10 +444,7 @@
           "columnNumber": 191
         },
         "hitCount": 0,
-        "children": [
-          22,
-          31
-        ]
+        "children": [22, 31]
       },
       {
         "id": 22,
@@ -540,10 +473,7 @@
           "columnNumber": 35
         },
         "hitCount": 0,
-        "children": [
-          32,
-          34
-        ]
+        "children": [32, 34]
       },
       {
         "id": 32,
@@ -555,9 +485,7 @@
           "columnNumber": 22
         },
         "hitCount": 0,
-        "children": [
-          33
-        ]
+        "children": [33]
       },
       {
         "id": 33,
@@ -586,9 +514,7 @@
           "columnNumber": 10
         },
         "hitCount": 0,
-        "children": [
-          35
-        ]
+        "children": [35]
       },
       {
         "id": 35,
@@ -600,9 +526,7 @@
           "columnNumber": 7
         },
         "hitCount": 0,
-        "children": [
-          36
-        ]
+        "children": [36]
       },
       {
         "id": 36,
@@ -614,9 +538,7 @@
           "columnNumber": 19
         },
         "hitCount": 0,
-        "children": [
-          37
-        ]
+        "children": [37]
       },
       {
         "id": 37,
@@ -628,10 +550,7 @@
           "columnNumber": 12
         },
         "hitCount": 2,
-        "children": [
-          52,
-          69
-        ],
+        "children": [52, 69],
         "positionTicks": [
           {
             "line": 40,
@@ -683,10 +602,7 @@
           "columnNumber": 18
         },
         "hitCount": 3,
-        "children": [
-          39,
-          70
-        ],
+        "children": [39, 70],
         "positionTicks": [
           {
             "line": 88,
@@ -708,9 +624,7 @@
           "columnNumber": 5
         },
         "hitCount": 0,
-        "children": [
-          40
-        ]
+        "children": [40]
       },
       {
         "id": 40,
@@ -722,9 +636,7 @@
           "columnNumber": 20
         },
         "hitCount": 0,
-        "children": [
-          41
-        ]
+        "children": [41]
       },
       {
         "id": 41,
@@ -753,9 +665,7 @@
           "columnNumber": 141426
         },
         "hitCount": 0,
-        "children": [
-          71
-        ]
+        "children": [71]
       },
       {
         "id": 71,
@@ -784,9 +694,7 @@
           "columnNumber": 24
         },
         "hitCount": 0,
-        "children": [
-          66
-        ]
+        "children": [66]
       },
       {
         "id": 66,
@@ -798,9 +706,7 @@
           "columnNumber": 28
         },
         "hitCount": 0,
-        "children": [
-          67
-        ]
+        "children": [67]
       },
       {
         "id": 67,
@@ -812,9 +718,7 @@
           "columnNumber": 37
         },
         "hitCount": 4,
-        "children": [
-          68
-        ],
+        "children": [68],
         "positionTicks": [
           {
             "line": 122,
@@ -873,9 +777,7 @@
           "columnNumber": 26
         },
         "hitCount": 0,
-        "children": [
-          73
-        ]
+        "children": [73]
       },
       {
         "id": 73,
@@ -904,9 +806,7 @@
           "columnNumber": 96155
         },
         "hitCount": 0,
-        "children": [
-          17
-        ]
+        "children": [17]
       },
       {
         "id": 17,
@@ -918,9 +818,7 @@
           "columnNumber": 120841
         },
         "hitCount": 0,
-        "children": [
-          18
-        ]
+        "children": [18]
       },
       {
         "id": 18,
@@ -932,9 +830,7 @@
           "columnNumber": 120865
         },
         "hitCount": 0,
-        "children": [
-          19
-        ]
+        "children": [19]
       },
       {
         "id": 19,
@@ -946,9 +842,7 @@
           "columnNumber": 93838
         },
         "hitCount": 0,
-        "children": [
-          20
-        ]
+        "children": [20]
       },
       {
         "id": 20,
@@ -960,9 +854,7 @@
           "columnNumber": 108268
         },
         "hitCount": 0,
-        "children": [
-          21
-        ]
+        "children": [21]
       },
       {
         "id": 21,
@@ -1002,9 +894,7 @@
           "columnNumber": 23
         },
         "hitCount": 0,
-        "children": [
-          26
-        ]
+        "children": [26]
       },
       {
         "id": 26,
@@ -1033,9 +923,7 @@
           "columnNumber": 37
         },
         "hitCount": 0,
-        "children": [
-          28
-        ]
+        "children": [28]
       },
       {
         "id": 28,
@@ -1047,9 +935,7 @@
           "columnNumber": 17
         },
         "hitCount": 0,
-        "children": [
-          29
-        ]
+        "children": [29]
       },
       {
         "id": 29,
@@ -1061,9 +947,7 @@
           "columnNumber": 64
         },
         "hitCount": 0,
-        "children": [
-          30
-        ]
+        "children": [30]
       },
       {
         "id": 30,
@@ -1114,10 +998,7 @@
           "columnNumber": 31
         },
         "hitCount": 0,
-        "children": [
-          59,
-          60
-        ]
+        "children": [59, 60]
       },
       {
         "id": 59,
@@ -1146,9 +1027,7 @@
           "columnNumber": 14
         },
         "hitCount": 0,
-        "children": [
-          61
-        ]
+        "children": [61]
       },
       {
         "id": 61,
@@ -1160,9 +1039,7 @@
           "columnNumber": 14
         },
         "hitCount": 0,
-        "children": [
-          62
-        ]
+        "children": [62]
       },
       {
         "id": 62,
@@ -1174,9 +1051,7 @@
           "columnNumber": 74
         },
         "hitCount": 0,
-        "children": [
-          63
-        ]
+        "children": [63]
       },
       {
         "id": 63,
@@ -1188,9 +1063,7 @@
           "columnNumber": 15
         },
         "hitCount": 0,
-        "children": [
-          64
-        ]
+        "children": [64]
       },
       {
         "id": 64,
@@ -1219,10 +1092,7 @@
           "columnNumber": 22
         },
         "hitCount": 0,
-        "children": [
-          75,
-          79
-        ]
+        "children": [75, 79]
       },
       {
         "id": 75,
@@ -1234,9 +1104,7 @@
           "columnNumber": 84
         },
         "hitCount": 0,
-        "children": [
-          76
-        ]
+        "children": [76]
       },
       {
         "id": 76,
@@ -1248,9 +1116,7 @@
           "columnNumber": 21
         },
         "hitCount": 0,
-        "children": [
-          77
-        ]
+        "children": [77]
       },
       {
         "id": 77,
@@ -1262,9 +1128,7 @@
           "columnNumber": 37
         },
         "hitCount": 0,
-        "children": [
-          78
-        ]
+        "children": [78]
       },
       {
         "id": 78,
@@ -1293,9 +1157,7 @@
           "columnNumber": 15
         },
         "hitCount": 0,
-        "children": [
-          80
-        ]
+        "children": [80]
       },
       {
         "id": 80,
@@ -1307,9 +1169,7 @@
           "columnNumber": 39
         },
         "hitCount": 0,
-        "children": [
-          81
-        ]
+        "children": [81]
       },
       {
         "id": 81,
@@ -1332,196 +1192,17 @@
     "startTime": 60578117477,
     "endTime": 60578237697,
     "samples": [
-      5,
-      6,
-      9,
-      10,
-      15,
-      21,
-      22,
-      23,
-      23,
-      24,
-      26,
-      30,
-      33,
-      37,
-      38,
-      41,
-      47,
-      38,
-      50,
-      51,
-      38,
-      52,
-      52,
-      56,
-      57,
-      43,
-      59,
-      64,
-      52,
-      53,
-      67,
-      68,
-      51,
-      67,
-      68,
-      68,
-      68,
-      52,
-      52,
-      38,
-      24,
-      38,
-      12,
-      67,
-      52,
-      68,
-      52,
-      14,
-      51,
-      38,
-      68,
-      68,
-      68,
-      68,
-      38,
-      68,
-      68,
-      68,
-      69,
-      37,
-      68,
-      24,
-      71,
-      68,
-      68,
-      23,
-      68,
-      68,
-      68,
-      38,
-      68,
-      68,
-      73,
-      68,
-      68,
-      67,
-      67,
-      78,
-      81,
-      81,
-      81,
-      56,
-      52,
-      24,
-      24,
-      38,
-      24,
-      38,
-      73,
-      33,
-      24,
-      23,
-      48,
-      82
+      5, 6, 9, 10, 15, 21, 22, 23, 23, 24, 26, 30, 33, 37, 38, 41, 47, 38, 50, 51, 38, 52, 52, 56, 57, 43, 59, 64, 52,
+      53, 67, 68, 51, 67, 68, 68, 68, 52, 52, 38, 24, 38, 12, 67, 52, 68, 52, 14, 51, 38, 68, 68, 68, 68, 38, 68, 68,
+      68, 69, 37, 68, 24, 71, 68, 68, 23, 68, 68, 68, 38, 68, 68, 73, 68, 68, 67, 67, 78, 81, 81, 81, 56, 52, 24, 24,
+      38, 24, 38, 73, 33, 24, 23, 48, 82
     ],
     "timeDeltas": [
-      38227,
-      812,
-      587,
-      571,
-      266,
-      330,
-      601,
-      578,
-      108,
-      553,
-      572,
-      571,
-      574,
-      584,
-      567,
-      554,
-      566,
-      579,
-      569,
-      571,
-      580,
-      983,
-      995,
-      1016,
-      984,
-      1005,
-      1002,
-      992,
-      1007,
-      1003,
-      996,
-      1026,
-      966,
-      1004,
-      999,
-      1003,
-      666,
-      374,
-      958,
-      998,
-      1002,
-      1003,
-      1005,
-      996,
-      992,
-      1001,
-      1026,
-      976,
-      1000,
-      993,
-      1030,
-      976,
-      1035,
-      967,
-      1000,
-      996,
-      1003,
-      1000,
-      997,
-      1000,
-      1000,
-      1029,
-      971,
-      1001,
-      998,
-      1000,
-      1009,
-      994,
-      1047,
-      954,
-      997,
-      1000,
-      1001,
-      999,
-      1000,
-      249,
-      753,
-      1008,
-      998,
-      994,
-      997,
-      1011,
-      1000,
-      991,
-      998,
-      1036,
-      966,
-      999,
-      1004,
-      997,
-      999,
-      1005,
-      1004,
-      998
+      38227, 812, 587, 571, 266, 330, 601, 578, 108, 553, 572, 571, 574, 584, 567, 554, 566, 579, 569, 571, 580, 983,
+      995, 1016, 984, 1005, 1002, 992, 1007, 1003, 996, 1026, 966, 1004, 999, 1003, 666, 374, 958, 998, 1002, 1003,
+      1005, 996, 992, 1001, 1026, 976, 1000, 993, 1030, 976, 1035, 967, 1000, 996, 1003, 1000, 997, 1000, 1000, 1029,
+      971, 1001, 998, 1000, 1009, 994, 1047, 954, 997, 1000, 1001, 999, 1000, 249, 753, 1008, 998, 994, 997, 1011, 1000,
+      991, 998, 1036, 966, 999, 1004, 997, 999, 1005, 1004, 998
     ]
   }
 }

@@ -338,8 +338,8 @@
   "receipts": [
     {
       "name": "windows-save-only-results.json",
-      "bytes": 38441,
-      "sha256": "28d4dda9ca506f4ff8edccdc1a680a37e876f8e5d2129f4088d8a8ebc99f4caa"
+      "bytes": 37861,
+      "sha256": "6a3c890c0bb6fe7695b5c2f5ba0117cba37d9db4cf05e9faf1e00ba6bade9e71"
     },
     {
       "name": "windows-save-only-ui.json",

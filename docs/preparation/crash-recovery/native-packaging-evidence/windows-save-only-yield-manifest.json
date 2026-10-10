@@ -51,23 +51,23 @@
     },
     {
       "name": "windows-save-only-yield-cpu-before.json",
-      "bytes": 33031,
-      "sha256": "d257e7b06abbae37789a267c35c593be2f025330a71b261340776ad189496a33"
+      "bytes": 30037,
+      "sha256": "472db9e137fb40050277b19438a72c70ce7bc7e07c50ce575ca9203bc6c01ebf"
     },
     {
       "name": "windows-save-only-yield-cpu-after.json",
-      "bytes": 31125,
-      "sha256": "a53e9e50edfb961d90eff47fa7f99b750b6201badd0da99b96a90449be3ea3f9"
+      "bytes": 28665,
+      "sha256": "53b463636185333c2c986687a30125a2618585a502fea66f35864d2d05247a95"
     },
     {
       "name": "windows-save-only-yield-before.json",
-      "bytes": 47746,
-      "sha256": "52d32748db5aeabf3025d3a52566823a50d6a1b6347c8c0ca70a43538dc3a48b"
+      "bytes": 47456,
+      "sha256": "18e0166ed547fdaab92393a0d3dc2868a1f94fce82b98782f449832104666f80"
     },
     {
       "name": "windows-save-only-yield-results.json",
-      "bytes": 69908,
-      "sha256": "2d0e9cd14f3ddcf84263dbc379c4a02443ebfd2394c5201349e9390316a930d6"
+      "bytes": 69328,
+      "sha256": "d9c11975c585dbbc7c3c11623a9614c9b294b664b9058e4c51da9b0381df7009"
     },
     {
       "name": "windows-save-only-yield-checks.json",

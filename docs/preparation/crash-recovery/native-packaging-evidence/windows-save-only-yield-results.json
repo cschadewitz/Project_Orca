@@ -1563,43 +1563,18 @@
       "traceWritten": true,
       "memory": {
         "baseline": [
-          [
-            41099264,
-            42717184,
-            98750464,
-            100007936
-          ],
-          [
-            29544448,
-            29999104,
-            80793600,
-            80797696
-          ]
+          [41099264, 42717184, 98750464, 100007936],
+          [29544448, 29999104, 80793600, 80797696]
         ],
         "combinedPrivateCommitPeak": 144441344,
         "sampleCount": 638,
         "schema": 1,
         "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed.",
         "max": [
-          [
-            107552768,
-            109920256,
-            136798208,
-            136818688
-          ],
-          [
-            36888576,
-            36888576,
-            89804800,
-            89821184
-          ]
+          [107552768, 109920256, 136798208, 136818688],
+          [36888576, 36888576, 89804800, 89821184]
         ],
-        "fields": [
-          "privateCommit",
-          "processLifetimePeakCommit",
-          "workingSet",
-          "processLifetimePeakWorkingSet"
-        ]
+        "fields": ["privateCommit", "processLifetimePeakCommit", "workingSet", "processLifetimePeakWorkingSet"]
       },
       "combinedManagedIncrementBytes": 27174818,
       "privateCommitIncrementBytes": 73797632,
@@ -2385,39 +2360,14 @@
         "sampleCount": 539,
         "combinedPrivateCommitPeak": 133824512,
         "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed.",
-        "fields": [
-          "privateCommit",
-          "processLifetimePeakCommit",
-          "workingSet",
-          "processLifetimePeakWorkingSet"
-        ],
+        "fields": ["privateCommit", "processLifetimePeakCommit", "workingSet", "processLifetimePeakWorkingSet"],
         "max": [
-          [
-            92450816,
-            94289920,
-            115200000,
-            115204096
-          ],
-          [
-            42143744,
-            42221568,
-            90918912,
-            90935296
-          ]
+          [92450816, 94289920, 115200000, 115204096],
+          [42143744, 42221568, 90918912, 90935296]
         ],
         "baseline": [
-          [
-            37912576,
-            37912576,
-            91828224,
-            91832320
-          ],
-          [
-            34443264,
-            34529280,
-            83251200,
-            83255296
-          ]
+          [37912576, 37912576, 91828224, 91832320],
+          [34443264, 34529280, 83251200, 83255296]
         ]
       },
       "combinedManagedIncrementBytes": 16839518,
