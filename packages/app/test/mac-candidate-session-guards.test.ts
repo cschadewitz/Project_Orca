@@ -9,6 +9,14 @@ import type { MacCandidatePrepared } from "../src/main/mac-update-candidates.js"
 import { macUpdateRehearsal, barrier, type ProofFault } from "./mac-update-rehearsal-fixture.js";
 
 const closers: (() => Promise<void>)[] = [];
+async function reached(checkpoint: ReturnType<typeof barrier>, operation: Promise<unknown>) {
+  await Promise.race([
+    checkpoint.promise,
+    operation.then((state) => {
+      throw new Error(`Candidate session settled before checkpoint: ${JSON.stringify(state)}`);
+    }),
+  ]);
+}
 afterEach(async () => {
   for (const close of closers.splice(0).reverse()) await close();
 });
@@ -84,7 +92,7 @@ it("waits for actual runtime work, reuses approved owned bytes and reaches only 
   });
   done();
   const pending = h.session.reconsider();
-  await entered.promise;
+  await reached(entered, pending);
   expect(h.check.mock.calls[0]![0]).toEqual({
     binding: h.f.binding,
     directory: path,
@@ -104,7 +112,13 @@ it("waits for actual runtime work, reuses approved owned bytes and reaches only 
   expect(h.session.defer(id)).toBe(false);
   await h.session.reconsider();
   await h.session.approve(id);
-  expect(h.f.runtimeEvents).toEqual([{ action: "prepare", outcome: "held" }]);
+  expect(h.f.runtimeEvents).toEqual([
+    { action: "drain", outcome: "draining" },
+    { action: "drain", outcome: "draining" },
+    { action: "drain", outcome: "held" },
+    { action: "prepare", outcome: "held" },
+    { action: "drain", outcome: "held" },
+  ]);
   expect(await h.session.offer(h.input, h.f.target, new AbortController().signal)).toEqual({ outcome: "unknown" });
 });
 
@@ -151,7 +165,11 @@ it.each<ProofFault>(["lost", "proof", "pid", "instance", "active"])(
     expect(await readFile(join(await h.directory(), "native-mac-artifact.json"))).toEqual(h.f.bytes);
     await h.session.reconsider();
     expect(h.session.defer(id)).toBe(false);
-    expect(h.f.runtimeEvents).toEqual([{ action: "prepare", outcome: "held" }]);
+    expect(h.f.runtimeEvents).toEqual([
+      { action: "drain", outcome: "held" },
+      { action: "drain", outcome: "held" },
+      { action: "prepare", outcome: "held" },
+    ]);
   },
 );
 
@@ -167,7 +185,7 @@ it("deferral during held admission preserves candidate bytes until uncertain rel
   h.f.failRelease();
   const id = await h.offer();
   const pending = h.session.approve(id);
-  await entered.promise;
+  await reached(entered, pending);
   const path = await h.directory();
   expect(h.session.defer(id)).toBe(true);
   await nextTurn();
@@ -177,7 +195,7 @@ it("deferral during held admission preserves candidate bytes until uncertain rel
   await h.session.settled();
   expect(await readFile(join(path, "native-mac-artifact.json"))).toEqual(h.f.bytes);
   expect(h.f.windows.active).toBe(true);
-  expect(h.f.runtimeEvents.map((event) => event.action)).toEqual(["prepare", "resume"]);
+  expect(h.f.runtimeEvents.map((event) => event.action)).toEqual(["drain", "drain", "prepare", "resume"]);
   expect(h.check).not.toHaveBeenCalled();
 });
 
@@ -192,13 +210,44 @@ it.each(["valid", "committed", undefined])(
   },
 );
 
-it("lost or refusing checkpoint evidence retains owners when authentic release cannot be established", async () => {
+it("refusing checkpoint evidence retains owners when authentic release cannot be established", async () => {
   const h = await fixture();
   h.check.mockResolvedValue("refused");
+  h.f.failRelease();
   expect((await h.session.approve(await h.offer())).phase).toBe("recovery-required");
   expect(h.f.windows.active).toBe(true);
-  expect(h.f.runtimeEvents.map((event) => event.action)).toEqual(["prepare", "resume"]);
+  expect(h.f.runtimeEvents).toEqual([
+    { action: "drain", outcome: "held" },
+    { action: "drain", outcome: "held" },
+    { action: "prepare", outcome: "held" },
+    { action: "drain", outcome: "held" },
+    { action: "resume" },
+  ]);
   expect(await readdir(h.root)).toHaveLength(1);
+  expect(h.session.defer(h.session.state.offerId!)).toBe(false);
+  expect(await h.f.call("runs.start", { workflowId: "flow" })).toMatchObject({ ok: false });
+});
+
+it("a known checkpoint refusal releases the authentic owner and permits explicit candidate cleanup", async () => {
+  const h = await fixture();
+  h.check.mockResolvedValue("refused");
+  const id = await h.offer();
+  expect(await h.session.approve(id)).toMatchObject({ phase: "failed", blocker: "candidate" });
+  expect(h.f.runtimeEvents).toEqual([
+    { action: "drain", outcome: "held" },
+    { action: "drain", outcome: "held" },
+    { action: "prepare", outcome: "held" },
+    { action: "drain", outcome: "held" },
+    { action: "resume", outcome: "released" },
+  ]);
+  expect(h.f.windows.active).toBe(false);
+  expect(h.f.a.frozen()).toBe(false);
+  expect(await readdir(h.root)).toHaveLength(1);
+  expect(h.session.defer(id)).toBe(true);
+  await h.session.settled();
+  expect(await readdir(h.root)).toEqual([]);
+  expect(await h.offer()).not.toBe(id);
+  expect(h.f.inspect).toHaveBeenCalledOnce();
 });
 
 it("a document change during a refusing checkpoint stays unknown without requesting admission resume", async () => {
@@ -208,7 +257,12 @@ it("a document change during a refusing checkpoint stays unknown without request
     return "refused";
   });
   expect((await h.session.approve(await h.offer())).phase).toBe("recovery-required");
-  expect(h.f.runtimeEvents).toEqual([{ action: "prepare", outcome: "held" }]);
+  expect(h.f.runtimeEvents).toEqual([
+    { action: "drain", outcome: "held" },
+    { action: "drain", outcome: "held" },
+    { action: "prepare", outcome: "held" },
+    { action: "drain", outcome: "held" },
+  ]);
   expect(h.f.windows.active).toBe(true);
   expect(await readFile(join(await h.directory(), "native-mac-artifact.json"))).toEqual(h.f.bytes);
 });
@@ -219,7 +273,12 @@ it("a throwing checkpoint is unknown while verified download authenticity remain
   const id = await h.offer();
   expect((await h.session.approve(id)).phase).toBe("recovery-required");
   expect(h.session.verification).toBe("verified");
-  expect(h.f.runtimeEvents).toEqual([{ action: "prepare", outcome: "held" }]);
+  expect(h.f.runtimeEvents).toEqual([
+    { action: "drain", outcome: "held" },
+    { action: "drain", outcome: "held" },
+    { action: "prepare", outcome: "held" },
+    { action: "drain", outcome: "held" },
+  ]);
   expect(h.session.defer(id)).toBe(false);
   expect(await readdir(h.root)).toHaveLength(1);
 });
