@@ -23,16 +23,26 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 async function fixture(count = 1) {
-  const base = await mkdtemp(join(process.cwd(), "orca-update-window-"));
-  roots.push(base);
-  const control = join(base, "control"),
-    data = Array.from({ length: count }, (_, i) => join(base, "data-" + i));
-  await mkdir(control, { mode: 0o700 });
-  for (const root of data) await mkdir(root, { mode: 0o700 });
-  await provisionUpdateWindow(control, data);
-  const window = new ClosedUpdateWindow(control);
-  closers.push(() => window.detach());
-  return { base, control, data, window };
+  for (let attempt = 0; ; attempt++) {
+    const base = await mkdtemp(join(process.cwd(), "orca-update-window-"));
+    roots.push(base);
+    const control = join(base, "control"),
+      data = Array.from({ length: count }, (_, i) => join(base, "data-" + i));
+    await mkdir(control, { mode: 0o700 });
+    for (const root of data) await mkdir(root, { mode: 0o700 });
+    try {
+      await provisionUpdateWindow(control, data);
+    } catch (error) {
+      // Real fence slots must stay deterministic across processes. A fresh directory
+      // changes their hash when fixture provisioning collides with another listener.
+      await rm(base, { recursive: true, force: true });
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt >= 4) throw error;
+      continue;
+    }
+    const window = new ClosedUpdateWindow(control);
+    closers.push(() => window.detach());
+    return { base, control, data, window };
+  }
 }
 async function writer(root: string, launch?: { attempt: string; token: string }) {
   const lease = await enterUpdateWriter(root, launch);
