@@ -201,8 +201,11 @@ import type { ReadModel } from "./read-model.js";
 import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
 
 import type { LiveInputChangeSource } from "./live-input-notifications.js";
+import { templateMethods } from "./template-methods.js";
 
 export interface MethodContext {
+  /** Guard-owned current workspace authority, rechecked after reads and under the config writer lock. */
+  configurationAuthority?: (write: boolean, read?: boolean) => Promise<void>;
   /** Internal authenticated mount; never a collector constructed by the method table. */
   hostResourceRead?: (params: unknown, invocation: MethodContext) => Promise<unknown>;
   operatorMutations?: OperatorMutationComposition | undefined;
@@ -542,7 +545,7 @@ export const workflowsGet: Method<Parameters<ReadModel["workflowsGet"]>[0], Work
  */
 export const configGet: Method<ConfigGetParams, ConfigGetResult> = {
   params: ConfigGetParamsSchema,
-  handle: (_params, ctx) => config(ctx).get(),
+  handle: (_params, ctx) => config(ctx).get(ctx.configurationAuthority && (() => ctx.configurationAuthority!(false))),
 };
 
 // ------------------------------------------------------------- the plan reads
@@ -664,12 +667,14 @@ export const runsStart: Method<RunsStartParams, RunsStartResult> = {
  */
 export const configApply: Method<ConfigApplyParams, ConfigApplyResult> = {
   params: ConfigApplyParamsSchema,
-  handle: (params, ctx) => config(ctx).apply(params),
+  handle: (params, ctx) =>
+    config(ctx).apply(params, ctx.configurationAuthority && (() => ctx.configurationAuthority!(true, false))),
 };
 
 export const configSet: Method<ConfigSetParams, ConfigSetResult> = {
   params: ConfigSetParamsSchema,
-  handle: (params, ctx) => config(ctx).set(params),
+  handle: (params, ctx) =>
+    config(ctx).set(params, ctx.configurationAuthority && (() => ctx.configurationAuthority!(true))),
 };
 
 // ------------------------------------------------------------ the plan writes
@@ -965,6 +970,7 @@ export function methodsFor(ctx: MethodContext): MethodTable {
   if (ctx.agents) Object.assign(table, agentMethods);
   if (ctx.config) {
     Object.assign(table, configMethods);
+    if (ctx.config.canApply && ctx.identity) Object.assign(table, templateMethods(Boolean(ctx.control)));
     // Reading the configuration is a read; writing it is a write, and a read-only daemon
     // has no `control`. Two facts, one `if`, so the two can never drift apart.
     if (ctx.control) {

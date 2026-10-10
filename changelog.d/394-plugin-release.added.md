@@ -1,0 +1,1 @@
+Added opt-in production bootstrap verification and frozen per-plugin identity mounting for independently pinned closed-bundle release evidence, with exact composition, runtime, identity and byte checks. Trusted attestation production/pin delivery remains a deployment requirement; unsupported plugins continue to refuse restoration.

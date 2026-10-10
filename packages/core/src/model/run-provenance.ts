@@ -14,9 +14,15 @@ export const RunProvenanceSchema = z.object({
       agent: ChoiceSchema,
       host: ChoiceSchema,
       model: ChoiceSchema.optional(),
-      template: ChoiceSchema.optional(),
+      template: ChoiceSchema.extend({
+        /** Digest of the captured parsed instruction asset; optional for historical records. */
+        revision: z.string().optional(),
+        partials: z.array(z.object({ id: z.string(), revision: z.string() })).optional(),
+      }).optional(),
     }),
   ),
   templatePack: ChoiceSchema.optional(),
+  /** Effective dispatch default; individual node pins may select another workflow. */
+  itemWorkflow: ChoiceSchema.optional(),
 });
 export type RunProvenance = z.infer<typeof RunProvenanceSchema>;

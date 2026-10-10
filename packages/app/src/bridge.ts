@@ -14,10 +14,20 @@
  * says so. `alerts.update` is the one call in the other direction with nothing to answer:
  * it states what is waiting, and the main process has no verdict to give back.
  */
+import type { TemplateBridge } from "./template-bridge.js";
 import type { DiagnosticsBridge } from "./diagnostics-contract.js";
+import type { FirstRunBridge } from "./first-run-contract.js";
 import type { DaemonConnectionBridge } from "./daemon-connection.js";
 import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
-import type { PreflightParams, PreflightResult } from "./configuration-launch-contract.js";
+import type { MacUpdateCommand, MacUpdateView } from "./mac-update-contract.js";
+import type {
+  CheckoutEvidence,
+  LaunchReview,
+  LaunchResponse,
+  RetainedLaunch,
+  PreflightParams,
+  PreflightResult,
+} from "./configuration-launch-contract.js";
 
 import type { ConnectionState } from "@orca/design";
 import type {
@@ -199,7 +209,26 @@ export interface AlertActivation {
   item?: AlertItem;
 }
 
+import type { GuidedLaunchSnapshot, ProtectedGuidedLaunch } from "./guided-launch-bridge.js";
 export interface OrcaBridge {
+  firstRun?: FirstRunBridge;
+  macUpdates?: {
+    read(): MacUpdateView;
+    act(command: MacUpdateCommand): Promise<BridgeResult<MacUpdateView>>;
+    subscribe(listener: (state: MacUpdateView) => void): () => void;
+  };
+  guidedLaunch?: {
+    snapshot(): Promise<BridgeResult<GuidedLaunchSnapshot>>;
+    preflight(
+      params: PreflightParams,
+    ): Promise<BridgeResult<{ preflight: PreflightResult; checkout: CheckoutEvidence }>>;
+    submit(review: LaunchReview): Promise<BridgeResult<{ intent: RetainedLaunch; response: LaunchResponse }>>;
+    retained(): Promise<BridgeResult<readonly RetainedLaunch[]>>;
+    load(id: string): Promise<BridgeResult<ProtectedGuidedLaunch>>;
+    resolve(review: LaunchReview): Promise<BridgeResult<RetainedLaunch | undefined>>;
+    recover(params: { id: string; action: "inspect" | "reconcile" }): Promise<BridgeResult<LaunchResponse>>;
+    abandon(id: string): Promise<BridgeResult<{ abandoned: boolean }>>;
+  };
   diagnostics?: DiagnosticsBridge;
   /** Coherent launch reads; absence is an ordinary unavailable app seam. */
   operator?: {
@@ -388,6 +417,8 @@ export interface OrcaBridge {
     /** Saved and active remain separate guarded operations. */
     apply?: (params: ConfigApplyParams) => Promise<BridgeResult<ConfigApplyResult>>;
   };
+  /** Optional until the integration owner registers the typed template IPC dispatcher. */
+  templates?: TemplateBridge;
   notifications: {
     /**
      * Daemon-initiated messages: run and step transitions, coalesced agent output, inputs

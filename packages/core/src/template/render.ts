@@ -16,13 +16,16 @@
  */
 import { stringify as stringifyYaml } from "yaml";
 import { OrcaError } from "../errors.js";
-import { evaluateExpression, truthy, type EvalOptions } from "../expr/index.js";
+import { checkExpression, evaluateExpression, truthy, type EvalOptions } from "../expr/index.js";
 
 export interface RenderOptions extends EvalOptions {
   /** Resolve `{{> name}}` partials. */
   partials?: (name: string) => string | undefined;
   /** Guard against runaway recursion in partials. */
   maxDepth?: number;
+  /** Optional authoring bounds; ordinary runtime rendering retains its existing behavior. */
+  maxOutputLength?: number;
+  maxOperations?: number;
 }
 
 type Node =
@@ -104,26 +107,42 @@ export function formatValue(v: unknown): string {
   return stringifyYaml(v).trimEnd();
 }
 
-function renderNodes(nodes: Node[], ctx: Record<string, unknown>, opts: RenderOptions, depth: number): string {
+function renderNodes(
+  nodes: Node[],
+  ctx: Record<string, unknown>,
+  opts: RenderOptions,
+  depth: number,
+  budget: { remaining: number },
+): string {
   let out = "";
+  const consume = () => {
+    if (--budget.remaining < 0) throw new OrcaError("TEMPLATE_RENDER", "preview operation bound exceeded");
+  };
+  const append = (value: string) => {
+    if (opts.maxOutputLength !== undefined && out.length + value.length > opts.maxOutputLength)
+      throw new OrcaError("TEMPLATE_RENDER", "preview output bound exceeded");
+    out += value;
+  };
   for (const n of nodes) {
+    consume();
     switch (n.t) {
       case "text":
-        out += n.s;
+        append(n.s);
         break;
       case "expr":
-        out += formatValue(evaluateExpression(n.src, ctx, opts));
+        append(formatValue(evaluateExpression(n.src, ctx, opts)));
         break;
       case "if":
-        out += renderNodes(truthy(evaluateExpression(n.cond, ctx, opts)) ? n.then : n.else, ctx, opts, depth);
+        append(renderNodes(truthy(evaluateExpression(n.cond, ctx, opts)) ? n.then : n.else, ctx, opts, depth, budget));
         break;
       case "each": {
         const items = evaluateExpression(n.src, ctx, opts);
         const arr = Array.isArray(items) ? items : items && typeof items === "object" ? Object.entries(items) : [];
         arr.forEach((item, i) => {
+          consume();
           const scope: Record<string, unknown> = { ...ctx, [n.itemVar]: item };
           if (n.indexVar) scope[n.indexVar] = i;
-          out += renderNodes(n.body, scope, opts, depth);
+          append(renderNodes(n.body, scope, opts, depth, budget));
         });
         break;
       }
@@ -132,7 +151,7 @@ function renderNodes(nodes: Node[], ctx: Record<string, unknown>, opts: RenderOp
           throw new OrcaError("TEMPLATE_RENDER", `partial nesting too deep at ${n.name}`);
         const body = opts.partials?.(n.name);
         if (body === undefined) throw new OrcaError("TEMPLATE_NOT_FOUND", `partial '${n.name}' not found`);
-        out += renderNodes(parseTemplate(body), ctx, opts, depth + 1);
+        append(renderNodes(parseTemplate(body), ctx, opts, depth + 1, budget));
         break;
       }
     }
@@ -141,7 +160,7 @@ function renderNodes(nodes: Node[], ctx: Record<string, unknown>, opts: RenderOp
 }
 
 export function renderTemplate(body: string, context: Record<string, unknown>, options: RenderOptions = {}): string {
-  return renderNodes(parseTemplate(body), context, options, 0);
+  return renderNodes(parseTemplate(body), context, options, 0, { remaining: options.maxOperations ?? Infinity });
 }
 
 /** Parse-only check used by workflow validation. */
@@ -152,4 +171,24 @@ export function checkTemplate(body: string): string | undefined {
   } catch (e) {
     return e instanceof Error ? e.message : String(e);
   }
+}
+
+/** Parse every branch for authoring diagnostics and exact-ID partial references without rendering. */
+export function templateReferences(body: string): string[] {
+  const partials = new Set<string>();
+  function walk(nodes: Node[]): void {
+    for (const node of nodes) {
+      if (node.t === "partial") partials.add(node.name);
+      const expression = node.t === "expr" || node.t === "each" ? node.src : node.t === "if" ? node.cond : undefined;
+      if (expression !== undefined && checkExpression(expression))
+        throw new OrcaError("TEMPLATE_RENDER", "invalid template expression");
+      if (node.t === "if") {
+        walk(node.then);
+        walk(node.else);
+      }
+      if (node.t === "each") walk(node.body);
+    }
+  }
+  walk(parseTemplate(body));
+  return [...partials];
 }

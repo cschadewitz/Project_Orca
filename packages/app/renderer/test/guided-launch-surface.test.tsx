@@ -120,6 +120,15 @@ describe("guided launch workspace", () => {
     expect(ports.preflight).not.toHaveBeenCalled();
     expect(controller.read().draft.vars.count).toBeUndefined();
   });
+  it("keeps visible fields synchronized with externally selected task values", () => {
+    const { controller } = mount();
+    fireEvent.change(screen.getByLabelText(/^task/), { target: { value: "Earlier task" } });
+    act(() => {
+      controller.edit({ ...controller.read().draft, vars: { task: "Exact replacement task" } });
+    });
+    expect(screen.getByLabelText<HTMLInputElement>(/^task/).value).toBe("Exact replacement task");
+    expect(controller.read().inputText).toEqual({});
+  });
   it("withholds sensitive values from preview and uses password input", async () => {
     const { controller } = mount();
     const token = screen.getByLabelText(/^token/);

@@ -1,0 +1,328 @@
+{
+  "schema": 1,
+  "regressionOnly": true,
+  "pairedExecution": false,
+  "productionEnabled": false,
+  "childSha256": "a02888f23a46435fb488003eda1c9a95d79a710fadd183522292bd5fe3e818fc",
+  "cases": [
+    {
+      "name": "startup-guard-destination-and-known-save",
+      "exitCode": 0,
+      "receipt": {
+        "schema": 1,
+        "mode": "on",
+        "schedule": "failure",
+        "cells": [
+          {
+            "target": "open",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "prefixRefusalVerified": true,
+            "enteredMs": 270.8256,
+            "publicElapsedMs": 116.11939999999998,
+            "publicOutcome": "cleanup_pending",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.22479999999995925,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 0
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "writeExportState",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "prefixRefusalVerified": true,
+            "enteredMs": 840.7681,
+            "publicElapsedMs": 1.399499999999989,
+            "publicOutcome": "status",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 1048576,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.1374999999999318,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          },
+          {
+            "target": "completionRecord",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "exactSavedBytes": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "prefixRefusalVerified": true,
+            "enteredMs": 1786.005,
+            "publicElapsedMs": 353.5775000000001,
+            "publicOutcome": "status",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 1048576,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.11320000000000618,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 5242880
+            },
+            "offOutcome": "cleanup_pending",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          }
+        ],
+        "unhandledRejections": 0,
+        "regressionOnly": true,
+        "expectedCells": ["open", "writeExportState", "completionRecord"],
+        "faultCampaignElapsedMs": 2199.2864,
+        "memory": {
+          "method": "Electron main heapUsed+external sampled every 2ms and boundaries; arrayBuffers not added twice; no renderer in writer fixture; native allocator/RSS separate",
+          "managedIncrementBytes": 55350665,
+          "managedLimitBytes": 33554432,
+          "rssIncrementBytes": 59289600,
+          "controlledBinaryPeakBytes": 5275712,
+          "binaryLimitBytes": 8388608,
+          "reservationPeakBytes": 4194304,
+          "zeroAfterEveryCell": true,
+          "managedPass": false,
+          "binaryPass": true
+        },
+        "legacyCalls": 0,
+        "ok": true,
+        "callbacksMs": {
+          "setup->open:setup": 0.5615999999999985,
+          "open:setup": 2.1000999999999976,
+          "open:setup->open:fault": 0.29419999999998936,
+          "open:fault": 2.073599999999999,
+          "open:fault->open:settlement": 0.09130000000004657,
+          "open:settlement": 2.0481999999999516,
+          "open:settlement->writeExportState:setup": 1.9990000000000236,
+          "writeExportState:setup": 1.9748999999999342,
+          "writeExportState:setup->writeExportState:fault": 0.31589999999994234,
+          "writeExportState:fault": 1.4938999999999396,
+          "writeExportState:fault->writeExportState:settlement": 0.028199999999969805,
+          "writeExportState:settlement": 2.18119999999999,
+          "writeExportState:settlement->completionRecord:setup": 0.7850000000000819,
+          "completionRecord:setup": 2.1325999999999112,
+          "completionRecord:setup->completionRecord:fault": 0.044599999999945794,
+          "completionRecord:fault": 2.0090000000000146,
+          "completionRecord:fault->completionRecord:settlement": 0.025200000000040745,
+          "completionRecord:settlement": 2.2193999999999505,
+          "completionRecord:settlement->execution-wait": 1.0185999999998785
+        },
+        "heartbeatGapsMs": {
+          "open:setup": 18.140500000000003,
+          "open:fault": 15.999099999999999,
+          "open:settlement": 15.984000000000037,
+          "writeExportState:setup": 16.028800000000047,
+          "writeExportState:fault": 16.010600000000068,
+          "writeExportState:settlement": 16.07100000000014,
+          "completionRecord:setup": 16.08459999999991,
+          "completionRecord:fault": 16.27319999999986,
+          "completionRecord:settlement": 16.745300000000043
+        },
+        "timingDisposition": "4ms target deferred by owner; all observations retained; no timing pass or Layout attribution claimed",
+        "nativeElapsedMaxMs": {
+          "openRoot": 3.5161999999999978,
+          "rootStat": 0.5574000000000296,
+          "acquire": 16.790899999999993,
+          "stopped": 0.39500000000001023,
+          "stat": 0.508199999999988,
+          "list": 0.44870000000003074,
+          "openCreate": 1.2871999999999844,
+          "write": 0.5439000000001215,
+          "sync": 45.441299999999956,
+          "closeFile": 0.38269999999988613,
+          "replace": 71.50620000000004,
+          "validateDestination": 0.9311000000000149,
+          "openRead": 7.176400000000058,
+          "fileStat": 0.43820000000005166,
+          "read": 0.4715000000001055,
+          "release": 0.341199999999958,
+          "closeRoot": 0.3225000000002183,
+          "remove": 0.5716999999999643,
+          "publish": 30.144400000000132
+        },
+        "nativeOutstandingPeak": 1,
+        "electron": "44.4.5",
+        "node": "24.21.0",
+        "productionEnabled": false
+      },
+      "pass": true,
+      "ownedExitConfirmed": true,
+      "disposableStateRemoved": true
+    },
+    {
+      "name": "accounting-on-controlled-stop",
+      "exitCode": 1,
+      "receipt": {
+        "schema": 1,
+        "mode": "on",
+        "schedule": "failure",
+        "cells": [
+          {
+            "target": "open",
+            "syntheticFault": true,
+            "checks": {
+              "zeroReservation": true,
+              "zeroControlledBinary": true,
+              "noLateDestination": true,
+              "writerSettled": true,
+              "noHistoryOrStage": true,
+              "diskBound": true
+            },
+            "faultObserved": true,
+            "operationTimeoutMs": 1000,
+            "enteredMs": 298.25520000000006,
+            "publicElapsedMs": 115.7502,
+            "publicOutcome": "cleanup_pending",
+            "pendingBeforeRevocation": true,
+            "reservationBeforeRevocation": 0,
+            "writerOutstandingBeforeRelease": 0,
+            "logicalOffMs": 0.2300999999999931,
+            "retainedWhileParked": {
+              "reservation": 0,
+              "binary": 0
+            },
+            "offOutcome": "off",
+            "ownedFilesAfterCleanup": [
+              {
+                "name": "setting.json",
+                "bytes": 46
+              },
+              {
+                "name": "writer.lock",
+                "bytes": 0
+              }
+            ],
+            "faultHits": 1,
+            "faultPeak": 1,
+            "diskOutstandingPeak": 1
+          }
+        ],
+        "unhandledRejections": 0,
+        "regressionOnly": true,
+        "expectedCells": ["open"],
+        "ok": false,
+        "failureCode": "synthetic-regression-stop",
+        "memory": {
+          "method": "Electron main heapUsed+external sampled every 2ms and boundaries; arrayBuffers not added twice; no renderer in writer fixture; native allocator/RSS separate",
+          "managedIncrementBytes": 37111361,
+          "managedLimitBytes": 33554432,
+          "rssIncrementBytes": 41508864,
+          "controlledBinaryPeakBytes": 5242880,
+          "binaryLimitBytes": 8388608,
+          "reservationPeakBytes": 0,
+          "zeroAfterEveryCell": true,
+          "managedPass": false,
+          "binaryPass": true
+        },
+        "legacyCalls": 0,
+        "callbacksMs": {
+          "setup->open:setup": 0.5426000000000215,
+          "open:setup": 2.1399000000000115,
+          "open:setup->open:fault": 0.26230000000003884,
+          "open:fault": 2.0066000000000486,
+          "open:fault->open:settlement": 0.07380000000000564,
+          "open:settlement": 1.9750999999999976
+        },
+        "heartbeatGapsMs": {
+          "open:setup": 17.975600000000043,
+          "open:fault": 16.654100000000085,
+          "open:settlement": 16.053800000000024
+        },
+        "timingDisposition": "4ms target deferred by owner; all observations retained; no timing pass or Layout attribution claimed",
+        "nativeElapsedMaxMs": {
+          "openRoot": 4.808600000000013,
+          "rootStat": 0.5745000000000005,
+          "acquire": 21.03279999999998,
+          "stopped": 0.3877999999999986,
+          "stat": 0.5829999999999984,
+          "list": 0.36600000000001387,
+          "openCreate": 5.893900000000002,
+          "write": 0.5062000000000069,
+          "sync": 39.549499999999995,
+          "closeFile": 0.19669999999999277,
+          "replace": 86.58000000000004,
+          "openRead": 0.41380000000003747,
+          "fileStat": 0.39229999999997744,
+          "read": 0.4011000000000422,
+          "release": 0.3380000000000791,
+          "closeRoot": 0.22709999999995034
+        },
+        "nativeOutstandingPeak": 1,
+        "electron": "44.4.5",
+        "node": "24.21.0",
+        "productionEnabled": false
+      },
+      "pass": true,
+      "ownedExitConfirmed": true,
+      "disposableStateRemoved": true
+    }
+  ],
+  "pass": true
+}

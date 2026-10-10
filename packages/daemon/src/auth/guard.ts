@@ -263,6 +263,17 @@ export class Authorizer {
                 principalId: principal.id,
                 ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
               },
+              configurationAuthority: async (write, read = true) => {
+                if (!this.currentPrincipal) throw authRequired();
+                const current = this.currentPrincipal(principal);
+                if (
+                  current.id !== principal.id ||
+                  current.credentialId !== principal.credentialId ||
+                  (read && !holds(current, "config.read")) ||
+                  (write && !holds(current, "config.write"))
+                )
+                  throw authForbidden();
+              },
               liveAnswerAuthority: {
                 actor: {
                   principalId: principal.id,

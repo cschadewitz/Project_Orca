@@ -1,0 +1,184 @@
+diff --git a/packages/app/src/main/index.ts b/packages/app/src/main/index.ts
+index af6ef3d..a330f09 100644
+--- a/packages/app/src/main/index.ts
++++ b/packages/app/src/main/index.ts
+@@ -437,11 +437,12 @@ const workspace = new Workspace({
+       // A build run from the repository: `dist/`, one level up from `dist/main`.
+       fileURLToPath(new URL("../", import.meta.url)),
+     ]),
+-  start: ({ entry, cwd, readOnly, configPath, onExit }) =>
++  start: ({ entry, cwd, readOnly, configPath, firstRunToken, onExit }) =>
+     startBundledDaemon({
+       entry,
+       cwd,
+       ...(configPath ? { configPath } : {}),
++      ...(firstRunToken ? { firstRunToken } : {}),
+       // A first-run startup never retries an owned child whose exit could be uncertain.
+       ...(configPath ? { attempts: 1 } : {}),
+       // The one flag the app passes, through the seam `daemon-process.ts` left for it:
+@@ -557,6 +558,7 @@ const firstRun = new FirstRunSetup({
+     };
+   },
+   current: (path) => workspace.currentFirstRun(path),
++  configuration: (path) => workspace.captureFirstRunConfiguration(path),
+ });
+
+ let firstRunConnectionAttempt = 0;
+diff --git a/packages/app/src/main/workspace.ts b/packages/app/src/main/workspace.ts
+index fe33e3e..232a8a8 100644
+--- a/packages/app/src/main/workspace.ts
++++ b/packages/app/src/main/workspace.ts
+@@ -53,6 +53,7 @@ export interface WorkspaceDeps {
+     cwd: string;
+     readOnly: boolean;
+     configPath?: string;
++    firstRunToken?: string;
+     onExit: (exit: DaemonExit) => void;
+   }) => Promise<BundledDaemon>;
+   /** Build the read client for a daemon URL. */
+@@ -145,6 +146,60 @@ export class Workspace {
+     { path: string; identity: NonNullable<HelloResult["identity"]> }
+   >();
+
++  /** Main-only saved-config binding over the exact surviving first-run owner.
++   * Config bytes may have changed after an explicit Config save; rebind checks the old/new hashes.
++   * This captures no alternate target and creates no process or permission grant.
++   */
++  captureFirstRunConfiguration(path: string) {
++    const daemon = this.daemon;
++    const client = this.clientNow;
++    const epoch = this.epoch;
++    const identity = this.identity;
++    const owner = daemon && this.firstRunOwners.get(daemon);
++    const durable = daemon && this.durableFirstRunOwners.get(daemon);
++    if (
++      !daemon ||
++      !owner ||
++      !durable?.rebindConfig ||
++      !identity ||
++      owner.path !== path ||
++      owner.identity.workspaceId !== identity.workspaceId ||
++      owner.identity.instanceId !== identity.instanceId
++    )
++      throw new FirstRunOwnershipRefusal();
++    const check = () => {
++      this.assertEpoch(epoch);
++      if (
++        this.closed ||
++        this.updating ||
++        this.macUpdateStopping ||
++        this.macUpdateHold ||
++        this.firstRunHold ||
++        this.pending ||
++        this.connectionPreparations.size ||
++        this.daemon !== daemon ||
++        daemon.exited === true ||
++        this.clientNow !== client ||
++        this.source !== "bundled" ||
++        this.target.readOnly ||
++        this.target.path !== path ||
++        this.identity?.workspaceId !== identity.workspaceId ||
++        this.identity.instanceId !== identity.instanceId
++      )
++        throw new FirstRunOwnershipRefusal();
++    };
++    check();
++    return {
++      client: client.withCapturedAuthentication(),
++      check,
++      rebind: (expectedHash: string, savedHash: string) => {
++        check();
++        durable.rebindConfig!(expectedHash, savedHash);
++        check();
++      },
++    };
++  }
++
+   /** Capture a locally owned target without sending maintenance or stopping any process.
+    * The reservation fences connection changes through authentication and subsequent checks.
+    * It does not certify idle execution, authorize installation or reopen remote admission.
+@@ -444,6 +499,7 @@ export class Workspace {
+           cwd: path,
+           readOnly: false,
+           configPath: join(path, "orca.config.yaml"),
++          ...(ownership.launchToken ? { firstRunToken: ownership.launchToken() } : {}),
+           onExit: () => {
+             exited = true;
+             if (daemon) this.recordFirstRunExit(daemon);
+diff --git a/packages/app/src/preload/index.cts b/packages/app/src/preload/index.cts
+index c13bb45..957655b 100644
+--- a/packages/app/src/preload/index.cts
++++ b/packages/app/src/preload/index.cts
+@@ -115,6 +115,10 @@ const bridge: OrcaBridge = {
+     choose: () => call("orca:workspace.firstRun.choose"),
+     prepare: (id) => call("orca:workspace.firstRun.prepare", id),
+     connect: () => call("orca:workspace.firstRun.connect"),
++    prepareRecovery: () => call("orca:workspace.firstRun.prepareRecovery"),
++    reconcileRecovery: (id) => call("orca:workspace.firstRun.reconcileRecovery", id),
++    reviewConfiguration: () => call("orca:workspace.firstRun.reviewConfiguration"),
++    bindConfiguration: (id) => call("orca:workspace.firstRun.bindConfiguration", id),
+   },
+   macUpdates: {
+     read: () => ipcRenderer.sendSync("orca:macUpdate.read") as MacUpdateView,
+diff --git a/packages/app/test/first-run-workspace.test.ts b/packages/app/test/first-run-workspace.test.ts
+index 956df67..2286fef 100644
+--- a/packages/app/test/first-run-workspace.test.ts
++++ b/packages/app/test/first-run-workspace.test.ts
+@@ -216,7 +216,7 @@ afterEach(async () => {
+ it.skipIf(typeof process.getuid !== "function")(
+   "prepares, authenticates and reopens a real CLI child with exact config/store/owned PID",
+   async () => {
+-    const root = await mkdtemp(join(tmpdir(), "orca-first-run-owned-"));
++    const root = await mkdtemp(join(process.cwd(), ".orca-first-run-owned-test-"));
+     const ownerState: { workspace?: Workspace } = {};
+     cleanup = async () => {
+       await ownerState.workspace?.close();
+@@ -326,3 +326,48 @@ it.skipIf(typeof process.getuid !== "function")(
+   },
+   30_000,
+ );
++
++it("captures saved-config binding only over the exact surviving first-run owner and rejects target changes", async () => {
++  const rebindConfig = vi.fn();
++  const f = rig({
++    reserveFirstRunOwnership: () => ({
++      check: () => {},
++      attach: () => {},
++      verify: () => {},
++      complete: () => f.exited(),
++      rebindConfig,
++    }),
++  });
++  const candidate = await f.workspace.prepareFirstRunConnection("/selected");
++  expect(() => f.workspace.captureFirstRunConfiguration("/selected")).toThrow("reconciliation");
++  candidate.activate(hello());
++  expect(() => f.workspace.captureFirstRunConfiguration("/wrong")).toThrow("reconciliation");
++  const boundary = f.workspace.captureFirstRunConfiguration("/selected");
++  boundary.rebind("reviewed-old-hash", "reviewed-new-hash");
++  expect(rebindConfig).toHaveBeenCalledExactlyOnceWith("reviewed-old-hash", "reviewed-new-hash");
++  (await f.workspace.prepareConnection("http://remote:6722")).activate(hello());
++  expect(() => boundary.rebind("old", "new")).toThrow("previous connection");
++  expect(rebindConfig).toHaveBeenCalledOnce();
++  await f.workspace.close();
++});
++it("refuses saved-config capture without the durable rebind interface and after app close", async () => {
++  const legacy = rig();
++  (await legacy.workspace.prepareFirstRunConnection("/selected")).activate(hello());
++  expect(() => legacy.workspace.captureFirstRunConfiguration("/selected")).toThrow("reconciliation");
++  await legacy.workspace.close();
++  const rebindConfig = vi.fn();
++  const f = rig({
++    reserveFirstRunOwnership: () => ({
++      check: () => {},
++      attach: () => {},
++      verify: () => {},
++      complete: () => f.exited(),
++      rebindConfig,
++    }),
++  });
++  (await f.workspace.prepareFirstRunConnection("/selected")).activate(hello());
++  const boundary = f.workspace.captureFirstRunConfiguration("/selected");
++  await f.workspace.close();
++  expect(() => boundary.rebind("old", "new")).toThrow("reconciliation");
++  expect(rebindConfig).not.toHaveBeenCalled();
++});

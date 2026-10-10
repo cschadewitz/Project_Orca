@@ -1,6 +1,6 @@
 /** Fresh disposable source processes exercise closed startup only; no signed Mac or full protected-state recovery. */
 import { readFile, writeFile } from "node:fs/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it as platformIt, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { PROTOCOL_VERSION } from "@orca/protocol";
@@ -11,6 +11,8 @@ import {
   type MacRestartChild,
 } from "../src/main/mac-update-restart.js";
 import { restartFixture } from "./mac-restart-fixture.js";
+// Node on Windows cannot deliver the catchable POSIX SIGTERM used by this Mac fixture.
+const it = platformIt.skipIf(process.platform === "win32");
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
   vi.useRealTimers();
@@ -739,4 +741,33 @@ it("refuses real unauthenticated replacement access without falling back or reop
   });
   await expect(admission(f)).rejects.toThrow("AUTH_INVALID");
   expect(f.replacement()!.child.child.exitCode).toBeNull();
+});
+
+it("a fresh supervisor reuses closed image/identity/store guards without launching or resurrecting consent", async () => {
+  const f = await fixture();
+  const receipt = await stopped(f);
+  expect((await new MacRestartVerification(f.ports, 10000).verify(f.request(receipt), signal())).outcome).toBe(
+    "verified-closed",
+  );
+  const before = f.calls.filter((call) => call === "start").length;
+  const owned = f.process();
+  const verifier = new MacRestartVerification(f.ports, 10000);
+  expect(
+    (
+      await verifier.inspectExistingClosed(
+        { ...f.request(receipt), previous: receipt.target, process: owned, fenceId: owned.fenceId },
+        signal(),
+      )
+    ).outcome,
+  ).toBe("verified-closed");
+  expect(f.calls.filter((call) => call === "start")).toHaveLength(before);
+  await expect(admission(f)).rejects.toThrow("closed");
+  const wrong = new MacRestartVerification(f.ports, 10000);
+  expect(
+    await wrong.inspectExistingClosed(
+      { ...f.request(receipt), previous: receipt.target, process: owned, fenceId: randomUUID() },
+      signal(),
+    ),
+  ).toEqual({ outcome: "unknown" });
+  expect(f.replacement()!.child.signals).toEqual([]);
 });

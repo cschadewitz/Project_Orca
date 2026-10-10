@@ -1,0 +1,1060 @@
+{
+  "schema": 1,
+  "sourceCommit": "49a21254dfb02dfce5182902a317298a644bc560",
+  "productionEnabled": false,
+  "runs": [
+    {
+      "ok": true,
+      "mode": "off",
+      "electron": "44.4.5",
+      "node": "24.21.0",
+      "productionEnabled": false,
+      "fixtureCaptureOverride": false,
+      "pairedExecution": true,
+      "events": 0,
+      "previousEvents": 0,
+      "bytes": 0,
+      "saveExact": false,
+      "repetitions": 0,
+      "callbacks": {
+        "setup": 0.9828999999999724,
+        "setup->paired-idle": 0.11970000000019354,
+        "paired-idle": 0.041600000000016735,
+        "paired-idle->paired-wait": 1.1174000000000888,
+        "paired-wait": 0.5304999999998472
+      },
+      "gaps": { "setup": 3.3203000000000884, "paired-idle": 0.3666000000000622, "paired-wait": 5.0625 },
+      "transitions": { "setup->paired-idle": 0.5272999999999683, "paired-idle->paired-wait": 1.2702999999999065 },
+      "gc": [
+        { "phase": "setup", "durationMs": 0.40949999913573265, "kind": 1 },
+        { "phase": "setup", "durationMs": 0.5945000015199184, "kind": 1 },
+        { "phase": "setup", "durationMs": 0.2248999997973442, "kind": 1 },
+        { "phase": "setup", "durationMs": 0.18640000000596046, "kind": 1 },
+        { "phase": "setup", "durationMs": 0.22830000147223473, "kind": 1 },
+        { "phase": "setup", "durationMs": 0.26409999653697014, "kind": 1 },
+        { "phase": "setup", "durationMs": 0.2542000003159046, "kind": 1 },
+        { "phase": "setup", "durationMs": 0.20259999856352806, "kind": 1 },
+        { "phase": "paired-idle", "durationMs": 0.21539999917149544, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2797999978065491, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26419999822974205, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2411000020802021, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.22049999982118607, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2907999977469444, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2573999986052513, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.27079999819397926, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21649999916553497, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.23440000042319298, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.30570000037550926, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.32899999991059303, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26810000091791153, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.5957999974489212, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.30890000239014626, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.34439999982714653, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.20900000259280205, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.25950000062584877, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.268800001591444, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3295999988913536, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2428000010550022, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.29190000146627426, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2645999975502491, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2215999998152256, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3448000028729439, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2525999993085861, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21880000084638596, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2631000019609928, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.23670000210404396, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.28860000148415565, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2225000001490116, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.36550000309944153, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21959999948740005, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2151999995112419, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26900000125169754, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2703000009059906, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2725999988615513, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2782000005245209, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2508000023663044, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21480000019073486, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26339999958872795, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.27569999918341637, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2117999978363514, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.4440999999642372, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3140999972820282, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21860000118613243, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2508000023663044, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2776999995112419, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26420000195503235, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21780000254511833, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.35419999808073044, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2102999985218048, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21250000223517418, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26009999960660934, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24780000001192093, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26669999957084656, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3288999982178211, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.35199999809265137, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.32899999991059303, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24579999968409538, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26029999926686287, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24469999969005585, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3280000016093254, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21700000017881393, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2631999999284744, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2888000011444092, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.23730000108480453, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2525000013411045, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2232999987900257, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.36639999970793724, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.22360000014305115, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.43560000136494637, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21929999813437462, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24010000005364418, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.23519999906420708, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.4158000014722347, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26570000126957893, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.27400000020861626, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2548999972641468, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3546000011265278, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2663000002503395, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.28200000151991844, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26159999892115593, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.25950000062584877, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.265599999576807, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.25299999862909317, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2395000010728836, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3166999965906143, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.25430000200867653, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2571000009775162, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2505999989807606, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.263799998909235, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.22220000252127647, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21620000153779984, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2700999975204468, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24549999833106995, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24729999899864197, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2782999984920025, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3002999983727932, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2474999986588955, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.23929999768733978, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2450999990105629, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2776999995112419, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2823000028729439, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.20390000194311142, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2068999968469143, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.236200001090765, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.25510000064969063, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24560000002384186, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2151999995112419, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.20329999923706055, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24780000001192093, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.20809999853372574, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2248000018298626, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.22989999875426292, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3116999976336956, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.1875999979674816, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3377999998629093, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24619999900460243, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.25779999792575836, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24929999932646751, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26269999891519547, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.20659999921917915, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.31140000000596046, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.22670000046491623, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2824000008404255, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.29410000145435333, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2435000017285347, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.27070000022649765, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2336999997496605, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24479999765753746, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2840999998152256, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24729999899864197, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.20729999989271164, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.23020000010728836, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2615000009536743, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.25119999796152115, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3247000016272068, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.23079999908804893, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.25369999930262566, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2355000004172325, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2719999998807907, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2256999984383583, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2727000005543232, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.27139999717473984, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21629999950528145, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24069999903440475, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21229999884963036, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24069999903440475, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.22859999909996986, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3603999987244606, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21079999953508377, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.20960000157356262, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.34310000017285347, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.391100000590086, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.27240000292658806, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.23800000175833702, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2564999982714653, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3548000007867813, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3953000009059906, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.25849999859929085, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21899999678134918, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2621999979019165, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.20989999920129776, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2850000001490116, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2078000009059906, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2322000004351139, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.33739999681711197, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21009999886155128, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2420000024139881, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2938000001013279, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.219200000166893, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.31689999997615814, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.236200001090765, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.29759999737143517, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21609999984502792, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.215999998152256, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2606999985873699, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24139999970793724, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2476000003516674, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21620000153779984, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.30869999900460243, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2573999986052513, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.328600000590086, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.32019999995827675, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2751999981701374, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2679999992251396, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.23799999803304672, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.4084000028669834, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.22020000219345093, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.4032000005245209, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.22200000286102295, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.27470000088214874, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26970000192523, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.22670000046491623, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.26330000162124634, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.24960000067949295, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.22450000047683716, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.25840000063180923, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.314800001680851, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.30379999801516533, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.20249999687075615, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2686000019311905, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2547999992966652, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2507000006735325, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2564999982714653, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.32679999992251396, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2628000006079674, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.21560000255703926, "kind": 1 }
+      ],
+      "clockMaxMs": 0,
+      "clockCalls": 0,
+      "nativeIOElapsedMaxMs": {},
+      "nativeIOReferencedBufferPeakBytes": 0,
+      "payloadReservationPeakBytes": 0,
+      "mainHeapExternalIncrementBytes": 2178512,
+      "mainRssIncrementBytes": 9252864,
+      "rendererBase": {
+        "backingStorageSize": 877185,
+        "embedderHeapUsedSize": 1847664,
+        "totalSize": 3670016,
+        "usedSize": 2233740
+      },
+      "rendererHeapBackingEmbedderIncrementBytes": 0,
+      "legacyCalls": 0,
+      "traceWritten": true,
+      "childExitCode": 0,
+      "monitorExitCode": 0,
+      "executionOracle": {
+        "exitCode": 0,
+        "elapsedMs": 44033.113,
+        "artifactCount": 29,
+        "artifactSignature": "5229b24c45dec290928336f30b13494f9ce53d37ee07f537611b0c8a2fc80a4f",
+        "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+        "semanticByKind": [
+          {
+            "kind": "decision-matrix",
+            "name": "decisionMatrix",
+            "sha256": "788506a154dee82e5b00d167a41e2ed2b15817b1f84425fe5553db29288081d6"
+          },
+          {
+            "kind": "decomposition",
+            "name": "decomposition",
+            "sha256": "88299e6febb5e42d0908b8340fb79b9eed40c7d3e843e14e3db2a8ae7f15db63"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "600ddb38040239891a9d1cb7e38540be67e4117fe4598e56f7d52f0fe767bd23"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "2f51f54a704308e9f3f853e90a5af1d2e2e4899989a3d290e4821c29c27d5f7c"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "a2bb0762a4236a3fdf6a58027c7389bd7a036f227c9082b0e43bbbf82785bdaa"
+          },
+          {
+            "kind": "generic",
+            "name": "programSummary",
+            "sha256": "43d3e99ee5ed2f5de8aa52adfbab9d070d5ca21e1d9d61ea23500296a2b1aaef"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "991b5eb2a6320c619383371008c1e3bb97f4ea77b4dd82cd544d93bdcc2182b8"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "954971cc5f9f37e0afd544b04113af27c7ffbe1bebfcf9a5ebbf53ef99f45688"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "b694ec0a75c1318beaef7e65f20a228d736c6c9fb7a0636576dc3ef12e8b4e81"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "10941a49ffd22602fa6c0547c9c02426d7141a8a056e38f8dd02f89f8cd3d099"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6f042d063246e1c0291894a29ddd59462d2261572707270f823953a947f6ad2d"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6b609d237677cf6b73f6515c4601a070a3c76ef68e6fe02ff13c3b02edf0352c"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "0eefe76aebb09d46a44c0dd8a4a6326f35ac7884fcc5d1590c9df11c0e8fec07"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "risk-register",
+            "name": "riskRegister",
+            "sha256": "574503e6d64b9edaea05d2b4c5b776d88c4c199a093255314a0b68cb7a301031"
+          },
+          {
+            "kind": "schedule",
+            "name": "schedule",
+            "sha256": "73795c8f0f884a042f5d0855879a43d9d27360a3bbdf7bde6f5c2b93cb9a0332"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "0123d7127018317099bb9060225de811d062f4a9ec6264e6a7b1641129924e53"
+          }
+        ],
+        "normalization": "Generated identity/provenance/timestamp metadata excluded; generated UUID/time text normalized. Kind/name, semantic front matter, prose and multiplicity retained. This compares semantic outputs, not raw IDs or complete execution graph.",
+        "workItems": [
+          { "slug": "docs", "status": "done" },
+          { "slug": "login-api", "status": "done" },
+          { "slug": "schema", "status": "done" }
+        ]
+      },
+      "memory": {
+        "max": [
+          [42287104, 42475520, 101715968, 101912576],
+          [37490688, 39288832, 88145920, 88350720]
+        ],
+        "schema": 1,
+        "sampleCount": 2780,
+        "baseline": [
+          [41283584, 42475520, 99295232, 99766272],
+          [36536320, 36540416, 87498752, 87502848]
+        ],
+        "fields": ["privateCommit", "processLifetimePeakCommit", "workingSet", "processLifetimePeakWorkingSet"],
+        "combinedPrivateCommitPeak": 79486976,
+        "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed."
+      },
+      "trace": [
+        { "process": "renderer", "name": "MajorGC", "count": 2, "maxMs": 2.707, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MARK_COMPACTOR", "count": 2, "maxMs": 2.59, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_EVACUATE", "count": 4, "maxMs": 1.775, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_BACKGROUND_MARKING", "count": 23, "maxMs": 1.636, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_EVACUATE_COPY", "count": 2, "maxMs": 1.165, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_EVACUATE_COPY_PARALLEL", "count": 2, "maxMs": 1.083, "over4ms": 0 },
+        {
+          "process": "renderer",
+          "name": "V8.GC_HEAP_ENSURE_SWEEPING_COMPLETED",
+          "count": 2,
+          "maxMs": 0.833,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_BACKGROUND_EVACUATE_COPY",
+          "count": 2,
+          "maxMs": 0.804,
+          "over4ms": 0
+        },
+        { "process": "renderer", "name": "V8.GC_MC_INCREMENTAL", "count": 11, "maxMs": 0.743, "over4ms": 0 },
+        { "process": "main", "name": "MinorGC", "count": 216, "maxMs": 0.588, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_SCAVENGER", "count": 216, "maxMs": 0.54, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_SCAVENGER_SCAVENGE", "count": 216, "maxMs": 0.48, "over4ms": 0 },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_UPDATE_POINTERS",
+          "count": 2,
+          "maxMs": 0.478,
+          "over4ms": 0
+        },
+        { "process": "renderer", "name": "V8.GC_MC_INCREMENTAL_START", "count": 2, "maxMs": 0.372, "over4ms": 0 },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_INCREMENTAL_EMBEDDER_TRACING",
+          "count": 11,
+          "maxMs": 0.353,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER_SCAVENGE_PARALLEL_PHASE",
+          "count": 216,
+          "maxMs": 0.345,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_HEAP_EXTERNAL_WEAK_GLOBAL_HANDLES",
+          "count": 216,
+          "maxMs": 0.287,
+          "over4ms": 0
+        },
+        { "process": "renderer", "name": "V8.GC_MC_CLEAR", "count": 2, "maxMs": 0.28, "over4ms": 0 },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER_BACKGROUND_SCAVENGE_PARALLEL",
+          "count": 687,
+          "maxMs": 0.229,
+          "over4ms": 0
+        },
+        { "process": "renderer", "name": "V8.GC_MC_CLEAR_JOIN_JOB", "count": 2, "maxMs": 0.228, "over4ms": 0 },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_UPDATE_POINTERS_TO_NEW_ROOTS",
+          "count": 2,
+          "maxMs": 0.199,
+          "over4ms": 0
+        },
+        { "process": "renderer", "name": "V8.GC_MC_BACKGROUND_SWEEPING", "count": 8, "maxMs": 0.194, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_MARK", "count": 2, "maxMs": 0.182, "over4ms": 0 },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_UPDATE_POINTERS_SLOTS_MAIN",
+          "count": 2,
+          "maxMs": 0.177,
+          "over4ms": 0
+        },
+        { "process": "main", "name": "V8.GC_SCAVENGER_SCAVENGE_ROOTS", "count": 216, "maxMs": 0.169, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_SWEEP", "count": 10, "maxMs": 0.168, "over4ms": 0 },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_CLEAR_SWEEP_EXTERNAL_POINTER_TABLE",
+          "count": 2,
+          "maxMs": 0.138,
+          "over4ms": 0
+        },
+        { "process": "renderer", "name": "V8.GC_MC_EVACUATE_EPILOGUE", "count": 2, "maxMs": 0.117, "over4ms": 0 },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_BACKGROUND_EVACUATE_UPDATE_POINTERS",
+          "count": 11,
+          "maxMs": 0.106,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_MARK_FULL_CLOSURE_PARALLEL",
+          "count": 2,
+          "maxMs": 0.103,
+          "over4ms": 0
+        },
+        { "process": "renderer", "name": "V8.GC_MC_MARK_ROOTS", "count": 6, "maxMs": 0.098, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_HEAP_EPILOGUE_SAFEPOINT", "count": 2, "maxMs": 0.084, "over4ms": 0 },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_MARK_WEAK_CLOSURE_EPHEMERON_MARKING",
+          "count": 6,
+          "maxMs": 0.082,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_UPDATE_POINTERS_PARALLEL",
+          "count": 2,
+          "maxMs": 0.08,
+          "over4ms": 0
+        },
+        { "process": "main", "name": "V8.GC_SCAVENGER_SCAVENGE_FINALIZE", "count": 216, "maxMs": 0.075, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_MARK_EMBEDDER_PROLOGUE", "count": 4, "maxMs": 0.074, "over4ms": 0 },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_UPDATE_POINTERS_POINTER_TABLES",
+          "count": 2,
+          "maxMs": 0.071,
+          "over4ms": 0
+        },
+        { "process": "main", "name": "V8.GC_HEAP_EXTERNAL_PROLOGUE", "count": 216, "maxMs": 0.07, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_MARK_EMBEDDER_TRACING", "count": 6, "maxMs": 0.062, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_CLEAR_STRING_TABLE", "count": 16, "maxMs": 0.059, "over4ms": 0 }
+      ]
+    },
+    {
+      "ok": true,
+      "mode": "on",
+      "electron": "44.4.5",
+      "node": "24.21.0",
+      "productionEnabled": false,
+      "fixtureCaptureOverride": true,
+      "pairedExecution": true,
+      "events": 8192,
+      "previousEvents": 8192,
+      "bytes": 950694,
+      "saveExact": true,
+      "repetitions": 30,
+      "callbacks": {
+        "setup": 0.9638999999999669,
+        "setup->paired-idle": 0.1090999999998985,
+        "paired-idle": 0.048699999999826105,
+        "paired-idle->initialize-promotion": 2.7695000000001073,
+        "initialize-promotion": 0.7146000000000186,
+        "initialize-promotion->capture": 0.6911000000000058,
+        "capture": 2.0417999999999665,
+        "capture->checkpoint": 1.4117000000001099,
+        "checkpoint": 2.306100000000015,
+        "checkpoint->previous-preview": 0.24400000000014188,
+        "previous-preview": 3.9484999999999673,
+        "previous-preview->oracle-previous": 4.941499999999905,
+        "oracle-previous->renderer-preview": 0.07699999999999818,
+        "renderer-preview": 4.217399999999998,
+        "renderer-preview->picker": 0.024100000000089494,
+        "picker": 0.12120000000004438,
+        "picker->save": 0.04330000000004475,
+        "save": 2.458799999999883,
+        "save->oracle-save": 0.01720000000022992,
+        "oracle-save": 0.03220000000010259,
+        "oracle-save->close-preview": 5.723500000000058,
+        "close-preview": 0.09439999999995052,
+        "close-preview->checkpoint-repeat": 0.2578000000003158,
+        "checkpoint-repeat": 2.4475000000002183,
+        "checkpoint-repeat->renderer-preview-repeat": 0.037000000000261934,
+        "renderer-preview-repeat": 4.8784999999998035,
+        "renderer-preview-repeat->close-preview-repeat": 0.029199999999946158,
+        "close-preview-repeat": 0.06309999999939464,
+        "close-preview-repeat->checkpoint-repeat": 0.24390000000039436,
+        "close-preview-repeat->opt-out": 0.13290000000051805,
+        "opt-out": 1.085399999999936,
+        "opt-out->paired-wait": 0.13760000000002037,
+        "paired-wait": 0.7167999999983294
+      },
+      "gaps": {
+        "setup": 3.1812000000001035,
+        "paired-idle": 0.7581000000000131,
+        "initialize-promotion": 1.4405000000001564,
+        "capture": 2.3083999999998923,
+        "checkpoint": 2.7864999999999327,
+        "previous-preview": 1.7273000000000138,
+        "renderer-preview": 6.6810999999997875,
+        "picker": 0.9083000000000538,
+        "save": 2.6205999999997402,
+        "oracle-save": 0.10510000000022046,
+        "close-preview": 0.724999999999909,
+        "checkpoint-repeat": 6.022600000000239,
+        "renderer-preview-repeat": 8.060900000000402,
+        "close-preview-repeat": 0.7026000000005297,
+        "opt-out": 1.4134000000012747,
+        "paired-wait": 3.6975000000020373
+      },
+      "transitions": {
+        "setup->paired-idle": 0.4637000000000171,
+        "paired-idle->initialize-promotion": 4.801099999999906,
+        "initialize-promotion->capture": 1.609899999999925,
+        "capture->checkpoint": 2.0454999999999472,
+        "checkpoint->previous-preview": 1.0434999999999945,
+        "previous-preview->renderer-preview": 10.543499999999995,
+        "renderer-preview->picker": 0.304300000000012,
+        "picker->save": 0.4493999999999687,
+        "save->oracle-save": 0.20209999999997308,
+        "oracle-save->close-preview": 7.454499999999825,
+        "close-preview->checkpoint-repeat": 0.5183000000001812,
+        "checkpoint-repeat->renderer-preview-repeat": 0.8704999999999927,
+        "renderer-preview-repeat->close-preview-repeat": 0.3308999999999287,
+        "close-preview-repeat->checkpoint-repeat": 0.7162000000007538,
+        "close-preview-repeat->opt-out": 0.3120999999991909,
+        "opt-out->paired-wait": 0.2967000000007829
+      },
+      "gc": [
+        { "phase": "setup", "durationMs": 0.5146000012755394, "kind": 1 },
+        { "phase": "setup", "durationMs": 0.35009999945759773, "kind": 1 },
+        { "phase": "setup", "durationMs": 0.24080000072717667, "kind": 1 },
+        { "phase": "setup", "durationMs": 0.3004000000655651, "kind": 1 },
+        { "phase": "paired-idle", "durationMs": 0.2168000005185604, "kind": 1 },
+        { "phase": "paired-idle", "durationMs": 0.263799998909235, "kind": 1 },
+        { "phase": "initialize-promotion", "durationMs": 0.5708000026643276, "kind": 1 },
+        { "phase": "initialize-promotion", "durationMs": 0.42510000243782997, "kind": 1 },
+        { "phase": "capture", "durationMs": 0.6888999976217747, "kind": 1 },
+        { "phase": "capture", "durationMs": 0.7872999981045723, "kind": 1 },
+        { "phase": "capture", "durationMs": 0.6079000011086464, "kind": 1 },
+        { "phase": "capture", "durationMs": 0.5199999995529652, "kind": 1 },
+        { "phase": "checkpoint", "durationMs": 0.9240000024437904, "kind": 1 },
+        { "phase": "checkpoint", "durationMs": 0.9078999981284142, "kind": 1 },
+        { "phase": "checkpoint", "durationMs": 0.4203999973833561, "kind": 1 },
+        { "phase": "previous-preview", "durationMs": 0.7524999976158142, "kind": 1 },
+        { "phase": "previous-preview", "durationMs": 0.9875000007450581, "kind": 1 },
+        { "phase": "previous-preview", "durationMs": 1.0590000003576279, "kind": 1 },
+        { "phase": "renderer-preview", "durationMs": 0.7334000021219254, "kind": 1 },
+        { "phase": "renderer-preview", "durationMs": 0.8209000006318092, "kind": 1 },
+        { "phase": "save", "durationMs": 1.1361000016331673, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 1.6955999992787838, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 1.2767000012099743, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 0.8658999986946583, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 0.861600000411272, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 0.8636000007390976, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 1.267400000244379, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 0.7899999991059303, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 0.9144000001251698, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 0.8141999989748001, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 1.190600000321865, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 0.9777000024914742, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 0.8497000001370907, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 0.18229999765753746, "kind": 8 },
+        { "phase": "renderer-preview-repeat", "durationMs": 2.6865000016987324, "kind": 4 },
+        { "phase": "checkpoint-repeat", "durationMs": 2.113800000399351, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 2.3027999997138977, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 2.0004000030457973, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 1.7712000012397766, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 2.336600001901388, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 2.288800001144409, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 2.553599998354912, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 1.834900002926588, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 1.7129999995231628, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 2.2844999991357327, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 1.873599998652935, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 1.978099998086691, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 0.23259999975562096, "kind": 8 },
+        { "phase": "renderer-preview-repeat", "durationMs": 3.339800000190735, "kind": 4 },
+        { "phase": "checkpoint-repeat", "durationMs": 2.499099999666214, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 1.6266999989748, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 1.8917999975383282, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 2.201699998229742, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 2.303200002759695, "kind": 1 },
+        { "phase": "renderer-preview-repeat", "durationMs": 2.001900002360344, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 1.8902999982237816, "kind": 1 },
+        { "phase": "checkpoint-repeat", "durationMs": 1.8782999999821186, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 2.501800000667572, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.2215999998152256, "kind": 8 },
+        { "phase": "paired-wait", "durationMs": 1.4935000017285347, "kind": 4 },
+        { "phase": "paired-wait", "durationMs": 1.0790999978780746, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 1.624200001358986, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 1.1042999997735023, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.267000000923872, "kind": 8 },
+        { "phase": "paired-wait", "durationMs": 1.5122999995946884, "kind": 4 },
+        { "phase": "paired-wait", "durationMs": 1.0076999999582767, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.9470999985933304, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.40549999848008156, "kind": 8 },
+        { "phase": "paired-wait", "durationMs": 1.816500000655651, "kind": 4 },
+        { "phase": "paired-wait", "durationMs": 1.3951999992132187, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 1.15259999781847, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.3268999978899956, "kind": 8 },
+        { "phase": "paired-wait", "durationMs": 2.4070999994874, "kind": 4 },
+        { "phase": "paired-wait", "durationMs": 0.9727000035345554, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 1.0614000000059605, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.43139999732375145, "kind": 8 },
+        { "phase": "paired-wait", "durationMs": 1.761499997228384, "kind": 4 },
+        { "phase": "paired-wait", "durationMs": 1.0444000028073788, "kind": 1 },
+        { "phase": "paired-wait", "durationMs": 0.9941999986767769, "kind": 1 }
+      ],
+      "clockMaxMs": 0.4385000000038417,
+      "clockCalls": 755062,
+      "nativeIOElapsedMaxMs": {
+        "openRoot": 1.7114000000001397,
+        "rootStat": 3.6741000000001804,
+        "openRead": 11.516700000000128,
+        "fileStat": 1.7466000000001713,
+        "read": 0.99350000000004,
+        "closeFile": 16.188500000000204,
+        "list": 2.823699999999917,
+        "stat": 3.229400000000169,
+        "stopped": 1.0984999999998308,
+        "acquire": 13.96180000000004,
+        "openCreate": 30.89759999999933,
+        "write": 34.40730000000076,
+        "sync": 52.27530000000024,
+        "replace": 93.67709999999988,
+        "validateDestination": 1.5471999999999753,
+        "publish": 27.46230000000014,
+        "remove": 1.7642000000005282
+      },
+      "nativeIOReferencedBufferPeakBytes": 951024,
+      "payloadReservationPeakBytes": 4194304,
+      "mainHeapExternalIncrementBytes": 59163505,
+      "mainRssIncrementBytes": 81346560,
+      "rendererBase": {
+        "backingStorageSize": 877185,
+        "embedderHeapUsedSize": 1845728,
+        "totalSize": 3670016,
+        "usedSize": 2233516
+      },
+      "rendererHeapBackingEmbedderIncrementBytes": 29795938,
+      "legacyCalls": 0,
+      "traceWritten": true,
+      "childExitCode": 0,
+      "monitorExitCode": 0,
+      "executionOracle": {
+        "exitCode": 0,
+        "elapsedMs": 44997.712700000004,
+        "artifactCount": 29,
+        "artifactSignature": "47af2b2c78edc1900c7abc0b5a73976dc5ad04f7cdc5d8e6cc01c0cc23406f22",
+        "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+        "semanticByKind": [
+          {
+            "kind": "decision-matrix",
+            "name": "decisionMatrix",
+            "sha256": "788506a154dee82e5b00d167a41e2ed2b15817b1f84425fe5553db29288081d6"
+          },
+          {
+            "kind": "decomposition",
+            "name": "decomposition",
+            "sha256": "88299e6febb5e42d0908b8340fb79b9eed40c7d3e843e14e3db2a8ae7f15db63"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "600ddb38040239891a9d1cb7e38540be67e4117fe4598e56f7d52f0fe767bd23"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "2f51f54a704308e9f3f853e90a5af1d2e2e4899989a3d290e4821c29c27d5f7c"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "a2bb0762a4236a3fdf6a58027c7389bd7a036f227c9082b0e43bbbf82785bdaa"
+          },
+          {
+            "kind": "generic",
+            "name": "programSummary",
+            "sha256": "43d3e99ee5ed2f5de8aa52adfbab9d070d5ca21e1d9d61ea23500296a2b1aaef"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "991b5eb2a6320c619383371008c1e3bb97f4ea77b4dd82cd544d93bdcc2182b8"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "954971cc5f9f37e0afd544b04113af27c7ffbe1bebfcf9a5ebbf53ef99f45688"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "b694ec0a75c1318beaef7e65f20a228d736c6c9fb7a0636576dc3ef12e8b4e81"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "10941a49ffd22602fa6c0547c9c02426d7141a8a056e38f8dd02f89f8cd3d099"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6f042d063246e1c0291894a29ddd59462d2261572707270f823953a947f6ad2d"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6b609d237677cf6b73f6515c4601a070a3c76ef68e6fe02ff13c3b02edf0352c"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "0eefe76aebb09d46a44c0dd8a4a6326f35ac7884fcc5d1590c9df11c0e8fec07"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "risk-register",
+            "name": "riskRegister",
+            "sha256": "574503e6d64b9edaea05d2b4c5b776d88c4c199a093255314a0b68cb7a301031"
+          },
+          {
+            "kind": "schedule",
+            "name": "schedule",
+            "sha256": "73795c8f0f884a042f5d0855879a43d9d27360a3bbdf7bde6f5c2b93cb9a0332"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "0123d7127018317099bb9060225de811d062f4a9ec6264e6a7b1641129924e53"
+          }
+        ],
+        "normalization": "Generated identity/provenance/timestamp metadata excluded; generated UUID/time text normalized. Kind/name, semantic front matter, prose and multiplicity retained. This compares semantic outputs, not raw IDs or complete execution graph.",
+        "workItems": [
+          { "slug": "docs", "status": "done" },
+          { "slug": "login-api", "status": "done" },
+          { "slug": "schema", "status": "done" }
+        ]
+      },
+      "memory": {
+        "schema": 1,
+        "fields": ["privateCommit", "processLifetimePeakCommit", "workingSet", "processLifetimePeakWorkingSet"],
+        "combinedPrivateCommitPeak": 236445696,
+        "max": [
+          [147517440, 149143552, 172253184, 172744704],
+          [94064640, 97222656, 143994880, 147628032]
+        ],
+        "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed.",
+        "baseline": [
+          [41177088, 41177088, 98004992, 98009088],
+          [31621120, 31625216, 84488192, 84492288]
+        ],
+        "sampleCount": 2885
+      },
+      "trace": [
+        { "process": "renderer", "name": "MajorGC", "count": 3, "maxMs": 5.075, "over4ms": 1 },
+        { "process": "renderer", "name": "V8.GC_MARK_COMPACTOR", "count": 3, "maxMs": 4.997, "over4ms": 1 },
+        { "process": "main", "name": "V8.GC_MC_BACKGROUND_MARKING", "count": 48, "maxMs": 4.96, "over4ms": 9 },
+        { "process": "main", "name": "MajorGC", "count": 7, "maxMs": 3.33, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_MARK_COMPACTOR", "count": 7, "maxMs": 3.25, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_BACKGROUND_SAFEPOINT", "count": 1, "maxMs": 2.64, "over4ms": 0 },
+        { "process": "main", "name": "MinorGC", "count": 65, "maxMs": 2.546, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_FINISH", "count": 3, "maxMs": 2.544, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_SCAVENGER", "count": 65, "maxMs": 2.512, "over4ms": 0 },
+        { "process": "renderer", "name": "FunctionCall", "count": 1205, "maxMs": 2.494, "over4ms": 0 },
+        { "process": "renderer", "name": "EvaluateScript", "count": 377, "maxMs": 2.416, "over4ms": 0 },
+        { "process": "renderer", "name": "EventDispatch", "count": 130, "maxMs": 2.187, "over4ms": 0 },
+        {
+          "process": "main",
+          "name": "V8.GC_HEAP_EXTERNAL_WEAK_GLOBAL_HANDLES",
+          "count": 71,
+          "maxMs": 1.774,
+          "over4ms": 0
+        },
+        { "process": "main", "name": "V8.GC_MC_FINISH", "count": 7, "maxMs": 1.412, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_EVACUATE", "count": 6, "maxMs": 1.4, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_MC_BACKGROUND_SWEEPING", "count": 27, "maxMs": 1.388, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_MC_EVACUATE", "count": 14, "maxMs": 1.166, "over4ms": 0 },
+        {
+          "process": "main",
+          "name": "V8.GC_BACKGROUND_YOUNG_ARRAY_BUFFER_SWEEP",
+          "count": 45,
+          "maxMs": 1.16,
+          "over4ms": 0
+        },
+        { "process": "renderer", "name": "MinorGC", "count": 6, "maxMs": 1.152, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_SCAVENGER_SCAVENGE", "count": 65, "maxMs": 1.06, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_BACKGROUND_MARKING", "count": 33, "maxMs": 1.05, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_EVACUATE_COPY", "count": 3, "maxMs": 0.973, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_SCAVENGER", "count": 6, "maxMs": 0.967, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_SCAVENGER_SCAVENGE", "count": 6, "maxMs": 0.951, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_EVACUATE_COPY_PARALLEL", "count": 3, "maxMs": 0.928, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_MC_EVACUATE_UPDATE_POINTERS", "count": 7, "maxMs": 0.838, "over4ms": 0 },
+        {
+          "process": "renderer",
+          "name": "V8.GC_HEAP_ENSURE_SWEEPING_COMPLETED",
+          "count": 3,
+          "maxMs": 0.816,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_BACKGROUND_EVACUATE_COPY",
+          "count": 3,
+          "maxMs": 0.738,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_BACKGROUND_FULL_ARRAY_BUFFER_SWEEP",
+          "count": 7,
+          "maxMs": 0.727,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_SCAVENGER_SCAVENGE_PARALLEL_PHASE",
+          "count": 6,
+          "maxMs": 0.697,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER_SCAVENGE_PARALLEL_PHASE",
+          "count": 65,
+          "maxMs": 0.672,
+          "over4ms": 0
+        },
+        { "process": "renderer", "name": "Layout", "count": 11, "maxMs": 0.654, "over4ms": 0 },
+        {
+          "process": "renderer",
+          "name": "V8.GC_SCAVENGER_BACKGROUND_SCAVENGE_PARALLEL",
+          "count": 28,
+          "maxMs": 0.638,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER_BACKGROUND_SCAVENGE_PARALLEL",
+          "count": 315,
+          "maxMs": 0.629,
+          "over4ms": 0
+        },
+        { "process": "main", "name": "V8.GC_MC_EVACUATE_COPY", "count": 7, "maxMs": 0.581, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_MC_EVACUATE_COPY_PARALLEL", "count": 7, "maxMs": 0.54, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_MC_BACKGROUND_EVACUATE_COPY", "count": 4, "maxMs": 0.48, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_MC_CLEAR", "count": 7, "maxMs": 0.472, "over4ms": 0 },
+        { "process": "renderer", "name": "V8.GC_MC_MARK", "count": 3, "maxMs": 0.462, "over4ms": 0 },
+        { "process": "main", "name": "V8.GC_MC_INCREMENTAL_START", "count": 7, "maxMs": 0.444, "over4ms": 0 }
+      ]
+    }
+  ],
+  "exactElectron": "44.4.5",
+  "producer": {
+    "ok": true,
+    "mode": "producer",
+    "events": 8192,
+    "checkpoint": true,
+    "productionEnabled": false,
+    "forcedOwnedExit": true
+  },
+  "executionEqual": true,
+  "workEqual": true,
+  "allOwnedExitsConfirmed": true,
+  "disposableStateRemoved": true
+}

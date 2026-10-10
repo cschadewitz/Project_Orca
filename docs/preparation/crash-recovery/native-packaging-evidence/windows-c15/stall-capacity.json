@@ -1,0 +1,9 @@
+{
+  "utc": "2026-10-09T20:23:46.3477309Z",
+  "logicalProcessors": 12,
+  "cpuLoadPercent": 2,
+  "totalMemoryKiB": 33463424,
+  "freeMemoryKiB": 14031828,
+  "freeDiskBytes": 73383264256,
+  "overlappingHeavyJobs": 0
+}

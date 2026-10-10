@@ -1,0 +1,728 @@
+{
+  "date": "2026-10-09",
+  "sourceBase": "455b1e05f3e3a83175678e8a90f181e30244f966",
+  "scope": "Linux x64 Node source/native POSIX fixture; synthetic keys/clock; shipping capture disabled; no Electron/Mac/Windows acceptance",
+  "historicalAuthorEvidence": "linux-workload.json (preview 38.192994 ms, checkpoint 25.649978 ms)",
+  "nodeHeaders": {
+    "version": "24.19.0",
+    "sha256": "54f14a297d47ea0794fe272363703d9dc419c96ac68f20d890f98b63754a3e4c",
+    "verification": "official nodejs.org SHASUMS256.txt; locally extracted under /tmp"
+  },
+  "nativeBuildCommand": "/usr/bin/cc -shared -fPIC -std=c11 -O2 -DNAPI_VERSION=8 -Wall -Wextra -Werror -I/tmp/orca-diagnostics-headers/node-v24.19.0/include/node packages/app/native/diagnostics/storage.c -o packages/app/native/diagnostics/build/Release/diagnostics_storage.node",
+  "command": "node --expose-gc --import tsx packages/app/test/recovery-preparation/native-workload-probe.ts",
+  "baseline": {
+    "platform": "linux",
+    "arch": "x64",
+    "node": "24.19.0",
+    "offeredEvents": 8192,
+    "retainedEvents": 8192,
+    "omissions": 0,
+    "serializedBytes": 974807,
+    "exactSaveAndExportSurvivesOptOut": true,
+    "recordMaxMs": 0.3666249999999991,
+    "dispatchMaxMs": 0.23534399999999778,
+    "checkpointMs": 39.40648299999998,
+    "previewMs": 35.066592000000014,
+    "eventLoopDelayMaxMs": 32.69707200000005,
+    "idleDelayMaxMs": 0.3060389999999984,
+    "delayByPhase": {
+      "capture": 0.9693899999999758,
+      "checkpoint": 18.15959200000009,
+      "preview": 32.69707200000005,
+      "save": 0.9767689999999902
+    },
+    "managedIncrementBytes": 19378345,
+    "rssIncrementBytes": 26939392,
+    "payloadPeak": 3145728,
+    "diskBytesObservedPeak": 976112,
+    "cpuMicros": {
+      "user": 118706,
+      "system": 38132
+    },
+    "callbackTargetMs": 4,
+    "recordAndInitialDispatchWithin4ms": true,
+    "observedResponsivenessWithin4ms": false,
+    "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+  },
+  "baselineProfileRun": {
+    "platform": "linux",
+    "arch": "x64",
+    "node": "24.19.0",
+    "offeredEvents": 8192,
+    "retainedEvents": 8192,
+    "omissions": 0,
+    "serializedBytes": 974807,
+    "exactSaveAndExportSurvivesOptOut": true,
+    "recordMaxMs": 0.4662390000000016,
+    "dispatchMaxMs": 0.3156640000000266,
+    "checkpointMs": 36.931866000000014,
+    "previewMs": 40.233048999999994,
+    "eventLoopDelayMaxMs": 38.02615700000001,
+    "idleDelayMaxMs": 1.0116230000000144,
+    "delayByPhase": {
+      "capture": 0.6244230000000073,
+      "checkpoint": 16.87770499999999,
+      "preview": 38.02615700000001,
+      "save": 1.9590469999999982
+    },
+    "managedIncrementBytes": 19204245,
+    "rssIncrementBytes": 29728768,
+    "payloadPeak": 3145728,
+    "diskBytesObservedPeak": 976112,
+    "cpuMicros": {
+      "user": 121197,
+      "system": 29916
+    },
+    "callbackTargetMs": 4,
+    "recordAndInitialDispatchWithin4ms": true,
+    "observedResponsivenessWithin4ms": false,
+    "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+  },
+  "localCpuDiagnosis": {
+    "standalone8192EventParseMs": [2.381045, 2.269137, 2.363347],
+    "genericCanonicalSerializationMs": [12.875309, 10.215021, 9.778996],
+    "fixedKeyReplacerSerializationMs": [12.513723, 11.866751, 12.222118],
+    "interpretation": "Generic per-object sorting is expensive; a fixed-key JSON.stringify replacer did not resolve it. Whole-report parsing and final fragment flattening also stack deferred CPU work."
+  },
+  "intermediate": {
+    "cooperativeStringFragmentsWithWholeReportParse": {
+      "overlappedWithFocusedTestsAndStatics": {
+        "platform": "linux",
+        "arch": "x64",
+        "node": "24.19.0",
+        "offeredEvents": 8192,
+        "retainedEvents": 8192,
+        "omissions": 0,
+        "serializedBytes": 974807,
+        "exactSaveAndExportSurvivesOptOut": true,
+        "recordMaxMs": 1.3523290000000543,
+        "dispatchMaxMs": 0.4192249999999831,
+        "checkpointMs": 94.18918699999995,
+        "previewMs": 99.584248,
+        "eventLoopDelayMaxMs": 19.97520700000007,
+        "idleDelayMaxMs": 4.086397000000034,
+        "delayByPhase": {
+          "capture": 16.950777000000016,
+          "checkpoint": 14.54658900000004,
+          "preview": 19.97520700000007,
+          "save": 8.777972999999974
+        },
+        "managedIncrementBytes": 19646881,
+        "rssIncrementBytes": 18452480,
+        "payloadPeak": 4194304,
+        "diskBytesObservedPeak": 976112,
+        "cpuMicros": {
+          "user": 132028,
+          "system": 56415
+        },
+        "callbackTargetMs": 4,
+        "recordAndInitialDispatchWithin4ms": true,
+        "observedResponsivenessWithin4ms": false,
+        "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+      },
+      "firstIsolated": {
+        "platform": "linux",
+        "arch": "x64",
+        "node": "24.19.0",
+        "offeredEvents": 8192,
+        "retainedEvents": 8192,
+        "omissions": 0,
+        "serializedBytes": 974807,
+        "exactSaveAndExportSurvivesOptOut": true,
+        "recordMaxMs": 0.5639010000000155,
+        "dispatchMaxMs": 0.4021230000000173,
+        "checkpointMs": 24.626425000000012,
+        "previewMs": 21.652731999999986,
+        "eventLoopDelayMaxMs": 2.4654899999999884,
+        "idleDelayMaxMs": 0.3686230000000137,
+        "delayByPhase": {
+          "capture": 0.7594310000000064,
+          "checkpoint": 1.5956539999999961,
+          "preview": 2.4654899999999884,
+          "save": 2.083170999999993
+        },
+        "managedIncrementBytes": 20026629,
+        "rssIncrementBytes": 20611072,
+        "payloadPeak": 4194304,
+        "diskBytesObservedPeak": 976112,
+        "cpuMicros": {
+          "user": 98664,
+          "system": 21510
+        },
+        "callbackTargetMs": 4,
+        "recordAndInitialDispatchWithin4ms": true,
+        "observedResponsivenessWithin4ms": true,
+        "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+      },
+      "threeSubsequentIsolatedRuns": [
+        {
+          "platform": "linux",
+          "arch": "x64",
+          "node": "24.19.0",
+          "offeredEvents": 8192,
+          "retainedEvents": 8192,
+          "omissions": 0,
+          "serializedBytes": 974807,
+          "exactSaveAndExportSurvivesOptOut": true,
+          "recordMaxMs": 0.5364400000000273,
+          "dispatchMaxMs": 0.35110199999996894,
+          "checkpointMs": 32.29967399999998,
+          "previewMs": 50.70225000000005,
+          "eventLoopDelayMaxMs": 14.292783999999983,
+          "idleDelayMaxMs": 0.4208770000000186,
+          "delayByPhase": {
+            "capture": 1.1312680000000341,
+            "checkpoint": 3.3622910000000275,
+            "preview": 14.292783999999983,
+            "save": 7.345073999999954
+          },
+          "managedIncrementBytes": 19617946,
+          "rssIncrementBytes": 20189184,
+          "payloadPeak": 4194304,
+          "diskBytesObservedPeak": 976112,
+          "cpuMicros": {
+            "user": 248682,
+            "system": 116836
+          },
+          "callbackTargetMs": 4,
+          "recordAndInitialDispatchWithin4ms": true,
+          "observedResponsivenessWithin4ms": false,
+          "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+        },
+        {
+          "platform": "linux",
+          "arch": "x64",
+          "node": "24.19.0",
+          "offeredEvents": 8192,
+          "retainedEvents": 8192,
+          "omissions": 0,
+          "serializedBytes": 974807,
+          "exactSaveAndExportSurvivesOptOut": true,
+          "recordMaxMs": 5.032361999999978,
+          "dispatchMaxMs": 0.342412999999965,
+          "checkpointMs": 39.586787999999984,
+          "previewMs": 24.261464000000046,
+          "eventLoopDelayMaxMs": 6.670655000000011,
+          "idleDelayMaxMs": 0.7834849999999847,
+          "delayByPhase": {
+            "capture": 6.2250390000000095,
+            "checkpoint": 6.670655000000011,
+            "preview": 4.01316300000002,
+            "save": 3.2343569999999886
+          },
+          "managedIncrementBytes": 21004612,
+          "rssIncrementBytes": 21938176,
+          "payloadPeak": 4194304,
+          "diskBytesObservedPeak": 976112,
+          "cpuMicros": {
+            "user": 80734,
+            "system": 73297
+          },
+          "callbackTargetMs": 4,
+          "recordAndInitialDispatchWithin4ms": false,
+          "observedResponsivenessWithin4ms": false,
+          "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+        },
+        {
+          "platform": "linux",
+          "arch": "x64",
+          "node": "24.19.0",
+          "offeredEvents": 8192,
+          "retainedEvents": 8192,
+          "omissions": 0,
+          "serializedBytes": 974807,
+          "exactSaveAndExportSurvivesOptOut": true,
+          "recordMaxMs": 0.3984839999999963,
+          "dispatchMaxMs": 0.26980600000001687,
+          "checkpointMs": 25.862142999999975,
+          "previewMs": 23.13962799999996,
+          "eventLoopDelayMaxMs": 3.3494650000000092,
+          "idleDelayMaxMs": 0.4233289999999954,
+          "delayByPhase": {
+            "capture": 0.9039389999999798,
+            "checkpoint": 2.1985919999999908,
+            "preview": 3.3494650000000092,
+            "save": 1.776736000000028
+          },
+          "managedIncrementBytes": 21008324,
+          "rssIncrementBytes": 22290432,
+          "payloadPeak": 4194304,
+          "diskBytesObservedPeak": 976112,
+          "cpuMicros": {
+            "user": 91102,
+            "system": 36684
+          },
+          "callbackTargetMs": 4,
+          "recordAndInitialDispatchWithin4ms": true,
+          "observedResponsivenessWithin4ms": true,
+          "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+        }
+      ],
+      "instrumentedCpuAndGcProbe": {
+        "platform": "linux",
+        "arch": "x64",
+        "node": "24.19.0",
+        "offeredEvents": 8192,
+        "retainedEvents": 8192,
+        "omissions": 0,
+        "serializedBytes": 974807,
+        "exactSaveAndExportSurvivesOptOut": true,
+        "recordMaxMs": 1.1210940000000278,
+        "dispatchMaxMs": 0.37712599999997565,
+        "checkpointMs": 31.031162999999992,
+        "previewMs": 37.94285000000002,
+        "eventLoopDelayMaxMs": 7.859497000000033,
+        "idleDelayMaxMs": 0.9284049999999979,
+        "delayByPhase": {
+          "capture": 1.2631900000000087,
+          "checkpoint": 5.304642999999999,
+          "preview": 7.859497000000033,
+          "save": 2.9631560000000263
+        },
+        "managedIncrementBytes": 20619556,
+        "rssIncrementBytes": 22257664,
+        "payloadPeak": 4194304,
+        "diskBytesObservedPeak": 976112,
+        "cpuMicros": {
+          "user": 98167,
+          "system": 78189
+        },
+        "callbackTargetMs": 4,
+        "recordAndInitialDispatchWithin4ms": true,
+        "observedResponsivenessWithin4ms": false,
+        "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+      },
+      "slowReportBatchSamplesMs": [
+        {
+          "reportBatchMs": 2.9359870000000114,
+          "atMs": 387.277647
+        },
+        {
+          "reportBatchMs": 1.3485210000000052,
+          "atMs": 420.420734
+        },
+        {
+          "reportBatchMs": 3.777458000000024,
+          "atMs": 423.542395
+        },
+        {
+          "reportBatchMs": 6.388360000000034,
+          "atMs": 433.506219
+        }
+      ],
+      "interpretation": "One initial isolated pass was insufficient; subsequent failures led to segmented parsing and bounded incremental output. Overlapped and instrumented runs are not final acceptance evidence."
+    },
+    "segmentedParsingWithStringFragmentJoin": {
+      "threeIsolatedRuns": [
+        {
+          "platform": "linux",
+          "arch": "x64",
+          "node": "24.19.0",
+          "offeredEvents": 8192,
+          "retainedEvents": 8192,
+          "omissions": 0,
+          "serializedBytes": 974807,
+          "exactSaveAndExportSurvivesOptOut": true,
+          "recordMaxMs": 1.015154999999993,
+          "dispatchMaxMs": 0.2672239999999988,
+          "checkpointMs": 30.140600000000006,
+          "previewMs": 36.107507,
+          "eventLoopDelayMaxMs": 5.245463000000029,
+          "idleDelayMaxMs": 0.3695460000000139,
+          "delayByPhase": {
+            "capture": 1.4294720000000325,
+            "checkpoint": 3.1346249999999714,
+            "preview": 5.245463000000029,
+            "save": 2.3086529999999925
+          },
+          "managedIncrementBytes": 20175404,
+          "rssIncrementBytes": 20885504,
+          "payloadPeak": 4194304,
+          "diskBytesObservedPeak": 976112,
+          "cpuMicros": {
+            "user": 122858,
+            "system": 43688
+          },
+          "callbackTargetMs": 4,
+          "recordAndInitialDispatchWithin4ms": true,
+          "observedResponsivenessWithin4ms": false,
+          "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+        },
+        {
+          "platform": "linux",
+          "arch": "x64",
+          "node": "24.19.0",
+          "offeredEvents": 8192,
+          "retainedEvents": 8192,
+          "omissions": 0,
+          "serializedBytes": 974807,
+          "exactSaveAndExportSurvivesOptOut": true,
+          "recordMaxMs": 0.7294590000000198,
+          "dispatchMaxMs": 0.3640970000000152,
+          "checkpointMs": 27.737871000000013,
+          "previewMs": 26.328919000000013,
+          "eventLoopDelayMaxMs": 5.081932999999992,
+          "idleDelayMaxMs": 0.33118500000000495,
+          "delayByPhase": {
+            "capture": 1.1472770000000025,
+            "checkpoint": 4.165354999999977,
+            "preview": 5.081932999999992,
+            "save": 1.7642149999999788
+          },
+          "managedIncrementBytes": 20784644,
+          "rssIncrementBytes": 22679552,
+          "payloadPeak": 4194304,
+          "diskBytesObservedPeak": 976112,
+          "cpuMicros": {
+            "user": 98180,
+            "system": 27715
+          },
+          "callbackTargetMs": 4,
+          "recordAndInitialDispatchWithin4ms": true,
+          "observedResponsivenessWithin4ms": false,
+          "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+        },
+        {
+          "platform": "linux",
+          "arch": "x64",
+          "node": "24.19.0",
+          "offeredEvents": 8192,
+          "retainedEvents": 8192,
+          "omissions": 0,
+          "serializedBytes": 974807,
+          "exactSaveAndExportSurvivesOptOut": true,
+          "recordMaxMs": 0.6815689999999961,
+          "dispatchMaxMs": 0.3231219999999837,
+          "checkpointMs": 29.421796,
+          "previewMs": 28.078462000000002,
+          "eventLoopDelayMaxMs": 4.538253999999995,
+          "idleDelayMaxMs": 0.3785859999999843,
+          "delayByPhase": {
+            "capture": 1.1865720000000124,
+            "checkpoint": 3.019383000000005,
+            "preview": 4.538253999999995,
+            "save": 2.6031600000000026
+          },
+          "managedIncrementBytes": 20751148,
+          "rssIncrementBytes": 22609920,
+          "payloadPeak": 4194304,
+          "diskBytesObservedPeak": 976112,
+          "cpuMicros": {
+            "user": 109224,
+            "system": 27310
+          },
+          "callbackTargetMs": 4,
+          "recordAndInitialDispatchWithin4ms": true,
+          "observedResponsivenessWithin4ms": false,
+          "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+        }
+      ],
+      "instrumentedRun": {
+        "platform": "linux",
+        "arch": "x64",
+        "node": "24.19.0",
+        "offeredEvents": 8192,
+        "retainedEvents": 8192,
+        "omissions": 0,
+        "serializedBytes": 974807,
+        "exactSaveAndExportSurvivesOptOut": true,
+        "recordMaxMs": 0.6927209999999491,
+        "dispatchMaxMs": 0.26898400000004585,
+        "checkpointMs": 30.623541999999986,
+        "previewMs": 31.93826999999999,
+        "eventLoopDelayMaxMs": 3.9663909999999873,
+        "idleDelayMaxMs": 0.3368170000000248,
+        "delayByPhase": {
+          "capture": 0.7894900000000007,
+          "checkpoint": 3.2142109999999775,
+          "preview": 3.9663909999999873,
+          "save": 2.1559589999999957
+        },
+        "managedIncrementBytes": 20235820,
+        "rssIncrementBytes": 21241856,
+        "payloadPeak": 4194304,
+        "diskBytesObservedPeak": 976112,
+        "cpuMicros": {
+          "user": 100266,
+          "system": 55465
+        },
+        "callbackTargetMs": 4,
+        "recordAndInitialDispatchWithin4ms": true,
+        "observedResponsivenessWithin4ms": true,
+        "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+      },
+      "slowReportBatchSamplesMs": [
+        {
+          "label": "serialization",
+          "reportBatchMs": 0.5291339999999991,
+          "done": false,
+          "atMs": 317.56094
+        },
+        {
+          "label": "serialization",
+          "reportBatchMs": 2.011932999999999,
+          "done": true,
+          "atMs": 319.237717
+        },
+        {
+          "label": "serialization",
+          "reportBatchMs": 1.506371999999999,
+          "done": true,
+          "atMs": 349.641773
+        },
+        {
+          "label": "validation",
+          "reportBatchMs": 1.299387999999965,
+          "done": false,
+          "atMs": 352.625555
+        },
+        {
+          "label": "validation",
+          "reportBatchMs": 2.824380000000019,
+          "done": true,
+          "atMs": 362.551627
+        }
+      ],
+      "interpretation": "Final fragment joins and validation completion still approached/exceeded the gate; replace the join with incremental bounded Buffer writes."
+    },
+    "incrementalBufferBeforeFrozenStringRelease": {
+      "threeIsolatedRuns": [
+        {
+          "platform": "linux",
+          "arch": "x64",
+          "node": "24.19.0",
+          "offeredEvents": 8192,
+          "retainedEvents": 8192,
+          "omissions": 0,
+          "serializedBytes": 974807,
+          "exactSaveAndExportSurvivesOptOut": true,
+          "recordMaxMs": 0.617935999999986,
+          "dispatchMaxMs": 0.27182200000004286,
+          "checkpointMs": 39.07223000000005,
+          "previewMs": 30.91301500000003,
+          "eventLoopDelayMaxMs": 2.5695670000000064,
+          "idleDelayMaxMs": 0.4791450000000168,
+          "delayByPhase": {
+            "capture": 1.8353309999999965,
+            "checkpoint": 1.766368,
+            "preview": 2.5695670000000064,
+            "save": 2.467466999999999
+          },
+          "managedIncrementBytes": 20315472,
+          "rssIncrementBytes": 25387008,
+          "payloadPeak": 4194304,
+          "diskBytesObservedPeak": 976112,
+          "cpuMicros": {
+            "user": 119417,
+            "system": 41492
+          },
+          "callbackTargetMs": 4,
+          "recordAndInitialDispatchWithin4ms": true,
+          "observedResponsivenessWithin4ms": true,
+          "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+        },
+        {
+          "platform": "linux",
+          "arch": "x64",
+          "node": "24.19.0",
+          "offeredEvents": 8192,
+          "retainedEvents": 8192,
+          "omissions": 0,
+          "serializedBytes": 974807,
+          "exactSaveAndExportSurvivesOptOut": true,
+          "recordMaxMs": 0.5311229999999796,
+          "dispatchMaxMs": 0.31973399999998264,
+          "checkpointMs": 34.736985000000004,
+          "previewMs": 36.20547700000003,
+          "eventLoopDelayMaxMs": 2.871148000000005,
+          "idleDelayMaxMs": 2.2097249999999917,
+          "delayByPhase": {
+            "capture": 0.7415560000000028,
+            "checkpoint": 2.032010000000014,
+            "preview": 2.871148000000005,
+            "save": 2.000992999999994
+          },
+          "managedIncrementBytes": 18727516,
+          "rssIncrementBytes": 23347200,
+          "payloadPeak": 4194304,
+          "diskBytesObservedPeak": 976112,
+          "cpuMicros": {
+            "user": 134305,
+            "system": 39398
+          },
+          "callbackTargetMs": 4,
+          "recordAndInitialDispatchWithin4ms": true,
+          "observedResponsivenessWithin4ms": true,
+          "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+        },
+        {
+          "platform": "linux",
+          "arch": "x64",
+          "node": "24.19.0",
+          "offeredEvents": 8192,
+          "retainedEvents": 8192,
+          "omissions": 0,
+          "serializedBytes": 974807,
+          "exactSaveAndExportSurvivesOptOut": true,
+          "recordMaxMs": 0.37304900000000885,
+          "dispatchMaxMs": 0.33001099999998473,
+          "checkpointMs": 35.027840999999995,
+          "previewMs": 34.162937,
+          "eventLoopDelayMaxMs": 2.219498999999985,
+          "idleDelayMaxMs": 0.3338839999999834,
+          "delayByPhase": {
+            "capture": 0.720643999999993,
+            "checkpoint": 1.637360000000001,
+            "preview": 2.219498999999985,
+            "save": 1.7148599999999874
+          },
+          "managedIncrementBytes": 18328215,
+          "rssIncrementBytes": 22040576,
+          "payloadPeak": 4194304,
+          "diskBytesObservedPeak": 976112,
+          "cpuMicros": {
+            "user": 136762,
+            "system": 28381
+          },
+          "callbackTargetMs": 4,
+          "recordAndInitialDispatchWithin4ms": true,
+          "observedResponsivenessWithin4ms": true,
+          "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+        }
+      ],
+      "interpretation": "All three observed gates pass. Self-review subsequently dropped the frozen snapshot string before yielded validation to preserve the existing four-copy preparation reservation; final measurements follow that lifetime edit."
+    }
+  },
+  "finalThreeIsolatedRuns": [
+    {
+      "platform": "linux",
+      "arch": "x64",
+      "node": "24.19.0",
+      "offeredEvents": 8192,
+      "retainedEvents": 8192,
+      "omissions": 0,
+      "serializedBytes": 974807,
+      "exactSaveAndExportSurvivesOptOut": true,
+      "recordMaxMs": 0.9226770000000215,
+      "dispatchMaxMs": 0.37410399999998845,
+      "checkpointMs": 36.656901000000005,
+      "previewMs": 29.42220199999997,
+      "eventLoopDelayMaxMs": 1.9008970000000431,
+      "idleDelayMaxMs": 0.21651900000000524,
+      "delayByPhase": {
+        "capture": 1.5194960000000037,
+        "checkpoint": 1.9008970000000431,
+        "preview": 1.7261570000000006,
+        "save": 1.493600000000015
+      },
+      "managedIncrementBytes": 19100002,
+      "rssIncrementBytes": 23298048,
+      "payloadPeak": 4194304,
+      "diskBytesObservedPeak": 976112,
+      "cpuMicros": {
+        "user": 117595,
+        "system": 36336
+      },
+      "callbackTargetMs": 4,
+      "recordAndInitialDispatchWithin4ms": true,
+      "observedResponsivenessWithin4ms": true,
+      "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+    },
+    {
+      "platform": "linux",
+      "arch": "x64",
+      "node": "24.19.0",
+      "offeredEvents": 8192,
+      "retainedEvents": 8192,
+      "omissions": 0,
+      "serializedBytes": 974807,
+      "exactSaveAndExportSurvivesOptOut": true,
+      "recordMaxMs": 0.5388680000000079,
+      "dispatchMaxMs": 0.2819509999999923,
+      "checkpointMs": 29.531993999999997,
+      "previewMs": 31.030293,
+      "eventLoopDelayMaxMs": 2.363650000000007,
+      "idleDelayMaxMs": 0.4382229999999936,
+      "delayByPhase": {
+        "capture": 0.8002119999999877,
+        "checkpoint": 1.4813049999999919,
+        "preview": 2.363650000000007,
+        "save": 1.92005800000004
+      },
+      "managedIncrementBytes": 17827892,
+      "rssIncrementBytes": 22519808,
+      "payloadPeak": 4194304,
+      "diskBytesObservedPeak": 976112,
+      "cpuMicros": {
+        "user": 120967,
+        "system": 35750
+      },
+      "callbackTargetMs": 4,
+      "recordAndInitialDispatchWithin4ms": true,
+      "observedResponsivenessWithin4ms": true,
+      "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+    },
+    {
+      "platform": "linux",
+      "arch": "x64",
+      "node": "24.19.0",
+      "offeredEvents": 8192,
+      "retainedEvents": 8192,
+      "omissions": 0,
+      "serializedBytes": 974807,
+      "exactSaveAndExportSurvivesOptOut": true,
+      "recordMaxMs": 0.36161599999999794,
+      "dispatchMaxMs": 0.33790500000003476,
+      "checkpointMs": 30.57472200000001,
+      "previewMs": 28.59311299999999,
+      "eventLoopDelayMaxMs": 2.607528000000002,
+      "idleDelayMaxMs": 0.24052299999999605,
+      "delayByPhase": {
+        "capture": 1.244058999999993,
+        "checkpoint": 1.9454100000000096,
+        "preview": 2.607528000000002,
+        "save": 1.2270669999999768
+      },
+      "managedIncrementBytes": 21061340,
+      "rssIncrementBytes": 26574848,
+      "payloadPeak": 4194304,
+      "diskBytesObservedPeak": 976112,
+      "cpuMicros": {
+        "user": 89162,
+        "system": 45103
+      },
+      "callbackTargetMs": 4,
+      "recordAndInitialDispatchWithin4ms": true,
+      "observedResponsivenessWithin4ms": true,
+      "method": "One disposable Node process; native POSIX port; synthetic keys/clock; 1 ms and operation/batch samples. Disk observed after operations, not transient high-water. No paired runtime, Electron/renderer, secure-storage, Mac clock/ACL or whole-process memory proof."
+    }
+  ],
+  "finalInterpretation": "All three final isolated observations meet the unchanged observed 4 ms gate with 8192 retained events, zero omissions, 974807 canonical bytes and exact Save surviving opt-out. Sampling is not a hard scheduler/latency/memory guarantee or native Electron/Mac proof. The now-visible 4194304-byte preparation reservation was already present in policy; cooperative turns allow the sampler to observe it. No policy limits were raised.",
+  "unproven": [
+    "paired actual runtime execution",
+    "hard callback latency under native device/scheduler/GC pressure",
+    "transient disk high-water",
+    "hard managed/external memory bound",
+    "combined main/worker/renderer 32 MiB gate",
+    "Mac Darwin compilation and packaged Electron loading",
+    "Mac clock/ACL/full-flush",
+    "Keychain/DPAPI",
+    "signed/downloaded candidate identity",
+    "Windows privacy",
+    "external network observation",
+    "accessibility and physical acceptance"
+  ],
+  "hostObservationDuringTask": {
+    "availableCpus": 4,
+    "memoryBytes": 18882699264,
+    "load1m": 0.93
+  },
+  "finalSourceFilesSha256": {
+    "packages/app/src/main/diagnostics/pretrigger-buffer.ts": "426403e1d40372aa6f6b2ef2c22ce2b7c29a578cc8692f9199889115f52ba4ef",
+    "packages/app/src/main/diagnostics/recovery-controller.ts": "de8edb2b0f63a4890ee1e0d76b640b036403e40f70ebcd51d1ad638db493db67",
+    "packages/app/src/main/diagnostics/report-validation.ts": "e359789c1eee7e4189d99aa92caec340c59fa6d6779fda8f22e98e6b755e5549",
+    "packages/app/src/main/diagnostics/report-work.ts": "11c736ad755e53ee2039c8095b552535c3817fde873ccf6f23ab9ff8e6a822b3",
+    "packages/app/src/main/diagnostics/snapshot.ts": "957959abda9ef341234efce56b507faae45d43aca24c66c595f26abb8ba3e2fc"
+  },
+  "nativeAddonSha256": "57ea854ad9faea5797841e0840f3fb74c909b96da77be3c8f26ee6f9b1fc5197"
+}

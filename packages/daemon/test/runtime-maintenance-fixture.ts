@@ -36,16 +36,25 @@ export async function runtimeMaintenanceFixture(
     wrongCredentials?: boolean;
     invalidIdentity?: boolean;
     lease?: RunLeaseOptions;
+    gated?: boolean;
+    newAdmissionOpen?: () => boolean;
+    existingWorkOpen?: () => boolean;
   } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "orca-runtime-maintenance-"));
   await writeFile(
     join(dir, "flow.yaml"),
-    "id: flow\nname: Flow\nversion: '1'\nstart: s\nnodes: {s: {type: start}, e: {type: end}}\nedges: [{from: s, to: e}]\n",
+    options.gated
+      ? "id: flow\nname: Flow\nversion: '1'\nstart: s\nnodes: {s: {type: start}, g: {type: gate, question: 'Finish?', options: [finish]}, e: {type: end}}\nedges: [{from: s, to: g}, {from: g, to: e}]\n"
+      : "id: flow\nname: Flow\nversion: '1'\nstart: s\nnodes: {s: {type: start}, e: {type: end}}\nedges: [{from: s, to: e}]\n",
   );
   const app = await bootstrap({
     configDir: dir,
-    config: parseOrcaConfig({ workflows: ["*.yaml"], templates: [], program: { workflow: "flow" } }),
+    config: parseOrcaConfig({
+      workflows: ["*.yaml"],
+      templates: [],
+      program: { workflow: "flow", itemWorkflow: "flow" },
+    }),
     logger: silentLogger,
     ...(options.lease ? { lease: options.lease } : {}),
   });
@@ -115,6 +124,8 @@ export async function runtimeMaintenanceFixture(
     control: options.wrongControl ? undefined : control,
     liveInputs: runtime.port,
     runtimeIdle: runtime,
+    newAdmissionOpen: options.newAdmissionOpen,
+    existingWorkOpen: options.existingWorkOpen,
     requestSubmissions: options.omitRequests ? undefined : requests,
     admissionRetries: admissions,
     continuationAdmissions: continuations,

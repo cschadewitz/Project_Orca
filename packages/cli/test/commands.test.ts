@@ -118,6 +118,7 @@ beforeAll(async () => {
       "version: 1",
       "workflows: [tiny.yaml, program.yaml]",
       "templates: []",
+      "program: { workflow: program, itemWorkflow: tiny }",
       "hosts:",
       "  - { id: local, type: local }",
       "  - { id: remote, type: ssh, host: example.invalid, user: orca, port: 2222 }",

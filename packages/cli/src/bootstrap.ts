@@ -2,6 +2,13 @@
  * Bootstrap: turn `orca.config.yaml` into a wired Orchestrator + ProgramService.
  * The CLI, the ACP facade and embedders all go through here.
  */
+import { enterFirstRunWriter } from "@orca/protocol/first-run-fence";
+import {
+  enterConfiguredUpdateBootstrap,
+  isClosedUpdateBootstrap,
+  closedUpdateOwnsConfiguredRoots,
+} from "./update-bootstrap.js";
+import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
 import { FileRetryClaimStore } from "@orca/store";
 import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
@@ -61,9 +68,17 @@ import {
   type LoadedRestorationPlugin,
 } from "./plugin-runtime.js";
 
+import {
+  loadInstalledPluginRelease,
+  type InstalledPluginRelease,
+  type VerifiedPluginRelease,
+} from "./plugin-release.js";
+
 export const CONFIG_FILENAMES = ["orca.config.yaml", "orca.config.yml", "orca.config.json"];
 
 export interface BootstrapOptions {
+  /** Trusted composition supplies an independently approved closed-bundle release pin; never read from config/RPC/env. */
+  installedPluginRelease?: InstalledPluginRelease;
   /** Required for plugin restart opt-in. Verify full code/dependency identities using trusted installed release evidence. */
   verifyPluginRestorationIdentity?: PluginRestorationIdentityVerifier;
   /** Trusted production composition, created over these exact stores before any interpreter runs. */
@@ -124,6 +139,8 @@ export interface OrcaApp {
   templates: TemplateRegistry;
   agents: AgentRegistry;
   logger: Logger;
+  /** Existing store owners, read-only and conservative; no retry cursor or reconciliation. */
+  closedWorkState(): Promise<"empty" | "parked" | "unsupported-generation">;
 }
 
 export async function findConfig(cwd: string): Promise<string | undefined> {
@@ -150,13 +167,21 @@ export async function loadConfig(
   configPath?: string,
 ): Promise<{ config: OrcaConfig; configDir: string; configFile?: string }> {
   const file = configPath ?? (await findConfig(cwd));
-  if (!file) return { config: parseOrcaConfig({}), configDir: resolve(cwd) };
+  if (!file) {
+    const config = parseOrcaConfig({}),
+      configDir = resolve(cwd);
+    await enterConfiguredUpdateBootstrap(configDir, resolve(configDir, config.storeDir));
+    return { config, configDir };
+  }
   const text = await readFile(file, "utf8");
   const raw = parseConfigFile(file, text);
   try {
     // The path travels with the parsed config: `config.get`/`config.set` serve the file
     // itself, and rediscovering it in the daemon could find a different one (#174).
-    return { config: parseOrcaConfig(raw), configDir: dirname(resolve(file)), configFile: resolve(file) };
+    const config = parseOrcaConfig(raw),
+      configDir = dirname(resolve(file));
+    await enterConfiguredUpdateBootstrap(configDir, resolve(configDir, config.storeDir));
+    return { config, configDir, configFile: resolve(file) };
   } catch (e) {
     throw new OrcaError("CONFIG_INVALID", `${file}: ${(e as Error).message}`, {}, { cause: e });
   }
@@ -232,6 +257,16 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const { config, configDir, configFile } = opts.config
     ? { config: opts.config, configDir: opts.configDir ?? cwd, configFile: undefined }
     : await loadConfig(cwd, opts.configPath);
+  const firstRunLaunch = process.env.ORCA_FIRST_RUN_LAUNCH;
+  delete process.env.ORCA_FIRST_RUN_LAUNCH;
+  await enterConfiguredUpdateBootstrap(resolve(configDir), resolve(configDir, config.storeDir));
+  if (isClosedUpdateBootstrap() && config.plugins.length)
+    throw new OrcaError("CONFIG_INVALID", "Closed replacement cannot execute uncertified plugin initialization");
+  if (isClosedUpdateBootstrap())
+    await enterClosedFirstRunInspection(resolve(configDir), resolve(configDir, config.storeDir), () =>
+      closedUpdateOwnsConfiguredRoots(configDir, resolve(configDir, config.storeDir)),
+    );
+  else await enterFirstRunWriter(resolve(configDir), resolve(configDir, config.storeDir), firstRunLaunch);
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config);
   const assets = await releaseAssets(config);
@@ -301,7 +336,13 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   // Direct method/prototype/nested replacements are unsupported even without extractor registration.
   const runtimeMutated = captureRuntimeObjects([...agents.listHosts(), ...configuredExecutors.values(), plan]);
   const pluginEntries = await pluginEntryDigests(config, configDir);
-  const loadedPlugins = await loadPlugins(config, configDir, api, logger);
+  if (opts.installedPluginRelease && opts.verifyPluginRestorationIdentity)
+    throw pluginRestorationRefusal("identity_unverified");
+  const installedRelease = opts.installedPluginRelease
+    ? await loadInstalledPluginRelease(opts.installedPluginRelease, pluginEntries ?? [])
+    : undefined;
+  const verifyPluginIdentity = installedRelease?.verify ?? opts.verifyPluginRestorationIdentity;
+  const loadedPlugins = await loadPlugins(config, configDir, api, logger, installedRelease, pluginEntries);
   for (const loaded of loadedPlugins) {
     const entry = pluginEntries?.find((entry) => entry.spec === loaded.spec);
     if (entry) loaded.entry = entry;
@@ -330,11 +371,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     runtimeMutated() ||
     pluginHumanInput ||
     pluginExecutors.some((type) => !type.startsWith("custom:"));
-  const pluginRestoration = await capturePluginRestoration(
-    loadedPlugins,
-    unsupportedRestoration,
-    opts.verifyPluginRestorationIdentity,
-  );
+  const pluginRestoration = await capturePluginRestoration(loadedPlugins, unsupportedRestoration, verifyPluginIdentity);
   const runtimeFingerprint = pluginEntries
     ? createHash("sha256")
         .update(
@@ -410,7 +447,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     validateCustomNode: (node) => executors.validateNode(node),
     restorePluginExecutors: (snapshot) => {
       if (unsupportedRestoration) throw pluginRestorationRefusal("unsupported_registration");
-      return restorePluginExecutors(snapshot.pluginRestoration, loadedPlugins, opts.verifyPluginRestorationIdentity);
+      return restorePluginExecutors(snapshot.pluginRestoration, loadedPlugins, verifyPluginIdentity);
     },
   });
   // Verify bytes still represent the config bootstrap loaded before labelling them active.
@@ -493,6 +530,20 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     submissionAuthority: submission?.authority,
     retryClaims,
     retryClaimStore,
+    async closedWorkState() {
+      try {
+        const retry = retryClaimStore ? await retryClaimStore.closedWorkState() : "unsupported-generation";
+        if (retry !== "empty") return retry;
+        const admissions = await submission.admissions.records.list();
+        if (admissions.length) return "parked";
+        const ids = await orchestrator.listRuns();
+        // Retained runs may carry generations, continuations or protected input.
+        // This initial native binding supports empty work only, without replay/restoration.
+        return ids.length ? "parked" : "empty";
+      } catch {
+        return "unsupported-generation";
+      }
+    },
     directAdmissions,
     retrySafeAdmissions:
       directAdmissions && program.submissions
@@ -520,14 +571,24 @@ export async function loadPlugins(
   configDir: string,
   api: PluginApi,
   logger: Logger,
+  installedRelease?: VerifiedPluginRelease,
+  entries?: readonly { spec: string; url: string; digest: string }[],
 ): Promise<LoadedRestorationPlugin[]> {
   const loaded: LoadedRestorationPlugin[] = [];
   for (const spec of config.plugins) {
-    const mod = (await import(pluginSpecifier(spec, configDir))) as { default?: OrcaPlugin };
+    const identity = installedRelease?.identityFor(spec);
+    const entry = entries?.find((candidate) => candidate.spec === spec);
+    if (installedRelease && (!identity || !entry)) throw pluginRestorationRefusal("identity_unverified");
+    // A digest-qualified URL cannot adopt an earlier module-cache entry after bytes change at the same path.
+    const importUrl =
+      installedRelease && entry ? `${entry.url}?orca-plugin-release=${entry.digest}` : pluginSpecifier(spec, configDir);
+    const mod = (await import(importUrl)) as { default?: OrcaPlugin };
     if (!mod.default?.register)
       throw new OrcaError("CONFIG_INVALID", `plugin ${spec} has no default OrcaPlugin export`);
     const before = new Map(api.executors.types().map((type) => [type, api.executors.get(type)]));
-    await mod.default.register(api);
+    const pluginApi = installedRelease ? { ...api } : api;
+    if (identity) Object.defineProperty(pluginApi, "restorationIdentity", { value: identity, enumerable: true });
+    await mod.default.register(pluginApi);
     loaded.push({
       spec,
       plugin: mod.default,

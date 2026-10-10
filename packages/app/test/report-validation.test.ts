@@ -88,8 +88,8 @@ describe("retained coverage semantics", () => {
         });
         try {
           expect(recovered.controller.status().previous).toBe(true);
-          expect(await recovered.controller.preparePreview("previous")).toEqual({ ok: false, code: "unavailable" });
-          expect(recovered.controller.status().activePreviewHandle).toBeUndefined();
+          expect(await recovered.controller.prepareExport("previous")).toEqual({ ok: false, code: "unavailable" });
+          expect(recovered.controller.status().activeExportHandle).toBeUndefined();
           expect(recovered.picker.calls).toBe(0);
           expect(recovered.native.publishCalls).toBe(0);
         } finally {

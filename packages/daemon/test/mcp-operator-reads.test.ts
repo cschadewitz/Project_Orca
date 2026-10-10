@@ -185,6 +185,45 @@ describe("bounded operator reads", () => {
     expect(new Set(ids).size).toBe(206);
     expect(reads.mock.calls.every(([, range]) => range?.limit === 100 || range?.limit === 1)).toBe(true);
   });
+  it.each([
+    ["path-bearing text", "Recorded artifact at /workspace/private-job/artifacts/revision.md"],
+    ["legitimate safe text", "Revision completed successfully."],
+  ])("keeps closed event metadata and explicitly omits arbitrary agent %s", async (_label, text) => {
+    const events = new InMemoryEventStore();
+    await events.append({
+      type: "agent.update",
+      runId: "run",
+      payload: {
+        stepRunId: "step",
+        sessionId: "session",
+        update: {
+          kind: "text",
+          text,
+          title: "/private/title",
+          locations: ["C:\\private\\artifact.md"],
+          args: { text: "/private/tool-argument", length: 22 },
+          result: { text: "/private/tool-result", length: 20 },
+        },
+      },
+    });
+    const [stored] = await events.readRange("run", { after: -1, limit: 1 });
+    const f = fixture([], { collections: { events: (p) => eventSnapshot(events, p) } });
+    const page = await f.model.page(params());
+    expect(page.items).toEqual([
+      {
+        id: stored!.id,
+        kind: "agent.update",
+        runId: "run",
+        stepRunId: "step",
+        seq: stored!.seq,
+        at: stored!.at,
+        omitted: ["agent-text", "tool-arguments", "tool-results", "paths"],
+      },
+    ]);
+    expect(JSON.stringify(page)).not.toContain(text);
+    expect(JSON.stringify(page)).not.toMatch(/private|session/);
+    expect(stored).toMatchObject({ payload: { update: { text } } });
+  });
   it("projects graph topology and redacted typed inputs without prompts, defaults or metadata", async () => {
     const def = WorkflowDefinitionSchema.parse({
       id: "wf",

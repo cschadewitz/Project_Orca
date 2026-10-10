@@ -1,0 +1,98 @@
+[
+  {
+    "source": "a991fbfea9da6d39dea2f0c513cc5a000d993c14",
+    "platform": "win32",
+    "arch": "x64",
+    "node": "24.19.0",
+    "offeredEvents": 8192,
+    "retainedEvents": 8192,
+    "omissions": {
+      "budget": 0,
+      "expired": 0,
+      "invalid": 0,
+      "unavailable": "unknown"
+    },
+    "serializedBytes": 974807,
+    "exactMemoryPortSaveAndExportSurvivesOptOut": true,
+    "simultaneousFullMemoryPortGenerations": true,
+    "recordCallbackMaxMs": 0.42919999999998026,
+    "delayByPhaseMs": {
+      "idle": 15.04419999999999,
+      "capture": 0.9780999999999835,
+      "checkpoint": 12.367200000000025,
+      "preview": 3.498300000000029,
+      "optOut": 11.081999999999994
+    },
+    "payloadPeak": 4194304,
+    "managedIncrementBytes": 22422528,
+    "rssIncrementBytes": 23650304,
+    "observed4msGateMet": false,
+    "combined32MiBGate": "not measured",
+    "nativeStorageClockCrypto": "not exercised",
+    "method": "One Windows Node process; synthetic clock, memory-only disk/publication; shipping flag unchanged. 1 ms timer plus controller emissions; heapUsed+external, arrayBuffers not double-counted. Idle scheduling retained. No renderer, worker, actual execution, filesystem, DPAPI, hard allocation or native high-water proof."
+  },
+  {
+    "source": "a991fbfea9da6d39dea2f0c513cc5a000d993c14",
+    "platform": "win32",
+    "arch": "x64",
+    "node": "24.19.0",
+    "offeredEvents": 8192,
+    "retainedEvents": 8192,
+    "omissions": {
+      "budget": 0,
+      "expired": 0,
+      "invalid": 0,
+      "unavailable": "unknown"
+    },
+    "serializedBytes": 974807,
+    "exactMemoryPortSaveAndExportSurvivesOptOut": true,
+    "simultaneousFullMemoryPortGenerations": true,
+    "recordCallbackMaxMs": 0.39860000000001605,
+    "delayByPhaseMs": {
+      "idle": 15.011899999999997,
+      "capture": 0.8295999999999992,
+      "checkpoint": 14.649000000000001,
+      "preview": 3.3152000000000044,
+      "optOut": 12.410699999999963
+    },
+    "payloadPeak": 4194304,
+    "managedIncrementBytes": 22094691,
+    "rssIncrementBytes": 23420928,
+    "observed4msGateMet": false,
+    "combined32MiBGate": "not measured",
+    "nativeStorageClockCrypto": "not exercised",
+    "method": "One Windows Node process; synthetic clock, memory-only disk/publication; shipping flag unchanged. 1 ms timer plus controller emissions; heapUsed+external, arrayBuffers not double-counted. Idle scheduling retained. No renderer, worker, actual execution, filesystem, DPAPI, hard allocation or native high-water proof."
+  },
+  {
+    "source": "a991fbfea9da6d39dea2f0c513cc5a000d993c14",
+    "platform": "win32",
+    "arch": "x64",
+    "node": "24.19.0",
+    "offeredEvents": 8192,
+    "retainedEvents": 8192,
+    "omissions": {
+      "budget": 0,
+      "expired": 0,
+      "invalid": 0,
+      "unavailable": "unknown"
+    },
+    "serializedBytes": 974807,
+    "exactMemoryPortSaveAndExportSurvivesOptOut": true,
+    "simultaneousFullMemoryPortGenerations": true,
+    "recordCallbackMaxMs": 0.5975999999999999,
+    "delayByPhaseMs": {
+      "idle": 15.022400000000005,
+      "capture": 1.6282999999999959,
+      "checkpoint": 3.0083999999999946,
+      "preview": 13.410199999999975,
+      "optOut": 11.356300000000033
+    },
+    "payloadPeak": 4194304,
+    "managedIncrementBytes": 23282828,
+    "rssIncrementBytes": 24272896,
+    "observed4msGateMet": false,
+    "combined32MiBGate": "not measured",
+    "nativeStorageClockCrypto": "not exercised",
+    "method": "One Windows Node process; synthetic clock, memory-only disk/publication; shipping flag unchanged. 1 ms timer plus controller emissions; heapUsed+external, arrayBuffers not double-counted. Idle scheduling retained. No renderer, worker, actual execution, filesystem, DPAPI, hard allocation or native high-water proof."
+  }
+]

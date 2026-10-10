@@ -203,8 +203,10 @@ an explicit lease-derived-status omission; their `running` does not prove livene
 are event/attempt facts, not a newly invented step state reducer. Provenance carries generation and workflow content identity and
 agent/model/template identifiers. Arbitrary input values, workspace paths, protected payload
 references, raw config, prompts, tool arguments/results and arbitrary event context are omitted.
-Public agent text comes only from the existing sensitivity-projected event store. Existing
-workflow-input redaction and validation are reused. Configuration status is read through an
+Agent-update rows retain event/step identity and sequence metadata, but omit all free-form
+agent text with an explicit `agent-text` omission. The existing sensitivity projection does
+not prove prose is path-free, so these rows do not selectively pass supposedly safe text.
+Existing workflow-input redaction and validation are reused. Configuration status is read through an
 allowlisted ConfigModel projection, never by proxying raw `config.get` and deleting keys.
 
 ## Approval, retry and continuity rules

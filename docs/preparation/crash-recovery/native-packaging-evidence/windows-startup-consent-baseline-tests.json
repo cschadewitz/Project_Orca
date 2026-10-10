@@ -1,0 +1,88 @@
+{
+  "numTotalTestSuites": 1,
+  "numPassedTestSuites": 0,
+  "numFailedTestSuites": 1,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 4,
+  "numPassedTests": 2,
+  "numFailedTests": 2,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "snapshot": {
+    "added": 0,
+    "failure": false,
+    "filesAdded": 0,
+    "filesRemoved": 0,
+    "filesRemovedList": [],
+    "filesUnmatched": 0,
+    "filesUpdated": 0,
+    "matched": 0,
+    "total": 0,
+    "unchecked": 0,
+    "uncheckedKeysByFile": [],
+    "unmatched": 0,
+    "updated": 0,
+    "didUpdate": false
+  },
+  "startTime": 1791542055282,
+  "success": false,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "keeps durable consent when navigation revokes a preview during the startup read",
+          "status": "failed",
+          "title": "keeps durable consent when navigation revokes a preview during the startup read",
+          "duration": 14.929299999999955,
+          "failureMessages": [
+            "AssertionError: expected { enabled: false, …(10) } to match object { enabled: true, minutes: 10, …(3) }\n(6 matching properties omitted from actual)\n    at Proxy.<anonymous> (file:///<dependencies>/node_modules/.pnpm/vitest@5.0.2_@types+node@26_c1c8fe877328aa44ebb89410a8a51022/node_modules/vitest/dist/chunks/index.DGdajAO2.js:2051:10)\n    at Proxy.<anonymous> (file:///<dependencies>/node_modules/.pnpm/vitest@5.0.2_@types+node@26_c1c8fe877328aa44ebb89410a8a51022/node_modules/vitest/dist/chunks/index.DGdajAO2.js:1945:14)\n    at Proxy.methodWrapper (file:///<dependencies>/node_modules/.pnpm/chai@6.2.2/node_modules/chai/index.js:1700:25)\n    at <workspace>/packages/app/test/diagnostics-startup-consent.test.ts:56:35\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at file:///<dependencies>/node_modules/.pnpm/vitest@5.0.2_@types+node@26_c1c8fe877328aa44ebb89410a8a51022/node_modules/vitest/dist/chunks/run.C5UmxDPh.js:2783:20"
+          ],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "keeps durable consent when renderer-disposal revokes a preview during the startup read",
+          "status": "failed",
+          "title": "keeps durable consent when renderer-disposal revokes a preview during the startup read",
+          "duration": 1.8181999999999903,
+          "failureMessages": [
+            "AssertionError: expected { enabled: false, …(10) } to match object { enabled: true, minutes: 10, …(3) }\n(6 matching properties omitted from actual)\n    at Proxy.<anonymous> (file:///<dependencies>/node_modules/.pnpm/vitest@5.0.2_@types+node@26_c1c8fe877328aa44ebb89410a8a51022/node_modules/vitest/dist/chunks/index.DGdajAO2.js:2051:10)\n    at Proxy.<anonymous> (file:///<dependencies>/node_modules/.pnpm/vitest@5.0.2_@types+node@26_c1c8fe877328aa44ebb89410a8a51022/node_modules/vitest/dist/chunks/index.DGdajAO2.js:1945:14)\n    at Proxy.methodWrapper (file:///<dependencies>/node_modules/.pnpm/chai@6.2.2/node_modules/chai/index.js:1700:25)\n    at <workspace>/packages/app/test/diagnostics-startup-consent.test.ts:56:35\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at file:///<dependencies>/node_modules/.pnpm/vitest@5.0.2_@types+node@26_c1c8fe877328aa44ebb89410a8a51022/node_modules/vitest/dist/chunks/run.C5UmxDPh.js:2783:20"
+          ],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "a newer off fences the pending enabled startup read",
+          "status": "passed",
+          "title": "a newer off fences the pending enabled startup read",
+          "duration": 2.0774999999999864,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "a newer shutdown fences the pending enabled startup read",
+          "status": "passed",
+          "title": "a newer shutdown fences the pending enabled startup read",
+          "duration": 0.762299999999982,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        }
+      ],
+      "startTime": 1791542055739,
+      "endTime": 1791542055758.7622,
+      "status": "failed",
+      "message": "",
+      "name": "<workspace>/packages/app/test/diagnostics-startup-consent.test.ts"
+    }
+  ]
+}

@@ -113,7 +113,7 @@ export async function makeFixture(kind: PluginKind = "builtin"): Promise<Fixture
 }
 
 export async function assertOwned(fixture: Pick<Fixture, "root" | "owner">): Promise<void> {
-  if (!resolve(fixture.root).startsWith(`${resolve(tmpdir())}/orca-restoration-acceptance-396-`))
+  if (!resolve(fixture.root).startsWith(join(resolve(tmpdir()), "orca-restoration-acceptance-396-")))
     throw new Error("Fixture root is outside its disposable namespace");
   const marker = JSON.parse(await readFile(join(fixture.root, "fixture-owner.json"), "utf8")) as { owner?: unknown };
   if (marker.owner !== fixture.owner) throw new Error("Fixture ownership mismatch");

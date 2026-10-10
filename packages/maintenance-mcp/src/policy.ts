@@ -26,7 +26,7 @@ export const OPERATIONS = [
 export type ServiceAlias = (typeof SERVICES)[number];
 export type Operation = (typeof OPERATIONS)[number];
 export const POLICY = Object.freeze({
-  version: "maintenance-readonly-v1",
+  version: "maintenance-readonly-v2",
   host: "agent-01",
   mounts: ["root"] as const,
   // Names are proposals, not an asserted match to a running unit or bus owner.
@@ -35,20 +35,27 @@ export const POLICY = Object.freeze({
       alias,
       proposedManager: "user" as const,
       proposedUnit: `${alias}.service`,
-      configuredManager: null,
-      configuredUid: null,
-      configuredUnit: null,
+      configuredManager: null as "user" | null,
+      configuredUid: null as number | null,
+      configuredUnit: null as string | null,
     }),
   ),
   categories: CATEGORIES,
   operations: OPERATIONS,
   limits: LIMITS,
+  observerPreparation: {
+    hostSources: ["linux-proc-boot", "linux-proc-uptime", "linux-proc-memory", "linux-root-statfs"],
+    serviceSource: "same-user-systemctl-show",
+    logSource: "same-user-structured-journal",
+    serviceIdentitiesConfigured: false,
+    deploymentHostBinding: "unverified",
+  },
 });
 export const POLICY_ID = createHash("sha256").update(JSON.stringify(POLICY)).digest("hex");
 export const BUILD = Object.freeze({
   package: "@orca/maintenance-mcp",
   version: "0.1.0",
-  sourceBaseRevision: "e1db2049e4a9b4a26a9f66e16e6891f8caf131d6",
+  sourceBaseRevision: "db579fb7ac9cfce2e4e6901713088a80602311da",
   deployedRevision: null,
   attestation: "unattested-preparation" as const,
 });

@@ -1,0 +1,20 @@
+{
+  "source": "compiled isolated worktree; commit pinned in accompanying acceptance report",
+  "scope": "compiled Windows Node initializer; not packaged Electron",
+  "noCreatedDiagnosticFiles": true,
+  "keyCalls": 0,
+  "pickerCalls": 0,
+  "status": {
+    "enabled": false,
+    "productionEnabled": false,
+    "scopeVersion": 1,
+    "minutes": 5,
+    "code": "cleanup_pending",
+    "previous": false,
+    "tailLossPossible": true,
+    "cleanupPending": true,
+    "acknowledgedUnknown": false,
+    "olderUnknowns": false,
+    "payloadReservedBytes": 0
+  }
+}

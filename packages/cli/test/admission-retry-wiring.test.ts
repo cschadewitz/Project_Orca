@@ -36,7 +36,7 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
       );
       const app = (await bootstrap({
         configDir: dir,
-        config: parseOrcaConfig({ workflows: ["*.yaml"], templates: [] }),
+        config: parseOrcaConfig({ program: { itemWorkflow: "program" }, workflows: ["*.yaml"], templates: [] }),
         logger: silentLogger,
       })) as Awaited<ReturnType<typeof bootstrap>> & {
         retryClaims: RegisteredRetryClaims;

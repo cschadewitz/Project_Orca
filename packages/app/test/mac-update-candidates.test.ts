@@ -2,7 +2,7 @@
 import { mkdtemp, readFile, readdir, rm, stat, mkdir, symlink, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it as platformIt, vi } from "vitest";
 import {
   downloadMacCandidate,
   macSource,
@@ -14,6 +14,8 @@ import {
 import { readMacManifest, sha256 } from "../src/main/mac-candidate-manifest.js";
 import { MacCandidateSession, type MacCandidateOffer } from "../src/main/mac-update-candidates.js";
 
+// The download contract requires POSIX private modes. Windows must refuse it.
+const it = platformIt.skipIf(process.platform === "win32");
 const filesystemFaults = vi.hoisted(() => ({
   cleanup: new Set<string>(),
   writeGate: undefined as (() => Promise<void>) | undefined,
@@ -124,7 +126,21 @@ async function rig() {
     trust: { catalog, inspect },
     fetch,
   };
-  const session = new MacCandidateSession(ports);
+  // Explicit synthetic drain lease permits download tests; no production owner/native activation.
+  const session = new MacCandidateSession(ports, {
+    drainAdmission: async (expected, token) => ({
+      outcome: "ready",
+      lease: {
+        target: expected,
+        token,
+        observe: async () => "held",
+        release: async () => "released",
+      },
+    }),
+    prepareDrafts: async () => ({ outcome: "blocked", blocker: "candidate" }),
+    prepareAdmission: async () => ({ outcome: "unknown" }),
+    checkPrepared: async () => "unknown",
+  });
   const offer = async () => {
     const result = await session.offer(input, target, signal());
     expect(result.outcome).toBe("available");
@@ -138,6 +154,42 @@ afterEach(async () => {
   filesystemFaults.cleanup.clear();
   filesystemFaults.writeGate = undefined;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+platformIt.runIf(process.platform === "win32")(
+  "refuses Windows storage before transport, inspection or owned writes",
+  async () => {
+    const r = await rig();
+    expect(await downloadMacCandidate(r.binding, r.bytes, r.ports, signal())).toEqual({ outcome: "failed" });
+    expect(r.fetch).not.toHaveBeenCalled();
+    expect(r.inspect).not.toHaveBeenCalled();
+    expect(await readdir(r.root)).toEqual([]);
+  },
+);
+
+it("cancelled inspection settles its native cleanup before discarding the owned download", async () => {
+  const r = await rig(),
+    controller = new AbortController(),
+    entered = pending<void>(),
+    cleanup = pending<void>();
+  const original = r.inspect.getMockImplementation()!;
+  r.inspect.mockImplementation(async (...args) => {
+    entered.resolve();
+    await cleanup.promise;
+    return original(...args);
+  });
+  let settled = false;
+  const operation = downloadMacCandidate(r.binding, r.bytes, r.ports, controller.signal).finally(() => {
+    settled = true;
+  });
+  await entered.promise;
+  controller.abort();
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  expect((await readdir(r.root)).length).toBe(1);
+  cleanup.resolve();
+  expect((await operation).outcome).toBe("failed");
+  expect(await readdir(r.root)).toEqual([]);
 });
 
 describe("main-only candidate binding and consent", () => {
@@ -399,7 +451,7 @@ describe("main-only candidate binding and consent", () => {
     const [newDirectory] = await readdir(r.root);
     expect(newDirectory).toBeTruthy();
     expect(newDirectory).not.toBe(oldDirectory);
-    expect(r.catalog).toHaveBeenCalledTimes(6);
+    expect(r.catalog).toHaveBeenCalledTimes(10);
     expect(r.fetch).toHaveBeenCalledTimes(2 * r.files.size);
     expect(r.inspect).toHaveBeenCalledTimes(2);
   });

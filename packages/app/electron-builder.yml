@@ -45,6 +45,8 @@ files:
   - "!dist/daemon"
   # electron-builder's own output directory (directories.output), which would package itself.
   - "!dist/release"
+  # Architecture-specific native addons live outside asar, once per matching image.
+  - "!dist/diagnostics-native"
   # Build artefacts of `tsc -b`: declarations and the incremental build state are for the
   # workspace, not for a user's disk.
   - "!**/*.d.ts"
@@ -82,20 +84,33 @@ linux:
       arch: [x64, arm64]
 
 mac:
+  extraResources:
+    - from: ../../tools/deploy
+      to: native/mac-validator/tools/deploy
+      filter: ["native-mac-runtime.py", "native-mac-candidate.py", "native-mac-verify.py"]
+    - from: ../../tools/packaged-mac
+      to: native/mac-validator/tools/packaged-mac
+      filter: ["native-containment.py", "archive-containment.py"]
+    - from: "dist/diagnostics-native/darwin-${arch}"
+      to: "native/diagnostics/darwin-${arch}"
+      filter: ["diagnostics_clock.node", "diagnostics_storage.node", "manifest.json"]
   category: public.app-category.developer-tools
   target:
     - target: dmg
       arch: [x64, arm64]
     - target: zip
       arch: [x64, arm64]
-  # Unsigned, deliberately and temporarily: there is no Developer ID certificate in this
-  # repository's secrets yet, and electron-builder would otherwise try to sign with whatever
-  # identity is in the runner's keychain and fail the build. Signing and notarisation are
-  # the named follow-up in docs/RELEASING.md, with the secrets they need.
+  # The ordinary lane is deliberately unsigned. Signing authority and protected execution
+  # remain operator prerequisites; Forbidden metadata means unknown, not absent. Explicit
+  # null prevents builder from selecting an incidental runner keychain identity.
   identity: null
   notarize: false
 
 win:
+  extraResources:
+    - from: "dist/diagnostics-native/win32-${arch}"
+      to: "native/diagnostics/win32-${arch}"
+      filter: ["diagnostics_clock.node", "diagnostics_storage.node", "first_run_windows.node", "manifest.json"]
   # Preserve existing NSIS upgrade/uninstall GUID and shortcut AppUserModelID.
   # Changing this requires a separate Windows migration decision (docs/RELEASING.md).
   appId: dev.orca.desktop
@@ -120,3 +135,7 @@ publish:
   provider: generic
   url: https://updates.invalid/
   channel: latest
+
+# Explicit local addon build is required for Mac/Windows packaging. No network/build at hook time.
+beforePack: ./scripts/diagnostics-native-package.js
+afterPack: ./scripts/verify-diagnostics-native.js

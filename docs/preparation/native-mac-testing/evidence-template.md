@@ -4,6 +4,13 @@ Template only. Copy into the approved private evidence destination at execution 
 do not commit filled user/machine records here. Preparation source:
 `7abc2342aa672ee9d2f10d565ca4f8eb546184df`, 2026-10-02. No execution is claimed.
 
+9 October reconciliation: use the [current runbook](../native-mac-beta-readiness/acceptance-runbook.md)
+and #416's stricter allowlist. Filled packets/command selections remain private;
+no raw tool output, log tails, screenshots, prompts/code/agent output, full paths,
+credentials or protected stores enter retained/shared evidence. Earlier proposed
+screenshot/log budgets are superseded below. A harmless marker-only launch is not
+report-artifact, gate, real-agent or crash-recovery evidence.
+
 ## Identity and authorization
 
 | Field | Value to fill |
@@ -11,7 +18,7 @@ do not commit filled user/machine records here. Preparation source:
 | Evidence/run ID, UTC start/end | `<required>` |
 | Executor and mode | `<hosted arm64 VM / controlled Mac / physical M-series>` |
 | Tester alias and session approval reference | `<no personal contact details or credentials>` |
-| Scope approved | `<installation, disposable state, screenshots, sleep/restart, real agent separately>` |
+| Scope approved | `<installation, disposable state, sleep/restart and real agent separately; no implicit device access or sharing>` |
 | Candidate ID, version, source commit | `<exact full SHA, not branch name>` |
 | Harness source commit, fixture revision | `<full SHA; mac-safe-v1 or agreed replacement>` |
 | Build run URL/ID/attempt | `<credential-free immutable provenance>` |
@@ -63,12 +70,13 @@ Link #387's upgrade/restore scenario evidence rather than copying its recovery p
 
 | Evidence ID | Relative file / digest / bytes | Scenario and purpose | Redaction/truncation review |
 | --- | --- | --- | --- |
-| `<id>` | `<sanitized log, assertion JSON or cropped screenshot>` | `<MAC-ID>` | `<reviewer alias; omissions and limits>` |
+| `<id>` | `<allowlisted status/enum assertion JSON, digest and bytes>` | `<MAC-ID>` | `<reviewer alias; omissions and limits>` |
 
-Use [harness limits](harness-design.md#diagnostics-and-cleanup): 256 KiB per log tail,
-256 KiB assertion JSON, five screenshots at 2 MiB each per scenario, 25 MiB packet.
-Truncation is explicit. No raw trace/HAR/video upload. Scan generated secrets and canary
-before retention; record scan outcome without their values. Unsafe diagnostics are omitted.
+Retain at most 256 KiB of allowlisted assertion JSON per case. Optional native-validated
+#416 manual diagnostic export has its own consent, immutable preview and complete-report
+1 MiB cap; it does not upload. No raw trace/HAR/video/log tail/screenshot is retained or
+shared. Exceeding a bound is a failed evidence outcome, never silently truncated success.
+Record safe privacy/canary-check outcomes without secret values; unsafe evidence is omitted.
 
 | Failure/decision | Reproduction using fixtures only | Severity / owner / existing issue | Acceptance impact and next action |
 | --- | --- | --- | --- |

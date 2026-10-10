@@ -110,6 +110,10 @@ export interface DaemonOptions extends MethodContext {
   auth?: DaemonAuthOptions | undefined;
   maintenanceToken?: string | undefined;
   admissionFile?: string | undefined;
+  /** Durable managed-root admission, independent of runtime drain. Existing completion remains available. */
+  newAdmissionOpen?: (() => boolean) | undefined;
+  /** Held completion/observation permission; final durable stop or lost root identity closes it. */
+  existingWorkOpen?: (() => boolean) | undefined;
   host?: string | undefined;
   /** `0` (the default) picks a free port; read the real one from `DaemonHandle.port`. */
   port?: number | undefined;
@@ -236,7 +240,28 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const maintenance = new Maintenance(
     opts.maintenanceToken,
     opts.admissionFile,
-    runtime && identity ? { activity: runtime.activity, target: { ...identity, processId: process.pid } } : undefined,
+    runtime && identity
+      ? {
+          activity: runtime.activity,
+          target: { ...identity, processId: process.pid },
+          unfinished: async () => {
+            const ids = await runtime.orchestrator.listRuns();
+            // An oversized or failed inventory cannot establish quiescence.
+            if (ids.length > 4096) return { unfinished: [], truncated: true };
+            const unfinished: import("@orca/protocol").RuntimeDrainResult["unfinished"] = [];
+            for (const runId of ids) {
+              const { status } = await runtime.orchestrator.getSummary(runId);
+              if (status === "completed" || status === "failed" || status === "cancelled") continue;
+              const group = unfinished.find((entry) => entry.status === status);
+              if (group) group.count++;
+              else unfinished.push({ status, count: 1 });
+            }
+            return { unfinished, truncated: false };
+          },
+        }
+      : undefined,
+    opts.newAdmissionOpen,
+    opts.existingWorkOpen,
   );
   const ctx: MethodContext = {
     ...(identity ? { identity } : {}),
@@ -310,7 +335,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           ],
         };
       },
-      () => maintenance.admissionClosed(),
+      () => maintenance.existingWorkClosed(),
     );
   // A daemon without a store serves `hello` alone, and says so in `hello.methods`: a read
   // method it cannot answer is an unknown method, not a method that fails.
@@ -320,7 +345,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           currentPrincipal: (principal) => {
             if (!principal.credentialId) throw authRequired();
             const current = auth.credentials.current(principal.credentialId);
-            if (!current.ok) throw authRequired();
+            if (!current.ok) throw authInvalid();
             return current.principal;
           },
           resolver: auth.resolver,
@@ -973,8 +998,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const recoverContinuations =
     continuationModel && ctx.submissionWorkspaceId && auth.mode === "token"
       ? async () => {
-          // Timer recovery must not enter behind a runtime admission fence.
-          if (maintenance.admissionClosed()) return;
+          // Existing continuations may drain; the full idle fence still refuses timer entry.
+          if (maintenance.existingWorkClosed()) return;
           await continuationModel.recoverBatch(async (entry) => {
             const credentialId = entry.actor?.credentialId;
             if (!credentialId || entry.workspaceId !== ctx.submissionWorkspaceId) return undefined;

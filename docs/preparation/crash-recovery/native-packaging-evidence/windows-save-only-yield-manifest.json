@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "sourceCommit": "9ac669fd8b401444576fdbf39057d118d1c0cc90",
+  "originalSource": "21b615fe278f91888a68198475c6fcc6a791208f",
+  "baseCandidate": "fb951acdb288c7ffa0ee9032e2f4bf7bcde95182",
+  "productionEnabled": false,
+  "macHeld": true,
+  "branch": "calcifer/windows-diagnostics-save-only",
+  "integrationBase": "calcifer/m10-m21-m22-same-boot-config-integration",
+  "authorAndCommitter": "Calcifer Schadewitz <schadewitzcalcifer@gmail.com>",
+  "controlledBudgetAndReportConsentScope": "unchanged",
+  "changedProduction": "recovery-controller only: one retained-lease turn boundary before recovered digest admission",
+  "nativeIdentity": "Unchanged verified x64 native identities from windows-save-only-manifest.json; same Electron44.4.5/Node24.21.0 runtime.",
+  "compiledController": {
+    "name": "packages/app/dist/main/diagnostics/recovery-controller.js",
+    "bytes": 41779,
+    "sha256": "a62b48551a88eb4b1eb4be9f7dd55106c46df1f0b2330b8eda1d46bd0226fd4c"
+  },
+  "fixtureFiles": [
+    {
+      "name": "attribution-fixture/resource-child.cjs",
+      "bytes": 20972,
+      "sha256": "5660d14c3c2d5c2102d6fc06829831c324b224c15f9aa89d0d95711a8af83fe3"
+    },
+    {
+      "name": "yield-fixture/resource-child.cjs",
+      "bytes": 21036,
+      "sha256": "b6629f38e56085deda20af13d4acb51420552a807778a1bcfdfa1b74fa216fae"
+    },
+    {
+      "name": "attribution-fixture/run-resource.mjs",
+      "bytes": 6433,
+      "sha256": "1e867df976861de95c970374f9ea6458e4b3da32e87ce984f5d83f74666e02f7"
+    },
+    {
+      "name": "yield-fixture/run-resource.mjs",
+      "bytes": 6470,
+      "sha256": "236dd5107d104a56275d75196e8d9ba37d27b7bf1688128db21c70203c30dd43"
+    }
+  ],
+  "unchangedRendererBundle": {
+    "name": "renderer-bundle.js",
+    "bytes": 747864,
+    "sha256": "d2688ca482a02e71b4c224c59bfde423a4f9681ab018bada6e8acbc20973a204"
+  },
+  "receipts": [
+    {
+      "name": "windows-save-only-yield-attribution.json",
+      "bytes": 2347,
+      "sha256": "bc51151f5c39ce213e5da427c2b006850b4830eacee4e4ed47132d41d45afcaf"
+    },
+    {
+      "name": "windows-save-only-yield-cpu-before.json",
+      "bytes": 30037,
+      "sha256": "472db9e137fb40050277b19438a72c70ce7bc7e07c50ce575ca9203bc6c01ebf"
+    },
+    {
+      "name": "windows-save-only-yield-cpu-after.json",
+      "bytes": 28665,
+      "sha256": "53b463636185333c2c986687a30125a2618585a502fea66f35864d2d05247a95"
+    },
+    {
+      "name": "windows-save-only-yield-before.json",
+      "bytes": 47456,
+      "sha256": "18e0166ed547fdaab92393a0d3dc2868a1f94fce82b98782f449832104666f80"
+    },
+    {
+      "name": "windows-save-only-yield-results.json",
+      "bytes": 69328,
+      "sha256": "d9c11975c585dbbc7c3c11623a9614c9b294b664b9058e4c51da9b0381df7009"
+    },
+    {
+      "name": "windows-save-only-yield-checks.json",
+      "bytes": 11788,
+      "sha256": "2220823024a10883d7a54b7b3636988af43ac64c3ded61226d44253b954b29ab"
+    }
+  ],
+  "outcome": "Affected 4ms recovered-export gate passes once after attributed product fix; production/overall independent-native-manual gates remain held."
+}

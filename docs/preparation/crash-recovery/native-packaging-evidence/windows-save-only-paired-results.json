@@ -1,0 +1,4998 @@
+{
+  "schema": 1,
+  "sourceCommit": "5fac1a05a56152861ca08168da0b052f56e8cbae",
+  "productionEnabled": false,
+  "runs": [
+    {
+      "ok": true,
+      "elapsedMs": 42225.145,
+      "timingAttribution": {
+        "appliesTo": "full_only",
+        "method": "Supplemental fixed-ring async callback/observer spans and recovered-only 500us V8 sampling; original workload retained, original failure not replaced. Profiler scheduling adds observer cost; CPU samples are approximate and callback/observer spans are wall time, not an OS scheduling trace.",
+        "phaseTimes": [
+          {
+            "phase": "paired-idle",
+            "atMs": 1249.8691
+          },
+          {
+            "phase": "paired-wait",
+            "atMs": 1450.5047
+          }
+        ]
+      },
+      "mode": "off",
+      "electron": "44.4.5",
+      "node": "24.21.0",
+      "productionEnabled": false,
+      "fixtureCaptureOverride": false,
+      "pairedExecution": true,
+      "observer": "full",
+      "measurementOnly": false,
+      "periodicBusyRefusals": 0,
+      "events": 0,
+      "bytes": 0,
+      "saveExact": false,
+      "exports": {},
+      "a11y": [],
+      "repetitions": 0,
+      "callbacks": {
+        "setup": 8.886300000000006,
+        "setup->paired-idle": 0.10149999999998727,
+        "paired-idle": 0.029600000000073123,
+        "paired-idle->paired-wait": 1.106899999999996,
+        "paired-wait": 0.2717000000011467
+      },
+      "gaps": {
+        "setup": 9.078499999999963,
+        "paired-idle": 0.35200000000008913,
+        "paired-wait": 0.7627000000002226
+      },
+      "transitions": {
+        "setup->paired-idle": 0.4635000000000673,
+        "paired-idle->paired-wait": 1.2164000000000215
+      },
+      "gc": [
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 646.5323,
+          "durationMs": 0.41119999438524246,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 734.9806,
+          "durationMs": 0.5768999978899956,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 813.6602,
+          "durationMs": 0.20279999822378159,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 892.4931,
+          "durationMs": 0.22540000081062317,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 966.0795,
+          "durationMs": 0.19420000165700912,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 1037.4801,
+          "durationMs": 0.17590000480413437,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 1109.2865,
+          "durationMs": 0.20329999923706055,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 1181.9503,
+          "durationMs": 0.20189999788999557,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-idle",
+          "startTimeMs": 1253.8685,
+          "durationMs": 0.17180000245571136,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-idle",
+          "startTimeMs": 1318.3113,
+          "durationMs": 0.16369999945163727,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-idle",
+          "startTimeMs": 1411.979,
+          "durationMs": 0.20470000058412552,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 1503.621,
+          "durationMs": 0.190700002014637,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 1596.9196,
+          "durationMs": 0.18609999865293503,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 1688.4667,
+          "durationMs": 0.18559999763965607,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 1780.4235,
+          "durationMs": 0.17710000276565552,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 1871.2901,
+          "durationMs": 0.24300000071525574,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 1982.3134,
+          "durationMs": 0.19629999995231628,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 2114.1948,
+          "durationMs": 0.24870000034570694,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 2250.2981,
+          "durationMs": 0.18029999732971191,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 2385.1225,
+          "durationMs": 0.22659999877214432,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 2517.602,
+          "durationMs": 0.20320000499486923,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 2650.3382,
+          "durationMs": 0.22169999778270721,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 2784.4053,
+          "durationMs": 0.20820000022649765,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 2916.2884,
+          "durationMs": 0.2387000024318695,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 3047.2952,
+          "durationMs": 0.20680000633001328,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 3178.7372,
+          "durationMs": 0.22259999811649323,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 3313.2314,
+          "durationMs": 0.2045999988913536,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 3447.2174,
+          "durationMs": 0.22179999947547913,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 3579.4194,
+          "durationMs": 0.20080000162124634,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 3710.1264,
+          "durationMs": 0.2190999984741211,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 3843.7718,
+          "durationMs": 0.23029999434947968,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 3980.0202,
+          "durationMs": 0.2004000023007393,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 4111.7417,
+          "durationMs": 0.18789999932050705,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 4243.314,
+          "durationMs": 0.16899999976158142,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 4372.896,
+          "durationMs": 0.23200000077486038,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 4508.0365,
+          "durationMs": 0.20329999923706055,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 4639.6378,
+          "durationMs": 0.20250000059604645,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 4770.9475,
+          "durationMs": 0.1988999992609024,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 4903.3959,
+          "durationMs": 0.21859999746084213,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 5038.661,
+          "durationMs": 0.20360000431537628,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 5172.9755,
+          "durationMs": 0.20430000126361847,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 5308.2575,
+          "durationMs": 0.19300000369548798,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 5441.9097,
+          "durationMs": 0.24050000309944153,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 5574.2049,
+          "durationMs": 0.18849999457597733,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 5705.8887,
+          "durationMs": 0.2028999999165535,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 5838.0992,
+          "durationMs": 0.20600000023841858,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 5974.9291,
+          "durationMs": 0.21940000355243683,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 6109.8241,
+          "durationMs": 0.21079999953508377,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 6241.9826,
+          "durationMs": 0.17390000075101852,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 6374.8631,
+          "durationMs": 0.23149999976158142,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 6510.7415,
+          "durationMs": 0.17150000482797623,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 6647.0367,
+          "durationMs": 0.20340000092983246,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 6779.9985,
+          "durationMs": 0.20750000327825546,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 6911.814,
+          "durationMs": 0.2239999994635582,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 7047.9157,
+          "durationMs": 0.22259999811649323,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 7180.9923,
+          "durationMs": 0.19189999997615814,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 7313.9766,
+          "durationMs": 0.19849999994039536,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 7448.5401,
+          "durationMs": 0.36320000141859055,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 7583.5309,
+          "durationMs": 0.17520000040531158,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 7715.544,
+          "durationMs": 0.17010000348091125,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 7843.9833,
+          "durationMs": 0.20899999886751175,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 7978.0302,
+          "durationMs": 0.23030000180006027,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 8113.051,
+          "durationMs": 0.1891000047326088,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 8245.7431,
+          "durationMs": 0.2021999955177307,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 8380.3304,
+          "durationMs": 0.2313000038266182,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 8511.4262,
+          "durationMs": 0.20919999480247498,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 8642.1674,
+          "durationMs": 0.19280000030994415,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 8778.6421,
+          "durationMs": 0.2022000029683113,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 8911.5741,
+          "durationMs": 0.22469999641180038,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 9047.9083,
+          "durationMs": 0.22390000522136688,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 9181.5563,
+          "durationMs": 0.17810000479221344,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 9314.5839,
+          "durationMs": 0.19870000332593918,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 9444.8016,
+          "durationMs": 0.22029999643564224,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 9574.4024,
+          "durationMs": 0.2621999979019165,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 9713.0175,
+          "durationMs": 0.20899999886751175,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 9846.5712,
+          "durationMs": 0.223300002515316,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 9978.3924,
+          "durationMs": 0.20319999754428864,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 10112.5998,
+          "durationMs": 0.21140000224113464,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 10248.7967,
+          "durationMs": 0.20260000228881836,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 10382.0235,
+          "durationMs": 0.23589999973773956,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 10517.3545,
+          "durationMs": 0.21379999816417694,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 10649.5017,
+          "durationMs": 0.22360000014305115,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 10784.4946,
+          "durationMs": 0.18950000405311584,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 10919.9583,
+          "durationMs": 0.24740000069141388,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 11057.1743,
+          "durationMs": 0.2434000000357628,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 11194.6549,
+          "durationMs": 0.20499999821186066,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 11330.7489,
+          "durationMs": 0.20319999754428864,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 11465.3163,
+          "durationMs": 0.22680000215768814,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 11600.6901,
+          "durationMs": 0.19700000435113907,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 11736.9963,
+          "durationMs": 0.20970000326633453,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 11872.6155,
+          "durationMs": 0.22109999507665634,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 12003.6592,
+          "durationMs": 0.19380000233650208,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 12136.8726,
+          "durationMs": 0.1988999992609024,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 12271.1896,
+          "durationMs": 0.21720000356435776,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 12410.821,
+          "durationMs": 0.22829999774694443,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 12545.3418,
+          "durationMs": 0.1889999955892563,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 12684.23,
+          "durationMs": 0.2247999981045723,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 12820.1305,
+          "durationMs": 0.2133999988436699,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 12954.5212,
+          "durationMs": 0.2264000028371811,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 13088.5166,
+          "durationMs": 0.19340000301599503,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 13227.4656,
+          "durationMs": 0.1965000033378601,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 13364.5446,
+          "durationMs": 0.24769999831914902,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 13500.0696,
+          "durationMs": 0.20279999822378159,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 13632.1905,
+          "durationMs": 0.2036999985575676,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 13769.3861,
+          "durationMs": 0.20329999923706055,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 13909.5556,
+          "durationMs": 0.23990000039339066,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 14047.7985,
+          "durationMs": 0.22709999978542328,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 14185.1759,
+          "durationMs": 0.2046000063419342,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 14316.5691,
+          "durationMs": 0.19349999725818634,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 14449.7577,
+          "durationMs": 0.2718999981880188,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 14589.8106,
+          "durationMs": 0.198000006377697,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 14721.3516,
+          "durationMs": 0.19770000129938126,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 14858.7715,
+          "durationMs": 0.2402999997138977,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 15002.7862,
+          "durationMs": 0.2360999956727028,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 15142.4092,
+          "durationMs": 0.18730000406503677,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 15280.7223,
+          "durationMs": 0.20250000059604645,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 15416.282,
+          "durationMs": 0.24770000576972961,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 15555.4816,
+          "durationMs": 0.20629999786615372,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 15696.2796,
+          "durationMs": 0.19280000030994415,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 15832.9664,
+          "durationMs": 0.2070000022649765,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 15966.1446,
+          "durationMs": 0.23199999332427979,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 16101.8512,
+          "durationMs": 0.20310000330209732,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 16237.8003,
+          "durationMs": 0.1745999976992607,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 16372.7273,
+          "durationMs": 0.23959999531507492,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 16506.8275,
+          "durationMs": 0.19169999659061432,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 16644.5231,
+          "durationMs": 0.20569999516010284,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 16778.341,
+          "durationMs": 0.1988000050187111,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 16914.7998,
+          "durationMs": 0.20759999752044678,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 17049.8785,
+          "durationMs": 0.18900000303983688,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 17182.6992,
+          "durationMs": 0.19090000540018082,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 17316.287,
+          "durationMs": 0.1730000004172325,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 17454.3048,
+          "durationMs": 0.2524999976158142,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 17591.2005,
+          "durationMs": 0.20099999755620956,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 17722.6565,
+          "durationMs": 0.19249999523162842,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 17856.3865,
+          "durationMs": 0.221500001847744,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 17996.3377,
+          "durationMs": 0.20989999920129776,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 18135.7508,
+          "durationMs": 0.2749999985098839,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 18268.4896,
+          "durationMs": 0.2013999968767166,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 18405.0388,
+          "durationMs": 0.23170000314712524,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 18545.4022,
+          "durationMs": 0.20270000398159027,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 18680.2367,
+          "durationMs": 0.2502000033855438,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 18816.5928,
+          "durationMs": 0.17880000174045563,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 18955.8875,
+          "durationMs": 0.23330000042915344,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 19097.601,
+          "durationMs": 0.2321999967098236,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 19235.5827,
+          "durationMs": 0.2142999991774559,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 19370.4318,
+          "durationMs": 0.2298000007867813,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 19507.5531,
+          "durationMs": 0.20850000530481339,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 19645.5675,
+          "durationMs": 0.21149999648332596,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 19782.4884,
+          "durationMs": 0.21640000492334366,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 19918.1896,
+          "durationMs": 0.22600000351667404,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 20055.5977,
+          "durationMs": 0.1956000030040741,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 20193.3187,
+          "durationMs": 0.20239999890327454,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 20330.0829,
+          "durationMs": 0.18769999593496323,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 20465.809,
+          "durationMs": 0.23489999771118164,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 20598.6477,
+          "durationMs": 0.19749999791383743,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 20735.7633,
+          "durationMs": 0.20499999821186066,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 20872.5591,
+          "durationMs": 0.2353999987244606,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 21010.7348,
+          "durationMs": 0.2801999971270561,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 21153.7123,
+          "durationMs": 0.20719999819993973,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 21305.2222,
+          "durationMs": 0.22919999808073044,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 21443.1411,
+          "durationMs": 0.2581999972462654,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 21584.461,
+          "durationMs": 0.2158999964594841,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 21723.5687,
+          "durationMs": 0.19169999659061432,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 21856.4752,
+          "durationMs": 0.2587999999523163,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 21990.4564,
+          "durationMs": 0.25119999796152115,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 22130.1965,
+          "durationMs": 0.2718999981880188,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 22271.6984,
+          "durationMs": 0.29020000249147415,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 22416.9334,
+          "durationMs": 0.26410000026226044,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 22553.0436,
+          "durationMs": 0.19520000368356705,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 22690.5385,
+          "durationMs": 0.2167999967932701,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 22824.4309,
+          "durationMs": 0.2019999995827675,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 22958.5356,
+          "durationMs": 0.25219999998807907,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 23092.721,
+          "durationMs": 0.19699999690055847,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 23229.2119,
+          "durationMs": 0.19539999961853027,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 23368.9808,
+          "durationMs": 0.2704999968409538,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 23506.5968,
+          "durationMs": 0.21400000154972076,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 23640.9476,
+          "durationMs": 0.2053999975323677,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 23775.608,
+          "durationMs": 0.20009999722242355,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 23909.5209,
+          "durationMs": 0.26649999618530273,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 24046.3906,
+          "durationMs": 0.2474999949336052,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 24182.2242,
+          "durationMs": 0.2578999996185303,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 24317.9582,
+          "durationMs": 0.1876000016927719,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 24450.7544,
+          "durationMs": 0.2216000035405159,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 24583.2533,
+          "durationMs": 0.1866999939084053,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 24719.9918,
+          "durationMs": 0.20179999619722366,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 24857.7451,
+          "durationMs": 0.21770000457763672,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 24990.826,
+          "durationMs": 0.20320000499486923,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 25124.399,
+          "durationMs": 0.22140000015497208,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 25261.4096,
+          "durationMs": 0.1843000054359436,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 25397.1936,
+          "durationMs": 0.22940000146627426,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 25533.5245,
+          "durationMs": 0.19740000367164612,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 25665.0258,
+          "durationMs": 0.20069999992847443,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 25798.1713,
+          "durationMs": 0.22020000219345093,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 25932.0743,
+          "durationMs": 0.21580000221729279,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 26065.5789,
+          "durationMs": 0.19510000199079514,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 26198.1088,
+          "durationMs": 0.17440000176429749,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 26323.664,
+          "durationMs": 0.22100000083446503,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 26454.0707,
+          "durationMs": 0.226500004529953,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 26587.8741,
+          "durationMs": 0.23920000344514847,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 26720.7289,
+          "durationMs": 0.24170000106096268,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 26855.3327,
+          "durationMs": 0.2184000015258789,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 26986.9523,
+          "durationMs": 0.17100000381469727,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 27121.6276,
+          "durationMs": 0.18630000203847885,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 27251.8973,
+          "durationMs": 0.18790000677108765,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 27384.6279,
+          "durationMs": 0.2587999999523163,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 27519.2915,
+          "durationMs": 0.21719999611377716,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 27655.4061,
+          "durationMs": 0.1988000050187111,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 27790.3922,
+          "durationMs": 0.19300000369548798,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 27924.6071,
+          "durationMs": 0.24319999665021896,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 28057.0379,
+          "durationMs": 0.2053000032901764,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 28189.7909,
+          "durationMs": 0.2036999985575676,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 28321.5618,
+          "durationMs": 0.19769999384880066,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 28453.5166,
+          "durationMs": 0.24980000406503677,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 28593.5812,
+          "durationMs": 0.2865999937057495,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 28737.8636,
+          "durationMs": 0.2823000028729439,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 28871.5958,
+          "durationMs": 0.24390000104904175,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 29004.0625,
+          "durationMs": 0.2004000023007393,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 29138.8329,
+          "durationMs": 0.2061999961733818,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 29266.4534,
+          "durationMs": 0.19860000163316727,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 29405.5192,
+          "durationMs": 0.2726000025868416,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 29540.7142,
+          "durationMs": 0.19620000571012497,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 29677.4704,
+          "durationMs": 0.20170000195503235,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 29812.6869,
+          "durationMs": 0.20760000497102737,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 29951.296,
+          "durationMs": 0.24560000002384186,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 30092.0409,
+          "durationMs": 0.1973000019788742,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 30232.1208,
+          "durationMs": 0.2289000004529953,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 30374.6698,
+          "durationMs": 0.26680000126361847,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 30507.584,
+          "durationMs": 0.2199000045657158,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 30639.0682,
+          "durationMs": 0.20650000125169754,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 30768.4953,
+          "durationMs": 0.20319999754428864,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 30905.3933,
+          "durationMs": 0.24929999560117722,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 31041.972,
+          "durationMs": 0.2190999984741211,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 31181.1091,
+          "durationMs": 0.19990000128746033,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 31323.2258,
+          "durationMs": 0.20639999955892563,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 31468.034,
+          "durationMs": 0.3171999976038933,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 31600.5233,
+          "durationMs": 0.2079000025987625,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 31738.3494,
+          "durationMs": 0.19579999893903732,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 31881.9881,
+          "durationMs": 0.2298000007867813,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 32017.2819,
+          "durationMs": 0.20189999788999557,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 32151.4901,
+          "durationMs": 0.2231999933719635,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 32290.9521,
+          "durationMs": 0.20679999887943268,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 32421.5244,
+          "durationMs": 0.20869999378919601,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 32563.2526,
+          "durationMs": 0.2401999980211258,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 32700.1005,
+          "durationMs": 0.21880000084638596,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 32843.1659,
+          "durationMs": 0.22380000352859497,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 32975.3142,
+          "durationMs": 0.20190000534057617,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 33111.5924,
+          "durationMs": 0.30220000445842743,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 33246.5901,
+          "durationMs": 0.2386000007390976,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 33374.5124,
+          "durationMs": 0.22929999977350235,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 33512.3325,
+          "durationMs": 0.2012000009417534,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 33648.086,
+          "durationMs": 0.1873999983072281,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 33780.9542,
+          "durationMs": 0.2144000008702278,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 33916.6528,
+          "durationMs": 0.24960000067949295,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 34055.265,
+          "durationMs": 0.20180000364780426,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 34191.348,
+          "durationMs": 0.1972000002861023,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 34323.9824,
+          "durationMs": 0.18159999698400497,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 34458.6983,
+          "durationMs": 0.25349999964237213,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 34603.327,
+          "durationMs": 0.2718000039458275,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 34745.26,
+          "durationMs": 0.20080000162124634,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 34879.1691,
+          "durationMs": 0.2426000013947487,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 35014.5354,
+          "durationMs": 0.1924000009894371,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 35150.7756,
+          "durationMs": 0.21159999817609787,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 35283.604,
+          "durationMs": 0.20089999586343765,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 35416.5582,
+          "durationMs": 0.22760000079870224,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 35547.7885,
+          "durationMs": 0.19370000064373016,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 35682.7156,
+          "durationMs": 0.18060000240802765,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 35813.9771,
+          "durationMs": 0.19520000368356705,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 35944.7257,
+          "durationMs": 0.2239999994635582,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 36082.0076,
+          "durationMs": 0.20160000026226044,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 36214.1341,
+          "durationMs": 0.18230000138282776,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 36352.0171,
+          "durationMs": 0.24040000140666962,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 36484.3422,
+          "durationMs": 0.20179999619722366,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 36619.1006,
+          "durationMs": 0.18639999628067017,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 36751.0617,
+          "durationMs": 0.20520000159740448,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 36887.6824,
+          "durationMs": 0.22619999945163727,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 37028.4972,
+          "durationMs": 0.3448000028729439,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 37164.9546,
+          "durationMs": 0.19099999964237213,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 37299.4846,
+          "durationMs": 0.24050000309944153,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 37430.4837,
+          "durationMs": 0.2525999993085861,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 37564.0618,
+          "durationMs": 0.1938999965786934,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 37698.9561,
+          "durationMs": 0.20560000091791153,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 37832.239,
+          "durationMs": 0.19539999961853027,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 37963.4168,
+          "durationMs": 0.2290000021457672,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 38101.0919,
+          "durationMs": 0.1972000002861023,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 38235.0441,
+          "durationMs": 0.2053999975323677,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 38369.6328,
+          "durationMs": 0.2752000018954277,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 38503.8103,
+          "durationMs": 0.20419999957084656,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 38641.9736,
+          "durationMs": 0.25129999965429306,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 38777.9576,
+          "durationMs": 0.2200000062584877,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 38916.9385,
+          "durationMs": 0.24700000137090683,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 39059.3368,
+          "durationMs": 0.20570000261068344,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 39193.5904,
+          "durationMs": 0.1981000006198883,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 39323.9096,
+          "durationMs": 0.1931000053882599,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 39450.164,
+          "durationMs": 0.23100000619888306,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 39579.2064,
+          "durationMs": 0.19269999861717224,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 39711.672,
+          "durationMs": 0.21130000054836273,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 39843.5061,
+          "durationMs": 0.18240000307559967,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 39980.7367,
+          "durationMs": 0.23560000211000443,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 40114.7614,
+          "durationMs": 0.19929999858140945,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 40246.2148,
+          "durationMs": 0.2030000016093254,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 40382.1465,
+          "durationMs": 0.23009999841451645,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 40516.6212,
+          "durationMs": 0.21889999508857727,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 40764.2233,
+          "durationMs": 0.23889999836683273,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 41044.2727,
+          "durationMs": 0.2830999940633774,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 41323.2326,
+          "durationMs": 0.23770000040531158,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 41607.8748,
+          "durationMs": 0.24719999730587006,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 41894.6503,
+          "durationMs": 0.26829999685287476,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 42164.2754,
+          "durationMs": 0.23330000042915344,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 42430.7527,
+          "durationMs": 0.2920000031590462,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 42708.8645,
+          "durationMs": 0.2434000000357628,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 42993.4643,
+          "durationMs": 0.29500000178813934,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 43270.3935,
+          "durationMs": 0.22389999777078629,
+          "kind": 1
+        }
+      ],
+      "clockMaxMs": 0,
+      "clockCalls": 0,
+      "nativeIOElapsedMaxMs": {},
+      "nativeIOReferencedBufferPeakBytes": 0,
+      "payloadReservationPeakBytes": 0,
+      "controlledBinary": {
+        "allocatedBytes": 0,
+        "peakBytes": 0,
+        "arenaBytes": 0,
+        "externalAllowanceBytes": 0,
+        "leases": 0,
+        "allocations": 0
+      },
+      "rendererSamples": [
+        {
+          "phase": "paired-wait",
+          "backingStorageSize": 877428,
+          "embedderHeapUsedSize": 399752,
+          "totalSize": 2359296,
+          "usedSize": 1935180
+        }
+      ],
+      "mainAtPeak": {
+        "phase": "paired-wait",
+        "rss": 107196416,
+        "heapTotal": 13893632,
+        "heapUsed": 9402932,
+        "external": 2839466,
+        "arrayBuffers": 0
+      },
+      "mainHeapExternalIncrementBytes": 4172715,
+      "mainRssIncrementBytes": 13352960,
+      "rendererBase": {
+        "backingStorageSize": 877476,
+        "embedderHeapUsedSize": 1384216,
+        "totalSize": 3670016,
+        "usedSize": 2392424
+      },
+      "rendererHeapBackingEmbedderIncrementBytes": 0,
+      "legacyCalls": 0,
+      "traceWritten": true,
+      "supervisorPostExitExports": [],
+      "childExitCode": 0,
+      "monitorExitCode": 0,
+      "executionOracle": {
+        "exitCode": 0,
+        "elapsedMs": 41942.013600000006,
+        "artifactCount": 29,
+        "artifactSignature": "cd76b3da75508f2023ec76200bb24165027a23143fb6f73cf67790281a12ba3d",
+        "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+        "semanticByKind": [
+          {
+            "kind": "decision-matrix",
+            "name": "decisionMatrix",
+            "sha256": "788506a154dee82e5b00d167a41e2ed2b15817b1f84425fe5553db29288081d6"
+          },
+          {
+            "kind": "decomposition",
+            "name": "decomposition",
+            "sha256": "88299e6febb5e42d0908b8340fb79b9eed40c7d3e843e14e3db2a8ae7f15db63"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "600ddb38040239891a9d1cb7e38540be67e4117fe4598e56f7d52f0fe767bd23"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "2f51f54a704308e9f3f853e90a5af1d2e2e4899989a3d290e4821c29c27d5f7c"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "a2bb0762a4236a3fdf6a58027c7389bd7a036f227c9082b0e43bbbf82785bdaa"
+          },
+          {
+            "kind": "generic",
+            "name": "programSummary",
+            "sha256": "43d3e99ee5ed2f5de8aa52adfbab9d070d5ca21e1d9d61ea23500296a2b1aaef"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "991b5eb2a6320c619383371008c1e3bb97f4ea77b4dd82cd544d93bdcc2182b8"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "954971cc5f9f37e0afd544b04113af27c7ffbe1bebfcf9a5ebbf53ef99f45688"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "b694ec0a75c1318beaef7e65f20a228d736c6c9fb7a0636576dc3ef12e8b4e81"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "10941a49ffd22602fa6c0547c9c02426d7141a8a056e38f8dd02f89f8cd3d099"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6f042d063246e1c0291894a29ddd59462d2261572707270f823953a947f6ad2d"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6b609d237677cf6b73f6515c4601a070a3c76ef68e6fe02ff13c3b02edf0352c"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "0eefe76aebb09d46a44c0dd8a4a6326f35ac7884fcc5d1590c9df11c0e8fec07"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "risk-register",
+            "name": "riskRegister",
+            "sha256": "574503e6d64b9edaea05d2b4c5b776d88c4c199a093255314a0b68cb7a301031"
+          },
+          {
+            "kind": "schedule",
+            "name": "schedule",
+            "sha256": "73795c8f0f884a042f5d0855879a43d9d27360a3bbdf7bde6f5c2b93cb9a0332"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "0123d7127018317099bb9060225de811d062f4a9ec6264e6a7b1641129924e53"
+          }
+        ],
+        "normalization": "Generated identity/provenance/timestamp metadata excluded; generated UUID/time text normalized. Kind/name, semantic front matter, prose and multiplicity retained. This compares semantic outputs, not raw IDs or complete execution graph.",
+        "workItems": [
+          {
+            "slug": "docs",
+            "status": "done"
+          },
+          {
+            "slug": "login-api",
+            "status": "done"
+          },
+          {
+            "slug": "schema",
+            "status": "done"
+          }
+        ]
+      },
+      "memory": {
+        "combinedPrivateCommitPeak": 87552000,
+        "sampleCount": 2667,
+        "schema": 1,
+        "fields": ["privateCommit", "processLifetimePeakCommit", "workingSet", "processLifetimePeakWorkingSet"],
+        "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed.",
+        "max": [
+          [51888128, 52203520, 107606016, 107900928],
+          [35663872, 36700160, 87576576, 87580672]
+        ],
+        "baseline": [
+          [47030272, 49213440, 100880384, 102625280],
+          [35119104, 35663872, 86335488, 86339584]
+        ]
+      },
+      "trace": [
+        {
+          "process": "renderer",
+          "name": "MajorGC",
+          "count": 2,
+          "maxMs": 2.12,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MARK_COMPACTOR",
+          "count": 2,
+          "maxMs": 2.045,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE",
+          "count": 4,
+          "maxMs": 1.29,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_BACKGROUND_MARKING",
+          "count": 35,
+          "maxMs": 1.081,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_COPY",
+          "count": 2,
+          "maxMs": 0.91,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_BACKGROUND_EVACUATE_COPY",
+          "count": 1,
+          "maxMs": 0.798,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_COPY_PARALLEL",
+          "count": 1,
+          "maxMs": 0.669,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_HEAP_ENSURE_SWEEPING_COMPLETED",
+          "count": 2,
+          "maxMs": 0.659,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "MinorGC",
+          "count": 311,
+          "maxMs": 0.566,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER",
+          "count": 311,
+          "maxMs": 0.501,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER_SCAVENGE",
+          "count": 311,
+          "maxMs": 0.473,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_INCREMENTAL_START",
+          "count": 2,
+          "maxMs": 0.36,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER_SCAVENGE_PARALLEL_PHASE",
+          "count": 311,
+          "maxMs": 0.326,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_CLEAR",
+          "count": 2,
+          "maxMs": 0.306,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_UPDATE_POINTERS",
+          "count": 2,
+          "maxMs": 0.29,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_BACKGROUND_SWEEPING",
+          "count": 11,
+          "maxMs": 0.271,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_INCREMENTAL",
+          "count": 18,
+          "maxMs": 0.27,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_CLEAR_JOIN_JOB",
+          "count": 2,
+          "maxMs": 0.248,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER_BACKGROUND_SCAVENGE_PARALLEL",
+          "count": 1003,
+          "maxMs": 0.233,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_MARK",
+          "count": 2,
+          "maxMs": 0.167,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_INCREMENTAL_EMBEDDER_TRACING",
+          "count": 18,
+          "maxMs": 0.165,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_CLEAR_SWEEP_EXTERNAL_POINTER_TABLE",
+          "count": 2,
+          "maxMs": 0.143,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_SWEEP",
+          "count": 6,
+          "maxMs": 0.135,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_MARK_EMBEDDER_PROLOGUE",
+          "count": 4,
+          "maxMs": 0.117,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER_SCAVENGE_ROOTS",
+          "count": 311,
+          "maxMs": 0.111,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_UPDATE_POINTERS_SLOTS_MAIN",
+          "count": 2,
+          "maxMs": 0.107,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_HEAP_EPILOGUE_SAFEPOINT",
+          "count": 2,
+          "maxMs": 0.097,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_UPDATE_POINTERS_TO_NEW_ROOTS",
+          "count": 2,
+          "maxMs": 0.096,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_MARK_ROOTS",
+          "count": 6,
+          "maxMs": 0.083,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER_SCAVENGE_FINALIZE",
+          "count": 311,
+          "maxMs": 0.081,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_MARK_FULL_CLOSURE_PARALLEL",
+          "count": 2,
+          "maxMs": 0.078,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_CLEAR_STRING_TABLE",
+          "count": 16,
+          "maxMs": 0.074,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_EPILOGUE",
+          "count": 2,
+          "maxMs": 0.073,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_BACKGROUND_EVACUATE_UPDATE_POINTERS",
+          "count": 7,
+          "maxMs": 0.058,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_UPDATE_POINTERS_POINTER_TABLES",
+          "count": 2,
+          "maxMs": 0.057,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_HEAP_EXTERNAL_WEAK_GLOBAL_HANDLES",
+          "count": 309,
+          "maxMs": 0.056,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_MARK_WEAK_CLOSURE_EPHEMERON_MARKING",
+          "count": 6,
+          "maxMs": 0.053,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_HEAP_EXTERNAL_PROLOGUE",
+          "count": 311,
+          "maxMs": 0.05,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_CLEAR_WEAK_REFERENCES_TRIVIAL",
+          "count": 2,
+          "maxMs": 0.048,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_HEAP_EMBEDDER_TRACING_EPILOGUE",
+          "count": 2,
+          "maxMs": 0.045,
+          "over4ms": 0
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "elapsedMs": 41960.9485,
+      "timingAttribution": {
+        "appliesTo": "full_only",
+        "method": "Supplemental fixed-ring async callback/observer spans and recovered-only 500us V8 sampling; original workload retained, original failure not replaced. Profiler scheduling adds observer cost; CPU samples are approximate and callback/observer spans are wall time, not an OS scheduling trace.",
+        "maxRecoveredGap": {
+          "startMs": 1514.1669,
+          "endMs": 1517.945,
+          "gapMs": 3.778099999999995,
+          "spans": [
+            {
+              "id": 31120,
+              "phase": "previous-export",
+              "endPhase": "previous-export",
+              "hookStart": 1514.1661,
+              "callbackStart": 1514.1662,
+              "callbackEnd": 1514.3585,
+              "sampleStart": 1514.3598,
+              "sampleEnd": 1514.3749,
+              "hookEnd": 1514.3759
+            },
+            {
+              "id": 31122,
+              "phase": "previous-export",
+              "endPhase": "previous-export",
+              "hookStart": 1514.377,
+              "callbackStart": 1514.3771,
+              "callbackEnd": 1514.3782,
+              "sampleStart": 1514.379,
+              "sampleEnd": 1514.4158,
+              "hookEnd": 1514.4166
+            },
+            {
+              "id": 31123,
+              "phase": "previous-export",
+              "endPhase": "previous-export",
+              "hookStart": 1514.4192,
+              "callbackStart": 1514.4193,
+              "callbackEnd": 1517.3413,
+              "sampleStart": 1517.3432,
+              "sampleEnd": 1517.392,
+              "hookEnd": 1517.3932
+            },
+            {
+              "id": 30120,
+              "phase": "previous-export",
+              "endPhase": "previous-export",
+              "hookStart": 1517.3947,
+              "callbackStart": 1517.3949,
+              "callbackEnd": 1517.3957,
+              "sampleStart": 1517.3967,
+              "sampleEnd": 1517.4119,
+              "hookEnd": 1517.4126
+            },
+            {
+              "id": 30122,
+              "phase": "previous-export",
+              "endPhase": "previous-export",
+              "hookStart": 1517.4133,
+              "callbackStart": 1517.4134,
+              "callbackEnd": 1517.4198,
+              "sampleStart": 1517.4205,
+              "sampleEnd": 1517.4314,
+              "hookEnd": 1517.4321
+            },
+            {
+              "id": 30123,
+              "phase": "previous-export",
+              "endPhase": "previous-export",
+              "hookStart": 1517.4329,
+              "callbackStart": 1517.433,
+              "callbackEnd": 1517.5134,
+              "sampleStart": 1517.5147,
+              "sampleEnd": 1517.5298,
+              "hookEnd": 1517.5307
+            },
+            {
+              "id": 30124,
+              "phase": "previous-export",
+              "endPhase": "previous-export",
+              "hookStart": 1517.5318,
+              "callbackStart": 1517.532,
+              "callbackEnd": 1517.5326,
+              "sampleStart": 1517.5333,
+              "sampleEnd": 1517.5643,
+              "hookEnd": 1517.5651
+            },
+            {
+              "id": 30111,
+              "phase": "previous-export",
+              "endPhase": "previous-export",
+              "hookStart": 1517.5659,
+              "callbackStart": 1517.566,
+              "callbackEnd": 1517.584,
+              "sampleStart": 1517.5851,
+              "sampleEnd": 1517.5978,
+              "hookEnd": 1517.5985
+            },
+            {
+              "id": 31129,
+              "phase": "previous-export",
+              "endPhase": "previous-export",
+              "hookStart": 1517.8242,
+              "callbackStart": 1517.8244,
+              "callbackEnd": 1517.825,
+              "sampleStart": 1517.8263,
+              "sampleEnd": 1517.8456,
+              "hookEnd": 1517.8465
+            },
+            {
+              "id": 31127,
+              "phase": "previous-export",
+              "endPhase": "previous-export",
+              "hookStart": 1517.8472,
+              "callbackStart": 1517.8473,
+              "callbackEnd": 1517.8652,
+              "sampleStart": 1517.866,
+              "sampleEnd": 1517.9157,
+              "hookEnd": 1517.9168
+            }
+          ],
+          "activeCallbacks": [
+            {
+              "id": 31130,
+              "phase": "previous-export",
+              "hookStart": 1517.944,
+              "callbackStart": 1517.9442
+            }
+          ],
+          "ringTotal": 934,
+          "ringCapacity": 1024
+        },
+        "phaseTimes": [
+          {
+            "phase": "paired-idle",
+            "atMs": 828.8579
+          },
+          {
+            "phase": "initialize-promotion",
+            "atMs": 1029.3085
+          },
+          {
+            "phase": "capture",
+            "atMs": 1169.6012
+          },
+          {
+            "phase": "checkpoint",
+            "atMs": 1221.9495
+          },
+          {
+            "phase": "previous-export",
+            "atMs": 1448.6862
+          },
+          {
+            "phase": "attribution-stop",
+            "atMs": 1529.2386
+          },
+          {
+            "phase": "previous-picker",
+            "atMs": 1538.9906
+          },
+          {
+            "phase": "previous-save",
+            "atMs": 1551.1126
+          },
+          {
+            "phase": "oracle-previous-save",
+            "atMs": 2043.2655
+          },
+          {
+            "phase": "previous-cancel-export",
+            "atMs": 2048.4352
+          },
+          {
+            "phase": "current-export",
+            "atMs": 2051.474
+          },
+          {
+            "phase": "current-picker",
+            "atMs": 2127.783
+          },
+          {
+            "phase": "current-save",
+            "atMs": 2139.1484
+          },
+          {
+            "phase": "oracle-current-save",
+            "atMs": 2751.3516
+          },
+          {
+            "phase": "current-cancel-export",
+            "atMs": 2758.2486
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 2760.1838
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 3093.4745
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 3165.8737
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 3167.5084
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 3430.5718
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 3502.7108
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 3504.0743
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 3753.3207
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 3825.7057
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 3827.0983
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 4111.1075
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 4183.7141
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 4185.0736
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 4406.233
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 4478.5205
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 4479.7793
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 4688.4429
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 4761.1559
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 4762.4647
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 5034.0642
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 5106.6876
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 5108.023
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 5313.2342
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 5385.5654
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 5386.7832
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 5573.3828
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 5645.9382
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 5647.4322
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 5850.4956
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 5922.8464
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 5924.2606
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 6145.995
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 6227.9807
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 6229.6467
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 6464.2721
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 6537.0515
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 6539.2588
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 6793.5987
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 6865.6867
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 6867.3795
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 7117.3284
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 7189.6686
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 7191.0201
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 7396.7927
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 7468.6478
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 7469.949
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 7661.5221
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 7733.6636
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 7734.9219
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 7953.0854
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 8025.5498
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 8026.8946
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 8234.4625
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 8306.6622
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 8307.9099
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 8545.7189
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 8617.5177
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 8618.7612
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 8958.7885
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 9030.6862
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 9032.208
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 9256.0083
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 9327.668
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 9328.9073
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 9520.096
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 9591.6483
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 9592.8549
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 9814.6652
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 9886.6216
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 9887.9446
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 10138.4762
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 10210.9558
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 10212.7359
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 10461.4656
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 10533.9891
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 10535.9163
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 10817.0354
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 10889.733
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 10890.9643
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 11146.3327
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 11218.6333
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 11220.1137
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 11431.7821
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 11503.6851
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 11505.0994
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 11726.3702
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 11798.8129
+          },
+          {
+            "phase": "checkpoint-repeat",
+            "atMs": 11800.2473
+          },
+          {
+            "phase": "export-repeat",
+            "atMs": 11987.217
+          },
+          {
+            "phase": "cancel-export-repeat",
+            "atMs": 12059.6182
+          },
+          {
+            "phase": "opt-out",
+            "atMs": 12060.8391
+          },
+          {
+            "phase": "paired-wait",
+            "atMs": 12225.3424
+          }
+        ],
+        "cpuStartBracket": {
+          "beforeMs": 1409.87,
+          "afterMs": 1448.6695
+        },
+        "cpuEndBracket": {
+          "beforeMs": 1529.2409,
+          "afterMs": 1536.9941
+        }
+      },
+      "mode": "on",
+      "electron": "44.4.5",
+      "node": "24.21.0",
+      "productionEnabled": false,
+      "fixtureCaptureOverride": true,
+      "pairedExecution": true,
+      "observer": "full",
+      "measurementOnly": false,
+      "periodicBusyRefusals": 0,
+      "events": 8192,
+      "previousEvents": 8192,
+      "bytes": 950299,
+      "saveExact": true,
+      "exports": {
+        "previous": {
+          "byteLength": 950474,
+          "sha256": "3a96ae7b0cf2fd282aa51b6db4ccd213791aef5435c60a9ef5baab5564ae06ff",
+          "source": "previous",
+          "descriptorOnly": true,
+          "exactFrozenBytes": true,
+          "events": 8192
+        },
+        "current": {
+          "byteLength": 950299,
+          "sha256": "4f9febe75c8e8b60f2095241f2993657be94389f53cf5e03a0aedbed912c8681",
+          "source": "current",
+          "descriptorOnly": true,
+          "exactFrozenBytes": true,
+          "events": 8192
+        }
+      },
+      "a11y": [],
+      "repetitions": 30,
+      "callbacks": {
+        "setup": 1.0030999999999608,
+        "setup->paired-idle": 0.10009999999999764,
+        "paired-idle": 0.05899999999996908,
+        "paired-idle->initialize-promotion": 1.835399999999936,
+        "initialize-promotion": 2.2871000000000095,
+        "initialize-promotion->capture": 0.47710000000006403,
+        "capture": 1.2317000000000462,
+        "capture->checkpoint": 1.0778000000000247,
+        "checkpoint": 38.70790000000011,
+        "checkpoint->previous-export": 0.49250000000006366,
+        "previous-export": 2.9220000000000255,
+        "previous-export->attribution-stop": 7.695100000000139,
+        "attribution-stop": 1.100500000000011,
+        "attribution-stop->previous-picker": 0.05300000000011096,
+        "previous-picker": 0.0830999999998312,
+        "previous-picker->previous-save": 0.14409999999998035,
+        "previous-save": 2.5720000000001164,
+        "previous-save->previous-cancel-export": 5.2146000000000186,
+        "previous-cancel-export": 0.046199999999771535,
+        "previous-cancel-export->current-export": 0.04629999999997381,
+        "current-export": 2.5120999999999185,
+        "current-export->current-picker": 0.05079999999998108,
+        "current-picker": 0.094300000000203,
+        "current-picker->current-save": 0.14620000000013533,
+        "current-save": 2.4702000000002045,
+        "current-save->current-cancel-export": 6.94360000000006,
+        "current-cancel-export": 0.05760000000009313,
+        "current-cancel-export->checkpoint-repeat": 0.061300000000301225,
+        "checkpoint-repeat": 0.34240000000045256,
+        "checkpoint-repeat->export-repeat": 0.035300000000461296,
+        "export-repeat": 2.6017000000001644,
+        "export-repeat->cancel-export-repeat": 0.0408000000006723,
+        "cancel-export-repeat": 0.0543999999999869,
+        "cancel-export-repeat->checkpoint-repeat": 0.06419999999980064,
+        "cancel-export-repeat->opt-out": 0.020099999999729334,
+        "opt-out": 1.3370999999988271,
+        "opt-out->paired-wait": 0.19750000000021828,
+        "paired-wait": 0.23940000000220607
+      },
+      "gaps": {
+        "setup": 2.703199999999981,
+        "paired-idle": 0.37979999999993197,
+        "initialize-promotion": 2.951000000000022,
+        "capture": 1.3665000000000873,
+        "checkpoint": 1.761700000000019,
+        "previous-export": 3.778099999999995,
+        "attribution-stop": 0.2414000000001124,
+        "previous-picker": 0.8576999999997952,
+        "previous-save": 2.7438999999999396,
+        "previous-cancel-export": 0.4351999999998952,
+        "current-export": 3.1721999999999753,
+        "current-picker": 0.45810000000028595,
+        "current-save": 2.632300000000214,
+        "current-cancel-export": 0.32930000000033033,
+        "checkpoint-repeat": 1.4531000000006316,
+        "export-repeat": 3.0560000000004948,
+        "cancel-export-repeat": 0.47410000000127184,
+        "opt-out": 1.608299999999872,
+        "paired-wait": 0.8723000000009051
+      },
+      "transitions": {
+        "setup->paired-idle": 0.456299999999942,
+        "paired-idle->initialize-promotion": 3.3411000000000968,
+        "initialize-promotion->capture": 1.2754999999999654,
+        "capture->checkpoint": 1.536100000000033,
+        "checkpoint->previous-export": 42.13830000000007,
+        "previous-export->attribution-stop": 9.261099999999942,
+        "attribution-stop->previous-picker": 0.24639999999999418,
+        "previous-picker->previous-save": 0.37570000000005166,
+        "previous-save->previous-cancel-export": 5.474500000000262,
+        "previous-cancel-export->current-export": 0.26279999999997017,
+        "current-export->current-picker": 0.25509999999985666,
+        "current-picker->current-save": 0.36149999999997817,
+        "current-save->current-cancel-export": 7.419199999999819,
+        "current-cancel-export->checkpoint-repeat": 0.29060000000026776,
+        "checkpoint-repeat->export-repeat": 0.882499999999709,
+        "export-repeat->cancel-export-repeat": 0.288300000000163,
+        "cancel-export-repeat->checkpoint-repeat": 0.4018000000005486,
+        "cancel-export-repeat->opt-out": 0.17459999999846332,
+        "opt-out->paired-wait": 0.4418000000005122
+      },
+      "gc": [
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 473.8751,
+          "durationMs": 0.35849999636411667,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 550.9563,
+          "durationMs": 0.49710000306367874,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 627.9342,
+          "durationMs": 0.20580000430345535,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 703.0456,
+          "durationMs": 0.1834999993443489,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "setup",
+          "startTimeMs": 778.1554,
+          "durationMs": 0.20309999585151672,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-idle",
+          "startTimeMs": 854.8682,
+          "durationMs": 0.2045000046491623,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-idle",
+          "startTimeMs": 928.6253,
+          "durationMs": 0.1768999993801117,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-idle",
+          "startTimeMs": 1006.0735,
+          "durationMs": 0.16120000183582306,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "initialize-promotion",
+          "startTimeMs": 1062.592,
+          "durationMs": 0.3913000002503395,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "initialize-promotion",
+          "startTimeMs": 1104.549,
+          "durationMs": 0.5586999952793121,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "initialize-promotion",
+          "startTimeMs": 1158.8688,
+          "durationMs": 0.30150000005960464,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "capture",
+          "startTimeMs": 1180.769,
+          "durationMs": 0.279899999499321,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "capture",
+          "startTimeMs": 1193.0771,
+          "durationMs": 0.1639999970793724,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "capture",
+          "startTimeMs": 1205.5508,
+          "durationMs": 0.16589999943971634,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "capture",
+          "startTimeMs": 1218.0676,
+          "durationMs": 0.14389999955892563,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint",
+          "startTimeMs": 1245.0508,
+          "durationMs": 0.3921999931335449,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint",
+          "startTimeMs": 1266.2269,
+          "durationMs": 0.3391000032424927,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint",
+          "startTimeMs": 1292.1267,
+          "durationMs": 0.36479999870061874,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint",
+          "startTimeMs": 1315.5683,
+          "durationMs": 0.3922000005841255,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint",
+          "startTimeMs": 1362.7971,
+          "durationMs": 0.3457999974489212,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "previous-export",
+          "startTimeMs": 1458.0192,
+          "durationMs": 0.474200002849102,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "previous-export",
+          "startTimeMs": 1470.5562,
+          "durationMs": 0.5100999996066093,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "previous-export",
+          "startTimeMs": 1476.0348,
+          "durationMs": 0.27380000054836273,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "previous-export",
+          "startTimeMs": 1480.9895,
+          "durationMs": 0.27329999953508377,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "previous-export",
+          "startTimeMs": 1485.7016,
+          "durationMs": 0.2858999967575073,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "previous-picker",
+          "startTimeMs": 1541.1721,
+          "durationMs": 0.40789999812841415,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "previous-save",
+          "startTimeMs": 1653.7418,
+          "durationMs": 0.6033999994397163,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "previous-save",
+          "startTimeMs": 1771.6805,
+          "durationMs": 0.4738999977707863,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "previous-save",
+          "startTimeMs": 1897.7362,
+          "durationMs": 0.5337000042200089,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "previous-save",
+          "startTimeMs": 2021.7322,
+          "durationMs": 0.6059000045061111,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "current-export",
+          "startTimeMs": 2126.4475,
+          "durationMs": 0.6719000041484833,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "current-save",
+          "startTimeMs": 2239.3296,
+          "durationMs": 0.9765999987721443,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "current-save",
+          "startTimeMs": 2357.164,
+          "durationMs": 0.564800001680851,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "current-save",
+          "startTimeMs": 2501.8548,
+          "durationMs": 0.4594999998807907,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "current-save",
+          "startTimeMs": 2640.9277,
+          "durationMs": 0.5771000012755394,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 2774.1875,
+          "durationMs": 1.192900002002716,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 2825.1272,
+          "durationMs": 0.8127000033855438,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 2934.4704,
+          "durationMs": 0.4624999985098839,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 3089.3672,
+          "durationMs": 0.4311999976634979,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 3194.6342,
+          "durationMs": 0.7096000015735626,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 3250.638,
+          "durationMs": 0.5175000056624413,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 3400.766,
+          "durationMs": 0.5355999991297722,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 3519.6036,
+          "durationMs": 0.466899998486042,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 3572.4201,
+          "durationMs": 0.5478999987244606,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 3733.1603,
+          "durationMs": 0.6354999989271164,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 3855.5424,
+          "durationMs": 0.7185999974608421,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 3921.9837,
+          "durationMs": 0.45889999717473984,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 4083.2427,
+          "durationMs": 0.6846999973058701,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 4208.7927,
+          "durationMs": 0.5635999962687492,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 4273.7456,
+          "durationMs": 0.8077000007033348,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "export-repeat",
+          "startTimeMs": 4419.4454,
+          "durationMs": 0.5502000004053116,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 4529.7894,
+          "durationMs": 0.6986000016331673,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 4623.7662,
+          "durationMs": 0.5991000011563301,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "export-repeat",
+          "startTimeMs": 4759.9927,
+          "durationMs": 0.40619999915361404,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 4825.2788,
+          "durationMs": 0.741299994289875,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 4965.4643,
+          "durationMs": 0.4860000014305115,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 5112.1085,
+          "durationMs": 0.46640000492334366,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 5173.0938,
+          "durationMs": 0.626400001347065,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "export-repeat",
+          "startTimeMs": 5317.3069,
+          "durationMs": 0.594700001180172,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 5426.2605,
+          "durationMs": 0.6775000020861626,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 5505.5085,
+          "durationMs": 0.5168999955058098,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "export-repeat",
+          "startTimeMs": 5641.4628,
+          "durationMs": 0.4708999991416931,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 5710.4829,
+          "durationMs": 0.7767999991774559,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 5845.8982,
+          "durationMs": 0.6488000005483627,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 5957.5313,
+          "durationMs": 0.6724999994039536,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 6036.4484,
+          "durationMs": 0.47839999943971634,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "export-repeat",
+          "startTimeMs": 6167.4247,
+          "durationMs": 0.48749999701976776,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 6287.7827,
+          "durationMs": 0.7687999978661537,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 6391.67,
+          "durationMs": 0.9745999947190285,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 6541.1158,
+          "durationMs": 0.527199998497963,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 6604.7784,
+          "durationMs": 0.7469000071287155,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 6753.2804,
+          "durationMs": 0.5749000012874603,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 6889.2966,
+          "durationMs": 0.7119000032544136,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 6949.4737,
+          "durationMs": 0.7502999976277351,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 7113.4189,
+          "durationMs": 0.5428000018000603,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 7225.1276,
+          "durationMs": 0.7137999981641769,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 7307.2122,
+          "durationMs": 0.5153999999165535,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "export-repeat",
+          "startTimeMs": 7423.3232,
+          "durationMs": 0.5115000009536743,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 7602.2042,
+          "durationMs": 1.0157999992370605,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 7801.0225,
+          "durationMs": 0.9148999974131584,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 8034.744,
+          "durationMs": 0.7980999946594238,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 8231.9581,
+          "durationMs": 1.1173999980092049,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 8430.9652,
+          "durationMs": 0.9191000014543533,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 8675.3984,
+          "durationMs": 1.0795999988913536,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "export-repeat",
+          "startTimeMs": 8965.7455,
+          "durationMs": 0.6908000037074089,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 9167.0417,
+          "durationMs": 1.0012000054121017,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 9391.1109,
+          "durationMs": 0.9821999967098236,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 9626.4,
+          "durationMs": 0.9782999977469444,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "export-repeat",
+          "startTimeMs": 9838.0894,
+          "durationMs": 0.8337999954819679,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 10060.7183,
+          "durationMs": 1.007200002670288,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 10275.6949,
+          "durationMs": 0.8911999985575676,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 10561.2075,
+          "durationMs": 1.084199994802475,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 10806.0084,
+          "durationMs": 0.7633999958634377,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 11000.016,
+          "durationMs": 0.9908000007271767,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 11266.4166,
+          "durationMs": 0.9879000037908554,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 11508.443,
+          "durationMs": 0.8464000001549721,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 11719.8623,
+          "durationMs": 0.9794000014662743,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "checkpoint-repeat",
+          "startTimeMs": 11905.6052,
+          "durationMs": 0.9900000020861626,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "opt-out",
+          "startTimeMs": 12181.6882,
+          "durationMs": 1.0830000042915344,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 12526.7309,
+          "durationMs": 0.6363000050187111,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 12898.7136,
+          "durationMs": 0.3790999948978424,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 13267.1336,
+          "durationMs": 0.2980000004172325,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 13665.7251,
+          "durationMs": 0.3126999959349632,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 14064.255,
+          "durationMs": 0.3602999970316887,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 14437.2965,
+          "durationMs": 0.30220000445842743,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 14824.4599,
+          "durationMs": 0.3536999970674515,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 15217.7831,
+          "durationMs": 0.2822999954223633,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 15621.8808,
+          "durationMs": 0.3003999963402748,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 16016.7032,
+          "durationMs": 0.36500000208616257,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 16415.9643,
+          "durationMs": 0.30719999969005585,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 16804.672,
+          "durationMs": 0.30400000512599945,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 17194.0773,
+          "durationMs": 0.318000003695488,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 17595.8447,
+          "durationMs": 0.3325999975204468,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 17992.5273,
+          "durationMs": 0.3011000007390976,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 18380.0794,
+          "durationMs": 0.29329999536275864,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 18771.2716,
+          "durationMs": 0.3037000000476837,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 19169.7311,
+          "durationMs": 0.29729999601840973,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 19581.5031,
+          "durationMs": 0.31849999725818634,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 19975.8632,
+          "durationMs": 0.28620000183582306,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 20359.9612,
+          "durationMs": 0.3271000012755394,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 20749.6526,
+          "durationMs": 0.316600002348423,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 21133.6347,
+          "durationMs": 0.32989999651908875,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 21524.5845,
+          "durationMs": 0.3646000027656555,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 21915.5118,
+          "durationMs": 0.32100000232458115,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 22314.277,
+          "durationMs": 0.3498999997973442,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 22714.0075,
+          "durationMs": 0.27790000289678574,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 23113.331,
+          "durationMs": 0.32919999957084656,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 23508.1514,
+          "durationMs": 0.3206000030040741,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 23893.9735,
+          "durationMs": 0.29270000010728836,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 24292.5838,
+          "durationMs": 0.41599999368190765,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 24686.6212,
+          "durationMs": 0.308399997651577,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 25078.4653,
+          "durationMs": 0.3211999982595444,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 25464.4141,
+          "durationMs": 0.3303999975323677,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 25856.1009,
+          "durationMs": 0.31619999557733536,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 26251.766,
+          "durationMs": 0.28209999948740005,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 26648.958,
+          "durationMs": 0.31860000640153885,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 27045.7785,
+          "durationMs": 0.3247000053524971,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 27441.7226,
+          "durationMs": 0.3125,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 27840.31,
+          "durationMs": 0.3037000000476837,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 28208.5197,
+          "durationMs": 0.29110000282526016,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 28600.1315,
+          "durationMs": 0.2986000031232834,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 28998.7658,
+          "durationMs": 0.3286000043153763,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 29401.7475,
+          "durationMs": 0.3229999989271164,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 29799.1311,
+          "durationMs": 0.2850999981164932,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 30178.4134,
+          "durationMs": 0.29249999672174454,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 30583.833,
+          "durationMs": 0.3231000006198883,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 30984.6636,
+          "durationMs": 0.33960000425577164,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 31387.6692,
+          "durationMs": 0.3669999986886978,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 31790.7006,
+          "durationMs": 0.30799999833106995,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 32196.8272,
+          "durationMs": 0.3158999979496002,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 32570.8865,
+          "durationMs": 0.29760000109672546,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 32964.0888,
+          "durationMs": 0.2995000034570694,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 33364.5154,
+          "durationMs": 0.3020000010728836,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 33766.4676,
+          "durationMs": 0.28929999470710754,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 34162.482,
+          "durationMs": 0.29670000076293945,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 34538.6781,
+          "durationMs": 0.3013000041246414,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 34935.7991,
+          "durationMs": 0.3076000064611435,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 35333.9662,
+          "durationMs": 0.40060000121593475,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 35736.1825,
+          "durationMs": 0.28190000355243683,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 36137.0059,
+          "durationMs": 0.31039999425411224,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 36525.4399,
+          "durationMs": 0.3374999985098839,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 36902.6418,
+          "durationMs": 0.32679999619722366,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 37307.1411,
+          "durationMs": 0.3131000027060509,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 37708.7964,
+          "durationMs": 0.27950000017881393,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 38112.8974,
+          "durationMs": 0.32599999755620956,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 38503.9557,
+          "durationMs": 0.3385000005364418,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 38894.5103,
+          "durationMs": 0.28029999881982803,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 39295.1531,
+          "durationMs": 0.3046000003814697,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 39692.9197,
+          "durationMs": 0.3123000040650368,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 40089.8395,
+          "durationMs": 0.3026999980211258,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 40497.9655,
+          "durationMs": 0.33810000121593475,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 40897.7516,
+          "durationMs": 0.37200000137090683,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 41306.5616,
+          "durationMs": 0.31849999725818634,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 41681.965,
+          "durationMs": 0.30079999566078186,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 42087.7996,
+          "durationMs": 0.4651999995112419,
+          "kind": 1
+        },
+        {
+          "deliveryPhase": "paired-wait",
+          "startTimeMs": 42483.1168,
+          "durationMs": 0.2928999960422516,
+          "kind": 1
+        }
+      ],
+      "clockMaxMs": 0.20010000000002037,
+      "clockCalls": 799220,
+      "nativeIOElapsedMaxMs": {
+        "openRoot": 1.2027000000000498,
+        "rootStat": 1.7665999999990163,
+        "openRead": 7.89469999999983,
+        "fileStat": 1.3824000000004162,
+        "read": 1.6813999999994849,
+        "closeFile": 34.263800000000174,
+        "list": 1.1261999999996988,
+        "stat": 1.5870000000004438,
+        "stopped": 1.371900000000096,
+        "acquire": 16.190700000000106,
+        "openCreate": 18.882000000000062,
+        "write": 1.3438000000005559,
+        "sync": 52.95330000000013,
+        "replace": 78.36389999999983,
+        "validateDestination": 1.7406999999998334,
+        "publish": 27.924800000000005,
+        "remove": 14.533000000000357
+      },
+      "nativeIOReferencedBufferPeakBytes": 950800,
+      "payloadReservationPeakBytes": 4194304,
+      "controlledBinary": {
+        "allocatedBytes": 0,
+        "peakBytes": 5406720,
+        "arenaBytes": 0,
+        "externalAllowanceBytes": 0,
+        "leases": 0,
+        "allocations": 839
+      },
+      "rendererSamples": [
+        {
+          "phase": "checkpoint",
+          "backingStorageSize": 877712,
+          "embedderHeapUsedSize": 1375784,
+          "totalSize": 3670016,
+          "usedSize": 2574300
+        },
+        {
+          "phase": "previous-export",
+          "backingStorageSize": 879721,
+          "embedderHeapUsedSize": 1505720,
+          "totalSize": 3670016,
+          "usedSize": 2758224
+        },
+        {
+          "phase": "previous-save",
+          "backingStorageSize": 881928,
+          "embedderHeapUsedSize": 1510184,
+          "totalSize": 4980736,
+          "usedSize": 2625512
+        },
+        {
+          "phase": "current-export",
+          "backingStorageSize": 883066,
+          "embedderHeapUsedSize": 1510184,
+          "totalSize": 5242880,
+          "usedSize": 2788028
+        },
+        {
+          "phase": "current-save",
+          "backingStorageSize": 885093,
+          "embedderHeapUsedSize": 1638616,
+          "totalSize": 5505024,
+          "usedSize": 3040268
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 886216,
+          "embedderHeapUsedSize": 1764848,
+          "totalSize": 5767168,
+          "usedSize": 2732668
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 887339,
+          "embedderHeapUsedSize": 1893512,
+          "totalSize": 5767168,
+          "usedSize": 2849344
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 888462,
+          "embedderHeapUsedSize": 1893512,
+          "totalSize": 5767168,
+          "usedSize": 2978640
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 889585,
+          "embedderHeapUsedSize": 2020648,
+          "totalSize": 5767168,
+          "usedSize": 3100632
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 890708,
+          "embedderHeapUsedSize": 2020648,
+          "totalSize": 5767168,
+          "usedSize": 3209408
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 891831,
+          "embedderHeapUsedSize": 2020648,
+          "totalSize": 5767168,
+          "usedSize": 3320272
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 892954,
+          "embedderHeapUsedSize": 2020648,
+          "totalSize": 5767168,
+          "usedSize": 3437552
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 894077,
+          "embedderHeapUsedSize": 2020648,
+          "totalSize": 5767168,
+          "usedSize": 3545072
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 895209,
+          "embedderHeapUsedSize": 2020648,
+          "totalSize": 4980736,
+          "usedSize": 2917104
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 896332,
+          "embedderHeapUsedSize": 2020648,
+          "totalSize": 4980736,
+          "usedSize": 3023956
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 897579,
+          "embedderHeapUsedSize": 2020648,
+          "totalSize": 5242880,
+          "usedSize": 3146976
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 898702,
+          "embedderHeapUsedSize": 2145984,
+          "totalSize": 5242880,
+          "usedSize": 3254360
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 899825,
+          "embedderHeapUsedSize": 2145984,
+          "totalSize": 5242880,
+          "usedSize": 3378412
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 900948,
+          "embedderHeapUsedSize": 2145984,
+          "totalSize": 5242880,
+          "usedSize": 3493044
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 902071,
+          "embedderHeapUsedSize": 2145984,
+          "totalSize": 5242880,
+          "usedSize": 3604704
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 903194,
+          "embedderHeapUsedSize": 2145984,
+          "totalSize": 4456448,
+          "usedSize": 2991780
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 904317,
+          "embedderHeapUsedSize": 2145984,
+          "totalSize": 4456448,
+          "usedSize": 3096816
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 905440,
+          "embedderHeapUsedSize": 2145984,
+          "totalSize": 4718592,
+          "usedSize": 3203204
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 906563,
+          "embedderHeapUsedSize": 2145984,
+          "totalSize": 4718592,
+          "usedSize": 3313040
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 907686,
+          "embedderHeapUsedSize": 2145984,
+          "totalSize": 4980736,
+          "usedSize": 3430316
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 908809,
+          "embedderHeapUsedSize": 2145984,
+          "totalSize": 4980736,
+          "usedSize": 3541088
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 909932,
+          "embedderHeapUsedSize": 2145984,
+          "totalSize": 4980736,
+          "usedSize": 3645976
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 911055,
+          "embedderHeapUsedSize": 2267984,
+          "totalSize": 4456448,
+          "usedSize": 3030780
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 912178,
+          "embedderHeapUsedSize": 2267984,
+          "totalSize": 4456448,
+          "usedSize": 3141408
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 913301,
+          "embedderHeapUsedSize": 2395232,
+          "totalSize": 4718592,
+          "usedSize": 3248612
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 914424,
+          "embedderHeapUsedSize": 2395232,
+          "totalSize": 4718592,
+          "usedSize": 3365556
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 915547,
+          "embedderHeapUsedSize": 2395232,
+          "totalSize": 4718592,
+          "usedSize": 3469640
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 916670,
+          "embedderHeapUsedSize": 2395232,
+          "totalSize": 4980736,
+          "usedSize": 3581592
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 917793,
+          "embedderHeapUsedSize": 2395232,
+          "totalSize": 4980736,
+          "usedSize": 3687132
+        },
+        {
+          "phase": "export-repeat",
+          "backingStorageSize": 918916,
+          "embedderHeapUsedSize": 2395232,
+          "totalSize": 5242880,
+          "usedSize": 3794252
+        },
+        {
+          "phase": "opt-out",
+          "backingStorageSize": 919881,
+          "embedderHeapUsedSize": 2521032,
+          "totalSize": 5767168,
+          "usedSize": 3210636
+        },
+        {
+          "phase": "paired-wait",
+          "backingStorageSize": 880314,
+          "embedderHeapUsedSize": 420240,
+          "totalSize": 3145728,
+          "usedSize": 2649260
+        }
+      ],
+      "mainAtPeak": {
+        "phase": "checkpoint-repeat",
+        "rss": 131522560,
+        "heapTotal": 28721152,
+        "heapUsed": 20192132,
+        "external": 11003874,
+        "arrayBuffers": 0
+      },
+      "mainHeapExternalIncrementBytes": 23129999,
+      "mainRssIncrementBytes": 43220992,
+      "rendererBase": {
+        "backingStorageSize": 877476,
+        "embedderHeapUsedSize": 1384216,
+        "totalSize": 3670016,
+        "usedSize": 2392460
+      },
+      "rendererHeapBackingEmbedderIncrementBytes": 2454248,
+      "legacyCalls": 0,
+      "traceWritten": true,
+      "supervisorPostExitExports": [
+        {
+          "source": "previous",
+          "bytes": 950474,
+          "sha256": "3a96ae7b0cf2fd282aa51b6db4ccd213791aef5435c60a9ef5baab5564ae06ff",
+          "events": 8192,
+          "omissions": 0,
+          "finalLF": true,
+          "exactFrozenDigest": true
+        },
+        {
+          "source": "current",
+          "bytes": 950299,
+          "sha256": "4f9febe75c8e8b60f2095241f2993657be94389f53cf5e03a0aedbed912c8681",
+          "events": 8192,
+          "omissions": 0,
+          "finalLF": true,
+          "exactFrozenDigest": true
+        }
+      ],
+      "childExitCode": 0,
+      "monitorExitCode": 0,
+      "executionOracle": {
+        "exitCode": 0,
+        "elapsedMs": 41638.3387,
+        "artifactCount": 29,
+        "artifactSignature": "99f48b9e4b7ad2bf21fbde964610bad8d2685087d5b607c8cc5d4471d0c7e851",
+        "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+        "semanticByKind": [
+          {
+            "kind": "decision-matrix",
+            "name": "decisionMatrix",
+            "sha256": "788506a154dee82e5b00d167a41e2ed2b15817b1f84425fe5553db29288081d6"
+          },
+          {
+            "kind": "decomposition",
+            "name": "decomposition",
+            "sha256": "88299e6febb5e42d0908b8340fb79b9eed40c7d3e843e14e3db2a8ae7f15db63"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "600ddb38040239891a9d1cb7e38540be67e4117fe4598e56f7d52f0fe767bd23"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "2f51f54a704308e9f3f853e90a5af1d2e2e4899989a3d290e4821c29c27d5f7c"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "a2bb0762a4236a3fdf6a58027c7389bd7a036f227c9082b0e43bbbf82785bdaa"
+          },
+          {
+            "kind": "generic",
+            "name": "programSummary",
+            "sha256": "43d3e99ee5ed2f5de8aa52adfbab9d070d5ca21e1d9d61ea23500296a2b1aaef"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "991b5eb2a6320c619383371008c1e3bb97f4ea77b4dd82cd544d93bdcc2182b8"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "954971cc5f9f37e0afd544b04113af27c7ffbe1bebfcf9a5ebbf53ef99f45688"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "b694ec0a75c1318beaef7e65f20a228d736c6c9fb7a0636576dc3ef12e8b4e81"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "10941a49ffd22602fa6c0547c9c02426d7141a8a056e38f8dd02f89f8cd3d099"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6f042d063246e1c0291894a29ddd59462d2261572707270f823953a947f6ad2d"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6b609d237677cf6b73f6515c4601a070a3c76ef68e6fe02ff13c3b02edf0352c"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "0eefe76aebb09d46a44c0dd8a4a6326f35ac7884fcc5d1590c9df11c0e8fec07"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "risk-register",
+            "name": "riskRegister",
+            "sha256": "574503e6d64b9edaea05d2b4c5b776d88c4c199a093255314a0b68cb7a301031"
+          },
+          {
+            "kind": "schedule",
+            "name": "schedule",
+            "sha256": "73795c8f0f884a042f5d0855879a43d9d27360a3bbdf7bde6f5c2b93cb9a0332"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "0123d7127018317099bb9060225de811d062f4a9ec6264e6a7b1641129924e53"
+          }
+        ],
+        "normalization": "Generated identity/provenance/timestamp metadata excluded; generated UUID/time text normalized. Kind/name, semantic front matter, prose and multiplicity retained. This compares semantic outputs, not raw IDs or complete execution graph.",
+        "workItems": [
+          {
+            "slug": "docs",
+            "status": "done"
+          },
+          {
+            "slug": "login-api",
+            "status": "done"
+          },
+          {
+            "slug": "schema",
+            "status": "done"
+          }
+        ]
+      },
+      "memory": {
+        "sampleCount": 2653,
+        "combinedPrivateCommitPeak": 142815232,
+        "max": [
+          [106590208, 107900928, 134488064, 134893568],
+          [36401152, 37765120, 89903104, 89907200]
+        ],
+        "fields": ["privateCommit", "processLifetimePeakCommit", "workingSet", "processLifetimePeakWorkingSet"],
+        "method": "GetProcessMemoryInfo for two owned PIDs. OS process-lifetime peak commit includes native/crypto/libuv and renderer external pages; incremental commit is not continuous logical allocation accounting. Private commit sampled at requested 2ms cadence; actual scheduler cadence unguaranteed.",
+        "baseline": [
+          [42131456, 42131456, 98529280, 98533376],
+          [28819456, 29052928, 81203200, 81207296]
+        ],
+        "schema": 1
+      },
+      "trace": [
+        {
+          "process": "renderer",
+          "name": "Layout",
+          "count": 12,
+          "maxMs": 6.986,
+          "over4ms": 1
+        },
+        {
+          "process": "renderer",
+          "name": "MajorGC",
+          "count": 2,
+          "maxMs": 2.013,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MARK_COMPACTOR",
+          "count": 2,
+          "maxMs": 1.952,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "FunctionCall",
+          "count": 1304,
+          "maxMs": 1.642,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "EvaluateScript",
+          "count": 596,
+          "maxMs": 1.598,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "EventDispatch",
+          "count": 138,
+          "maxMs": 1.442,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE",
+          "count": 4,
+          "maxMs": 1.232,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_BACKGROUND_MARKING",
+          "count": 20,
+          "maxMs": 1.226,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "MinorGC",
+          "count": 175,
+          "maxMs": 1.188,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER",
+          "count": 175,
+          "maxMs": 1.144,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER_SCAVENGE",
+          "count": 175,
+          "maxMs": 0.935,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_COPY",
+          "count": 2,
+          "maxMs": 0.863,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_COPY_PARALLEL",
+          "count": 2,
+          "maxMs": 0.825,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "MinorGC",
+          "count": 6,
+          "maxMs": 0.819,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER_SCAVENGE_PARALLEL_PHASE",
+          "count": 175,
+          "maxMs": 0.772,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_SCAVENGER_BACKGROUND_SCAVENGE_PARALLEL",
+          "count": 587,
+          "maxMs": 0.733,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_BACKGROUND_SAFEPOINT",
+          "count": 1,
+          "maxMs": 0.72,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_HEAP_ENSURE_SWEEPING_COMPLETED",
+          "count": 2,
+          "maxMs": 0.708,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_SCAVENGER",
+          "count": 6,
+          "maxMs": 0.688,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_HEAP_EXTERNAL_WEAK_GLOBAL_HANDLES",
+          "count": 172,
+          "maxMs": 0.677,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_SCAVENGER_SCAVENGE",
+          "count": 6,
+          "maxMs": 0.675,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_BACKGROUND_SAFEPOINT",
+          "count": 6,
+          "maxMs": 0.531,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_SCAVENGER_SCAVENGE_PARALLEL_PHASE",
+          "count": 6,
+          "maxMs": 0.52,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_BACKGROUND_EVACUATE_COPY",
+          "count": 1,
+          "maxMs": 0.478,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_SCAVENGER_BACKGROUND_SCAVENGE_PARALLEL",
+          "count": 12,
+          "maxMs": 0.465,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_CLEAR",
+          "count": 2,
+          "maxMs": 0.405,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_BACKGROUND_YOUNG_ARRAY_BUFFER_SWEEP",
+          "count": 77,
+          "maxMs": 0.375,
+          "over4ms": 0
+        },
+        {
+          "process": "main",
+          "name": "V8.GC_BACKGROUND_UNPARK",
+          "count": 2,
+          "maxMs": 0.37,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_CLEAR_JOIN_JOB",
+          "count": 2,
+          "maxMs": 0.363,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_INCREMENTAL_START",
+          "count": 2,
+          "maxMs": 0.346,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_INCREMENTAL",
+          "count": 23,
+          "maxMs": 0.331,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_EVACUATE_UPDATE_POINTERS",
+          "count": 2,
+          "maxMs": 0.329,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "UpdateLayoutTree",
+          "count": 12,
+          "maxMs": 0.272,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_BACKGROUND_SWEEPING",
+          "count": 12,
+          "maxMs": 0.251,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_HEAP_EPILOGUE_SAFEPOINT",
+          "count": 8,
+          "maxMs": 0.212,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "Paint",
+          "count": 24,
+          "maxMs": 0.201,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_HEAP_EXTERNAL_WEAK_GLOBAL_HANDLES",
+          "count": 1,
+          "maxMs": 0.166,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "PrePaint",
+          "count": 12,
+          "maxMs": 0.155,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_CLEAR_EXTERNAL_STRING_TABLE",
+          "count": 2,
+          "maxMs": 0.141,
+          "over4ms": 0
+        },
+        {
+          "process": "renderer",
+          "name": "V8.GC_MC_CLEAR_SWEEP_EXTERNAL_POINTER_TABLE",
+          "count": 2,
+          "maxMs": 0.133,
+          "over4ms": 0
+        }
+      ]
+    }
+  ],
+  "exactElectron": "44.4.5",
+  "producer": {
+    "ok": true,
+    "mode": "producer",
+    "events": 8192,
+    "checkpoint": true,
+    "productionEnabled": false,
+    "forcedOwnedExit": true
+  },
+  "executionEqual": true,
+  "workEqual": true,
+  "allOwnedExitsConfirmed": true,
+  "disposableStateRemoved": true
+}

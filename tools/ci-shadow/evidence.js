@@ -1,6 +1,6 @@
 /** Normalize real Vitest reports and compare full CI evidence without granting admission. */
 import { lstatSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { isAbsolute, relative } from "node:path";
+import { isAbsolute, relative, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { digest, git, hash, sorted, validPath } from "./git.js";
 
@@ -52,8 +52,11 @@ export function normalizeVitest(report, root) {
     .map((file) => {
       if (typeof file.name !== "string" || !isAbsolute(file.name) || !["passed", "failed"].includes(file.status))
         throw new Error("invalid_vitest_file");
-      const path = relative(root, file.name);
-      if (!validPath(path) || path.length > 512 || !Array.isArray(file.assertionResults))
+      // Git inventory paths use '/', while a Windows runner reports native separators.
+      // Convert only the host separator; a literal POSIX backslash remains invalid.
+      const runnerPath = relative(root, file.name);
+      const path = runnerPath.split(sep).join("/");
+      if (isAbsolute(runnerPath) || !validPath(path) || path.length > 512 || !Array.isArray(file.assertionResults))
         throw new Error("invalid_vitest_path");
       const statuses = file.assertionResults.map((test) => test.status);
       if (statuses.some((status) => !["passed", "failed", "skipped", "pending", "todo"].includes(status)))

@@ -754,8 +754,18 @@ it("parses NUL records and refuses truncated/malformed status, unsafe paths and 
 
 it("records malformed changed paths and incomplete/empty discovery as full", () => {
   reset();
-  write("docs/new\nfile.md", "prose\n");
-  expect(plan(save()).wouldRun.reasonCodes).toContain("malformed_path");
+  // Windows cannot create a newline filename. Construct only immutable Git metadata,
+  // which is the actual untrusted input the selector must reject on every host.
+  const blob = git(directory, ["hash-object", "-w", "--stdin"], "prose\n").toString().trim();
+  const tree = git(
+    directory,
+    ["mktree", "-z"],
+    Buffer.concat([git(directory, ["ls-tree", "-z", base]), Buffer.from(`100644 blob ${blob}\tnew\nfile.md\0`)]),
+  )
+    .toString()
+    .trim();
+  const head = git(directory, ["commit-tree", tree, "-p", base], "Malformed path fixture\n").toString().trim();
+  expect(plan(head).wouldRun.reasonCodes).toContain("malformed_path");
   reset();
   write("packages/app/renderer/src/unmapped.ts", 'import "./absent.js";\n');
   expect(plan(save()).graphs[1].complete).toBe(false);

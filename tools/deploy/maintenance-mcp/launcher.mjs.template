@@ -1,0 +1,9 @@
+// Inactive preparation. Pin the reviewed built package path; run with a clean environment before Node starts.
+import { serveLinuxMaintenanceStdio } from "@REVIEWED_BUILT_PACKAGE_INDEX@";
+
+if (process.argv.length !== 2 || process.platform !== "linux" || !process.getuid || process.getuid() === 0) {
+  process.stderr.write("maintenance_launcher_refused\n");
+  process.exitCode = 1;
+} else {
+  serveLinuxMaintenanceStdio();
+}

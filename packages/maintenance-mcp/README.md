@@ -1,18 +1,22 @@
-# Independent maintenance MCP — inactive first increment
+# Independent maintenance MCP — inactive observer preparation
 
 Preparation for [#483](https://github.com/cschadewitz/Project_Orca/issues/483).
-This is a closed read-only contract, an SDK stdio entry function, a refusing production
-adapter, and synthetic tests. **It is not deployable maintenance access.** Nothing installs,
-starts, enables, connects to, or grants authority on agent-01. The issue remains open for
-production observation, activation and access acceptance.
+The merged #485 contract now has an explicit opt-in Linux observer and inactive launcher
+preparation. **It is not activated or accepted maintenance access.** No host identity,
+service, tunnel, credential or permission is created. #483 remains open for reviewed
+service identities, real-host sources, activation and actual-client acceptance.
 
 The package depends only on the repository's already selected MCP server SDK **2.3.0**
 and Zod **4.6.5**, pinned exactly. It imports no ORCA daemon, store, engine, credentials,
-configuration or launcher. Its separate build is `pnpm --filter @orca/maintenance-mcp build`.
-There is deliberately no executable bin, start script, service unit, production config,
-tunnel profile, key example or activation command. Importing the package has no transport
-or observation side effects. The source API `serveMaintenanceStdio()` starts a local
-stdio session only when explicitly called; it always uses the refusing adapter.
+configuration or work-route launcher. Its separate build is
+`pnpm --filter @orca/maintenance-mcp build`.
+There is no executable bin, start script, populated configuration or key example.
+Importing the package has no transport or observation side effects.
+`serveMaintenanceStdio()` still uses the refusing adapter.
+`serveLinuxMaintenanceStdio()` explicitly selects fixed Linux sources. Inactive
+[launcher/tunnel templates](../../tools/deploy/maintenance-mcp/) and the
+[observer runbook](../../docs/maintenance-observer-runbook.md) describe the separate
+reviewed installation handoff; they have not been rendered, installed or started.
 
 ## Implemented API
 
@@ -21,15 +25,17 @@ exactly these four tools, all read-only, idempotent, non-destructive and closed-
 No resources, prompts, subscriptions, raw-log export, restart, stop, enable, repair,
 auto-restart or other control tools are implemented. Unknown tools fail generically.
 
-| Tool | Arguments | Current shipped behavior |
+| Tool | Arguments | Default refusing entry behavior |
 | --- | --- | --- |
 | `maintenance_discover` | `{}` | Local contract readiness, fixed policy/hash and limits, build metadata, fresh bridge instance UUID; host boot identity unavailable |
 | `get_host_health` | `{"host":"agent-01"}` | `unavailable / not_configured`; proposed mount alias is `root` |
 | `get_service_health` | `{"host":"agent-01","service":"…"}` | `orca-daemon`: `not_supervised / not_configured`; all other aliases unavailable |
 | `get_service_logs` | Same service target, optional enum `category`, optional integer `limit` (1–50, default 20) | `unavailable / not_configured` |
 
-`host` is an alias, never a DNS name to resolve. `root` is a fixed proposed mount alias;
-there is no mount/path input or implemented filesystem probe. Services are exactly
+`host` is an alias, never a DNS name to resolve. `root` is the fixed mount alias for
+Linux `statfs("/")`; there is no mount/path input. The launcher must be bound to the
+approved agent-01 deployment; local kernel data alone does not verify that alias.
+Services are exactly
 `orca-daemon`, `orca-tunnel`, `maintenance-bridge`, `maintenance-tunnel`. Category is
 exactly `lifecycle`, `readiness`, or `resource`. There are no caller-supplied paths,
 URLs, commands, environment variables, process argv, arbitrary units, journal selectors,
@@ -51,8 +57,11 @@ commit or binary. The reviewed PR SHA must be recorded independently for a futur
 `policyId` is SHA-256 of the serialized fixed policy (including limits and proposed
 identities). It is an identifier, not a signature. A bridge instance UUID is newly generated
 per backend lifetime and is not a credential. Host boot identity explicitly remains
-`unavailable`, including when injecting synthetic observations. A production adapter must
-add a reviewed boot identity mechanism and consistency checks before activation.
+`unavailable`, including when injecting synthetic observations. The opt-in observer reads
+the kernel boot UUID before and after acquisition and rejects
+changes. Discovery deliberately performs no host read and still reports unavailable boot
+identity; use the timestamped health observation for diagnostic boot identity. Neither
+boot UUID nor a fixture is deployment attestation or caller authorization.
 
 There is no pagination or cursor issuance/acceptance; clients receive a bounded recent
 snapshot and explicit `truncated`. Principal/boot/policy cursor binding is therefore not
@@ -80,8 +89,9 @@ choice requires its own reviewed exact mapping; no system-manager authority exis
 ## Observation adapter and structured log policy
 
 `ObservationAdapter.read` is a trusted, injected implementation boundary, not a dynamically
-loaded plugin and not an MCP argument. Tests inject in-memory bytes. The shipped
-`unavailableAdapter` performs zero I/O and returns null for every source. Neither the
+loaded plugin and not an MCP argument. Tests inject in-memory bytes. The default
+`unavailableAdapter` performs zero I/O and returns null for every source. The optional
+`LinuxObservationAdapter` is described below. Neither the
 ORCA-dependent MCP backend nor its guarded launcher is reused.
 
 Before being connected to real sources, an adapter must enforce fixed routes and the
@@ -113,13 +123,61 @@ are returned in chronological order. A stale batch stays stale. Upstream or resu
 truncation sets `truncated`; omission counts describe only the bounded acquired batch,
 never the unread remainder of a journal. No arbitrary journal text is exported.
 
+## Fixed Linux observer preparation
+
+The default entry retains all refusing behavior in the API table above. The explicit
+observer entry reports `productionSources: fixed_linux_preparation`, which describes
+selected code, not installed readiness. It acquires host data only on `get_host_health`:
+
+- `/proc/sys/kernel/random/boot_id` before and after acquisition;
+- `/proc/uptime` and only `MemTotal`/`MemAvailable` from `/proc/meminfo`;
+- total and unprivileged available root bytes from `statfs("/")` with bigint arithmetic.
+
+Kernel files use read-only, no-follow, nonblocking descriptors, validate root-owned
+regular files, and close on all read/validation outcomes. Size-zero procfs metadata is
+not used as a size bound. Reads share one byte budget and acquire at most one overflow
+sentinel byte before refusing; no unbounded `readFile` or synchronous host call is used.
+UTF-8, boot UUID, finite/safe counts, unique memory keys and consistent capacity are
+checked. Unsupported platforms, source failures and boot changes fail closed.
+
+Service/log adapters are implemented as fixed same-user source readers, but all
+configured manager/UID/unit values remain null. The public observer therefore returns
+`not_configured` for them; foreground ORCA remains `not_supervised`. The internal source
+preparation function is a trusted test/review seam, not an MCP argument or launcher flag.
+A future source policy must pin the exact user manager, positive numeric UID and fixed
+alias unit. The process UID must equal that reviewed UID. Root, system managers,
+other-user buses and arbitrary units are refused without fallback. A separate maintenance
+user cannot inspect Casey's work-route units through this implementation.
+
+The fixed query executables are `/usr/bin/systemctl` (`--user show`, only `Id`,
+`LoadState`, `ActiveState`) and `/usr/bin/journalctl` (current user journal, exact UID,
+user unit and boot matches, last 15 minutes, at most 64 records, JSON field allowlist).
+No shell, pager, follow mode, alternate journal directory or caller-selected command is
+used. Query children receive only `LANG`, `LC_ALL`, the exact UID's runtime directory and
+user-bus address. Missing permissions, stderr warnings, missing units, transitional
+states, target mismatch or malformed data return unavailable; no raw error is echoed.
+
+Logs require dedicated `ORCA_MAINTENANCE_*` structured journal fields. Ordinary message
+bodies are never requested, interpreted as JSON or redacted heuristically. Readiness is
+exactly `true`/`false`, lifecycle state and resource are enums, and percentages are bounded
+decimal numbers. UID/unit/boot provenance must match every acquired record. Only typed
+records cross the adapter boundary; unsupported records become omissions. A capped
+snapshot is conservatively marked truncated. Empty or entirely omitted batches do not
+prove the service is quiet or healthy. See the runbook for producer compatibility gates.
+
+stdout and discarded stderr consume the same aggregate acquisition allowance. Overflow,
+abort or deadline kills only the observer's query child. The read does not settle until
+that child closes; this preserves the backend's two-slot bound. Kernel filesystem calls
+remain cooperative and cannot be force-cancelled by JavaScript. Supervisor CPU/memory
+limits and namespace/source verification remain activation prerequisites.
+
 ## Resource bounds and audits
 
 | Boundary | Limit |
 | --- | --- |
 | SDK stdio receive buffer | 8 KiB; oversized input closes transport |
 | Tool arguments | 4 KiB serialized JSON |
-| Source acquisition | 16 KiB and 64 records per read |
+| Source acquisition | aggregate 16 KiB and 64 records per read |
 | Source concurrency | 2 per backend, no queue |
 | Observation deadline | 1 second, cooperative abort |
 | Tool result envelope | 32 KiB, including both text and structured content |
@@ -159,7 +217,7 @@ must be independent of ORCA. If a cross-user journal or system-manager source ca
 observed narrowly, keep it unavailable. A later narrowly privileged observation helper
 would need separate review: fixed alias-to-manager/UID/unit map, read-only narrow protocol,
 typed projections at the privileged boundary, bounded reads, peer identity checks,
-ownership/ACL review and no generic command/path/bus selector. No helper is included here.
+ownership/ACL review and no generic command/path/bus selector. No privileged or cross-user helper is included here.
 
 Colocation on agent-01 can survive an ORCA daemon/store failure and SSH logout **once
 independently supervised and accepted**. It cannot survive a dead agent-01, kernel,
@@ -178,7 +236,7 @@ Future topology: an independently supervised maintenance tunnel using the offici
 The logical bridge and tunnel aliases do not imply two systemd units already exist; if
 the bridge is a tunnel-owned child, the actual supervisor/child observation model needs
 explicit review. Verify the release artifact, launch syntax, process ownership and
-stdio lifecycle with the official client before producing a launcher/profile. Do not
+stdio lifecycle with the official client before installing a rendered launcher/profile. Do not
 reuse the ORCA MCP guarded launcher, which requires a functioning ORCA daemon/store.
 If a private Unix-socket bridge becomes necessary, use the SDK-supported stream route
 only after validating runtime socket support, path ownership, peer access and lifecycle.
@@ -227,11 +285,11 @@ the shipped refusing backend. `test/fixtures.ts` supplies synthetic host/log ada
 tests use no real host observation or logs. Run from the repository root:
 
 ```text
-pnpm exec vitest run packages/maintenance-mcp/test --maxWorkers=2
-pnpm run typecheck
-pnpm run lint
-pnpm exec prettier --check packages/maintenance-mcp tsconfig.build.json
-pnpm --filter @orca/maintenance-mcp build
+node_modules/.bin/vitest run packages/maintenance-mcp/test --maxWorkers=2
+node_modules/.bin/tsc -p packages/maintenance-mcp --noEmit --composite false
+node_modules/.bin/eslint packages/maintenance-mcp/src packages/maintenance-mcp/test
+node_modules/.bin/prettier --check packages/maintenance-mcp
+node_modules/.bin/tsc -b packages/maintenance-mcp
 ```
 
 Tests cover strict schema rejection, path/unit/bus/URL injection, fake secrets and
@@ -239,5 +297,8 @@ adversarial log bodies, bounded source bytes/records/responses, stale/future obs
 timeouts and stuck concurrency slots, ORCA-independent readiness, negative mutation/tool
 discovery, stdio framing and the absence of ORCA runtime imports. Production Linux,
 systemd/user-bus/journal permissions, official tunnel, actual client identity, revocation,
-logout and reboot acceptance have **not run**. Follow-up production adapter/launcher work
-and all activation gates remain tracked by #483; merging source alone must not close it.
+logout and reboot acceptance have **not run**. The opt-in Linux acquisition logic is
+tested with synthetic descriptors and query children,
+not real host reads. Service-manager UID/unit binding, host deployment binding, source
+producer compatibility and all activation gates remain tracked by #483; merging source
+alone must not close it.

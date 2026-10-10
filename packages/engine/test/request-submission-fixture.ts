@@ -62,7 +62,7 @@ edges: [{ from: s, to: e }]
   let initialization: Promise<void> | undefined;
   const ready = () =>
     (initialization ??= generations
-      .initialize(parseOrcaConfig({ agents: [], program: { workflow: "program" } }), "fixture")
+      .initialize(parseOrcaConfig({ agents: [], program: { workflow: "program", itemWorkflow: "program" } }), "fixture")
       .then(() => {
         orc.generations = generations;
       }));

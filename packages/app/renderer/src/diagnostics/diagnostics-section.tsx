@@ -1,5 +1,5 @@
-/** Explicit local consent, exact-byte preview and separate picker/Save controls. */
-import type { JSX } from "react";
+/** Explicit local consent, main-owned export and separate picker/Save controls. */
+import { type JSX } from "react";
 import type { DiagnosticsBridge } from "../../../src/diagnostics-contract.js";
 import { Button, ConfigField, Menu, Text } from "../ui/index.js";
 import { DIAGNOSTICS_MESSAGES, EARLIER_EXPORT_WARNING, SAVE_WARNING } from "./diagnostics-model.js";
@@ -35,12 +35,12 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
         be set from one to fifteen minutes. Size limits can leave less history. After an app crash, one previous session
         may be available for up to 24 hours during the same operating-system boot. Recovery after an operating-system
         restart, power loss or unverifiable age is unavailable. This setting stays on across app restarts until you turn
-        it off. ORCA does not upload this data. Preview and saving a local file are separate choices.
+        it off. ORCA does not upload this data. Exporting requires an explicit choice of report, destination and Save.
       </Text>
       <Text style="caption" as="p">
         Checkpoints are attempted about every five seconds. A crash can lose more than five seconds when writes are
-        delayed or fail. The preview includes the actual omissions and coverage; configured lookback does not guarantee
-        that much retained history.
+        delayed or fail. The saved report includes the actual omissions and coverage; configured lookback does not
+        guarantee that much retained history.
       </Text>
 
       {bridge === undefined ? (
@@ -85,9 +85,9 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
             )}
           </div>
           <Text style="caption" as="p">
-            Turning this off stops collection and removes ORCA&apos;s retained diagnostic history, unsaved previews and
-            diagnostics key material after safe cleanup. Files you already saved are unchanged. Unresolved work remains
-            visible until writers have ceased and owned cleanup is verified.
+            Turning this off stops collection and removes ORCA&apos;s retained diagnostic history, unsaved prepared
+            reports and diagnostics key material after safe cleanup. Files you already saved are unchanged. Unresolved
+            work remains visible until writers have ceased and owned cleanup is verified.
           </Text>
           <ConfigField
             label="Diagnostic lookback"
@@ -174,7 +174,7 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
                 : "This is not a complete export history."}
             </Text>
           )}
-          {state.preview === undefined && (
+          {state.report === undefined && (
             <div className="orca-diagnostics__actions">
               <Button
                 disabled={!available || state.busy || unknown}
@@ -183,7 +183,7 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
                 }
                 onClick={() => void state.prepare("current")}
               >
-                Preview current diagnostics
+                Export current diagnostics
               </Button>
               {status.previous && (
                 <>
@@ -192,7 +192,7 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
                     disabledReason={disabledReason}
                     onClick={() => void state.prepare("previous")}
                   >
-                    Preview previous session
+                    Export previous session
                   </Button>
                   <Button disabled={state.busy} disabledReason={disabledReason} onClick={() => void state.discard()}>
                     Discard previous session
@@ -212,24 +212,24 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
           {state.message}
         </Text>
       )}
-      {state.preview !== undefined && (
-        <section className="orca-diagnostics__preview" aria-label="Diagnostic preview">
+      {state.report !== undefined && (
+        <section className="orca-diagnostics__export" aria-label="Diagnostic export">
           <Text style="heading" as="h3">
-            Exact {state.preview.source === "previous" ? "previous-session" : "current-session"} preview
+            Save {state.report.source === "previous" ? "previous-session" : "current-session"} diagnostics
           </Text>
           <Text style="caption" as="p">
-            This is the complete content that will be saved, including omissions and the final newline. It contains{" "}
-            {state.preview.byteLength} UTF-8 bytes. It expires within {Math.ceil(state.preview.expiresInMs / 1000)}{" "}
-            seconds and may become unavailable sooner if its source expires or changes. New events do not change these
-            bytes.
+            ORCA has prepared a fixed report with omissions and coverage information. Report contents are available in
+            the saved file. It contains {state.report.byteLength} UTF-8 bytes. It expires within{" "}
+            {Math.ceil(state.report.expiresInMs / 1000)} seconds and may become unavailable sooner if its source expires
+            or changes. New events do not change these bytes.
           </Text>
-          {state.preview.tailLossPossible && (
+          {state.report.tailLossPossible && (
             <Text style="caption" as="p">
               Checkpoint tail loss is possible. Events after the last completed checkpoint may be missing.
             </Text>
           )}
           <div className="orca-diagnostics__actions">
-            <Button onClick={state.close}>Close preview</Button>
+            <Button onClick={state.cancel}>Cancel export</Button>
             <Button
               disabled={state.busy || unknown}
               disabledReason={disabledReason}
@@ -262,20 +262,10 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
                 disabledReason={disabledReason}
                 onClick={() => void state.save()}
               >
-                Save exact content
+                Save report
               </Button>
             </>
           )}
-          <Text
-            style="mono-body"
-            as="pre"
-            tabIndex={0}
-            role="region"
-            aria-label="Complete exact diagnostic report"
-            className="orca-diagnostics__exact"
-          >
-            {state.preview.text}
-          </Text>
         </section>
       )}
     </section>

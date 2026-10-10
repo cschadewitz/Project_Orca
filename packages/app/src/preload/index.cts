@@ -30,6 +30,7 @@ import type {
   WorkspaceSnapshot,
 } from "../bridge.js";
 import type { UpdateSnapshot } from "../update-contract.js";
+import type { MacUpdateView } from "../mac-update-contract.js";
 import type { DiagnosticsResult, DiagnosticsStatus } from "../diagnostics-contract.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
@@ -109,13 +110,50 @@ function forwardMacDraft(_event: unknown, value: unknown): void {
 ipcRenderer.on("orca:macUpdate.prepare", forwardMacDraft);
 
 const bridge: OrcaBridge = {
+  firstRun: {
+    status: () => call("orca:workspace.firstRun.status"),
+    choose: () => call("orca:workspace.firstRun.choose"),
+    prepare: (id) => call("orca:workspace.firstRun.prepare", id),
+    connect: () => call("orca:workspace.firstRun.connect"),
+    prepareRecovery: () => call("orca:workspace.firstRun.prepareRecovery"),
+    reconcileRecovery: (id) => call("orca:workspace.firstRun.reconcileRecovery", id),
+    reviewConfiguration: () => call("orca:workspace.firstRun.reviewConfiguration"),
+    bindConfiguration: (id) => call("orca:workspace.firstRun.bindConfiguration", id),
+  },
+  macUpdates: {
+    read: () => ipcRenderer.sendSync("orca:macUpdate.read") as MacUpdateView,
+    act: async (command) => {
+      try {
+        return await call("orca:macUpdate.act", command);
+      } catch {
+        return { ok: false, error: { code: "UPDATE", message: "Update request is unavailable" } };
+      }
+    },
+    subscribe: (listener) => {
+      const forward = (_event: unknown, state: MacUpdateView) => listener(state);
+      ipcRenderer.on("orca:macUpdate.changed", forward);
+      return () => {
+        ipcRenderer.off("orca:macUpdate.changed", forward);
+      };
+    },
+  },
+  guidedLaunch: {
+    snapshot: () => call("orca:guidedLaunch.snapshot"),
+    preflight: (params) => call("orca:guidedLaunch.preflight", params),
+    submit: (review) => call("orca:guidedLaunch.submit", review),
+    retained: () => call("orca:guidedLaunch.retained"),
+    load: (id) => call("orca:guidedLaunch.load", id),
+    resolve: (review) => call("orca:guidedLaunch.resolve", review),
+    recover: (params) => call("orca:guidedLaunch.recover", params),
+    abandon: (id) => call("orca:guidedLaunch.abandon", id),
+  },
   operator: { preflight: (params) => call("orca:operator.preflight", params) },
   diagnostics: {
     status: () => diagnosticCall("status"),
     setEnabled: (enabled, scopeVersion) => diagnosticCall("setEnabled", { enabled, scopeVersion }),
     setMinutes: (minutes) => diagnosticCall("setMinutes", { minutes }),
-    preparePreview: (source) => diagnosticCall("preparePreview", { source }),
-    closePreview: (handle) => diagnosticCall("closePreview", { handle }),
+    prepareExport: (source) => diagnosticCall("prepareExport", { source }),
+    cancelExport: (handle) => diagnosticCall("cancelExport", { handle }),
     chooseDestination: (handle) => diagnosticCall("chooseDestination", { handle }),
     save: (handle, destinationToken) => diagnosticCall("save", { handle, destinationToken }),
     discardPrevious: () => diagnosticCall("discardPrevious"),
@@ -156,7 +194,9 @@ const bridge: OrcaBridge = {
       };
     },
     connect: (url) =>
-      ipcRenderer.invoke("orca:daemon.connect", url) as Promise<{ ok: true } | { ok: false; message: string }>,
+      ipcRenderer.invoke("orca:daemon.connect", url, targetEpoch) as Promise<
+        { ok: true } | { ok: false; message: string }
+      >,
     cancel: () => ipcRenderer.send("orca:daemon.cancel"),
   },
   updates: {
@@ -234,6 +274,9 @@ const bridge: OrcaBridge = {
     validateInputs: (params) => call("orca:workflows.validateInputs", params),
   },
   agents: { list: (params = {}) => call("orca:agents.list", params) },
+  templates: {
+    call: (method, params) => call("orca:templates", { method, params }),
+  },
   config: {
     get: (params = {}) => call("orca:config.get", params),
     set: (params) => call("orca:config.set", params),

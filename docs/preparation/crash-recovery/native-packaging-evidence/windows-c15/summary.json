@@ -1,0 +1,230 @@
+{
+  "schema": 1,
+  "outcome": "C15 partial evidence; held",
+  "pairs": [
+    {
+      "schedule": "failure",
+      "comparisonCount": 1,
+      "cli": [
+        {
+          "mode": "off",
+          "exitCode": 0,
+          "elapsedMs": 38151.6216,
+          "artifactCount": 29,
+          "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+          "workItems": [
+            {
+              "slug": "docs",
+              "status": "done"
+            },
+            {
+              "slug": "login-api",
+              "status": "done"
+            },
+            {
+              "slug": "schema",
+              "status": "done"
+            }
+          ]
+        },
+        {
+          "mode": "on",
+          "exitCode": 0,
+          "elapsedMs": 37867.2394,
+          "artifactCount": 29,
+          "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+          "workItems": [
+            {
+              "slug": "docs",
+              "status": "done"
+            },
+            {
+              "slug": "login-api",
+              "status": "done"
+            },
+            {
+              "slug": "schema",
+              "status": "done"
+            }
+          ]
+        }
+      ],
+      "semanticEqual": true,
+      "workEqual": true,
+      "plannedCells": [
+        "readSetting",
+        "readExportState",
+        "writeSetting",
+        "open",
+        "maintain",
+        "checkpoint",
+        "previous",
+        "discardPrevious",
+        "cleanExit",
+        "cleanup",
+        "writeExportState",
+        "stageExport",
+        "clearStage",
+        "validateDestination",
+        "publishStage",
+        "writersStopped",
+        "picker",
+        "completionRecord",
+        "nativeWrite",
+        "nativePublish"
+      ],
+      "completedCells": ["readSetting", "readExportState", "writeSetting"],
+      "stoppedAt": "open",
+      "error": "fault-not-reached",
+      "remainingCells": [
+        "open",
+        "maintain",
+        "checkpoint",
+        "previous",
+        "discardPrevious",
+        "cleanExit",
+        "cleanup",
+        "writeExportState",
+        "stageExport",
+        "clearStage",
+        "validateDestination",
+        "publishStage",
+        "writersStopped",
+        "picker",
+        "completionRecord",
+        "nativeWrite",
+        "nativePublish"
+      ],
+      "unhandledRejections": 0,
+      "failureWriterSettled": true,
+      "allOwnedExitsConfirmed": true,
+      "disposableStateRemoved": true,
+      "offManagedIncrementBytes": 1582073,
+      "onManagedMeasurement": "unavailable in stopped receipt; no 32MiB acceptance claim",
+      "maxObservedParkedBinaryBytes": 5242880,
+      "pressureAttempts": 0,
+      "maxPublicElapsedMs": 4.951999999999998,
+      "timingDisposition": "deferred; raw callback and heartbeat observations retained"
+    },
+    {
+      "schedule": "stall",
+      "comparisonCount": 1,
+      "cli": [
+        {
+          "mode": "off",
+          "exitCode": 0,
+          "elapsedMs": 38185.5057,
+          "artifactCount": 29,
+          "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+          "workItems": [
+            {
+              "slug": "docs",
+              "status": "done"
+            },
+            {
+              "slug": "login-api",
+              "status": "done"
+            },
+            {
+              "slug": "schema",
+              "status": "done"
+            }
+          ]
+        },
+        {
+          "mode": "on",
+          "exitCode": 0,
+          "elapsedMs": 37085.3402,
+          "artifactCount": 29,
+          "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+          "workItems": [
+            {
+              "slug": "docs",
+              "status": "done"
+            },
+            {
+              "slug": "login-api",
+              "status": "done"
+            },
+            {
+              "slug": "schema",
+              "status": "done"
+            }
+          ]
+        }
+      ],
+      "semanticEqual": true,
+      "workEqual": true,
+      "plannedCells": [
+        "readSetting",
+        "readExportState",
+        "writeSetting",
+        "open",
+        "maintain",
+        "checkpoint",
+        "previous",
+        "discardPrevious",
+        "cleanExit",
+        "cleanup",
+        "writeExportState",
+        "stageExport",
+        "clearStage",
+        "validateDestination",
+        "publishStage",
+        "writersStopped",
+        "picker",
+        "completionRecord",
+        "nativePublish",
+        "nativeWrite"
+      ],
+      "completedCells": [
+        "readSetting",
+        "readExportState",
+        "writeSetting",
+        "open",
+        "maintain",
+        "checkpoint",
+        "previous",
+        "discardPrevious",
+        "cleanExit",
+        "cleanup"
+      ],
+      "stoppedAt": "writeExportState",
+      "error": "Expected values to be strictly equal:\n\nfalse !== true\n",
+      "remainingCells": [
+        "writeExportState",
+        "stageExport",
+        "clearStage",
+        "validateDestination",
+        "publishStage",
+        "writersStopped",
+        "picker",
+        "completionRecord",
+        "nativePublish",
+        "nativeWrite"
+      ],
+      "unhandledRejections": 0,
+      "failureWriterSettled": true,
+      "allOwnedExitsConfirmed": true,
+      "disposableStateRemoved": true,
+      "offManagedIncrementBytes": 1580565,
+      "onManagedMeasurement": "unavailable in stopped receipt; no 32MiB acceptance claim",
+      "maxObservedParkedBinaryBytes": 5242880,
+      "pressureAttempts": 1280,
+      "maxPublicElapsedMs": 1140.2268999999997,
+      "timingDisposition": "deferred; raw callback and heartbeat observations retained"
+    }
+  ],
+  "productionEnabled": false,
+  "macHeld": true,
+  "nativeFailureProof": false,
+  "hardwareProof": false,
+  "rendererIncluded": false,
+  "finalCorrectedHarnessRuntime": "unrun",
+  "layout": {
+    "maxMs": 6.986,
+    "source": "../windows-save-only-paired-results.json",
+    "rawTraceRetained": false,
+    "attribution": "Only per-process/name count/max/over4ms aggregates retained; no ts/tid/phase interval. CPU profile covers main recovered export, not renderer. Cannot attribute this Layout interval; no OS-noise claim."
+  }
+}

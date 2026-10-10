@@ -1,0 +1,58 @@
+{
+  "format": 1,
+  "sourceCommit": "24cf52dc18f97f981cafcdc8e71d640e8672de8c",
+  "sourceTree": "00de979fa2dccb632d50fe39bee161f4e85685ee",
+  "parentCommit": "dccde5ddd8a0539827a194ccdd882c718745c9ce",
+  "electron": "44.4.5",
+  "nativeEvidence": "GNU x64 synthetic injection in exact Electron; not MSVC/package acceptance",
+  "nativeBinarySha256": "2a8016b2a46ea14398b37d5ceae7cee2ffc6ca3ca09029c95a4414d429afeb66",
+  "coldDpapi": "pass",
+  "coldAsyncControl": "refused",
+  "initializedAsyncControl": "pass",
+  "disabledCapture": "pass",
+  "focusedTestsPassed": 55,
+  "linuxSyscallTestsSkipped": 1,
+  "captureActivated": false,
+  "files": [
+    {
+      "name": "windows-electron-24cf52d-cold-dpapi.json",
+      "bytes": 1224,
+      "sha256": "6fabeaae2739c1739d5097340610829dde2c756e6603e894fee026cd1e63709b"
+    },
+    {
+      "name": "windows-electron-24cf52d-cold.json",
+      "bytes": 206,
+      "sha256": "834f46a66979e7b698c8877821f1558ae6c36515ecb4db1abb266640a1767023"
+    },
+    {
+      "name": "windows-electron-24cf52d-initialized.json",
+      "bytes": 1136,
+      "sha256": "29585655156c124d2a015248f7d3e0dc16f3b3ed2ae6a606a3831e0f108aedef"
+    },
+    {
+      "name": "windows-electron-24cf52d-privacy.json",
+      "bytes": 725,
+      "sha256": "6bd3434845ce9ba2bad1fa2917e6fd1a50d22467ddb6e47122171368b80c6d2a"
+    },
+    {
+      "name": "windows-electron-refusals.jsonl",
+      "bytes": 790,
+      "sha256": "1242dad4241bb5ec2585a3f36644893bc588173b7a0f9b534ce2e7fcaee33188"
+    },
+    {
+      "name": "original/windows-electron-88fc825-cold.json",
+      "bytes": 206,
+      "sha256": "5d065d96930eb00bf27ad1f87f213380310637e1b777d726ed4cb1535a8a3969"
+    },
+    {
+      "name": "original/windows-electron-88fc825-initialized.json",
+      "bytes": 794,
+      "sha256": "cb98fd520a41518e20e0a2440347d56e950e68cc927a069b69a0e6a5f146edca"
+    },
+    {
+      "name": "original/windows-electron-refusals.jsonl",
+      "bytes": 970,
+      "sha256": "ba1f6af242713e6893d7cd57fd6e9baf81cdc40acebf4996c03424a83938930e"
+    }
+  ]
+}

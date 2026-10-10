@@ -1,4 +1,13 @@
-/* Config owns the only scroll region; the complete report wraps without clipping. */
+/* Config owns the only scroller. Export controls show metadata and status. */
+.orca-diagnostics,
+.orca-diagnostics__export {
+  min-width: 0;
+}
+
+.orca-diagnostics .orca-field {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .orca-diagnostics p {
   margin: 0;
 }
@@ -10,25 +19,8 @@
   gap: var(--space-2);
 }
 
-.orca-diagnostics__preview {
+.orca-diagnostics__export {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-}
-
-/* type: mono-body */
-.orca-diagnostics__exact {
-  margin: 0;
-  padding: var(--space-3);
-  border: var(--stroke-hairline) solid var(--border-control);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  color: var(--ink-primary);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.orca-diagnostics__exact:focus-visible {
-  outline: var(--stroke-focus) solid var(--border-focus);
-  outline-offset: var(--stroke-hairline);
 }

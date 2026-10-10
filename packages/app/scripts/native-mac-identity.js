@@ -1,6 +1,6 @@
 /**
- * Isolated delivery-v1 identity producer. Fixture mode only until native policy and
- * #442 integration are reviewed. No packaging, signing, credentials or publishing.
+ * Delivery-v1 build identity and fixture producer. The native adapter observes actual
+ * pre-signing resources separately. No signing, credentials or publishing.
  * See docs/preparation/native-mac-delivery/signing-foundation.md for the input seam.
  */
 import { createHash } from "node:crypto";
@@ -53,6 +53,7 @@ function run(command, args, cwd = root) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 8 * 1024 * 1024,
+      timeout: 180_000,
     });
   } catch {
     throw new IdentityError("COMMAND_FAILED");
@@ -82,8 +83,7 @@ export function readSelectedSource(repoRoot, sourceCommit) {
 }
 
 /** This is a producer's input check, not a second artifact/manifest validator. */
-export function checkFixtureMetadata(metadata, source) {
-  requireValue(metadata?.kind === "fixture", "FIXTURE_ONLY");
+function checkMetadata(metadata, source) {
   requireValue(metadata.sourceCommit === source.sourceCommit, "METADATA_SOURCE");
   requireValue(metadata.appVersion === source.releaseVersion, "APP_VERSION");
   requireValue(
@@ -104,18 +104,26 @@ export function checkFixtureMetadata(metadata, source) {
   );
 }
 
+export function checkFixtureMetadata(metadata, source) {
+  requireValue(metadata?.kind === "fixture", "FIXTURE_ONLY");
+  checkMetadata(metadata, source);
+}
+
+export function checkCandidateMetadata(metadata, source) {
+  requireValue(metadata?.kind === "candidate", "CANDIDATE_POLICY");
+  checkMetadata(metadata, source);
+  requireValue(
+    typeof metadata.minimumMacOS === "string" && /^[0-9]+(?:\.[0-9]+)*$/.test(metadata.minimumMacOS),
+    "MINIMUM_OS_REQUIRED",
+  );
+}
+
 /** All output fields are delivery-v1 fields; provenance stays outside the identity. */
-export function assembleFixtureIdentity({
-  source,
-  metadata,
-  compiledProtocol,
-  hello,
-  daemonBytes,
-  expectedDaemonSha256,
-  toolchain,
-  builtAt,
-}) {
-  checkFixtureMetadata(metadata, source);
+function assembleIdentity(
+  { source, metadata, compiledProtocol, hello, daemonBytes, expectedDaemonSha256, toolchain, builtAt },
+  check,
+) {
+  check(metadata, source);
   requireValue(
     sameProtocol(compiledProtocol, source.protocol) && sameProtocol(hello?.protocol, compiledProtocol),
     "BUILD_PROTOCOL",
@@ -167,6 +175,15 @@ export function assembleFixtureIdentity({
   };
 }
 
+export function assembleFixtureIdentity(inputs) {
+  return assembleIdentity(inputs, checkFixtureMetadata);
+}
+
+/** Candidate callers must supply observed native values; no synthetic mode conversion. */
+export function assembleCandidateIdentity(inputs) {
+  return assembleIdentity(inputs, checkCandidateMetadata);
+}
+
 /** Resolve installed tools against the selected lock, never package manifest ranges. */
 function resolvedTools(source) {
   const appRequire = createRequire(join(root, "packages/app/package.json"));
@@ -196,26 +213,16 @@ function resolvedTools(source) {
   return { ...toolchain, node: process.versions.node, pnpm };
 }
 
-/** Rebuild selected source, compare the staged daemon, and reuse the authenticated probe. */
-export async function produceFixtureIdentity({
-  mode,
-  sourceCommit,
-  metadata,
-  daemonPath,
-  expectedDaemonSha256,
-  output,
-}) {
-  requireValue(mode === "fixture", "FIXTURE_ONLY");
-  const source = readSelectedSource(root, sourceCommit);
-  checkFixtureMetadata(metadata, source);
+/** Reuse locked compilation and the owned authenticated daemon probe in both modes. */
+export async function collectBuildIdentity({ source, metadata, daemonPath, expectedDaemonSha256, candidate }) {
   const tools = resolvedTools(source);
   requireValue(lstatSync(daemonPath).isFile(), "DAEMON_FILE");
   const daemonBytes = readFileSync(daemonPath);
   requireValue(digest.test(expectedDaemonSha256) && hash(daemonBytes) === expectedDaemonSha256, "DAEMON_HASH");
-  const scratch = mkdtempSync(join(tmpdir(), "orca-identity-fixture-"));
+  const scratch = mkdtempSync(join(tmpdir(), "orca-build-identity-"));
   try {
-    // Force compilation so ignored stale dist/ outputs cannot supply build provenance.
     run("pnpm", ["exec", "tsc", "-b", "tsconfig.build.json", "--force"]);
+    if (candidate) run("pnpm", ["--filter", "@orca/app", "run", "build:renderer"]);
     const freshBundle = join(scratch, "orca-daemon.mjs");
     run(process.execPath, ["scripts/build-daemon.js", "--outfile", freshBundle], join(root, "packages/app"));
     requireValue(readFileSync(freshBundle).equals(daemonBytes), "STALE_DAEMON");
@@ -228,10 +235,13 @@ export async function produceFixtureIdentity({
     );
     const { probeBundledDaemon } = await import("../../../tools/probe-bundled-daemon.js");
     const hello = await probeBundledDaemon({ bundlePath: freshBundle });
-    requireValue(JSON.stringify(readSelectedSource(root, sourceCommit)) === JSON.stringify(source), "SOURCE_CHANGED");
+    requireValue(
+      JSON.stringify(readSelectedSource(root, source.sourceCommit)) === JSON.stringify(source),
+      "SOURCE_CHANGED",
+    );
     requireValue(readFileSync(daemonPath).equals(daemonBytes), "DAEMON_CHANGED");
-    const { esbuild, typescript, ...toolchain } = tools;
-    const identity = assembleFixtureIdentity({
+    const { esbuild: _esbuild, typescript: _typescript, ...toolchain } = tools;
+    const identity = (candidate ? assembleCandidateIdentity : assembleFixtureIdentity)({
       source,
       metadata,
       compiledProtocol,
@@ -241,33 +251,56 @@ export async function produceFixtureIdentity({
       toolchain,
       builtAt: new Date().toISOString(),
     });
-    // A new directory only: no overwriting an existing identity or a packaged app.
-    mkdirSync(output);
-    writeFileSync(join(output, "orca-build.json"), `${JSON.stringify(identity, null, 2)}\n`, { flag: "wx" });
-    writeFileSync(
-      join(output, "fixture-provenance.json"),
-      `${JSON.stringify(
-        {
-          kind: "fixture",
-          sourceCommit,
-          lockfileSha256: source.lockfileSha256,
-          identitySha256: hash(readFileSync(join(output, "orca-build.json"))),
-          expectedTeamId: EXPECTED_TEAM_ID,
-          esbuild,
-          typescript,
-          hostPlatform: process.platform,
-          hostArch: process.arch,
-          syntheticFields: ["buildId", "bundleShortVersion", "bundleVersion", "toolchain.xcode", "toolchain.macos"],
-        },
-        null,
-        2,
-      )}\n`,
-      { flag: "wx" },
-    );
-    return identity;
+    return { identity, tools };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+/** Rebuild selected source, compare the staged daemon, and reuse the authenticated probe. */
+export async function produceFixtureIdentity({
+  mode,
+  sourceCommit,
+  metadata,
+  daemonPath,
+  expectedDaemonSha256,
+  output,
+}) {
+  requireValue(mode === "fixture", "FIXTURE_ONLY");
+  const source = readSelectedSource(root, sourceCommit);
+  checkFixtureMetadata(metadata, source);
+  const { identity, tools } = await collectBuildIdentity({
+    source,
+    metadata,
+    daemonPath,
+    expectedDaemonSha256,
+    candidate: false,
+  });
+  const { esbuild, typescript } = tools;
+  // A new directory only: no overwriting an existing identity or a packaged app.
+  mkdirSync(output);
+  writeFileSync(join(output, "orca-build.json"), `${JSON.stringify(identity, null, 2)}\n`, { flag: "wx" });
+  writeFileSync(
+    join(output, "fixture-provenance.json"),
+    `${JSON.stringify(
+      {
+        kind: "fixture",
+        sourceCommit,
+        lockfileSha256: source.lockfileSha256,
+        identitySha256: hash(readFileSync(join(output, "orca-build.json"))),
+        expectedTeamId: EXPECTED_TEAM_ID,
+        esbuild,
+        typescript,
+        hostPlatform: process.platform,
+        hostArch: process.arch,
+        syntheticFields: ["buildId", "bundleShortVersion", "bundleVersion", "toolchain.xcode", "toolchain.macos"],
+      },
+      null,
+      2,
+    )}\n`,
+    { flag: "wx" },
+  );
+  return identity;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

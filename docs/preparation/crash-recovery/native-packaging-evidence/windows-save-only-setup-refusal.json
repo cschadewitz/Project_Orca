@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "sourceCommit": "21b615fe278f91888a68198475c6fcc6a791208f",
+  "stage": "native private-parent ACL verification",
+  "cellRuns": 0,
+  "outcome": "refused",
+  "existingPermissionsChanged": false,
+  "allOwnedExitsConfirmed": true,
+  "disposableStateRemoved": true,
+  "resolution": "Newly created native-verified private profiles under the previously accepted parent; no existing permission repair or new access."
+}

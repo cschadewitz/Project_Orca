@@ -17,6 +17,7 @@ export interface StructuredFormProps {
   /** Integration owns stable row identity across ordered insert/remove/move operations. */
   rowKey: (path: DocumentPath, index: number) => string;
   onShowRaw?: (path: DocumentPath) => void;
+  referenceChoices?: (path: DocumentPath) => readonly string[] | undefined;
 }
 
 function Action({
@@ -228,7 +229,7 @@ function ArrayEntries({
       index < 0
         ? root.current?.querySelector(":scope > [data-add-entry]")
         : root.current?.querySelectorAll(":scope > [data-entry-row]")[index];
-    ((row?.querySelector("input") ?? row?.querySelector("button")) as HTMLElement | null)?.focus();
+    ((row?.querySelector("input, select") ?? row?.querySelector("button")) as HTMLElement | null)?.focus();
   }, [entries]);
   const displayPath = pathLabel(form.path);
   return (
@@ -307,6 +308,7 @@ function Scalar({
       value: shape.field.type === "boolean" ? value !== true : shape.field.type === "number" ? 0 : readable,
     },
   ]);
+  const references = form.referenceChoices?.(path);
   return (
     <ConfigField
       label={label}
@@ -316,7 +318,25 @@ function Scalar({
       {...(form.onShowRaw === undefined ? {} : { onShowRaw: () => form.onShowRaw?.(path) })}
     >
       {(control) =>
-        shape.field.type === "enum" ? (
+        references !== undefined ? (
+          <select
+            {...control}
+            className={`orca-input ${textClass("mono-body")}`}
+            value={readable}
+            disabled={!editAccess.allowed}
+            onChange={(event) => change(event.target.value)}
+          >
+            <option value="">Choose reference</option>
+            {readable && !references.includes(readable) && (
+              <option value={readable}>{readable} (unavailable reference)</option>
+            )}
+            {references.map((choice) => (
+              <option key={choice} value={choice}>
+                {choice}
+              </option>
+            ))}
+          </select>
+        ) : shape.field.type === "enum" ? (
           <Menu
             label={label}
             triggerProps={control}
@@ -393,7 +413,7 @@ function RecordEntries({
       (row) => row.dataset.recordEntry === destination,
     );
     const control =
-      row?.querySelector<HTMLInputElement>("input") ??
+      row?.querySelector<HTMLInputElement | HTMLSelectElement>("input, select") ??
       row?.querySelector<HTMLButtonElement>("button") ??
       keyInput.current;
     control?.focus();

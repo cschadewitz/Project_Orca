@@ -1,0 +1,266 @@
+{
+  "schema": 1,
+  "kind": "local-M21-overlap-self-review",
+  "sourceHead": "b5086ffc20c3c132b5061af3253be1b9c55f4575",
+  "node": "24.19.0",
+  "pnpm": "12.4.2",
+  "platform": "win32",
+  "arch": "x64",
+  "source": {
+    "schema": 1,
+    "sourceHead": "b5086ffc20c3c132b5061af3253be1b9c55f4575",
+    "previousCandidate": "98104c039f59e1f6d72901b5a6b46270ed7bf42a",
+    "pr605": "c2b469fb5a437c7056eaecc2c7bb141dff2255aa",
+    "pr605Base": "6fcd543a368246c2156f86a225072a871c754435",
+    "missingImplementationCommits": 1,
+    "allFiveMaximalTipsIncluded": true,
+    "divergentPr577Excluded": true,
+    "conflict": "comment only; identical minmax(0, 1fr) layout rule retained",
+    "unchangedPaths": [
+      "packages/app/renderer/src/config/config-surface.tsx",
+      "packages/app/renderer/src/config/config.css",
+      "packages/app/renderer/src/config/configuration-studio-surface.tsx",
+      "packages/design/css/components.css",
+      "packages/cli/src/bootstrap.ts",
+      "packages/cli/src/commands/index.ts",
+      "packages/app/src/main/index.ts",
+      "packages/app/src/preload/index.cts",
+      "packages/app/src/main/workspace.ts",
+      "packages/app/src/diagnostics-contract.ts",
+      "packages/app/src/main/diagnostics",
+      "packages/app/native",
+      "packages/app/src/main/mac-managed-update-application.ts"
+    ],
+    "heldDiagnosticsUpdaterCliAndFirstRunWiringUnchanged": true,
+    "diffCheck": "pass",
+    "scopedPrettierCanonicalGitBlobs": "pass",
+    "scopedFiles": [
+      "packages/app/src/main/guided-launch-adapter.ts",
+      "packages/app/src/main/guided-intent-contract.ts",
+      "packages/engine/src/configuration-generation.ts",
+      "packages/engine/src/configuration-provenance.ts",
+      "packages/engine/src/orchestrator.ts",
+      "packages/engine/src/program/request-submission.ts",
+      "packages/daemon/src/operator-read-model.ts",
+      "packages/daemon/src/template-authoring.ts",
+      "packages/protocol/src/operator-reads.ts",
+      "packages/app/renderer/src/guided-launch/controller.ts",
+      "packages/app/renderer/src/guided-launch/production-bindings.ts",
+      "packages/app/renderer/src/template-authoring/controller.ts",
+      "packages/app/renderer/src/config/structured-form/structured-form.tsx",
+      "packages/app/renderer/test/guided-launch-route.test.tsx"
+    ],
+    "sourceHashes": {
+      "packages/app/src/main/guided-launch-adapter.ts": "dad01a59a69d0e8f066b20ff0eb9587b6f8acd7d2c795677aa8970599569fe51",
+      "packages/app/src/main/guided-intent-contract.ts": "7d7bef2ab44ca2ecb89a36df6b2bf9e4f2edadb003156ac86b10ceae37ff4bcd",
+      "packages/engine/src/configuration-generation.ts": "9c352b4db287e44ffc7301697e6584711a6e24ca29bc07e0dd43fd466676dd14",
+      "packages/engine/src/configuration-provenance.ts": "24112e72f15d32c151d5bb3374c1d01e0fc7cf622bc7b432074a589fb320a237",
+      "packages/engine/src/orchestrator.ts": "f9dd30de2a743314cd169b8e1d52f05eddd66a51b644cf07a3a67f3fc4dc2ac0",
+      "packages/engine/src/program/request-submission.ts": "326561aa63dac4b69bcd9895cdcf30f08bb9d008828a207a8fc8ac1b5d19527b",
+      "packages/daemon/src/operator-read-model.ts": "a7e8e20ac3aeeabce3a2854a8c246461f2bb383a404d9059d07d05e1ec9cc135",
+      "packages/daemon/src/template-authoring.ts": "00a30d5fc85870f2d62a78a902f9e817641d24726ad44b3958611e4ab11ab81b",
+      "packages/protocol/src/operator-reads.ts": "d7d08fb92a7603e3d766a3b01867b769bb69cd17cc36f28991e7a0e2bd7297f1",
+      "packages/app/renderer/src/guided-launch/controller.ts": "9358098618a9c38e86f1a589ccb4984af08547b65dc1eae34a6a58f94e6211b9",
+      "packages/app/renderer/src/guided-launch/production-bindings.ts": "91c94926529ea16f47c6a779724f3f8284c23b71005d44a474b86e506c82ab7b",
+      "packages/app/renderer/src/template-authoring/controller.ts": "0efe990801ecdbe2b4c8423bcd4e500eeae288c5c1ef4a38faae99b39e50c947",
+      "packages/app/renderer/src/config/structured-form/structured-form.tsx": "fdfcf409a1f24cc46a75fbba7ba4dce5d5bf1a0597988f645f32a5b8ff396307",
+      "packages/app/renderer/test/guided-launch-route.test.tsx": "8b6996439a3b3a76c1eef4275f536c48aa7bafc29b6db5574c3350f461e37f51"
+    },
+    "nativeHarnessExecuted": false,
+    "buildsExecuted": false,
+    "CI": false,
+    "publication": false,
+    "nativeAcceptanceDisposition": "pending M21 owner"
+  },
+  "remoteHeadsRechecked": [
+    {
+      "head": "6fcd543a368246c2156f86a225072a871c754435",
+      "ref": "refs/heads/calcifer/m10-m21-m22-same-boot-config-integration"
+    },
+    {
+      "head": "db579fb7ac9cfce2e4e6901713088a80602311da",
+      "ref": "refs/heads/main"
+    },
+    {
+      "head": "c2b469fb5a437c7056eaecc2c7bb141dff2255aa",
+      "ref": "refs/pull/605/head"
+    }
+  ],
+  "tests": {
+    "command": "node node_modules/vitest/vitest.mjs run <21 listed affected files> --maxWorkers=1 --reporter=default --reporter=json",
+    "passed": 266,
+    "failed": 0,
+    "skipped": 2,
+    "passedFiles": 21,
+    "files": [
+      {
+        "file": "packages/cli/test/installed-plugin-serve-guards.test.ts",
+        "status": "passed",
+        "passed": 3,
+        "skipped": []
+      },
+      {
+        "file": "packages/cli/test/plugin-release-bootstrap.test.ts",
+        "status": "passed",
+        "passed": 7,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/test/diagnostics-shipping-ipc.test.ts",
+        "status": "passed",
+        "passed": 2,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/test/diagnostics-startup-consent.test.ts",
+        "status": "passed",
+        "passed": 4,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/test/diagnostics-windows-refusal.test.ts",
+        "status": "passed",
+        "passed": 5,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/test/guided-launch-adapter.test.ts",
+        "status": "passed",
+        "passed": 13,
+        "skipped": [
+          "reserved harmless first-run sample binding refuses changed instruction bytes after review before retaining or sending",
+          "reserved harmless first-run sample binding retains only the exact direct sample task and refuses Request or altered inputs"
+        ]
+      },
+      {
+        "file": "packages/app/test/mac-app-writer-barrier.test.ts",
+        "status": "passed",
+        "passed": 2,
+        "skipped": []
+      },
+      {
+        "file": "packages/daemon/test/operator-request-preflight.test.ts",
+        "status": "passed",
+        "passed": 19,
+        "skipped": []
+      },
+      {
+        "file": "packages/daemon/test/template-authoring-service.test.ts",
+        "status": "passed",
+        "passed": 4,
+        "skipped": []
+      },
+      {
+        "file": "packages/engine/test/config-generation.test.ts",
+        "status": "passed",
+        "passed": 23,
+        "skipped": []
+      },
+      {
+        "file": "packages/engine/test/launch-selection-validation.test.ts",
+        "status": "passed",
+        "passed": 5,
+        "skipped": []
+      },
+      {
+        "file": "packages/protocol/test/mcp-operator-schemas.test.ts",
+        "status": "passed",
+        "passed": 4,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/renderer/test/configuration-studio-route.test.tsx",
+        "status": "passed",
+        "passed": 9,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/renderer/test/configuration-studio-structured-form.test.tsx",
+        "status": "passed",
+        "passed": 26,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/renderer/test/guided-launch-controller.test.ts",
+        "status": "passed",
+        "passed": 45,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/renderer/test/guided-launch-route.test.tsx",
+        "status": "passed",
+        "passed": 9,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/renderer/test/guided-launch-shared-bindings.test.ts",
+        "status": "passed",
+        "passed": 10,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/renderer/test/guided-launch-surface.test.tsx",
+        "status": "passed",
+        "passed": 12,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/renderer/test/template-authoring-editor.test.tsx",
+        "status": "passed",
+        "passed": 22,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/renderer/test/template-authoring-model.test.ts",
+        "status": "passed",
+        "passed": 33,
+        "skipped": []
+      },
+      {
+        "file": "packages/app/renderer/test/template-studio-route.test.tsx",
+        "status": "passed",
+        "passed": 9,
+        "skipped": []
+      }
+    ]
+  },
+  "statics": {
+    "rootTypecheck": "pass",
+    "rendererTypecheck": "pass",
+    "cssTokens": "pass",
+    "scopedEslint": "pass",
+    "scopedPrettierCanonicalGitBlobs": "pass",
+    "diffCheck": "pass"
+  },
+  "findings": [
+    "Comment-only shared shell CSS conflict resolved; layout declarations unchanged.",
+    "Automatic guided-launch route test merge retains previous diagnostics/first-run checks and new Request/recovery cases.",
+    "No additional bounded integration defect found in reviewed overlaps."
+  ],
+  "heldGates": {
+    "diagnosticsProductionEnabled": false,
+    "macUpdaterActivationAllowed": false,
+    "C15EnabledManagedMemory": "unresolved",
+    "exactCommandPositiveAcceptance": "unsupported/blocked"
+  },
+  "validationScope": {
+    "fullCombinedSuite": false,
+    "coverage": false,
+    "builds": false,
+    "Electron": false,
+    "nativeHarness": false,
+    "CI": false,
+    "publication": false,
+    "independentReview": false
+  },
+  "remaining": [
+    "M21 final Windows native Request/restart acceptance disposition and any final delta",
+    "parent coordination for aggregate/build/Electron validation",
+    "parent prerequisite checkpoint before CI/publication"
+  ],
+  "notes": [
+    "Initial candidate and constituent receipts retain their original source pins; results are not summed or promoted to aggregate/native proof.",
+    "M21 owner retains the heavy-test window.",
+    "Windows first-run ownership refusal is an implementation limitation, not a successful setup acceptance."
+  ]
+}

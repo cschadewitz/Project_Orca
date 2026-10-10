@@ -1,15 +1,27 @@
 /** Authorized bounded projections; never accepts a caller-selected principal or raw config RPC. */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   OrcaError,
+  isOrcaError,
+  systemClock,
   reduceRunSummary,
   validateWorkflowInputs,
   redactWorkflowInputSchema,
   type OrcaEvent,
   type WorkflowDefinition,
+  type WorkflowInputDeclaration,
+  type WorkflowInputSchema,
 } from "@orca/core";
-import { lapsed, type EventStore, type LeaseStore } from "@orca/store";
-import { workflowRevision, type ConfigurationGenerations, type GenerationStatus } from "@orca/engine";
+import { lapsed, redactExecutionValue, type EventStore, type LeaseStore } from "@orca/store";
+import {
+  launchProvenance,
+  configuredGenerationSecrets,
+  submissionRequest,
+  workflowRevision,
+  type ConfigurationGenerations,
+  type GenerationStatus,
+} from "@orca/engine";
 import { ProtocolFault, displayStatusForRun, type ArtifactsGetResult } from "@orca/protocol";
 import {
   OperatorArtifactParamsSchema,
@@ -17,6 +29,7 @@ import {
   OperatorDiscoverySchema,
   OperatorPageParamsSchema,
   OperatorPreflightParamsSchema,
+  OperatorPreflightResultSchema,
   OperatorRowSchema,
   OperatorBoundaryRowSchema,
   OperatorBoundaryProjectionSchema,
@@ -256,6 +269,8 @@ export class OperatorReadModel {
       throw new OrcaError("RUN_STATE", "Input projection has inconsistent identity");
     if (row.runId && !(await this.options.allowsRun(p, row.runId))) return undefined;
     if (!row.runId && row.workflowId && !workflowAllowed(p.scope, row.workflowId)) return undefined;
+    if (row.kind === "item-workflow-default" && row.workflowId && !workflowAllowed(p.scope, row.workflowId))
+      return undefined;
     for (const key of ["parentRunId", "childRunId"] as const)
       if (row[key] && !(await this.options.allowsRun(p, row[key]))) delete row[key];
     if (!holds(p, "plan.read")) {
@@ -289,30 +304,139 @@ export class OperatorReadModel {
       params.workflowId ?? (params.purpose === "request" ? material.snapshot.config.program.workflow : undefined);
     if (!workflowId || !workflowAllowed(p.scope, workflowId))
       throw new OrcaError("WORKFLOW_NOT_FOUND", "Workflow is unavailable");
+    if ((params.request || params.overrides) && params.purpose !== "request")
+      throw new ProtocolFault("PROTOCOL_MESSAGE", "Request drafts and overrides require Request preflight");
+    const selectedItemWorkflow = params.overrides?.itemWorkflow ?? params.vars.itemWorkflow;
+    if (typeof selectedItemWorkflow === "string" && !workflowAllowed(p.scope, selectedItemWorkflow))
+      throw new OrcaError("WORKFLOW_NOT_FOUND", "Workflow is unavailable");
     // Capture may select stored content before the active definition for an explicit version.
     // The generation guard alone therefore does not prove that our validation uses that content.
     const launch = await generations.captureLaunch({
       purpose: params.purpose,
       workflowId,
-      expectedConfigGeneration: material.snapshot.id,
+      expectedConfigGeneration: params.expectedConfigGeneration ?? material.snapshot.id,
       ...(params.workflowVersion ? { workflowVersion: params.workflowVersion } : {}),
+      ...(params.expectedWorkflowRevision ? { expectedWorkflowRevision: params.expectedWorkflowRevision } : {}),
     });
     const definition = material.snapshot.workflowDefinitions?.find(
       (d) => d.id === launch.workflow.id && d.version === launch.workflow.version,
     );
     if (!definition || workflowRevision(definition) !== launch.workflow.revision)
       throw new OrcaError("NOT_SUPPORTED", "The captured workflow definition is unavailable for preflight validation");
-    const { validation } = validateWorkflowInputs(definition, params.vars);
+    const request = params.request
+      ? submissionRequest(
+          params.request,
+          this.options.now ? { now: () => this.options.now!().getTime(), isoNow: () => this.stamp() } : systemClock,
+        )
+      : undefined;
+    const supplied: Record<string, unknown> = request ? { ...params.vars, request } : params.vars;
+    // Match the captured Request launch's configuration default beneath caller vars.
+    const injectItemWorkflow =
+      params.purpose === "request" &&
+      (definition.inputSchema?.unknown !== "reject" ||
+        Object.hasOwn(definition.inputSchema.fields, "itemWorkflow") ||
+        Object.hasOwn(definition.vars, "itemWorkflow"));
+    const boundVars: Record<string, unknown> = injectItemWorkflow
+      ? { itemWorkflow: material.snapshot.config.program.itemWorkflow, ...supplied }
+      : supplied;
+    const effectiveItemWorkflow =
+      params.overrides?.itemWorkflow ??
+      boundVars.itemWorkflow ??
+      definition.vars.itemWorkflow ??
+      definition.inputSchema?.fields.itemWorkflow?.default;
+    if (
+      params.purpose === "request" &&
+      typeof effectiveItemWorkflow === "string" &&
+      !workflowAllowed(p.scope, effectiveItemWorkflow)
+    )
+      throw new OrcaError("WORKFLOW_NOT_FOUND", "Workflow is unavailable");
+    const { validation, vars } = validateWorkflowInputs(definition, boundVars);
+    if (params.purpose === "request")
+      for (const name of ["request", "__orcaAdmissionId"])
+        if (Object.hasOwn(params.vars, name))
+          validation.errors.push({ path: `vars.${name}`, message: "is supplied by Request submission" });
+    // Guided choices are declared configuration reads. Dynamic ACP model discovery remains
+    // the existing session admission contract; this read must never contact an agent.
+    if (params.overrides?.model && typeof params.overrides.model === "object")
+      for (const [agentId, modelId] of Object.entries(params.overrides.model)) {
+        const agent = material.agents.listAgents().find((candidate) => candidate.id === agentId);
+        if (!agent?.models?.some((model) => model.id === modelId))
+          validation.errors.push({ path: `overrides.model.${agentId}`, message: "is not a declared model choice" });
+      }
+    validation.ok = validation.errors.length === 0;
+    if (validation.ok) {
+      try {
+        await launch.validateStartRun({ vars: supplied, ...(params.overrides ? { overrides: params.overrides } : {}) });
+      } catch (error) {
+        const path = isOrcaError(error, "AGENT_NOT_FOUND")
+          ? "overrides.roles"
+          : isOrcaError(error, "AGENT_MODEL_NOT_FOUND")
+            ? "overrides.model"
+            : isOrcaError(error, "TEMPLATE_NOT_FOUND")
+              ? "overrides.templatePack"
+              : isOrcaError(error, "WORKFLOW_NOT_FOUND")
+                ? params.overrides?.itemWorkflow !== undefined
+                  ? "overrides.itemWorkflow"
+                  : Object.hasOwn(params.vars, "itemWorkflow")
+                    ? "vars.itemWorkflow"
+                    : "program.itemWorkflow"
+                : undefined;
+        if (!path) throw error;
+        validation.ok = false;
+        validation.errors.push({ path, message: "selection is unavailable or invalid" });
+      }
+    }
+    const resolved = validation.ok
+      ? launchProvenance(
+          material,
+          definition,
+          vars,
+          boundVars,
+          params.overrides,
+          injectItemWorkflow && !Object.hasOwn(params.vars, "itemWorkflow") ? "config.program.itemWorkflow" : undefined,
+        )
+      : undefined;
+    const globalModel = params.overrides?.model;
+    if (resolved && typeof globalModel === "string") {
+      const effectiveAgents = new Set(resolved.selections.map((selection) => selection.agent.value));
+      for (const agent of material.agents.listAgents())
+        if (
+          effectiveAgents.has(agent.id) &&
+          agent.models?.length &&
+          !agent.models.some((model) => model.id === globalModel)
+        )
+          validation.errors.push({
+            path: "overrides.model",
+            message: "is not a declared model choice for an effective agent",
+          });
+      validation.ok = validation.errors.length === 0;
+    }
+    const detailedChoices = holds(p, "config.read");
+    const provenance = validation.ok && detailedChoices ? resolved : undefined;
     await this.unchanged(p, "runs.start");
-    return {
+    if (detailedChoices) await this.unchanged(p, "config.read");
+    if (generations.current.snapshot.id !== material.snapshot.id)
+      throw new OrcaError("CONFIG_STALE", "Active configuration changed; refresh before launching");
+    const secrets = configuredGenerationSecrets(material);
+    const result = OperatorPreflightResultSchema.parse({
       target: this.options.target,
       workflowId,
       workflowVersion: launch.workflow.version,
       expectedWorkflowRevision: launch.workflow.revision,
       expectedConfigGeneration: launch.generationId,
-      validation,
+      validation: redactExecutionValue(validation, secrets),
+      inputSchema: definition.inputSchema ? operatorInputSchema(definition.inputSchema, secrets) : null,
+      ...(provenance ? { selections: provenance.selections, templatePack: provenance.templatePack } : {}),
+      ...(provenance?.itemWorkflow &&
+      params.purpose === "request" &&
+      workflowAllowed(p.scope, provenance.itemWorkflow.value)
+        ? { itemWorkflow: provenance.itemWorkflow }
+        : {}),
       asOf: this.stamp(),
-    };
+    });
+    if (Buffer.byteLength(JSON.stringify(result)) > OPERATOR_MAX_RESULT_BYTES / 3)
+      throw new OrcaError("NOT_SUPPORTED", "Preflight projection exceeds the operator read limit");
+    return result;
   }
   async artifact(raw: import("zod").input<typeof OperatorArtifactParamsSchema>) {
     const p = await this.principal("artifacts.read");
@@ -371,6 +495,32 @@ export class OperatorReadModel {
       return undefined;
     }
   }
+}
+
+/** Concealed configured defaults are declarations of sensitivity, never usable placeholder values. */
+function operatorInputSchema(schema: WorkflowInputSchema, secrets: readonly string[]): WorkflowInputSchema {
+  const declaration = (field: WorkflowInputDeclaration): WorkflowInputDeclaration => {
+    const concealed = [field.default, field.enum].some(
+      (value) => !isDeepStrictEqual(value, redactExecutionValue(value, secrets)),
+    );
+    return {
+      ...field,
+      ...(concealed ? { sensitive: true } : {}),
+      ...(field.items ? { items: declaration(field.items) } : {}),
+      ...(field.properties
+        ? {
+            properties: Object.fromEntries(
+              Object.entries(field.properties).map(([name, child]) => [name, declaration(child)]),
+            ),
+          }
+        : {}),
+    };
+  };
+  const marked = {
+    ...schema,
+    fields: Object.fromEntries(Object.entries(schema.fields).map(([name, field]) => [name, declaration(field)])),
+  };
+  return redactExecutionValue(redactWorkflowInputSchema(marked), secrets, true);
 }
 interface Cursor {
   binding: string;
@@ -435,8 +585,9 @@ function* eventRows(event: OrcaEvent): Generator<OperatorRow> {
   if ("attempt" in p && typeof p.attempt === "number") base.attempt = p.attempt;
   if ("error" in p && p.error) base.errorCode = p.error.code;
   if (event.type === "agent.update") {
-    base.text = event.payload.update.text;
-    base.omitted = ["tool-arguments", "tool-results", "paths"];
+    // Public sensitivity projection can still contain workspace paths in prose.
+    // Preserve closed event metadata, never infer arbitrary text is path-free.
+    base.omitted = ["agent-text", "tool-arguments", "tool-results", "paths"];
   }
   if (event.type === "artifact.recorded") {
     const a = event.payload.artifact;
@@ -461,6 +612,25 @@ function* eventRows(event: OrcaEvent): Generator<OperatorRow> {
         source: choice.agent.source,
         ...(choice.model ? { modelId: choice.model.value } : {}),
         ...(choice.template ? { templateId: choice.template.value } : {}),
+      };
+    // The program's dispatch default can still be superseded by a workflow node's own pin.
+    if (prov.itemWorkflow)
+      yield {
+        id: `${event.id}:item-workflow`,
+        kind: "item-workflow-default",
+        runId: event.runId,
+        workflowId: prov.itemWorkflow.value,
+        source: prov.itemWorkflow.source,
+        configGeneration: prov.configGeneration,
+      };
+    if (prov.templatePack)
+      yield {
+        id: `${event.id}:template-pack`,
+        kind: "template-pack-selection",
+        runId: event.runId,
+        templatePack: prov.templatePack.value,
+        source: prov.templatePack.source,
+        configGeneration: prov.configGeneration,
       };
   }
   yield base;
@@ -693,7 +863,7 @@ export function operatorGenerationCollections(
         rows: workflowRows(def),
       };
     },
-    choices: async () => {
+    choices: async (_params, principal) => {
       const generation = generations.current;
       return {
         revision: generation.snapshot.id,
@@ -711,12 +881,17 @@ export function operatorGenerationCollections(
                 configGeneration: generation.snapshot.id,
               };
           }
-          for (const [role, agentId] of Object.entries(generation.agents.listRoles()))
+          const configuredRoles = generation.agents.listRoles();
+          const roles = new Set([
+            ...Object.keys(configuredRoles),
+            ...generation.agents.listAgents().flatMap((agent) => agent.roles),
+          ]);
+          for (const role of roles)
             yield {
               id: role,
               kind: "role",
-              agentId,
-              source: "configuration",
+              agentId: generation.agents.resolve({ role }).agent.id,
+              source: Object.hasOwn(configuredRoles, role) ? "configuration" : "agent.roles",
               configGeneration: generation.snapshot.id,
             };
           for (const template of generation.snapshot.templates)
@@ -726,6 +901,24 @@ export function operatorGenerationCollections(
               templateId: template.id,
               configGeneration: generation.snapshot.id,
             };
+          for (const pack of generation.templates.packs())
+            yield {
+              id: pack,
+              kind: "template-pack",
+              templatePack: pack,
+              configGeneration: generation.snapshot.id,
+            };
+          for (const workflow of generation.snapshot.workflows)
+            if (holds(principal, "workflows.read") && workflowAllowed(principal.scope, workflow.id))
+              yield {
+                id: workflow.id,
+                kind: "item-workflow",
+                workflowId: workflow.id,
+                workflowVersion: workflow.version,
+                workflowRevision: workflow.revision,
+                source: workflow.id === generation.snapshot.config.program.itemWorkflow ? "configuration" : "available",
+                configGeneration: generation.snapshot.id,
+              };
         })(),
       };
     },

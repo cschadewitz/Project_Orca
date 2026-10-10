@@ -1,8 +1,8 @@
 /** Exercise genuine-report normalization, SHA binding, skip policy and safe artifact intake. */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -250,6 +250,13 @@ it("rejects duplicate files and unknown statuses", () => {
   report.testResults.pop();
   report.testResults[0].assertionResults[0].status = "cancelled";
   expect(() => normalizeVitest(report, root)).toThrow("unknown_assertion_status");
+});
+
+it.runIf(process.platform === "win32")("refuses report paths on another Windows drive", () => {
+  const report = raw();
+  const otherDrive = resolve(root)[0].toUpperCase() === "Z" ? "Y" : "Z";
+  report.testResults[0].name = `${otherDrive}:\\outside\\test.js`;
+  expect(() => normalizeVitest(report, root)).toThrow("invalid_vitest_path");
 });
 
 it("compares both full lanes and records exact intentional skips separately from passes", () => {
@@ -560,14 +567,16 @@ it.each(["complete", "stale_after_read", "malformed_artifact"])(
   },
 );
 
-it("publishes complete JSON atomically and refuses symlink/oversized inputs", () => {
+it("publishes complete JSON atomically and refuses linked/oversized inputs", () => {
   const dir = temp();
   const path = join(dir, "report.json");
   atomicJSON(path, { real: true });
   expect(readJSON(path)).toEqual({ real: true });
   expect(() => readJSON(path, 2)).toThrow("unsafe_or_oversized_json");
-  execFileSync("ln", ["-s", path, join(dir, "link.json")]);
-  expect(() => readJSON(join(dir, "link.json"))).toThrow("unsafe_or_oversized_json");
+  const link = join(dir, "link");
+  if (process.platform === "win32") symlinkSync(temp(), link, "junction");
+  else symlinkSync(path, link, "file");
+  expect(() => readJSON(link)).toThrow("unsafe_or_oversized_json");
 });
 
 it.each(["valid", "traversal", "extra", "symlink", "oversized", "invalid_json"])("bounded ZIP intake: %s", (mode) => {
@@ -609,8 +618,17 @@ it("forwards workflow reporter options through pinned pnpm's explicit run comman
     `import fs from 'node:fs'; fs.writeFileSync(process.env.SHADOW_ARGS,JSON.stringify(process.argv.slice(2)));`,
   );
   const args = ["--reporter=default", "--reporter=json", "--outputFile.json=/synthetic/report.json"];
+  // The global Windows pnpm shim is a .cmd, which execFile cannot launch.
+  // Use its installed native executable directly, without a shell or downloads.
+  const pnpm =
+    process.platform === "win32"
+      ? ((process.env.PATH ?? "")
+          .split(delimiter)
+          .map((entry) => join(entry, "node_modules", "pnpm", "pnpm.exe"))
+          .find((entry) => existsSync(entry)) ?? "pnpm.exe")
+      : "pnpm";
   for (const script of ["test", "test:coverage"]) {
-    execFileSync("pnpm", ["run", script, ...args], {
+    execFileSync(pnpm, ["run", script, ...args], {
       cwd: dir,
       timeout: 30000,
       stdio: ["ignore", "pipe", "pipe"],

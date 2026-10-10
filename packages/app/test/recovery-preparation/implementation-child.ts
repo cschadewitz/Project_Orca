@@ -1,6 +1,7 @@
+import { frozenReportText } from "./frozen-report-text.js";
 /** Actual coordinator/disk kill fixture. IPC signals only reached real mutation boundaries. */
 import { join } from "node:path";
-import { implementationFixture, enableAndPreview, value, borrowFixtureHelper } from "./implementation-fixture.js";
+import { implementationFixture, enableAndExport, value, borrowFixtureHelper } from "./implementation-fixture.js";
 import type { OptOutCrashEvidence } from "./process-fixture.js";
 
 const profile = process.argv[2];
@@ -30,7 +31,7 @@ if (boundary === "maximum-checkpoint-committed") {
   await fixture.controller.checkpoint();
   await reached(boundary);
 }
-const preview = await enableAndPreview(fixture);
+const preview = await enableAndExport(fixture);
 if (
   boundary === "before-optout-summary-removal" ||
   boundary === "after-optout-summary-removal" ||
@@ -40,8 +41,8 @@ if (
   const destination = value(await fixture.controller.chooseDestination(preview.handle));
   value(await fixture.controller.save(preview.handle, destination.token));
   if (fixture.controller.status().lastSaveOutcome !== "saved") throw new Error("Prior native export not saved");
-  value(await fixture.controller.closePreview(preview.handle));
-  const unknown = value(await fixture.controller.preparePreview("current"));
+  value(await fixture.controller.cancelExport(preview.handle));
+  const unknown = await frozenReportText(fixture.controller, value(await fixture.controller.prepareExport("current")));
   fixture.picker.destination = join(profile, "unknown-report.json");
   fixture.native.publication = () => Promise.resolve("unknown");
   const selected = value(await fixture.controller.chooseDestination(unknown.handle));
@@ -50,10 +51,13 @@ if (
   if (acknowledgedId === undefined) throw new Error("No unknown operation to acknowledge");
   value(await fixture.controller.retryCleanup());
   value(await fixture.controller.acknowledgeUnknown(acknowledgedId));
-  value(await fixture.controller.closePreview(unknown.handle));
+  value(await fixture.controller.cancelExport(unknown.handle));
   const evidence: OptOutCrashEvidence = { publishedText: preview.text, acknowledgedId };
   if (boundary === "optout-unresolved") {
-    const unresolved = value(await fixture.controller.preparePreview("current"));
+    const unresolved = await frozenReportText(
+      fixture.controller,
+      value(await fixture.controller.prepareExport("current")),
+    );
     fixture.picker.destination = join(profile, "unresolved-report.json");
     const selected = value(await fixture.controller.chooseDestination(unresolved.handle));
     await fixture.controller.save(unresolved.handle, selected.token);
@@ -124,8 +128,8 @@ if (boundary === "before-ack") {
 }
 value(await fixture.controller.acknowledgeUnknown(id));
 if (boundary === "during-fresh-intent") {
-  value(await fixture.controller.closePreview(preview.handle));
-  const fresh = value(await fixture.controller.preparePreview("current"));
+  value(await fixture.controller.cancelExport(preview.handle));
+  const fresh = await frozenReportText(fixture.controller, value(await fixture.controller.prepareExport("current")));
   fixture.picker.destination = join(profile, "fresh-report.json");
   const selected = value(await fixture.controller.chooseDestination(fresh.handle));
   fixture.native.beforeReplace = async (_source, destination) => {

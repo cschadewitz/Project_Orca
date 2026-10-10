@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "harnessHead": "74a3ef441449523d110849c9d1c92aa0f61fdf83",
+  "verifierFirstAttempt": {
+    "exitCode": 1,
+    "phase": "read-only Git subprocess",
+    "error": "spawnSync git EPERM",
+    "comparisonsExecuted": false
+  },
+  "verifierApprovedAttempt": {
+    "exitCode": 0,
+    "oldEvidenceUnchanged": true,
+    "productionUnchanged": true,
+    "sourceAndArchiveHashesPass": true,
+    "correctedPairsHave20PassingSyntheticCells": true,
+    "bothManagedFailuresRetained": true,
+    "documentsAndLinksPass": true
+  },
+  "gitDiffCheckExitCode": 0,
+  "staticChecksReRunReason": "Final verification of newly added regression flags/runner and evidence integrity; no comparison or broad test repeated.",
+  "numericGatesEdited": false,
+  "productChanges": false,
+  "layoutOptimizationOrNewCapture": false
+}

@@ -11,6 +11,10 @@ export interface TemplateAuthoringEditorProps {
   controller: TemplateAuthoringController;
   /** File-picker/clipboard integrations belong to the host; no automatic external export. */
   onExport?: (key: string, source: string) => void;
+  /** Production integration saves source first; explicit catalog Apply is rendered by its host. */
+  saveLabel?: string;
+  /** Config owns scrolling when embedding this editor in its bounded body. */
+  embedded?: boolean;
 }
 
 function parseFixtures(text: string): FixtureInputs | undefined {
@@ -37,7 +41,12 @@ function parseFixtures(text: string): FixtureInputs | undefined {
 }
 
 /** Independent surface; the integrator supplies discovery, target feeds and draft retention. */
-export function TemplateAuthoringEditor({ controller, onExport }: TemplateAuthoringEditorProps): JSX.Element {
+export function TemplateAuthoringEditor({
+  controller,
+  onExport,
+  saveLabel = "Publish revision",
+  embedded = false,
+}: TemplateAuthoringEditorProps): JSX.Element {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [selection, setSelected] = useState(state.base.assets[0]?.key ?? "");
   const [pack, setPack] = useState("");
@@ -59,7 +68,10 @@ export function TemplateAuthoringEditor({ controller, onExport }: TemplateAuthor
   const source = controller.exportSource(selected);
   const fixtures = parseFixtures(fixtureText);
   const resolved = asset ? resolveTemplate(state.base.assets, asset.id, pack || undefined) : undefined;
-  const errors = [...catalogErrors(state.base.assets), ...(state.review?.errors ?? []), ...(state.errors ?? [])];
+  const errors = [
+    ...(state.review?.errors ?? state.base.errors ?? catalogErrors(state.base.assets)),
+    ...(state.errors ?? []),
+  ];
   const writeReason = state.blocked ?? state.base.writeReason;
   const publicationReason = controller.publicationReason();
   const keyboard = useKeyboard();
@@ -84,7 +96,10 @@ export function TemplateAuthoringEditor({ controller, onExport }: TemplateAuthor
       unregister.push(
         keyboard.register({
           scope: "config",
-          label: "Publish reviewed template revision",
+          label:
+            saveLabel === "Save reviewed source"
+              ? "Save reviewed template source"
+              : "Publish reviewed template revision",
           action: () => {
             void controller.publish();
           },
@@ -94,10 +109,14 @@ export function TemplateAuthoringEditor({ controller, onExport }: TemplateAuthor
     return () => {
       for (const remove of unregister) remove();
     };
-  }, [controller, keyboard, publicationReason, state.busy, writeReason]);
+  }, [controller, keyboard, publicationReason, state.busy, writeReason, saveLabel]);
 
   return (
-    <section className="orca-template-authoring" aria-label="Template authoring" {...scopeProps("config")}>
+    <section
+      className={embedded ? "orca-template-editor" : "orca-template-authoring"}
+      aria-label="Template authoring"
+      {...scopeProps("config")}
+    >
       <Text style="heading" as="h2">
         Templates and packs
       </Text>
@@ -239,7 +258,7 @@ export function TemplateAuthoringEditor({ controller, onExport }: TemplateAuthor
         )}
       </ConfigField>
       <Button
-        disabled={!previewId || source === undefined || !fixtures || state.busy || writeReason !== undefined}
+        disabled={!previewId || source === undefined || !fixtures || state.busy || state.blocked !== undefined}
         onClick={() => {
           if (previewId && fixtures)
             void controller.preview(previewId, asset ? pack || undefined : undefined, fixtures);
@@ -298,7 +317,7 @@ export function TemplateAuthoringEditor({ controller, onExport }: TemplateAuthor
             void controller.publish();
           }}
         >
-          Publish revision
+          {saveLabel}
         </Button>
         <Button disabled={state.busy} onClick={() => controller.discard()}>
           Cancel edits

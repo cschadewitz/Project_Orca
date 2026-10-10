@@ -65,11 +65,21 @@ export interface ContinuationCommit {
 export interface ContinuationJournal {
   read(continuationId: string): Promise<ContinuationEntry | undefined>;
   /**
+   * Resolve existing retry claims without acquiring run ownership. On a lookup miss,
+   * rerun under the run writer fence, acquired outside the retry catalog/operation
+   * locks. Keep that ownership through validation, binding and acceptance publication.
+   * The callback may run twice and must seal the same canonical command both times.
+   */
+  withAdmission<T>(runId: string, work: () => Promise<T>): Promise<T>;
+  /** Effect-free fresh-intent validation; assert an already-held run fence before reading the boundary. */
+  validateFresh(command: ContinuationCommand): Promise<void>;
+  /**
    * Under the run writer fence: first recover an identical committed correlation;
    * otherwise validate the exact issued boundary (workflow/generation/step/attempt,
    * request and revision), validate any durable decision and reauthorize immediately
    * before append. Commit ONE protected continuation.recorded event containing both
    * answer and accepted dispatch-needed intent. A stale boundary has no effects.
+   * Fresh claims were validated under the same fence before publication and binding.
    * The retry claim is already bound; this adapter must not allocate another identity.
    * A crash after append is recovered by correlation, never by answering again.
    */
@@ -135,6 +145,7 @@ export class ContinuationAdmissionService implements ContinuationService {
           }),
         ) as JsonValue;
       },
+      validateFresh: (command) => this.options.journal.validateFresh(command),
       prepare: (command, context) => this.commit(command, context, true),
       recover: (command, context) => this.commit(command, context, false),
     });
@@ -151,7 +162,9 @@ export class ContinuationAdmissionService implements ContinuationService {
       // still contains the authoritative acceptance after a restore or rewind.
       const canonical = canonicalJson(this.operation.canonicalize(command));
       const snapshot = JSON.parse(canonical) as ContinuationCommand;
-      const response = await this.options.retries.execute(this.operation, snapshot, retry, authority);
+      const response = await this.options.journal.withAdmission(snapshot.runId, () =>
+        this.options.retries.execute(this.operation, snapshot, retry, authority),
+      );
       if (response.state !== "resolved") return response;
       const entry = await this.read(response.result.continuationId);
       this.assertOwner(entry, authority);

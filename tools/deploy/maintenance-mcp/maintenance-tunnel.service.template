@@ -1,0 +1,25 @@
+# INACTIVE user unit. Render/review under a separately approved maintenance user manager.
+[Unit]
+Description=Independent read-only maintenance tunnel and stdio bridge
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=exec
+WorkingDirectory=@INDEPENDENT_RUNTIME@
+# Clear ambient overrides before tunnel-client or its Node child starts. No ORCA environment/config.
+ExecStart=/usr/bin/env -i HOME=@MAINTENANCE_HOME@ PATH=@REVIEWED_PATH@ LANG=C TMPDIR=@PRIVATE_TMPDIR@ @PINNED_TUNNEL_CLIENT_0_0_15@ run --profile-file @PRIVATE_MAINTENANCE_PROFILE@
+UMask=0077
+Restart=no
+TimeoutStopSec=10
+KillMode=control-group
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+MemoryMax=256M
+CPUQuota=25%
+TasksMax=64
+
+[Install]
+WantedBy=default.target

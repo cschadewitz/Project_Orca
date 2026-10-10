@@ -25,7 +25,7 @@ async function fixture() {
   dirs.push(dir);
   await writeFile(
     join(dir, "orca.config.yaml"),
-    "workflows: [typed.yaml]\ntemplates: []\nprogram: { workflow: typed }\n",
+    "workflows: [typed.yaml]\ntemplates: []\nprogram: { workflow: typed, itemWorkflow: typed }\n",
   );
   const definition = {
     id: "typed",

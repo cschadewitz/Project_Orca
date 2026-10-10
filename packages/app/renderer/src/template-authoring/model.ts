@@ -20,7 +20,10 @@ export interface AuthoringSnapshot {
   readonly target: AuthoringTarget;
   readonly revision: string;
   readonly generation: string;
+  readonly contextRevision?: string;
   readonly assets: readonly TemplateAsset[];
+  /** Current authoritative catalog diagnostics, including parser and workflow failures. */
+  readonly errors?: readonly AuthoringError[];
   readonly writeReason?: string;
 }
 

@@ -177,6 +177,8 @@ export interface StartRunOptions {
   workflowId?: string;
   inline?: { graph: WorkflowGraph; id: string; version?: string };
   vars?: Record<string, unknown>;
+  /** Trusted captured-launch attribution; never accepted from wire launch params. */
+  itemWorkflowSource?: "config.program.itemWorkflow";
   workspace?: Workspace;
   requestId?: string;
   workItemId?: string;
@@ -350,7 +352,8 @@ export class Orchestrator {
         "WORKFLOW_INVALID",
         `workflow '${def.id}' changed since its inputs were validated; validate them again before starting`,
       );
-    if (opts.overrides) this.validateOverrides(def, opts.overrides, generation?.agents);
+    if (opts.overrides)
+      this.validateOverrides(def, opts.overrides, generation?.agents, generation?.workflows, generation?.templates);
     const inputs = validateWorkflowInputs(def, opts.vars ?? {});
     if (!inputs.validation.ok) {
       const { errors, warnings } = inputs.validation;
@@ -375,7 +378,7 @@ export class Orchestrator {
       throw new OrcaError("RUN_STATE", "Request and work item associations do not match");
     const { definition: def, vars, generation } = await this.validateStartRun(opts, supplied);
     const provenance = generation
-      ? launchProvenance(generation, def, vars, opts.vars ?? {}, opts.overrides)
+      ? launchProvenance(generation, def, vars, opts.vars ?? {}, opts.overrides, opts.itemWorkflowSource)
       : undefined;
     if (generation) {
       if (!this.generations) throw unavailable();
@@ -1230,8 +1233,18 @@ export class Orchestrator {
    * configured, and every role the workflow's own nodes ask for must be filled under it -
    * rather than failing on the first step that needs the agent.
    */
-  private validateOverrides(def: WorkflowDefinition, overrides: RunOverrides, agents = this.agents): void {
+  private validateOverrides(
+    def: WorkflowDefinition,
+    overrides: RunOverrides,
+    agents = this.agents,
+    workflows = this.workflows,
+    templates = this.templates,
+  ): void {
     agents.validateOverrides(overrides);
+    if (overrides.itemWorkflow !== undefined && !workflows.has(overrides.itemWorkflow))
+      throw new OrcaError("WORKFLOW_NOT_FOUND", "Selected item workflow is unavailable");
+    if (overrides.templatePack !== undefined && !templates.packs().includes(overrides.templatePack))
+      throw new OrcaError("TEMPLATE_NOT_FOUND", "Selected template pack is unavailable");
     const scoped = agents.withOverrides(overrides);
     for (const node of Object.values(def.nodes)) {
       const selector = (node as { agent?: unknown }).agent;

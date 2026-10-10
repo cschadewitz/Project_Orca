@@ -6,6 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { DaemonIdentity } from "../daemon-connection.js";
+import type { MacOwnedStopResult } from "./mac-update-restart.js";
 
 /** References the existing #402 manifest bytes; this is not a second artifact manifest.
  * The reviewed compatibility/recovery plans and channel are also part of consent.
@@ -45,8 +46,19 @@ export interface MacDraftLease {
   /** Releases exactly this all-window freeze. Unknown must retain its safety boundary. */
   release(this: void): Promise<"released" | "unknown">;
 }
-export interface MacAdmissionLease {
+/** One process-local owner from exact consent through drain and idle preparation. */
+export interface MacDrainLease {
   readonly target: MacUpdateTarget;
+  readonly token: string;
+  observe(this: void): Promise<"draining" | "held" | "unknown">;
+  /** Defer while draining, resume after held; never releases an uncertain fence. */
+  release(this: void): Promise<"released" | "unknown">;
+}
+export interface MacAdmissionLease {
+  readonly token?: string;
+  readonly target: MacUpdateTarget;
+  /** Main-only owned stop evidence. Never authorizes replacement, restore or reopening. */
+  stopOwned?(this: void, signal: AbortSignal, operationMs: number): Promise<MacOwnedStopResult>;
   /** Resume only the exact owned target/token, with positive acknowledgement. */
   release(this: void): Promise<"released" | "unknown">;
 }
@@ -56,6 +68,14 @@ export interface MacUpdatePorts {
    * after all writes settle; honor abort. Do not forward raw errors/progress metadata.
    */
   download(this: void, candidate: MacUpdateCandidate, signal: AbortSignal): Promise<"verified" | "failed">;
+  /** Trusted consent freshness/revocation, refreshed while waiting and before freeze. */
+  approvalCurrent?(
+    this: void,
+    candidate: MacUpdateCandidate,
+    target: MacUpdateTarget,
+  ): Promise<"valid" | "refused" | "unknown">;
+  /** Missing/unsupported drain fails closed. Capture without blocking existing work. */
+  drainAdmission?(this: void, target: MacUpdateTarget, token: string): Promise<MacPreparation<MacDrainLease>>;
   /** Reuse prepareDrafts acknowledgements; also guard new windows/interaction until release. */
   prepareDrafts(this: void): Promise<MacPreparation<MacDraftLease>>;
   /** Atomically fence via existing maintenance prepare, on a positively owned daemon only.
@@ -63,7 +83,12 @@ export interface MacUpdatePorts {
    * without touching them. Active work/callbacks/unknown work prevent ready. Blocked
    * guarantees no fence acquired; a lost response is unknown, never blocked.
    */
-  prepareAdmission(this: void, target: MacUpdateTarget, token: string): Promise<MacPreparation<MacAdmissionLease>>;
+  prepareAdmission(
+    this: void,
+    target: MacUpdateTarget,
+    token: string,
+    drain?: MacDrainLease,
+  ): Promise<MacPreparation<MacAdmissionLease>>;
   /** Under both leases, recheck trust/freshness/exact bytes, all windows, UI/managed daemon/
    * protocol/store compatibility and complete-state recovery readiness. No stop/writes.
    */
@@ -114,6 +139,18 @@ function isAdmissionLease(value: unknown): value is MacAdmissionLease {
     target.epoch >= 0
   );
 }
+function isDrainLease(value: unknown, expected: MacUpdateTarget, token: string): value is MacDrainLease {
+  return (
+    isAdmissionLease(value) &&
+    "token" in value &&
+    value.token === token &&
+    "observe" in value &&
+    typeof value.observe === "function" &&
+    value.target.workspaceId === expected.workspaceId &&
+    value.target.instanceId === expected.instanceId &&
+    value.target.epoch === expected.epoch
+  );
+}
 /** Normalize synchronous adapter exceptions as well as rejected promises. */
 async function settled<T>(operation: () => Promise<T>, fallback: T): Promise<T> {
   try {
@@ -140,11 +177,21 @@ export class MacUpdates {
   private sealed = false;
   private download: AbortController | undefined;
   private verified = false;
+  private token: string | undefined;
+  private drain: MacDrainLease | undefined;
+  private deferring: Promise<void> | undefined;
+  private readonly listeners = new Set<(state: MacUpdateSnapshot) => void>();
 
   constructor(private readonly ports: MacUpdatePorts) {}
 
   get state(): MacUpdateSnapshot {
     return this.snapshot;
+  }
+  subscribe(listener: (state: MacUpdateSnapshot) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
   private set(phase: MacUpdateSnapshot["phase"], blocker?: MacUpdateBlocker): void {
     this.snapshot = Object.freeze({
@@ -152,12 +199,19 @@ export class MacUpdates {
       ...(this.offer ? { offerId: this.offer.id } : {}),
       ...(blocker ? { blocker } : {}),
     });
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(this.snapshot);
+      } catch {
+        /* Observers cannot alter lease ownership. */
+      }
+    }
   }
   /** Fresh offer IDs also invalidate same-version rebuilds and replayed approvals.
    * The caller must defer/revoke an old offer before replacing it while work is pending.
    */
   present(candidate: MacUpdateCandidate, target: MacUpdateTarget): string | undefined {
-    if (this.busy || this.sealed) return undefined;
+    if (this.busy || this.sealed || this.drain || this.deferring) return undefined;
     if (
       !/^[a-f0-9]{64}$/.test(candidate.manifestSha256) ||
       !candidate.channel ||
@@ -195,11 +249,26 @@ export class MacUpdates {
     this.reconsiderPending = false;
     this.download?.abort();
     this.set("deferred");
+    if (!this.busy && this.drain) {
+      this.busy = true;
+      this.deferring = this.releaseDrain()
+        .then(() => undefined)
+        .finally(() => {
+          this.busy = false;
+          this.deferring = undefined;
+        });
+    }
     return true;
+  }
+  /** Action owners await remote defer settlement before discarding candidate evidence. */
+  async settled(): Promise<MacUpdateSnapshot> {
+    await this.deferring;
+    return this.state;
   }
   async approve(id: string): Promise<MacUpdateSnapshot> {
     if (!this.offer || this.offer.id !== id || this.busy || this.sealed || this.approved) return this.state;
     this.approved = true;
+    this.token ??= randomUUID();
     return this.run(this.offer);
   }
   async reconsider(): Promise<MacUpdateSnapshot> {
@@ -217,6 +286,10 @@ export class MacUpdates {
   private async run(offer: Offer): Promise<MacUpdateSnapshot> {
     this.busy = true;
     try {
+      if (!this.drain) {
+        this.set("preparing");
+        if ((await this.observeDrain(offer)) === "stop") return this.state;
+      }
       if (!this.verified) {
         this.download = new AbortController();
         this.set("downloading");
@@ -238,6 +311,7 @@ export class MacUpdates {
     } catch {
       this.unknown();
     } finally {
+      if (!this.approved && !this.sealed && this.drain) await this.releaseDrain();
       this.reconsiderPending = false;
       this.busy = false;
     }
@@ -252,19 +326,86 @@ export class MacUpdates {
   /** Reverse acquisition order; failed admission release keeps drafts frozen as well.
    * Never call release on a preparation whose ownership wasn't positively returned.
    */
+  private async releaseDrain(): Promise<boolean> {
+    const drain = this.drain;
+    if (!drain) return true;
+    if ((await settled(() => drain.release(), "unknown")) !== "released") {
+      this.unknown();
+      return false;
+    }
+    this.drain = undefined;
+    this.token = undefined;
+    return true;
+  }
   private async release(drafts: MacDraftLease, admission?: MacAdmissionLease): Promise<boolean> {
     if (admission && (await settled(() => admission.release(), "unknown")) !== "released") {
       this.unknown();
       return false;
     }
+    // Admission cleanup consumed the same remote owner; never release it twice.
+    if (admission) {
+      this.drain = undefined;
+      this.token = undefined;
+    }
+    if (!admission && !this.approved && !(await this.releaseDrain())) return false;
     if ((await settled(() => drafts.release(), "unknown")) !== "released") {
       this.unknown();
       return false;
     }
     return true;
   }
+  private drainUnknown(): "stop" {
+    this.unknown();
+    return "stop";
+  }
+  private async observeDrain(offer: Offer): Promise<"draining" | "held" | "stop"> {
+    if (!this.approved) return "stop";
+    if (this.ports.approvalCurrent) {
+      const current = await settled(() => this.ports.approvalCurrent!(offer.candidate, offer.target), "unknown");
+      if (current === "refused") {
+        this.approved = false;
+        this.verified = false;
+        if (await this.releaseDrain()) this.set("failed", "candidate");
+        return "stop";
+      }
+      if (current !== "valid") return this.drainUnknown();
+      if (!this.approved) return "stop";
+    }
+    if (!this.drain) {
+      if (!this.ports.drainAdmission) {
+        this.approved = false;
+        this.set("failed", "activity");
+        return "stop";
+      }
+      const result = await settled(() => this.ports.drainAdmission!(offer.target, this.token!), { outcome: "unknown" });
+      if (result?.outcome === "blocked") {
+        this.approved = false;
+        this.set("failed", result.blocker);
+        return "stop";
+      }
+      if (result?.outcome !== "ready" || !isDrainLease(result.lease, offer.target, this.token!))
+        return this.drainUnknown();
+      this.drain = result.lease;
+    }
+    const drain = this.drain;
+    if (!this.approved) return "stop";
+    const observation = await settled(() => drain.observe(), "unknown");
+    if (!isDrainLease(drain, offer.target, this.token!)) return this.drainUnknown();
+    if (!this.approved) return "stop";
+    if (observation !== "draining" && observation !== "held") return this.drainUnknown();
+    return observation;
+  }
   private async prepare(offer: Offer): Promise<void> {
     this.set("preparing");
+    if (!this.approved) return;
+    const observation = await this.observeDrain(offer);
+    if (observation === "stop") return;
+    if (observation === "draining") {
+      this.set("waiting", "activity");
+      return;
+    }
+    const drain = this.drain!;
+    // Parked work/live callbacks were inventoried before any all-call/window freeze.
     const drafts = await settled(() => this.ports.prepareDrafts(), { outcome: "unknown" });
     if (drafts?.outcome !== "ready" && drafts?.outcome !== "blocked") return this.unknown();
     if (drafts.outcome === "blocked") {
@@ -276,7 +417,7 @@ export class MacUpdates {
       await this.release(drafts.lease);
       return;
     }
-    const admission = await settled(() => this.ports.prepareAdmission(offer.target, randomUUID()), {
+    const admission = await settled(() => this.ports.prepareAdmission(offer.target, this.token!, drain), {
       outcome: "unknown",
     });
     if (admission?.outcome !== "ready" && admission?.outcome !== "blocked") return this.unknown();
@@ -298,9 +439,11 @@ export class MacUpdates {
       await this.release(drafts.lease, admission.lease);
       return;
     }
+    if ((await settled(() => drain.observe(), "unknown")) !== "held") return this.unknown();
     const validation = await settled(() => this.ports.revalidate(offer.candidate, offer.target), "unknown");
     if (validation !== "valid" && validation !== "refused") return this.unknown();
     if (
+      !isDrainLease(drain, offer.target, this.token!) ||
       !isDraftLease(drafts.lease) ||
       !isAdmissionLease(admission.lease) ||
       admission.lease.target.workspaceId !== offer.target.workspaceId ||

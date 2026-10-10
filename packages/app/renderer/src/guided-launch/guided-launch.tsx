@@ -1,5 +1,5 @@
 /** Guided launch workspace composed from shared primitives and injected protected admission ports. */
-import { useState, useSyncExternalStore, type JSX, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type JSX, type ReactNode } from "react";
 import type { WorkflowInputDeclarationView } from "@orca/protocol";
 import { Button, Card, ConfigField, Menu, Text } from "../ui/index.js";
 import type { GuidedLaunchController } from "./controller.js";
@@ -7,6 +7,7 @@ import { launchReceipt } from "./controller.js";
 import type { LaunchDraft } from "./contracts.js";
 import { inputSensitive, parseInput } from "./input-model.js";
 import { RequestOverrides, type RequestOverrideChoices } from "./request-overrides.js";
+import { launchSelectionLines } from "../../../src/launch-provenance.js";
 import "./guided-launch.css";
 
 function InputField({
@@ -16,18 +17,24 @@ function InputField({
   onChange,
   locked,
   protectedValue,
+  rawText,
 }: {
   name: string;
   field: WorkflowInputDeclarationView;
   vars: Record<string, unknown>;
-  onChange: (vars: Record<string, unknown>) => boolean;
+  onChange: (vars: Record<string, unknown>, text: string | undefined) => boolean;
   locked: boolean;
   protectedValue: boolean;
+  rawText: string | undefined;
 }): JSX.Element {
   const present = Object.hasOwn(vars, name);
   const value = vars[name];
-  const [text, setText] = useState(present ? (typeof value === "string" ? value : JSON.stringify(value)) : "");
-  const [error, setError] = useState<string>();
+  const text = rawText ?? (present ? (typeof value === "string" ? value : (JSON.stringify(value) ?? "")) : "");
+  const error = (() => {
+    if (rawText === undefined || value !== undefined) return undefined;
+    const parsed = parseInput(field, rawText);
+    return parsed.ok ? "Review the value against the current input declaration." : parsed.message;
+  })();
   const supported = ["string", "number", "integer", "boolean", "array", "object"].includes(field.type);
   return (
     <ConfigField
@@ -50,10 +57,7 @@ function InputField({
               const raw = event.target.value;
               const parsed = parseInput(field, raw);
               // Invalid text must invalidate the old review/value, never silently submit the prior value.
-              if (onChange({ ...vars, [name]: parsed.ok ? parsed.value : undefined })) {
-                setText(raw);
-                setError(parsed.ok ? undefined : parsed.message);
-              }
+              onChange({ ...vars, [name]: parsed.ok ? parsed.value : undefined }, raw);
             }}
           />
           <Button
@@ -62,10 +66,7 @@ function InputField({
             onClick={() => {
               const next = { ...vars };
               delete next[name];
-              if (onChange(next)) {
-                setText("");
-                setError(undefined);
-              }
+              onChange(next, undefined);
             }}
           >
             Omit value
@@ -75,10 +76,7 @@ function InputField({
               disabled={locked}
               disabledReason="The original launch intent is retained."
               onClick={() => {
-                if (onChange({ ...vars, [name]: null })) {
-                  setText("null");
-                  setError(undefined);
-                }
+                onChange({ ...vars, [name]: null }, undefined);
               }}
             >
               Use null
@@ -86,7 +84,7 @@ function InputField({
           )}
           {!supported && <Text style="caption">This input type requires an updated editor.</Text>}
           <Text style="caption">
-            {present ? "Explicit value" : "Omitted"}
+            {error ? "Invalid value" : present ? "Explicit value" : "Omitted"}
             {protectedValue || inputSensitive(field) ? "; value withheld from preview" : ""}
           </Text>
         </>
@@ -97,6 +95,9 @@ function InputField({
 
 export interface GuidedLaunchProps {
   controller: GuidedLaunchController;
+  requirePermissionReview?: boolean;
+  protectedDraftsAvailable?: boolean;
+  restoreAvailable?: boolean;
   /** Shared selection owner supplies only supported, authorized Request override controls. */
   requestOverrides?: (draft: LaunchDraft, edit: (draft: LaunchDraft) => void, locked: boolean) => ReactNode;
   overrideChoices?: RequestOverrideChoices;
@@ -107,6 +108,9 @@ export interface GuidedLaunchProps {
 }
 export function GuidedLaunch({
   controller,
+  requirePermissionReview = false,
+  protectedDraftsAvailable = true,
+  restoreAvailable = true,
   requestOverrides,
   overrideChoices,
   onConfiguration,
@@ -115,6 +119,8 @@ export function GuidedLaunch({
 }: GuidedLaunchProps): JSX.Element {
   const state = useSyncExternalStore(controller.subscribe, controller.read);
   const { draft, context, review } = state;
+  const [permissionConfirmed, confirmPermission] = useState(false);
+  useEffect(() => confirmPermission(false), [review]);
   const workflow = context.workflows.find((w) => w.id === draft.workflowId);
   const selectedRoot = context.roots.find((root) => root.id === draft.rootId);
   const locked =
@@ -125,9 +131,12 @@ export function GuidedLaunch({
   const reason = controller.disabledReason();
   const invalid = Object.values(draft.vars).some((value) => value === undefined);
   const receipt = state.result === undefined ? undefined : launchReceipt(state.result);
-  const undeclared = Object.keys(draft.vars).filter(
-    (name) => !Object.hasOwn(workflow?.inputSchema?.fields ?? {}, name),
+  const editableFields = Object.fromEntries(
+    Object.entries(workflow?.inputSchema?.fields ?? {}).filter(
+      ([name]) => draft.mode !== "request" || !["request", "__orcaAdmissionId"].includes(name),
+    ),
   );
+  const undeclared = Object.keys(draft.vars).filter((name) => !Object.hasOwn(editableFields, name));
   const edit = (next: LaunchDraft) => controller.edit(next);
   return (
     <section className="orca-guided-launch" aria-label="Guided launch">
@@ -221,15 +230,32 @@ export function GuidedLaunch({
               onChange={(overrides) => edit({ ...draft, overrides })}
             />
           )}
+          {requestOverrides === undefined && overrideChoices === undefined && (
+            <Text style="caption">
+              Request override choices are unavailable under the current configuration or authorization. Configured
+              selections are checked by preflight.
+            </Text>
+          )}
+          {workflow?.inputSchema?.fields.request !== undefined && (
+            <Text style="caption">
+              The submission service supplies the declared Request input from its title and body.
+            </Text>
+          )}
         </>
       )}
-      {Object.entries(workflow?.inputSchema?.fields ?? {}).map(([name, field]) => (
+      {Object.entries(editableFields).map(([name, field]) => (
         <InputField
           key={`${draft.workflowId}:${state.draftTarget.epoch}:${state.inputEpoch}:${state.intent?.id ?? "unsent"}:${name}`}
           name={name}
           field={field}
           vars={draft.vars}
-          onChange={(vars) => edit({ ...draft, vars })}
+          rawText={state.inputText[name]}
+          onChange={(vars, text) => {
+            const inputText = { ...state.inputText };
+            if (text === undefined) delete inputText[name];
+            else inputText[name] = text;
+            return controller.edit({ ...draft, vars }, inputText);
+          }}
           locked={locked}
           protectedValue={state.withheldInputs.includes(name)}
         />
@@ -259,7 +285,7 @@ export function GuidedLaunch({
         <Text style="mono-id">Generation {context.activeGeneration}</Text>
         {selectedRoot?.evidence.state === "verified" && <Text style="caption">{selectedRoot.evidence.summary}</Text>}
         {workflow?.provenance.map((line, index) => (
-          <Text key={index} style="caption">
+          <Text key={index} style="mono-id">
             {line}
           </Text>
         ))}
@@ -273,6 +299,29 @@ export function GuidedLaunch({
           <Text style="mono-id">
             Root {review.rootId} / {review.rootRevision}
           </Text>
+          {review.checkout?.state === "verified" && (
+            <>
+              <Text style="mono-id">
+                Repository {review.checkout.repository} / base {review.checkout.baseCommit}
+              </Text>
+              <Text style="mono-id">
+                {review.checkout.profile === "prepared-local"
+                  ? `Cwd ${review.checkout.cwd} / branch ${review.checkout.branch}`
+                  : `Worktree ${review.checkout.worktreeRoot} / branch prefix ${review.checkout.branchPrefix}`}
+              </Text>
+            </>
+          )}
+          {review.selectionProvenance === undefined ? (
+            <Text style="caption">
+              Resolved agent, model and instruction provenance is unavailable for this review.
+            </Text>
+          ) : (
+            launchSelectionLines(review.selectionProvenance).map((line, index) => (
+              <Text key={index} style="mono-id">
+                {line}
+              </Text>
+            ))
+          )}
           {Object.entries(review.command.params.vars ?? {}).map(([name, value]) => (
             <Text key={name} style="mono-id">
               {name}:{" "}
@@ -287,6 +336,22 @@ export function GuidedLaunch({
             </Text>
           ))}
         </Card>
+      )}
+      {requirePermissionReview && review && (
+        <ConfigField label="Permission review" path="permission-review">
+          {(control) => (
+            <label>
+              <input
+                {...control}
+                type="checkbox"
+                checked={permissionConfirmed}
+                onChange={(event) => confirmPermission(event.target.checked)}
+              />
+              I reviewed the configured permission policy. This work may execute commands in the prepared checkout;
+              permission requests still require their own confirmation.
+            </label>
+          )}
+        </ConfigField>
       )}
       <Text style="body">{state.message}</Text>
       {state.errors.map((issue, index) => (
@@ -322,8 +387,10 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.submit();
           }}
-          disabled={state.busy || state.phase !== "review" || invalid}
-          disabledReason="Validate and review the exact command before launching."
+          disabled={
+            state.busy || state.phase !== "review" || invalid || (requirePermissionReview && !permissionConfirmed)
+          }
+          disabledReason="Validate the exact command and review its permission policy before launching."
         >
           Launch
         </Button>
@@ -351,8 +418,12 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.saveDraft();
           }}
-          disabled={state.busy}
-          disabledReason="A launch operation or protected read is pending."
+          disabled={locked || !protectedDraftsAvailable}
+          disabledReason={
+            protectedDraftsAvailable
+              ? "A launch operation or protected read is pending."
+              : "Protected unsent draft storage is unavailable. This session retains your draft."
+          }
         >
           Save protected draft
         </Button>
@@ -360,8 +431,12 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.restore();
           }}
-          disabled={state.busy}
-          disabledReason="A launch operation or protected read is pending."
+          disabled={state.busy || !restoreAvailable}
+          disabledReason={
+            restoreAvailable
+              ? "A launch operation or protected read is pending."
+              : "Choose the exact retained launch to restore."
+          }
         >
           Restore protected launch
         </Button>
@@ -369,8 +444,12 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.loadDraft();
           }}
-          disabled={state.busy}
-          disabledReason="A launch operation or protected read is pending."
+          disabled={state.busy || !protectedDraftsAvailable}
+          disabledReason={
+            protectedDraftsAvailable
+              ? "A launch operation or protected read is pending."
+              : "Protected unsent draft storage is unavailable. This session retains your draft."
+          }
         >
           Restore protected draft
         </Button>

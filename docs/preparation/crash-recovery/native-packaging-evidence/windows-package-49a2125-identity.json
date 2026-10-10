@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "sourceCommit": "49a21254dfb02dfce5182902a317298a644bc560",
+  "electron": "44.4.5",
+  "unsignedPortable": true,
+  "actualBuilderDirectory": true,
+  "originalAsarSha256": "24a649167ff93cbdc638b8b768055775104d8bcdb2698751e539b71b05249865",
+  "instrumentedAsarSha256": "90832b9463d2c9dec11dc93ac38ebebb8a2a38b8da82438d91685c27e1039908",
+  "exeSha256": "d61efdf4341cfa1ee5b359d85ab2187290ff65245e33fb10cfaa467250af78a1",
+  "originalMainSha256": "42ef22bca4d5c65b758369e5b771bdc29512aab1faa3e555f3d35c185bc0b78c",
+  "bootstrapOnlyChanges": ["package.json main", "acceptance-bootstrap.cjs"],
+  "method": "Candidate app.asar built by actual electron-builder. Second owned image adds a bootstrap to suppress protocol registration, window showing and outside-fixture connections; product main/preload/renderer bytes unchanged. This is instrumented packaged execution, not an untouched installed-app verdict."
+}

@@ -59,6 +59,7 @@ export type Route =
   | { kind: "artifact"; surface: "runs"; name: string; version?: number; runId?: string }
   | { kind: "workflow"; surface: "config"; workflowId: string; runId?: string }
   | { kind: "agent"; surface: "agents"; agentId: string }
+  | { kind: "launch"; surface: "config" }
   | { kind: "config"; surface: "config"; document: ConfigDocument };
 
 /** `build.2` — the node, and the attempt when one is named. */
@@ -143,6 +144,8 @@ export function resolveRoute(url: string): Route | undefined {
         : { kind: "workflow", surface: "config", workflowId: first, ...(run !== undefined ? { runId: run } : {}) };
     case "agent":
       return first === undefined ? undefined : { kind: "agent", surface: "agents", agentId: first };
+    case "launch":
+      return first === undefined ? { kind: "launch", surface: "config" } : undefined;
     case "config":
       /* The bare URL is the YAML, which is what "the configuration" means to everybody who
          is not thinking about ADR 0009. An unrecognised second segment resolves to nothing
@@ -163,6 +166,8 @@ export const surfaceFor = (route: Route): SurfaceId => route.surface;
 /* ---------- the canonical URLs, which are what Copy link and the palette emit ---------- */
 
 const path = (type: string, id: string): string => `orca://${type}/${encodeURIComponent(id)}`;
+
+export const launchUrl = (): string => "orca://launch";
 
 export const runUrl = (runId: string): string => path("run", runId);
 
@@ -296,6 +301,8 @@ export function describeRoute(route: Route): { type: string; id: string } {
       return { type: "workflow", id: route.workflowId };
     case "agent":
       return { type: "agent", id: route.agentId };
+    case "launch":
+      return { type: "launch", id: "guided launch" };
     case "config":
       return route.document === "permissions"
         ? { type: "document", id: "orca.permissions.json" }

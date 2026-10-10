@@ -42,13 +42,20 @@ const EnvelopeSchema = z.strictObject({
 });
 
 const unreadable = () =>
-  new OrcaError("RUN_STATE", "protected execution record or key is missing, invalid or unreadable");
+  new OrcaError(
+    "RUN_STATE",
+    "protected execution record or key is missing, invalid or unreadable",
+    protectedDiagnostic,
+  );
+// Explicit owner projection on an already authorized failed operation. Generic
+// RUN_STATE remains ambiguous; this tag contains no cause, path, key or record.
+const protectedDiagnostic = Object.freeze({ diagnostics: Object.freeze({ protectedState: "unavailable" }) });
 
 // Identity, not an error code/message or caller-supplied data, selects a fixed diagnostic.
 // Reconstruct at the boundary so even a mutated internal error cannot carry plaintext.
 const safeFailures = new WeakMap<object, "record" | "limit">();
 export function protectedRecordInvalid(): OrcaError {
-  const error = new OrcaError("RUN_STATE", "protected execution record is missing or invalid");
+  const error = new OrcaError("RUN_STATE", "protected execution record is missing or invalid", protectedDiagnostic);
   safeFailures.set(error, "record");
   return error;
 }

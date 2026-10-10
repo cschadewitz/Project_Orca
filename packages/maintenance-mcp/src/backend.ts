@@ -11,6 +11,7 @@ import {
 } from "./contracts.js";
 import { BUILD, LIMITS, OPERATIONS, POLICY, POLICY_ID, type Operation } from "./policy.js";
 import { unavailableAdapter, type ObservationAdapter, type ReadRequest } from "./adapter.js";
+import { SourceError } from "./observer-io.js";
 
 type Failure = "not_configured" | "busy" | "timeout" | "source_failed" | "oversized_source" | "invalid_source";
 type ReadResult = { ok: true; value: unknown } | { ok: false; reason: Failure };
@@ -63,7 +64,7 @@ export class MaintenanceBackend {
         hostBootIdentity: { status: "unavailable", bootId: null, reason: "not_configured" },
         callerIdentity: { kind: "local_stdio_unverified", verifiedHuman: false },
         readiness: "contract_ready",
-        productionSources: "unavailable",
+        productionSources: this.adapter.sourceMode ?? "unavailable",
         transport: "stdio",
         cursors: false,
         mutations: false,
@@ -160,8 +161,8 @@ export class MaintenanceBackend {
         } catch {
           return { ok: false, reason: "invalid_source" };
         }
-      } catch {
-        return { ok: false, reason: "source_failed" };
+      } catch (error) {
+        return { ok: false, reason: error instanceof SourceError ? error.reason : "source_failed" };
       } finally {
         this.inFlight--;
       }

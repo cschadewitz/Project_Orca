@@ -27,6 +27,7 @@
 import { createContext, useContext, type JSX, type ReactNode } from "react";
 import { useConfigFeed, type ConfigFeed } from "./use-config.js";
 import { ConfigurationStudioProvider } from "./configuration-studio-context.js";
+import { TemplateStudioProvider } from "../template-authoring/context.js";
 
 const ConfigContext = createContext<ConfigFeed | null>(null);
 
@@ -34,7 +35,9 @@ export function ConfigProvider({ children }: { children: ReactNode }): JSX.Eleme
   const feed = useConfigFeed();
   return (
     <ConfigContext.Provider value={feed}>
-      <ConfigurationStudioProvider feed={feed}>{children}</ConfigurationStudioProvider>
+      <ConfigurationStudioProvider feed={feed}>
+        <TemplateStudioProvider feed={feed}>{children}</TemplateStudioProvider>
+      </ConfigurationStudioProvider>
     </ConfigContext.Provider>
   );
 }

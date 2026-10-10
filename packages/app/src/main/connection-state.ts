@@ -44,6 +44,7 @@ import {
 import type { ConnectionSnapshot } from "../bridge.js";
 import { authenticationCode } from "../client/auth.js";
 import type { RetryCount, SubscriptionState } from "../client/subscription.js";
+import { observeOwnedDiagnostic, type OwnedDiagnosticObserver } from "./diagnostics/source-producers.js";
 
 /** How long a departure from `live` stays off the screen. */
 export const QUIET_MS = 5_000;
@@ -110,6 +111,7 @@ export interface ConnectionMachineOptions {
   hello: () => Promise<HelloResult>;
   /** Publish a post-subscribe handshake only after its connection lifetime is checked. */
   onHello?: (hello: HelloResult) => void;
+  onDiagnostic?: OwnedDiagnosticObserver;
   /** Called with every snapshot the renderer has not already been told about. */
   onChange: (snapshot: ConnectionSnapshot) => void;
   quietMs?: number | undefined;
@@ -127,6 +129,8 @@ export class ConnectionMachine {
   private daemonGone = false;
   private failuresAtCap = 0;
   private fileMode = false;
+  private hadLiveConnection = false;
+  private failureObserved = false;
 
   /* -- what the handshake said -- */
   private orcaVersion: string | undefined;
@@ -175,15 +179,24 @@ export class ConnectionMachine {
     // A socket that has just become a stream is a daemon that has just answered a
     // `subscribe`, and not necessarily the daemon that answered the last one.
     if (link === "live" && arrived) {
+      this.hadLiveConnection = true;
+      this.failureObserved = false;
       this.generation += 1;
       void this.shakeHands();
     }
+    if (arrived && (link === "closed" || link === "reconnecting")) this.observeConnectionFailure();
     this.settle({ immediate: link === "auth-failed" });
   }
 
   /** Authentication refusals bypass the network-blip quiet window and stale handshakes. */
-  authenticationFailed(): void {
+  authenticationFailed(code?: ReturnType<typeof authenticationCode>): void {
     if (this.done) return;
+    if (code === "AUTH_REQUIRED")
+      observeOwnedDiagnostic(this.opts.onDiagnostic, "connection", "authentication_required");
+    else if (code === "AUTH_INVALID")
+      observeOwnedDiagnostic(this.opts.onDiagnostic, "connection", "authentication_invalid");
+    else if (code === "AUTH_FORBIDDEN")
+      observeOwnedDiagnostic(this.opts.onDiagnostic, "connection", "authorization_denied");
     this.handshake += 1;
     this.linkChanged("auth-failed");
   }
@@ -216,6 +229,8 @@ export class ConnectionMachine {
     this.daemonGone = false;
     this.failuresAtCap = 0;
     this.fileMode = fileMode;
+    this.hadLiveConnection = false;
+    this.failureObserved = false;
     this.orcaVersion = undefined;
     this.daemonProtocol = undefined;
     this.capabilities = undefined;
@@ -231,6 +246,7 @@ export class ConnectionMachine {
     if (this.done) return;
     this.handshake += 1;
     this.daemonGone = true;
+    this.observeConnectionFailure();
     this.settle();
   }
 
@@ -259,7 +275,10 @@ export class ConnectionMachine {
     } catch (error) {
       // A refusal from an old request cannot revoke a newer connection on the same client.
       // Current revocation still bypasses the visual quiet window, like socket refusals.
-      if (!this.done && token === this.handshake && authenticationCode(error)) this.authenticationFailed();
+      if (!this.done && token === this.handshake) {
+        const code = authenticationCode(error);
+        if (code) this.authenticationFailed(code);
+      }
       /* The socket is a stream and the read endpoint did not answer. That is not a verdict
          on the daemon's protocol, so the last verdict stands rather than being invented. */
       return;
@@ -282,7 +301,18 @@ export class ConnectionMachine {
        `HelloResult`, so "is `config.set` served" can only be asked of the snapshot. */
     this.methods = result.methods;
     this.compatible = isCompatible(PROTOCOL_VERSION, result.protocol);
+    if (!this.compatible) observeOwnedDiagnostic(this.opts.onDiagnostic, "connection", "protocol_mismatch");
     this.settle();
+  }
+
+  private observeConnectionFailure(): void {
+    if (this.failureObserved) return;
+    this.failureObserved = true;
+    observeOwnedDiagnostic(
+      this.opts.onDiagnostic,
+      "connection",
+      this.hadLiveConnection ? "connection_lost" : "connection_unavailable",
+    );
   }
 
   /** Recompute the state, then decide whether the screen gets to hear about it yet. */

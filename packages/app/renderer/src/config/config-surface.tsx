@@ -42,6 +42,7 @@ import type { ConnectionState } from "@orca/design";
 import { CONFIG_SET_METHOD, type ConfigDocument } from "@orca/protocol";
 import { useSurfaceDensity } from "../appearance-context.js";
 import { useMethodPresent, useWritability } from "../chrome/use-connection.js";
+import { useSidebarCollapsed } from "../chrome/use-breakpoints.js";
 import { SURFACES } from "../chrome/surfaces.js";
 import { useKeyboard } from "../keyboard-context.js";
 import { scopeProps } from "../keyboard-map.js";
@@ -67,14 +68,23 @@ export interface ConfigSurfaceProps {
    * element that is not in the document yet.
    */
   open?: ConfigDocument;
+  launch?: ReactNode;
+  onLaunch?: () => void;
 }
 
 type View = "form" | "raw";
 
-export function ConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Element {
+export function ConfigSurface({ connection, open, launch, onLaunch }: ConfigSurfaceProps): JSX.Element {
   const feed = useConfig();
   if (window.orca.daemonConnection || (feed.state.phase === "ready" && feed.state.data.formSchema !== undefined))
-    return <ConfigurationStudioSurface connection={connection} {...(open ? { open } : {})} />;
+    return (
+      <ConfigurationStudioSurface
+        connection={connection}
+        {...(launch ? { launch } : {})}
+        {...(onLaunch ? { onLaunch } : {})}
+        {...(open ? { open } : {})}
+      />
+    );
   return <LegacyConfigSurface connection={connection} {...(open ? { open } : {})} />;
 }
 
@@ -305,8 +315,14 @@ const fileName = (path: string): string => path.split("/").pop() ?? path;
 
 /** The surface root: `data-surface` for density, and the scope `⌘S` is registered in. */
 function Surface({ children }: { children: ReactNode }): JSX.Element {
+  const narrow = useSidebarCollapsed();
   return (
-    <div className="orca-config" data-surface="config" {...scopeProps("config")}>
+    <div
+      className="orca-config"
+      data-surface="config"
+      data-config-layout={narrow ? "stacked" : "columns"}
+      {...scopeProps("config")}
+    >
       {window.orca.daemonConnection && <ConnectionSource bridge={window.orca.daemonConnection} />}
       {/* Keep the keyed local section mounted when loading has one child and ready has several. */}
       <>{children}</>

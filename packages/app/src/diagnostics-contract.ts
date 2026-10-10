@@ -5,12 +5,14 @@ export const DIAGNOSTICS_PRODUCTION_ENABLED = false;
 export type DiagnosticResultCode =
   | "off"
   | "ready"
+  | "export_ready"
   | "unavailable"
   | "age_uncertain"
   | "expired"
   | "capacity_limited"
-  | "stale_preview"
+  | "stale_export"
   | "publication_pending"
+  | "cancelled"
   | "saved"
   | "refused"
   | "cleanup_pending"
@@ -18,6 +20,7 @@ export type DiagnosticResultCode =
   | "unknown_ready"
   | "acknowledged_unknown";
 export interface DiagnosticsStatus {
+  revision: number;
   enabled: boolean;
   productionEnabled: boolean;
   scopeVersion: number;
@@ -30,16 +33,19 @@ export interface DiagnosticsStatus {
   unknownOperation?: string;
   acknowledgedUnknown: boolean;
   olderUnknowns: boolean;
-  activePreviewHandle?: string;
+  activeExportHandle?: string;
   payloadReservedBytes: number;
+  controlledBinaryAllocatedBytes?: number;
+  controlledBinaryPeakBytes?: number;
   lastSaveOutcome?: "saved" | "refused" | "unknown";
   saveAdmittedBeforeRevocation?: boolean;
 }
 export type DiagnosticsResult<T> = { ok: true; value: T } | { ok: false; code: DiagnosticResultCode };
-export interface DiagnosticPreview {
+export interface DiagnosticExport {
+  statusRevision: number;
   handle: string;
-  text: string;
   byteLength: number;
+  sha256: string;
   source: "current" | "previous";
   expiresInMs: number;
   tailLossPossible: boolean;
@@ -53,8 +59,8 @@ export interface DiagnosticsBridge {
   status(): Promise<DiagnosticsResult<DiagnosticsStatus>>;
   setEnabled(enabled: boolean, scopeVersion: number): Promise<DiagnosticsResult<DiagnosticsStatus>>;
   setMinutes(minutes: number): Promise<DiagnosticsResult<DiagnosticsStatus>>;
-  preparePreview(source: "current" | "previous"): Promise<DiagnosticsResult<DiagnosticPreview>>;
-  closePreview(handle: string): Promise<DiagnosticsResult<DiagnosticsStatus>>;
+  prepareExport(source: "current" | "previous"): Promise<DiagnosticsResult<DiagnosticExport>>;
+  cancelExport(handle: string): Promise<DiagnosticsResult<DiagnosticsStatus>>;
   chooseDestination(handle: string): Promise<DiagnosticsResult<DiagnosticDestination>>;
   save(handle: string, destinationToken: string): Promise<DiagnosticsResult<DiagnosticsStatus>>;
   discardPrevious(): Promise<DiagnosticsResult<DiagnosticsStatus>>;

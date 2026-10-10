@@ -2,6 +2,15 @@
  * CLI command implementations. Each command receives parsed positionals and
  * flags and an output sink; `main.ts` handles argument parsing and errors.
  */
+import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
+import { firstRunRequiresExplicitContinuationRecovery } from "../first-run-recovery-fence.js";
+import {
+  assertClosedUpdateCommand,
+  isClosedUpdateBootstrap,
+  configuredUpdateAdmissionOpen,
+  configuredUpdateExistingWorkOpen,
+  closedUpdateStartupReceipt,
+} from "../update-bootstrap.js";
 import { mcpCommand } from "./mcp.js";
 import { AdmissionRetryModel, ContinuationAdmissionModel, neverAttached } from "@orca/daemon";
 import { admissionRetryOptions } from "./admission-retry.js";
@@ -81,6 +90,7 @@ import { RequestSubmissionModel } from "@orca/daemon";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
 import { memoryStores } from "@orca/store";
 import { scriptedAgentSpec } from "@orca/testing";
+import type { InstalledPluginRelease } from "../plugin-release.js";
 import { bootstrap, loadConfig, loadPlugins, type OrcaApp } from "../bootstrap.js";
 import { formatEvent, formatPaused, formatPendingInput, formatRunState, stepAgents } from "../format.js";
 import { daemonCall, DaemonRedirectError, isAuthenticationFailure } from "../daemon-client.js";
@@ -727,319 +737,7 @@ export const commands: Record<string, Command> = {
     help: "serve [--host addr] [--port n] [--read-only] [--unauthenticated-loopback]  Run the authenticated ORCA daemon until interrupted. Default 127.0.0.1:6722; --read-only omits run controls.",
     usage:
       "Token authentication is on by default; the local credential is stored in auth/local-client.token beside the workspace config.\n--unauthenticated-loopback explicitly permits unauthenticated local access.\nRemote binds require --trusted-proxy IP (repeatable) behind a TLS-terminating proxy.\n--allow-origin origin permits a browser origin (repeatable; none by default).\n",
-    async run(ctx) {
-      const port = ctx.flags.port === undefined ? 6722 : Number(ctx.flags.port);
-      if (!Number.isInteger(port) || port < 0 || port > 65535) {
-        throw new OrcaError("CONFIG_INVALID", `--port must be a port number, got '${String(ctx.flags.port)}'`);
-      }
-      const readOnly = Boolean(ctx.flags["read-only"]);
-      let revisionRuntime: ReturnType<typeof createRevisionRuntime> | undefined;
-      const executionBinding: { current?: ReturnType<typeof daemonExecutionRuntime> } = {};
-      const app = await bootstrap({
-        ...(!readOnly && !ctx.flags["unauthenticated-loopback"]
-          ? {
-              revisionRuntime: (stores) => {
-                revisionRuntime = createRevisionRuntime({
-                  stores,
-                  authorizeExecution: async (runId) => {
-                    const current = executionBinding.current;
-                    if (!current) throw new OrcaError("RUN_STATE", "Revision execution authority is unavailable");
-                    await current.authorizeExecution(runId);
-                  },
-                });
-                return revisionRuntime.runtime;
-              },
-            }
-          : {}),
-        cwd: ctx.cwd,
-        ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
-        // Every gate parks to the log, whatever `humanInput.mode` says in the config. A
-        // daemon that prompted on a terminal nobody is watching, or auto-answered on a
-        // person's behalf, would fail worse than pausing does: parked, the question is on
-        // `inputs.list` and `inputs.answer` settles it, from this process or the next one.
-        ...(readOnly ? {} : { humanInput: new PausingHumanInput() }),
-        // A stable holder, so a run this daemon is already driving is re-acquired rather
-        // than blocked on, and so a lease in `orca leases list` names a process to go and
-        // look at instead of an opaque id.
-        lease: { holder: `orca-serve@${hostname()}:${process.pid}` },
-      });
-      const storeDir = resolvePath(app.configDir, app.config.storeDir);
-      // The plan travels with the read model (#169): `bootstrap` always builds a
-      // `PlanService`, so a daemon over a real workspace answers the nine plan reads too.
-      const reads = new ReadModel({ orchestrator: app.orchestrator, plan: app.plan });
-      // Agents regardless of `--read-only`: listing health reads memory, and a ping spawns
-      // an agent, shakes hands and closes without touching a run, a lease or a log.
-      const agents = new AgentModel({ orchestrator: app.orchestrator, reads });
-      // The two configuration documents, `--read-only` or not: `config.get` is a read, and
-      // `config.set` is kept out by being in the control half of the table (#174, #266).
-      const config = new ConfigModel({
-        generations: app.generations,
-        configDir: app.configDir,
-        ...(app.configFile ? { configFile: app.configFile } : {}),
-        permissionsFile: permissionPolicyPath(app.configDir),
-      });
-      const control = readOnly
-        ? undefined
-        : new ControlModel({
-            orchestrator: app.orchestrator,
-            reads,
-            permissionsFile: permissionPolicyPath(app.configDir),
-            // So an "always" answer's sidecar write pushes `config.changed` like any other.
-            config,
-          });
-      // The plan's writes ride the same switch: `--read-only` omits them with the run
-      // controls, and they are present together or not at all.
-      const planControl =
-        readOnly || !reads.plans
-          ? undefined
-          : new PlanControlModel({
-              plan: app.plan,
-              orchestrator: app.orchestrator,
-              plans: reads.plans,
-              reads,
-            });
-      const authDir = ctx.flags["unauthenticated-loopback"]
-        ? undefined
-        : openAuthDirectory(resolvePath(app.configDir, "auth"));
-      const auth = authDir
-        ? {
-            mode: "token" as const,
-            credentials: authDir.credentials,
-            ownership: authDir.ownership,
-            resolver: orchestratorResolver(app.orchestrator),
-            audit: authDir.audit,
-            trustedProxies: ctx.flags["trusted-proxy"] as string[] | undefined,
-            allowedOrigins: ctx.flags["allow-origin"] as string[] | undefined,
-          }
-        : {
-            mode: "loopback-unauthenticated" as const,
-            allowedOrigins: ctx.flags["allow-origin"] as string[] | undefined,
-          };
-      // Refuse an unsafe bind before rotating the credential local clients already use.
-      validateDeployment(auth, (ctx.flags.host as string | undefined) ?? "127.0.0.1");
-      const workspaceId = await workspaceIdentity(storeDir);
-      const identity = createDaemonIdentity(workspaceId);
-      const liveRuntime =
-        !readOnly && authDir
-          ? daemonExecutionRuntime({
-              instanceId: identity.instanceId,
-              workspaceId,
-              orchestrator: app.orchestrator,
-              credentials: authDir.credentials,
-              ownership: authDir.ownership,
-            })
-          : undefined;
-      if (liveRuntime) {
-        executionBinding.current = liveRuntime;
-        app.orchestrator.liveInput = liveRuntime;
-        app.orchestrator.runtimeActivity = liveRuntime.activity;
-        app.orchestrator.admissionExecution = {
-          authorize: (policy) => liveRuntime.authorizeAdmissionExecution(policy),
-        };
-      }
-      const requestSubmissions =
-        !readOnly && authDir && app.program.submissions
-          ? new RequestSubmissionModel({
-              runtimeActivity: liveRuntime?.activity,
-              orchestrator: app.orchestrator,
-              service: app.program.submissions,
-              shouldDispatch: (id) => neverAttached(app.orchestrator, id),
-              checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
-              execute: async (id, authority) => {
-                const state = liveRuntime
-                  ? await liveRuntime.withResumeAuthority(id, authority, () => app.orchestrator.run(id))
-                  : await app.orchestrator.run(id);
-                await app.program.settle(state);
-              },
-              executionFailed: (id) => app.logger.error("Request execution requires recovery", { runId: id }),
-            })
-          : undefined;
-      const admissionRetries =
-        !readOnly && authDir && app.retryClaims && app.directAdmissions && app.program.submissions
-          ? new AdmissionRetryModel({
-              runtimeActivity: liveRuntime?.activity,
-              claims: app.retryClaims,
-              direct: app.directAdmissions,
-              requests: app.program.submissions,
-              orchestrator: app.orchestrator,
-              checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
-              execute: async (id, authority) => {
-                if (liveRuntime) await liveRuntime.withResumeAuthority(id, authority, () => app.orchestrator.run(id));
-                else await app.orchestrator.run(id);
-              },
-              executionFailed: (id) => app.logger.error("Run admission requires recovery", { runId: id }),
-            })
-          : undefined;
-      const continuationAdmissions =
-        !readOnly && liveRuntime && app.retryClaims && app.retryClaimStore
-          ? new ContinuationAdmissionModel({
-              runtimeActivity: liveRuntime.activity,
-              claims: app.retryClaims,
-              orchestrator: app.orchestrator,
-              locators: new FileContinuationLocatorStore({
-                storeDir,
-                execution: app.orchestrator.stores.execution,
-                retries: app.retryClaimStore,
-              }),
-              executionRuntime: liveRuntime,
-            })
-          : undefined;
-      const revisionServices =
-        revisionRuntime && app.retryClaims && liveRuntime
-          ? createRevisionInputServices({
-              journal: revisionRuntime.journal,
-              readJournal: revisionRuntime.readJournal,
-              retries: revisionRuntime.fenceRetries(app.retryClaims),
-              assertRetryFence: revisionRuntime.assertRetryFence,
-              stale: () => new OrcaError("REVISION_STALE", "Revision destination is no longer available"),
-            })
-          : undefined;
-      if (revisionServices && app.retryClaims) revisionServices.register(app.retryClaims);
-      const daemon = await startDaemon({
-        runtimeIdle: liveRuntime,
-        admissionExecutionSource: async (runId) => {
-          const status = await readAdmissionExecutionStatus(app.orchestrator.stores, runId);
-          switch (status.state) {
-            case "ordinary":
-              return undefined;
-            case "ready":
-              return { state: "pending" };
-            case "started":
-              return { state: "started" };
-            case "unknown":
-              return { state: "uncertain", reason: "legacy-evidence" };
-            case "blocked":
-              return { state: "uncertain", reason: "evidence-unavailable" };
-          }
-        },
-        ...(revisionServices && revisionRuntime
-          ? { revisionSources: { services: revisionServices, readBoundaries: revisionRuntime.readBoundaries } }
-          : {}),
-        operatorSources: {
-          ...(liveRuntime
-            ? {
-                liveState: (target) => liveRuntime.port.inspect(target),
-                liveRevision: () => liveRuntime.port.observationRevision,
-              }
-            : {}),
-          events: app.orchestrator.stores.events,
-          leases: app.orchestrator.stores.leases,
-          generations: app.generations,
-          documents: {
-            events: app.orchestrator.stores.events,
-            requests: app.orchestrator.stores.requests,
-            items: app.orchestrator.stores.workItems,
-          },
-          definitionFor: (id, version, stored) => app.orchestrator.definitionFor(id, version, stored),
-          configStatus: () => config.operatorStatus(),
-          artifactRun: async (id) => (await app.orchestrator.stores.artifacts.get(id))?.producedBy.runId,
-          artifact: (_runId, artifactId, maxBytes) => reads.artifactsGet({ artifactId, maxBytes }),
-        },
-
-        admissionRetries,
-        continuationAdmissions,
-        requestSubmissions,
-        submissionWorkspaceId: workspaceId,
-        identity,
-        liveInputs: liveRuntime?.port,
-        workspaceId,
-        auth,
-        maintenanceToken: process.env.ORCA_MAINTENANCE_TOKEN,
-        admissionFile: process.env.ORCA_ADMISSION_FILE,
-        host: ctx.flags.host as string | undefined,
-        port,
-        orcaVersion: ORCA_VERSION,
-        storeDir,
-        // With control on - the default - this process is one of the store's writers. It
-        // takes each run's single-writer lease before it appends, exactly as a CLI does, and
-        // refuses a run another live process holds (ADR 0008, #101). `--read-only` gives
-        // back the daemon v0.3.0 shipped: projections and nothing else.
-        //
-        // `runs.subscribe` is a read either way: the socket fans out this process's own
-        // event store, so a client sees what runs *this* daemon drives or observes. A run
-        // appended by a separate CLI process lands in that store's files, not in this
-        // orchestrator's listeners, and still shows up on the next read - which is a
-        // property of an in-memory listener list, not of the store (#196 made the store
-        // multi-process safe). `plan.changed` has the same boundary, for the same reason.
-        //
-        // Derived, never asserted: `plan.read` is exactly "this read model has a plan" and
-        // `plan.write` exactly "a PlanControlModel was built", which are the same two facts
-        // `methodsFor` puts the plan methods in the table on. Hardcoding them meant a daemon
-        // over a store with no plan advertised a capability whose nine methods `hello` did
-        // not list, and a client hid nothing on the strength of it.
-        capabilities: [
-          ...(admissionRetries ? (["runs.admit", "admissions.get", "admissions.reconcile"] as const) : []),
-          "runs.read",
-          "runs.subscribe",
-          "workflows.validateInputs",
-          ...(control ? (["runs.control"] as const) : []),
-          ...(reads.plans ? (["plan.read"] as const) : []),
-          ...(planControl ? (["plan.write"] as const) : []),
-        ],
-        reads,
-        agents,
-        config,
-        workflowInputs: new WorkflowInputsModel({ resolve: orchestratorDefinitionResolver(app.orchestrator) }),
-        ...(control ? { control } : {}),
-        ...(planControl ? { planControl } : {}),
-        source: app.orchestrator,
-        // `plan.changed` is folded from this process's plan journal - the store's own
-        // listener seam. A plan a CLI beside this daemon changes lands on the next read,
-        // the same boundary the run feed has just above.
-        planSource: app.orchestrator.stores.plan.journal,
-      });
-      try {
-        if (authDir) await bootstrapLocalOwner(authDir);
-      } catch (error) {
-        liveRuntime?.close();
-        await daemon.close();
-        throw error;
-      }
-      let recoveringContinuations: Promise<void> | undefined;
-      const recoverContinuations = () => {
-        if (!daemon.recoverContinuations || recoveringContinuations) return;
-        recoveringContinuations = daemon
-          .recoverContinuations()
-          .catch(() => app.logger.warn("Continuation recovery requires explicit attention"))
-          .finally(() => {
-            recoveringContinuations = undefined;
-          });
-      };
-      recoverContinuations();
-      const continuationTimer = daemon.recoverContinuations ? setInterval(recoverContinuations, 5_000) : undefined;
-      continuationTimer?.unref();
-      ctx.out(
-        `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,
-      );
-      ctx.out(`serving ${storeDir}: ${READ_METHODS.join(", ")}, ${AGENT_METHODS.join(", ")}`);
-      if (reads.plans) ctx.out(`serving the plan: ${PLAN_READ_METHODS.join(", ")}`);
-      if (control) {
-        ctx.out(`driving runs: ${CONTROL_METHODS.join(", ")}`);
-      } else {
-        ctx.out("read-only: no 'runs.control' capability, and the control methods are absent from this daemon");
-      }
-      ctx.out(
-        authDir
-          ? `authentication: token; local token file: ${authDir.tokenFile}`
-          : "authentication: explicit unauthenticated loopback compatibility mode; any local process may call this daemon",
-      );
-      if (daemon.socketUrl) ctx.out(`notifications on ${daemon.socketUrl}: ${SUBSCRIPTION_METHODS.join(", ")}`);
-      await new Promise<void>((resolve) => {
-        const stop = () => {
-          process.off("SIGINT", stop);
-          process.off("SIGTERM", stop);
-          resolve();
-        };
-        process.once("SIGINT", stop);
-        process.once("SIGTERM", stop);
-      });
-      if (continuationTimer) clearInterval(continuationTimer);
-      await recoveringContinuations;
-      liveRuntime?.close();
-      await daemon.close();
-      await continuationAdmissions?.drain();
-      return 0;
-    },
+    run: (ctx) => serveDaemon(ctx),
   },
 
   kepler: {
@@ -1060,6 +758,7 @@ export const commands: Record<string, Command> = {
       // workspace is removed after the run unless --keep asks for it.
       const dir = ctx.flags.dir ? String(ctx.flags.dir) : await mkdtemp(join(tmpdir(), "orca-demo-"));
       const keep = Boolean(ctx.flags.dir) || Boolean(ctx.flags.keep);
+      assertNoUnownedFirstRunMutation(resolvePath(dir));
       await mkdir(dir, { recursive: true });
       // commands/ -> (src|dist) -> cli -> packages -> repo root
       const here = fileURLToPath(new URL(".", import.meta.url));
@@ -1258,3 +957,346 @@ export const commands: Record<string, Command> = {
     },
   },
 };
+
+/** Trusted operator composition only; no CLI flag, config, RPC or environment supplies this reference. */
+export async function serveWithInstalledPluginRelease(
+  ctx: CommandContext,
+  installedPluginRelease: InstalledPluginRelease,
+): Promise<number> {
+  if (!installedPluginRelease || ctx.flags["unauthenticated-loopback"])
+    throw new OrcaError("CONFIG_INVALID", "Installed plugin serve requires authenticated trusted composition");
+  // Snapshot the caller's reference and command context before asynchronous startup.
+  return serveDaemon(
+    { ...ctx, flags: { ...ctx.flags }, positionals: [...ctx.positionals] },
+    Object.freeze({ ...installedPluginRelease }),
+  );
+}
+
+async function serveDaemon(ctx: CommandContext, installedPluginRelease?: InstalledPluginRelease): Promise<number> {
+  assertClosedUpdateCommand("serve", ctx.flags);
+  const port = ctx.flags.port === undefined ? 6722 : Number(ctx.flags.port);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new OrcaError("CONFIG_INVALID", `--port must be a port number, got '${String(ctx.flags.port)}'`);
+  }
+  const readOnly = Boolean(ctx.flags["read-only"]);
+  let revisionRuntime: ReturnType<typeof createRevisionRuntime> | undefined;
+  const executionBinding: { current?: ReturnType<typeof daemonExecutionRuntime> } = {};
+  const app = await bootstrap({
+    ...(installedPluginRelease ? { installedPluginRelease } : {}),
+    ...(!readOnly && !ctx.flags["unauthenticated-loopback"]
+      ? {
+          revisionRuntime: (stores) => {
+            revisionRuntime = createRevisionRuntime({
+              stores,
+              authorizeExecution: async (runId) => {
+                const current = executionBinding.current;
+                if (!current) throw new OrcaError("RUN_STATE", "Revision execution authority is unavailable");
+                await current.authorizeExecution(runId);
+              },
+            });
+            return revisionRuntime.runtime;
+          },
+        }
+      : {}),
+    cwd: ctx.cwd,
+    ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+    // Every gate parks to the log, whatever `humanInput.mode` says in the config. A
+    // daemon that prompted on a terminal nobody is watching, or auto-answered on a
+    // person's behalf, would fail worse than pausing does: parked, the question is on
+    // `inputs.list` and `inputs.answer` settles it, from this process or the next one.
+    ...(readOnly ? {} : { humanInput: new PausingHumanInput() }),
+    // A stable holder, so a run this daemon is already driving is re-acquired rather
+    // than blocked on, and so a lease in `orca leases list` names a process to go and
+    // look at instead of an opaque id.
+    lease: { holder: `orca-serve@${hostname()}:${process.pid}` },
+  });
+  const storeDir = resolvePath(app.configDir, app.config.storeDir);
+  // The plan travels with the read model (#169): `bootstrap` always builds a
+  // `PlanService`, so a daemon over a real workspace answers the nine plan reads too.
+  const reads = new ReadModel({ orchestrator: app.orchestrator, plan: app.plan });
+  // Agents regardless of `--read-only`: listing health reads memory, and a ping spawns
+  // an agent, shakes hands and closes without touching a run, a lease or a log.
+  const agents = new AgentModel({ orchestrator: app.orchestrator, reads });
+  // The two configuration documents, `--read-only` or not: `config.get` is a read, and
+  // `config.set` is kept out by being in the control half of the table (#174, #266).
+  const config = new ConfigModel({
+    generations: app.generations,
+    configDir: app.configDir,
+    ...(app.configFile ? { configFile: app.configFile } : {}),
+    permissionsFile: permissionPolicyPath(app.configDir),
+  });
+  const control = readOnly
+    ? undefined
+    : new ControlModel({
+        orchestrator: app.orchestrator,
+        reads,
+        permissionsFile: permissionPolicyPath(app.configDir),
+        // So an "always" answer's sidecar write pushes `config.changed` like any other.
+        config,
+      });
+  // The plan's writes ride the same switch: `--read-only` omits them with the run
+  // controls, and they are present together or not at all.
+  const planControl =
+    readOnly || !reads.plans
+      ? undefined
+      : new PlanControlModel({
+          plan: app.plan,
+          orchestrator: app.orchestrator,
+          plans: reads.plans,
+          reads,
+        });
+  const authDir = ctx.flags["unauthenticated-loopback"]
+    ? undefined
+    : openAuthDirectory(resolvePath(app.configDir, "auth"));
+  const auth = authDir
+    ? {
+        mode: "token" as const,
+        credentials: authDir.credentials,
+        ownership: authDir.ownership,
+        resolver: orchestratorResolver(app.orchestrator),
+        audit: authDir.audit,
+        trustedProxies: ctx.flags["trusted-proxy"] as string[] | undefined,
+        allowedOrigins: ctx.flags["allow-origin"] as string[] | undefined,
+      }
+    : {
+        mode: "loopback-unauthenticated" as const,
+        allowedOrigins: ctx.flags["allow-origin"] as string[] | undefined,
+      };
+  // Refuse an unsafe bind before rotating the credential local clients already use.
+  validateDeployment(auth, (ctx.flags.host as string | undefined) ?? "127.0.0.1");
+  const workspaceId = await workspaceIdentity(storeDir);
+  const identity = createDaemonIdentity(workspaceId);
+  const liveRuntime =
+    !readOnly && authDir
+      ? daemonExecutionRuntime({
+          instanceId: identity.instanceId,
+          workspaceId,
+          orchestrator: app.orchestrator,
+          credentials: authDir.credentials,
+          ownership: authDir.ownership,
+        })
+      : undefined;
+  if (liveRuntime) {
+    executionBinding.current = liveRuntime;
+    app.orchestrator.liveInput = liveRuntime;
+    app.orchestrator.runtimeActivity = liveRuntime.activity;
+    app.orchestrator.admissionExecution = {
+      authorize: (policy) => liveRuntime.authorizeAdmissionExecution(policy),
+    };
+  }
+  const requestSubmissions =
+    !readOnly && authDir && app.program.submissions
+      ? new RequestSubmissionModel({
+          runtimeActivity: liveRuntime?.activity,
+          orchestrator: app.orchestrator,
+          service: app.program.submissions,
+          shouldDispatch: (id) => neverAttached(app.orchestrator, id),
+          checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
+          execute: async (id, authority) => {
+            const state = liveRuntime
+              ? await liveRuntime.withResumeAuthority(id, authority, () => app.orchestrator.run(id))
+              : await app.orchestrator.run(id);
+            await app.program.settle(state);
+          },
+          executionFailed: (id) => app.logger.error("Request execution requires recovery", { runId: id }),
+        })
+      : undefined;
+  const admissionRetries =
+    !readOnly && authDir && app.retryClaims && app.directAdmissions && app.program.submissions
+      ? new AdmissionRetryModel({
+          runtimeActivity: liveRuntime?.activity,
+          claims: app.retryClaims,
+          direct: app.directAdmissions,
+          requests: app.program.submissions,
+          orchestrator: app.orchestrator,
+          checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
+          execute: async (id, authority) => {
+            if (liveRuntime) await liveRuntime.withResumeAuthority(id, authority, () => app.orchestrator.run(id));
+            else await app.orchestrator.run(id);
+          },
+          executionFailed: (id) => app.logger.error("Run admission requires recovery", { runId: id }),
+        })
+      : undefined;
+  const continuationAdmissions =
+    !readOnly && liveRuntime && app.retryClaims && app.retryClaimStore
+      ? new ContinuationAdmissionModel({
+          runtimeActivity: liveRuntime.activity,
+          claims: app.retryClaims,
+          orchestrator: app.orchestrator,
+          locators: new FileContinuationLocatorStore({
+            storeDir,
+            execution: app.orchestrator.stores.execution,
+            retries: app.retryClaimStore,
+          }),
+          executionRuntime: liveRuntime,
+        })
+      : undefined;
+  const revisionServices =
+    revisionRuntime && app.retryClaims && liveRuntime
+      ? createRevisionInputServices({
+          journal: revisionRuntime.journal,
+          readJournal: revisionRuntime.readJournal,
+          retries: revisionRuntime.fenceRetries(app.retryClaims),
+          assertRetryFence: revisionRuntime.assertRetryFence,
+          stale: () => new OrcaError("REVISION_STALE", "Revision destination is no longer available"),
+        })
+      : undefined;
+  if (revisionServices && app.retryClaims) revisionServices.register(app.retryClaims);
+  const daemon = await startDaemon({
+    runtimeIdle: liveRuntime,
+    admissionExecutionSource: async (runId) => {
+      const status = await readAdmissionExecutionStatus(app.orchestrator.stores, runId);
+      switch (status.state) {
+        case "ordinary":
+          return undefined;
+        case "ready":
+          return { state: "pending" };
+        case "started":
+          return { state: "started" };
+        case "unknown":
+          return { state: "uncertain", reason: "legacy-evidence" };
+        case "blocked":
+          return { state: "uncertain", reason: "evidence-unavailable" };
+      }
+    },
+    ...(revisionServices && revisionRuntime
+      ? { revisionSources: { services: revisionServices, readBoundaries: revisionRuntime.readBoundaries } }
+      : {}),
+    operatorSources: {
+      ...(liveRuntime
+        ? {
+            liveState: (target) => liveRuntime.port.inspect(target),
+            liveRevision: () => liveRuntime.port.observationRevision,
+          }
+        : {}),
+      events: app.orchestrator.stores.events,
+      leases: app.orchestrator.stores.leases,
+      generations: app.generations,
+      documents: {
+        events: app.orchestrator.stores.events,
+        requests: app.orchestrator.stores.requests,
+        items: app.orchestrator.stores.workItems,
+      },
+      definitionFor: (id, version, stored) => app.orchestrator.definitionFor(id, version, stored),
+      configStatus: () => config.operatorStatus(),
+      artifactRun: async (id) => (await app.orchestrator.stores.artifacts.get(id))?.producedBy.runId,
+      artifact: (_runId, artifactId, maxBytes) => reads.artifactsGet({ artifactId, maxBytes }),
+    },
+
+    admissionRetries,
+    continuationAdmissions,
+    requestSubmissions,
+    submissionWorkspaceId: workspaceId,
+    identity,
+    liveInputs: liveRuntime?.port,
+    workspaceId,
+    auth,
+    maintenanceToken: process.env.ORCA_MAINTENANCE_TOKEN,
+    admissionFile: process.env.ORCA_ADMISSION_FILE,
+    newAdmissionOpen: configuredUpdateAdmissionOpen,
+    existingWorkOpen: configuredUpdateExistingWorkOpen,
+    host: ctx.flags.host as string | undefined,
+    port,
+    orcaVersion: ORCA_VERSION,
+    storeDir,
+    // With control on - the default - this process is one of the store's writers. It
+    // takes each run's single-writer lease before it appends, exactly as a CLI does, and
+    // refuses a run another live process holds (ADR 0008, #101). `--read-only` gives
+    // back the daemon v0.3.0 shipped: projections and nothing else.
+    //
+    // `runs.subscribe` is a read either way: the socket fans out this process's own
+    // event store, so a client sees what runs *this* daemon drives or observes. A run
+    // appended by a separate CLI process lands in that store's files, not in this
+    // orchestrator's listeners, and still shows up on the next read - which is a
+    // property of an in-memory listener list, not of the store (#196 made the store
+    // multi-process safe). `plan.changed` has the same boundary, for the same reason.
+    //
+    // Derived, never asserted: `plan.read` is exactly "this read model has a plan" and
+    // `plan.write` exactly "a PlanControlModel was built", which are the same two facts
+    // `methodsFor` puts the plan methods in the table on. Hardcoding them meant a daemon
+    // over a store with no plan advertised a capability whose nine methods `hello` did
+    // not list, and a client hid nothing on the strength of it.
+    capabilities: [
+      ...(admissionRetries ? (["runs.admit", "admissions.get", "admissions.reconcile"] as const) : []),
+      "runs.read",
+      "runs.subscribe",
+      "workflows.validateInputs",
+      ...(control ? (["runs.control"] as const) : []),
+      ...(reads.plans ? (["plan.read"] as const) : []),
+      ...(planControl ? (["plan.write"] as const) : []),
+    ],
+    reads,
+    ...(isClosedUpdateBootstrap() ? {} : { agents }),
+    config,
+    workflowInputs: new WorkflowInputsModel({ resolve: orchestratorDefinitionResolver(app.orchestrator) }),
+    ...(control ? { control } : {}),
+    ...(planControl ? { planControl } : {}),
+    source: app.orchestrator,
+    // `plan.changed` is folded from this process's plan journal - the store's own
+    // listener seam. A plan a CLI beside this daemon changes lands on the next read,
+    // the same boundary the run feed has just above.
+    planSource: app.orchestrator.stores.plan.journal,
+  });
+  try {
+    if (authDir && !isClosedUpdateBootstrap()) await bootstrapLocalOwner(authDir);
+  } catch (error) {
+    liveRuntime?.close();
+    await daemon.close();
+    throw error;
+  }
+  let recoveringContinuations: Promise<void> | undefined;
+  const recoverContinuations = () => {
+    if (!daemon.recoverContinuations || recoveringContinuations) return;
+    recoveringContinuations = daemon
+      .recoverContinuations()
+      .catch(() => app.logger.warn("Continuation recovery requires explicit attention"))
+      .finally(() => {
+        recoveringContinuations = undefined;
+      });
+  };
+  const explicitRecovery = isClosedUpdateBootstrap() || firstRunRequiresExplicitContinuationRecovery(app.configDir);
+  if (!explicitRecovery) recoverContinuations();
+  const continuationTimer =
+    daemon.recoverContinuations && !explicitRecovery ? setInterval(recoverContinuations, 5_000) : undefined;
+  continuationTimer?.unref();
+  ctx.out(
+    `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,
+  );
+  ctx.out(`serving ${storeDir}: ${READ_METHODS.join(", ")}, ${AGENT_METHODS.join(", ")}`);
+  if (reads.plans) ctx.out(`serving the plan: ${PLAN_READ_METHODS.join(", ")}`);
+  if (control) {
+    ctx.out(`driving runs: ${CONTROL_METHODS.join(", ")}`);
+  } else {
+    ctx.out("read-only: no 'runs.control' capability, and the control methods are absent from this daemon");
+  }
+  ctx.out(
+    authDir
+      ? `authentication: token; local token file: ${authDir.tokenFile}`
+      : "authentication: explicit unauthenticated loopback compatibility mode; any local process may call this daemon",
+  );
+  if (isClosedUpdateBootstrap()) {
+    const receipt = await closedUpdateStartupReceipt(
+      app.configDir,
+      storeDir,
+      { ...identity, processId: process.pid },
+      () => app.closedWorkState(),
+    );
+    ctx.out("closed update validation: " + JSON.stringify(receipt));
+  }
+  if (daemon.socketUrl) ctx.out(`notifications on ${daemon.socketUrl}: ${SUBSCRIPTION_METHODS.join(", ")}`);
+  await new Promise<void>((resolve) => {
+    const stop = () => {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+      resolve();
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+  if (continuationTimer) clearInterval(continuationTimer);
+  await recoveringContinuations;
+  liveRuntime?.close();
+  await daemon.close();
+  await continuationAdmissions?.drain();
+  return 0;
+}

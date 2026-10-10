@@ -1,0 +1,802 @@
+{
+  "numTotalTestSuites": 9,
+  "numPassedTestSuites": 9,
+  "numFailedTestSuites": 0,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 66,
+  "numPassedTests": 66,
+  "numFailedTests": 0,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "snapshot": {
+    "added": 0,
+    "failure": false,
+    "filesAdded": 0,
+    "filesRemoved": 0,
+    "filesRemovedList": [],
+    "filesUnmatched": 0,
+    "filesUpdated": 0,
+    "matched": 0,
+    "total": 0,
+    "unchecked": 0,
+    "uncheckedKeysByFile": [],
+    "unmatched": 0,
+    "updated": 0,
+    "didUpdate": false
+  },
+  "startTime": 1791546233026,
+  "success": true,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "reuses aligned storage, erases released bytes and refuses before the unchanged ceiling",
+          "status": "passed",
+          "title": "reuses aligned storage, erases released bytes and refuses before the unchanged ceiling",
+          "duration": 4.712800000000016,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "charges before a provider starts and retains its returned bytes until actual disposal",
+          "status": "passed",
+          "title": "charges before a provider starts and retains its returned bytes until actual disposal",
+          "duration": 0.6664000000000101,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "bounds maximum checkpoint/open buffers, owns returned plaintext and retires persistent keys",
+          "status": "passed",
+          "title": "bounds maximum checkpoint/open buffers, owns returned plaintext and retires persistent keys",
+          "duration": 1423.6588000000002,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        }
+      ],
+      "startTime": 1791546247687,
+      "endTime": 1791546249115.6587,
+      "status": "passed",
+      "message": "",
+      "name": "<workspace>/packages/app/test/diagnostics-payload-memory.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "preserves the generic canonical oracle for every enum, maximum offsets/count and empty reports",
+          "status": "passed",
+          "title": "preserves the generic canonical oracle for every enum, maximum offsets/count and empty reports",
+          "duration": 97.51780000000002,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "freezes all 8192 events before yielding and remains immutable across collection/stop",
+          "status": "passed",
+          "title": "freezes all 8192 events before yielding and remains immutable across collection/stop",
+          "duration": 55.1167999999999,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "validates immutable decoded bytes even if the source Buffer changes during a yielded turn",
+          "status": "passed",
+          "title": "validates immutable decoded bytes even if the source Buffer changes during a yielded turn",
+          "duration": 3005.6969,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "retains exact rejection of extra/duplicate fields, framing, invalid UTF-8 and event semantics",
+          "status": "passed",
+          "title": "retains exact rejection of extra/duplicate fields, framing, invalid UTF-8 and event semantics",
+          "duration": 117.33550000000014,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "revokes off during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "title": "revokes off during report preparation without returning plaintext or early reservation release",
+          "duration": 55.50889999999981,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "revokes document during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "title": "revokes document during report preparation without returning plaintext or early reservation release",
+          "duration": 47.709299999999985,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "revokes clock during report preparation without returning plaintext or early reservation release",
+          "status": "passed",
+          "title": "revokes clock during report preparation without returning plaintext or early reservation release",
+          "duration": 44.61740000000009,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "rechecks authority after checkpoint serialization before any disk dispatch",
+          "status": "passed",
+          "title": "rechecks authority after checkpoint serialization before any disk dispatch",
+          "duration": 36.55459999999994,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "retains frozen binary bytes until a timeout Save actually settles",
+          "status": "passed",
+          "title": "retains frozen binary bytes until a timeout Save actually settles",
+          "duration": 12.763300000000072,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "retains frozen binary bytes until a off Save actually settles",
+          "status": "passed",
+          "title": "retains frozen binary bytes until a off Save actually settles",
+          "duration": 17.303800000000138,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        }
+      ],
+      "startTime": 1791546233552,
+      "endTime": 1791546237042.3037,
+      "status": "passed",
+      "message": "",
+      "name": "<workspace>/packages/app/test/diagnostics-report-performance.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "keeps durable consent when navigation revokes a preview during the startup read",
+          "status": "passed",
+          "title": "keeps durable consent when navigation revokes a preview during the startup read",
+          "duration": 6.3781999999999925,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "keeps durable consent when renderer-disposal revokes a preview during the startup read",
+          "status": "passed",
+          "title": "keeps durable consent when renderer-disposal revokes a preview during the startup read",
+          "duration": 0.9762999999999806,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "a newer off fences the pending enabled startup read",
+          "status": "passed",
+          "title": "a newer off fences the pending enabled startup read",
+          "duration": 1.2597000000000094,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "a newer shutdown fences the pending enabled startup read",
+          "status": "passed",
+          "title": "a newer shutdown fences the pending enabled startup read",
+          "duration": 0.4899000000000058,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        }
+      ],
+      "startTime": 1791546249941,
+      "endTime": 1791546249949.49,
+      "status": "passed",
+      "message": "",
+      "name": "<workspace>/packages/app/test/diagnostics-startup-consent.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer is off by default, reads nothing while off, and restarts empty/off",
+          "status": "passed",
+          "title": "is off by default, reads nothing while off, and restarts empty/off",
+          "duration": 9.91210000000001,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer expires at five minutes, including without new observations",
+          "status": "passed",
+          "title": "expires at five minutes, including without new observations",
+          "duration": 3.761799999999994,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer shortens immediately and never reconstructs history when lengthened",
+          "status": "passed",
+          "title": "shortens immediately and never reconstructs history when lengthened",
+          "duration": 5.178200000000004,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer evicts oldest at the count cap, shows loss and coverage, and wraps the ring",
+          "status": "passed",
+          "title": "evicts oldest at the count cap, shows loss and coverage, and wraps the ring",
+          "duration": 4.985900000000015,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer enforces complete serialized bytes independently of count and counts unfit events",
+          "status": "passed",
+          "title": "enforces complete serialized bytes independently of count and counts unfit events",
+          "duration": 5.027299999999968,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer keeps a frozen complete snapshot above the old 256-event/256-KiB limits",
+          "status": "passed",
+          "title": "keeps a frozen complete snapshot above the old 256-event/256-KiB limits",
+          "duration": 22.528999999999996,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer caps a burst at 8192 with visible saturated omissions and bounded snapshots",
+          "status": "passed",
+          "title": "caps a burst at 8192 with visible saturated omissions and bounded snapshots",
+          "duration": 206.9131,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer does not reset an active session and refreshes exported identities for every snapshot",
+          "status": "passed",
+          "title": "does not reset an active session and refreshes exported identities for every snapshot",
+          "duration": 3.6954000000000065,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer refuses unsupported resource caps {\"maxEvents\":0}",
+          "status": "passed",
+          "title": "refuses unsupported resource caps {\"maxEvents\":0}",
+          "duration": 1.2058999999999855,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer refuses unsupported resource caps {\"maxEvents\":8193}",
+          "status": "passed",
+          "title": "refuses unsupported resource caps {\"maxEvents\":8193}",
+          "duration": 0.49589999999994916,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer refuses unsupported resource caps {\"maxReportBytes\":1114}",
+          "status": "passed",
+          "title": "refuses unsupported resource caps {\"maxReportBytes\":1114}",
+          "duration": 0.504099999999994,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer refuses unsupported resource caps {\"maxReportBytes\":1048577}",
+          "status": "passed",
+          "title": "refuses unsupported resource caps {\"maxReportBytes\":1048577}",
+          "duration": 0.30819999999999936,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer invalidates on uncertain clock NaN",
+          "status": "passed",
+          "title": "invalidates on uncertain clock NaN",
+          "duration": 1.264699999999948,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer invalidates on uncertain clock Infinity",
+          "status": "passed",
+          "title": "invalidates on uncertain clock Infinity",
+          "duration": 1.3677999999999884,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer invalidates on uncertain clock -1",
+          "status": "passed",
+          "title": "invalidates on uncertain clock -1",
+          "duration": 1.7952999999999975,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer invalidates on uncertain clock 9007199254740992",
+          "status": "passed",
+          "title": "invalidates on uncertain clock 9007199254740992",
+          "duration": 1.341099999999983,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer fails closed on backward/throwing clocks and ignores wall-clock jumps",
+          "status": "passed",
+          "title": "fails closed on backward/throwing clocks and ignores wall-clock jumps",
+          "duration": 4.8256000000000085,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer rejects content-bearing objects and strings without reading or coercing them",
+          "status": "passed",
+          "title": "rejects content-bearing objects and strings without reading or coercing them",
+          "duration": 2.939700000000016,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer rejects invalid configuration 0 without changing retention",
+          "status": "passed",
+          "title": "rejects invalid configuration 0 without changing retention",
+          "duration": 1.691599999999994,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer rejects invalid configuration 16 without changing retention",
+          "status": "passed",
+          "title": "rejects invalid configuration 16 without changing retention",
+          "duration": 1.6449999999999818,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer rejects invalid configuration 1.5 without changing retention",
+          "status": "passed",
+          "title": "rejects invalid configuration 1.5 without changing retention",
+          "duration": 1.5448000000000093,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer rejects invalid configuration NaN without changing retention",
+          "status": "passed",
+          "title": "rejects invalid configuration NaN without changing retention",
+          "duration": 1.332899999999995,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer rejects invalid configuration Infinity without changing retention",
+          "status": "passed",
+          "title": "rejects invalid configuration Infinity without changing retention",
+          "duration": 1.4817000000000462,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["volatile diagnostic pre-trigger buffer"],
+          "fullName": "volatile diagnostic pre-trigger buffer keeps the draft schema, count/time ceilings and phase/code allowlist coordinated",
+          "status": "passed",
+          "title": "keeps the draft schema, count/time ceilings and phase/code allowlist coordinated",
+          "duration": 2.3202999999999747,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        }
+      ],
+      "startTime": 1791546249387,
+      "endTime": 1791546249675.3203,
+      "status": "passed",
+      "message": "",
+      "name": "<workspace>/packages/app/test/pretrigger-buffer.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["persistent diagnostics choice"],
+          "fullName": "persistent diagnostics choice remains available while legacy configuration is pending and preserves its preview when that read completes",
+          "status": "passed",
+          "title": "remains available while legacy configuration is pending and preserves its preview when that read completes",
+          "duration": 149.60099999999875,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["persistent diagnostics choice"],
+          "fullName": "persistent diagnostics choice remains available while studio configuration is pending and preserves its preview when that read completes",
+          "status": "passed",
+          "title": "remains available while studio configuration is pending and preserves its preview when that read completes",
+          "duration": 81.02690000000075,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["persistent diagnostics choice"],
+          "fullName": "persistent diagnostics choice starts off with five minutes and no automatic consent, preview, picker or save",
+          "status": "passed",
+          "title": "starts off with five minutes and no automatic consent, preview, picker or save",
+          "duration": 20.14389999999912,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["persistent diagnostics choice"],
+          "fullName": "persistent diagnostics choice does not migrate a remembered setting into production capture or automatically preview recovery",
+          "status": "passed",
+          "title": "does not migrate a remembered setting into production capture or automatically preview recovery",
+          "duration": 9.586600000000544,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["persistent diagnostics choice"],
+          "fullName": "persistent diagnostics choice uses the shared menu to explicitly set the approved lookback range",
+          "status": "passed",
+          "title": "uses the shared menu to explicitly set the approved lookback range",
+          "duration": 51.28299999999945,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["persistent diagnostics choice"],
+          "fullName": "persistent diagnostics choice leaves ordinary UI usable when the bridge is absent or rejects without rendering a raw exception",
+          "status": "passed",
+          "title": "leaves ordinary UI usable when the bridge is absent or rejects without rendering a raw exception",
+          "duration": 9.95929999999862,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["persistent diagnostics choice"],
+          "fullName": "persistent diagnostics choice does not let an old initial status read replace a newer main push",
+          "status": "passed",
+          "title": "does not let an old initial status read replace a newer main push",
+          "duration": 5.530399999999645,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save keeps all 1 MiB of exact text and the final newline across offscreen layout blocks",
+          "status": "passed",
+          "title": "keeps all 1 MiB of exact text and the final newline across offscreen layout blocks",
+          "duration": 36.20269999999982,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save rejects late plaintext when age uncertainty arrives during pending preparation",
+          "status": "passed",
+          "title": "rejects late plaintext when age uncertainty arrives during pending preparation",
+          "duration": 25.272899999999936,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save renders every exact byte including omissions and newline, then requires picker and separate Save",
+          "status": "passed",
+          "title": "renders every exact byte including omissions and newline, then requires picker and separate Save",
+          "duration": 31.610599999999977,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save removes old destination authority while a new picker is pending and ignores its late reply after close",
+          "status": "passed",
+          "title": "removes old destination authority while a new picker is pending and ignores its late reply after close",
+          "duration": 47.95349999999962,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save acknowledges disposal only after the text is gone and restores no content on a late preview reply",
+          "status": "passed",
+          "title": "acknowledges disposal only after the text is gone and restores no content on a late preview reply",
+          "duration": 57.40339999999924,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save clears a revoked handle on target/source/key-loss status push, and closes the handle on unmount",
+          "status": "passed",
+          "title": "clears a revoked handle on target/source/key-loss status push, and closes the handle on unmount",
+          "duration": 52.365200000000186,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save expires the exact preview without renewing it for new checkpoints",
+          "status": "passed",
+          "title": "expires the exact preview without renewing it for new checkpoints",
+          "duration": 38.73919999999998,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save reports a Save admitted before opt-out truthfully when its completion arrives late",
+          "status": "passed",
+          "title": "reports a Save admitted before opt-out truthfully when its completion arrives late",
+          "duration": 36.02280000000064,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save does not carry a prior Save success into a new pending or unknown Save",
+          "status": "passed",
+          "title": "does not carry a prior Save success into a new pending or unknown Save",
+          "duration": 94.83059999999932,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save allows a fresh explicit Save after known refusal and preview close without changing consent",
+          "status": "passed",
+          "title": "allows a fresh explicit Save after known refusal and preview close without changing consent",
+          "duration": 138.16810000000078,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save allows a fresh explicit Save after known refusal and preview expiry without changing consent",
+          "status": "passed",
+          "title": "allows a fresh explicit Save after known refusal and preview expiry without changing consent",
+          "duration": 1105.2054000000007,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save disposes the view but does not claim Off when revocation is unconfirmed by transport",
+          "status": "passed",
+          "title": "disposes the view but does not claim Off when revocation is unconfirmed by transport",
+          "duration": 42.01020000000062,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save disposes the view but does not claim Off when revocation is unconfirmed by stale_preview",
+          "status": "passed",
+          "title": "disposes the view but does not claim Off when revocation is unconfirmed by stale_preview",
+          "duration": 45.7440000000006,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save uses authoritative disabled status for failed durable opt-out and clears its feedback on explicit enable",
+          "status": "passed",
+          "title": "uses authoritative disabled status for failed durable opt-out and clears its feedback on explicit enable",
+          "duration": 64.64400000000023,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["exact preview and separate local Save"],
+          "fullName": "exact preview and separate local Save clears session-only off failure feedback when main reports diagnostics On again",
+          "status": "passed",
+          "title": "clears session-only off failure feedback when main reports diagnostics On again",
+          "duration": 28.318100000000413,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["unknown Save, cleanup and explicit acknowledgement"],
+          "fullName": "unknown Save, cleanup and explicit acknowledgement blocks unknown work and offers a disabled acknowledgement with a visible cleanup retry",
+          "status": "passed",
+          "title": "blocks unknown work and offers a disabled acknowledgement with a visible cleanup retry",
+          "duration": 18.952800000000934,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["unknown Save, cleanup and explicit acknowledgement"],
+          "fullName": "unknown Save, cleanup and explicit acknowledgement acknowledges only, then requires a fresh explicit preview, picker and Save",
+          "status": "passed",
+          "title": "acknowledges only, then requires a fresh explicit preview, picker and Save",
+          "duration": 47.70640000000094,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["unknown Save, cleanup and explicit acknowledgement"],
+          "fullName": "unknown Save, cleanup and explicit acknowledgement keeps cleanup and unresolved outcome visible while off without offering capture authority",
+          "status": "passed",
+          "title": "keeps cleanup and unresolved outcome visible while off without offering capture authority",
+          "duration": 7.624599999999191,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        }
+      ],
+      "startTime": 1791546245158,
+      "endTime": 1791546247405.6245,
+      "status": "passed",
+      "message": "",
+      "name": "<workspace>/packages/app/renderer/test/diagnostics.test.tsx"
+    }
+  ]
+}

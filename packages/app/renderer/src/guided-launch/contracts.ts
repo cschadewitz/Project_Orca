@@ -10,8 +10,11 @@ import type {
   CheckoutEvidence,
   EditorTarget,
   LaunchCommand as SharedLaunchCommand,
+  LaunchSelectionProvenance,
+  PreflightParams,
   PreflightResult,
 } from "../../../src/configuration-launch-contract.js";
+import type { RequestOverrideChoices } from "./request-overrides.js";
 
 /** App-local injection contracts. These do not register an RPC or a storage format. */
 export interface LaunchTarget extends EditorTarget {
@@ -44,8 +47,12 @@ export interface LaunchContext {
   unavailableReason?: string;
   directReason?: string;
   requestReason?: string;
+  /** Recovery has its own authorization; losing launch grants does not revoke inspection. */
+  recoveryReason?: string;
+  recoveryAction?: "inspect" | "reconcile";
   roots: readonly LaunchRoot[];
   workflows: readonly LaunchWorkflow[];
+  overrideChoices?: RequestOverrideChoices;
 }
 export interface LaunchDraft {
   mode: "direct" | "request";
@@ -71,6 +78,7 @@ export interface LaunchReview {
   /** Names proven non-sensitive by this exact review's metadata, never by a later schema. */
   visibleInputs?: readonly string[];
   checkout?: CheckoutEvidence;
+  selectionProvenance?: LaunchSelectionProvenance;
 }
 /** Opaque handle to the main owner's protected, exact-command intent. No renderer ledger/key. */
 export interface LaunchIntent {
@@ -97,8 +105,11 @@ export interface LaunchPorts {
     rootId: string;
     workflowId: string;
     workflowVersion: string;
+    expectedWorkflowRevision?: string;
+    expectedConfigGeneration?: string;
     vars: Record<string, unknown>;
     overrides?: RequestsSubmitParams["overrides"];
+    request?: PreflightParams["request"];
   }): Promise<
     Pick<
       PreflightResult,
@@ -108,6 +119,10 @@ export interface LaunchPorts {
       | "expectedWorkflowRevision"
       | "expectedConfigGeneration"
       | "validation"
+      | "inputSchema"
+      | "selections"
+      | "itemWorkflow"
+      | "templatePack"
     > & {
       /** Guarded by the integrator's root adapter alongside coherent operator preflight. */
       rootId: string;
@@ -119,6 +134,8 @@ export interface LaunchPorts {
   retain?: (review: LaunchReview) => Promise<LaunchIntent>;
   /** Canonical shared owner can retain and submit atomically; a lost handle remains ambiguous. */
   launch?: (review: LaunchReview) => Promise<{ intent: LaunchIntent; response: LaunchResult }>;
+  /** Lookup must match the complete frozen review in protected main storage; never infer by workflow. */
+  resolveIntent?: (review: LaunchReview) => Promise<LaunchIntent | undefined>;
   /** Must use the captured target, current authority and retained exact retry key/command. */
   submit?: (intent: LaunchIntent) => Promise<LaunchInitialResult>;
   recover(intent: LaunchIntent): Promise<LaunchResult>;
@@ -142,6 +159,8 @@ export interface LaunchState {
   draft: LaunchDraft;
   sequence: number;
   inputEpoch: number;
+  /** Session-only editor text, including invalid JSON; never placed in a command or preferences. */
+  inputText: Readonly<Record<string, string>>;
   /** Includes protected reads and confirmations even when the visible phase does not change. */
   busy: boolean;
   /** Session protection is monotonic; unclassified restored input names are always withheld. */

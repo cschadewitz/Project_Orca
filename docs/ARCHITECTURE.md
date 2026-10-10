@@ -381,6 +381,17 @@ ownership boundary and reread the durable log under it. The backward-readable le
 fence and legacy-writer refusals are documented in
 [ownership compatibility](v0.5.2-ownership-compatibility.md).
 
+Fresh continuation intent validates its exact parked boundary and decision before
+publishing a retry claim or binding a continuation ID. A lookup miss first releases
+the retry catalog mutex, then acquires run ownership before reentering the catalog;
+that ownership spans validation, claim publication, binding and journal acceptance.
+Existing keys bypass moving-state validation and retain their authorization, conflict
+and authoritative-marker checks, including replay during execution and after completion.
+If another same-key caller publishes while ownership is awaited, a refused contender
+can adopt the existing claim; a still-fresh key retains the ownership refusal without
+publication. A supplied boundary token never provisions a missing token key.
+Historical reservations remain recovery evidence and are not deleted or rebound.
+
 Durable continuation attachment and receipt settlement are separate fenced writes.
 Before attachment, lease contention refuses the competing reconciliation with
 `RUN_LEASED` and preserves the shared receipt. This includes the interval after an

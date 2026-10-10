@@ -1,0 +1,646 @@
+{
+  "schema": 1,
+  "sourceCommit": "21b615fe278f91888a68198475c6fcc6a791208f",
+  "node": "24.19.0",
+  "retainedPinnedDependencies": true,
+  "vitest": {
+    "mode": "focused single worker, no coverage",
+    "files": 11,
+    "total": 119,
+    "passed": 114,
+    "failed": 0,
+    "platformSkipped": 5,
+    "refreshedLifecycleFile": {
+      "passed": 25,
+      "failed": 0
+    },
+    "suites": [
+      {
+        "name": "packages/app/test/daemon-connection-integration.test.ts",
+        "status": "passed",
+        "refreshedAfterCancellationAssertion": false,
+        "tests": [
+          {
+            "name": "mounts closed template commands and gates same-boot setup throughout an updater reservation",
+            "status": "passed"
+          },
+          {
+            "name": "dispatches verified opt-out before diagnostics initialization while opt-in waits",
+            "status": "passed"
+          },
+          {
+            "name": "a verified newer Off fences an older Enable waiting at the main initialization boundary",
+            "status": "passed"
+          },
+          {
+            "name": "renderer-process-gone fences a preview waiting at main initialization without a reload",
+            "status": "passed"
+          },
+          {
+            "name": "permits old-target preview disposal only from the current window document without initializing diagnostics",
+            "status": "passed"
+          },
+          {
+            "name": "returns env → read-only store → env through IPC, honoring drafts and preserving the saved endpoint",
+            "status": "passed"
+          },
+          {
+            "name": "opens a store with no windows and still refuses drafts when a window exists",
+            "status": "passed"
+          },
+          {
+            "name": "preserves env permission alerts when first hello arrives after the renderer update",
+            "status": "passed"
+          },
+          {
+            "name": "preserves bundled permission alerts when first hello arrives after the renderer update",
+            "status": "passed"
+          },
+          {
+            "name": "preserves store permission alerts when first hello arrives after the renderer update",
+            "status": "passed"
+          },
+          {
+            "name": "installs synchronous IPC and disconnects safely for malformed configuration localhost:6722",
+            "status": "passed"
+          },
+          {
+            "name": "installs synchronous IPC and disconnects safely for malformed configuration not-a-url-private-token",
+            "status": "passed"
+          },
+          {
+            "name": "installs synchronous IPC and disconnects safely for malformed configuration https://owner:private-token@host",
+            "status": "passed"
+          },
+          {
+            "name": "composes the Mac window lease with main IPC while installation stays unavailable",
+            "status": "passed"
+          },
+          {
+            "name": "mounts first-run selection/preparation before hello and rejects paths, stale frames, epochs and pending drafts",
+            "status": "skipped"
+          },
+          {
+            "name": "native replacement bootstrap blocks protected main IPC before its journal inspection",
+            "status": "passed"
+          },
+          {
+            "name": "native replacement unknown startup paints recovery without normal diagnostics or child bootstrap",
+            "status": "passed"
+          },
+          {
+            "name": "main pause refuses new writes and retains its app writer until a dispatched RPC settles",
+            "status": "passed"
+          },
+          {
+            "name": "durable admission closure retains completion only for the reserved live drain",
+            "status": "passed"
+          },
+          {
+            "name": "quit retains app ownership until dispatch and background storage both settle",
+            "status": "passed"
+          },
+          {
+            "name": "main pause tracks first-run receipt work before releasing its app writer",
+            "status": "passed"
+          },
+          {
+            "name": "main forwards only current-client and current-subscription diagnostic facts",
+            "status": "passed"
+          },
+          {
+            "name": "main removes power observation on quit and suppresses later facts",
+            "status": "passed"
+          },
+          {
+            "name": "main removes power observation on updater pause and suppresses later facts",
+            "status": "passed"
+          },
+          {
+            "name": "late diagnostic initialization cannot publish app_started after quit",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/test/diagnostics-payload-memory.test.ts",
+        "status": "passed",
+        "refreshedAfterCancellationAssertion": false,
+        "tests": [
+          {
+            "name": "reuses aligned storage, erases released bytes and refuses before the unchanged ceiling",
+            "status": "passed"
+          },
+          {
+            "name": "charges before a provider starts and retains its returned bytes until actual disposal",
+            "status": "passed"
+          },
+          {
+            "name": "bounds maximum checkpoint/open buffers, owns returned plaintext and retires persistent keys",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/test/diagnostics-preload.test.ts",
+        "status": "passed",
+        "refreshedAfterCancellationAssertion": false,
+        "tests": [
+          {
+            "name": "exposes only export descriptors and removes every preview-content capability",
+            "status": "passed"
+          },
+          {
+            "name": "sends only opaque handle and destination token for explicit picker, Save and cancellation",
+            "status": "passed"
+          },
+          {
+            "name": "forwards authoritative status without report contents or automatic export actions",
+            "status": "passed"
+          },
+          {
+            "name": "maps rejected transport to closed actionable status without exposing native exception text",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/test/diagnostics-report-performance.test.ts",
+        "status": "passed",
+        "refreshedAfterCancellationAssertion": true,
+        "tests": [
+          {
+            "name": "preserves the generic canonical oracle for every enum, maximum offsets/count and empty reports",
+            "status": "passed"
+          },
+          {
+            "name": "freezes all 8192 events before yielding and remains immutable across collection/stop",
+            "status": "passed"
+          },
+          {
+            "name": "keeps a full-count checkpoint immutable and owned after the live ring stops",
+            "status": "passed"
+          },
+          {
+            "name": "validates immutable decoded bytes even if the source Buffer changes during a yielded turn",
+            "status": "passed"
+          },
+          {
+            "name": "retains exact rejection of extra/duplicate fields, framing, invalid UTF-8 and event semantics",
+            "status": "passed"
+          },
+          {
+            "name": "accepts every closed pair at decimal boundaries and rejects noncanonical event spellings",
+            "status": "passed"
+          },
+          {
+            "name": "keeps validated immutable text and independently owned exact bytes through disposal",
+            "status": "passed"
+          },
+          {
+            "name": "yields each batch with one completion promise and rejects scheduled generator failures",
+            "status": "passed"
+          },
+          {
+            "name": "prepares only a descriptor with frozen bytes/digest and no renderer transport allowance",
+            "status": "passed"
+          },
+          {
+            "name": "erases main-owned report bytes immediately on off without a renderer disposal acknowledgement",
+            "status": "passed"
+          },
+          {
+            "name": "erases main-owned report bytes immediately on expiry without a renderer disposal acknowledgement",
+            "status": "passed"
+          },
+          {
+            "name": "erases main-owned report bytes immediately on document without a renderer disposal acknowledgement",
+            "status": "passed"
+          },
+          {
+            "name": "cancels a picker without publication and requires a fresh destination",
+            "status": "passed"
+          },
+          {
+            "name": "revokes off during report preparation without returning plaintext or early reservation release",
+            "status": "passed"
+          },
+          {
+            "name": "revokes document during report preparation without returning plaintext or early reservation release",
+            "status": "passed"
+          },
+          {
+            "name": "revokes clock during report preparation without returning plaintext or early reservation release",
+            "status": "passed"
+          },
+          {
+            "name": "rechecks authority after checkpoint serialization before any disk dispatch",
+            "status": "passed"
+          },
+          {
+            "name": "retains frozen binary bytes until a timeout Save actually settles",
+            "status": "passed"
+          },
+          {
+            "name": "retains frozen binary bytes until a off Save actually settles",
+            "status": "passed"
+          },
+          {
+            "name": "retains frozen binary bytes until a cancel Save actually settles",
+            "status": "passed"
+          },
+          {
+            "name": "retains frozen binary bytes until a document Save actually settles",
+            "status": "passed"
+          },
+          {
+            "name": "joins repeated Save clicks and publishes only the frozen report despite later capture",
+            "status": "passed"
+          },
+          {
+            "name": "refuses altered frozen bytes at the last publication admission check",
+            "status": "passed"
+          },
+          {
+            "name": "orders consent revocation before publication admission without inventing an unsaved outcome",
+            "status": "passed"
+          },
+          {
+            "name": "orders consent revocation after publication admission without inventing an unsaved outcome",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/test/diagnostics-source-producers.test.ts",
+        "status": "passed",
+        "refreshedAfterCancellationAssertion": false,
+        "tests": [
+          {
+            "name": "serialization failure has no dispatch or uncertain-admission authority",
+            "status": "passed"
+          },
+          {
+            "name": "admits only closed primitive owner facts, with no accessor/coercion or exception authority",
+            "status": "passed"
+          },
+          {
+            "name": "connection owner distinguishes unavailable/lost, ignores stale handshakes and isolates optional observation",
+            "status": "passed"
+          },
+          {
+            "name": "admission owner records response loss and safe recoverable state without retry or content",
+            "status": "passed"
+          },
+          {
+            "name": "pre-dispatch auth refusal is not uncertain admission, and stale hello publishes no diagnostic",
+            "status": "passed"
+          },
+          {
+            "name": "protected-state owner projection is required; generic RUN_STATE is insufficient",
+            "status": "passed"
+          },
+          {
+            "name": "records only the recognized AUTH_REQUIRED connection verdict",
+            "status": "passed"
+          },
+          {
+            "name": "records only the recognized AUTH_INVALID connection verdict",
+            "status": "passed"
+          },
+          {
+            "name": "records only the recognized AUTH_FORBIDDEN connection verdict",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/test/diagnostics-startup-consent.test.ts",
+        "status": "passed",
+        "refreshedAfterCancellationAssertion": false,
+        "tests": [
+          {
+            "name": "keeps durable consent when navigation revokes a preview during the startup read",
+            "status": "passed"
+          },
+          {
+            "name": "keeps durable consent when renderer-disposal revokes a preview during the startup read",
+            "status": "passed"
+          },
+          {
+            "name": "a newer off fences the pending enabled startup read",
+            "status": "passed"
+          },
+          {
+            "name": "a newer shutdown fences the pending enabled startup read",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/test/diagnostics-startup-producer.test.ts",
+        "status": "passed",
+        "refreshedAfterCancellationAssertion": false,
+        "tests": [
+          {
+            "name": "rejects arbitrary source values without coercion and isolates recorder failure",
+            "status": "passed"
+          },
+          {
+            "name": "startup producer/controller integration uses current consent and never replays observations collected before opt-in or after Off",
+            "status": "skipped"
+          },
+          {
+            "name": "startup producer/controller integration cannot activate the production-disabled controller",
+            "status": "skipped"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/test/diagnostics-windows-refusal.test.ts",
+        "status": "passed",
+        "refreshedAfterCancellationAssertion": false,
+        "tests": [
+          {
+            "name": "Windows x64 native capability has one fixed packaged location",
+            "status": "passed"
+          },
+          {
+            "name": "Windows arm64 native capability has one fixed packaged location",
+            "status": "passed"
+          },
+          {
+            "name": "repeated actual Windows off/refused attempts and recreation retain no files or key/picker authority",
+            "status": "passed"
+          },
+          {
+            "name": "Windows key seam refuses unavailable without plaintext fallback",
+            "status": "passed"
+          },
+          {
+            "name": "Windows key seam refuses rotation without plaintext fallback",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/test/report-validation.test.ts",
+        "status": "passed",
+        "refreshedAfterCancellationAssertion": false,
+        "tests": [
+          {
+            "name": "authenticated report identifiers preserves exact valid bytes or refreshes only public IDs, freshIds=false",
+            "status": "passed"
+          },
+          {
+            "name": "authenticated report identifiers preserves exact valid bytes or refreshes only public IDs, freshIds=true",
+            "status": "passed"
+          },
+          {
+            "name": "authenticated report identifiers rejects coerced UUIDs before public-ID refresh, freshIds=false",
+            "status": "passed"
+          },
+          {
+            "name": "authenticated report identifiers rejects coerced UUIDs before public-ID refresh, freshIds=true",
+            "status": "passed"
+          },
+          {
+            "name": "retained coverage semantics requires the actual first retained event or zero for no events, freshIds=false",
+            "status": "passed"
+          },
+          {
+            "name": "retained coverage semantics requires the actual first retained event or zero for no events, freshIds=true",
+            "status": "passed"
+          },
+          {
+            "name": "retained coverage semantics rejects malformed empty coverage from encrypted previous recovery before refreshing public IDs",
+            "status": "skipped"
+          },
+          {
+            "name": "retained coverage semantics rejects malformed nonempty coverage from encrypted previous recovery before refreshing public IDs",
+            "status": "skipped"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/renderer/test/diagnostics.test.tsx",
+        "status": "passed",
+        "refreshedAfterCancellationAssertion": false,
+        "tests": [
+          {
+            "name": "persistent diagnostics choice remains available while legacy configuration is pending and preserves its preview when that read completes",
+            "status": "passed"
+          },
+          {
+            "name": "persistent diagnostics choice remains available while studio configuration is pending and preserves its preview when that read completes",
+            "status": "passed"
+          },
+          {
+            "name": "persistent diagnostics choice starts off with five minutes and no automatic consent, preview, picker or save",
+            "status": "passed"
+          },
+          {
+            "name": "persistent diagnostics choice does not migrate a remembered setting into production capture or automatically preview recovery",
+            "status": "passed"
+          },
+          {
+            "name": "persistent diagnostics choice uses the shared menu to explicitly set the approved lookback range",
+            "status": "passed"
+          },
+          {
+            "name": "persistent diagnostics choice leaves ordinary UI usable when the bridge is absent or rejects without rendering a raw exception",
+            "status": "passed"
+          },
+          {
+            "name": "persistent diagnostics choice does not let an old initial status read replace a newer main push",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save fences descriptor authority with its revision without fetching report plaintext",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save guards same-turn repeated preparation and Save clicks before React commits busy state",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save treats picker cancellation as a retryable choice without retaining old destination authority",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save rejects late plaintext when age uncertainty arrives during pending preparation",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save shows report metadata without contents and requires picker and separate Save",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save removes old destination authority while a new picker is pending and ignores its late reply after close",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save acknowledges disposal only after the text is gone and restores no content on a late preview reply",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save clears a revoked handle on target/source/key-loss status push, and closes the handle on unmount",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save expires the exact preview without renewing it for new checkpoints",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save reports a Save admitted before opt-out truthfully when its completion arrives late",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save does not carry a prior Save success into a new pending or unknown Save",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save allows a fresh explicit Save after known refusal and preview close without changing consent",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save allows a fresh explicit Save after known refusal and preview expiry without changing consent",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save disposes the view but does not claim Off when revocation is unconfirmed by transport",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save disposes the view but does not claim Off when revocation is unconfirmed by stale_export",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save uses authoritative disabled status for failed durable opt-out and clears its feedback on explicit enable",
+            "status": "passed"
+          },
+          {
+            "name": "descriptor-only export and separate local Save clears session-only off failure feedback when main reports diagnostics On again",
+            "status": "passed"
+          },
+          {
+            "name": "unknown Save, cleanup and explicit acknowledgement blocks unknown work and offers a disabled acknowledgement with a visible cleanup retry",
+            "status": "passed"
+          },
+          {
+            "name": "unknown Save, cleanup and explicit acknowledgement acknowledges only, then requires a fresh explicit preview, picker and Save",
+            "status": "passed"
+          },
+          {
+            "name": "unknown Save, cleanup and explicit acknowledgement keeps cleanup and unresolved outcome visible while off without offering capture authority",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "name": "packages/app/renderer/test/guided-launch-route.test.tsx",
+        "status": "passed",
+        "refreshedAfterCancellationAssertion": false,
+        "tests": [
+          {
+            "name": "mounted guided launch route selects the exact smoke-check task without launching and still requires explicit permission review",
+            "status": "passed"
+          },
+          {
+            "name": "mounted guided launch route keeps diagnostics mounted and typed drafts protected across Config/launch navigation, with per-preview permission review",
+            "status": "passed"
+          },
+          {
+            "name": "mounted guided launch route binds Request title/body to the guarded Request command and navigates from its distinct accepted receipt",
+            "status": "passed"
+          },
+          {
+            "name": "mounted guided launch route recovers exact lost acknowledgement through main lookup after target review, without a second submission",
+            "status": "passed"
+          },
+          {
+            "name": "mounted guided launch route restores an explicitly selected protected command when its workflow is absent, masking values and requiring acknowledged abandonment",
+            "status": "passed"
+          },
+          {
+            "name": "mounted guided launch route offers setup and palette navigation before handshake without enabling capture or launch",
+            "status": "passed"
+          }
+        ]
+      }
+    ]
+  },
+  "staticChecks": [
+    {
+      "check": "root TypeScript noEmit",
+      "outcome": "passed",
+      "supportingLocalLogSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "check": "renderer TypeScript",
+      "outcome": "passed",
+      "supportingLocalLogSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "check": "app/main/preload TypeScript build",
+      "outcome": "passed",
+      "supportingLocalLogSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "check": "affected ESLint",
+      "outcome": "passed",
+      "supportingLocalLogSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "check": "affected Prettier check",
+      "outcome": "passed",
+      "supportingLocalLogSha256": "f20510a9da4717c51c4cffee6d0dd88d6c9a723d0a83711d01216f5b48961283"
+    },
+    {
+      "check": "renderer/design CSS token check",
+      "outcome": "passed",
+      "supportingLocalLogSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "additionalProbe": {
+    "name": "compiled Windows Node refusal",
+    "outcome": "passed",
+    "noCreatedDiagnosticFiles": true,
+    "keyCalls": 0,
+    "pickerCalls": 0,
+    "eslintAndPrettier": "passed after formatting",
+    "productionSourceUnchanged": true
+  },
+  "setupRefusals": [
+    "Sandbox child spawn EPERM required approved execution of focused tools.",
+    "Retained workspace dependency junctions initially resolved the earlier checkout; all @orca junctions were corrected before final passing checks.",
+    "First native parent ACL verification refused before a cell ran; no existing permissions changed and owned state was removed."
+  ],
+  "selfReview": {
+    "outcome": "complete, activation held",
+    "inspected": [
+      "Descriptor-only contract/main IPC/preload; deleted report DOM and byte/selection owners",
+      "Renderer synchronous guards and revision/epoch fencing through Off/cancel/expiry/unmount/stale replies",
+      "Main frozen bytes/digest, native admission authority, pending writer storage and reservations until actual settlement",
+      "Consent/recovery ancestry and unchanged native/disk/key implementation",
+      "Acceptance evidence distinguishes the scope change from old viewer failure and retains strict responsiveness failure"
+    ],
+    "independentReview": "unrun"
+  },
+  "unrun": [
+    "full suite",
+    "coverage",
+    "Actions dispatch",
+    "exact-source Linux-only filesystem/crash schedules",
+    "full renderer/Vite production build",
+    "Windows ARM64 native execution",
+    "Mac native/physical acceptance",
+    "paired execution under failures/load",
+    "manual Narrator/keyboard/disclosure",
+    "second-user isolation",
+    "remaining native expiry/network/failure/crash schedules",
+    "physical/hardware acceptance"
+  ],
+  "productionCapture": "disabled",
+  "mac": "held"
+}

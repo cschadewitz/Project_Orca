@@ -1,0 +1,8 @@
+{
+  "storeDir": "../state",
+  "plugins": ["./plugins/m10-owned.mjs"],
+  "workflows": ["../workflow.yaml"],
+  "templates": [],
+  "agents": [],
+  "humanInput": { "mode": "pause" }
+}

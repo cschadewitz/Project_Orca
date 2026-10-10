@@ -93,7 +93,12 @@ export class RequestSubmissionModel {
     authority: SubmissionAuthority,
     retry: RetryOptions = {},
   ): Promise<SubmissionResult> {
-    return this.start(await this.opts.service.submit(command, authority, retry), authority);
+    const release = this.opts.runtimeActivity?.enter("dispatch", true);
+    try {
+      return this.start(await this.opts.service.submit(command, authority, retry), authority);
+    } finally {
+      release?.();
+    }
   }
   canSubmitRetry(): boolean {
     return typeof this.opts.service.submitRetry === "function";
@@ -103,10 +108,15 @@ export class RequestSubmissionModel {
     authority: SubmissionAuthority,
     retry: RetryOptions,
   ): Promise<RetryResult<SubmissionResult>> {
-    if (!this.opts.service.submitRetry) throw new OrcaError("NOT_SUPPORTED", "Retry admission is not configured");
-    const response = await this.opts.service.submitRetry(command, retry, authority);
-    if (response.state === "resolved" && response.result.state === "accepted") this.start(response.result, authority);
-    return response;
+    const release = this.opts.runtimeActivity?.enter("dispatch", true);
+    try {
+      if (!this.opts.service.submitRetry) throw new OrcaError("NOT_SUPPORTED", "Retry admission is not configured");
+      const response = await this.opts.service.submitRetry(command, retry, authority);
+      if (response.state === "resolved" && response.result.state === "accepted") this.start(response.result, authority);
+      return response;
+    } finally {
+      release?.();
+    }
   }
   async reconcile(
     admissionId: string,

@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "sourceCommit": "2346bc539ae25a3448d21e86448546b6c905c7c4",
+  "checks": [
+    {
+      "name": "root-typescript",
+      "exitCode": 0
+    },
+    {
+      "name": "renderer-typescript",
+      "exitCode": 0
+    },
+    {
+      "name": "app-preload-build",
+      "exitCode": 0
+    },
+    {
+      "name": "scoped-eslint",
+      "exitCode": 0
+    },
+    {
+      "name": "scoped-prettier",
+      "exitCode": 0
+    },
+    {
+      "name": "css-tokens",
+      "exitCode": 0
+    },
+    {
+      "name": "whitespace",
+      "exitCode": 0
+    }
+  ],
+  "fullSuite": false,
+  "actionsDispatched": false
+}
