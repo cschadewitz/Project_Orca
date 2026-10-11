@@ -90,6 +90,24 @@ describe("ScheduleBadge", () => {
       expect(markup, classification).toContain("orca-badge__why");
     }
   });
+
+  it("draws the why beside the badge's ground, never on it (rule 5)", () => {
+    const markup = html(<ScheduleBadge classification="waiting" onExplain={() => {}} aligned />);
+    // The badge's ground closes before the button opens: two siblings, not one nested in the other.
+    expect(markup).toMatch(
+      /^<span class="orca-badge [^"]*orca-badge--aligned"[^>]*>.*?<\/span><\/span><button[^>]*orca-badge__why/,
+    );
+    // Without a callback there is no button at all: the badge is a label.
+    expect(html(<ScheduleBadge classification="waiting" />)).not.toContain("<button");
+  });
+});
+
+describe("StatusChip in the schedule column", () => {
+  it("takes the aligned badge's width rather than the status column's", () => {
+    const markup = html(<StatusChip status="succeeded" aligned="schedule" />);
+    expect(markup).toContain("orca-chip--aligned-schedule");
+    expect(markup).not.toMatch(/orca-chip--aligned(?!-)/);
+  });
 });
 
 describe("ConnectionIndicator", () => {

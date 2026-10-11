@@ -82,12 +82,39 @@ describe("the schedule table", () => {
   });
 
   /**
+   * Every row's schedule cell is the mark, then the **why** — never the why inside the
+   * badge's tint. It used to be inside it on a classified row and after the outcome chip on
+   * a settled one, so the tint ended before "why" on some rows and after it on others and
+   * the links did not line up. A control is accent and accent is never a state (rule 5).
+   * Both marks take the aligned badge's width, so every why starts at one edge; happy-dom
+   * cannot measure that, so what is held is the classes that make it true.
+   */
+  it("draws each row's why beside its mark, never inside the tint, at one aligned width", async () => {
+    const table = await openPlan();
+    for (const item of PLAN_ITEMS) {
+      const row = rows(table).find((candidate) => candidate.id === scheduleRowId(item.id))!;
+      const cell = row.querySelector("[role='gridcell']")!;
+      const why = within(cell as HTMLElement).getByRole("button", { name: /^Why / });
+      expect(why.closest(".orca-badge, .orca-chip"), item.slug).toBeNull();
+
+      const settled = item.classification === "done" || item.classification === "failed";
+      const mark = cell.querySelector(settled ? ".orca-chip" : ".orca-badge")!;
+      expect(mark, item.slug).toBeTruthy();
+      expect(mark.classList.contains(settled ? "orca-chip--aligned-schedule" : "orca-badge--aligned"), item.slug).toBe(
+        true,
+      );
+      // The mark comes first and the why after it, in the same cell.
+      expect(mark.compareDocumentPosition(why) & Node.DOCUMENT_POSITION_FOLLOWING, item.slug).toBeTruthy();
+    }
+  });
+
+  /**
    * The two columns #170's spec asks for and the surface shipped without: the **request**
    * the item was decomposed from, and the item's **own status**.
    *
    * The status is not the classification and the row must not let them be confused: the
    * classification is where the scheduler *put* the item and is the tinted badge with the
-   * **why** on it; the status is what the item says about itself, in a plain chip with its
+   * **why** beside it; the status is what the item says about itself, in a plain chip with its
    * own word and glyph. `auth-api` is the case that proves they are two facts — it is
    * `pending` and classified `ready` at the same time.
    */

@@ -278,6 +278,13 @@
 .orca-chip--aligned {
   width: var(--chip-aligned-width);
 }
+/* The one column that mixes chips and schedule badges (`StatusChip`'s `aligned="schedule"`):
+   the plan's schedule column, where a settled item draws its outcome as a chip and every
+   other item draws an aligned badge. The chip takes the badge's floor there, so the **why**
+   after either one starts at one edge. Still a `width`, so the base rule's minimum wins. */
+.orca-chip--aligned-schedule {
+  width: var(--badge-aligned-width);
+}
 
 .orca-dot {
   width: var(--mark-md);
@@ -962,6 +969,9 @@
 
 /* ---------- schedule badge ---------- */
 
+/* A badge is never narrower than its word, for the chip's reason (`.orca-chip` above): a
+   minimum beats any width a column hands it, and `flex: none` keeps a row that runs out of
+   room from squeezing it. */
 /* type: caption, at medium */
 .orca-badge {
   display: inline-flex;
@@ -972,6 +982,25 @@
   border-radius: var(--radius-xs);
   border: var(--stroke-hairline) solid transparent;
   font-weight: 500;
+  white-space: nowrap;
+  flex: none;
+  min-width: max-content;
+}
+/* A column of schedule badges (`ScheduleBadge`'s `aligned`), on the chip column's terms: a
+   floor written as the width, defined once on the shell root, so the settled rows' chips in
+   the same column (`.orca-chip--aligned-schedule`) read the same number rather than a copy.
+
+   The floor is the longest schedule word's room plus exactly the badge's other parts. The
+   longest word is "waiting on deps", 86.4px of Plex at caption, medium — longer than
+   "unschedulable" at 80.9px. `ch` here is not a Plex zero: both stacks lead with the symbol
+   faces, which carry no "0", so `ch` falls back to half an em (6px at caption), and the word
+   is 14.4 of those. Fifteen hold every schedule word. As with the chip, `ch` resolves on the
+   element that uses the property, so a box that wants this width is set in caption. */
+.orca {
+  --badge-aligned-width: calc(15ch + var(--icon-sm) + var(--space-1) + 2 * var(--space-2) + 2 * var(--stroke-hairline));
+}
+.orca-badge--aligned {
+  width: var(--badge-aligned-width);
 }
 .orca-badge--ready {
   color: var(--status-succeeded);
@@ -1001,9 +1030,13 @@
   font-size: var(--icon-sm);
   line-height: 1;
 }
+/* The why sits beside the badge, after its ground, never on it: it is a control, a control
+   is accent, and accent is never a state (RULES.md rule 5). Inside the badge, the tint ended
+   after "why" on a classified row and before it on a settled one, whose outcome chip had the
+   why beside it — so the links did not line up down the schedule column. */
 /* type: caption */
 .orca-badge__why {
-  margin-left: var(--space-1);
+  margin-left: var(--space-2);
   /* It is a <button>: it opens the explanation popover, it does not navigate. */
   border: 0;
   padding: 0;

@@ -119,10 +119,21 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
       </Section>
 
       <Section title="Schedule classes">
-        <div className="preview__row">
+        {/* The schedule column: each mark at the aligned badge's width, a settled item's
+            outcome chip at the same width, and the why beside each — never inside the tint —
+            so every why starts at one edge. */}
+        <div className="preview__stack">
           {SCHEDULE_CLASSES.map((classification) => (
-            <ScheduleBadge key={classification} classification={classification} onExplain={noop} />
+            <span key={classification}>
+              <ScheduleBadge classification={classification} onExplain={noop} aligned />
+            </span>
           ))}
+          <span>
+            <StatusChip status="succeeded" aligned="schedule" />
+            <button type="button" className={`orca-badge__why ${textClass("caption")}`} onClick={noop}>
+              why
+            </button>
+          </span>
         </div>
       </Section>
 

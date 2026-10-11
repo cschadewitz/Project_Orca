@@ -69,7 +69,7 @@ screen now:
   list, since `dependencies.list` filters the *from* side only), and a waive that asks once,
   naming what it unblocks, and then folds the waive's own answer into the table and the
   graph without a second `dependencies.list`.
-- **The explanation is the badge's `why`, in the one `Menu`**, listing `schedule.explain`'s
+- **The explanation is the `why` beside the badge, in the one `Menu`**, listing `schedule.explain`'s
   lines word for word. `orca://item/<slug>` lands on Plan with it open, which is what made
   `Menu` take an optional controlled `open` — a link that arrives is not a click.
 
@@ -89,7 +89,7 @@ screen now:
   stored status and is *not* the classification beside it — the classification is where the
   scheduler put the item, the status is what the item says about itself, and an item is
   routinely `pending` *and* `ready`. They are drawn so they cannot be confused: the
-  classification is the tinted `ScheduleBadge` with the **why** on it, the status is a plain
+  classification is the tinted `ScheduleBadge` with the **why** beside it, the status is a plain
   `Chip` carrying the word and glyph from `semantics.json`'s `workItemStatus` (added for
   this), with no tint at all — a tinted chip in ORCA means a run status.
 - **The table pages.** `items.list` answers a window, so the surface sends its own `limit`

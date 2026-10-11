@@ -36,8 +36,11 @@ export interface StatusChipProps {
    * column (the run tree, the claims list). A floor, not a clamp — `.orca-chip` is never
    * narrower than its own glyph and word. There is no `className`: the chip's box is the
    * component layer's, and a surface lays out around it rather than sizing it.
+   * `"schedule"` (`orca-chip--aligned-schedule`) is the one column that mixes chips with
+   * schedule badges — the plan's schedule column, where a settled item's outcome is a chip —
+   * and takes the aligned badge's width (`--badge-aligned-width`) instead.
    */
-  aligned?: boolean;
+  aligned?: boolean | "schedule";
 }
 
 /**
@@ -490,7 +493,7 @@ export interface PermissionCardProps {
 }
 
 /**
- * Built, and corrected here against what the Plan surface met (#170). Three changes:
+ * Built, and corrected here against what the Plan surface met (#170) and since:
  *
  * - **Glyph and word, not word alone.** `SCHEDULE_PRESENTATION` now carries a glyph for
  *   each of the five, the way `STATUS_PRESENTATION` does: a classification is never
@@ -503,17 +506,26 @@ export interface PermissionCardProps {
  *   those two with `StatusChip`'s `succeeded` and `failed`, and never invents a sixth
  *   badge (`renderer/src/plan/plan-model.ts` holds the mapping).
  * - **`onExplain` is no longer the only disclosure.** The explanation is the app's one
- *   `Menu`, and a `Menu` owns its own trigger — so a caller may pass the whole disclosure
- *   as `explanation` instead, which replaces the built-in **why** button and takes the
- *   same `.orca-badge__why` class. Neither given draws no disclosure at all, which is the
- *   badge as a *label* (the inspector, the preview gallery).
+ *   `Menu`, and a `Menu` owns its own trigger — so a caller that owns the disclosure (the
+ *   schedule table) omits `onExplain` and draws that trigger *beside* the badge with the
+ *   same `.orca-badge__why` class. Neither draws no disclosure at all, which is the badge
+ *   as a *label* (the inspector, the dependency strip).
+ * - **The why is beside the badge, never inside it.** It is a control and so `accent`,
+ *   which is never a state (rule 5), and a link drawn on the classification's tint reads
+ *   as part of it. Inside, the tint ended after "why" on a classified row and before it on
+ *   a settled one (whose outcome chip had the why beside it), and the links did not line up.
+ *   The `explanation` slot that put a caller's trigger inside the badge is gone with it.
+ * - **`aligned`** (`orca-badge--aligned`): the longest schedule word's width
+ *   (`--badge-aligned-width`, "waiting on deps"), so a column of badges — and of
+ *   `StatusChip`s drawn `aligned="schedule"` beside them — ends at one edge and every why
+ *   after them starts at one. A floor: `.orca-badge` is never narrower than its word.
  */
 export interface ScheduleBadgeProps {
   classification: ScheduleClass;
-  /** Opens the explanation popover. Every classification can explain itself. */
+  /** Draws a **why** button beside the badge that opens the explanation popover. */
   onExplain?(): void;
-  /** The disclosure itself, when the caller owns it: a `Menu` whose trigger is the why. */
-  explanation?: unknown;
+  /** The longest schedule word's width, for a column of them. */
+  aligned?: boolean;
 }
 
 /**

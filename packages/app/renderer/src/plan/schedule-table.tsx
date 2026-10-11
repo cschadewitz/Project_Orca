@@ -12,14 +12,14 @@
  *
  * The **status** column and the **classification** column are not the same fact and are
  * drawn so they cannot be mistaken for each other. The classification is where the
- * scheduler put the item and is a tinted `ScheduleBadge` with a **why**; the status is
- * what the item says about itself, is a plain `Chip` with its own word and glyph
+ * scheduler put the item and is a tinted `ScheduleBadge` with a **why** beside it; the
+ * status is what the item says about itself, is a plain `Chip` with its own word and glyph
  * (`WORK_ITEM_STATUS_PRESENTATION`), and nothing opens off it. An item can be `pending`
  * and `ready`, or `pending` and `waiting on deps` — which is exactly why both are on
  * screen.
  *
- * The badge's **why** opens the explanation, and it opens in the app's one `Menu`: the
- * lines are `schedule.explain`'s, verbatim, one per row, in the order it returned them.
+ * The **why** beside the badge opens the explanation, and it opens in the app's one `Menu`:
+ * the lines are `schedule.explain`'s, verbatim, one per row, in the order it returned them.
  * Choosing a row copies that line, which is the only thing a read-only popover can
  * usefully do and is what keeps the menu's focus contract intact — a list of items that
  * are all disabled is a popover focus cannot enter.
@@ -34,7 +34,7 @@ export interface ScheduleTableProps {
   items: readonly PlanItemView[];
   selectedId: string | undefined;
   onSelect: (item: PlanItemView) => void;
-  /** `Enter` on a row, and the badge's **why**: both open the explanation. */
+  /** `Enter` on a row, and the **why** beside its badge: both open the explanation. */
   onExplain: (item: PlanItemView) => void;
   /** The item whose explanation is open, and its lines once they have been read. */
   explainFor: string | undefined;
@@ -89,7 +89,7 @@ export function ScheduleTable(props: ScheduleTableProps): JSX.Element {
       noun="work item"
       scope="list"
       /* A `grid`, not the substrate's default `listbox`: a row here holds controls — the
-         badge's **why** and the claim's run — and a control inside an `option` is a
+         **why** beside the badge and the claim's run — and a control inside an `option` is a
          control nothing can reach (`nested-interactive`). The cells below carry
          `role="gridcell"`, which is what makes those controls legal and reachable. */
       role="grid"
@@ -162,19 +162,22 @@ function Row({ item, onExplain, open, lines, explainError, onCloseExplanation, o
 
   return (
     <>
+      {/* Every row is the mark, then the why: never the why inside the badge's tint, because
+          it is a control and accent is never a state (rule 5), and because the settled rows
+          draw a chip with nothing inside it — so a why inside the badge ended its tint on some
+          rows and not others, and the links did not line up. Both marks take the badge's
+          aligned width, so every why starts at one edge. */}
       <span className="orca-plan__cell" role="gridcell">
         {mark.kind === "badge" ? (
-          <ScheduleBadge classification={mark.classification} explanation={why} />
+          <ScheduleBadge classification={mark.classification} aligned />
         ) : (
           /* A settled item is not in the ordering, so it has no schedule badge to draw:
              what it has is an outcome, in the run status that means the same thing. The
              explanation is still one press away, because `schedule.explain` answers for a
              settled item too. */
-          <>
-            <StatusChip status={mark.status} />
-            {why}
-          </>
+          <StatusChip status={mark.status} aligned="schedule" />
         )}
+        {why}
       </span>
 
       <span className={`orca-plan__id ${textClass("mono-id")}`} role="gridcell">
