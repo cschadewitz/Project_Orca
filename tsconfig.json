@@ -30,6 +30,7 @@
     "packages/*/test/**/*.ts",
     "examples/**/*.ts",
     "vitest.config.ts",
+    "vitest.renderer.config.ts",
     "packages/app/vite.config.ts"
   ]
 }
