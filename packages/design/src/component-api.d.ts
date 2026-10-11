@@ -111,6 +111,28 @@ export interface WellProps {
   id?: string;
 }
 
+/**
+ * Names and the values ORCA holds under them, as a detail pane reads them (built:
+ * `KeyValueList`, over `.orca-kv`). The one display for that: a run's variables in step
+ * detail, a node's configuration in the Workflows inspector, the variables a launch will
+ * send in its review card. Editing a value is `ConfigField` around a control, not this.
+ *
+ * A `<dl>`. The name is `mono-id`, because a variable or a config key is an identifier ORCA
+ * produced (rule 8). A string, number, boolean or `null` is set on the line beside it in
+ * `mono-body`; an object or an array is its two-space JSON in a `Well` under it, clamped to
+ * eight lines with a **Show all** / **Show less** button (`aria-expanded`, `aria-controls`)
+ * that appears only when the clamp, measured, cuts something off. Values are untyped and
+ * are printed verbatim, never read as a shape (rule 12). An empty record draws nothing: why
+ * there is nothing is the caller's sentence.
+ */
+export interface KeyValueListProps {
+  /** Each name and its value, in the record's own key order. */
+  values: Readonly<Record<string, unknown>>;
+  /** Names whose value may not be shown: listed as "Withheld" in sans, the value never read. */
+  withheld?: readonly string[];
+  className?: string;
+}
+
 /** The generated union of `orca-text-*` class names; see `TextStyle` in src/tokens.ts. */
 export type TextStyleName = string;
 

@@ -1696,6 +1696,95 @@
   width: 100%;
 }
 
+/* ---------- a name and its value ---------- */
+
+/* `KeyValueList`: names and the values ORCA holds under them, read in a detail pane — a
+   run's variables, a node's configuration, the variables a launch will send. One display,
+   so the three read alike. It is the inspector field's geometry without its control: the
+   name in the inspector's narrower label column, the value beside it, a hairline under each.
+   It is a `<dl>`, and the user agent's block margins come off it and off every `<dd>`; the
+   item's padding replaces them.
+
+   The value column is `minmax(0, 1fr)`, never a bare `1fr`, whose `auto` floor is the widest
+   thing in it that cannot break: one long unbroken value then set the column, and the pane,
+   wider than the pane. The list is not a list of rows (rule 9): an item is as tall as its
+   value, and every machine string in it breaks inside itself rather than running past it. */
+.orca-kv {
+  margin: 0;
+}
+.orca-kv__item {
+  display: grid;
+  grid-template-columns: var(--col-label-narrow) minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+  padding: var(--space-2) 0;
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+}
+/* The name is an identifier ORCA produced — a variable, a config key — so it is mono (rule 8),
+   at the label's 12/16 so the switch from `caption` moved nothing, and medium so it is told
+   from the mono value beside it by more than position. Inset to sit on the first line of a
+   `mono-body` value. Its column is fixed, so a name longer than the column breaks rather
+   than widening it: between its words where it has them (the component marks each camelCase
+   hump with a `<wbr>`), and inside a word only where it does not. */
+/* type: mono-id */
+.orca-kv__name {
+  margin: 0;
+  padding-top: var(--space-1);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.orca-kv__value {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* type: mono-body */
+.orca-kv__value--line {
+  font-family: var(--font-mono);
+}
+/* A value the caller may not show, said in a word. The interface speaking, so sans; and the
+   name's 12/16 box and inset, so the two sit on one line. */
+/* type: caption */
+.orca-kv__value--withheld {
+  padding-top: var(--space-1);
+  color: var(--ink-secondary);
+}
+/* An object or an array is a block of indented JSON in a `.orca-well`, under its name across
+   the list's whole width rather than in the value column, which at a pane's narrowest is too
+   few characters wide for one indented key. */
+.orca-kv__item--block {
+  grid-template-columns: minmax(0, 1fr);
+}
+.orca-kv__item--block > .orca-kv__value {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+/* Closed, a block is its first eight lines and stops on a line boundary with an ellipsis,
+   which is the system's mark for "this goes on" (docs/design/30-long-running-content.md).
+   Eight is room for a whole object of six keys — most of what a workflow puts in a variable
+   — before anybody has to open it. The rest of the value is still in the document, so a
+   screen reader reads all of it either way.
+
+   Clamped by line rather than by a height, so the box ends on a line boundary; and clipped
+   at the *content* edge, because the lines after the clamp are still laid out below it.
+   `overflow: hidden` clips at the padding edge, and in Chromium the ninth line showed
+   through the well's bottom padding as the top half of a line. `clip` rather than `hidden`
+   also leaves the well something that is not a scroll container, so nothing can scroll a
+   value inside its own box while it is closed. */
+.orca-kv__well--clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+  overflow: clip;
+  overflow-clip-margin: content-box;
+}
+/* Show all / Show less: under the block, at its start — it is about the block, not the pane. */
+.orca-kv__more {
+  align-self: flex-start;
+}
+
 /* ---------- artifact panel ---------- */
 
 .orca-artifact {
