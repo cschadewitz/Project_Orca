@@ -9,6 +9,7 @@ export {
 } from "./config-field.js";
 export { ConnectionIndicator, type ConnectionIndicatorProps } from "./connection-indicator.js";
 export { COUNTERPARTS, counterpartsFor, type Counterpart, type CrumbType } from "./counterparts.js";
+export { focusAfterLeaving } from "./focus-after-leaving.js";
 export { formatAbsolute, formatDuration, formatRelative } from "./format-time.js";
 export { Menu, type MenuItem, type MenuMeasurer, type MenuProps } from "./menu.js";
 export {

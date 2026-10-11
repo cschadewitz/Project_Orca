@@ -33,14 +33,15 @@
  * is kept anywhere, on the wire or off it — so the "auto-approval count explained" the issue
  * asks for cannot be rendered. Rule 12: it is absent rather than approximated.
  */
-import { useCallback, useMemo, type JSX } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, type JSX } from "react";
 import { CONFIG_SET_METHOD, PERMISSION_DECISIONS, TOOL_KINDS, type ConfigDocument } from "@orca/protocol";
 import { useMethodPresent, useWritability } from "../chrome/use-connection.js";
-import { Button, Chip, ConfigField, Menu, Text, Time, textClass } from "../ui/index.js";
+import { Button, Chip, ConfigField, Menu, Text, Time, focusAfterLeaving, textClass } from "../ui/index.js";
 import { configUrl } from "../route-table.js";
 import { POLICY_LAYERS, agentPolicies, describeRule, rowsFrom } from "./config-model.js";
 import { DraftBar } from "./draft-bar.js";
 import {
+  grantKeys,
   handRule,
   parseSidecar,
   ruleChanges,
@@ -121,7 +122,7 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
     [agentId, data],
   );
 
-  const rules = held ? rulesOf(held, agentId) : [];
+  const rules = useMemo<readonly SidecarRule[]>(() => (held ? rulesOf(held, agentId) : []), [held, agentId]);
   const changes = onDisk && held ? ruleChanges(onDisk, held) : 0;
 
   /** Replace this agent's rules, as a draft on the whole document. */
@@ -145,6 +146,43 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
     },
     [editRule, rules],
   );
+
+  /* Where focus goes when a grant leaves the list holding it. **Remove** takes its own row out
+     of the document, and the Remove focused inside it with the row, so focus would fall to
+     the page body; a re-read that no longer has the grant does the same to a field inside it.
+     The row reports, on its way out, that it was holding focus (`Grant`), and the list puts
+     focus on the Remove of the grant that took its place: the next one, or the one before it
+     when it was the last (`focusAfterLeaving` — the claims list's rule), or **Add a grant**
+     when the list is now empty. The section itself is the last resort, for a list whose
+     controls went in the same commit. A row that leaves *without* focus reports nothing, so
+     focus a person has put somewhere else stays where they put it. */
+  const section = useRef<HTMLElement>(null);
+  const list = useRef<HTMLOListElement>(null);
+  const keys = useMemo(() => grantKeys(rules), [rules]);
+  /* The rows as the last commit drew them, and the one that left it holding focus — written
+     by the row's own unmount, in the same commit as the effect below that reads it. */
+  const drawn = useRef(keys);
+  const leftHoldingFocus = useRef<string | undefined>(undefined);
+  const onLeaveHoldingFocus = useCallback((key: string) => {
+    leftHoldingFocus.current = key;
+  }, []);
+
+  /* Layout, not passive: the row has just gone and focus is on the body, and moving it in the
+     same frame means there is never a painted moment, or a keystroke, with it there. */
+  useLayoutEffect(() => {
+    const before = drawn.current;
+    drawn.current = keys;
+    const gone = leftHoldingFocus.current;
+    leftHoldingFocus.current = undefined;
+    if (gone === undefined || keys.includes(gone)) return;
+    // Something in this same commit has already put focus somewhere: it is not lost.
+    if (document.activeElement !== null && document.activeElement !== document.body) return;
+    const at = focusAfterLeaving(before, keys, gone);
+    const remove =
+      at === undefined ? null : (list.current?.children[at]?.querySelector<HTMLElement>("[data-grant-remove]") ?? null);
+    const add = section.current?.querySelector<HTMLElement>("[data-grant-add]") ?? null;
+    (remove ?? add ?? section.current)?.focus();
+  }, [keys]);
 
   const configured = policy ? rowsFrom(policy, "config") : [];
   /* ORCA's own floor, appended after the sidecar (#140). Read-only like the configured
@@ -227,14 +265,15 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
             )}
           </section>
 
-          {/* The written half. */}
-          <section className="orca-policy__section" aria-label="Written grants">
+          {/* The written half. Focusable from script and never a `Tab` stop: it is where focus
+              goes when the last grant leaves with no Add a grant to land on. */}
+          <section ref={section} className="orca-policy__section" aria-label="Written grants" tabIndex={-1}>
             <div className="orca-policy__section-head">
               <Text style="label-strong">Written by &quot;allow always&quot;</Text>
               <Chip>sidecar</Chip>
               <span className="orca-spacer" />
               {editable && (
-                <Button size="sm" onClick={() => write([...rules, handRule((now ?? isoNow)())])}>
+                <Button size="sm" data-grant-add="" onClick={() => write([...rules, handRule((now ?? isoNow)())])}>
                   Add a grant
                 </Button>
               )}
@@ -251,10 +290,14 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
                 Nothing has been granted with &quot;always&quot; for this agent.
               </Text>
             ) : (
-              <ol className="orca-policy__grants">
+              <ol ref={list} className="orca-policy__grants">
                 {rules.map((rule, index) => (
                   <Grant
-                    key={`${index}:${rule.addedAt ?? ""}`}
+                    /* The rule's name, not its place (`grantKeys`): the grants after a removed
+                       one keep their rows, and the one that slides into the gap is a row
+                       focus can be put back on. */
+                    key={keys[index]}
+                    rowKey={keys[index]!}
                     rule={rule}
                     agentId={agentId}
                     index={index}
@@ -267,6 +310,7 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
                     onDecision={(decision) => editRule(index, { decision })}
                     onMatch={(key, value) => editMatch(index, key, value)}
                     onRemove={() => write(rules.filter((_, at) => at !== index))}
+                    onLeaveHoldingFocus={onLeaveHoldingFocus}
                   />
                 ))}
               </ol>
@@ -345,6 +389,8 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
 const isoNow = (): string => new Date().toISOString();
 
 interface GrantProps {
+  /** The rule's name in the list, which is also its React key (`grantKeys`). */
+  rowKey: string;
   rule: SidecarRule;
   /** Whose policy this is, and where in the file the rule sits: together they are its path. */
   agentId: string;
@@ -355,6 +401,8 @@ interface GrantProps {
   onDecision: (decision: SidecarRule["decision"]) => void;
   onMatch: <K extends keyof RuleMatch>(key: K, value: RuleMatch[K]) => void;
   onRemove: () => void;
+  /** Said once, as the row unmounts, if focus was inside it: the list decides where it goes. */
+  onLeaveHoldingFocus: (key: string) => void;
 }
 
 /**
@@ -366,6 +414,7 @@ interface GrantProps {
  * guess which. `scope` is the third, and it is the one that needs no path written down.
  */
 function Grant({
+  rowKey,
   rule,
   agentId,
   index,
@@ -375,13 +424,28 @@ function Grant({
   onDecision,
   onMatch,
   onRemove,
+  onLeaveHoldingFocus,
 }: GrantProps): JSX.Element {
   /* The path into the sidecar this row writes, which is what `ConfigField` says it is for:
      a form over a file a person also hand-edits has to name the key each row changes. */
   const base = `agents.${agentId}.rules[${index}]`;
   const text = describeRule({ ...rule, source: "permissions" });
+  const row = useRef<HTMLLIElement>(null);
+
+  /* The last moment the row can tell whether it holds focus, as `ClaimRow` does it. A layout
+     effect's cleanup runs before React takes the row out of the document, so a focused Remove
+     is still in it here; a moment later focus is on the body, and a row that had it looks like
+     one that never did. Nothing changes these two while the row is mounted — the key is the
+     one React keys it by, the callback is stable — so this runs once, on the way out. */
+  useLayoutEffect(() => {
+    const element = row.current;
+    return () => {
+      if (element?.contains(document.activeElement)) onLeaveHoldingFocus(rowKey);
+    };
+  }, [rowKey, onLeaveHoldingFocus]);
+
   return (
-    <li className="orca-policy__grant">
+    <li ref={row} className="orca-policy__grant">
       <div className="orca-policy__grant-head">
         <span className={`orca-config__order ${textClass("mono-id")}`}>{order}</span>
         {/* The same sentence the Config surface's read-only list draws, tagged with the
@@ -401,7 +465,7 @@ function Grant({
             Colour): the danger tone is for the control that commits a destructive act, like
             Release's ✕ Confirm, not for one that drafts it. */}
         {editable && (
-          <Button size="sm" onClick={onRemove} aria-label={`Remove grant ${order}`}>
+          <Button size="sm" data-grant-remove="" onClick={onRemove} aria-label={`Remove grant ${order}`}>
             Remove
           </Button>
         )}

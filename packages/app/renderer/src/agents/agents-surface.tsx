@@ -67,6 +67,7 @@ import {
   StatusChip,
   Text,
   Time,
+  focusAfterLeaving,
   textClass,
   useIdTails,
 } from "../ui/index.js";
@@ -74,7 +75,6 @@ import { AgentCard } from "./agent-card.js";
 import {
   claimSubject,
   countLabel,
-  focusAfterLeaving,
   groupByHost,
   phraseText,
   releaseCommand,

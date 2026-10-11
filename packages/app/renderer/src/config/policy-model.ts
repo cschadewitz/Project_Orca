@@ -139,6 +139,31 @@ export function rulesOf(doc: SidecarDocument, agentId: string): readonly Sidecar
 }
 
 /**
+ * Each rule's name in the policy panel's list, in order: the key a grant row is drawn under,
+ * and the name the panel's focus bookkeeping uses for it (`focusAfterLeaving`).
+ *
+ * **A rule is named by when it was added, not by where it is.** Removing a grant moves every
+ * rule after it up one place, and a key that was the position — or carried it — would name
+ * each of them anew: React would draw them all again, and the row that slid into the gap
+ * would be one focus had never been in. `addedAt` is the provenance a run or the app stamped
+ * on the rule, and nothing in the panel edits it, so it holds still while the rule's match
+ * and decision are edited under it.
+ *
+ * Two rules can share a stamp, or have none — a sidecar somebody wrote by hand — so each is
+ * also counted among the rules before it with the same stamp. Those few are named by their
+ * order among themselves, which is what a position would have been, and nothing worse.
+ */
+export function grantKeys(rules: readonly SidecarRule[]): string[] {
+  const seen = new Map<string, number>();
+  return rules.map((rule) => {
+    const stamp = rule.addedAt ?? "";
+    const nth = seen.get(stamp) ?? 0;
+    seen.set(stamp, nth + 1);
+    return `${stamp}#${nth}`;
+  });
+}
+
+/**
  * The document with one agent's rules replaced.
  *
  * An agent left with no rules loses its key rather than keeping an empty `rules: []`. The
