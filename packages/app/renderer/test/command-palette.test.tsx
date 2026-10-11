@@ -267,6 +267,25 @@ describe("jump targets", () => {
     expect(parseJump(`  run_${id.toLowerCase()}  `)?.url).toBe(`orca://run/run_${id}`);
   });
 
+  /* Every run admitted through `requests.submit` or a direct launch is `run_<uuid>`, and the
+     jump row recognised only the 26-character form — so the runs a person started from the
+     app were the ones that could not be jumped to by id. */
+  it("recognises a run admitted with a UUID id, prefix and all, and canonicalises it", () => {
+    const id = "run_cae154fb-f778-47ba-ae71-bb4df6bb09e1";
+    expect(parseJump(id)).toEqual({ url: `orca://run/${id}`, label: "Open run", detail: id });
+    expect(parseJump(`  ${id.toUpperCase().replace("RUN_", "run_")}  `)?.url).toBe(`orca://run/${id}`);
+    expect(parseJump(id.toUpperCase())?.url).toBe(`orca://run/${id}`);
+  });
+
+  it("does not take a bare UUID for a run: it is as likely an intent or an operation", () => {
+    expect(parseJump("cae154fb-f778-47ba-ae71-bb4df6bb09e1")).toBeUndefined();
+    // Nor junk that only looks like one.
+    expect(parseJump("run_cae154fb-f778-47ba-ae71-bb4df6bb09e")).toBeUndefined();
+    expect(parseJump("run_cae154fb-f778-47ba-ae71-bb4df6bb09e1x")).toBeUndefined();
+    expect(parseJump("run_zae154fb-f778-47ba-ae71-bb4df6bb09e1")).toBeUndefined();
+    expect(parseJump("req_cae154fb-f778-47ba-ae71-bb4df6bb09e1")).toBeUndefined();
+  });
+
   it("recognises an orca:// URL as typed", () => {
     expect(parseJump("orca://gate/91c4")?.url).toBe("orca://gate/91c4");
     expect(parseJump("orca://artifact/spec.md@v3")?.label).toBe("Open link");
