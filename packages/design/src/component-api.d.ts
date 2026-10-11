@@ -823,6 +823,81 @@ export interface WorkflowNodeProps {
   onOpen?(id: string): void;
 }
 
+/** Which way a graph canvas's layers run (`renderer/src/workflow/layout.ts`). A person's view, never the workflow's. */
+export type LayoutDirection = "horizontal" | "vertical";
+
+/**
+ * Built, in `renderer/src/ui/canvas-controls.tsx`, over `.orca-canvasctl`: the group of view
+ * controls in the bottom-right corner of the workflow canvas, the workflow editor and the plan
+ * graph — zoom out, the zoom level (pressing it is `0`, back to rest), zoom in, zoom to fit,
+ * and the direction and minimap toggles.
+ *
+ * **It holds no state.** Every handler is an action of the canvas's `useCanvasView`, which
+ * also answers the keys, so a click on zoom in and a press of `+` are one zoom; `scale` is
+ * what the readout prints and what the limits are checked against. A toggle is drawn only
+ * with its handler. Icon buttons are `Button`s (`sm`, `ghost`) named for their action — the
+ * name is the tooltip too, with the key beside it — and the toggles are named for what they
+ * will do (`Lay out top to bottom`, `Hide the minimap`) rather than taking `aria-pressed`. At a
+ * zoom limit a button is `aria-disabled` with the reason in its title. A named `group`, not a
+ * `toolbar`, and placed outside the canvas's keyboard scope so `Enter` on it is the button's.
+ */
+export interface CanvasControlsProps {
+  /** The group's accessible name: what these controls are the view of. */
+  label: string;
+  scale: number;
+  onZoomIn(): void;
+  onZoomOut(): void;
+  /** Back to 100% and no pan: `0`. */
+  onRest(): void;
+  onFit(): void;
+  direction?: LayoutDirection;
+  onToggleDirection?(): void;
+  /** Whether the minimap is showing. */
+  minimap?: boolean;
+  onToggleMinimap?(): void;
+}
+
+/**
+ * The few tones a minimap box takes. Not the eight statuses: at this size a box carries a
+ * colour and nothing else, and the canvas beside it carries the glyph and the word (rule 4).
+ */
+export type MinimapTone = "plain" | "strong" | "running" | "waiting" | "failed" | "succeeded" | "faint";
+
+/** One node on the minimap, in the drawing's own px (margin included); the minimap scales it. */
+export interface MinimapNode {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  tone?: MinimapTone;
+  /** Drawn in accent, which is what selection is (rule 5). */
+  selected?: boolean;
+}
+
+/**
+ * Built, in `renderer/src/ui/graph-minimap.tsx`, over `.orca-graphmap` — not `.orca-minimap`,
+ * which is the list's status gutter. The whole drawing, scaled to fit the `minimap-w` ×
+ * `minimap-h` box with its aspect kept, plus an accent rectangle for what the canvas shows.
+ * A press outside the rectangle centres the view on that point and a drag of it pans; both
+ * arrive as `onPan` with the pan to show at the current scale.
+ *
+ * `aria-hidden`, with no tab stop: it is a pointer convenience over what `⇧`-arrows, `+`/`-`/`0`
+ * and zoom to fit already do from the keyboard, and what it draws is the canvas's own listbox.
+ */
+export interface GraphMinimapProps {
+  /** The drawing's extent in its own px, margin included. */
+  content: { width: number; height: number };
+  nodes: readonly MinimapNode[];
+  /** What the canvas shows: `screen = pan + scale × world`. */
+  view: { scale: number; pan: { x: number; y: number } };
+  /** The canvas viewport's measured size. */
+  viewport: { width: number; height: number };
+  onPan(pan: { x: number; y: number }): void;
+  /** Defaults to the `minimap-w` × `minimap-h` tokens. */
+  box?: { width: number; height: number };
+}
+
 /** Generated: `OBJECT_KINDS` from semantics.json's `objectKind`. */
 export type ObjectKind = "run" | "workItem" | "request" | "step" | "gate" | "event";
 

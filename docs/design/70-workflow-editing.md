@@ -10,7 +10,8 @@ ahead. This file is the editor's spec and its as-built record.
 
 The editor is a canvas with a palette and an inspector. Drag a node type from the palette onto
 the canvas to add it, or onto an edge to insert it there. Drag a node to move it. Drag from a
-node's port (the dot on its right edge) onto another node to connect them. Select a node or an
+node's port (the dot on its right edge, or its bottom edge when the graph runs top to bottom)
+onto another node to connect them. Select a node or an
 edge to edit it in the inspector. The outline on the left lists the nodes in file order, and
 there is one selection across the outline, the canvas and the inspector.
 
@@ -47,8 +48,9 @@ YAML by hand. The editor keeps both protections:
 | Open a container | Double-click a `loop` or `parallel` | `Enter` | The canvas shows the inline graph; the trail above it leads back out |
 | Undo, redo | Draft bar | `⌘Z`, `⌘⇧Z` | One step per batch of operations, kept in the draft so it survives closing the app |
 
-Pan, zoom and selection work as in the viewer. Every pointer gesture has a keyboard path, and
-every key is in the `workflow-edit` scope, so the palette lists them.
+Pan, zoom, selection, the layout direction and the minimap work as in the viewer (below, "The
+canvas's view"). Every pointer gesture has a keyboard path, and every key is in the
+`workflow-edit` scope, so the palette lists them.
 
 The inspector's **Delete** and **Delete edge** are default-tone buttons that do not ask, like
 the keys that do the same: each edits the draft, which `⌘Z` takes back and only **Review and
@@ -220,6 +222,63 @@ the budget from `tokens.json` and checks `node-h` is the smallest step that fits
 The code is in `packages/app/renderer/src/workflow/editor/` (`draft-model.ts` is the pure
 part, with its own test), `packages/daemon/src/workflow-drafts.ts` and the
 `workflowDrafts.*` contract in `packages/protocol/src/workflow-drafts.ts`.
+
+## The canvas's view: zoom, direction and the minimap
+
+The viewer's canvas, the editor's and the plan's dependency graph share one set of view
+controls, in the bottom-right corner of the canvas: **zoom out**, the **zoom level** (pressing
+it goes back to 100% and no pan, which is `0`), **zoom in**, **zoom to fit**, the **layout
+direction** and **the minimap**, with the minimap above them. The pieces are shared rather than
+copied: `ui/use-canvas-view.ts` holds zoom and pan and registers the zoom and pan keys,
+`ui/canvas-controls.tsx` and `ui/graph-minimap.tsx` draw the corner, and
+`ui/use-graph-preferences.ts` remembers the two toggles.
+
+- **Zoom.** The keys, the buttons, ⌘/Ctrl with the wheel and a trackpad pinch are one zoom. The
+  keys and buttons step through 25%, 50%, 75%, 100%, 150% and 200% about the middle of the
+  canvas; the wheel and the pinch zoom smoothly about the pointer, within the same limits.
+  **Zoom to fit** shows the whole graph, centred, at up to 100% — never magnified, because a
+  three-node graph at 200% is not more of it — and at 25% a graph too wide even for that is
+  centred on its middle, with the minimap for the rest. The canvas opens at rest, as it always
+  has.
+- **Panning.** Drag empty canvas, `⇧` with an arrow, a plain wheel or two-finger scroll, or the
+  minimap. The drawing no longer scrolls natively: the viewport clips it at the canvas's height,
+  so the pan is the only offset and the minimap's rectangle can be honest. A wheel moves the
+  drawing to its edge and then lets the canvas scroll on to the group boxes an expanded
+  container opens below it, which is what native scrolling used to reach.
+- **Layout direction.** Left to right (the default) or top to bottom. The layering, the order
+  within a layer and which edges are back edges are the same either way (`layout.ts`); only
+  where the layers go and which sides the edges use change. Top to bottom, a forward edge leaves
+  a node's bottom and enters the next one's top, and a back edge leaves by the **left** side,
+  runs through a gutter beside the columns and comes back into the target's left side — the one
+  side no forward edge uses, as the top is left to right — and it is still dotted. A forward
+  edge's label sits just above its target rather than at the edge's midpoint, because a
+  fan-out's midpoints are side by side in a gap one line tall and their conditions would print
+  over each other; a back edge's label is turned to run up its gutter. An expanded
+  container's group box is laid out in the same direction as the graph that holds it. The node
+  box does not turn; the start and end pills sit at the edge of their slot their edges use.
+  Turning the graph puts the view back at rest, and the arrows turn with it: `↓` is the next
+  layer top to bottom.
+- **Pinned positions in the editor stay in the horizontal frame.** The layout record
+  (`.layout/<id>.json`) is shared by everybody who edits the workflow; the direction is one
+  person's. So pins are always stored as they were before there was a choice, and a turned
+  graph draws them through `toDirection`, which maps between the two layouts' lattices — layer
+  steps along the flow, rank steps across it — rather than swapping x and y. A node pinned half
+  a layer past `plan` and a rank below it is half a layer below `plan` and a rank to its right
+  when the graph runs down: beside the same neighbours. A drop on a turned graph goes back
+  through `fromDirection` before the `place` is sent. Turning the graph writes nothing to the
+  draft, and a teammate reading left to right sees what you placed where you meant it.
+- **The minimap** is the whole graph in the canvas's corner: each node a box in its tone (the
+  run's status where a run is overlaid, the draft's change in the editor, the dependency's
+  state on the plan), the selection in accent, and an accent rectangle for what the canvas
+  shows. Click in it to centre the view there; drag the rectangle to pan. It follows the pan,
+  the zoom, the window's size and the direction. It is `minimap-w` × `minimap-h`, on
+  `surface-raised` with a hairline and no shadow, and can be hidden.
+- **Remembered per person.** The direction and whether the minimap shows are kept in the app's
+  own `preferences.json` under `canvases`, per canvas: `workflow` (the viewer and the editor,
+  which are one canvas) and `plan-graph`. Never in the workflow YAML and never in `.layout/`.
+
+The keys, the names of the controls and why the minimap is hidden from assistive technology are
+in `50-accessibility-and-keyboard.md`.
 
 **Not built yet:**
 

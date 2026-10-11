@@ -57,10 +57,10 @@ list has selection, the palette has focus), and the design must keep both legibl
 | Streams | `G` / `⇧G` | Top / bottom, `⇧G` re-enters following |
 | Streams | `/` | Search within the stream, `N` / `⇧N` to cycle matches |
 | Cards | `1`–`9`, `Enter`, `⇧Enter`, `G` | Select option, submit, submit with a note, go to the run |
-| Workflow canvas | `↑` / `↓` | Move the selection within a layer |
-| Workflow canvas | `→` / `←` | Move the selection to the next / previous layer |
+| Workflow canvas | `↑` / `↓` | Move the selection within a layer; top to bottom, to the previous / next layer |
+| Workflow canvas | `→` / `←` | Move the selection to the next / previous layer; top to bottom, within a layer |
 | Workflow canvas | `Enter` | Expand or collapse the selected `subworkflow` or `parallel` |
-| Workflow canvas | `+` / `-` / `0` | Zoom in, zoom out, back to rest |
+| Workflow canvas | `+` / `-` / `0` | Zoom in, zoom out, back to rest (100%, no pan) |
 | Workflow canvas | `⇧↑` `⇧↓` `⇧←` `⇧→` | Pan |
 | Workflow editor | `↑` / `↓` / `←` / `→` | Select the nearest node in that direction, by where the boxes are drawn |
 | Workflow editor | `Enter` | Open the selected `loop` or `parallel` node's inline graph |
@@ -72,10 +72,10 @@ list has selection, the palette has focus), and the design must keep both legibl
 | Workflow editor | `+` / `-` / `0`, `⇧↑` `⇧↓` `⇧←` `⇧→` | Zoom and pan, as on the viewer's canvas |
 | Schedule table | `Enter` | Explain the selected work item |
 | Plan journal | `J` / `K`, `↑` / `↓` | Move selection |
-| Plan graph | `↑` / `↓` | Move the selection within a layer |
-| Plan graph | `→` / `←` | Move the selection to the next / previous layer |
+| Plan graph | `↑` / `↓` | Move the selection within a layer; top to bottom, to the previous / next layer |
+| Plan graph | `→` / `←` | Move the selection to the next / previous layer; top to bottom, within a layer |
 | Plan graph | `Enter` | Show the selected node's relationships in the docked panel |
-| Plan graph | `+` / `-` / `0` | Zoom in, zoom out, back to rest |
+| Plan graph | `+` / `-` / `0` | Zoom in, zoom out, back to rest (100%, no pan) |
 | Plan graph | `⇧↑` `⇧↓` `⇧←` `⇧→` | Pan |
 | Panel | `[` / `]` | Previous / next artifact version |
 | Config | `⌘S` | Save the configuration draft |
@@ -98,6 +98,42 @@ Every action in this map is also in the command palette, with its key shown besi
 converse does not hold, and deliberately: a command may register with **no key at all** and be
 reachable from the palette alone, which is how something worth doing but not worth one of the
 letters left stays discoverable. Nothing is reachable by keyboard alone or by mouse alone.
+
+### The graph canvases' view controls
+
+The workflow canvas, the workflow editor and the plan graph each have a group of view controls
+in the bottom-right corner, under a minimap. They add **no key**, and that is the decision:
+
+- **The buttons are the keys' actions, not a second zoom.** Zoom out and zoom in are `-` and
+  `+`; the zoom level between them ("100%") is `0`, back to rest. One state in
+  `ui/use-canvas-view.ts` answers the keys, the buttons, the wheel and the minimap, so a press
+  and a click never disagree. Each icon button is named for its action and has it as its
+  tooltip with the key beside it ("Zoom in (+)"); an icon is never the only label. At a limit
+  a button stays focusable and says why it does nothing ("Zoomed in as far as the canvas goes,
+  200%").
+- **`0` keeps its meaning: rest.** Zoom to fit is the other thing a reset could mean, and it
+  is a button and a keyless palette command, **Zoom to fit the whole graph** (#205). So are the
+  two toggles, **Lay out top to bottom** / **Lay out left to right** and **Hide the minimap** /
+  **Show the minimap**, each named for what it will do — which is also the button's accessible
+  name, rather than a fixed name with `aria-pressed`: the state is a direction, not an on and
+  an off.
+- **The group sits outside the canvas's keyboard scope.** Inside it, `Enter` on a focused
+  button would be the canvas's `Enter` (and in the editor, `⌫` would delete the selected node),
+  because the map dispatches before the button's default. It is a named `group`, not a
+  `toolbar`: six ordinary tab stops after the canvas, with no roving arrows promised.
+- **Every pointer gesture has a keyboard path.** ⌘/Ctrl with the wheel, or a trackpad pinch,
+  zooms about the pointer, where `+` and `-` zoom about the middle of the canvas. A plain wheel,
+  a drag of empty canvas and a click or a drag in the minimap all pan, which `⇧` with an arrow
+  does; a plain wheel stops at the drawing's edge and then lets the canvas scroll on to the
+  group boxes below it, as it did before the drawing clipped. **Zoom to fit** is "show me all
+  of it".
+- **The minimap is `aria-hidden` and has no tab stop.** It is a pointer convenience over what
+  those keys already do, and what it draws is the canvas's own listbox, which a screen reader
+  already reads node by node, status first. Exposed, it would be an unlabelled second copy of
+  the graph with no keyboard path of its own. Its show/hide button is an ordinary named control.
+- **Turning the graph turns the arrows.** Top to bottom, the layers are rows, so `↓` is the next
+  layer and `→` the next node in the layer; the palette's labels change with it. The arrows
+  always point where the selection goes.
 
 ## Screen readers and live regions
 
@@ -173,6 +209,7 @@ changes, the check named beside it is the thing that has to change with it.
 | Status without colour | `renderer/test/a11y-sweep.test.tsx` asserts glyph **and** word in the accessible name of every status row; `test/smoke/app-shell.spec.ts` re-reads them under `filter: grayscale(1)` in both themes and keeps a picture beside the assertion |
 | Focus | `renderer/test/focus-and-selection.test.ts` reads the stylesheets: the ring is `:focus-visible` everywhere, selection never borrows `--border-focus`, and every `outline: none` matches a named allowlist |
 | Keyboard map | `renderer/test/keyboard-map-agreement.test.tsx` — the table below is transcribed and asserted in both directions, so a mouse-only action cannot be added quietly |
+| The graph canvases' view controls | `renderer/test/canvas-controls.test.tsx` — the buttons drive the keys' zoom, every control is named, the group is outside the canvas's scope, the minimap is `aria-hidden` with no tab stop, and fit and the toggles are keyless palette commands; `renderer/test/workflow-layout.test.ts` for which way the arrows point in each direction |
 | Resizing a pane | `renderer/test/pane-splitter.test.tsx` — the separator's role, range and arrow keys, the restore, and which boundaries the app offers at which width; `renderer/test/panes.test.ts` for the clamp. The real drag and the real cursor are `test/smoke/app-shell.spec.ts`, in an Electron window |
 | Screen readers and live regions | `a11y-sweep.test.tsx` — exactly one polite announcer across all surfaces, assertive cards, the output pane's `role="log"` with `aria-live="off"`; `renderer/test/announcements.test.ts` covers what the announcer says and, as much, what it stays silent about |
 | Reduced motion and preferences | The `prefers-reduced-motion` and `prefers-contrast: more` blocks in `components.css`. No automated check — see the gap below |
