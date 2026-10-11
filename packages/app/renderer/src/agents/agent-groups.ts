@@ -106,14 +106,42 @@ export function releaseRefusal(claim: ClaimView): string | undefined {
 }
 
 /**
- * What releasing this claim does, in the words the confirmation shows: the work item, the
- * run it is taken from, and the consequence. Every clause is a fact off the `ClaimView` —
- * nothing here predicts what the scheduler will then do, which is what the result's own
- * `note` is for.
+ * A span of a sentence, and whether ORCA produced it — the run's name and any id are set
+ * in mono and the rest in sans, because "mono means ORCA produced it" holds inside a
+ * sentence as well as in a column (RULES.md rule 8). The palette's `labelMachine` is the
+ * same split for a label with one id in it; a consequence has two machine strings.
  */
-export function releaseConsequence(claim: ClaimView): string {
-  const run = claim.owner.name ?? claim.owner.runId;
+export interface Phrase {
+  text: string;
+  machine?: true;
+}
+
+/**
+ * What a claim is called in a sentence: its work item's title, which is what a person knows
+ * the work by, or the work item's id when the item has no title to give.
+ */
+export function claimSubject(claim: ClaimView): Phrase {
   const title = claim.workItem?.title;
-  const subject = title === undefined || title === "" ? claim.workItemId : `${claim.workItemId} — ${title}`;
-  return `Take ${subject} back from ${run}. The item goes back to the scheduler and another run may claim it.`;
+  return title === undefined || title === "" ? { text: claim.workItemId, machine: true } : { text: title };
+}
+
+/**
+ * What releasing this claim does, in the words the armed row shows under itself: the work
+ * item, what happens to it, and the run it is taken from. Subject first, so a row cut short
+ * by a narrow pane still says what it is about (the brand book's Voice); sentence case and no
+ * apology. Every clause is a fact off the `ClaimView` — "may" is not a prediction, and what
+ * the scheduler then actually does is the result's own `note`.
+ */
+export function releaseConsequence(claim: ClaimView): readonly Phrase[] {
+  return [
+    claimSubject(claim),
+    { text: " goes back to the scheduler. " },
+    { text: claim.owner.name ?? claim.owner.runId, machine: true },
+    { text: " loses its claim on it, and another run may claim it." },
+  ];
+}
+
+/** A sentence of phrases as plain text: a `title`, an assertion, an announcement. */
+export function phraseText(phrases: readonly Phrase[]): string {
+  return phrases.map((phrase) => phrase.text).join("");
 }

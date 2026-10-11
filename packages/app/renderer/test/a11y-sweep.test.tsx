@@ -400,12 +400,13 @@ describe("Agents: health in the name, before the id", () => {
       expect(screen.getByRole("button", { name: `Permissions for ${agent.id}` })).toBeTruthy();
     }
 
-    /* The same for **Release**: the one that will fire names its work item, and the one the
-       daemon would refuse is disabled with the reason reachable *on* the control rather than
-       only on hover — `Button` uses `aria-disabled` and keeps the element focusable for
-       exactly this (docs/design/40-connection-states.md). */
-    expect(screen.getByRole("button", { name: "Release wi-3" })).toBeTruthy();
-    const refused = screen.getByRole("button", { name: "Release" });
+    /* The same for **Release**: each names the work it acts on — by its title, which is what
+       a person knows the work by — and the one the daemon would refuse is disabled with the
+       reason reachable *on* the control rather than only on hover — `Button` uses
+       `aria-disabled` and keeps the element focusable for exactly this
+       (docs/design/40-connection-states.md). */
+    expect(screen.getByRole("button", { name: "Release Document the rollout" })).toBeTruthy();
+    const refused = screen.getByRole("button", { name: "Release Wire the login button" });
     expect(refused.getAttribute("aria-disabled")).toBe("true");
     expect(refused.hasAttribute("disabled")).toBe(false);
     expect(refused.getAttribute("title")).toContain("The run could still resume");
@@ -416,12 +417,14 @@ describe("Agents: health in the name, before the id", () => {
     await goTo("Agents");
     const announcer = announcers()[0]!;
 
-    fireEvent.click(await screen.findByRole("button", { name: "Release wi-3" }));
-    fireEvent.click(
-      within(await screen.findByRole("menu", { name: "Release wi-3" })).getByRole("menuitem", {
-        name: /^Release wi-3/,
-      }),
-    );
+    /* Release asks in place, then Confirm sends. A press is focus and then a click, as in
+       the app — happy-dom does not move focus on a click by itself. */
+    const release = await screen.findByRole("button", { name: "Release Document the rollout" });
+    act(() => release.focus());
+    fireEvent.click(release);
+    const confirm = screen.getByRole("button", { name: "Confirm release of Document the rollout" });
+    act(() => confirm.focus());
+    fireEvent.click(confirm);
 
     /* A write this app made is not something the daemon pushes, so it goes through
        `useAnnounce()` into the *same* region every notification does — and the surface grows

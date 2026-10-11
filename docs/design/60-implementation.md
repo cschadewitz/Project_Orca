@@ -217,7 +217,9 @@ been sent in the meantime. There is no dialog, deliberately — a modal over thi
 move focus out of the query field, put a second layer on the stack for `Esc` to unwind, and
 ask the question somewhere other than where the person is looking. Cancel, waive and release
 carry one; resume, decide and reopen do not, because re-driving a parked run, deciding a
-decision and reopening one are all acts with a way back.
+decision and reopening one are all acts with a way back. A destructive control on a list row
+outside the palette asks the same way, on its own row — the Agents surface's claims are the
+first ("Releasing a claim", below).
 
 **A destructive row is never first.** It sorts below every other command, whatever scope it
 is in, for the reason a gate's destructive option is never bound to `1`: the first row is
@@ -628,14 +630,29 @@ screen is, so the rows re-read themselves. A card's "always" that the daemon *re
 derive a rule from says so on the Attention surface rather than promising anything
 (`alwaysOutcome`, #221) — the panel then simply has nothing new to show, which is correct.
 
-**Releasing a claim** (#88) is the surface's other write. Each claim whose
-`owner.releasable` is true gets a danger-toned **Release** with a confirmation `Menu` naming
-the work item, the run it is taken from and what happens next; one the daemon would refuse is
-disabled with the reason on the control. There is no **Force release** here — `--force` takes
-an item from a run that could still resume, which has no undo and stays a CLI act. Nothing
-pushes for a release (it journals no event), so the claims are re-read once after the call,
-and the result's `note` — what releasing did *not* fix, since a dead run's log never moves on
-— is announced into the app's one live region and left on the row.
+**Releasing a claim** (#88) is the surface's other write, and it **confirms inline, as a
+second state of the row** — the palette's destructive-row pattern above, on a list row. At
+rest each claim carries a quiet **Release** in the default tone, named for the work item's
+title; one the daemon would refuse is the same button disabled with the reason on it. Pressing
+it *arms* the row: the row takes the danger tone, the control becomes **Keep** and **✕ Confirm
+release**, and the row grows into its declared two-line variant to say, under itself, what
+releasing does — "*title* goes back to the scheduler. *run* loses its claim on it, and another
+run may claim it", subject first and ids in mono. Nothing has been sent. Keep is first and
+takes focus, so a second `Enter` keeps the claim; Confirm leads with `✕`, names the work item
+and is `aria-describedby` the consequence, and the pair is a `group` named as the question.
+Keep, `Esc` (the armed row is on the transient layer stack, so the one global `Esc` unwinds it),
+focus leaving the row and arming another row all disarm it — one row asks at a time — and the
+first two hand focus back to Release. It was a confirmation `Menu` until the design-conformance
+review, which found the three things a popover over a list gets wrong here: the consequence was
+in an item's eyebrow-styled `hint`, so an uppercase line wider than the window; the destructive
+item was first and focused on open, so Release then `Enter` released; and the question was asked
+in a layer over the list rather than on the row it was about. The palette's **Release claim on**
+row is the Plan surface's in every respect — `labelMachine`, `tone: "danger"`, a `confirm`.
+There is no **Force release** here — `--force` takes an item from a run that could still
+resume, which has no undo and stays a CLI act. Nothing pushes for a release (it journals no
+event), so the claims are re-read once after the call, and the result's `note` — what releasing
+did *not* fix, since a dead run's log never moves on — is announced into the app's one live
+region and left on the row, in the same two-line variant.
 
 **And one control that is not there: retrying a handshake from the card.** No method drives
 the daemon's handshake retry — `agents.ping` probes an agent and records a result, it does

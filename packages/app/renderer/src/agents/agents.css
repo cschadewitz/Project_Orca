@@ -216,14 +216,51 @@
   color: var(--status-failed);
 }
 
-/* A claim carrying a release note is a declared two-line variant, not a row that grew
+/* A claim with a second line to draw is a declared two-line variant, not a row that grew
    (RULES.md rule 9): exactly two `--row-h`, the bound height doubled and never restated,
    the same arithmetic `.orca-list--two-line` uses. The base row above stays one line and
    keeps its `nowrap` columns; only the modifier wraps, and only the note wraps onto the
-   second line, because only the modifier is on a row that has one. */
+   second line, because only the modifier is on a row that has one. Two things are that
+   second line: a release's result, after it, and the consequence while the row is armed
+   and asking — one at a time, so the variant is never taller than two lines. */
 .orca-agents__claim--note {
   flex-wrap: wrap;
   height: calc(var(--row-h) * 2);
   min-height: calc(var(--row-h) * 2);
   align-content: center;
+}
+
+/* ---------- a release, asked in place ---------- */
+
+/* The armed row (`ClaimRow` in agents-surface.tsx): the danger tone on the row's own edge,
+   not a filled band — a red ground reads as an error that has already happened, which is the
+   reason the palette's armed row gives too. The colour is not the only thing that changed:
+   the control is now Keep and ✕ Confirm release, and the row has a second line saying what
+   releasing does. */
+.orca-agents__claim--armed {
+  border-color: var(--status-failed);
+}
+/* Keep, then Confirm: the safe choice first, where focus lands. */
+.orca-agents__claim-ask {
+  flex: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+/* The failed run's ✕ at the chip's glyph size, leading the word it belongs to — the same
+   glyph and size the palette's danger row and a danger menu item lead with. */
+.orca-agents__claim-glyph {
+  font-size: var(--icon-sm);
+  line-height: 1;
+}
+/* What releasing does, as the armed row's second line. Unlike the daemon's note above, it is
+   ORCA's own sentence and it leads with its subject, so it truncates at its end rather than
+   wrapping out of the row's two lines (rule 9) — a narrow pane still shows what it is about,
+   the whole sentence is in its title, and Confirm is described by it for a screen reader. */
+.orca-agents__claim-consequence {
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
