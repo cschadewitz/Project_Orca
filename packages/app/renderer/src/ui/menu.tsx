@@ -38,6 +38,7 @@
  *    uppercase, unwrapped, at the trailing edge — which is right for a type or a date and
  *    wrong for anything a person has to read: a consequence set there was an uppercase line
  *    that blew the menu out past the window (the Agents surface's release confirmation).
+ *    **An id is a `hintMachine`**, which is the same place in mono and never re-cased.
  *  - **Placement flips rather than clips**, decided by `placeMenu` over measurements this
  *    component takes through an injectable measurer (see `menu-placement.ts` for why).
  */
@@ -63,6 +64,7 @@ import {
   type MenuPlacement,
   type Rect,
 } from "./menu-placement.js";
+import { MachineText, ObjectId } from "./object-id.js";
 import { textClass } from "./text.js";
 
 export interface MenuItem {
@@ -74,6 +76,18 @@ export interface MenuItem {
    * in the menu's `note`) and never an id, which uppercase would re-capitalise.
    */
   hint?: string;
+  /**
+   * The same trailing meta when it is machine text — an id, `ai-sdlc · v3 · 7 nodes`,
+   * `orca://` — set in mono and never re-cased. A token from `idText` is drawn as one: its
+   * glyph as decoration, its kind as a word. Takes the place of `hint`; give one or the other.
+   */
+  hintMachine?: string;
+  /**
+   * The id of the object this item names, drawn after the label as a faint `ObjectId` token:
+   * two runs called the same thing are two different choices, and the token is what tells
+   * them apart. The label still leads and is what typeahead reads.
+   */
+  labelId?: string;
   /** Listed, named and skipped by the arrow keys; a menu never hides what it cannot do. */
   disabled?: boolean;
   /**
@@ -458,8 +472,16 @@ export function Menu({
                     {CHROME_GLYPHS.danger}
                   </span>
                 ) : null}
-                <span>{item.label}</span>
-                {item.hint === undefined ? null : (
+                {item.labelId === undefined ? (
+                  <span>{item.label}</span>
+                ) : (
+                  /* The name is the part that gives way; the token keeps its width, because
+                     two runs with one name are told apart by nothing else. */
+                  <ObjectId id={item.labelId} name={item.label} />
+                )}
+                {item.hintMachine !== undefined ? (
+                  <MachineText text={item.hintMachine} className="orca-menu__machine" />
+                ) : item.hint === undefined ? null : (
                   <span className={`orca-menu__type ${textClass("eyebrow")}`}>{item.hint}</span>
                 )}
               </button>

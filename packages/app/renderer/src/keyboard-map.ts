@@ -86,6 +86,8 @@ export interface PaletteChoice {
   label: string;
   /** A trailing note: a workflow's version and node count, a decision option's rationale. */
   hint?: string;
+  /** The same note when it is machine text — an id, `ai-sdlc · v3 · 7 nodes` — in mono, never re-cased. */
+  hintMachine?: string;
 }
 
 /**

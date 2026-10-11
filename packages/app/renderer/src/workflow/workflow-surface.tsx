@@ -284,9 +284,12 @@ function runOptions(runs: readonly RunSummaryView[], picked: string | undefined)
     rows.push({
       id: run.id,
       label: run.name,
+      // Runs of one workflow are usually called the same thing, so the name is followed by
+      // the run's id token — the one thing that tells two of them apart.
+      labelId: run.id,
       // The status word and the version the run is pinned to: the two facts that decide
-      // which of a dozen runs a person meant.
-      hint: `${run.status} · v${run.workflowVersion}`,
+      // which of a dozen runs a person meant. In mono, never re-cased: `v3` is ORCA's.
+      hintMachine: `${run.status} · v${run.workflowVersion}`,
     });
   }
   return rows;

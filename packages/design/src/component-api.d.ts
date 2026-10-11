@@ -922,6 +922,18 @@ export interface MenuItem {
    * and never an id, which uppercase would re-capitalise.
    */
   hint?: string;
+  /**
+   * The same trailing meta when it is machine text — an intent id, a workflow's
+   * `id · vN · N nodes`, `orca://` — in `.orca-menu__machine`: mono, never re-cased. An id
+   * token from `idText` is drawn as one (glyph decorative, kind as a word). Instead of `hint`.
+   */
+  hintMachine?: string;
+  /**
+   * The id of the object the item names, drawn after the label as a faint `ObjectId` token —
+   * the workflow viewer's run picker, where runs of one workflow share a name. The label
+   * still leads and is what typeahead reads.
+   */
+  labelId?: string;
   /** Shown, named and skipped by the arrow keys rather than hidden. */
   disabled?: boolean;
   /**

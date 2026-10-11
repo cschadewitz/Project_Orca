@@ -406,6 +406,7 @@ function Picker({
             id: choice.id,
             label: choice.label,
             ...(choice.hint === undefined ? {} : { hint: choice.hint }),
+            ...(choice.hintMachine === undefined ? {} : { hintMachine: choice.hintMachine }),
           }))}
           onChoose={(item) => onChoose(item.id)}
           open

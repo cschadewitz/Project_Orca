@@ -463,6 +463,62 @@ describe("a menu's hint", () => {
   });
 });
 
+describe("a menu's machine hint and labelled id", () => {
+  it("sets an id, a version or a link in mono and leaves its case alone", () => {
+    /* The eyebrow's uppercase turned `ai-sdlc · v3` into `AI-SDLC · V3` and `orca://` into
+       `ORCA://`: machine text re-cased is a different-looking string (rule 8). */
+    mount(
+      <Menu
+        label="Workflows"
+        items={[
+          { id: "a", label: "AI SDLC", hintMachine: "ai-sdlc · v3 · 7 nodes" },
+          { id: "b", label: "Copy id", hintMachine: "☰ JH7X8P" },
+        ]}
+        onChoose={() => {}}
+      >
+        w
+      </Menu>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
+    const [plain, token] = screen.getAllByRole("menuitem");
+    const meta = plain!.querySelector(".orca-menu__machine")!;
+    expect(meta.textContent).toBe("ai-sdlc · v3 · 7 nodes");
+    expect(meta.className).toContain("orca-text-mono-id");
+    expect(plain!.querySelector(".orca-menu__type")).toBeNull();
+    // An id token is drawn as one: a decorative glyph and the kind said as a word.
+    expect(token!.querySelector(".orca-objid__kind")?.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.getByRole("menuitem", { name: "Copy id run JH7X8P" })).toBeTruthy();
+
+    const css = componentsCssSource.replace(/\/\*[\s\S]*?\*\//g, "");
+    const rule = /\.orca-menu__machine\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(rule).toMatch(/font-family:\s*var\(--font-mono\)/);
+    expect(rule).not.toMatch(/text-transform/);
+  });
+
+  it("follows a label with the id token that tells two of one name apart", () => {
+    mount(
+      <Menu
+        label="Runs"
+        items={[
+          { id: "run_01M4M8A1WDAQMMX98Q6KJH7X8P", label: "Database schema", labelId: "run_01M4M8A1WDAQMMX98Q6KJH7X8P" },
+          { id: "run_01M4M8A1WDAQMMX98Q6KJ0C46Q", label: "Database schema", labelId: "run_01M4M8A1WDAQMMX98Q6KJ0C46Q" },
+        ]}
+        onChoose={() => {}}
+      >
+        r
+      </Menu>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Runs" }));
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Database schema☰run JH7X8P",
+      "Database schema☰run J0C46Q",
+    ]);
+    expect(screen.getAllByRole("menuitem")[0]!.querySelector(".orca-objid")!.getAttribute("title")).toBe(
+      "run_01M4M8A1WDAQMMX98Q6KJH7X8P",
+    );
+  });
+});
+
 describe("the menu surface", () => {
   it("floats on the raised surface in both themes, never on the scrim", () => {
     /* A menu floats, so it stands on `surface-raised` — "things that float: … popovers,

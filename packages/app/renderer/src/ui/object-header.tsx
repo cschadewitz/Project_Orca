@@ -192,7 +192,7 @@ function CrumbMenu({ crumbs, crumb, onChoose }: CrumbMenuProps): JSX.Element | n
   const byId = new Map(options.map((option) => [option.id, option]));
 
   const items: MenuItem[] = [
-    ...(link ? [{ id: COPY_LINK, label: "Copy link", hint: "orca://" }] : []),
+    ...(link ? [{ id: COPY_LINK, label: "Copy link", hintMachine: "orca://" }] : []),
     ...options.map((option) => ({ id: option.id, label: option.label, hint: option.leadsTo })),
   ];
 

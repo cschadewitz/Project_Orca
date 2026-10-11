@@ -52,8 +52,9 @@ export function PaletteStartRun({ onOpen }: PaletteStartRunProps): JSX.Element |
               id: workflow.id,
               label: workflow.name,
               // The id as well as the name: two workflows may be called the same thing and
-              // only one of them is the one about to run.
-              hint: `${workflow.id} · v${workflow.version} · ${workflow.nodeCount} nodes`,
+              // only one of them is the one about to run. Machine text, so mono and never
+              // re-cased — the eyebrow's uppercase made `ai-sdlc` read `AI-SDLC`.
+              hintMachine: `${workflow.id} · v${workflow.version} · ${workflow.nodeCount} nodes`,
             }));
           },
           choose: (workflowId) => {

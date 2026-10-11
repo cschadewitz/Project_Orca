@@ -2113,6 +2113,17 @@
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
+/* The same trailing meta when it is machine text (`MenuItem.hintMachine`) — an intent id, a
+   workflow's `id · vN · N nodes`, `orca://`. Mono and verbatim, never re-cased: the eyebrow's
+   uppercase turned `ai-sdlc` into `AI-SDLC` and an id into a different-looking id. An id
+   token in it is drawn as one (`MachineText`). */
+/* type: mono-id */
+.orca-menu__machine {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  color: var(--ink-tertiary);
+}
 /* A note the popover makes rather than a choice it offers: no hover, no pointer, no
    height rung, and it wraps, because what it says is a sentence and not a row. */
 /* type: caption */
