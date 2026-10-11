@@ -69,6 +69,7 @@ function mount(
   const onApply = vi.fn(async () => options.apply ?? true);
   const onSelect = vi.fn();
   const onOpenNested = vi.fn();
+  const onDelete = vi.fn();
   const ref = createRef<InspectorHandle>();
   const issues = options.issues ?? [];
   const byNode = new Map<string, DraftIssue[]>();
@@ -94,11 +95,12 @@ function mount(
         onApply={onApply}
         onSelect={onSelect}
         onOpenNested={onOpenNested}
+        onDelete={onDelete}
       />
     </h.Providers>,
   );
   const inspector = screen.getByRole("complementary", { name: "Inspector" });
-  return { inspector, onApply, onSelect, onOpenNested, ref };
+  return { inspector, onApply, onSelect, onOpenNested, onDelete, ref };
 }
 
 const node = (id: string, options: Parameters<typeof mount>[0] = {}) =>
@@ -125,7 +127,7 @@ describe("the inspector with nothing selected", () => {
   it("edits the workflow's name and description, and counts the graph", () => {
     const { inspector, onApply } = mount({ workflow: { name: "Flow", description: "Old" } });
     expect(within(inspector).getByText("workflow")).toBeTruthy();
-    expect(inspector.textContent).toContain("9 nodes, 4 edges, starting at start — more than one start node");
+    expect(inspector.textContent).toContain("9 nodes, 4 edges, starting at start — more than one start node");
     enter(field("Name"), "");
     expect(onApply).not.toHaveBeenCalled();
     enter(field("Name"), "Renamed");
@@ -143,7 +145,7 @@ describe("the inspector with nothing selected", () => {
     expect(within(inspector).getByText("inline graph")).toBeTruthy();
     expect(within(inspector).getByText("again")).toBeTruthy();
     expect(screen.queryByLabelText(/^Name/)).toBeNull();
-    expect(inspector.textContent).toContain("2 nodes, 1 edges, starting at start");
+    expect(inspector.textContent).toContain("2 nodes, 1 edge, starting at start");
   });
 
   it("says a graph with no start starts at nothing, and a workflow with no fields is blank", () => {
@@ -295,13 +297,14 @@ describe("a node", () => {
     expect(onApply).toHaveBeenCalledWith([{ op: "addEdge", from: "choose", to: "sub" }]);
   });
 
-  it("says when nothing follows a node, and deletes it with or without its connections", () => {
-    const { inspector, onApply } = node("sub");
+  it("says when nothing follows a node, and hands a delete with or without its connections to the editor", () => {
+    const { inspector, onApply, onDelete } = node("sub");
     expect(inspector.textContent).toContain("Nothing follows this node yet.");
     fireEvent.click(within(inspector).getByRole("button", { name: "Delete" }));
-    expect(onApply).toHaveBeenLastCalledWith([{ op: "removeNode", id: "sub" }]);
+    expect(onDelete).toHaveBeenLastCalledWith(false);
     fireEvent.click(within(inspector).getByRole("button", { name: "Delete with its connections" }));
-    expect(onApply).toHaveBeenLastCalledWith([{ op: "removeNode", id: "sub", detach: true }]);
+    expect(onDelete).toHaveBeenLastCalledWith(true);
+    expect(onApply).not.toHaveBeenCalled();
   });
 
   it("offers a second start node to become the start, and keeps the start's type and deletion", () => {
@@ -402,8 +405,8 @@ describe("a node", () => {
 });
 
 describe("an edge", () => {
-  it("re-ends the edge, sets and clears its condition and label, and deletes it", async () => {
-    const { inspector, onApply, onSelect } = mount({ selection: { kind: "edge", index: 3 } });
+  it("re-ends the edge, sets and clears its condition and label, and hands its delete to the editor", () => {
+    const { inspector, onApply, onDelete } = mount({ selection: { kind: "edge", index: 3 } });
     expect(inspector.textContent).toContain("choose → review");
     expect(within(inspector).getByText("added")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Edge source" }));
@@ -421,8 +424,7 @@ describe("an edge", () => {
     enter(field("Label"), "no");
     expect(onApply).toHaveBeenLastCalledWith([{ op: "updateEdge", index: 3, label: "no" }]);
     fireEvent.click(within(inspector).getByRole("button", { name: "Delete edge" }));
-    expect(onApply).toHaveBeenLastCalledWith([{ op: "removeEdge", index: 3 }]);
-    await waitFor(() => expect(onSelect).toHaveBeenCalledWith(undefined));
+    expect(onDelete).toHaveBeenCalledWith(false);
   });
 
   it("names the edge's problems, and clears a label and sets a condition", () => {
@@ -437,12 +439,7 @@ describe("an edge", () => {
     expect(onApply).toHaveBeenLastCalledWith([{ op: "updateEdge", index: 2, when: "choice == 'no'" }]);
   });
 
-  it("keeps a refused delete selected, and shows a read-only edge as text", async () => {
-    const { inspector, onSelect } = mount({ selection: { kind: "edge", index: 0 }, apply: false });
-    fireEvent.click(within(inspector).getByRole("button", { name: "Delete edge" }));
-    await act(async () => {});
-    expect(onSelect).not.toHaveBeenCalled();
-    cleanup();
+  it("shows a read-only edge as text", () => {
     const readOnly = mount({ selection: { kind: "edge", index: 0 }, readOnly: true });
     expect(screen.queryByRole("button", { name: "Edge source" })).toBeNull();
     expect(within(readOnly.inspector).queryByRole("button", { name: "Delete edge" })).toBeNull();

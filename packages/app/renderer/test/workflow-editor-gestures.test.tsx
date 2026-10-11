@@ -175,7 +175,8 @@ describe("the canvas's keys", () => {
     expect(inspector().textContent).toContain("plan → done");
     key(canvas, { key: "Backspace" });
     await waitFor(() => expect(drafts.ops()).toEqual([{ op: "removeEdge", index: 1 }]));
-    await waitFor(() => expect(within(inspector()).getByText("workflow")).toBeTruthy());
+    // The selection moves to the node the edge left from.
+    await waitFor(() => expect(canvas.getAttribute("aria-activedescendant")).toBe("orca-wfedit-node-plan"));
     pick("start");
     key(canvas, { key: "Delete" });
     expect(said).toContain("The start node stays. Connect it to something else instead.");
@@ -365,9 +366,9 @@ describe("the canvas's pointer gestures", () => {
 describe("the draft bar", () => {
   it("counts changes, undoes, redoes and tidies", async () => {
     const { drafts } = await openEditor((fake) => draftBridge(fake));
-    expect(bar().textContent).toContain("your draft · 0 changes");
+    expect(bar().textContent).toContain("your draft · 0 changes");
     fireEvent.click(screen.getByRole("button", { name: /Set variables/ }));
-    await waitFor(() => expect(bar().textContent).toContain("1 change"));
+    await waitFor(() => expect(bar().textContent).toContain("1 change"));
     expect(drafts.ops()).toEqual([expect.objectContaining({ op: "addNode", id: "set-1" })]);
     expect(bar().textContent).toContain("Saved in the draft");
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
@@ -385,7 +386,7 @@ describe("the draft bar", () => {
     fireEvent.pointerMove(plan, { pointerId: 1, clientX: 200, clientY: 200 });
     fireEvent.pointerUp(plan, { pointerId: 1, clientX: 200, clientY: 200 });
     await waitFor(() => expect(drafts.ops()).toHaveLength(1));
-    await waitFor(() => expect(bar().textContent).toContain("0 changes to the layout"));
+    await waitFor(() => expect(bar().textContent).toContain("0 changes to the layout"));
     expect(plan.textContent).toContain("pinned");
   });
 
@@ -600,7 +601,7 @@ describe("nested graphs", () => {
       }),
     );
     const panel = screen.getByRole("region", { name: "Validation" });
-    expect(panel.textContent).toContain("2 errors · 1 warning · 2 notes");
+    expect(panel.textContent).toContain("2 errors · 1 warning · 2 notes");
     fireEvent.click(within(panel).getByRole("button", { name: "again ▸ done" }));
     expect(screen.getByRole("navigation", { name: "Graph" }).textContent).toContain("again");
     expect(inspector().textContent).toContain("nodes.again.body.graph.nodes.done");
