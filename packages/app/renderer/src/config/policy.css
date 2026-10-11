@@ -1,11 +1,13 @@
 /* The permission policy inspector (#176): geometry only.
 
    Every surface in it is a component-layer class already — `.orca-field*` for a row,
-   `.orca-input` for a control, `.orca-chip` for the document a rule came from,
-   `.orca-btn--danger` for **Remove**, `.orca-draftbar` for the save bar — and the rule rows
-   are the Config surface's own `.orca-config__rule*`, imported with `config.css` rather than
-   restated. What is left here is the column the panel stacks in and the box one grant sits
-   in, so nothing below names a colour, a radius or a duration of its own. */
+   `.orca-input` for a control, `.orca-chip` for the document a rule came from, the plain
+   `.orca-btn` for **Remove** (not `--danger`: it edits a draft that only Save writes, and a
+   red button on every grant was saturation no status put there), `.orca-draftbar` for the
+   save bar — and the rule rows are the Config surface's own `.orca-config__rule*`, imported
+   with `config.css` rather than restated. What is left here is the column the panel stacks
+   in and the box one grant sits in, so nothing below names a colour, a radius or a duration
+   of its own. */
 
 .orca-policy {
   display: flex;

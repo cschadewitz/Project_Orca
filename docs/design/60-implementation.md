@@ -219,7 +219,10 @@ ask the question somewhere other than where the person is looking. Cancel, waive
 carry one; resume, decide and reopen do not, because re-driving a parked run, deciding a
 decision and reopening one are all acts with a way back. A destructive control on a list row
 outside the palette asks the same way, on its own row — the Agents surface's claims are the
-first ("Releasing a claim", below).
+first ("Releasing a claim", below). An edit to a draft is not that act even when it takes
+something out: the policy panel's **Remove** drops a grant from a draft that only **Save**
+writes and **Discard** takes back, so it neither asks nor wears the danger tone ("Agents
+write", below).
 
 **A destructive row is never first.** It sorts below every other command, whatever scope it
 is in, for the reason a gate's destructive option is never bound to `1`: the first row is
@@ -606,6 +609,16 @@ Config surface's read-only view groups the same three layers the same way. A gra
 removed, narrowed or widened (kind, path, path prefix, scope, title pattern), or added by
 hand, in which case it is stamped with the time and with `grantedFor: "added by hand in the
 app"` so a reader of the diff can tell it from one a run wrote.
+
+**Remove is a quiet button and does not ask.** Like every other control on a grant it edits
+the draft: the grant leaves the list, the save bar counts the change, and the file is
+untouched until **Save**, with **Discard** as the way back until then. So the commit is Save,
+the one act here with no way back, and a confirmation on Remove would be a second commit in
+front of it. It is the default tone, as **Release** is at rest: it was red on every grant,
+which was saturation no status put on a resting screen, and the danger tone belongs to the
+control that commits a destructive act rather than to one that drafts it.
+`policy-editor.test.tsx` holds the panel to no danger tone at rest, and to a Remove that
+sends nothing until Save.
 
 **It is the Config surface's draft model, mounted elsewhere.** The panel lives in
 `renderer/src/config/` and reads the app's one feed through `ConfigProvider`: the same

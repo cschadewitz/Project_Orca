@@ -391,8 +391,17 @@ function Grant({
           {text}
         </span>
         <span className="orca-spacer" />
+        {/* The default tone, and no armed second state — unlike Release on the claims list.
+            Remove edits the draft and nothing else: the grant leaves this list, the save bar
+            counts one change, and the file is untouched until Save, with Discard as the way
+            back until then. A destructive control confirms only an act with no way back
+            (docs/design/60-implementation.md), and here that act is Save, so a confirmation
+            on the row would be a second commit in front of it. It was red on every grant at
+            rest, which is saturation no status put on a resting screen (the brand book's
+            Colour): the danger tone is for the control that commits a destructive act, like
+            Release's ✕ Confirm, not for one that drafts it. */}
         {editable && (
-          <Button size="sm" tone="danger" onClick={onRemove} aria-label={`Remove grant ${order}`}>
+          <Button size="sm" onClick={onRemove} aria-label={`Remove grant ${order}`}>
             Remove
           </Button>
         )}
