@@ -151,6 +151,26 @@ changelog fragment.
     request or a direct launch could be jumped to by id. It does now.
   - `renderer/test/object-id-guard.test.ts` fails on a raw id rendered as a JSX child, and on
     an id prefix in `packages/core/src/ids.ts` that is neither a kind nor listed as never shown.
+- **The object header had no chain elision** (follow-up 9). With an id token on every crumb,
+  request ▸ work item ▸ run ▸ step ran past a narrow pane — beside the docked panel, say —
+  and nothing gave way.
+  - **Decided:** the trail folds its middle into `…`. The crumbs after the root fold first,
+    nearest the root first, down to `request ▸ … ▸ run ▸ step`; then the parent folds,
+    `request ▸ … ▸ step`; only then is the current crumb's name cut at its end. The root and
+    the current crumb never fold, a trail of one or two never does, and the type, token and
+    version are never cut. Folding comes before cutting: a folded crumb is whole one click
+    away, a cut name is unreadable on screen.
+  - Fit is measured, not counted. `elideTrail` (`renderer/src/ui/crumb-elision.ts`) is a pure
+    function over the crumbs' natural widths and the trail's room, re-measured on a
+    `ResizeObserver`; a wide window shows the whole chain. The mode control and the actions
+    keep their width.
+  - `…` is a `Menu` of the folded crumbs (name, token, type), and choosing one is the crumb's
+    own `onOpen` through the route table. It is a button in the tab order whose accessible
+    name lists the levels it holds, in order, so the trail a screen reader walks is still the
+    whole chain. The folded crumbs are measured in an `inert`, `aria-hidden` row.
+  - Tests: `crumb-elision.test.ts` across widths, `object-header-elision.test.tsx` for the
+    menu, the keyboard and the names, and an `entry-points.test.tsx` case that opens a folded
+    work item from the chrome.
 
 ## Findings by area
 
@@ -171,7 +191,8 @@ changelog fragment.
 - **ObjectHeader: Partial.**
   - Typed crumbs, the current crumb not a link, and counterpart menus are there.
   - Missing, undocumented:
-    - Chain elision (`request ▸ … ▸ run`).
+    - Chain elision (`request ▸ … ▸ run`). *Fixed since: the trail folds its middle into
+      `…`; see "Fixed after the review".*
     - Risks and artifacts counterparts.
     - Ids in mono (crumb names are sans, against rule 8). *Fixed since: ids are tokens; see
       "Fixed after the review".*
@@ -418,9 +439,9 @@ a line in `docs/design` saying it is intended.
 6. Risk matrix: decide on the axes, and document the choice or flip them.
 7. Workflow viewer: draw a pinned run's own version with `workflows.get({ id, version })`.
 8. Status bar: add the "runs active" count, which the app already reads.
-9. Object header: chain elision (`request ▸ … ▸ run`) is still open. *Ids in mono: closed —
-   every crumb with an ORCA id carries its token and **Copy id**; see "Fixed after the
-   review".*
+9. Object header: chain elision and ids in mono. *Both closed. Elision: a trail that does
+   not fit folds its middle into a `…` menu; ids: every crumb with an ORCA id carries its
+   token and **Copy id**. See "Fixed after the review".*
 10. Palette: the prefixes and the nearest-prefix no-results message.
 11. Workflow editor, still to build:
     - Dry run (#183).

@@ -117,6 +117,29 @@ counterpart objects: from a work item, "runs that attempted this" and "dependenc
 run, "the work item it claims" and "the workflow it executes". This is how cross-linking
 works — one component, no dead ends, and no surface needs to embed another's navigation.
 
+A trail that does not fit **folds its middle into `…`**:
+
+```
+❝ 5BNH42  ▸  …  ▸  Database schema ☰ JH7X8P  ▸  design (attempt 2) ▭ C6SE2Q
+❝ 5BNH42  ▸  …  ▸  design (attempt 2) ▭ C6SE2Q
+```
+
+Things give way in one order. First the middle folds, nearest the root first, until what is
+left is the root, `…`, the parent and the current crumb; then the parent folds; and only then
+is the current crumb's name cut at its end. The root and the current crumb never fold, and a
+trail of one or two crumbs never does. Folding comes before cutting because a folded crumb is
+whole one click away, while a cut name is on screen and unreadable, and two runs called
+"Database schema" and "Database migration" differ at exactly the end that is cut. The current
+crumb's name is the one that is cut because the surface under the header names that object
+whole — its selected row, its detail pane — and the root may be named nowhere else. The type
+label, the id token and the version are never cut. Whether the trail fits is measured, never
+counted: a wide window shows the whole chain, and the mode control and the actions keep their
+width. `…` is a button in the tab order that opens a menu of the folded crumbs — type, name
+and token — and choosing one goes where the crumb would have. Its accessible name lists what
+it holds ("2 hidden levels: work item Database schema, run Database schema"), so the trail a
+screen reader walks still names every level, in order. A folded crumb's own menu is reached by
+opening it; `…` lists objects, not their menus.
+
 ## Deep links
 
 `orca://` URLs open the app and resolve to exactly one object, so another tool (Kepler, Zed,
