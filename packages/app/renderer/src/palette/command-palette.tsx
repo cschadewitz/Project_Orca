@@ -26,7 +26,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type JSX, type Keyboard
 import { CHROME_GLYPHS } from "@orca/design";
 import { useKeyboard } from "../keyboard-context.js";
 import type { PaletteChoice, ShortcutPicker } from "../keyboard-map.js";
-import { Menu, textClass } from "../ui/index.js";
+import { MachineText, Menu, ObjectId, textClass } from "../ui/index.js";
 import { commandEntries, filterEntries, groupEntries, type PaletteEntry } from "./entries.js";
 import { parseJump, type JumpTarget } from "./jump.js";
 import { usePaletteSources } from "./sources.js";
@@ -329,6 +329,12 @@ function Row({
           {entry.detail}
         </span>
       ) : null}
+      {/* An object's id beside its name — a recent run's — as its token, never whole. */}
+      {entry.detailId !== undefined && !armed ? (
+        <span className={`orca-palette__detail ${textClass("caption")}`}>
+          <ObjectId id={entry.detailId} />
+        </span>
+      ) : null}
       {entry.unavailable ? (
         <span className={`orca-palette__why ${textClass("caption")}`}>{entry.unavailable}</span>
       ) : null}
@@ -338,8 +344,14 @@ function Row({
 }
 
 /**
- * A label with the id inside it set in mono — "Release claim on `wi-metrics`" (rule 8: mono
- * means ORCA produced it, and an id in a sentence a person reads is still an id).
+ * A label with machine text inside it set in mono — "Decide `auth-store-choice`" (rule 8:
+ * mono means ORCA produced it, and an id in a sentence a person reads is still an id).
+ *
+ * An id is never in a label whole: the label names the object and follows the name with its
+ * token, "Release claim on Database schema ⬡ 5M579G", and `machine` is that token — which
+ * `MachineText` draws as one, the glyph as decoration and the kind as a word, so the option
+ * is named "… work item 5M579G" rather than a symbol's name. The full id is the row's
+ * `objectId`: matched, never drawn.
  *
  * The split is done here rather than by the caller handing over three strings so that the
  * label stays one string everywhere else: it is what `filterEntries` matches, what names
@@ -352,7 +364,7 @@ function LabelText({ text, machine }: { text: string; machine?: string }): JSX.E
   return (
     <>
       {text.slice(0, at)}
-      <span className={`orca-mono ${textClass("mono-id")}`}>{machine}</span>
+      <MachineText text={machine} />
       {text.slice(at + machine.length)}
     </>
   );

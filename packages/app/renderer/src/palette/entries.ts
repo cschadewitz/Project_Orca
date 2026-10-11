@@ -29,8 +29,15 @@ export interface PaletteEntry {
    * query matches and what the option is named by.
    */
   labelMachine?: string;
+  /** The id of the object the row acts on: matched, never drawn (`Shortcut.objectId`). */
+  objectId?: string;
   /** Second column: the id, path or explanation. */
   detail?: string;
+  /**
+   * An id for the second column, drawn as an `ObjectId` token — a recent run's, beside its
+   * name — and matched whole, so the full id or its tail finds the row.
+   */
+  detailId?: string;
   /** True when `detail` is machine text and must be set in mono (docs/design/RULES.md rule 8). */
   detailIsMachine?: boolean;
   /**
@@ -102,6 +109,7 @@ export function commandEntries(
         section: shortcut.section ?? "actions",
         label: shortcut.label,
         ...(shortcut.labelMachine === undefined ? {} : { labelMachine: shortcut.labelMachine }),
+        ...(shortcut.objectId === undefined ? {} : { objectId: shortcut.objectId }),
         ...(shortcut.detail ? { detail: shortcut.detail } : {}),
         // No chip rather than an empty one: a keyless command has nothing to press (#205).
         ...(shortcut.key === undefined ? {} : { shortcut: shortcutLabel(shortcut.key, platform) }),
@@ -118,7 +126,12 @@ export function commandEntries(
 
 /** Lower is better. -1 means the entry does not match at all. */
 function score(entry: PaletteEntry, needle: string): number {
-  const haystacks = [entry.label, entry.detail ?? ""].map((s) => s.toLowerCase());
+  /* The ids last, so a word that happens to occur in one never outranks a match in what the
+     row says. They are there for the person who pastes an id, or types the tail a row
+     showed: the label holds the object's token, never its whole id. */
+  const haystacks = [entry.label, entry.detail ?? "", entry.detailId ?? "", entry.objectId ?? ""].map((s) =>
+    s.toLowerCase(),
+  );
   let best = -1;
   for (const [i, text] of haystacks.entries()) {
     const at = text.indexOf(needle);
