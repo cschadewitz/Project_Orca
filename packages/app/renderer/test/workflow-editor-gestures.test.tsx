@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { DraftIssue, DraftOperation, WorkflowDraftView } from "@orca/protocol";
+import { ZOOM_MAX, ZOOM_MIN } from "../src/ui/canvas-view.js";
 import { NODE_TYPE_MIME } from "../src/workflow/editor/editor-canvas.js";
 import { newNode } from "../src/workflow/editor/draft-model.js";
 import type { WorkflowDraftBridge } from "../../src/workflow-draft-bridge.js";
@@ -219,15 +220,15 @@ describe("the canvas's keys", () => {
     const transform = () => scene(canvas).style.transform;
     expect(transform()).toBe("translate(0px, 0px) scale(1)");
     for (let i = 0; i < 3; i += 1) key(canvas, { key: "+", code: "Equal", shiftKey: true });
-    expect(transform()).toContain("scale(2)");
+    expect(transform()).toContain(`scale(${ZOOM_MAX})`);
     for (let i = 0; i < 6; i += 1) key(canvas, { key: "-", code: "Minus" });
-    expect(transform()).toContain("scale(0.5)");
+    expect(transform()).toContain(`scale(${ZOOM_MIN})`);
     key(canvas, { key: "ArrowRight", shiftKey: true });
     key(canvas, { key: "ArrowDown", shiftKey: true });
     expect(transform()).not.toContain("translate(0px, 0px)");
     key(canvas, { key: "ArrowLeft", shiftKey: true });
     key(canvas, { key: "ArrowUp", shiftKey: true });
-    expect(transform()).toBe("translate(0px, 0px) scale(0.5)");
+    expect(transform()).toBe(`translate(0px, 0px) scale(${ZOOM_MIN})`);
     key(canvas, { key: "ArrowRight", shiftKey: true });
     key(canvas, { key: "0", code: "Digit0" });
     expect(transform()).toBe("translate(0px, 0px) scale(1)");
