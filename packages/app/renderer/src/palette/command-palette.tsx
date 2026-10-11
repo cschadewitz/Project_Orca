@@ -236,10 +236,13 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
                       entry={entry}
                       armed={entry.id === armed}
                       selected={entry.id === selected?.id}
-                      onPick={() => run(entry)}
-                      onHover={() => {
+                      onPick={() => {
+                        // A click is a choice, so it takes the selection with it: a
+                        // destructive row armed by a click is then the row the next `Enter`
+                        // confirms, rather than whichever row the keys had left selected.
                         const at = walkable.indexOf(entry);
                         if (at !== -1) setActive(at);
+                        run(entry);
                       }}
                     />
                   ))}
@@ -271,14 +274,12 @@ function Row({
   armed,
   selected,
   onPick,
-  onHover,
 }: {
   entry: PaletteEntry;
   /** Chosen once already: this row is asking, and the next `Enter` commits. */
   armed: boolean;
   selected: boolean;
   onPick: () => void;
-  onHover: () => void;
 }): JSX.Element {
   const row = `orca-palette__row ${textClass("label")}`;
   const tone = entry.tone === "danger" ? ` orca-palette__row--danger` : "";
@@ -297,7 +298,10 @@ function Row({
         event.preventDefault();
         onPick();
       }}
-      onMouseEnter={onHover}
+      /* No `onMouseEnter`: hover tints the row (`:hover` in components.css) and moves
+         nothing. The selection is the palette's only one and it is the keys', so a stray
+         mouse cannot change what `Enter` does (docs/design/10-information-architecture.md,
+         "Command palette"). */
     >
       {/* A destructive row carries its glyph as well as its colour, because colour is never
           the only channel (docs/design/RULES.md rule 4). Decorative: the row already says

@@ -95,6 +95,7 @@ const SYMBOLS = chars(
      face — which is why Config is radial rather than toothed. */
   0x2630, // ☰ surface runs
   0x2b21, // ⬡ surface plan
+  0x2442, // ⑂ surface workflows
   0x25c9, // ◉ surface agents
   0x274b, // ❋ surface config
 );

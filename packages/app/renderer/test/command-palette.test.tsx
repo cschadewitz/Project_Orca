@@ -143,6 +143,18 @@ describe("the command palette", () => {
     expect(selectedOption().id).toBe(first);
   });
 
+  it("does not move the selection on hover, so a stray mouse cannot change what Enter does", async () => {
+    mount();
+    await open();
+    const first = selectedOption().id;
+    const other = options().find((o) => o.id !== first)!;
+
+    fireEvent.mouseEnter(other);
+    fireEvent.mouseOver(other);
+    expect(selectedOption().id).toBe(first);
+    expect(query().getAttribute("aria-activedescendant")).toBe(first);
+  });
+
   it("points aria-activedescendant at the selected row while focus stays in the field", async () => {
     mount();
     await open();

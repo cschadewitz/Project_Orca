@@ -13,6 +13,7 @@
 │  Attention │              primary pane                 │                     │
 │  Runs      │                                           │                     │
 │  Plan      │                                           │                     │
+│  Workflows │                                           │                     │
 │  Agents    │                                           │                     │
 │  Config    │                                           │                     │
 │            │                                           │                     │
@@ -25,6 +26,16 @@ A custom title bar with `-webkit-app-region: drag`, no OS chrome relied upon, in
 macOS traffic lights and for the Windows caption buttons by platform-detected padding only —
 nothing else about the layout changes per platform.
 
+Nothing sits between the title bar and the sidebar. The connection bars
+(`40-connection-states.md`) and a link's landing notice are the primary pane's: under the
+object header, or at the top of the pane on a surface with no header. A notice is a claim
+about the pane it sits on, and one stretched across the rail reads as an alert about the
+whole window. The landing notice appears only when a link could not be honoured: a URL this
+version does not understand, a link that arrived with no daemon answering, an object the
+surface does not have, or a counterpart the app cannot follow yet. A link that worked says
+nothing, because the object header already names what is open. Dismissing a notice hides
+the sentence and leaves the place it landed.
+
 The two widths in that diagram are defaults, not fixtures. Every boundary in the window is
 draggable and the size is remembered per boundary (#276) — the sidebar and the docked panel here,
 and inside the surfaces the Runs step detail, the run tree over the event timeline, and the Plan
@@ -35,15 +46,23 @@ The splitter is the shell's, so a surface still to be built inherits a resizable
 inventing one — the dependency graph, the risk matrix and the decision log all want a pane
 boundary and none of them has to draw its own.
 
-## Five surfaces
+## Six surfaces
 
 | Surface | Glyph | What it answers | Phase |
 | --- | :---: | --- | --- |
 | **Attention** | ◆ | What needs me right now | 1 — shipped |
 | **Runs** | ☰ | What is happening and what happened | 1 — shipped |
 | **Plan** | ⬡ | What is coming, why it is not moving, what it depends on | 2 — shipped in v0.5.0 (#170); the graph, risk and decision modes shipped in v0.6.0 (#171–#173) |
+| **Workflows** | ⑂ | What the workflows are, and changing them | Added with the editor (#181): the list, the viewer (#177) and the editor (#180–#182) |
 | **Agents** | ◉ | Who is doing the work and are they healthy | 1 read, 2 write — both shipped |
-| **Config** | ❋ | How the system is wired, and what the workflows are | 2 — shipped in v0.5.0 (#175, #266, #177) |
+| **Config** | ❋ | How the system is wired | 2 — shipped in v0.5.0 (#175, #266) |
+
+**Workflows is the sixth surface, added with the editor.** The design had five, with the
+workflow viewer living under Config, reached only by link, from the palette, or from a run's
+"the workflow it executes". That left a workflow nothing had run yet with no way to it from the
+rail. With no workflow named, the surface lists every registered workflow, with its version,
+size and whether a draft is open; **Open** is the viewer and **Edit** the editor. It sits after
+Plan, with the surfaces about work, so Agents and Config moved to `⌘5` and `⌘6`.
 
 Phase 2 is the configuration and monitoring wave, and as of v0.5.0 all five surfaces have
 content. Plan is the schedule table, the scheduler's explanations, a requests sidebar and the
@@ -53,14 +72,14 @@ Risks, Decisions, Dependencies, Journal — with the risk matrix (#172), the dec
 well as a Runs surface**: Plan owns what is in it and names it — "Work item" for the schedule
 row's inspector, "Risk" for a selected risk's status, held items and journal entries, and
 "Relationships" for the graph's inspector (blocked by, blocks, waive). Config is `orca.config.yaml` as a form over the schema the daemon describes, beside
-the raw file, with the permission sidecar as its second document, and the workflow viewer
-(#177) is where `orca://workflow/…` lands.
+the raw file, with the permission sidecar as its second document. The workflow viewer
+(#177), where `orca://workflow/…` lands, moved to the Workflows surface with the editor.
 
 The glyph column is `semantics.json`'s `surface` map, bundled in the symbol face like every
 other glyph the app draws — it is never the OS's. It sits beside the label in the sidebar and
 becomes the whole of it below 960px, where the rail collapses (`50-accessibility-and-keyboard.md`),
-so the five are chosen to be told apart in greyscale at `--icon-md`: a solid diamond, three
-bars, a hollow hexagon, a ring round a dot, a radial burst. Attention carries the same ◆ the
+so the six are chosen to be told apart in greyscale at `--icon-md`: a solid diamond, three
+bars, a hollow hexagon, a fork, a ring round a dot, a radial burst. Attention carries the same ◆ the
 waiting status does, deliberately — the surface for what is waiting on a person is the one
 place that shape means the same thing twice. Config is radial rather than a cog because no
 OFL face ORCA bundles draws one (U+2699 is in neither Noto subset), and an OS cog would be a
@@ -128,12 +147,10 @@ one is worth keeping in mind before a new form is added:
   is `plan` and the query says how it is shown (`mode`) and what is selected (`focus`); a
   work item's "dependencies" counterpart, which resolved to nothing in v0.5.0, is now this
   link with `mode=deps` and the item focused.
-  **`orca://workflow/…` is built as of #177** and lands on the viewer, on the Config surface,
-  with `?run=` overlaying that run's path over the graph. Config's own screen shipped beside
-  it in v0.5.0 (#175, #266), so `⌘5` with no workflow named lands on the configuration form
-  and the raw file rather than on an unbuilt notice; a workflow is reached by link, from the
-  palette, or from the run header's "the workflow it executes".
-  Workflow *editing* remains v0.6.0.
+  **`orca://workflow/…` is built as of #177** and lands on the viewer, now on the Workflows
+  surface (#181), with `?run=` overlaying that run's path over the graph and `?edit` opening
+  the editor on the workflow's draft. With no workflow named, the surface is the list of
+  workflows; Config (`⌘6`) is the configuration form and the raw file.
 - **`orca://agent/…` was missing.** The Agents surface shipped in v0.4.0 and the palette lists
   agents, and every palette entry has to hand back a canonical URL.
 
@@ -158,6 +175,10 @@ every write the daemon serves, as of #178), **navigation**
 names). Typing a bare run id or an `orca://` URL jumps straight to it. The
 palette is the only place a phase-2 write action needs to be discoverable, which keeps the
 chrome of phase-1 screens empty.
+
+The highlighted row is the palette's one selection, and it belongs to the keys. Hover tints a
+row and moves nothing, so a stray mouse cannot change what `Enter` does; a click is a choice,
+and takes the selection with it.
 
 Every object row is an `orca://` URL and opens through the route table above, which is what
 keeps one resolver rather than three (#206). Two limits are worth writing down rather than

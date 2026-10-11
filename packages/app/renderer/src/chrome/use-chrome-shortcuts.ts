@@ -1,5 +1,5 @@
 /**
- * The chrome's own shortcuts from docs/design/50-accessibility-and-keyboard.md — ⌘1–⌘5
+ * The chrome's own shortcuts from docs/design/50-accessibility-and-keyboard.md — ⌘1–⌘6
  * for the surfaces, ⌘\ for the panel — registered in the keyboard map like every other
  * shortcut, so the palette lists them with their keys and nothing here dispatches its own
  * `keydown`. The surface keys are filed under the palette's navigation section; the panel

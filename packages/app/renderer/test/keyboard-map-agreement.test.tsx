@@ -37,6 +37,7 @@ import { RUN_ART } from "./fixtures-artifacts.js";
 import { FIVE_GATES, INPUTS_AS_OF } from "./fixtures-inputs.js";
 import { harness, installBridge, renderChrome, stubMatchMedia, type Harness } from "./harness.js";
 import type { FakeBridge } from "./fake-bridge.js";
+import { draftBridge } from "./fixtures-workflow-drafts.js";
 
 let fake: FakeBridge;
 const teardown: (() => void)[] = [];
@@ -67,8 +68,9 @@ const KEYBOARD_MAP: readonly { scope: ShortcutScope; key: string; action: string
   { scope: "global", key: "Mod+1", action: "Attention" },
   { scope: "global", key: "Mod+2", action: "Runs" },
   { scope: "global", key: "Mod+3", action: "Plan" },
-  { scope: "global", key: "Mod+4", action: "Agents" },
-  { scope: "global", key: "Mod+5", action: "Config" },
+  { scope: "global", key: "Mod+4", action: "Workflows" },
+  { scope: "global", key: "Mod+5", action: "Agents" },
+  { scope: "global", key: "Mod+6", action: "Config" },
   { scope: "global", key: "Mod+\\", action: "Toggle the docked panel" },
   { scope: "global", key: "Mod+Shift+D", action: "Toggle density on the focused surface" },
   { scope: "global", key: "Mod+Shift+L", action: "Cycle theme" },
@@ -110,6 +112,28 @@ const KEYBOARD_MAP: readonly { scope: ShortcutScope; key: string; action: string
   { scope: "workflow", key: "Shift+ArrowDown", action: "Pan down" },
   { scope: "workflow", key: "Shift+ArrowUp", action: "Pan up" },
   { scope: "config", key: "Mod+S", action: "Save the configuration draft" },
+  { scope: "workflow-edit", key: "ArrowDown", action: "Select the node below" },
+  { scope: "workflow-edit", key: "ArrowUp", action: "Select the node above" },
+  { scope: "workflow-edit", key: "ArrowRight", action: "Select the node to the right" },
+  { scope: "workflow-edit", key: "ArrowLeft", action: "Select the node to the left" },
+  { scope: "workflow-edit", key: "Enter", action: "Open the selected container's inside" },
+  { scope: "workflow-edit", key: "Delete", action: "Delete the selected node or edge" },
+  { scope: "workflow-edit", key: "Backspace", action: "Delete the selected node or edge" },
+  { scope: "workflow-edit", key: "Shift+Delete", action: "Delete the selected node and its connections" },
+  { scope: "workflow-edit", key: "F2", action: "Rename the selected node" },
+  { scope: "workflow-edit", key: "C", action: "Connect the selected node to another" },
+  { scope: "workflow-edit", key: "Mod+Enter", action: "Add a node after the selected one" },
+  { scope: "workflow-edit", key: "Alt+ArrowUp", action: "Move the selected node up the list" },
+  { scope: "workflow-edit", key: "Alt+ArrowDown", action: "Move the selected node down the list" },
+  { scope: "workflow-edit", key: "Mod+Z", action: "Undo" },
+  { scope: "workflow-edit", key: "Mod+Shift+Z", action: "Redo" },
+  { scope: "workflow-edit", key: "+", action: "Zoom in" },
+  { scope: "workflow-edit", key: "-", action: "Zoom out" },
+  { scope: "workflow-edit", key: "0", action: "Reset the zoom and the pan" },
+  { scope: "workflow-edit", key: "Shift+ArrowRight", action: "Pan right" },
+  { scope: "workflow-edit", key: "Shift+ArrowLeft", action: "Pan left" },
+  { scope: "workflow-edit", key: "Shift+ArrowDown", action: "Pan down" },
+  { scope: "workflow-edit", key: "Shift+ArrowUp", action: "Pan up" },
 ];
 
 const slotsOf = (shortcuts: readonly RegisteredShortcut[]): Set<string> =>
@@ -178,6 +202,21 @@ async function chromeOnAWorkflow(): Promise<Harness> {
   // under full-suite load, reading it immediately after the role appeared raced all twelve
   // workflow bindings and made the agreement check report the entire scope as missing.
   await waitFor(() => expect(h.keyboard.list().filter((shortcut) => shortcut.scope === "workflow")).toHaveLength(12));
+  return h;
+}
+
+/** The workflow editor (#181) on a draft of ai-sdlc: the viewer, then Edit. */
+async function chromeOnTheEditor(): Promise<Harness> {
+  fake = installBridge({ deepLink: "orca://workflow/ai-sdlc" });
+  teardown.push(fake.install());
+  draftBridge(fake);
+  const h = harness();
+  renderChrome(h);
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  await screen.findByRole("listbox", { name: "ai-sdlc draft graph" });
+  await waitFor(() =>
+    expect(h.keyboard.list().filter((shortcut) => shortcut.scope === "workflow-edit")).toHaveLength(22),
+  );
   return h;
 }
 
@@ -261,6 +300,7 @@ describe("every action in the map is registered", () => {
       chromeOnAStep,
       panelOnAnArtifact,
       chromeOnAWorkflow,
+      chromeOnTheEditor,
       chromeOnConfig,
       chromeOnThePlan("schedule"),
       chromeOnThePlan("journal"),

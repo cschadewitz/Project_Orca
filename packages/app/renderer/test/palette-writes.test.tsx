@@ -119,6 +119,25 @@ describe("cancel and resume", () => {
     expect(callsTo("runs.cancel")[0]).toMatchObject({ runId: "run-gate" });
   });
 
+  it("selects the row a click arms, so the next Enter confirms that row and not another", async () => {
+    mount();
+    await screen.findByRole("region", { name: /gate, Ship the rollout\?/ });
+    await open();
+
+    /* Hover no longer moves the selection, so the click has to: otherwise the armed row
+       and the row `Enter` runs are two different rows. The keys are left on the first row. */
+    const cancel = rows().find((row) => row.textContent?.includes("Cancel the run this is waiting on"))!;
+    expect(cancel.getAttribute("aria-selected")).toBe("false");
+    fireEvent.mouseDown(cancel);
+
+    const armed = await within(palette()).findByRole("option", { name: /Cancel run-gate — confirm/ });
+    expect(armed.getAttribute("aria-selected")).toBe("true");
+    expect(callsTo("runs.cancel")).toHaveLength(0);
+
+    fireEvent.keyDown(query(), { key: "Enter" });
+    await waitFor(() => expect(callsTo("runs.cancel")).toHaveLength(1));
+  });
+
   it("disarms the row when the selection moves off it", async () => {
     mount();
     await screen.findByRole("region", { name: /gate, Ship the rollout\?/ });

@@ -618,8 +618,11 @@ export class TemplateAuthoringService {
   }
 }
 
-/** New sources use exclusive creation; existing files use temp + rename under the shared writer lock. */
-async function atomicSource(path: string, text: string, create: boolean): Promise<void> {
+/**
+ * New sources use exclusive creation; existing files use temp + rename under the shared writer lock.
+ * Workflow draft publication (workflow-drafts.ts) writes workflow and layout files the same way.
+ */
+export async function atomicSource(path: string, text: string, create: boolean): Promise<void> {
   const stat = create ? undefined : await lstat(path);
   if (stat && (!stat.isFile() || stat.isSymbolicLink())) invalid("Asset is no longer a regular file.");
   const temp = `${path}.${randomUUID()}.tmp`;

@@ -61,11 +61,14 @@ import type { AlertItem, AlertsUpdate, BridgeResult, ConnectionSnapshot, Workspa
 import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/daemon-client.js";
 import { callTemplate } from "../client/template-client.js";
 import type { TemplateMethod } from "../template-bridge.js";
+import type { WorkflowDraftMethodName } from "../workflow-draft-bridge.js";
+import { callWorkflowDraft } from "../client/workflow-draft-client.js";
 import { daemonEndpoint } from "../daemon-connection.js";
 import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
 import { appMenuTemplate } from "./app-menu.js";
+import { hasTitleBarOverlay, titleBarOverlay, windowChrome } from "./window-chrome.js";
 import { createAlerts, type AlertTier } from "./alerts.js";
 import { ConnectionMachine } from "./connection-state.js";
 import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./deep-link.js";
@@ -438,6 +441,10 @@ handle("orca:workflows.list", (params: Parameters<DaemonClient["workflowsList"]>
 handle("orca:workflows.get", (params: Parameters<DaemonClient["workflowsGet"]>[0]) => client().workflowsGet(params));
 handle("orca:templates", (command: { method: TemplateMethod; params: unknown }) =>
   callTemplate(client(), command.method, command.params),
+);
+// Workflow drafts (#180): one channel for the closed method family, validated in the client.
+handle("orca:workflowDrafts", (command: { method: WorkflowDraftMethodName; params: unknown }) =>
+  callWorkflowDraft(client(), command.method, command.params),
 );
 handle("orca:config.get", (params: Parameters<DaemonClient["configGet"]>[0]) => client().configGet(params));
 handle("orca:config.apply", (params: Parameters<DaemonClient["configApply"]>[0]) => client().configApply(params));
@@ -1148,8 +1155,14 @@ function applyTheme(pref: ThemePreference): void {
   // follow themeSource, so an explicit choice reaches everything the renderer's attribute
   // cannot. The renderer sets `data-theme` for the same choice; the two never disagree.
   nativeTheme.themeSource = pref;
-  const color = canvasColor(resolveTheme(pref));
-  for (const win of BrowserWindow.getAllWindows()) win.setBackgroundColor(color);
+  const theme = resolveTheme(pref);
+  const color = canvasColor(theme);
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.setBackgroundColor(color);
+    // The caption buttons are painted by the OS from the colours they were given, not from
+    // the renderer's CSS, so a theme change has to reach them here too.
+    if (hasTitleBarOverlay(process.platform)) win.setTitleBarOverlay(titleBarOverlay(theme));
+  }
 }
 
 nativeTheme.on("updated", () => applyTheme(preferences.read().theme));
@@ -1158,12 +1171,15 @@ nativeTheme.on("updated", () => applyTheme(preferences.read().theme));
 
 function createWindow(): void {
   if (!macUpdateWindows.requestCreation()) return;
+  const theme = resolveTheme(preferences.read().theme);
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
     // No white flash on open in dark: the native background is the theme's canvas, and the
     // window stays hidden until the renderer has painted once.
-    backgroundColor: canvasColor(resolveTheme(preferences.read().theme)),
+    backgroundColor: canvasColor(theme),
+    // The renderer draws the title bar; the OS keeps only its buttons (window-chrome.ts).
+    ...windowChrome(process.platform, theme),
     show: false,
     webPreferences: {
       // `.cjs`, because a sandboxed preload is evaluated as a plain script and this package

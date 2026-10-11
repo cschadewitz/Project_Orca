@@ -57,7 +57,8 @@ export type Route =
   /** `orca://plan?mode=deps&focus=<id>` (#171): the Plan surface in a mode, something selected. */
   | { kind: "plan"; surface: "plan"; mode?: string; focus?: string }
   | { kind: "artifact"; surface: "runs"; name: string; version?: number; runId?: string }
-  | { kind: "workflow"; surface: "config"; workflowId: string; runId?: string }
+  /** `?edit` opens the editor on the workflow's draft (#181) rather than the viewer. */
+  | { kind: "workflow"; surface: "workflows"; workflowId: string; runId?: string; edit?: boolean }
   | { kind: "agent"; surface: "agents"; agentId: string }
   | { kind: "launch"; surface: "config" }
   | { kind: "config"; surface: "config"; document: ConfigDocument };
@@ -141,7 +142,13 @@ export function resolveRoute(url: string): Route | undefined {
     case "workflow":
       return first === undefined
         ? undefined
-        : { kind: "workflow", surface: "config", workflowId: first, ...(run !== undefined ? { runId: run } : {}) };
+        : {
+            kind: "workflow",
+            surface: "workflows",
+            workflowId: first,
+            ...(run !== undefined ? { runId: run } : {}),
+            ...(parsed.searchParams.has("edit") ? { edit: true } : {}),
+          };
     case "agent":
       return first === undefined ? undefined : { kind: "agent", surface: "agents", agentId: first };
     case "launch":
@@ -204,6 +211,9 @@ export const workflowUrl = (workflowId: string, runId?: string): string =>
   runId === undefined
     ? path("workflow", workflowId)
     : `${path("workflow", workflowId)}?run=${encodeURIComponent(runId)}`;
+
+/** The workflow editor on `workflowId`'s draft (#181): the viewer's route, with `?edit`. */
+export const workflowEditUrl = (workflowId: string): string => `${path("workflow", workflowId)}?edit`;
 
 /**
  * The URL for a crumb in the object header, which is what **Copy link** copies and what

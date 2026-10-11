@@ -43,6 +43,7 @@ export { Duration, Time, type DurationProps, type TimeProps } from "./time.js";
 export { Well, type WellProps } from "./well.js";
 export {
   WorkflowNode,
+  WorkflowNodeIcon,
   WORKFLOW_NODE_TYPES,
   asNodeType,
   workflowNodeName,

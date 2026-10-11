@@ -404,7 +404,7 @@ export function findNode(workflow: WorkflowView, id: string | undefined): Workfl
  * cubic from a right edge to a left edge that is to its left passes straight back through
  * every node between them.
  */
-function route<E extends GraphEdge>(
+export function route<E extends GraphEdge>(
   edge: E,
   key: string,
   boxes: ReadonlyMap<string, { x: number; y: number }>,

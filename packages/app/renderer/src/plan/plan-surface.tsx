@@ -110,6 +110,11 @@ export interface PlanSurfaceProps {
   onInspector?: (panel: PlanPanel | null, options: { open: boolean }) => void;
   /** A claim's run, opened through the route table. */
   onOpenRun: (runId: string) => void;
+  /**
+   * A link named an item this plan does not hold. Said only once the whole unfiltered plan
+   * is in hand: an item past the page held, or behind a filter, is not missing.
+   */
+  onMissing?: (id: string) => void;
 }
 
 const EMPTY: readonly PlanItemView[] = [];
@@ -133,7 +138,15 @@ export function PlanSurface(props: PlanSurfaceProps): JSX.Element {
   return <PlanBody {...props} />;
 }
 
-function PlanBody({ connection, open, focus, onHeader, onInspector, onOpenRun }: PlanSurfaceProps): JSX.Element {
+function PlanBody({
+  connection,
+  open,
+  focus,
+  onHeader,
+  onInspector,
+  onOpenRun,
+  onMissing,
+}: PlanSurfaceProps): JSX.Element {
   const [filters, setFilters] = useState<PlanFilters>(NO_FILTERS);
   const [mode, setMode] = useState<PlanMode>("schedule");
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
@@ -249,14 +262,27 @@ function PlanBody({ connection, open, focus, onHeader, onInspector, onOpenRun }:
 
   /* A link that arrived. `orca://item/<slug-or-id>` selects the item and opens the
      explanation, which is the information architecture's promise for that URL — so it
-     lands once the table has the row, and says nothing when the plan does not have it.
+     lands once the table has the row. When the plan does not have it, the chrome says which
+     id the link was holding (`onMissing`), and only once the answer is certain: the whole
+     plan held, nothing filtered out. A row on a later page is not a missing row.
 
      Acted on **once per link**, tracked in a ref. `held` is a new array on every re-read,
      so an effect that only depended on it re-fired on every `plan.changed` frame — which
      forced the mode back to Schedule and re-opened the explanation under somebody who had
      since switched to the Journal or closed it. A link is a thing that arrives, not a
-     thing that keeps arriving. */
+     thing that keeps arriving. The miss is said once per link for the same reason, and on
+     its own ref, so an item that turns up on a later frame still lands. */
+  const complete = feed.items.phase === "ready" && !hasMore && !isFiltered(filters);
   const landed = useRef<string | undefined>(undefined);
+  const missed = useRef<string | undefined>(undefined);
+  const reportMissing = useCallback(
+    (id: string) => {
+      if (missed.current === id) return;
+      missed.current = id;
+      onMissing?.(id);
+    },
+    [onMissing],
+  );
   useEffect(() => {
     if (open === undefined) {
       landed.current = undefined;
@@ -264,12 +290,15 @@ function PlanBody({ connection, open, focus, onHeader, onInspector, onOpenRun }:
     }
     if (landed.current === open) return;
     const match = held.find((item) => item.id === open || item.slug === open);
-    if (!match) return;
+    if (!match) {
+      if (complete) reportMissing(open);
+      return;
+    }
     landed.current = open;
     setMode("schedule");
     setSelectedId(match.id);
     setExplainFor(match.id);
-  }, [open, held]);
+  }, [open, held, complete, reportMissing]);
 
   /* `orca://plan?mode=deps&focus=<id>`: the mode, and the item (id or slug) or the node it
      names. Once per link, for the same reason as above. */
@@ -293,13 +322,16 @@ function PlanBody({ connection, open, focus, onHeader, onInspector, onOpenRun }:
       if (focus.id.startsWith("decision:") || focus.id.startsWith("external:")) setTargetNode(focus.id);
       else {
         const match = held.find((item) => item.id === focus.id || item.slug === focus.id);
-        if (!match) return;
+        if (!match) {
+          if (complete) reportMissing(focus.id);
+          return;
+        }
         setTargetNode(undefined);
         setSelectedId(match.id);
       }
     }
     focused.current = focusKey;
-  }, [focus, focusKey, held]);
+  }, [focus, focusKey, held, complete, reportMissing]);
 
   /* The explanation is read when it is opened and not before: one `schedule.explain` per
      item a person actually asks about, rather than one per row in the table. */

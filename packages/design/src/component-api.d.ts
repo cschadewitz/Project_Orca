@@ -1039,6 +1039,11 @@ export interface VirtualListProps<T> {
    */
   rowProps?(item: T, index: number, selected: boolean): Record<string, string | number | boolean | undefined>;
   /**
+   * Per-row custom properties the row's class reads — `--level` on a tree row, which
+   * `.orca-tree-row` indents by. Custom properties only: how a row looks stays its class's.
+   */
+  rowStyle?(item: T, index: number, selected: boolean): Record<`--${string}`, string | number>;
+  /**
    * Stay at the end as the list grows — a stream that is following. A growing `items`
    * reveals the last row; a scroll away from the bottom calls `onHold` **once**, not per
    * scroll event. The surface owns the flag: the substrate says when following stopped, not

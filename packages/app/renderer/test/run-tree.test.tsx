@@ -281,6 +281,22 @@ describe("the run tree", () => {
     expect(rowFor("run-parent/s-fan/!auth-perf").hasAttribute("aria-expanded")).toBe(false);
   });
 
+  it("indents each row by its depth, not just the guides beside it", async () => {
+    await openParent();
+    fireEvent.click(twisty(rows()[6]!));
+
+    /* `.orca-tree-row` pads by `--level`; the row element is the substrate's, so the depth
+       has to reach it through `rowStyle`. Without it every row sat at level 0 and only the
+       hairline guides moved. `aria-level` is one-based, `--level` zero-based. */
+    const levelVar = (key: string) =>
+      rows()
+        .find((row) => row.id === `tree-row-${key}`)!
+        .style.getPropertyValue("--level");
+    expect(levelVar("run-parent")).toBe("0");
+    expect(levelVar("run-parent/s-fan")).toBe("1");
+    expect(levelVar("run-parent/s-fan/run-child-ok")).toBe("2");
+  });
+
   it("puts the ancestor chain in the sticky header once a row has one", async () => {
     await openParent();
     press("End", "End");

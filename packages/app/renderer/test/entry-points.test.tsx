@@ -48,7 +48,8 @@ describe("deep links", () => {
     mount({ deepLink: "orca://agent/claude" });
 
     await waitFor(() => expect(activeSurface()).toContain("Agents"));
-    expect(landing()?.textContent).toContain("claude");
+    // A link that worked says nothing: the surface is the answer.
+    expect(landing()).toBeUndefined();
   });
 
   it("opens a URL that arrives while the window is up, and lands it on the same surface", async () => {
@@ -58,8 +59,7 @@ describe("deep links", () => {
     fake.link("orca://run/run-old/step/build.2");
 
     await waitFor(() => expect(activeSurface()).toContain("Runs"));
-    // The step, named the way the URL named it — node and attempt, not the opaque id.
-    expect(landing()?.textContent).toContain("build.2");
+    expect(landing()).toBeUndefined();
   });
 
   it("selects the row the URL names, not only the surface it is on", async () => {
@@ -123,7 +123,7 @@ describe("deep links", () => {
     // The sidecar has the keyboard: landing on a document means being in it, and a person
     // who followed that link did not ask for the YAML.
     await waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("orca.permissions.json"));
-    expect(landing()?.textContent).toContain("orca.permissions.json");
+    expect(landing()).toBeUndefined();
   });
 
   it("lands the bare config link in the YAML, which is the document it names", async () => {
@@ -150,7 +150,33 @@ describe("deep links", () => {
     // not in this store's plan, which leaves the table as it is and the landing naming the
     // id — a link is never dropped because the object behind it is not there.
     await screen.findByRole("grid", { name: "Schedule" });
+    await waitFor(() => expect(landing()?.textContent).toContain("No work item here matches"));
     expect(landing()?.textContent).toContain("wi-1");
+  });
+
+  it("dismisses the landing without leaving the place it landed", async () => {
+    const { fake } = mount();
+    await screen.findByRole("button", { name: "Attention" });
+
+    fake.link("orca://item/wi-1");
+    await waitFor(() => expect(landing()?.textContent).toContain("wi-1"));
+    fireEvent.click(within(landing()!).getByRole("button", { name: "Dismiss" }));
+
+    await waitFor(() => expect(landing()).toBeUndefined());
+    // The sentence goes; the surface the link opened stays.
+    expect(activeSurface()).toContain("Plan");
+    expect(screen.getByRole("grid", { name: "Schedule" })).toBeTruthy();
+  });
+
+  it("draws the landing under the object header, not across the sidebar", async () => {
+    const { fake } = mount();
+    await screen.findByRole("button", { name: "Attention" });
+
+    fake.link("orca://nonsense/2");
+
+    await waitFor(() => expect(landing()).toBeDefined());
+    // Inside the primary pane, so the rail stays flush under the title bar.
+    expect(landing()!.closest("main.orca-main")).not.toBeNull();
   });
 });
 
@@ -203,7 +229,8 @@ describe("the object header's links, in the chrome", () => {
     fireEvent.click(within(header).getAllByRole("button", { name: /Add the SSO callback/ })[0]!);
 
     await waitFor(() => expect(activeSurface()).toContain("Plan"));
-    expect(landing()?.textContent).toContain("wi-1");
+    // `wi-1` is not in this store's plan, so the landing says which id the crumb was holding.
+    await waitFor(() => expect(landing()?.textContent).toContain("wi-1"));
   });
 
   it("says which counterpart it cannot follow yet rather than swallowing the click", async () => {
@@ -269,7 +296,7 @@ describe("the palette's object rows", () => {
     fireEvent.mouseDown(steps[0]!);
 
     await waitFor(() => expect(activeSurface()).toContain("Runs"));
-    expect(landing()?.textContent).toContain("build");
+    expect(landing()).toBeUndefined();
   });
 
   it("does not search on a single character, which would list every step in the store", async () => {
@@ -288,7 +315,8 @@ describe("the palette's object rows", () => {
     const artifact = await screen.findByRole("option", { name: /artifact v/ });
     fireEvent.mouseDown(artifact);
 
-    await waitFor(() => expect(landing()?.textContent).toContain("spec"));
+    await waitFor(() => expect(activeSurface()).toContain("Runs"));
+    expect(landing()).toBeUndefined();
   });
 
   it("is an empty palette rather than a broken one when the store cannot be read", async () => {
@@ -336,6 +364,6 @@ describe("the palette's object rows", () => {
     fireEvent.mouseDown(await screen.findByRole("option", { name: /Open run/ }));
 
     await waitFor(() => expect(activeSurface()).toContain("Runs"));
-    expect(landing()?.textContent).toContain("run_01J7K3QF8ZC4W2M6NP0XYTB5RD");
+    expect(landing()).toBeUndefined();
   });
 });

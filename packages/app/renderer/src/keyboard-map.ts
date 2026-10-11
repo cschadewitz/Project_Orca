@@ -43,7 +43,8 @@ export type ShortcutScope =
   | "menu"
   | "workflow"
   | "plan-journal"
-  | "plan-graph";
+  | "plan-graph"
+  | "workflow-edit";
 
 export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "global",
@@ -64,6 +65,12 @@ export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "workflow",
   "plan-journal",
   "plan-graph",
+  /**
+   * The workflow editor's canvas (#181). Its own scope rather than `workflow`'s: the editor
+   * adds keys the read-only viewer must not have - delete, undo, rename, connect - and the
+   * arrows move the same selection over a graph that changes under them.
+   */
+  "workflow-edit",
 ];
 
 /** Which of the palette's three sections a shortcut belongs in. Search is not a command. */

@@ -14,6 +14,7 @@ import {
   runUrl,
   stepUrl,
   urlForCrumb,
+  workflowEditUrl,
   workflowUrl,
 } from "../src/route-table.js";
 import type { Crumb } from "../src/ui/index.js";
@@ -30,9 +31,9 @@ describe("resolveRoute", () => {
     expect(resolveRoute("orca://gate/91c4")).toEqual({ kind: "gate", surface: "attention", inputId: "91c4" });
   });
 
-  it("lands an item and a workflow on the surfaces that do not exist yet, rather than dropping them", () => {
-    // Plan is v0.5.0 and the workflow viewer v0.6.0; both select their surface and land on
-    // its unbuilt state with the id in hand, which is the honest answer.
+  it("lands an item on Plan and a workflow on Workflows, with the id in hand", () => {
+    // Plan is v0.5.0; the workflow viewer v0.6.0, on the Workflows surface since the editor
+    // (#181). Each selects its surface and opens the object it names.
     expect(resolveRoute("orca://item/auth-sso-epic")).toEqual({
       kind: "item",
       surface: "plan",
@@ -40,10 +41,20 @@ describe("resolveRoute", () => {
     });
     expect(resolveRoute("orca://workflow/ai-sdlc?run=7f3a2c")).toEqual({
       kind: "workflow",
-      surface: "config",
+      surface: "workflows",
       workflowId: "ai-sdlc",
       runId: "7f3a2c",
     });
+  });
+
+  it("opens the editor on a workflow's draft with ?edit, and builds that link", () => {
+    expect(resolveRoute(workflowEditUrl("ai-sdlc"))).toEqual({
+      kind: "workflow",
+      surface: "workflows",
+      workflowId: "ai-sdlc",
+      edit: true,
+    });
+    expect(resolveRoute("orca://workflow/ai-sdlc")).not.toHaveProperty("edit");
   });
 
   it("carries the run an artifact belongs to, because a version alone names nothing", () => {

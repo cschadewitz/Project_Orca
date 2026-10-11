@@ -1,90 +1,123 @@
 # Workflow editing
 
-The viewer ships first; editing is a later phase. This section specifies it now so the
-viewer's components do not have to be redrawn when it arrives — and so the two decisions that
-are hard to change later (what editing manipulates, and what happens to runs already in
-flight) are settled before code exists.
+The viewer shipped first (#177). The editor now ships over it: workflow drafts in the daemon
+(#180), the visual editor (#181) and its validation panel (#182). Dry run (#183) is still
+ahead. This file is the editor's spec and its as-built record.
 
-## The model: structured edits, derived layout
+## The model: semantic edits, drag and drop, layout as metadata
 
-**You edit a list and a form. The graph follows.**
+**You edit the graph directly. The file only ever changes semantically.**
 
-The workflow is a file of nodes and edges. The editor presents that file as an ordered node
-list on the left and an inspector on the right; the canvas in the middle re-lays out after
-every change and is never dragged. Selecting a node in the list selects it on the canvas and
-opens it in the inspector, and the reverse; there is one selection.
+The editor is a canvas with a palette and an inspector. Drag a node type from the palette onto
+the canvas to add it, or onto an edge to insert it there. Drag a node to move it. Drag from a
+node's port (the dot on its right edge) onto another node to connect them. Select a node or an
+edge to edit it in the inspector. The outline on the left lists the nodes in file order, and
+there is one selection across the outline, the canvas and the inspector.
 
-This is the decision everything else follows from, and the reason for it is the file. A
-dragged graph has to persist coordinates somewhere — either in the workflow file, where they
-pollute every diff and mean nothing to the daemon, or in a sidecar that silently drifts once
-someone edits the YAML by hand. Deriving layout means a workflow authored in ORCA and one
-hand-written in an editor are the same file, a diff shows only semantic change, and the app
-never owns state the daemon does not know about.
+This replaces this file's earlier rule that the canvas is never dragged (#181 records the
+change). That rule protected the file: a dragged graph has to keep coordinates somewhere, and
+coordinates in the workflow pollute every diff while a sidecar drifts once somebody edits the
+YAML by hand. The editor keeps both protections:
 
-What it costs: you cannot express intent through arrangement. That is acceptable here,
-because these graphs are small (the shipped `ai-sdlc` is sixteen nodes — eleven working ones,
-plus `start`, two `set`s and three `end`s) and their shape is
-already meaningful — layers are dependency depth, not taste.
+- **Every gesture is a semantic operation on the draft** (`workflowDrafts.apply`): add, insert
+  on an edge, connect, rename, change type, delete, reorder. None of them writes a position
+  into the workflow, so a published diff shows only what changed about the workflow.
+- **Where a node was dropped is layout metadata, kept apart from the workflow.** A drag is a
+  `place` operation on the draft's layout record. On publish the layout is written to
+  `workflows/.layout/<id>.json`, never into `<id>.yaml`.
+- **Layout stays derived wherever nobody dragged.** A node with no pin is placed by the
+  automatic layered layout (`layout.ts`), so a hand-written workflow still draws and a stale
+  pin for a renamed or deleted node is ignored. **Tidy layout** unpins every node in the graph
+  on screen.
 
 **Editing operations.**
 
-| Operation | Where | Result |
-| --- | --- | --- |
-| Add node | Palette in the list header, or `⌘⏎` on a selected node to insert after it | Node appended with a generated name, inspector focused on the name field |
-| Rename | Inspector, or `F2` in the list | Every edge referencing it updates; the old name is offered as an alias for one save |
-| Reorder | Drag in the list, or `⌥↑` / `⌥↓` | Edges are unaffected — list order is file order, not execution order |
-| Connect | Inspector's **next** field, or `C` with a node selected then pick a target | Edge added; the canvas re-lays out |
-| Branch | Inspector's branch table on a `decision` node | One row per branch: condition expression, target node, label |
-| Delete | `⌫` in the list | Node marked removed in the draft; edges into it become dangling and raise a validation error, never silently reroute |
-| Change type | Inspector's type select | Fields the new type does not use are kept in the draft and flagged, not dropped |
+| Operation | Pointer | Keyboard | Result |
+| --- | --- | --- | --- |
+| Add node | Drag a palette item onto the canvas | Press a palette item, or `⌘⏎` on the canvas to reach the palette | Node added with a generated id (`gate-1`) and placed where it was dropped. Pressed, it is inserted after the selected node |
+| Insert on an edge | Drag a palette item onto an edge | — | `from → new → to`; the edge's condition stays on its first half |
+| Move | Drag a node | — | Layout only; the workflow text is unchanged |
+| Connect | Drag from a node's port onto another node | `C` with a node selected, then pick a target | Edge added |
+| Branch | — | Select an edge: **Only when** and **Label** in the inspector | A decision's edges test `choice == 'option'`; one may be unconditional, the default |
+| Rename | — | Inspector's **Id**, or `F2` | Every edge, the graph's `start` and any artifact input's `fromNode` follow the new name |
+| Reorder | Drag a row's grip in the outline | `⌥↑` / `⌥↓` | File order only; execution order is the edges |
+| Delete | Inspector's **Delete** | `⌫` or `Delete` | The node goes; its edges stay, dangling, and validation names them. Nothing is rerouted silently |
+| Delete with its connections | Inspector | `⇧Delete` | The node and every edge into or out of it |
+| Change type | Inspector's **Type** | — | Fields the new type does not use are kept in the draft and flagged, not dropped |
+| Open a container | Double-click a `loop` or `parallel` | `Enter` | The canvas shows the inline graph; the trail above it leads back out |
+| Undo, redo | Draft bar | `⌘Z`, `⌘⇧Z` | One step per batch of operations, kept in the draft so it survives closing the app |
 
-**Direct manipulation that is still available:** pan and zoom, selecting a node or an edge,
-and collapsing a `subworkflow` or `parallel` node's children. Nothing that changes the file
-happens by dragging on the canvas.
+Pan, zoom and selection work as in the viewer. Every pointer gesture has a keyboard path, and
+every key is in the `workflow-edit` scope, so the palette lists them.
 
 ## Drafts
 
-Editing does not touch the live file. Opening the editor creates a **draft** of the workflow,
-named and owned by the person who made it, stored beside the workflow rather than in it.
+Editing does not touch the live file. **Edit** on the workflow viewer opens a **draft**, owned
+by the principal who opened it and stored beside the workflow:
 
 ```
-workflows/ai-sdlc.yaml              the live file
-workflows/.drafts/ai-sdlc@casey     the draft, until it is published or discarded
+workflows/ai-sdlc.yaml                          the live file
+workflows/.drafts/ai-sdlc@<owner hash>.json     the draft, until it is published or discarded
+workflows/.layout/ai-sdlc.json                  pinned positions, written on publish
 ```
 
-A draft is a full copy plus a change set, and the editor renders both at once: added nodes
-take `status-succeeded` borders on `status-succeeded-bg`, changed nodes take `accent`,
-removed nodes are dashed in `status-failed` with their name struck through, and new edges are
-drawn dashed in `accent`. This is the second reason the layout is derived — a draft and a
-live file that lay out identically can be diffed by eye.
+The draft holds the base it was taken from (version, a content hash and the text), the
+draft's YAML, its layout and up to a hundred undo steps. Every edit goes through the `yaml`
+package's comment-preserving document, so comments, key order, quoting, flow-style edges and
+blank lines survive, and publishing a change is byte-identical to making the same change by
+hand. `.drafts` and `.layout` are dot directories, which the configured `workflows/**` globs
+never load.
 
-**Publishing** requires validation to pass and shows a YAML diff of the whole change set.
-Discarding is one action and asks once. A draft is never auto-published, never
-auto-discarded, and survives the app closing.
+Every mutation names the draft revision it was made against, under a per-workflow lock: a
+second window editing the same draft is refused with `CONFIG_STALE`, and the editor re-reads
+the draft and says so rather than overwriting it.
 
-**One draft per workflow per person.** If another draft exists when you open the editor, the
-app says who has it and offers to open theirs read-only rather than starting a competing one.
+The editor draws the change set on the canvas: added nodes take `status-succeeded` borders on
+`status-succeeded-bg`, changed nodes take `accent`, removed nodes stay on the canvas dashed in
+`status-failed` with their name struck through, and new edges are dashed in `accent`.
+
+**Publishing** is **Review and publish**: the exact bytes that will be written, as a diff
+against the live file, with the next version already in them. The version counts its trailing
+number up (`1` → `2`, `1.4` → `1.5`); generation activation refuses a recorded version with
+different content (#179), so a publish always needs a new one. Publish is bound to the review:
+if the draft or the workflow file changed after the review, it is refused and asks for a new
+one. It runs under the configuration writer lock, writes the file and the layout, and
+activates a configuration generation exactly as `templates.publish` does. If activation
+refuses the workflow, the previous file and layout are restored and the draft is kept.
+
+Discarding asks once. A draft is never auto-published, never auto-discarded, and survives the
+app closing.
+
+**One draft per workflow.** If somebody else's draft exists when you open the editor, you get
+theirs read-only rather than a competing one: no palette, no keys that write, no publish.
 
 ## Validation and dry run
 
-The validation panel is docked under the canvas and is always present — empty when the draft
-is clean, because a panel that appears and disappears is a panel people stop watching.
+The validation panel is docked under the canvas and is always present, empty when the draft
+is clean, because a panel that appears and disappears is a panel people stop watching. Every
+row names where it is and selects it when pressed. The node's own findings are also at the top
+of its inspector, and a node with errors carries an `n errors` flag on the canvas.
 
-Three severities, and every row names the node and jumps to it:
+Findings come from the runtime's own schema and graph validator, run against the **active
+configuration generation**: its templates, agents, workflows and custom node validators. A
+draft that validates clean is one activation will accept. Three severities:
 
-- **Error** (blocks publish) — a dangling edge, an unreachable node, a `decision` with no
-  default branch, a `loop` with no exit, a `gate` whose option list is empty, a role with no
-  eligible agent, a subworkflow that does not exist, a cycle that is not inside a `loop`.
-- **Warning** (does not block) — a node no edge reaches from `start`, a `parallel` with one
-  branch, a retry count above the host's concurrency, a prompt template that does not exist
-  yet.
-- **Note** — a `gate` marked auto-approve, a `set` that shadows an earlier one.
+- **Error** (blocks publish): anything the schema or the runtime validator refuses, such as a
+  dangling edge, an edge out of an `end`, a missing start, a node with no outgoing edge, a
+  decision with two unconditional edges, a role with no agent, a template or subworkflow that
+  does not exist, or a bad expression. An **unreachable node is an error here**, not the
+  runtime's warning (#180): in an editor, a node nothing reaches is a node somebody forgot to
+  connect.
+- **Warning** (does not block): a field the node's type does not use (left behind by a type
+  change), a decision with no conditional edges, a `parallel` with one branch, and the
+  runtime's other warnings.
+- **Note**: a `gate` that approves itself, with its condition.
 
-**Dry run** executes the draft against a real request with every agent turn stubbed: no
-agents are contacted, no artifacts are written, gates auto-answer with their first option.
-It produces a real run tree in the run viewer, marked `dry run` throughout, which is how you
-find out that a decision expression never takes its second branch. Dry runs are events like
-anything else and appear in the timeline, tagged so they can be filtered out.
+**Not built yet:** the rules the runtime validator does not have. These are a `loop` with no
+exit, retries above the host's concurrency, a `set` that shadows an earlier one, and a cycle
+outside a `loop`, which `ai-sdlc`'s own back edges would currently trip. **Dry run** (#183)
+is also still ahead. It will execute the draft against a real request with every agent turn
+stubbed and gates auto-answered, and produce a run tree marked `dry run`.
 
 ## Runs in flight
 
@@ -158,8 +191,24 @@ and the two things a reader of this file would otherwise get wrong:
 
 ## What the editor reuses
 
-Everything except the node list and the ports. The canvas is the workflow viewer with an
-extra set of node states; the inspector is `ConfigField` at a narrower label column; the
-validation rows are timeline rows with a severity rail; the draft bar is the config editor's
-save bar with two more actions. The editor adds three components — node list, inspector shell,
-validation panel — and no new foundations at all.
+The canvas draws the viewer's `.orca-node` boxes and `.orca-edge` paths with the design
+system's draft states (`--added`, `--changed`, `--removed`, `--invalid`, `.orca-port`,
+`.orca-edge--draft`), and routes edges with the viewer's `layout.ts`. The inspector is
+`ConfigField` at the inspector's narrower label column, and every field shows its YAML path.
+The validation rows are `.orca-validation`, and the draft bar is `.orca-draftbar` with Undo,
+Redo, Tidy, Discard and Review and publish. The outline is `.orca-nodelist`. Choice fields are
+`Menu`s, and structured values the form has no control for (artifact inputs, completion, a
+decision's source) are edited as YAML in place and parsed before anything is sent.
+
+The code is in `packages/app/renderer/src/workflow/editor/` (`draft-model.ts` is the pure
+part, with its own test), `packages/daemon/src/workflow-drafts.ts` and the
+`workflowDrafts.*` contract in `packages/protocol/src/workflow-drafts.ts`.
+
+**Not built yet:**
+
+- The one-save alias for a renamed node.
+- A `draft.changed` notification. A second window finds out on its next edit, by the revision
+  check.
+- The draft bar's count of runs pinned to the base version. The review says that started runs
+  stay on it.
+- Per-person concurrent drafts.

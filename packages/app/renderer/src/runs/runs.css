@@ -70,6 +70,12 @@
 .orca-runs__left {
   display: grid;
   grid-template-rows: var(--pane-runs-tree, minmax(0, 2fr)) auto minmax(0, 3fr);
+  /* One column, and it is the column's width - never its content's. Left implicit, the track
+     is `auto`, whose floor is the widest row's min-content: tree rows do not wrap (rule 9), so
+     a detail pane dragged wide pushed this column past its own track and the tree's rows,
+     positioned, painted over the step detail beside it. `minmax(0, 1fr)` holds the column to
+     its share; a row that does not fit truncates its name and the list scrolls. */
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
 }
@@ -126,9 +132,15 @@
 
 /* ---------- the columns of a tree row ---------- */
 
+/* The status column. A floor rather than a width: `12ch` held the box to twelve zeros, and
+   "✓ succeeded" with the chip's padding, glyph and gap is wider than that in Plex, so the word
+   ran out past its own ground. The floor is the longest word's room plus exactly the chip's
+   other parts, so every status sits in one column; a label longer than any word ("failed ×3")
+   grows its chip rather than overflowing it. */
 .orca-runs__chip {
   flex: none;
-  width: 12ch;
+  justify-content: flex-start;
+  min-width: calc(10ch + var(--icon-sm) + var(--space-0-5) + 2 * var(--space-1-5) + 2 * var(--stroke-hairline));
 }
 /* The name is the one elastic column: everything else is sized to its content's worst case. */
 .orca-runs__name {

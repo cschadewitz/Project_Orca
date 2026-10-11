@@ -128,6 +128,11 @@
       "glyph": "⬡",
       "note": "An outlined hexagon — a node in the dependency graph the surface draws."
     },
+    "workflows": {
+      "word": "Workflows",
+      "glyph": "⑂",
+      "note": "A fork: a graph that branches, which is what a workflow is. Its own surface since the editor (#181), so a workflow is reachable from the rail rather than only by link or from a run."
+    },
     "agents": {
       "word": "Agents",
       "glyph": "◉",
