@@ -573,8 +573,11 @@ a line in `docs/design` saying it is intended.
 12. Docs: fix the `40` and `60` contradictions and the stale `component-api.d.ts` comments.
     *Closed: see "The design-system source layer".*
 13. Republish the Claude Design artifact from `docs/design` and `packages/design` so the
-    review surface matches the source again. *Next: the design system now states every
-    decision above, so this is a republish, not a reconciliation.*
+    review surface matches the source again. *Closed: republished as version 8 on
+    2026-10-11. Every card was re-synced, seven were added (ObjectId, KeyValueList, Menu,
+    CanvasControls, GraphMinimap, InlineConfirm, TextOverflow), RULES.md became a section,
+    and the bundled fonts travel with it. The previews draw what the app draws, and their
+    READMEs name the gaps below where they apply.*
 14. Links to objects that aren't there. Plan and Workflows report one. Two gaps remain:
     - Runs and Agents say nothing for an id they don't have.
     - `orca://agent/<id>` lands on Agents without selecting that agent's card. The route
@@ -606,6 +609,31 @@ a line in `docs/design` saying it is intended.
     instance (`ClaimRow`) and the palette's; the second list with an act that has no way back
     should lift `ClaimRow`'s state machine into `renderer/src/ui/` rather than copy it
     (`component-api.d.ts`, "Confirming in place").
+22. **Found while republishing the artifact.** Drawing every card against the app's real
+    markup turned up these app defects. None is fixed yet:
+    - **Destructive confirmations that break rule 17.** In each case the danger choice comes
+      first or lacks its `✕`:
+      - the workflow editor's armed "Discard every change" (no `✕`);
+      - the dependency graph's waive question ("Waive, unblocking …" before "Keep it", no `✕`);
+      - the decision list's reopen ("Reopen <key>" before Keep, no `✕`).
+    - **The Plan schedule's "why" menu is clipped.** It sits inside `.orca-plan__cell`, which
+      is `overflow: hidden`, so the open explanation does not show.
+    - **The risk matrix does not hold its plot.** `.orca-risk` is `table-layout: fixed` with no
+      width, so a long pin widens its column. A pin button stays as wide as its unwrapped text
+      and runs past its cell. The score is drawn over the first pin. Pins carry their text in
+      `aria-label` but not in `title`.
+    - **The workflow viewer ignores positions pinned in the editor.** `layoutWorkflow` takes no
+      pins, and `workflows.get` carries no layout.
+    - **Classes with no rule:** `.orca-link`, `.orca-menu__item[aria-disabled]`, the run
+      picker's `orca-button*`, `orca-kv__well`, `orca-agents__claim-keep` / `-confirm`. The
+      editor inspector's textareas are clipped, and its group headings have no type class.
+    - **Tone and text slips:**
+      - Attention gives failed rows the waiting rail.
+      - A config group card's eyebrow takes the gate card's `status-waiting` tone.
+      - The `risk.updated` journal line prints a raw `risk_…` id.
+      - A few counts still join with a plain space (`${n} inside`).
+    - **The configuration studio (#333) hand-rolls its save bar.** It has no change count, no
+      `returnFocus` and no giving-way note, unlike `DraftBar`.
 
 ## Repeating this review
 
