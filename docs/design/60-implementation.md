@@ -657,7 +657,11 @@ There is no **Force release** here — `--force` takes an item from a run that c
 resume, which has no undo and stays a CLI act. Nothing pushes for a release (it journals no
 event), so the claims are re-read once after the call, and the result's `note` — what releasing
 did *not* fix, since a dead run's log never moves on — is announced into the app's one live
-region and left on the row, in the same two-line variant.
+region and left on the row, in the same two-line variant, or under the section's heading once
+the re-read has taken the row away. When that row leaves holding focus, focus moves to the next
+row's Release — the previous row's if it was the last, the section itself if the list is now
+empty — while focus a person has already moved elsewhere stays where they put it, and a refused
+release keeps its row and its focus.
 
 **And one control that is not there: retrying a handshake from the card.** No method drives
 the daemon's handshake retry — `agents.ping` probes an agent and records a result, it does

@@ -74,6 +74,7 @@ import { AgentCard } from "./agent-card.js";
 import {
   claimSubject,
   countLabel,
+  focusAfterLeaving,
   groupByHost,
   phraseText,
   releaseCommand,
@@ -294,6 +295,22 @@ interface ClaimsProps {
  * a time: arming a second row has to disarm the first, and a flag per row could only do that
  * by every row watching every other. A claim that has left the list, or a list that has lost
  * its `claims.release`, has nothing armed.
+ *
+ * **Where focus goes when a row leaves is decided here too**, because only the list knows
+ * which rows are left. A release the daemon took is followed by the re-read, the claim is not
+ * in it, and the row unmounts with the busy Release that Confirm handed focus to — which
+ * drops a keyboard user on the page body, with no way back to where they were. So the row
+ * reports, on its way out, that it was holding focus (`ClaimRow`), and the list puts focus on
+ * the Release of the row that took its place: the next one, or the one before it when it was
+ * the last (`focusAfterLeaving`), or the section itself when the list is now empty. A row that
+ * leaves *without* focus reports nothing — a person who moved on while the release was in
+ * flight keeps focus wherever they took it — and a refused release leaves its row in the
+ * list, so focus simply stays on that row's Release.
+ *
+ * **And the result moves up to the section.** With its row gone, a release's result is the
+ * section's caption line, under the heading, until the next release says something else. It
+ * is said in the app's one live region whether or not the row survives (`use-agents.ts`); the
+ * line is for reading, not for hearing a second time.
  */
 function Claims({ claims, asOf, live, feed, canRelease }: ClaimsProps): JSX.Element {
   const [armed, setArmed] = useState<string | undefined>(undefined);
@@ -312,8 +329,46 @@ function Claims({ claims, asOf, live, feed, canRelease }: ClaimsProps): JSX.Elem
     if (!canRelease || !claims.some((claim) => claim.workItemId === armed)) setArmed(undefined);
   }, [armed, canRelease, claims]);
 
+  const section = useRef<HTMLElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const keys = useMemo(() => claims.map(claimKey), [claims]);
+  /* The rows as the last commit drew them, and the one that left it holding focus — written
+     by the row's own unmount, in the same commit as the effect below that reads it. */
+  const drawn = useRef(keys);
+  const leftHoldingFocus = useRef<string | undefined>(undefined);
+  const onLeaveHoldingFocus = useCallback((key: string) => {
+    leftHoldingFocus.current = key;
+  }, []);
+
+  /* Layout, not passive: the row has just gone and focus is on the body, and moving it in the
+     same frame means there is never a painted moment, or a keystroke, with it there. */
+  useLayoutEffect(() => {
+    const before = drawn.current;
+    drawn.current = keys;
+    const gone = leftHoldingFocus.current;
+    leftHoldingFocus.current = undefined;
+    if (gone === undefined || keys.includes(gone)) return;
+    // Something in this same commit has already put focus somewhere: it is not lost.
+    if (document.activeElement !== null && document.activeElement !== document.body) return;
+    const at = focusAfterLeaving(before, keys, gone);
+    const release =
+      at === undefined
+        ? null
+        : (list.current?.children[at]?.querySelector<HTMLElement>("[data-release-trigger]") ?? null);
+    (release ?? section.current)?.focus();
+  }, [keys]);
+
+  /* Only once its row has left: while the row is still there the result is on the row, which
+     is where a refusal — a release that leaves its row in place — always stays. */
+  const report = feed.release;
+  const orphaned =
+    report !== undefined && !claims.some((claim) => claim.workItemId === report.workItemId) ? report : undefined;
+
   return (
-    <section className="orca-agents__claims" aria-label="Claimed work">
+    /* Focusable from script and never a `Tab` stop: it is where focus goes when the last row
+       leaves, so a person lands on the heading of the list they were in and on the line saying
+       it is now empty. */
+    <section ref={section} className="orca-agents__claims" aria-label="Claimed work" tabIndex={-1}>
       <div className="orca-agents__host-head">
         <Text style="heading" as="h2">
           Claimed work
@@ -324,15 +379,27 @@ function Claims({ claims, asOf, live, feed, canRelease }: ClaimsProps): JSX.Elem
           as of <Time at={new Date(asOf)} show={live ? "both" : "absolute"} />
         </Text>
       </div>
+      {orphaned !== undefined && (
+        /* Not a live region: `use-agents.ts` has already said it into the app's one announcer.
+           Its own line rather than a clause in the "as of" caption beside the heading, which
+           is one line and does not wrap — and the daemon's note is a sentence whose second
+           half is the useful half. It names its work item, so it reads without the row. */
+        <Text
+          style="caption"
+          className={`orca-agents__claims-note${orphaned.failed ? " orca-agents__claims-note--failed" : ""}`}
+        >
+          {orphaned.message}
+        </Text>
+      )}
       {claims.length === 0 ? (
         <Text style="caption" className="orca-agents__none">
           Nothing is claimed right now.
         </Text>
       ) : (
-        <ul className="orca-agents__claim-list">
+        <ul ref={list} className="orca-agents__claim-list">
           {claims.map((claim) => (
             <ClaimRow
-              key={`${claim.workItemId}:${claim.owner.runId}`}
+              key={claimKey(claim)}
               claim={claim}
               tailOf={tailOf}
               live={live}
@@ -341,12 +408,22 @@ function Claims({ claims, asOf, live, feed, canRelease }: ClaimsProps): JSX.Elem
               armed={armed === claim.workItemId}
               onArm={setArmed}
               onDisarm={disarm}
+              onLeaveHoldingFocus={onLeaveHoldingFocus}
             />
           ))}
         </ul>
       )}
     </section>
   );
+}
+
+/**
+ * A row's identity in the list: the work item and the run holding it, because the same item
+ * claimed again by another run is another row. It is the React key, and the name the focus
+ * bookkeeping in `Claims` uses, so the two cannot disagree about which row left.
+ */
+function claimKey(claim: ClaimView): string {
+  return `${claim.workItemId}:${claim.owner.runId}`;
 }
 
 interface ClaimRowProps {
@@ -360,6 +437,8 @@ interface ClaimRowProps {
   armed: boolean;
   onArm: (workItemId: string) => void;
   onDisarm: (workItemId: string) => void;
+  /** Said once, as the row unmounts, if focus was inside it: the list decides where it goes. */
+  onLeaveHoldingFocus: (key: string) => void;
 }
 
 /**
@@ -393,9 +472,23 @@ interface ClaimRowProps {
  * the transient layer stack while armed, so the one global `Esc` unwinds it like any other
  * transient thing), focus leaving the row, or another row being armed (`Claims`). The first
  * two hand focus back to `Release`; the last two leave it where the person put it.
+ *
+ * **Leaving** — the claim gone from a re-read — the row says whether it was holding focus,
+ * and `Claims` moves it to a row that is still there.
  */
-function ClaimRow({ claim, tailOf, live, feed, canRelease, armed, onArm, onDisarm }: ClaimRowProps): JSX.Element {
+function ClaimRow({
+  claim,
+  tailOf,
+  live,
+  feed,
+  canRelease,
+  armed,
+  onArm,
+  onDisarm,
+  onLeaveHoldingFocus,
+}: ClaimRowProps): JSX.Element {
   const id = claim.workItemId;
+  const rowKey = claimKey(claim);
   const writability = useWritability();
   const refusal = releaseRefusal(claim);
   const blocked = refusal ?? (writability.can ? undefined : writability.reason);
@@ -445,6 +538,18 @@ function ClaimRow({ claim, tailOf, live, feed, canRelease, armed, onArm, onDisar
       element?.querySelector<HTMLElement>("[data-release-trigger]")?.focus();
     }
   }, [asking]);
+
+  /* The last moment the row can tell whether it holds focus. A layout effect's cleanup runs
+     before React takes the row out of the document, so a focused Release is still in it here;
+     a moment later focus is on the body, and a row that had it looks like one that never did.
+     Nothing changes these two while the row is mounted — the key is the one React keys it by,
+     the callback is stable — so this runs once, on the way out. */
+  useLayoutEffect(() => {
+    const element = row.current;
+    return () => {
+      if (element?.contains(document.activeElement)) onLeaveHoldingFocus(rowKey);
+    };
+  }, [rowKey, onLeaveHoldingFocus]);
 
   const onBlur = (event: ReactFocusEvent<HTMLLIElement>): void => {
     if (!asking || !settled.current) return;

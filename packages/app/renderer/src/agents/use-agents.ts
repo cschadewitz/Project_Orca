@@ -60,7 +60,10 @@ export interface AgentsFeed {
   reload: () => void;
   /** Work item ids with a release in flight: one call per claim, never two. */
   releasing: ReadonlySet<string>;
-  /** What the last release said, shown on the row it was about. */
+  /**
+   * What the last release said, shown on the row it was about — or, once a re-read has taken
+   * that row away, under the claims section's heading.
+   */
   release: ReleaseReport | undefined;
   /**
    * Take a work item back from the run that claimed it. Never `force`: forcing a release

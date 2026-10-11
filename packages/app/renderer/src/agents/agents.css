@@ -214,7 +214,16 @@
   color: var(--ink-secondary);
   overflow-wrap: anywhere;
 }
-.orca-agents__claim-note--failed {
+/* The same result once its row has left the list — a release the daemon took, which the
+   re-read no longer has — as the section's own caption line, under its heading. It wraps
+   for the reason the row's note does; it is not a row, so it has no line count to keep.
+   type: caption */
+.orca-agents__claims-note {
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
+.orca-agents__claim-note--failed,
+.orca-agents__claims-note--failed {
   color: var(--status-failed);
 }
 
