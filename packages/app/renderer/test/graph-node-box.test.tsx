@@ -202,8 +202,10 @@ describe("the node's box", () => {
     expect(needed, `the node's longest anatomy is ${needed}px`).toBeLessThanOrEqual(GRAPH_GEOMETRY["node-h"]);
     // A whole number of grid steps, like node-w, layer-gap and rank-gap (layout.ts, contract 4).
     expect(GRAPH_GEOMETRY["node-h"] % 16).toBe(0);
-    // And not a step more than it needs: the canvas pays for every pixel of it in every rank.
-    expect(GRAPH_GEOMETRY["node-h"] - needed).toBeLessThan(16);
+    /* And not a step more than it needs: the canvas pays for every pixel of it in every rank.
+       The padding was chosen so the sum lands on a step (96 at space-1-5; 100 at space-2
+       would be 112), so a part that grows by a pixel fails the line above, not this one. */
+    expect(GRAPH_GEOMETRY["node-h"], `the smallest 16px step that holds ${needed}px`).toBe(Math.ceil(needed / 16) * 16);
   });
 });
 

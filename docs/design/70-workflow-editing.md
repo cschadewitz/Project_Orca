@@ -206,10 +206,12 @@ forward edge meets a node half-way down and a back edge on its top. The kind eye
 line, the name at most two and the meta line one; each is cut at its end, never in the
 middle, and the whole text is in that part's `title`. The name and the status are also in the
 node's accessible name, status first, and the inspector prints the name whole. `node-h`
-(112px) holds the eyebrow, a two-line name and a meta line with a status chip at the
-current type sizes, so nothing is cut in half to fit. The start and end pills are as tall as
-their text and are centred in their slot. `renderer/test/graph-node-box.test.tsx` holds
-the rule and recomputes the budget from `tokens.json`.
+(96px) holds the eyebrow, a two-line name and a meta line with a status chip at the
+current type sizes, so nothing is cut in half to fit. It holds them exactly: the node's
+padding is 6px above and below rather than 8px so the sum lands on a 16px step, and at 8px
+the box would have been 112px. The start and end pills are as tall as their text and are
+centred in their slot. `renderer/test/graph-node-box.test.tsx` holds the rule, recomputes
+the budget from `tokens.json` and checks `node-h` is the smallest step that fits it.
 
 The code is in `packages/app/renderer/src/workflow/editor/` (`draft-model.ts` is the pure
 part, with its own test), `packages/daemon/src/workflow-drafts.ts` and the

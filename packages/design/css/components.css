@@ -1282,10 +1282,16 @@
    So the text fits the box: the kind is one line, the name at most two and the meta line
    one, each cut at its end with the whole string in its `title`. The whole name is also in
    the accessible name, after the status, and in the inspector, as before. `--node-h` is
-   those lines at their type styles plus the padding and the heaviest border, rounded up to
-   the grid, so no line is ever cut in half; each part is `flex: none` so the column cannot
-   squeeze one either. The content is centred, so what a short name leaves over is shared
-   above and below the line the edges attach to. */
+   those lines at their type styles plus the padding and the heaviest border, on the grid,
+   so no line is ever cut in half; each part is `flex: none` so the column cannot squeeze
+   one either. The content is centred, so what a short name leaves over is shared above and
+   below the line the edges attach to.
+
+   The padding above and below is `--space-1-5`, not the `--space-2` a card takes, because
+   it is what puts the sum on a grid step: at 6px the longest anatomy is exactly 96px, at
+   8px it is 100px and the box would be the next step, 112px — every node on every graph a
+   sixth taller for 4px of air. Anything that adds to the sum now costs a whole step;
+   `renderer/test/graph-node-box.test.tsx` adds it up from the tokens and says so. */
 .orca-node {
   display: inline-flex;
   flex-direction: column;
@@ -1293,7 +1299,7 @@
   gap: var(--space-0-5);
   min-width: var(--node-min-width);
   height: var(--node-h);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1-5) var(--space-3);
   background: var(--surface-raised);
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-md);
