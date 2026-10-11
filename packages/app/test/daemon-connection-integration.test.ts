@@ -87,6 +87,7 @@ vi.mock("electron", async () => {
   shell.webContents = webContents;
   const window = Object.assign(new EventEmitter(), {
     setBackgroundColor: vi.fn(),
+    setTitleBarOverlay: vi.fn(),
     isDestroyed: () => false,
     isFocused: () => true,
     webContents,
