@@ -11,3 +11,12 @@ packages/design/fonts/*.woff2 binary linguist-generated=true
 # Preserve that exact-byte boundary on Windows checkouts too.
 tools/ci-shadow/*.js text eol=lf
 tools/ci-shadow/*.json text eol=lf
+
+# The #402 native Mac fixture pins SHA-256 digests of these exact bytes (manifest,
+# sealed identity, daemon and stub archives), and the app's Mac update tests read them.
+tools/deploy/tests/native-mac/fixtures/** text eol=lf
+
+# The first-run sample workflow pins SHA-256 digests of the accepted #420 coding
+# fixture's template files and reference patch.
+examples/beta-first-job/template/** text eol=lf
+docs/preparation/beta-first-job/reference.patch text eol=lf
