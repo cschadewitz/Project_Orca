@@ -157,10 +157,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.orca-agents__claim-status {
-  flex: none;
-  width: 12ch;
-}
+/* The status column is `StatusChip`'s `aligned` variant, sized in components.css. It was a
+   `width: 12ch` here, narrower than "✓ succeeded", so the chip's ground stopped short of its
+   own word — the bug the run tree had and fixed in its own stylesheet alone. */
 .orca-agents__claim-run {
   flex: none;
   width: 24ch;

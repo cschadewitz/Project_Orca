@@ -108,6 +108,14 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
           ))}
           <StatusChip status="failed" label="failed ×3" />
         </div>
+        {/* `aligned`, the column a list of statuses forms: every chip at the longest word's
+            width, so the glyphs line up down the list. */}
+        <div className="preview__stack">
+          {RUN_STATUSES.map((status) => (
+            <StatusChip key={status} status={status} aligned />
+          ))}
+          <StatusChip status="failed" label="failed ×3" aligned />
+        </div>
       </Section>
 
       <Section title="Schedule classes">

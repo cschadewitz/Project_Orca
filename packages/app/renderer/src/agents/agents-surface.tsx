@@ -297,8 +297,8 @@ function Claims({ claims, asOf, live, feed, canRelease }: ClaimsProps): JSX.Elem
               <span className={`orca-agents__claim-title ${textClass("label")}`}>{claim.workItem?.title ?? ""}</span>
               {/* `DisplayStatus` and the design's `RunStatus` are the same eight words,
                   pinned against each other in packages/protocol/test — so no fold and no
-                  cast here. */}
-              <StatusChip status={claim.owner.status} className="orca-agents__claim-status" />
+                  cast here. `aligned` makes the statuses one column down the list. */}
+              <StatusChip status={claim.owner.status} aligned />
               <span className={`orca-id ${textClass("mono-id")} orca-agents__claim-run`}>
                 {claim.owner.name ?? claim.owner.runId}
               </span>
