@@ -264,12 +264,26 @@ popover uses it — the crumb's counterparts today, the schedule badge's explana
 artifact version menu and the risk cell's detail as they land.
 
 `↑`/`↓` move with wrapping, `Home`/`End` jump, `Enter` chooses, a letter jumps to the next
-item starting with it. Focus moves onto the first item on open and back to the trigger on
-close — a choice, a second press on the trigger, or `Esc`. The one exception is a press
-*outside*: focus is already going where the person clicked, and dragging it back would fight
-them. A `disabled` item is shown and named but skipped by the arrows, because a menu never
-hides what it cannot do; an empty item list renders no trigger at all, because a disclosure
-onto nothing is worse than no disclosure.
+item starting with it. Focus moves onto the first item on open — the first that is neither
+disabled nor `danger` — and back to the trigger on close — a choice, a second press on the
+trigger, or `Esc`. The one exception is a press *outside*: focus is already going where the
+person clicked, and dragging it back would fight them. A `disabled` item is shown and named
+but skipped by the arrows, because a menu never hides what it cannot do; an empty item list
+renders no trigger at all, because a disclosure onto nothing is worse than no disclosure.
+
+**A destructive item is never first, and never where focus lands.** `MenuItem.danger` draws an
+item in the danger tone led by `✕`, and the menu steps past it when it chooses where to put
+focus on open, so an `Enter` pressed out of habit chooses the safe thing — the rule a gate's
+destructive option and the palette's destructive rows keep for the same reason. The menu does
+not re-sort what it is given, because the order of a list is the caller's to mean something
+by; listing the safe choice first is the caller's half. A menu whose only choices are
+destructive puts focus on the list itself, and `↓` enters it.
+
+**A menu stands on `surface-raised`** with `shadow-popover`, which is what that pair is for. It
+stood on `surface-overlay` — the scrim behind a modal, which never carries text — until the
+design-conformance review, so every menu was see-through grey. **An item's `hint` is a one-word
+meta** (a type, a date) in the eyebrow style, uppercase and unwrapped; a sentence a menu has to
+say is its `note`, which wraps.
 
 The arrows, `Home`, `End` and `Enter` are registered on the `KeyboardMap` in a `menu` scope,
 so the palette lists them and innermost-first resolution stops them colliding with the

@@ -17,11 +17,45 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { harness, type Harness } from "./harness.js";
 import { expectedToken, inBothThemes, resolved, setTheme } from "./themes.js";
 import { Menu, placeMenu, type Counterpart, type Crumb, type MenuItem, type MenuMeasurement } from "../src/ui/index.js";
 import { ObjectHeader } from "../src/ui/object-header.js";
 import { useEscapeClosesTopLayer } from "../src/layers-context.js";
+import { componentsCssSource } from "./type-notes.js";
+
+// `node:path` rather than `new URL(relative, import.meta.url)` — the happy-dom trap
+// `type-notes.ts` documents.
+const here = dirname(fileURLToPath(import.meta.url));
+const rendererSrc = join(here, "..", "src");
+const componentApiSource = readFileSync(join(here, "..", "..", "..", "design", "src", "component-api.d.ts"), "utf8");
+
+/** Every file under `renderer/src` with one of `extensions`, by path from there. */
+function rendererSources(extensions: readonly string[] = [".ts", ".tsx"]): { name: string; text: string }[] {
+  const found: { name: string; text: string }[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (extensions.some((ext) => entry.name.endsWith(ext)))
+        found.push({ name: relative(rendererSrc, path).split(sep).join("/"), text: readFileSync(path, "utf8") });
+    }
+  };
+  walk(rendererSrc);
+  return found;
+}
+
+/** Every `selector { … }` in a stylesheet, comments stripped. */
+function cssRules(css: string): { selector: string; body: string }[] {
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  return [...bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+    selector: match[1]!.trim().replace(/\s+/g, " "),
+    body: match[2]!.trim(),
+  }));
+}
 
 const teardown: (() => void)[] = [];
 
@@ -325,8 +359,115 @@ describe("a menu's items", () => {
   });
 });
 
+describe("a destructive item", () => {
+  /* The order a caller should pass — the safe choice first — and the order a careless one
+     might: the menu has to land safely either way, because the item focus lands on is the
+     one a habitual Enter chooses. */
+  const safeFirst: MenuItem[] = [
+    { id: "keep", label: "Keep the draft" },
+    { id: "discard", label: "Discard the draft", danger: true },
+  ];
+  const dangerFirst: MenuItem[] = [
+    { id: "discard", label: "Discard the draft", danger: true },
+    { id: "keep", label: "Keep the draft" },
+  ];
+
+  it("leads with ✕ in the danger tone, and keeps the glyph out of its name", () => {
+    mount(
+      <Menu label="Draft" items={safeFirst} onChoose={() => {}}>
+        Draft
+      </Menu>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Draft" }));
+
+    const discard = screen.getByRole("menuitem", { name: "Discard the draft" });
+    expect(discard.classList.contains("orca-menu__item--danger")).toBe(true);
+    // The glyph as well as the colour (rule 4), hidden from the accessible name.
+    const glyph = discard.querySelector(".orca-menu__glyph");
+    expect(glyph?.textContent).toBe("✕");
+    expect(glyph?.getAttribute("aria-hidden")).toBe("true");
+    // The safe item carries neither.
+    const keep = screen.getByRole("menuitem", { name: "Keep the draft" });
+    expect(keep.classList.contains("orca-menu__item--danger")).toBe(false);
+    expect(keep.querySelector(".orca-menu__glyph")).toBeNull();
+  });
+
+  it("is never where focus lands on open, so Enter there chooses the safe item", () => {
+    const chosen = vi.fn();
+    mount(
+      <Menu label="Draft" items={dangerFirst} onChoose={chosen}>
+        Draft
+      </Menu>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Draft" }));
+
+    // Listed first by a caller that should not have — and still not focused.
+    expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Keep the draft" }));
+    press("Enter");
+    expect(chosen).toHaveBeenCalledTimes(1);
+    expect(chosen.mock.calls[0]?.[0]).toMatchObject({ id: "keep" });
+  });
+
+  it("is still reachable with the arrow keys, which only skip what is disabled", () => {
+    mount(
+      <Menu label="Draft" items={safeFirst} onChoose={() => {}}>
+        Draft
+      </Menu>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Draft" }));
+    press("ArrowDown");
+    expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Discard the draft" }));
+  });
+
+  it("lands on the list itself when every choice is destructive, and ↓ enters it", () => {
+    const chosen = vi.fn();
+    mount(
+      <Menu label="Draft" items={[{ id: "discard", label: "Discard the draft", danger: true }]} onChoose={chosen}>
+        Draft
+      </Menu>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Draft" }));
+
+    expect(document.activeElement).toBe(screen.getByRole("menu", { name: "Draft" }));
+    // Enter on the list chooses nothing: there is no item under it.
+    press("Enter");
+    expect(chosen).not.toHaveBeenCalled();
+    press("ArrowDown");
+    expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Discard the draft" }));
+  });
+
+  it("is documented as never first, in the primitive and in the component API", () => {
+    /* The half of the rule the menu cannot enforce without re-sorting what a caller meant by
+       its order is written where a caller reads before passing items. */
+    const menuSource = readFileSync(join(rendererSrc, "ui", "menu.tsx"), "utf8").replace(/\s*\n\s*\*\s*/g, " ");
+    expect(menuSource).toContain("**a destructive item is never first.**");
+    expect(componentApiSource.replace(/\s*\n\s*\*\s*/g, " ")).toContain("**a destructive item is never first**");
+    expect(componentApiSource).toMatch(/danger\?: boolean;/);
+  });
+});
+
+describe("a menu's hint", () => {
+  it("is never a sentence at any call site that writes one out", () => {
+    /* `hint` is set in the eyebrow style — uppercase and unwrapped — so a sentence there is
+       an uppercase line that runs out past the menu's edge; the Agents surface's release
+       confirmation did exactly that. A literal hint is checked here; a computed one (a type,
+       a date, a version) is the caller's to keep short, and `MenuItem.hint` says so. */
+    const literal = /\bhint:\s*"([^"]*)"/g;
+    const sentences: string[] = [];
+    for (const file of rendererSources()) {
+      for (const match of file.text.matchAll(literal)) {
+        if ((match[1] ?? "").trim().split(/\s+/).length > 3) sentences.push(`${file.name}: ${match[1]}`);
+      }
+    }
+    expect(sentences).toEqual([]);
+  });
+});
+
 describe("the menu surface", () => {
-  it("sits on the overlay surface in both themes", () => {
+  it("floats on the raised surface in both themes, never on the scrim", () => {
+    /* A menu floats, so it stands on `surface-raised` — "things that float: … popovers,
+       menus" in tokens.json. It stood on `surface-overlay`, the translucent scrim behind a
+       modal, so every menu in the app was see-through grey over the list it hung off. */
     const h = harness();
     teardown.push(h.dispose);
     const { Providers } = h;
@@ -339,8 +480,21 @@ describe("the menu surface", () => {
       ({ theme, container }) => {
         fireEvent.click(within(container).getByRole("button", { name: "Versions" }));
         const surface = container.querySelector(".orca-menu")!;
-        expect(resolved(surface, "background-color"), theme).toBe(expectedToken(theme, "surface-overlay"));
+        expect(resolved(surface, "background-color"), theme).toBe(expectedToken(theme, "surface-raised"));
+        expect(resolved(surface, "background-color"), theme).not.toBe(expectedToken(theme, "surface-overlay"));
       },
     );
+  });
+
+  it("leaves the scrim token to the two scrims, and to nothing that floats", () => {
+    /* `surface-overlay` "never carries text": the dialog layer and the palette layer are the
+       grounds it is for. Everything else that floats takes `surface-raised`. */
+    const grounds = cssRules(componentsCssSource)
+      .filter((rule) => /background(-color)?:\s*var\(--surface-overlay\)/.test(rule.body))
+      .map((rule) => rule.selector);
+    expect(grounds.sort()).toEqual([".orca-dialog-layer", ".orca-palette-layer"]);
+    for (const sheet of rendererSources([".css"])) {
+      expect(sheet.text.replace(/\/\*[\s\S]*?\*\//g, ""), sheet.name).not.toContain("--surface-overlay");
+    }
   });
 });

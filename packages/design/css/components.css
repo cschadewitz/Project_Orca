@@ -1928,7 +1928,14 @@
   color: var(--accent);
 }
 
-/* menus (the crumb's counterparts, and any other short list hung off a control) */
+/* menus (the crumb's counterparts, and any other short list hung off a control)
+
+   A menu floats, so it stands on `surface-raised` with `shadow-popover`, which is what that
+   pair is for. It stood on `surface-overlay` until the design-conformance review — the scrim
+   token, a translucent wash that is meant to sit *behind* a modal and never carry text — so
+   every menu in the app was see-through grey and the list under it showed through its items.
+   The two scrims below (`.orca-dialog-layer`, `.orca-palette-layer`) are the only grounds
+   that token is for. */
 
 /* The trigger and its popover. The menu is positioned against this, so any control can
    carry one without the surface around it needing a stacking context of its own. */
@@ -1946,7 +1953,7 @@
   margin: var(--space-1) 0 0;
   padding: var(--space-1);
   list-style: none;
-  background: var(--surface-overlay);
+  background: var(--surface-raised);
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-popover);
@@ -1983,6 +1990,23 @@
 .orca-menu__item:hover {
   background: var(--surface-hover);
 }
+/* A destructive choice (`MenuItem.danger`). The tone is on the item's text rather than a
+   filled band, for the reason the palette's danger row gives — a red band reads as an error
+   that has already happened — and the item leads with the failed run's `✕` so the colour is
+   never the only channel (RULES.md rule 4). The menu never focuses one on open and a caller
+   never lists one first (`ui/menu.tsx`). */
+.orca-menu__item--danger {
+  color: var(--status-failed);
+}
+.orca-menu__glyph {
+  flex: none;
+  font-size: var(--icon-sm);
+  line-height: 1;
+}
+/* A one-word meta beside an item — the type a counterpart leads to, a date — in the eyebrow
+   style, so uppercase, unwrapped and pushed to the trailing edge. That is why it is never a
+   sentence (the brand book's uppercase is never for one) and never an id, which uppercase
+   would re-capitalise: a sentence a menu has to say is the menu's `note`. */
 /* type: eyebrow */
 .orca-menu__type {
   margin-left: auto;
