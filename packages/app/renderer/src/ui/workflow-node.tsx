@@ -21,6 +21,11 @@
  *   `aria-activedescendant` over one tab stop, like every list in this app, so a node is a
  *   focusable-by-proxy row inside the canvas's `listbox` and never a tab stop of its own.
  *   Sixteen tab stops would be sixteen presses to cross one graph.
+ * - **It is a fixed box.** The layout routes every edge against `node-h`, so the box never
+ *   grows: the kind is one line, the name at most two and the meta line one, each cut at its
+ *   end by the component layer. What is cut is never lost — each part carries its whole text
+ *   in a `title`, and the whole name is in the accessible name after the status and in the
+ *   inspector.
  */
 import type { JSX } from "react";
 import { STATUS_PRESENTATION, type RunStatus } from "@orca/design";
@@ -136,6 +141,18 @@ export function workflowNodeName(
   return parts.join(", ");
 }
 
+/**
+ * The meta line's facts after the status chip, in the order they are drawn: the attempt when
+ * there was more than one, then what a collapsed container is hiding. One list, so the line
+ * and its `title` cannot say different things.
+ */
+function metaFacts(runState: WorkflowNodeRunState | undefined, collapsed: string | undefined): string[] {
+  const facts: string[] = [];
+  if (runState?.attempts !== undefined && runState.attempts > 1) facts.push(`attempt ${runState.attempts}`);
+  if (collapsed !== undefined) facts.push(collapsed);
+  return facts;
+}
+
 export function WorkflowNode({
   id,
   type,
@@ -157,6 +174,7 @@ export function WorkflowNode({
   if (draft) classes.push(`orca-node--${draft}`);
   if (invalid) classes.push("orca-node--invalid");
   if (selected) classes.push("orca-node--selected");
+  const facts = metaFacts(runState, collapsed);
 
   return (
     <div
@@ -182,19 +200,31 @@ export function WorkflowNode({
       )}
       <span className={`orca-node__kind ${textClass("eyebrow")}`}>
         <WorkflowNodeIcon type={type} />
-        {typeLabel}
+        <span className="orca-node__kind-label" title={typeLabel}>
+          {typeLabel}
+        </span>
       </span>
-      <span className={`orca-node__name ${textClass("mono-strong")}`}>{name}</span>
+      {/* Two lines at most, cut at the end; the whole name is in the title. */}
+      <span className={`orca-node__name ${textClass("mono-strong")}`} title={name}>
+        {name}
+      </span>
       {/* One meta line: the status word beside its glyph, the attempt when there was more
           than one, and the count of whatever a collapsed container is hiding. Everything on
-          it is a fact the daemon sent — there is no progress and no estimate here (rule 12). */}
-      {(runState || collapsed !== undefined) && (
-        <span className={`orca-node__meta ${textClass("caption")}`}>
+          it is a fact the daemon sent — there is no progress and no estimate here (rule 12).
+          It is one line and the last fact gives way first, so the title says all of it. */}
+      {(runState || facts.length > 0) && (
+        <span
+          className={`orca-node__meta ${textClass("caption")}`}
+          title={[...(runState ? [STATUS_PRESENTATION[runState.status].word] : []), ...facts].join(" · ")}
+        >
           {/* `StatusChip`, not a glyph of this component's own: the glyph and the word come
               from `STATUS_PRESENTATION` in one place and nothing re-declares them. */}
           {runState && <StatusChip status={runState.status} />}
-          {runState?.attempts !== undefined && runState.attempts > 1 && <span>attempt {runState.attempts}</span>}
-          {collapsed !== undefined && <span>{collapsed}</span>}
+          {facts.map((fact) => (
+            <span key={fact} className="orca-node__fact">
+              {fact}
+            </span>
+          ))}
         </span>
       )}
     </div>

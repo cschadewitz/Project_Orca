@@ -73,15 +73,27 @@
   stroke-linecap: round;
 }
 
+/* The slot the layout placed: exactly `node-w` × `node-h`, which is what `layout.ts` routed
+   the edges against and where the editor's port sits half-way down. It was a `min-height`,
+   which let a node with a long name push the slot — and its middle — past the number the
+   edges were drawn to; the node is a fixed box now (`.orca-node`), and so is its slot. A
+   node fills it; a start or end pill is shorter and is centred in it, which keeps its middle
+   on the line its edges are drawn to. */
 .orca-wfcanvas__box {
   position: absolute;
+  display: flex;
+  align-items: center;
   width: var(--node-w);
-  min-height: var(--node-h);
+  height: var(--node-h);
 }
 .orca-wfcanvas__box > .orca-node {
   width: 100%;
   height: 100%;
   cursor: pointer;
+}
+.orca-wfcanvas__box > .orca-node--start,
+.orca-wfcanvas__box > .orca-node--end {
+  height: auto;
 }
 
 /* An expanded container's body: its own drawing, inside a box that says whose it is. */
