@@ -23,6 +23,7 @@ export {
 export { ObjectHeader, type Crumb, type HeaderMode, type ObjectHeaderProps } from "./object-header.js";
 export { IdToken, MachineText, ObjectId, useIdTails, type ObjectIdProps } from "./object-id.js";
 export {
+  OPAQUE_WHOLE,
   TAIL_LENGTH,
   idText,
   idWords,

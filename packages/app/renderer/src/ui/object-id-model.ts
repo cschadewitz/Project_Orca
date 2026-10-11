@@ -25,6 +25,9 @@ import { OBJECT_KIND_PRESENTATION, OBJECT_KINDS, type ObjectKind } from "@orca/d
 /** The tail a row shows: six characters of every id format (see the file header). */
 export const TAIL_LENGTH = 6;
 
+/** An id in no format ORCA mints is drawn whole up to this length (`IdFormat`'s `opaque`). */
+export const OPAQUE_WHOLE = 12;
+
 /**
  * How the part after the prefix was minted, as far as the string can say.
  *
@@ -35,7 +38,9 @@ export const TAIL_LENGTH = 6;
  *   differently for it, so the guess costs nothing when it is wrong.
  * - `uuid` — a run admitted through `requests.submit` or a direct launch: `run_<uuid>`.
  * - `opaque` — anything else: a slug, a test fixture's `run-42`, an id from a newer daemon.
- *   Its tail is taken the same way, and it is never an error.
+ *   It is never an error. Nothing says which end of it identifies it — the shared-timestamp
+ *   head is a ULID's problem, not every string's — so a short one (`OPAQUE_WHOLE` characters
+ *   or fewer) is drawn whole, and a longer one gives its last six like everything else.
  */
 export type IdFormat = "ulid" | "uuid" | "keyed" | "opaque";
 
@@ -49,7 +54,10 @@ export interface ParsedId {
   /** What follows the prefix — the whole id when there is none. */
   body: string;
   format: IdFormat;
-  /** The last `n` characters of the body, or the whole body when it is no longer than that. */
+  /**
+   * The last `n` characters of the body, or the whole body when it is no longer than that —
+   * or, for a short `opaque` id, the whole body however short `n` is.
+   */
   tail(n?: number): string;
 }
 
@@ -88,15 +96,24 @@ export function parseId(id: string): ParsedId {
   const match = PREFIX.exec(id);
   const prefix = match?.[1];
   const body = match?.[2] ?? id;
+  const format = formatOf(body);
+  const floor = shortestTail(format, body);
   return {
     id,
     prefix,
     kind: kindOfPrefix(prefix),
     body,
-    format: formatOf(body),
-    tail: (n = TAIL_LENGTH) => (body.length <= n ? body : body.slice(-n)),
+    format,
+    tail: (n = TAIL_LENGTH) => tailOfBody(body, Math.max(n, floor)),
   };
 }
+
+/** The fewest characters an id may be drawn with: all of a short opaque one, else none. */
+function shortestTail(format: IdFormat, body: string): number {
+  return format === "opaque" && body.length <= OPAQUE_WHOLE ? body.length : 0;
+}
+
+const tailOfBody = (body: string, k: number): string => (body.length <= k ? body : body.slice(-k));
 
 /**
  * The tail each id in a list is drawn with: six characters, unless another id *in the same
@@ -111,16 +128,15 @@ export function parseId(id: string): ParsedId {
  */
 export function uniqueTails(ids: Iterable<string>, n: number = TAIL_LENGTH): Map<string, string> {
   const bodies = new Map<string, string>();
-  for (const id of ids) if (!bodies.has(id)) bodies.set(id, parseId(id).body);
-
   const length = new Map<string, number>();
-  for (const id of bodies.keys()) length.set(id, n);
+  for (const id of ids) {
+    if (bodies.has(id)) continue;
+    const parsed = parseId(id);
+    bodies.set(id, parsed.body);
+    length.set(id, Math.max(n, shortestTail(parsed.format, parsed.body)));
+  }
 
-  const tailOf = (id: string): string => {
-    const body = bodies.get(id)!;
-    const k = length.get(id)!;
-    return body.length <= k ? body : body.slice(-k);
-  };
+  const tailOf = (id: string): string => tailOfBody(bodies.get(id)!, length.get(id)!);
 
   /* Each pass groups the ids still in play by their current tail and lengthens every id
      in a group of two or more. A group stops growing once none of its ids has a character

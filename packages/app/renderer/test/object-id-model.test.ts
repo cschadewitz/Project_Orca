@@ -6,7 +6,15 @@
  */
 import { describe, expect, it } from "vitest";
 import { OBJECT_KIND_PRESENTATION, OBJECT_KINDS } from "@orca/design";
-import { TAIL_LENGTH, idText, idWords, parseId, parseIdText, uniqueTails } from "../src/ui/object-id-model.js";
+import {
+  OPAQUE_WHOLE,
+  TAIL_LENGTH,
+  idText,
+  idWords,
+  parseId,
+  parseIdText,
+  uniqueTails,
+} from "../src/ui/object-id-model.js";
 
 const ITEMS = ["wi_01M4M899VK0SNP2F9P560F9G7S", "wi_01M4M899VKJZRZSBHNDY5M579G", "wi_01M4M899VKZJX9B8P0KQPPBJ84"];
 const RUN_UUID = "run_cae154fb-f778-47ba-ae71-bb4df6bb09e1";
@@ -39,14 +47,17 @@ describe("parseId", () => {
     expect(parseId("risk_ZT4K9W2M8Q1N7R3V5X6Y0B2C4D").format).toBe("keyed");
   });
 
-  it("draws an id it does not recognise without failing, tail and all", () => {
+  it("draws an id it does not recognise without failing: whole when short, its tail when not", () => {
     const fixture = parseId("run-metrics");
     expect(fixture.prefix).toBeUndefined();
     expect(fixture.kind).toBeUndefined();
     expect(fixture.format).toBe("opaque");
-    expect(fixture.tail()).toBe("etrics");
-    // Shorter than a tail: the whole of it.
+    // Nothing says which end of a string in no ORCA format identifies it, so a short one is
+    // drawn whole — up to `OPAQUE_WHOLE` characters — and a long one gives its last six.
+    expect(fixture.tail()).toBe("run-metrics");
     expect(parseId("req-1").tail()).toBe("req-1");
+    expect(parseId("x".repeat(OPAQUE_WHOLE)).tail()).toBe("x".repeat(OPAQUE_WHOLE));
+    expect(parseId("a-much-longer-opaque-id").tail()).toBe("que-id");
     // A prefix that names no kind is still read as a prefix.
     expect(parseId("art_01M4M899VK0SNP2F9P560F9G7S").kind).toBeUndefined();
   });
@@ -106,8 +117,8 @@ describe("the token as a string", () => {
   it("is spoken as the kind's word, never the glyph", () => {
     expect(idWords(RUN_ULID)).toBe("run JH7X8P");
     expect(idWords(ITEMS[1]!)).toBe("work item 5M579G");
-    // Without a kind there is nothing to say but the tail.
-    expect(idWords("run-metrics")).toBe("etrics");
+    // Without a kind there is nothing to say but the id.
+    expect(idWords("run-metrics")).toBe("run-metrics");
   });
 
   it("is not mistaken for a decision key, a path or a sentence", () => {
