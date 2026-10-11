@@ -39,22 +39,6 @@ const stylesheets = (dir: string): { name: string; text: string }[] =>
       : [];
   });
 
-/**
- * Resets still written in their class's own rule, each over an element that takes a type class
- * — so each still renders at the shell's 14px. The next change folds them into the `:where()`.
- */
-const NOT_YET = new Set([
-  ".orca-bare",
-  ".orca-btn",
-  ".orca-badge__why",
-  ".orca-nav",
-  ".orca-crumb__more",
-  ".orca-menu__item",
-  ".orca-palette__input",
-  ".orca-seg__btn",
-  ".orca-plan__filter",
-]);
-
 describe("a control's font reset", () => {
   const sheets = [{ name: "components.css", text: componentsCssSource }, ...stylesheets(rendererSrc)];
 
@@ -62,10 +46,19 @@ describe("a control's font reset", () => {
     const offenders = sheets.flatMap(({ name, text }) =>
       rules(text)
         .filter((rule) => RESETS_FONT.test(rule.body))
-        .filter((rule) => !/^:where\(/.test(rule.selector) && !NOT_YET.has(rule.selector))
+        .filter((rule) => !/^:where\(/.test(rule.selector))
         .map((rule) => `${name}: ${rule.selector}`),
     );
     expect(offenders).toEqual([]);
+  });
+
+  it("covers every control class that took one, buttons and menu items with the crumbs", () => {
+    const where = rules(componentsCssSource).find((rule) => /^:where\(.*\.orca-btn,/.test(rule.selector));
+    const listed = where?.selector.split(/[\s,()]+/) ?? [];
+    for (const control of [".orca-bare", ".orca-btn", ".orca-menu__item", ".orca-nav", ".orca-seg__btn"]) {
+      expect(listed, control).toContain(control);
+    }
+    expect(where?.body).toMatch(RESETS_FONT);
   });
 
   it("covers the crumbs and the … that folds them", () => {

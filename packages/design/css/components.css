@@ -394,8 +394,29 @@
   border: 0;
   background: none;
   color: inherit;
-  font: inherit;
   cursor: pointer;
+}
+/* Every control class's font reset, in one place and at zero specificity. A <button> or an
+   <input> takes the user agent's font rather than the page's, so each of these resets it — and
+   written in the class's own rule, at a class's specificity and later in the cascade than
+   tokens.css, that `font: inherit` beat the `orca-text-*` class on the same element. Every
+   button, menu item, nav item and segmented button was the shell's 14/20 body instead of the
+   13/18 label it is noted as, the badge's why 14px instead of caption, and a `.orca-bare`
+   button set in `mono-id` was sans, so the cascade broke rule 8. Inside `:where()` the reset
+   still beats the user agent, as any author rule does, and loses to any type class. A control
+   class added later keeps to this: its `font` reset goes in this list, never in its own rule
+   (`font-reset.test.ts`). The crumbs' is beside the object header's rules. */
+:where(
+  .orca-bare,
+  .orca-btn,
+  .orca-badge__why,
+  .orca-nav,
+  .orca-crumb__more,
+  .orca-menu__item,
+  .orca-palette__input,
+  .orca-seg__btn
+) {
+  font: inherit;
 }
 
 /* type: label */
@@ -410,7 +431,6 @@
   border-radius: var(--radius-sm);
   background: var(--surface-base);
   color: var(--ink-primary);
-  font: inherit;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1116,7 +1136,6 @@
   border: 0;
   padding: 0;
   background: none;
-  font: inherit;
   color: var(--accent);
   cursor: pointer;
   text-decoration: underline;
@@ -2045,7 +2064,6 @@
   border: none;
   border-radius: var(--radius-sm);
   background: none;
-  font: inherit;
   text-align: left;
   color: var(--ink-secondary);
   cursor: default;
@@ -2280,7 +2298,6 @@
   border: 0;
   background: none;
   padding: 0;
-  font: inherit;
   font-size: var(--icon-sm);
   color: var(--ink-tertiary);
   cursor: pointer;
@@ -2349,7 +2366,6 @@
   border-radius: var(--radius-xs);
   background: none;
   color: var(--ink-primary);
-  font: inherit;
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
@@ -2546,7 +2562,6 @@
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
   border-radius: 0;
   background: none;
-  font: inherit;
   color: var(--ink-primary);
 }
 .orca-palette__input::placeholder {
@@ -2812,7 +2827,6 @@
   border: 0;
   background: var(--surface-base);
   color: var(--ink-secondary);
-  font: inherit;
   cursor: pointer;
   white-space: nowrap;
 }
