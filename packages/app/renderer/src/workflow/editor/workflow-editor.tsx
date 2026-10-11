@@ -274,6 +274,19 @@ function Editor({
   const errors = draft.issues.filter((issue) => issue.severity === "error").length;
   const owner = draft.owner.you ? "your draft" : `${draft.owner.principalId}'s draft, read-only`;
   const blocked = controller.conflict !== undefined;
+  const summary = `${owner} · ${counted(changes, "change")}${draft.dirty && changes === 0 ? " to the layout" : ""}`;
+  const status =
+    controller.conflict !== undefined
+      ? `Reloaded: ${controller.conflict}`
+      : controller.message !== undefined
+        ? controller.message
+        : !draft.base.current
+          ? "The workflow file changed since this draft was taken; it cannot be published."
+          : !writable.can
+            ? writable.reason
+            : controller.busy
+              ? "Saving…"
+              : "Saved in the draft";
 
   return (
     <div className="orca-wfedit">
@@ -282,20 +295,14 @@ function Editor({
         role="group"
         aria-label="Workflow draft"
       >
+        {/* One line (RULES.md rule 15): the name and the buttons keep their width, and the two
+            captions give way, the status first, cut at their end and whole in their title. */}
         <Text style="label-strong">{`Draft of ${draft.workflowId} v${draft.base.version}`}</Text>
-        <Text style="caption">{`${owner} · ${counted(changes, "change")}${draft.dirty && changes === 0 ? " to the layout" : ""}`}</Text>
-        <span role="status" className={textClass("caption")}>
-          {controller.conflict !== undefined
-            ? `Reloaded: ${controller.conflict}`
-            : controller.message !== undefined
-              ? controller.message
-              : !draft.base.current
-                ? "The workflow file changed since this draft was taken; it cannot be published."
-                : !writable.can
-                  ? writable.reason
-                  : controller.busy
-                    ? "Saving…"
-                    : "Saved in the draft"}
+        <Text style="caption" className="orca-truncate" title={summary}>
+          {summary}
+        </Text>
+        <span role="status" className={`orca-truncate ${textClass("caption")}`} title={status}>
+          {status}
         </span>
         <span className="orca-spacer" />
         {!readOnly && (

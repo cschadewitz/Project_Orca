@@ -43,8 +43,8 @@ export function StatusBar({ connection }: StatusBarProps): JSX.Element {
       )}
       <span className="orca-spacer" />
       {connection.state === "live" && !writes.can ? (
-        <Text style="caption" className="orca-faint">
-          read-only — {writes.reason}
+        <Text style="caption" className="orca-faint orca-truncate" title={`read-only — ${writes.reason}`}>
+          {`read-only — ${writes.reason}`}
         </Text>
       ) : null}
       {connection.orcaVersion ? (

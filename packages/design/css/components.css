@@ -84,6 +84,36 @@
   flex: 1 1 auto;
 }
 
+/* ---------- text that does not fit (RULES.md rule 15) ----------
+
+   Three rules, and every class below keeps them:
+
+   1. A bounded label never wraps. A chip, a badge, a pill, a button, a segment, a key cap, a
+      crumb's parts: one line, `white-space: nowrap`, and as wide as its text
+      (`min-width: max-content`, `flex: none`), so its outline always encloses it. A label that
+      can be longer than any box it sits in (an artifact name, a filter's id, a crumb's name)
+      is the one exception: it is cut at its end inside its outline, never in the middle, and
+      the caller puts the whole text in `title`.
+   2. A number and its noun are one unit. The renderer writes a count through `counted` or
+      `unit` (`ui/count.ts`), which join the two with a no-break space, so a run of counts
+      ("+2 nodes · 1 changed · 3 edges") wraps only between units, at the separators.
+   3. A bar stays one line. The title bar, the object header, the status bar and the draft
+      bar are a fixed height: their controls and counts keep their width, and when the bar
+      runs out of room the lowest-priority text in it, a caption or a summary that carries
+      `.orca-truncate`, is cut at its end with the whole of it in `title`. Rows never wrap
+      either (rule 9). What wraps is a run of things in a panel or a card, between whole
+      items: `.orca-chips`, a filter rail. */
+
+/* The text in a bar or a row that gives way when there is no room: cut at its end, the whole
+   of it in the element's `title`, which the caller sets. */
+.orca-truncate {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .orca-mono {
   font-family: var(--font-mono);
 }
@@ -433,6 +463,8 @@
   color: var(--ink-primary);
   cursor: pointer;
   white-space: nowrap;
+  /* A control keeps its width: a bar that runs out of room gives up its caption, not this. */
+  flex: none;
 }
 .orca-btn:hover {
   background: var(--surface-hover);
@@ -496,6 +528,9 @@
   line-height: 1;
   color: var(--ink-secondary);
   background: var(--surface-base);
+  /* A chord is one key cap: "⌘ ⇧ D" never breaks across two. */
+  white-space: nowrap;
+  flex: none;
 }
 
 /* ---------- run tree ---------- */
@@ -1896,6 +1931,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  white-space: nowrap;
   padding: 0 var(--space-3);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-canvas);
@@ -1930,12 +1966,19 @@
   border: var(--stroke-hairline) solid var(--status-waiting);
   font-weight: 500;
   cursor: pointer;
+  /* A pill, so it is as wide as "◆ 3 waiting" and never narrower (rule 15). */
+  white-space: nowrap;
+  flex: none;
+  min-width: max-content;
 }
 /* type: mono-id */
 .orca-statusbar {
   display: flex;
   align-items: center;
   gap: var(--space-4);
+  /* A bar is one line; the read-only reason is what gives way (`.orca-truncate`). */
+  white-space: nowrap;
+  min-width: 0;
   padding: 0 var(--space-3);
   border-top: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-canvas);
@@ -2205,6 +2248,7 @@
 /* type: eyebrow */
 .orca-crumb__type {
   flex: none;
+  white-space: nowrap;
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
@@ -2816,6 +2860,7 @@
 
 .orca-seg {
   display: inline-flex;
+  flex: none;
   align-items: center;
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-sm);
@@ -2948,6 +2993,7 @@
   background: var(--surface-raised);
   border: var(--stroke-hairline) solid var(--border-control);
   color: var(--ink-secondary);
+  white-space: nowrap;
 }
 .orca-port {
   width: var(--mark-port);
@@ -3061,10 +3107,15 @@
 
 /* ---------- draft bar ---------- */
 
+/* One line (rule 15): the count and the buttons keep their width, and the note, the message
+   and a conflict carry `.orca-truncate` and give way first, whole in their `title`. The count
+   is one unit (`changeLabel`), so "4 changes" never breaks between the number and the noun. */
 .orca-draftbar {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  white-space: nowrap;
+  min-width: 0;
   padding: var(--space-2) var(--space-4);
   background: var(--accent-subtle);
   border-top: var(--stroke-hairline) solid var(--accent);
@@ -3088,6 +3139,11 @@
   color: var(--ink-secondary);
   border: var(--stroke-hairline) solid var(--border-control);
   font-weight: 500;
+  /* A pill like a chip: "◷ pinned to v3" ran onto a second line outside its outline in a
+     narrow header, so it is one line and as wide as what it says (rule 15). */
+  white-space: nowrap;
+  flex: none;
+  min-width: max-content;
 }
 
 /* ---------- graph filter rail ---------- */

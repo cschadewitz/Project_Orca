@@ -73,6 +73,7 @@ export function DraftBar({
   onReload,
 }: DraftBarProps): JSX.Element {
   const blocked = conflict !== undefined;
+  const stale = `The file changed since you read it: ${conflict}`;
   const bar = useRef<HTMLDivElement>(null);
   const target = useRef(returnFocus);
   target.current = returnFocus;
@@ -101,14 +102,26 @@ export function DraftBar({
       role="group"
       aria-label="Unsaved configuration changes"
     >
+      {/* One line (RULES.md rule 15). The count keeps its width and is one unit; the
+          sentences after it give way first, cut at their end and whole in their title. */}
       <Text style="label-strong">{changeLabel(changes)}</Text>
-      {note !== undefined && <Text style="caption">{note}</Text>}
+      {note !== undefined && (
+        <Text style="caption" className="orca-truncate" title={note}>
+          {note}
+        </Text>
+      )}
       {conflict !== undefined && (
         /* Not a live region: the bar is where the person is already looking, and the save
            they pressed announces through the app's one announcer (`use-config.ts`). */
-        <Text style="caption">The file changed since you read it: {conflict}</Text>
+        <Text style="caption" className="orca-truncate" title={stale}>
+          {stale}
+        </Text>
       )}
-      {conflict === undefined && message !== undefined && <Text style="caption">{message}</Text>}
+      {conflict === undefined && message !== undefined && (
+        <Text style="caption" className="orca-truncate" title={message}>
+          {message}
+        </Text>
+      )}
       <span className="orca-spacer" />
       {blocked && (
         <Button size="sm" tone="ghost" onClick={onReload}>
