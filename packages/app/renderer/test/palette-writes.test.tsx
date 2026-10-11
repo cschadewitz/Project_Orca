@@ -111,7 +111,8 @@ describe("cancel and resume", () => {
     /* Armed: the palette is still open, the row now says what the next Enter will do, and
        nothing has been sent. */
     expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeNull();
-    await within(palette()).findByRole("option", { name: /Cancel run-gate — confirm/ });
+    // The run by its name and its id token, said as "run run-gate" — never the raw id alone.
+    await within(palette()).findByRole("option", { name: /^✕?Cancel .+ run run-gate — confirm$/ });
     expect(callsTo("runs.cancel")).toHaveLength(0);
 
     fireEvent.keyDown(query(), { key: "Enter" });
@@ -130,7 +131,7 @@ describe("cancel and resume", () => {
     expect(cancel.getAttribute("aria-selected")).toBe("false");
     fireEvent.mouseDown(cancel);
 
-    const armed = await within(palette()).findByRole("option", { name: /Cancel run-gate — confirm/ });
+    const armed = await within(palette()).findByRole("option", { name: /Cancel .+ run run-gate — confirm/ });
     expect(armed.getAttribute("aria-selected")).toBe("true");
     expect(callsTo("runs.cancel")).toHaveLength(0);
 

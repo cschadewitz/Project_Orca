@@ -37,7 +37,7 @@ import type { VirtualListHandle } from "../list/index.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { useControls } from "../attention/use-controls.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
-import { Menu, StateView, Text, textClass, type Crumb, type MenuItem } from "../ui/index.js";
+import { Menu, StateView, Text, idText, textClass, type Crumb, type MenuItem } from "../ui/index.js";
 import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { StepDetail } from "../step/index.js";
 import { matchesText } from "./run-rows.js";
@@ -168,6 +168,9 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
   const crumbs = useMemo<readonly Crumb[]>(() => {
     if (!selectedRun) return [];
     const trail: Crumb[] = [];
+    /* A request has no title on any read model this surface holds (`runs.list` carries
+       `requestId` alone), so its label is its id and the crumb draws the id's token in its
+       place — never the raw id, in sans, that it used to print. */
     if (selectedRun.requestId !== undefined) {
       trail.push({ type: "request", id: selectedRun.requestId, label: selectedRun.requestId });
     }
@@ -410,8 +413,9 @@ const NOTHING_ANSWERED = (): void => {};
  * copies of `runs.cancel` would be two answers to what a refused write says.
  *
  * Cancelling is destructive and irreversible, so its row is armed before it is run and
- * carries the run's id in the confirmation: the palette is reached by typing, and the run
- * a person meant is not always the run the palette had selected.
+ * names the run in the confirmation — its name and its id token, never the raw id: the
+ * palette is reached by typing, and the run a person meant is not always the run the palette
+ * had selected. Runs of one workflow share a name, so the token is the part that says which.
  */
 function useRunWrites(runId: string | undefined, runName: string | undefined): void {
   const announce = useAnnounce();
@@ -428,24 +432,28 @@ function useRunWrites(runId: string | undefined, runName: string | undefined): v
 
   const rows = useMemo((): readonly PaletteWrite[] => {
     if (runId === undefined) return [];
-    const named = runName ?? runId;
+    // The id is ORCA's, so its token is set in mono wherever it is drawn (rule 8), and the
+    // full id is matched, so pasting it finds these rows.
+    const token = idText(runId, { kind: "run" });
+    const named = runName === undefined ? token : `${runName} ${token}`;
     return [
       {
         scope: "run-tree",
         method: "runs.cancel",
         label: `Cancel ${named}`,
-        // The id is ORCA's, so it is set in mono wherever it is drawn (rule 8) — in the
-        // confirmation here, which is the state of the row that names the run by id.
-        labelMachine: runId,
+        labelMachine: token,
+        objectId: runId,
         detail: "Stops the run where it is; what has already happened stays in the log",
         tone: "danger",
-        confirm: `Cancel ${runId} — confirm`,
+        confirm: `Cancel ${named} — confirm`,
         action: () => current.current.cancel(runId),
       },
       {
         scope: "run-tree",
         method: "runs.resume",
         label: `Resume ${named}`,
+        labelMachine: token,
+        objectId: runId,
         detail: "Re-drives a parked run; it returns when the run parks again or finishes",
         action: () => current.current.resume(runId),
       },

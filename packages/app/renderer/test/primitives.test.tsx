@@ -216,8 +216,8 @@ describe("StateView", () => {
 
 describe("ObjectHeader", () => {
   const crumbs = [
-    { type: "item", id: "auth-sso-epic", label: "auth-sso-epic" },
-    { type: "run", id: "7f3a2c", label: "7f3a2c", current: true },
+    { type: "item", id: "wi_01M4M899VKJZRZSBHNDY5M579G", label: "auth-sso-epic" },
+    { type: "run", id: "run_01M4M8A1WDAQMMX98Q6KJH7X8P", label: "7f3a2c", current: true },
   ] as const;
 
   it("labels every crumb with its type and leaves the current one unlinked", () => {
@@ -230,6 +230,31 @@ describe("ObjectHeader", () => {
     expect(markup.match(/class="orca-crumb orca-text-label"/g)).toHaveLength(1);
   });
 
+  it("follows each crumb's name and type with its id token, faint, the whole id in its title", () => {
+    const markup = html(<ObjectHeader crumbs={crumbs} onOpen={() => {}} />);
+    // Name, type, token: the token after the type word, never the raw id.
+    expect(markup).toMatch(
+      /auth-sso-epic<\/span><span class="orca-crumb__type orca-text-eyebrow">item<\/span><span class="orca-objid orca-objid--faint orca-text-mono-id" title="wi_01M4M899VKJZRZSBHNDY5M579G">/,
+    );
+    expect(markup).toContain('<span class="orca-objid__tail">5M579G</span>');
+    expect(markup).toContain('<span class="orca-objid__tail">JH7X8P</span>');
+    expect(markup).not.toContain(">wi_01M4M899VKJZRZSBHNDY5M579G<");
+    // The type word beside it already says the kind, so the token does not say it again.
+    expect(markup).not.toContain("orca-visually-hidden");
+  });
+
+  it("draws a crumb with no name as its token, in the label's place", () => {
+    /* A request: `runs.list` carries `requestId` and no title, so the surface passes the id as
+       the label — and the crumb draws its token rather than 30 raw characters in sans. */
+    const id = "req_01M4M896DER1YQSTMV3G5BNH42";
+    const markup = html(<ObjectHeader crumbs={[{ type: "request", id, label: id }, crumbs[0]]} onOpen={() => {}} />);
+    expect(markup).not.toContain(`>${id}<`);
+    expect(markup).toContain('<span class="orca-objid__tail">5BNH42</span>');
+    // Said as "request 5BNH42" once: the type word is hidden from the name, which has it.
+    expect(markup).toContain('<span class="orca-visually-hidden">request </span>');
+    expect(markup).toContain('class="orca-crumb__type orca-text-eyebrow" aria-hidden="true">request<');
+  });
+
   it("offers a menu on every crumb that has somewhere to go, and none on one that has not", () => {
     /* Copy link alone is enough for a disclosure: every crumb with a canonical `orca://`
        URL is an address another tool can be handed (#165), handler or no handler. */
@@ -237,9 +262,12 @@ describe("ObjectHeader", () => {
     const withMenus = html(<ObjectHeader crumbs={crumbs} onOpenCounterpart={() => {}} />);
     expect(withMenus.match(/orca-crumb__more/g)).toHaveLength(2);
 
-    // A step crumb with no run above it: no URL to copy, and a step has no counterparts.
+    // A plan crumb: no URL to copy, no id a person is shown and no counterparts. (A step crumb
+    // with no run above it has no URL either, but it has an id to copy, so it has a menu now.)
+    const plan = [{ type: "plan", id: "plan-auth", label: "Auth rollout", current: true }] as const;
+    expect(html(<ObjectHeader crumbs={plan} onOpenCounterpart={() => {}} />)).not.toContain("orca-crumb__more");
     const steps = [{ type: "step", id: "build.2", label: "build", current: true }] as const;
-    expect(html(<ObjectHeader crumbs={steps} onOpenCounterpart={() => {}} />)).not.toContain("orca-crumb__more");
+    expect(html(<ObjectHeader crumbs={steps} onOpenCounterpart={() => {}} />)).toContain("orca-crumb__more");
   });
 
   it("knows the four counterparts the information architecture names", () => {

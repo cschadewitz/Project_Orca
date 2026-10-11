@@ -26,6 +26,7 @@
 import { STATUS_PRESENTATION, type RunStatus } from "@orca/design";
 import type { RunChangedParams, StepChangedParams } from "@orca/protocol";
 import { isTerminal } from "../runs/run-rows.js";
+import { parseId } from "../ui/object-id-model.js";
 
 /** What a `step.scheduled` said about a step, kept until the step stops. */
 export interface StepFacts {
@@ -111,8 +112,9 @@ function stepSentence(params: StepChangedParams, facts: StepFacts): string | und
   const phrase = ANNOUNCED_STEP.includes(params.status) ? STEP_PHRASE[params.status] : undefined;
   if (phrase === undefined) return undefined;
 
-  // The node's name if this window ever heard it, the step run's id if it did not.
-  const parts = [`${facts.nodeId ?? params.stepRunId} ${phrase}`];
+  // The node's name if this window ever heard it, the step run's id tail if it did not — what
+  // its token shows, never 26 characters read out one by one. The phrase says "step" itself.
+  const parts = [`${facts.nodeId ?? parseId(params.stepRunId).tail()} ${phrase}`];
   // "attempt 1" is what every step is, so it is not news; a second attempt is.
   if (facts.attempt !== undefined && facts.attempt > 1) parts.push(`${facts.attempt} attempts`);
   // What the step is parked on is the whole of why it is waiting.
@@ -130,5 +132,6 @@ function stepSentence(params: StepChangedParams, facts: StepFacts): string | und
  */
 export function foldRun(params: RunChangedParams): string | undefined {
   if (!isTerminal(params.status)) return undefined;
-  return `Run ${params.runId} ${STATUS_PRESENTATION[params.status].word}`;
+  // The run's tail, which is what its token shows: a whole id is 26 characters read out.
+  return `Run ${parseId(params.runId).tail()} ${STATUS_PRESENTATION[params.status].word}`;
 }

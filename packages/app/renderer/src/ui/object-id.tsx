@@ -43,7 +43,7 @@ export interface ObjectIdProps {
   /**
    * `row` (the default): the token, after `name` when there is one.
    * `header`: the token on a crumb, after the crumb's own name and type word — always faint,
-   * because the crumb's label leads.
+   * because the crumb's label leads, and silent about its kind, which the type word says.
    * `full`: the id verbatim, with the tail lifted out of it so the short form can be found
    * inside the long one — a detail pane, a notice that has to quote the id it could not open.
    */
@@ -74,7 +74,9 @@ export function ObjectId({ id, kind, variant = "row", name, tail, className }: O
   }
 
   const faint = variant === "header" || name !== undefined;
-  const token = <IdToken id={id} kind={kindOf(id, kind)} tail={shown} faint={faint} />;
+  /* On a crumb the type label beside the token already says the kind, so the token does not
+     say it a second time to a screen reader. */
+  const token = <IdToken id={id} kind={kindOf(id, kind)} tail={shown} faint={faint} sayKind={variant !== "header"} />;
   if (name === undefined) {
     return className === undefined ? token : <span className={className}>{token}</span>;
   }
@@ -96,12 +98,15 @@ export function IdToken({
   kind,
   tail,
   faint = false,
+  sayKind = true,
 }: {
   /** The whole id, for `title`. Absent where only the string form survived (`MachineText`). */
   id?: string;
   kind: ObjectKind | undefined;
   tail: string;
   faint?: boolean;
+  /** Put the kind's word in the accessible name. Off where a label beside it already says it. */
+  sayKind?: boolean;
 }): JSX.Element {
   const presentation = kind === undefined ? undefined : OBJECT_KIND_PRESENTATION[kind];
   return (
@@ -114,7 +119,7 @@ export function IdToken({
           <span className="orca-objid__kind" aria-hidden="true">
             {presentation.glyph}
           </span>
-          <span className="orca-visually-hidden">{`${presentation.word} `}</span>
+          {sayKind && <span className="orca-visually-hidden">{`${presentation.word} `}</span>}
         </>
       )}
       <span className="orca-objid__tail">{tail}</span>
