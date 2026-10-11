@@ -81,4 +81,35 @@ describe("editorLayout", () => {
     const dragging = editorLayout(graph, { graphs: {} }, [], METRICS, { id: "work", x: -5, y: 3 });
     expect(dragging.nodes.find((n) => n.node.id === "work")).toMatchObject({ x: 0, y: 3, pinned: true });
   });
+
+  it("draws the same pins top to bottom, through the lattice, and calls an edge back when it runs up", () => {
+    /* The pins are kept in the horizontal frame (layer step 14, rank step 6 here) whatever the
+       person's direction, because the layout record is shared and the direction is not. Top to
+       bottom the steps are 8 down a layer and 12 across a rank. */
+    const graph = editorGraph(base, base, [])!;
+    const auto = editorLayout(graph, { graphs: {} }, [], METRICS, undefined, "vertical");
+    expect(auto.nodes.map((n) => [n.node.id, n.x, n.y])).toEqual([
+      ["start", 0, 0],
+      ["work", 0, 8],
+      ["done", 0, 16],
+    ]);
+
+    // Half a layer and two ranks, as stored: drawn half a layer down and two ranks across.
+    const pins = { graphs: { "": { done: { x: 7, y: 12 } } } };
+    const turned = editorLayout(graph, pins, [], METRICS, undefined, "vertical");
+    expect(turned.nodes.find((n) => n.node.id === "done")).toMatchObject({ x: 24, y: 4, pinned: true });
+    // It is above `work` now, so the edge into it runs up the canvas: a back edge, out of the side.
+    const into = turned.edges.find((e) => e.edge.to === "done")!;
+    expect(into.isBack).toBe(true);
+    expect(into.path).not.toContain(" C ");
+    // The same record, left to right, is drawn where it was stored: nothing about it moved.
+    expect(editorLayout(graph, pins, [], METRICS).nodes.find((n) => n.node.id === "done")).toMatchObject({
+      x: 7,
+      y: 12,
+    });
+
+    // A node mid-drag is already in the drawn frame, and is drawn where the pointer has it.
+    const dragging = editorLayout(graph, pins, [], METRICS, { id: "work", x: 3, y: -5 }, "vertical");
+    expect(dragging.nodes.find((n) => n.node.id === "work")).toMatchObject({ x: 3, y: 0, pinned: true });
+  });
 });

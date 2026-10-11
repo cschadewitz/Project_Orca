@@ -8,7 +8,15 @@
  * and what the inspector shows; the daemon validates it against the real schema.
  */
 import { draftGraphKey, type DraftGraphPath, type DraftIssue, type DraftLayout } from "@orca/protocol";
-import { layoutGraph, route, type GraphMetrics, type PlacedEdge } from "../layout.js";
+import {
+  DEFAULT_DIRECTION,
+  layoutGraph,
+  route,
+  toDirection,
+  type GraphMetrics,
+  type LayoutDirection,
+  type PlacedEdge,
+} from "../layout.js";
 
 /** A node as the YAML holds it. */
 export type RawNode = Record<string, unknown> & { type?: unknown };
@@ -263,9 +271,18 @@ export interface EditorLayout {
  * where it was dropped and its edges re-routed. `override` is a node mid-drag, which is drawn
  * where the pointer has it before the drop is sent.
  *
- * An edge is routed as a back edge when it runs into a node that is not to its right - the
- * same picture the viewer draws, decided by where the boxes now are rather than by depth,
- * because a person may have dragged a later node to the left of an earlier one.
+ * An edge is routed as a back edge when it runs into a node that is not ahead of it along
+ * the flow - not to its right, or not below it when the layers run top to bottom - the same
+ * picture the viewer draws, decided by where the boxes now are rather than by depth, because
+ * a person may have dragged a later node behind an earlier one.
+ *
+ * **Pins are kept in the horizontal frame, whichever way the graph is drawn.** The layout
+ * record is shared by everybody who edits the workflow and the direction is one person's view
+ * of it, so a pin read from it goes through `toDirection` on its way to the screen, and a
+ * drop comes back through `fromDirection` before it is sent (`editor-canvas.tsx`). The map is
+ * between the two lattices rather than a swap of x and y, so a pinned node keeps its place
+ * among its auto-laid-out neighbours either way, and turning the graph writes nothing.
+ * `override` is mid-drag and so already in the drawn frame.
  */
 export function editorLayout(
   graph: EditorGraph,
@@ -273,11 +290,13 @@ export function editorLayout(
   path: DraftGraphPath,
   metrics: GraphMetrics,
   override?: { id: string; x: number; y: number },
+  direction: LayoutDirection = DEFAULT_DIRECTION,
 ): EditorLayout {
-  const auto = layoutGraph({ nodes: graph.nodes, edges: graph.edges, roots: [graph.start] }, metrics);
+  const auto = layoutGraph({ nodes: graph.nodes, edges: graph.edges, roots: [graph.start] }, metrics, direction);
   const pins = layout.graphs[draftGraphKey(path)] ?? {};
   const nodes: PlacedEditorNode[] = auto.nodes.map((placed) => {
-    const pin = override?.id === placed.node.id ? override : pins[placed.node.id];
+    const kept = pins[placed.node.id];
+    const pin = override?.id === placed.node.id ? override : kept ? toDirection(kept, direction, metrics) : undefined;
     return pin
       ? { node: placed.node, x: Math.max(0, pin.x), y: Math.max(0, pin.y), pinned: true }
       : { node: placed.node, x: placed.x, y: placed.y, pinned: false };
@@ -288,8 +307,16 @@ export function editorLayout(
     .map((edge) => {
       const from = boxes.get(edge.from)!;
       const to = boxes.get(edge.to)!;
-      const isBack = to.x <= from.x;
-      return route(edge, `${edge.index}:${edge.from}→${edge.to}`, boxes, metrics, isBack, -metrics.rankGap / 2);
+      const isBack = direction === "vertical" ? to.y <= from.y : to.x <= from.x;
+      return route(
+        edge,
+        `${edge.index}:${edge.from}→${edge.to}`,
+        boxes,
+        metrics,
+        isBack,
+        -metrics.rankGap / 2,
+        direction,
+      );
     });
   const width = nodes.reduce((most, placed) => Math.max(most, placed.x + metrics.nodeW), 0);
   const height = nodes.reduce((most, placed) => Math.max(most, placed.y + metrics.nodeH), 0);

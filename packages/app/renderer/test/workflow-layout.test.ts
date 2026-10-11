@@ -9,7 +9,19 @@
 import { describe, expect, it } from "vitest";
 import { GRAPH_GEOMETRY } from "@orca/design";
 import type { WorkflowView } from "@orca/protocol";
-import { edgeKey, edgePair, findNode, layoutWorkflow, type GraphMetrics } from "../src/workflow/layout.js";
+import {
+  arrowLabel,
+  arrowMove,
+  edgeKey,
+  edgePair,
+  findNode,
+  fromDirection,
+  lattice,
+  layoutWorkflow,
+  stepSelection,
+  toDirection,
+  type GraphMetrics,
+} from "../src/workflow/layout.js";
 import { AI_SDLC, WORKFLOW_VIEWS } from "./fixtures-workflows.js";
 
 /** A unit grid: a 10x10 node, a 10 gap each way, so a layer step is 20 and a rank step 20. */
@@ -335,6 +347,183 @@ describe("ai-sdlc, the graph the issue names", () => {
     for (const placed of layout.nodes) {
       expect(placed.x % GRID, `${placed.node.id} x`).toBe(0);
       expect(placed.y % GRID, `${placed.node.id} y`).toBe(0);
+    }
+  });
+});
+
+describe("top to bottom", () => {
+  /* Unit metrics where the box is wider than it is tall, so a test can tell a layout that
+     turned from one that merely swapped x and y: a 20x10 node, gaps of 10, so a layer step is
+     30 across (horizontal) or 20 down (vertical) and a rank step 20 down or 30 across. */
+  const WIDE: GraphMetrics = { nodeW: 20, nodeH: 10, layerGap: 10, rankGap: 10 };
+  const fan = graph(
+    "s",
+    ["s", "a", "b"],
+    [
+      ["s", "a"],
+      ["s", "b"],
+    ],
+  );
+  const at = (layout: ReturnType<typeof layoutWorkflow>, id: string): [number, number] => {
+    const placed = layout.nodes.find((n) => n.node.id === id)!;
+    return [placed.x, placed.y];
+  };
+
+  it("runs the layers down the canvas and the order across it", () => {
+    const layout = layoutWorkflow(fan, WIDE, "vertical");
+    expect(at(layout, "s")).toEqual([0, 0]);
+    // Layer 1 is a row one layer step down, its two nodes a rank step apart across it.
+    expect(at(layout, "a")).toEqual([0, 20]);
+    expect(at(layout, "b")).toEqual([30, 20]);
+    // The extent is the boxes, not the trailing gap: two columns wide, two rows tall.
+    expect([layout.width, layout.height]).toEqual([50, 30]);
+    // The horizontal layout of the same graph, for the contrast: layers across, order down.
+    const across = layoutWorkflow(fan, WIDE);
+    expect(at(across, "a")).toEqual([30, 0]);
+    expect(at(across, "b")).toEqual([30, 20]);
+    expect([across.width, across.height]).toEqual([50, 30]);
+  });
+
+  it("lays out the same layers, order and back edges either way: only the positions turn", () => {
+    for (const [name, workflow] of Object.entries(WORKFLOW_VIEWS)) {
+      const left = layoutWorkflow(workflow, REAL);
+      const down = layoutWorkflow(workflow, REAL, "vertical");
+      expect(down.layers, name).toBe(left.layers);
+      expect(
+        down.nodes.map((n) => [n.node.id, n.layer, n.order]),
+        name,
+      ).toEqual(left.nodes.map((n) => [n.node.id, n.layer, n.order]));
+      expect(
+        down.edges.map((e) => [e.key, e.isBack]),
+        name,
+      ).toEqual(left.edges.map((e) => [e.key, e.isBack]));
+    }
+  });
+
+  it("attaches a forward edge to the bottom of its source and the top of its target", () => {
+    const layout = layoutWorkflow(fan, WIDE, "vertical");
+    const toB = layout.edges.find((e) => e.pair === edgePair({ from: "s", to: "b" }))!;
+    // Out of s's bottom centre (10, 10), into b's top centre (40, 20), bending vertically.
+    expect(toB.path).toBe("M 10 10 C 10 15, 40 15, 40 20");
+    expect([toB.labelX, toB.labelY]).toEqual([25, 15]);
+    // Left to right, the same edge leaves s's right side half-way down and enters b's left.
+    const across = layoutWorkflow(fan, WIDE).edges.find((e) => e.pair === edgePair({ from: "s", to: "b" }))!;
+    expect(across.path).toBe("M 20 5 C 25 5, 25 25, 30 25");
+  });
+
+  it("routes a back edge out of the left side, through the gutter beside the columns, and still marks it back", () => {
+    const loop = graph(
+      "a",
+      ["a", "b", "c"],
+      [
+        ["a", "b"],
+        ["b", "c"],
+        ["c", "b"],
+      ],
+    );
+    const layout = layoutWorkflow(loop, WIDE, "vertical");
+    const back = layout.edges.find((e) => e.isBack)!;
+    expect(back.pair).toBe(edgePair({ from: "c", to: "b" }));
+    // c is at (0, 40) and b at (0, 20): out of c's left side half-way down, along the gutter
+    // half a rank gap left of the column, and into b's left side. Level segments, never the cubic.
+    expect(back.path).toBe("M 0 45 L -5 45 L -5 25 L 0 25");
+    expect(back.labelX).toBeLessThan(0);
+    // The forward edges never leave by the left: they keep to the bottom and the top.
+    for (const edge of layout.edges.filter((e) => !e.isBack)) expect(edge.path).toContain(" C ");
+  });
+
+  it("turns a nested graph the same way, so a group box reads like the graph that holds it", () => {
+    // `sdlc`'s `parallel` holds two inline branches, each a three-node chain.
+    const branches = WORKFLOW_VIEWS.sdlc!.nodes.find((node) => node.id === "fanout")!.nested!;
+    expect(branches).toHaveLength(2);
+    for (const branch of branches) {
+      const down = layoutWorkflow(branch, REAL, "vertical");
+      const left = layoutWorkflow(branch, REAL);
+      // A chain is a row of three when the graph runs across, and a column of three down.
+      expect([left.width, left.height], branch.id).toEqual([
+        3 * lattice(REAL, "horizontal").layer - REAL.layerGap,
+        REAL.nodeH,
+      ]);
+      expect([down.width, down.height], branch.id).toEqual([
+        REAL.nodeW,
+        3 * lattice(REAL, "vertical").layer - REAL.layerGap,
+      ]);
+      for (const placed of down.nodes) {
+        const twin = left.nodes.find((n) => n.node.id === placed.node.id)!;
+        expect(toDirection(twin, "vertical", REAL), placed.node.id).toEqual({ x: placed.x, y: placed.y });
+      }
+    }
+  });
+
+  it("keeps every node on the 16px grid, as the horizontal layout does", () => {
+    const layout = layoutWorkflow(AI_SDLC, REAL, "vertical");
+    for (const placed of layout.nodes) {
+      expect(placed.x % 16, `${placed.node.id} x`).toBe(0);
+      expect(placed.y % 16, `${placed.node.id} y`).toBe(0);
+    }
+  });
+});
+
+describe("one set of pins for both directions", () => {
+  it("maps the whole horizontal layout exactly onto the vertical one", () => {
+    const left = layoutWorkflow(AI_SDLC, REAL);
+    const down = layoutWorkflow(AI_SDLC, REAL, "vertical");
+    for (const placed of left.nodes) {
+      const twin = down.nodes.find((n) => n.node.id === placed.node.id)!;
+      expect(toDirection(placed, "vertical", REAL), placed.node.id).toEqual({ x: twin.x, y: twin.y });
+      expect(fromDirection(twin, "vertical", REAL), placed.node.id).toEqual({ x: placed.x, y: placed.y });
+    }
+  });
+
+  it("keeps a pin between the lattice points where it was, relative to its neighbours", () => {
+    const step = { h: lattice(REAL, "horizontal"), v: lattice(REAL, "vertical") };
+    // Half a layer past layer 1 and a quarter rank below rank 2, stored horizontally …
+    const pin = { x: 1.5 * step.h.layer, y: 2.25 * step.h.rank };
+    // … is half a layer below layer 1 and a quarter rank right of rank 2 when the graph runs down.
+    expect(toDirection(pin, "vertical", REAL)).toEqual({ x: 2.25 * step.v.rank, y: 1.5 * step.v.layer });
+    // And a drop drawn in the vertical frame goes back to the horizontal frame it is kept in.
+    expect(fromDirection(toDirection(pin, "vertical", REAL), "vertical", REAL)).toEqual(pin);
+    // Horizontal is the frame itself: nothing moves.
+    expect(toDirection(pin, "horizontal", REAL)).toEqual(pin);
+    expect(fromDirection(pin, "horizontal", REAL)).toEqual(pin);
+  });
+});
+
+describe("the arrows point where the selection goes", () => {
+  it("moves along a column with up and down, and across layers with left and right, left to right", () => {
+    expect(arrowMove("down", "horizontal")).toEqual({ axis: "rank", delta: 1 });
+    expect(arrowMove("right", "horizontal")).toEqual({ axis: "layer", delta: 1 });
+    expect(arrowLabel("down", "horizontal")).toBe("Next node in this layer");
+    expect(arrowLabel("left", "horizontal")).toBe("Previous layer");
+  });
+
+  it("moves across layers with up and down, and along a row with left and right, top to bottom", () => {
+    expect(arrowMove("down", "vertical")).toEqual({ axis: "layer", delta: 1 });
+    expect(arrowMove("up", "vertical")).toEqual({ axis: "layer", delta: -1 });
+    expect(arrowMove("right", "vertical")).toEqual({ axis: "rank", delta: 1 });
+    expect(arrowLabel("down", "vertical")).toBe("Next layer");
+    expect(arrowLabel("right", "vertical")).toBe("Next node in this layer");
+  });
+
+  it("steps to the next layer's nearest node, whichever arrow that is", () => {
+    const fan = graph(
+      "s",
+      ["s", "a", "b"],
+      [
+        ["s", "a"],
+        ["s", "b"],
+      ],
+    );
+    for (const direction of ["horizontal", "vertical"] as const) {
+      const layout = layoutWorkflow(fan, UNIT, direction);
+      const s = layout.nodes.find((n) => n.node.id === "s")!;
+      const forward = direction === "horizontal" ? "right" : "down";
+      const along = direction === "horizontal" ? "down" : "right";
+      const a = stepSelection(layout.nodes, s, forward, direction)!;
+      expect(a.node.id, direction).toBe("a");
+      expect(stepSelection(layout.nodes, a, along, direction)!.node.id, direction).toBe("b");
+      // Past the first layer, back is nowhere.
+      expect(stepSelection(layout.nodes, s, direction === "horizontal" ? "left" : "up", direction)).toBeUndefined();
     }
   });
 });
