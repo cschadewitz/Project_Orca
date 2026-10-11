@@ -39,11 +39,16 @@ const BASE: Doc = {
   ],
 };
 
-/** The draft service, in memory: the operations these tests send, applied to a plain document. */
+/**
+ * The draft service, in memory: the operations these tests send, applied to a plain document.
+ * Each batch is one undo step, as in the daemon, so `workflowDrafts.undo` puts back the document
+ * and the layout as they were before it.
+ */
 export function draftBridge(fake: FakeBridge, options: { owner?: string; issues?: DraftIssue[] } = {}) {
-  const doc: Doc = structuredClone(BASE);
+  let doc: Doc = structuredClone(BASE);
   let layout: DraftLayout = { graphs: {} };
   let revision = 0;
+  const undo: { doc: Doc; layout: DraftLayout }[] = [];
   const calls: { method: string; params: Record<string, unknown> }[] = [];
   const you = (options.owner ?? "local") === "local";
 
@@ -59,7 +64,7 @@ export function draftBridge(fake: FakeBridge, options: { owner?: string; issues?
     layout,
     issues: options.issues ?? [],
     dirty: revision > 0,
-    canUndo: you && revision > 0,
+    canUndo: you && undo.length > 0,
     canRedo: false,
     ...(revision > 0 && you
       ? {}
@@ -104,9 +109,17 @@ export function draftBridge(fake: FakeBridge, options: { owner?: string; issues?
       case "workflowDrafts.open":
         return { ok: true, result: view() };
       case "workflowDrafts.apply":
+        undo.push({ doc: structuredClone(doc), layout });
         for (const op of params.ops as DraftOperation[]) apply(op);
         revision += 1;
         return { ok: true, result: view() };
+      case "workflowDrafts.undo": {
+        const step = undo.pop();
+        if (!step) return { ok: false, error: { code: "CONFIG_INVALID", message: "There is nothing to undo." } };
+        ({ doc, layout } = step);
+        revision += 1;
+        return { ok: true, result: view() };
+      }
       case "workflowDrafts.review":
         return {
           ok: true,

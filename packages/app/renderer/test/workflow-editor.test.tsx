@@ -100,6 +100,69 @@ describe("the workflow editor", () => {
     await waitFor(() => expect(drafts.ops()).toEqual([{ op: "removeNode", id: "plan" }]));
   });
 
+  it("rests quiet: the inspector's Delete and Delete edge wear no danger tone", async () => {
+    await openEditor();
+    fireEvent.click(
+      within(screen.getByRole("list", { name: "Nodes, in file order" })).getByRole("button", { name: /plan/ }),
+    );
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+
+    /* Both only edit the draft, which Undo takes back and only Review and publish writes, so
+       they are ordinary buttons: status colour is the only saturation a resting screen
+       carries (the brand book). */
+    const remove = await within(inspector).findByRole("button", { name: "Delete" });
+    expect(remove.className).not.toContain("orca-btn--danger");
+    expect(inspector.querySelector(".orca-btn--danger")).toBeNull();
+
+    fireEvent.click(within(inspector).getByRole("button", { name: "→ done" }));
+    const removeEdge = await within(inspector).findByRole("button", { name: "Delete edge" });
+    expect(removeEdge.className).not.toContain("orca-btn--danger");
+    // Nowhere in the editor at rest: Discard takes the tone only once it is armed.
+    expect(document.querySelector(".orca-btn--danger")).toBeNull();
+  });
+
+  it("deletes from the inspector in one press, into the draft, and ⌘Z brings the node back", async () => {
+    const { canvas, drafts } = await openEditor();
+    fireEvent.click(
+      within(screen.getByRole("list", { name: "Nodes, in file order" })).getByRole("button", { name: /plan/ }),
+    );
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    fireEvent.click(await within(inspector).findByRole("button", { name: "Delete" }));
+
+    // One press is one draft operation: nothing to arm, nothing to confirm, nothing published.
+    await waitFor(() => expect(drafts.ops()).toEqual([{ op: "removeNode", id: "plan" }]));
+    await waitFor(() => expect(inspector.textContent).toContain("This node is removed in the draft."));
+    expect(screen.queryByRole("button", { name: /^(Keep|Confirm)/ })).toBeNull();
+    expect(drafts.calls.some((call) => call.method === "workflowDrafts.publish")).toBe(false);
+
+    act(() => canvas.focus());
+    fireEvent.keyDown(canvas, { key: "z", code: "KeyZ", metaKey: true });
+    await waitFor(() => expect(drafts.calls.map((call) => call.method)).toContain("workflowDrafts.undo"));
+    await waitFor(() => expect(inspector.textContent).not.toContain("This node is removed in the draft."));
+    expect(within(inspector).getByRole("button", { name: "Delete" })).toBeTruthy();
+  });
+
+  it("deletes an edge from the inspector in one press, and Undo puts it back", async () => {
+    const { drafts } = await openEditor();
+    fireEvent.click(
+      within(screen.getByRole("list", { name: "Nodes, in file order" })).getByRole("button", { name: /plan/ }),
+    );
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    fireEvent.click(within(inspector).getByRole("button", { name: "→ done" }));
+    fireEvent.click(await within(inspector).findByRole("button", { name: "Delete edge" }));
+
+    await waitFor(() => expect(drafts.ops()).toEqual([{ op: "removeEdge", index: 1 }]));
+    // The selection goes with the edge, and the nothing-selected inspector counts the graph.
+    await waitFor(() => expect(inspector.textContent).toMatch(/3 nodes, 1 edge/));
+    expect(screen.queryByRole("button", { name: /^(Keep|Confirm)/ })).toBeNull();
+
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Workflow draft" })).getByRole("button", { name: "Undo" }),
+    );
+    await waitFor(() => expect(drafts.calls.map((call) => call.method)).toContain("workflowDrafts.undo"));
+    await waitFor(() => expect(inspector.textContent).toContain("3 nodes, 2 edges"));
+  });
+
   it("reviews the exact diff and publishes it, then returns to the viewer", async () => {
     const { drafts } = await openEditor();
     fireEvent.click(
