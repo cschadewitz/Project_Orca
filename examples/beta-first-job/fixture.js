@@ -37,7 +37,8 @@ const env = Object.fromEntries(
 );
 Object.assign(env, {
   GIT_CONFIG_NOSYSTEM: "1",
-  GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+  // Git for Windows reads /dev/null as the null device too, and refuses NUL as a config path.
+  GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_TERMINAL_PROMPT: "0",
   GIT_AUTHOR_NAME: "Synthetic Fixture",
   GIT_AUTHOR_EMAIL: "fixture@example.invalid",
