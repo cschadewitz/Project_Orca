@@ -56,9 +56,11 @@ describe("the renderer's sources", () => {
   it("knows the shape it is looking for", () => {
     // Lines this branch replaced, and lines that only look like them.
     expect(COUNT.test("{`${graph.edges.length} edges, starting at `}")).toBe(true);
-    expect(COUNT.test("hintMachine: `${workflow.id} · v${workflow.version} · ${workflow.nodeCount} nodes`,")).toBe(true);
+    expect(COUNT.test("hintMachine: `${workflow.id} · v${workflow.version} · ${workflow.nodeCount} nodes`,")).toBe(
+      true,
+    );
     expect(COUNT.test("`${shown} of ${total} decisions`")).toBe(true);
-    expect(COUNT.test("{`${counted(graph.edges.length, \"edge\")}`}")).toBe(false);
+    expect(COUNT.test('{`${counted(graph.edges.length, "edge")}`}')).toBe(false);
     expect(COUNT.test("`v${workflow.version} is current`")).toBe(false);
   });
 
