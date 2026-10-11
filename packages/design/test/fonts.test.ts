@@ -144,6 +144,25 @@ describe("status glyphs", () => {
       );
     }
   });
+
+  test("and the symbol faces carry nothing semantics.json does not render", () => {
+    /* The other direction. A glyph swapped out of semantics.json and left in SYMBOLS — the
+       step's ▭ when it became ◫ — still ships in every install, and the list stops saying
+       what the app draws, which is the one thing a reader of build-fonts.js trusts it for. */
+    const build = readFileSync(join(here, "..", "..", "..", "tools", "font-build", "build-fonts.js"), "utf8");
+    const bundled = [...build.matchAll(/^const SYMBOLS(?:_MATH)? = chars\(([\s\S]*?)^\);/gm)].flatMap((list) =>
+      [...list[1]!.matchAll(/^\s*0x([0-9a-f]+),/gm)].map((cp) => String.fromCodePoint(Number.parseInt(cp[1]!, 16))),
+    );
+    assert.ok(bundled.length > 0, "found no SYMBOLS or SYMBOLS_MATH list in build-fonts.js");
+    const rendered = glyphs(semantics);
+    const unused = bundled.filter((glyph) => !rendered.has(glyph));
+    assert.deepEqual(
+      unused,
+      [],
+      `build-fonts.js subsets ${unused.join(" ")} into a symbol face, and semantics.json renders none of them. ` +
+        `Take them out and rerun pnpm run design:fonts.`,
+    );
+  });
 });
 
 describe("object kind glyphs", () => {

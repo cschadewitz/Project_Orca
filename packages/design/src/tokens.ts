@@ -314,7 +314,7 @@ export const OBJECT_KIND_PRESENTATION: Record<ObjectKind, { prefix: string; word
   run: { prefix: 'run', word: 'run', glyph: '☰' },
   workItem: { prefix: 'wi', word: 'work item', glyph: '⬡' },
   request: { prefix: 'req', word: 'request', glyph: '❝' },
-  step: { prefix: 'step', word: 'step', glyph: '▭' },
+  step: { prefix: 'step', word: 'step', glyph: '◫' },
   gate: { prefix: 'hi', word: 'gate', glyph: '⊓' },
   event: { prefix: 'evt', word: 'event', glyph: '✦' },
 };

@@ -103,7 +103,7 @@ They are joined by the **object header**, which is present on every screen that 
 and is the only breadcrumb in the app:
 
 ```
-❝ 5BNH42  ▸  Database schema ⬡ 5M579G  ▸  Database schema ☰ JH7X8P  ▸  design (attempt 2) ▭ C6SE2Q
+❝ 5BNH42  ▸  Database schema ⬡ 5M579G  ▸  Database schema ☰ JH7X8P  ▸  design (attempt 2) ◫ C6SE2Q
  request          work item                     run                         step
 ```
 

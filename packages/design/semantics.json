@@ -166,8 +166,8 @@
     "step": {
       "prefix": "step",
       "word": "step",
-      "glyph": "▭",
-      "note": "One box of a run's sequence. Thin at mono-id size; legible beside the tail, which carries the identity."
+      "glyph": "◫",
+      "note": "A box split in two: one step of a run's sequence, with the next beside it. Not ▭ (U+25AD), the plain rectangle, which is less than a third as tall as it is wide and at mono-id size reads as a dash in front of the tail."
     },
     "gate": {
       "prefix": "hi",

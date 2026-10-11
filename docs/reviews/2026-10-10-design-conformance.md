@@ -136,8 +136,9 @@ changelog fragment.
     exception to "not in a tooltip", `30-long-running-content.md`), in the object header's
     new **Copy id**, in the detail pane (`variant="full"`) and in the palette's matching.
   - Six kind glyphs in `semantics.json`'s `objectKind`, bundled and never a status: `☰` run
-    and `⬡` work item reuse their surfaces' rail glyphs on purpose; `❝` request, `▭` step,
-    `⊓` gate and `✦` event are new.
+    and `⬡` work item reuse their surfaces' rail glyphs on purpose; `❝` request, `◫` step,
+    `⊓` gate and `✦` event are new. The step's was first `▭`, the plain rectangle, which at
+    `mono-id` size read as a dash; it is the split square, from the same Noto face.
   - Call sites: the claimed-work rows, the Plan table's request and claim columns (now
     `col-id`), the Plan rail's request filters and inspector, the Runs crumbs, palette labels
     and danger confirmations (the name and the token via `labelMachine`, the whole id as
