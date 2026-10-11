@@ -23,12 +23,14 @@
 import {
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
   type DragEvent as ReactDragEvent,
   type JSX,
   type PointerEvent as ReactPointerEvent,
+  type Ref,
 } from "react";
 import { GRAPH_GEOMETRY } from "@orca/design";
 import type { DraftGraphPath, DraftIssue, DraftLayout } from "@orca/protocol";
@@ -65,6 +67,11 @@ export const NODE_TYPE_MIME = "application/x-orca-workflow-node";
 
 export type EditorSelection = { kind: "node"; id: string } | { kind: "edge"; index: number };
 
+export interface CanvasHandle {
+  /** Put keyboard focus on the canvas's one tab stop: where Delete, the arrows and ⌘Z are. */
+  focus(): void;
+}
+
 export interface EditorCanvasProps {
   graph: EditorGraph;
   layout: DraftLayout;
@@ -89,6 +96,8 @@ export interface EditorCanvasProps {
   onRedo: () => void;
   /** How the viewport is measured. The document by default; a test injects a size. */
   measure?: ViewportMeasurer;
+  /** The editor's hold on the canvas: where it puts focus after a delete from the inspector. */
+  ref?: Ref<CanvasHandle>;
 }
 
 interface Drag {
@@ -120,6 +129,18 @@ export function EditorCanvas(props: EditorCanvasProps): JSX.Element {
   );
   const canvas = useCanvasView({ scope: "workflow-edit", content, panStep: PAN_STEP, measure: props.measure });
   const scale = canvas.view.scale;
+  /* The viewport is the canvas view's (it measures and clips it) and the editor's focus target
+     after a delete from the inspector, so one stable ref feeds both. */
+  const viewport = useRef<HTMLDivElement | null>(null);
+  const { ref: viewRef } = canvas;
+  const viewportRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      viewport.current = element;
+      viewRef(element);
+    },
+    [viewRef],
+  );
+  useImperativeHandle(props.ref, () => ({ focus: () => viewport.current?.focus() }), []);
   // Turning the graph puts the view back at rest, as on the viewer.
   const { rest, panBy } = canvas;
   const turned = useRef(direction);
@@ -400,7 +421,7 @@ export function EditorCanvas(props: EditorCanvasProps): JSX.Element {
     <div className="orca-wfcanvas orca-wfedit__canvas" data-direction={direction}>
       <div className="orca-wfcanvas__stage">
         <div
-          ref={canvas.ref}
+          ref={viewportRef}
           className={`orca-wfcanvas__viewport${dropTarget === "canvas" ? " orca-wfedit__viewport--drop" : ""}`}
           {...scopeProps("workflow-edit")}
           role="listbox"

@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { DraftIssue } from "@orca/protocol";
 import { GRAPH_GEOMETRY } from "@orca/design";
-import { NODE_TYPE_MIME } from "../src/workflow/editor/editor-canvas.js";
+import { NODE_TYPE_MIME, editorNodeDomId } from "../src/workflow/editor/editor-canvas.js";
 import { fromDirection, type GraphMetrics, type LayoutDirection } from "../src/workflow/layout.js";
 import { harness, installBridge, renderChrome, stubMatchMedia } from "./harness.js";
 import { draftBridge } from "./fixtures-workflow-drafts.js";
@@ -23,6 +23,12 @@ const EDIT_METRICS: GraphMetrics = {
 };
 
 const teardown: (() => void)[] = [];
+
+/** A person's press: focus, then click. happy-dom does not move focus on a click as a browser does. */
+const press = (button: HTMLElement): void => {
+  act(() => button.focus());
+  fireEvent.click(button);
+};
 beforeEach(() => stubMatchMedia(1440));
 afterEach(() => {
   cleanup();
@@ -133,6 +139,11 @@ describe("the workflow editor", () => {
     act(() => canvas.focus());
     fireEvent.keyDown(canvas, { key: "Delete", code: "Delete" });
     await waitFor(() => expect(drafts.ops()).toEqual([{ op: "removeNode", id: "plan" }]));
+    /* The list closes up under the person: the selection is the node after it in file order,
+       the canvas's active descendant, so a screen reader says where they now are. Focus was
+       on the canvas and stays there. */
+    await waitFor(() => expect(canvas.getAttribute("aria-activedescendant")).toBe(editorNodeDomId("done")));
+    expect(document.activeElement).toBe(canvas);
   });
 
   it("rests quiet: the inspector's Delete and Delete edge wear no danger tone", async () => {
@@ -162,40 +173,78 @@ describe("the workflow editor", () => {
       within(screen.getByRole("list", { name: "Nodes, in file order" })).getByRole("button", { name: /plan/ }),
     );
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
-    fireEvent.click(await within(inspector).findByRole("button", { name: "Delete" }));
+    press(await within(inspector).findByRole("button", { name: "Delete" }));
 
     // One press is one draft operation: nothing to arm, nothing to confirm, nothing published.
     await waitFor(() => expect(drafts.ops()).toEqual([{ op: "removeNode", id: "plan" }]));
-    await waitFor(() => expect(inspector.textContent).toContain("This node is removed in the draft."));
+    const plan = (): Element => canvas.querySelector('[data-node-id="plan"] .orca-node')!;
+    await waitFor(() => expect(plan().className).toContain("orca-node--removed"));
     expect(screen.queryByRole("button", { name: /^(Keep|Confirm)/ })).toBeNull();
     expect(drafts.calls.some((call) => call.method === "workflowDrafts.publish")).toBe(false);
 
-    act(() => canvas.focus());
+    /* The Delete that was focused went with the node. Focus is on the canvas, not the page
+       body, and the selection is the node after it in file order: what the inspector now
+       shows, and what the canvas names as its active descendant. */
+    expect(document.activeElement).toBe(canvas);
+    expect(canvas.getAttribute("aria-activedescendant")).toBe(editorNodeDomId("done"));
+    expect(within(inspector).getByTitle("done")).toBeTruthy();
+
+    // ⌘Z is the canvas's, where focus already is.
     fireEvent.keyDown(canvas, { key: "z", code: "KeyZ", metaKey: true });
     await waitFor(() => expect(drafts.calls.map((call) => call.method)).toContain("workflowDrafts.undo"));
-    await waitFor(() => expect(inspector.textContent).not.toContain("This node is removed in the draft."));
-    expect(within(inspector).getByRole("button", { name: "Delete" })).toBeTruthy();
+    await waitFor(() => expect(plan().className).not.toContain("orca-node--removed"));
   });
 
-  it("deletes an edge from the inspector in one press, and Undo puts it back", async () => {
-    const { drafts } = await openEditor();
+  it("moves to the node before when the inspector deletes the last one in file order", async () => {
+    const { canvas, drafts } = await openEditor();
+    fireEvent.click(
+      within(screen.getByRole("list", { name: "Nodes, in file order" })).getByRole("button", { name: /done/ }),
+    );
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    press(await within(inspector).findByRole("button", { name: "Delete with its connections" }));
+
+    await waitFor(() => expect(drafts.ops()).toEqual([{ op: "removeNode", id: "done", detach: true }]));
+    await waitFor(() => expect(canvas.getAttribute("aria-activedescendant")).toBe(editorNodeDomId("plan")));
+    expect(document.activeElement).toBe(canvas);
+  });
+
+  it("deletes an edge from the inspector in one press, lands on the node it left, and Undo puts it back", async () => {
+    const { canvas, drafts } = await openEditor();
     fireEvent.click(
       within(screen.getByRole("list", { name: "Nodes, in file order" })).getByRole("button", { name: /plan/ }),
     );
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
     fireEvent.click(within(inspector).getByRole("button", { name: "→ done" }));
-    fireEvent.click(await within(inspector).findByRole("button", { name: "Delete edge" }));
+    press(await within(inspector).findByRole("button", { name: "Delete edge" }));
 
     await waitFor(() => expect(drafts.ops()).toEqual([{ op: "removeEdge", index: 1 }]));
-    // The selection goes with the edge, and the nothing-selected inspector counts the graph.
-    await waitFor(() => expect(inspector.textContent).toMatch(/3 nodes, 1 edge/));
+    /* The edge and its inspector are gone. The selection is the node the edge left from, whose
+       connections no longer list it, and focus is on the canvas rather than the page body. */
+    await waitFor(() => expect(canvas.getAttribute("aria-activedescendant")).toBe(editorNodeDomId("plan")));
+    expect(document.activeElement).toBe(canvas);
+    expect(within(inspector).getByText("Nothing follows this node yet.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^(Keep|Confirm)/ })).toBeNull();
 
     fireEvent.click(
       within(screen.getByRole("group", { name: "Workflow draft" })).getByRole("button", { name: "Undo" }),
     );
     await waitFor(() => expect(drafts.calls.map((call) => call.method)).toContain("workflowDrafts.undo"));
-    await waitFor(() => expect(inspector.textContent).toContain("3 nodes, 2 edges"));
+    await waitFor(() => expect(within(inspector).getByRole("button", { name: "→ done" })).toBeTruthy());
+  });
+
+  it("leaves focus where a person moved it while a delete was out", async () => {
+    const { canvas, drafts } = await openEditor();
+    const outline = screen.getByRole("list", { name: "Nodes, in file order" });
+    fireEvent.click(within(outline).getByRole("button", { name: /plan/ }));
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    press(await within(inspector).findByRole("button", { name: "Delete" }));
+    // Before the daemon answers, the person is already in the outline.
+    const elsewhere = within(outline).getByRole("button", { name: /start/ });
+    act(() => elsewhere.focus());
+
+    await waitFor(() => expect(drafts.ops()).toEqual([{ op: "removeNode", id: "plan" }]));
+    await waitFor(() => expect(canvas.getAttribute("aria-activedescendant")).toBe(editorNodeDomId("done")));
+    expect(document.activeElement).toBe(elsewhere);
   });
 
   it("reviews the exact diff and publishes it, then returns to the viewer", async () => {

@@ -26,9 +26,9 @@ import { useAnnounce } from "../../a11y/announce-context.js";
 import { diffText, gutterFor } from "../../artifacts/diff.js";
 import { PaneSplitter } from "../../chrome/pane-splitter.js";
 import { useWritability } from "../../chrome/use-connection.js";
-import { Button, StateView, Text, textClass } from "../../ui/index.js";
+import { Button, StateView, Text, focusAfterLeaving, textClass } from "../../ui/index.js";
 import { changeCount, editorGraph, freshId, issuesAt, nestedSteps, newNode, type EditorGraph } from "./draft-model.js";
-import { EditorCanvas, type EditorSelection } from "./editor-canvas.js";
+import { EditorCanvas, type CanvasHandle, type EditorSelection } from "./editor-canvas.js";
 import { EditorInspector, type InspectorHandle } from "./editor-inspector.js";
 import { EditorSidebar, ValidationPanel, type PaletteHandle } from "./editor-panels.js";
 import { useWorkflowDraft } from "./use-workflow-draft.js";
@@ -88,6 +88,7 @@ function Editor({
   const workflows = useWorkflowIds();
   const inspector = useRef<InspectorHandle>(null);
   const palette = useRef<PaletteHandle>(null);
+  const canvas = useRef<CanvasHandle>(null);
 
   /* A path into a graph the draft no longer has - its container was deleted or undone away -
      falls back to the nearest graph that still exists. */
@@ -160,9 +161,28 @@ function Editor({
     );
   };
 
+  /*
+   * Delete — the canvas's Delete key and the inspector's Delete, Delete with its connections
+   * and Delete edge alike. Each is one draft operation, which ⌘Z takes back, so none of them
+   * asks (docs/design/70-workflow-editing.md).
+   *
+   * **Where the selection and focus go.** The node or edge goes, and so does the inspector
+   * control that deleted it, which would drop keyboard focus to the page body. So the
+   * selection moves to a neighbour — after a node, the node after it in file order, or the one
+   * before when it was the last (`focusAfterLeaving`, the claims list's and the policy
+   * panel's rule, over the outline's order); after an edge, the node it left from — and focus
+   * goes to the canvas, the one tab stop where Delete, the arrows and ⌘Z are, whose active
+   * descendant then names that neighbour. Focus moves only when the delete took it with it
+   * (it was in the inspector, or has already fallen to the body): from the canvas's own
+   * Delete key it is already there, and focus a person moved elsewhere while the operation
+   * was out stays where they put it.
+   */
   const remove = (detach: boolean) => {
+    const live = graph.nodes.filter((node) => node.state !== "removed").map((node) => node.id);
     if (selection?.kind === "edge") {
-      void apply([{ op: "removeEdge", index: selection.index }]).then((ok) => ok && setSelection(undefined));
+      const edge = graph.edges.find((e) => e.index === selection.index);
+      const from = edge !== undefined && live.includes(edge.from) ? edge.from : undefined;
+      void apply([{ op: "removeEdge", index: selection.index }]).then((ok) => ok && landAfterDelete(from));
       return;
     }
     if (!selectedNode || selectedNode.state === "removed") return;
@@ -170,9 +190,18 @@ function Editor({
       announce("The start node stays. Connect it to something else instead.");
       return;
     }
-    void apply([{ op: "removeNode", id: selectedNode.id, ...(detach ? { detach: true } : {}) }]).then(
-      (ok) => ok && setSelection(undefined),
+    const gone = selectedNode.id;
+    const rest = live.filter((id) => id !== gone);
+    const at = focusAfterLeaving(live, rest, gone);
+    void apply([{ op: "removeNode", id: gone, ...(detach ? { detach: true } : {}) }]).then(
+      (ok) => ok && landAfterDelete(at === undefined ? undefined : rest[at]),
     );
+  };
+
+  const landAfterDelete = (next: string | undefined) => {
+    const active = document.activeElement;
+    if (active === null || active === document.body || inspector.current?.holdsFocus()) canvas.current?.focus();
+    setSelection(next === undefined ? undefined : { kind: "node", id: next });
   };
 
   const reorder = (delta: -1 | 1) => {
@@ -370,6 +399,7 @@ function Editor({
           />
           <div className="orca-wfedit__main">
             <EditorCanvas
+              ref={canvas}
               graph={graph}
               layout={draft.layout}
               path={path}
@@ -410,6 +440,7 @@ function Editor({
             workflows={workflows}
             onApply={apply}
             onSelect={setSelection}
+            onDelete={remove}
             onOpenNested={openNested}
           />
         </div>

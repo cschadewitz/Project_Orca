@@ -34,6 +34,8 @@ export interface InspectorHandle {
   focusName(): void;
   /** C: open the "connect to" menu for the selected node. */
   openConnect(): void;
+  /** Whether keyboard focus is inside the inspector — on a control a selection change takes away. */
+  holdsFocus(): boolean;
 }
 
 export interface EditorInspectorProps {
@@ -50,6 +52,11 @@ export interface EditorInspectorProps {
   workflows: readonly string[];
   onApply: (ops: DraftOperation[]) => Promise<boolean>;
   onSelect: (selection: EditorSelection | undefined) => void;
+  /**
+   * Delete the selection — the node or edge this inspector is showing — the way the canvas's
+   * Delete key does, so both leave the selection and focus in the same place.
+   */
+  onDelete: (detach: boolean) => void;
   onOpenNested: (step: { node: string; branch?: string; forEach?: true }) => void;
 }
 
@@ -146,6 +153,7 @@ export const EditorInspector = forwardRef<InspectorHandle, EditorInspectorProps>
   function EditorInspector(props, ref): JSX.Element {
     const { selection, graph } = props;
     const nameInput = useRef<HTMLInputElement>(null);
+    const aside = useRef<HTMLElement>(null);
     const [connectOpen, setConnectOpen] = useState(false);
     useImperativeHandle(
       ref,
@@ -155,6 +163,7 @@ export const EditorInspector = forwardRef<InspectorHandle, EditorInspectorProps>
           nameInput.current?.select();
         },
         openConnect: () => setConnectOpen(true),
+        holdsFocus: () => aside.current?.contains(document.activeElement) ?? false,
       }),
       [],
     );
@@ -163,7 +172,7 @@ export const EditorInspector = forwardRef<InspectorHandle, EditorInspectorProps>
     const edge = selection?.kind === "edge" ? graph.edges.find((e) => e.index === selection.index) : undefined;
 
     return (
-      <aside className="orca-inspector orca-wfedit__inspector" aria-label="Inspector">
+      <aside ref={aside} className="orca-inspector orca-wfedit__inspector" aria-label="Inspector">
         {node ? (
           <NodeInspector
             {...props}
@@ -193,6 +202,7 @@ function NodeInspector({
   workflows,
   onApply,
   onSelect,
+  onDelete,
   onOpenNested,
   nameRef,
   connectOpen,
@@ -389,17 +399,16 @@ function NodeInspector({
                   confirms only an act with no way back (docs/design/60-implementation.md), and
                   in this editor that act is Discard, which asks. Red on every resting inspector
                   was saturation no status put there (the brand book's Colour); the danger tone
-                  is for the control that commits, like the armed Discard every change. */}
+                  is for the control that commits, like the armed Discard every change.
+                  Both go through the editor's delete, the canvas Delete key's: the button goes
+                  with the node, so the selection moves to the next node and focus to the canvas
+                  rather than falling to the page body (`workflow-editor.tsx`). */}
               {!removed && node.id !== graph.start && (
                 <>
-                  <Button size="sm" onClick={() => void onApply([{ op: "removeNode", id: node.id }])}>
+                  <Button size="sm" onClick={() => onDelete(false)}>
                     Delete
                   </Button>
-                  <Button
-                    size="sm"
-                    tone="ghost"
-                    onClick={() => void onApply([{ op: "removeNode", id: node.id, detach: true }])}
-                  >
+                  <Button size="sm" tone="ghost" onClick={() => onDelete(true)}>
                     Delete with its connections
                   </Button>
                 </>
@@ -421,7 +430,7 @@ function EdgeInspector({
   issues,
   readOnly,
   onApply,
-  onSelect,
+  onDelete,
 }: EditorInspectorProps & { edgeIndex: number }): JSX.Element {
   const edge = graph.edges.find((e) => e.index === edgeIndex)!;
   const at = `${yamlPrefix}edges[${edge.index}]`;
@@ -495,15 +504,11 @@ function EdgeInspector({
           )}
         </ConfigField>
         {/* Quiet like the node's Delete: it takes the edge out of the draft, which Undo puts
-            back and only Review and publish writes. */}
+            back and only Review and publish writes. The selection moves to the node the edge
+            left from, and focus to the canvas, as the node's Delete does. */}
         {!readOnly && (
           <div className="orca-wfedit__row">
-            <Button
-              size="sm"
-              onClick={() =>
-                void onApply([{ op: "removeEdge", index: edge.index }]).then((ok) => ok && onSelect(undefined))
-              }
-            >
+            <Button size="sm" onClick={() => onDelete(false)}>
               Delete edge
             </Button>
           </div>
