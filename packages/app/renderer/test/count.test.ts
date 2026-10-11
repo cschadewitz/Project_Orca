@@ -11,30 +11,30 @@ import { NBSP, counted, countedOf, unit } from "../src/ui/count.js";
 
 describe("a count and its noun", () => {
   it("joins them with a no-break space, never an ordinary one", () => {
-    expect(NBSP).toBe(" ");
-    expect(counted(4, "change")).toBe("4 changes");
+    expect(NBSP).toBe("\u00a0");
+    expect(counted(4, "change")).toBe("4\u00a0changes");
     expect(counted(4, "change")).not.toContain(" ");
-    expect(unit("+2", "added")).toBe("+2 added");
+    expect(unit("+2", "added")).toBe("+2\u00a0added");
   });
 
   it("agrees: one is singular, every other number is plural", () => {
-    expect(counted(1, "edge")).toBe("1 edge");
-    expect(counted(0, "edge")).toBe("0 edges");
-    expect(counted(2, "edge")).toBe("2 edges");
-    expect(counted(1, "entry", "entries")).toBe("1 entry");
-    expect(counted(3, "entry", "entries")).toBe("3 entries");
+    expect(counted(1, "edge")).toBe("1\u00a0edge");
+    expect(counted(0, "edge")).toBe("0\u00a0edges");
+    expect(counted(2, "edge")).toBe("2\u00a0edges");
+    expect(counted(1, "entry", "entries")).toBe("1\u00a0entry");
+    expect(counted(3, "entry", "entries")).toBe("3\u00a0entries");
   });
 
   it("says a narrowed list as one unit, agreeing with the total", () => {
-    expect(countedOf(9, 9, "item")).toBe("9 items");
-    expect(countedOf(3, 9, "item")).toBe("3 of 9 items");
-    expect(countedOf(0, 1, "decision")).toBe("0 of 1 decision");
+    expect(countedOf(9, 9, "item")).toBe("9\u00a0items");
+    expect(countedOf(3, 9, "item")).toBe("3\u00a0of\u00a09\u00a0items");
+    expect(countedOf(0, 1, "decision")).toBe("0\u00a0of\u00a01\u00a0decision");
   });
 
   it("leaves the separators between units breakable", () => {
     const line = [counted(1, "error"), counted(2, "warning"), counted(0, "note")].join(" · ");
     // The only ordinary spaces are around the separators: a line breaks there or nowhere.
-    expect(line.split(" ")).toEqual(["1 error", "·", "2 warnings", "·", "0 notes"]);
+    expect(line.split(" ")).toEqual(["1\u00a0error", "·", "2\u00a0warnings", "·", "0\u00a0notes"]);
   });
 });
 

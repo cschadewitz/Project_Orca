@@ -13,11 +13,11 @@
  *   `aria-label`, a menu hint, the live region.
  *
  * A screen reader reads U+00A0 as a space, and a test that matches the text has to match it
- * as well (` ` in a string, `\s` in a regular expression).
+ * as well (`\u00a0` in a string, `\s` in a regular expression).
  */
 
 /** U+00A0. Between a number and its word; nowhere a line is meant to be able to break. */
-export const NBSP = " ";
+export const NBSP = "\u00a0";
 
 /** A number and the word after it as one unit: `unit(3, "waiting")`, `unit("+2", "added")`. */
 export function unit(count: number | string, word: string): string {

@@ -99,7 +99,7 @@ describe("a bar", () => {
     );
     const bar = screen.getByRole("group", { name: "Unsaved configuration changes" });
     // The count is one unit and is not the part that is cut.
-    const count = within(bar).getByText("4 changes", { normalizer: (text) => text });
+    const count = within(bar).getByText("4\u00a0changes", { normalizer: (text) => text });
     expect(count.className).not.toContain("orca-truncate");
     // The sentences are, each whole in its title.
     const sentence = within(bar).getByText(note);

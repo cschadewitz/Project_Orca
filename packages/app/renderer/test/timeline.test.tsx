@@ -209,7 +209,7 @@ describe("the event timeline", () => {
     await waitFor(() => expect(cursor()).toBe(`as of event ${EVENT_COUNT + 6}`));
     // One row for the batch, not one per update — the daemon coalesced it on purpose, and
     // the count is of events rather than of rows.
-    expect(entries()[entries().length - 1]!.textContent).toContain("6 agent updates");
+    expect(entries()[entries().length - 1]!.textContent).toContain("6\u00a0agent updates");
     expect(count()).toBe(`${PAGE + 7}\u00a0events`);
   });
 

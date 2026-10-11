@@ -70,7 +70,7 @@ describe("the labels", () => {
   it("counts agents and hosts, singular and plural", () => {
     expect(countLabel(4, 2)).toBe("4\u00a0agents on 2\u00a0hosts");
     expect(countLabel(1, 1)).toBe("1\u00a0agent on 1\u00a0host");
-    expect(countLabel(0, 0)).toBe("0 agents on 0 hosts");
+    expect(countLabel(0, 0)).toBe("0\u00a0agents on 0\u00a0hosts");
   });
 
   it("names a transport it knows and says nothing about one it does not", () => {
