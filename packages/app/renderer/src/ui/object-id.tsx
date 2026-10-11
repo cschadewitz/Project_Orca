@@ -136,8 +136,10 @@ export function IdToken({
 export function MachineText({ text, className }: { text: string; className?: string }): JSX.Element {
   const token = parseIdText(text);
   if (token !== undefined) {
+    /* The wrapper takes the caller's class and the type that class is noted with, as the
+       plain string below does: a menu's `.orca-menu__machine` expects `mono-id`. */
     return (
-      <span className={className}>
+      <span className={[textClass("mono-id"), className].filter(Boolean).join(" ")}>
         <IdToken kind={token.kind} tail={token.tail} faint />
       </span>
     );

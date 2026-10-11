@@ -13,6 +13,7 @@
  */
 import { useState, type JSX, type ReactNode } from "react";
 import {
+  CHROME_GLYPHS,
   CONNECTION_PRESENTATION,
   RUN_STATUSES,
   SCHEDULE_CLASSES,
@@ -31,6 +32,8 @@ import {
   Duration,
   GraphMinimap,
   KeyValueList,
+  MachineText,
+  Menu,
   ObjectHeader,
   ObjectId,
   REST,
@@ -44,11 +47,20 @@ import {
   ZOOM_MAX,
   ZOOM_MIN,
   ZOOM_STOPS,
+  counted,
+  idText,
   textClass,
+  unit,
   type CanvasView,
+  type MenuItem,
   type MinimapNode,
+  type TrailMeasurer,
 } from "../ui/index.js";
+import { DraftBar } from "../config/draft-bar.js";
 import type { LayoutDirection } from "../workflow/layout.js";
+/* The armed row is the claims list's, not a primitive (component-api.d.ts, "Confirming in
+   place"), so its picture below is drawn with that surface's own classes. */
+import "../agents/agents.css";
 import "./preview.css";
 
 /* Derived, never re-declared: the design system owns the list of states. */
@@ -155,6 +167,11 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
           <ObjectId id="wi_01M4M899VKJZRZSBHNDY5M579G" name="Database schema" />
           <ObjectId id="run_cae154fb-f778-47ba-ae71-bb4df6bb09e1" name="Export invoices as CSV" />
           <ObjectId id="req_01M4M896DER1YQSTMV3G5BNH42" />
+          {/* On a crumb: always faint, after the name and the type label. */}
+          <span className={textClass("label")}>
+            Database schema <span className={textClass("eyebrow")}>RUN</span>{" "}
+            <ObjectId id="run_01M4M8A1WDAQMMX98Q6KJH7X8P" variant="header" />
+          </span>
           <ObjectId id="run_01M4M8A1WDAQMMX98Q6KJH7X8P" variant="full" />
         </div>
       </Section>
@@ -177,7 +194,9 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
         <div className="preview__row">
           <Button>Default</Button>
           <Button tone="primary">Primary</Button>
-          <Button tone="danger">Cancel run</Button>
+          {/* The danger tone is the control that commits an act with no way back, led by its
+              glyph — never a control at rest (RULES.md rule 17). */}
+          <Button tone="danger">{`${CHROME_GLYPHS.danger} Confirm release`}</Button>
           <Button tone="ghost">Ghost</Button>
           <Button size="sm">Small</Button>
           <Button size="lg">Large</Button>
@@ -254,6 +273,40 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
         <div className="preview__pane">
           <ObjectHeaderDemo />
         </div>
+        {/* The same trail in a pane too narrow for it: the middle folds into `…`, nearest the
+            root first, and the root and the current crumb stay. The widths are injected so the
+            gallery folds at any window size, as the elision tests do. */}
+        <div className="preview__pane">
+          <ObjectHeaderDemo measure={NARROW_TRAIL} />
+        </div>
+      </Section>
+
+      <Section title="Menus">
+        {/* A real `Menu` (press it), and the same items drawn open with the menu's own classes,
+            so each theme shows every kind of item at once: a counterpart with its one-word
+            `hint`, a run named by its `labelId` token, machine text as `hintMachine` (mono,
+            never uppercased), the `note` a sentence goes in, and a `danger` item, led by its
+            glyph, listed last and never where focus lands. It stands on surface-raised. */}
+        <div className="preview__row">
+          <Menu
+            label="Database schema"
+            items={MENU_ITEMS}
+            onChoose={noop}
+            note={MENU_NOTE}
+            triggerClassName={`orca-btn orca-btn--sm ${textClass("caption")}`}
+          >
+            Open the menu
+          </Menu>
+        </div>
+        <MenuPicture />
+      </Section>
+
+      <Section title="Confirming in place">
+        <ArmedRowPicture />
+      </Section>
+
+      <Section title="Text that does not fit">
+        <TextThatDoesNotFit />
       </Section>
 
       <Section title="Graph canvas controls">
@@ -325,11 +378,151 @@ const STATE_TITLES: Record<
   },
 };
 
-function ObjectHeaderDemo(): JSX.Element {
+/* A trail that needs 720px in a 420px room: two middle crumbs fold, as they would beside the
+   docked panel. Natural widths in chain order (request, work item, run, step). */
+const NARROW_TRAIL: TrailMeasurer = () => ({ available: 420, crumbs: [96, 200, 240, 184], elision: 24, gap: 8 });
+
+const MENU_ITEMS: readonly MenuItem[] = [
+  { id: "runs", label: "Runs that attempted this", hint: "run" },
+  { id: "run", label: "Nightly build", labelId: "run_01M4M8A1WDAQMMX98Q6KJH7X8P" },
+  { id: "link", label: "Copy link", hintMachine: "orca://item/seed-rate-limit" },
+  { id: "id", label: "Copy id", hintMachine: idText("wi_01M4M899VKJZRZSBHNDY5M579G") },
+  { id: "release", label: "Release claim", danger: true },
+];
+const MENU_NOTE = "Nightly build holds this item, and another run may claim it once it is released.";
+
+/**
+ * The menu above, open, drawn with `Menu`'s own markup and classes: a gallery cannot hold a
+ * real menu open in two theme columns, because an open menu takes focus.
+ */
+function MenuPicture(): JSX.Element {
+  return (
+    <div className="preview__menu">
+      <ul className="orca-menu" role="presentation">
+        <li className={`orca-menu__note ${textClass("caption")}`}>{MENU_NOTE}</li>
+        {MENU_ITEMS.map((item) => (
+          <li key={item.id}>
+            <span className={`orca-menu__item${item.danger ? " orca-menu__item--danger" : ""} ${textClass("label")}`}>
+              {item.danger ? (
+                <span className="orca-menu__glyph" aria-hidden="true">
+                  {CHROME_GLYPHS.danger}
+                </span>
+              ) : null}
+              {item.labelId === undefined ? (
+                <span>{item.label}</span>
+              ) : (
+                <ObjectId id={item.labelId} name={item.label} />
+              )}
+              {item.hintMachine !== undefined ? (
+                <MachineText text={item.hintMachine} className="orca-menu__machine" />
+              ) : item.hint === undefined ? null : (
+                <span className={`orca-menu__type ${textClass("eyebrow")}`}>{item.hint}</span>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * A destructive act with no way back, confirmed on its own row: the claims list's two states
+ * (`ClaimRow` in agents/agents-surface.tsx), drawn with that surface's classes because the
+ * pattern is not a primitive yet. At rest the control is quiet; armed, the row's edge takes the
+ * danger tone, **Keep** comes first (where focus lands), **Confirm release** commits, and the
+ * row's declared second line says what releasing does.
+ */
+function ArmedRowPicture(): JSX.Element {
+  const item = "wi_01M4M899VKJZRZSBHNDY5M579G";
+  const run = "run_01M4M8A1WDAQMMX98Q6KJH7X8P";
+  const consequence = `Database schema goes back to the scheduler. ${idText(run)} loses its claim on it, and another run may claim it.`;
+  const row = (armed: boolean): JSX.Element => (
+    <li
+      className={`orca-agents__claim${armed ? " orca-agents__claim--note orca-agents__claim--armed" : ""}`}
+      key={String(armed)}
+    >
+      <span className={`orca-agents__claim-title ${textClass("label")}`}>
+        <ObjectId id={item} name="Database schema" />
+      </span>
+      <StatusChip status="succeeded" aligned />
+      <span className={`orca-agents__claim-run ${textClass("label")}`}>
+        <ObjectId id={run} name="Nightly build" />
+      </span>
+      {armed ? (
+        <span role="group" className="orca-agents__claim-ask" aria-label="Release Database schema?">
+          <Button size="sm">Keep</Button>
+          <Button size="sm" tone="danger">
+            <span className="orca-agents__claim-glyph" aria-hidden="true">
+              {CHROME_GLYPHS.danger}
+            </span>
+            Confirm release
+          </Button>
+        </span>
+      ) : (
+        <Button size="sm">Release</Button>
+      )}
+      {armed && (
+        <span
+          className={`orca-agents__claim-note orca-agents__claim-consequence ${textClass("caption")}`}
+          title={consequence}
+        >
+          Database schema goes back to the scheduler. <MachineText text={idText(run)} /> loses its claim on it, and
+          another run may claim it.
+        </span>
+      )}
+    </li>
+  );
+  return <ul className="orca-agents__claim-list">{[row(false), row(true)]}</ul>;
+}
+
+/**
+ * RULES.md rule 15 at a narrow width: a save bar is one line, its count one unit and its
+ * buttons whole, and its sentence is what gives way; a run of counts wraps only between them;
+ * a chip and the pinned pill stay one line inside their outlines.
+ */
+function TextThatDoesNotFit(): JSX.Element {
+  const counts = [
+    `+${counted(2, "node")}`,
+    unit(1, "changed"),
+    unit(1, "removed"),
+    counted(3, "edge"),
+    counted(1, "error"),
+  ];
+  return (
+    <div className="preview__stack">
+      <div className="preview__narrow preview__narrow--bar">
+        <DraftBar
+          changes={4}
+          busy={false}
+          note="Editing a field replaces any raw text you had typed: the last edited wins."
+          onValidate={noop}
+          onSave={noop}
+          onDiscard={noop}
+          onReload={noop}
+        />
+      </div>
+      <div className="preview__narrow">
+        <Text style="caption">{counts.join(" · ")}</Text>
+      </div>
+      <div className="preview__narrow orca-chips">
+        <Chip>agent</Chip>
+        <Chip>{`up to ${counted(3, "attempt")}`}</Chip>
+        <Chip>custom:release-train</Chip>
+        <span className={`orca-pinned ${textClass("caption")}`}>
+          <span aria-hidden="true">◷</span> pinned
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ObjectHeaderDemo({ measure }: { measure?: TrailMeasurer }): JSX.Element {
   const [chosen, setChosen] = useState<string | undefined>(undefined);
   return (
     <>
       <ObjectHeader
+        {...(measure === undefined ? {} : { measure })}
         /* Real ids from the dev demo store: the request has no title on any read model, so
            its label is its id and the crumb draws the token; the rest lead with their names. */
         crumbs={[

@@ -375,7 +375,7 @@ function NodeInspector({
                   open={connectOpen}
                   onOpenChange={onConnectOpen}
                   onChoose={(item) => void onApply([{ op: "addEdge", from: node.id, to: item.id }])}
-                  triggerClassName={`orca-btn orca-btn--sm ${textClass("label")}`}
+                  triggerClassName={`orca-btn orca-btn--sm ${textClass("caption")}`}
                 >
                   Connect to…
                 </Menu>
