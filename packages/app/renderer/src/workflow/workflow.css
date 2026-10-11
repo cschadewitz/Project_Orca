@@ -136,23 +136,12 @@
   margin-bottom: var(--space-3);
 }
 
-.orca-wf__fields {
-  display: grid;
-  grid-template-columns: var(--col-label-narrow) 1fr;
-  gap: var(--space-2) var(--space-3);
-  margin: var(--space-3) 0 0;
-}
-.orca-wf__field {
-  display: contents;
-}
-.orca-wf__field > dt {
-  color: var(--ink-secondary);
-  margin: 0;
-}
-.orca-wf__value {
-  margin: 0;
-  color: var(--ink-primary);
-  overflow-wrap: anywhere;
+/* The node's configuration is the component layer's `.orca-kv` (`KeyValueList`), the display
+   a run's variables use too; this says only how far it starts below the description. Two
+   classes deep, because `.orca-kv` takes the `<dl>`'s margins off in one class and the order
+   the two sheets arrive in is not this file's to decide. */
+.orca-wf__inspector > .orca-wf__fields {
+  margin-top: var(--space-3);
 }
 
 /* ---------- the Workflows surface: the list ---------- */

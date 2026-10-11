@@ -1,7 +1,7 @@
 /** Guided launch workspace composed from shared primitives and injected protected admission ports. */
 import { useEffect, useState, useSyncExternalStore, type JSX, type ReactNode } from "react";
 import type { WorkflowInputDeclarationView } from "@orca/protocol";
-import { Button, Card, ConfigField, Menu, ObjectId, Text } from "../ui/index.js";
+import { Button, Card, ConfigField, KeyValueList, Menu, ObjectId, Text } from "../ui/index.js";
 import type { GuidedLaunchController } from "./controller.js";
 import { launchReceipt } from "./controller.js";
 import type { LaunchDraft, LaunchRoot } from "./contracts.js";
@@ -340,14 +340,16 @@ export function GuidedLaunch({
               </Text>
             ))
           )}
-          {Object.entries(review.command.params.vars ?? {}).map(([name, value]) => (
-            <Text key={name} style="mono-id">
-              {name}:{" "}
-              {review.visibleInputs?.includes(name) && !state.withheldInputs.includes(name)
-                ? JSON.stringify(value)
-                : "Withheld"}
-            </Text>
-          ))}
+          {/* The variables the command will send, in the display a run's variables are read in
+              once it has started. A value is shown only when the review says it may be and this
+              session has not withheld it; otherwise the name is listed as withheld and the
+              value never reaches the document. */}
+          <KeyValueList
+            values={review.command.params.vars ?? {}}
+            withheld={Object.keys(review.command.params.vars ?? {}).filter(
+              (name) => !review.visibleInputs?.includes(name) || state.withheldInputs.includes(name),
+            )}
+          />
           {review.warnings.map((issue, index) => (
             <Text key={index} style="caption">
               {issue.path}: {issue.message}

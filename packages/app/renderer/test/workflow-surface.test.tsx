@@ -13,7 +13,7 @@ import { rawTokens, THEMES } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
 import { commandEntries } from "../src/palette/entries.js";
 import { nodeDomId } from "../src/workflow/workflow-canvas.js";
-import { AI_SDLC } from "./fixtures-workflows.js";
+import { AI_SDLC, WORKFLOW_VIEWS } from "./fixtures-workflows.js";
 import { harness, installBridge, renderChrome, stubMatchMedia, type Harness } from "./harness.js";
 import { installDesignSystem, resolved, setTheme } from "./themes.js";
 import type { FakeBridge } from "./fake-bridge.js";
@@ -344,6 +344,33 @@ describe("the inspector", () => {
     const listbox = within(group).getByRole("listbox", { name: "Nodes of sdlc::fanout::auth-ui" });
     await waitFor(() => expect(listbox.getAttribute("aria-activedescendant")).toBe(nodeDomId("ui-build")));
     expect(canvas.getAttribute("aria-activedescendant")).toBeNull();
+  });
+
+  it("lists a node's configuration through the shared display: keys in mono, an object in a well", async () => {
+    const canvas = await open("orca://workflow/sdlc");
+    fireEvent.click(named(canvas, "approve"));
+    const inspector = await screen.findByRole("complementary", { name: "Node detail: Approve spec" });
+    /* `KeyValueList`, the display a run's variables use, rather than the inspector's own grid
+       of compact JSON lines: one way to read a value wherever ORCA shows one. */
+    const list = inspector.querySelector("dl.orca-kv")!;
+    expect(list).toBeTruthy();
+    const keys = [...list.querySelectorAll("dt")];
+    expect(keys.map((dt) => dt.textContent)).toEqual(["question", "options"]);
+    // A config key is an identifier the workflow file declared, not a label: mono (rule 8).
+    for (const key of keys) expect(key.classList.contains("orca-text-mono-id"), key.textContent ?? "").toBe(true);
+
+    // A string is itself, on the line beside its key.
+    const question = keys[0]!.nextElementSibling!;
+    expect(question.textContent).toBe("Ship the rollout?");
+    expect(question.classList.contains("orca-text-mono-body")).toBe(true);
+
+    // An array of objects is its indented JSON in a sunken well under its key, verbatim —
+    // not the one compact line that used to run on past the inspector.
+    const options = WORKFLOW_VIEWS["sdlc"]!.nodes.find((node) => node.id === "approve")!.fields["options"];
+    const well = keys[1]!.nextElementSibling!.querySelector("pre.orca-well")!;
+    expect(well).toBeTruthy();
+    expect(well.textContent).toBe(JSON.stringify(options, null, 2));
+    expect(inspector.textContent).not.toContain('[{"id":"approve"');
   });
 
   it("says a node type carries no configuration rather than showing an empty list", async () => {

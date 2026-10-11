@@ -6,7 +6,7 @@ import type { LaunchPorts } from "../src/guided-launch/contracts.js";
 import { GuidedLaunchController } from "../src/guided-launch/controller.js";
 import { GuidedLaunch } from "../src/guided-launch/guided-launch.js";
 import { harness } from "./harness.js";
-import { deferred, launchContext, launchDraft, launchPorts } from "./guided-launch-fixtures.js";
+import { deferred, launchContext, launchDraft, launchPorts, previewed } from "./guided-launch-fixtures.js";
 
 const disposers: (() => void)[] = [];
 function mount(controller: GuidedLaunchController): void {
@@ -145,7 +145,7 @@ describe("protected restore state and confidentiality", () => {
     await act(() => controller.preview());
     expect(document.body.textContent).not.toContain("unclassified-protected-value");
     expect(screen.getByLabelText<HTMLInputElement>(/^token/).type).toBe("password");
-    expect(screen.getByText("token: Withheld")).toBeDefined();
+    expect(previewed("token")).toBe("Withheld");
   });
   it("does not downgrade a sensitive in-session input when current declarations change", async () => {
     const ports = launchPorts();
@@ -175,7 +175,7 @@ describe("protected restore state and confidentiality", () => {
     });
     await act(() => controller.preview());
     expect(document.body.textContent).not.toContain("existing-sensitive-value");
-    expect(screen.getByText("token: Withheld")).toBeDefined();
+    expect(previewed("token")).toBe("Withheld");
   });
   it.each(["draft", "launch"] as const)(
     "keeps visible task bound to the reviewed command during delayed empty %s restore",
@@ -243,8 +243,8 @@ describe("protected restore state and confidentiality", () => {
     expect(document.body.textContent).not.toContain("historical-nested-secret");
     expect(screen.getByLabelText<HTMLInputElement>(/^token/).type).toBe("password");
     expect(screen.getByLabelText<HTMLInputElement>(/^repo/).type).toBe("password");
-    expect(screen.getByText("token: Withheld")).toBeDefined();
-    expect(screen.getByText("repo: Withheld")).toBeDefined();
+    expect(previewed("token")).toBe("Withheld");
+    expect(previewed("repo")).toBe("Withheld");
     await act(() => controller.recover());
     expect(ports.recover).toHaveBeenCalledWith({ id: "historical-intent" });
     expect(document.body.textContent).not.toContain("historical-protected-token");

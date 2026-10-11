@@ -7,7 +7,7 @@ import { GuidedLaunch } from "../src/guided-launch/guided-launch.js";
 import { useEscapeClosesTopLayer } from "../src/layers-context.js";
 import { harness } from "./harness.js";
 import { installDesignSystem, installSurfaceStyles, setTheme } from "./themes.js";
-import { launchContext, launchDraft, launchPorts } from "./guided-launch-fixtures.js";
+import { launchContext, launchDraft, launchPorts, launchPreview, previewed } from "./guided-launch-fixtures.js";
 
 const teardown: (() => void)[] = [];
 function Escape(): null {
@@ -136,8 +136,36 @@ describe("guided launch workspace", () => {
     fireEvent.change(token, { target: { value: "sensitive-text-never-previewed" } });
     fireEvent.click(screen.getByRole("button", { name: "Preview launch" }));
     await waitFor(() => expect(controller.read().phase).toBe("review"));
-    expect(screen.getByText("token: Withheld")).toBeDefined();
+    expect(previewed("token")).toBe("Withheld");
     expect(document.body.textContent).not.toContain("sensitive-text-never-previewed");
+    // Not in an attribute or a hidden node of the preview either: the list never reads it.
+    expect(launchPreview().innerHTML).not.toContain("sensitive-text-never-previewed");
+  });
+  it("lists the command's variables in the shared display: names in mono, an object in a well", async () => {
+    const context = launchContext();
+    context.workflows[0]!.inputSchema!.fields.scope = { type: "object" };
+    const { controller } = mount(context, launchPorts(context));
+    const scope = { paths: ["src/auth", "src/login"], depth: 2 };
+    fireEvent.change(screen.getByLabelText(/^scope/), { target: { value: JSON.stringify(scope) } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview launch" }));
+    await waitFor(() => expect(controller.read().phase).toBe("review"));
+
+    /* `KeyValueList`, the display a run's variables are read in once it has started, rather
+       than a line of `name: {"paths":[…],"depth":2}` per input. */
+    const list = launchPreview().querySelector("dl.orca-kv")!;
+    expect(list).toBeTruthy();
+    const names = [...list.querySelectorAll("dt")];
+    expect(names.map((dt) => dt.textContent).sort()).toEqual(["scope", "task"]);
+    // An input's name is an identifier the workflow declared: mono (rule 8).
+    for (const dt of names) expect(dt.classList.contains("orca-text-mono-id"), dt.textContent ?? "").toBe(true);
+
+    // A string is itself, on the line; an object is its indented JSON in a sunken well.
+    expect(previewed("task")).toBe("Make a small change");
+    const value = names.find((dt) => dt.textContent === "scope")!.nextElementSibling!;
+    const well = value.querySelector("pre.orca-well")!;
+    expect(well).toBeTruthy();
+    expect(well.textContent).toBe(JSON.stringify(scope, null, 2));
+    expect(launchPreview().textContent).not.toContain(JSON.stringify(scope));
   });
   it("keeps lost acknowledgement visible and recovery uses the original handle", async () => {
     const ports = launchPorts();
