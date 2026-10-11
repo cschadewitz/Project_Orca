@@ -46,7 +46,7 @@ import {
   type MinimapTone,
   type ViewportMeasurer,
 } from "../../ui/index.js";
-import { fromDirection, type GraphMetrics } from "../layout.js";
+import { fromDirection, labelTransform, type GraphMetrics } from "../layout.js";
 import { editorLayout, nestedSteps, type EditorGraph, type PlacedEditorNode } from "./draft-model.js";
 
 const METRICS: GraphMetrics = {
@@ -461,6 +461,7 @@ export function EditorCanvas(props: EditorCanvasProps): JSX.Element {
                           className={`orca-edge__label ${textClass("mono-id")}`}
                           x={edge.labelX}
                           y={edge.labelY}
+                          transform={labelTransform(edge)}
                           textAnchor="middle"
                         >
                           {text}

@@ -143,6 +143,12 @@ export interface PlacedEdge<E extends GraphEdge = WorkflowEdgeView> {
   /** Where the `when` expression or the author's label is printed, when there is one. */
   labelX: number;
   labelY: number;
+  /**
+   * How far the label is turned, in degrees about its point: `-90` for a back edge in a
+   * top-to-bottom layout, whose label runs up the gutter beside the columns — the one place
+   * with room for it — and absent everywhere else.
+   */
+  labelAngle?: number;
 }
 
 export interface GraphLayout<N extends GraphNode = WorkflowNodeView, E extends GraphEdge = WorkflowEdgeView> {
@@ -548,7 +554,17 @@ export function route<E extends GraphEdge>(
   };
 }
 
-/** `route`, with the layers running top to bottom. */
+/**
+ * `route`, with the layers running top to bottom.
+ *
+ * **The labels move, because the room did.** Left to right, two edges fanning out of a
+ * decision have their midpoints a rank apart *vertically*, and a line of text between them
+ * fits. Top to bottom, the midpoints are side by side in a gap one line tall, and two `when`
+ * expressions at them print over each other. So a forward edge's label sits just above its
+ * target, where the edge arrives — the targets of a fan-out are a rank apart, which a label
+ * fits in — and a back edge's label is turned to run up the gutter its edge runs through,
+ * which is the one strip beside the columns with room for a line of text.
+ */
 function routeVertical<E extends GraphEdge>(
   edge: E,
   key: string,
@@ -571,6 +587,7 @@ function routeVertical<E extends GraphEdge>(
       path: `M ${from.x} ${y1} L ${side} ${y1} L ${side} ${y2} L ${to.x} ${y2}`,
       labelX: side,
       labelY: (y1 + y2) / 2,
+      labelAngle: -90,
     };
   }
 
@@ -585,10 +602,17 @@ function routeVertical<E extends GraphEdge>(
     pair,
     isBack: false,
     path: `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`,
-    labelX: (x1 + x2) / 2,
-    labelY: (y1 + y2) / 2,
+    // A quarter of the layer gap above the target, on the line the edge comes in down.
+    labelX: x2,
+    labelY: y2 - metrics.layerGap / 4,
   };
 }
+
+/** An edge label's SVG `transform`: its turn about its own point, or nothing for a level one. */
+export const labelTransform = (
+  edge: Pick<PlacedEdge<GraphEdge>, "labelX" | "labelY" | "labelAngle">,
+): string | undefined =>
+  edge.labelAngle === undefined ? undefined : `rotate(${edge.labelAngle} ${edge.labelX} ${edge.labelY})`;
 
 /** An arrow key, as the canvases name it. */
 export type Arrow = "up" | "down" | "left" | "right";

@@ -16,6 +16,7 @@ import {
   edgePair,
   findNode,
   fromDirection,
+  labelTransform,
   lattice,
   layoutWorkflow,
   stepSelection,
@@ -405,10 +406,23 @@ describe("top to bottom", () => {
     const toB = layout.edges.find((e) => e.pair === edgePair({ from: "s", to: "b" }))!;
     // Out of s's bottom centre (10, 10), into b's top centre (40, 20), bending vertically.
     expect(toB.path).toBe("M 10 10 C 10 15, 40 15, 40 20");
-    expect([toB.labelX, toB.labelY]).toEqual([25, 15]);
     // Left to right, the same edge leaves s's right side half-way down and enters b's left.
     const across = layoutWorkflow(fan, WIDE).edges.find((e) => e.pair === edgePair({ from: "s", to: "b" }))!;
     expect(across.path).toBe("M 20 5 C 25 5, 25 25, 30 25");
+  });
+
+  it("prints a fan-out's labels over their own targets, where two midpoints side by side would collide", () => {
+    const layout = layoutWorkflow(fan, WIDE, "vertical");
+    const toA = layout.edges.find((e) => e.pair === edgePair({ from: "s", to: "a" }))!;
+    const toB = layout.edges.find((e) => e.pair === edgePair({ from: "s", to: "b" }))!;
+    // A quarter of the layer gap above each target's top centre: a rank apart, level.
+    expect([toA.labelX, toA.labelY]).toEqual([10, 17.5]);
+    expect([toB.labelX, toB.labelY]).toEqual([40, 17.5]);
+    expect(toB.labelAngle).toBeUndefined();
+    expect(labelTransform(toB)).toBeUndefined();
+    // Left to right they stay at the midpoints, a rank apart down the gap, as they always were.
+    const across = layoutWorkflow(fan, WIDE).edges.find((e) => e.pair === edgePair({ from: "s", to: "b" }))!;
+    expect([across.labelX, across.labelY]).toEqual([25, 15]);
   });
 
   it("routes a back edge out of the left side, through the gutter beside the columns, and still marks it back", () => {
@@ -427,7 +441,9 @@ describe("top to bottom", () => {
     // c is at (0, 40) and b at (0, 20): out of c's left side half-way down, along the gutter
     // half a rank gap left of the column, and into b's left side. Level segments, never the cubic.
     expect(back.path).toBe("M 0 45 L -5 45 L -5 25 L 0 25");
-    expect(back.labelX).toBeLessThan(0);
+    // Its label runs up the gutter, half-way along the edge, turned to fit the strip.
+    expect([back.labelX, back.labelY, back.labelAngle]).toEqual([-5, 35, -90]);
+    expect(labelTransform(back)).toBe("rotate(-90 -5 35)");
     // The forward edges never leave by the left: they keep to the bottom and the top.
     for (const edge of layout.edges.filter((e) => !e.isBack)) expect(edge.path).toContain(" C ");
   });

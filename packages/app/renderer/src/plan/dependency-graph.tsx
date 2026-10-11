@@ -31,7 +31,14 @@ import {
   type MinimapTone,
   type ViewportMeasurer,
 } from "../ui/index.js";
-import { arrowLabel, layoutGraph, stepSelection, type Arrow, type GraphMetrics } from "../workflow/layout.js";
+import {
+  arrowLabel,
+  labelTransform,
+  layoutGraph,
+  stepSelection,
+  type Arrow,
+  type GraphMetrics,
+} from "../workflow/layout.js";
 import { edgeState, type DepEdge, type DepNode } from "./graph-model.js";
 
 const METRICS: GraphMetrics = {
@@ -224,6 +231,7 @@ export function DependencyGraph({
                           className={`orca-edge__label ${textClass("mono-id")}`}
                           x={placed.labelX}
                           y={placed.labelY}
+                          transform={labelTransform(placed)}
                           textAnchor="middle"
                         >
                           {d.target.stage}

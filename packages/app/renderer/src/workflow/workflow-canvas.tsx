@@ -68,7 +68,7 @@ import {
   type ViewportMeasurer,
   type WorkflowNodeRunState,
 } from "../ui/index.js";
-import { arrowLabel, layoutWorkflow, stepSelection, type Arrow, type GraphMetrics } from "./layout.js";
+import { arrowLabel, labelTransform, layoutWorkflow, stepSelection, type Arrow, type GraphMetrics } from "./layout.js";
 import type { OverlayIndex } from "./use-workflow.js";
 
 /** The tokens, in the shape `layout.ts` takes them. One statement of the mapping. */
@@ -378,6 +378,7 @@ function Graph({ layout, overlay, selected, onSelect, expanded, owns }: GraphPro
                   className={`orca-edge__label ${textClass("mono-id")}`}
                   x={placed.labelX}
                   y={placed.labelY}
+                  transform={labelTransform(placed)}
                   textAnchor="middle"
                 >
                   {label}
