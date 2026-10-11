@@ -144,6 +144,44 @@
       "note": "Radial, in the place a cog would sit: U+2699 is in no OFL face ORCA bundles, so a cog here would be the OS's drawing on every platform."
     }
   },
+  "objectKind": {
+    "run": {
+      "prefix": "run",
+      "word": "run",
+      "glyph": "☰",
+      "note": "The Runs rail glyph, on purpose: an id token is a pointer to the thing that surface lists, the way Attention's ◆ is the waiting glyph. Drawn only in front of an id tail."
+    },
+    "workItem": {
+      "prefix": "wi",
+      "word": "work item",
+      "glyph": "⬡",
+      "note": "The Plan rail glyph, on purpose, for the same reason as run's: a work item is a node in the graph Plan draws."
+    },
+    "request": {
+      "prefix": "req",
+      "word": "request",
+      "glyph": "❝",
+      "note": "An opening quotation mark: a request is what a person asked for, in their own words."
+    },
+    "step": {
+      "prefix": "step",
+      "word": "step",
+      "glyph": "▭",
+      "note": "One box of a run's sequence. Thin at mono-id size; legible beside the tail, which carries the identity."
+    },
+    "gate": {
+      "prefix": "hi",
+      "word": "gate",
+      "glyph": "⊓",
+      "note": "A gate across the path: a human input a run waits on. Not ⊘ or ◆, which are statuses."
+    },
+    "event": {
+      "prefix": "evt",
+      "word": "event",
+      "glyph": "✦",
+      "note": "Only in an event's copy menu: a timeline row names its event by sequence number (#148), which is the better handle."
+    }
+  },
   "chrome": {
     "crumbSeparator": { "glyph": "▸", "note": "Between object-header crumbs. Decorative: aria-hidden." },
     "commandKey": { "glyph": "⌘", "note": "In keyboard hints, the command palette and menus." },

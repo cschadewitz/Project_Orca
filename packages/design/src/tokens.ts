@@ -301,6 +301,24 @@ export const SURFACE_PRESENTATION: Record<SurfaceId, { word: string; glyph: stri
   config: { word: 'Config', glyph: '❋' },
 };
 
+export type ObjectKind = 'run' | 'workItem' | 'request' | 'step' | 'gate' | 'event';
+export const OBJECT_KINDS: readonly ObjectKind[] = ['run', 'workItem', 'request', 'step', 'gate', 'event'] as const;
+/**
+ * The kinds of object whose ids ORCA shows a person, and how an id of each is drawn: the
+ * id's own `prefix` (`run_`, `wi_` …, without the underscore), the `word` that names the
+ * kind in an accessible name ("run 7X8PXX"), and the `glyph` drawn in front of an id's
+ * tail. A kind glyph is never a status and is only ever drawn in front of an id tail
+ * (docs/design/README.md, Iconography); ☰ and ⬡ are the Runs and Plan rail glyphs on purpose.
+ */
+export const OBJECT_KIND_PRESENTATION: Record<ObjectKind, { prefix: string; word: string; glyph: string }> = {
+  run: { prefix: 'run', word: 'run', glyph: '☰' },
+  workItem: { prefix: 'wi', word: 'work item', glyph: '⬡' },
+  request: { prefix: 'req', word: 'request', glyph: '❝' },
+  step: { prefix: 'step', word: 'step', glyph: '▭' },
+  gate: { prefix: 'hi', word: 'gate', glyph: '⊓' },
+  event: { prefix: 'evt', word: 'event', glyph: '✦' },
+};
+
 /** Glyphs the chrome renders that are not a state: the crumb separator and the command key. */
 export type ChromeGlyph = 'crumbSeparator' | 'commandKey' | 'danger';
 export const CHROME_GLYPHS: Record<ChromeGlyph, string> = {

@@ -69,8 +69,8 @@ const BOX = chars(range(0x2500, 0x257f));
 
 /**
  * The glyphs ORCA renders as glyphs: the eight run statuses, the connection states, agent
- * health, the breadcrumb separator, the command key and the five surfaces. Kept in sync with
- * packages/design/semantics.json by the check below.
+ * health, the breadcrumb separator, the command key, the surfaces and the object kinds.
+ * Kept in sync with packages/design/semantics.json by the check below.
  *
  * Four glyphs carry a word in more than one domain, which is deliberate rather than an
  * oversight: a domain gives the glyph its word, and the same shape meaning "settled" or
@@ -93,15 +93,24 @@ const SYMBOLS = chars(
      Attention's as well as waiting's, deliberately; these four are the rest. A cog would be
      the obvious fifth and there is no OFL cog here to bundle — U+2699 is in neither Noto
      face — which is why Config is radial rather than toothed. */
-  0x2630, // ☰ surface runs
-  0x2b21, // ⬡ surface plan
+  0x2630, // ☰ surface runs · object kind run
+  0x2b21, // ⬡ surface plan · object kind work item
   0x2442, // ⑂ surface workflows
   0x25c9, // ◉ surface agents
   0x274b, // ❋ surface config
+  /* The object kinds an id token leads with (semantics.json `objectKind`). ☰ and ⬡ above
+     are the run's and the work item's, reused from the rail on purpose; these are the rest,
+     and the gate's ⊓ is in the Math face below. None of them is a status glyph. */
+  0x275d, // ❝ object kind request
+  0x25ad, // ▭ object kind step
+  0x2726, // ✦ object kind event
 );
 
-/** Not in Noto Sans Symbols 2; Noto Sans Math carries it. */
-const SYMBOLS_MATH = chars(0x2298); // ⊘ cancelled
+/** Not in Noto Sans Symbols 2; Noto Sans Math carries them. */
+const SYMBOLS_MATH = chars(
+  0x2298, // ⊘ cancelled
+  0x2293, // ⊓ object kind gate
+);
 
 /* ---------- what to build ---------- */
 
