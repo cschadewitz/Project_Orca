@@ -257,6 +257,37 @@ describe("palette entries", () => {
     expect(filterEntries(entries, "theme").map((e) => e.label)).toEqual(["Cycle theme"]);
     expect(filterEntries(entries, "nothing here")).toEqual([]);
   });
+
+  /* A label names the object and its token, never its whole id — so the id has to be matched
+     some other way, or pasting it from a log finds nothing. */
+  it("finds a command by the whole id it acts on, or by the tail a row showed", () => {
+    const id = "wi_01M4M899VKJZRZSBHNDY5M579G";
+    const release: RegisteredShortcut = {
+      id: "release",
+      scope: "card",
+      label: "Release claim on Database schema ⬡ 5M579G",
+      labelMachine: "⬡ 5M579G",
+      objectId: id,
+      action: () => {},
+    };
+    const entries = commandEntries([...shortcuts, release], "darwin", ["global"]);
+    expect(filterEntries(entries, id).map((e) => e.label)).toEqual([release.label]);
+    expect(filterEntries(entries, "5m579g").map((e) => e.label)).toEqual([release.label]);
+    // A match in what the row says still outranks one in an id it never draws.
+    expect(filterEntries(entries, "release")[0]?.label).toBe(release.label);
+  });
+
+  it("matches a run's id drawn as a token in the detail column", () => {
+    const run = {
+      id: "run:1",
+      section: "navigation" as const,
+      label: "Database schema",
+      detailId: "run_01M4M8A1WDAQMMX98Q6KJH7X8P",
+      run: () => {},
+    };
+    expect(filterEntries([run], "run_01M4M8A1WDAQMMX98Q6KJH7X8P")).toEqual([run]);
+    expect(filterEntries([run], "jh7x8p")).toEqual([run]);
+  });
 });
 
 describe("jump targets", () => {
