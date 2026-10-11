@@ -413,6 +413,11 @@ describe("the policy panel", () => {
     const panel = await screen.findByRole("complementary", { name: "Permissions for claude" });
     expect(within(panel).getAllByRole("listitem").length).toBeGreaterThan(0);
     expect(panel.textContent).toContain("allow edit under src");
+    // A rule truncates at its end in a narrow panel, so each carries the whole of itself in
+    // its title — the accessible name already had it; now a pointer does too.
+    const texts = [...panel.querySelectorAll<HTMLElement>(".orca-config__rule-text")];
+    expect(texts.length).toBeGreaterThan(0);
+    for (const text of texts) expect(text.getAttribute("title")).toBe(text.textContent);
     // One read for the app, not one per opening: the draft model is above the surfaces
     // (#175's `ConfigProvider`), so opening the panel asks the daemon nothing new.
     expect(fake.calls.filter((c) => c.method === "config.get")).toHaveLength(1);

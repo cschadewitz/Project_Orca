@@ -107,12 +107,41 @@ describe("the chip's box", () => {
     expect(declaration(aligned, "min-width")).toBeUndefined();
     expect(declaration(aligned, "max-width")).toBeUndefined();
     expect(declaration(aligned, "overflow")).toBeUndefined();
+    /* The floor is one custom property, defined once on the shell root, so the one other box
+       that has to be exactly as wide — the run tree's never-run placeholder — reads the same
+       number rather than a copy of it. */
+    expect(declaration(aligned, "width")).toBe("var(--chip-aligned-width)");
     // The longest word's room plus exactly the chip's other parts, each by its token.
-    const floor = declaration(aligned, "width") ?? "";
-    expect(floor).toMatch(/^calc\(\d+ch \+ /);
+    const root = rules(componentsCssSource).find(
+      (rule) => rule.selector === ".orca" && declaration(rule.body, "--chip-aligned-width") !== undefined,
+    );
+    expect(root, "components.css defines --chip-aligned-width on .orca").toBeDefined();
+    const floor = (declaration(root!.body, "--chip-aligned-width") ?? "").replace(/\s+/g, " ");
+    expect(floor).toMatch(/^calc\( ?\d+ch \+ /);
     for (const part of ["--icon-sm", "--space-0-5", "--space-1-5", "--stroke-hairline"]) {
       expect(floor, part).toContain(`var(${part})`);
     }
+  });
+
+  it("holds the run tree's never-run placeholder to exactly the aligned chip's width", () => {
+    /* A row with no status (a step that never ran) draws a placeholder in the status column.
+       It was `12ch` of label type, about ten pixels short of an aligned chip, so on those rows
+       the name and everything after it sat off the column. It now takes the chip's own
+       custom property — and the chip's type, because `ch` resolves in the face of the element
+       that uses it, so only the chip's type makes it the same number of pixels. */
+    const runsCss = sources([".css"]).find((sheet) => sheet.name === "runs/runs.css")!.text;
+    const placeholder = rules(runsCss).find((rule) => rule.selector === ".orca-runs__skipped")!.body;
+    expect(declaration(placeholder, "width")).toBe("var(--chip-aligned-width)");
+    expect(declaration(placeholder, "flex")).toBe("none");
+    // The chip's weight; its size comes from the type class the run tree puts beside it.
+    expect(declaration(placeholder, "font-weight")).toBe(declaration(componentRule(".orca-chip"), "font-weight"));
+    const tree = sources([".tsx"]).find((file) => file.name === "runs/tree/run-tree.tsx")!.text;
+    expect(tree).toMatch(/className=\{`orca-runs__skipped \$\{textClass\("caption"\)\}`\}/);
+    // And no stylesheet restates the arithmetic: the property is defined once.
+    const definitions = [componentsCssSource, ...sources([".css"]).map((sheet) => sheet.text)].flatMap((css) => [
+      ...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/--chip-aligned-width\s*:/g),
+    ]);
+    expect(definitions).toHaveLength(1);
   });
 
   it("is sized by no stylesheet the app adds on top of the component layer", () => {

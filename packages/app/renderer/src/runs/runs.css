@@ -142,9 +142,24 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* A step that never ran has no status, and its placeholder holds the status column open by
+   exactly what an aligned chip takes, so the name and everything after it stay in their
+   columns on those rows. The width is the chip's own custom property from components.css,
+   not a copy of it: this was `12ch` of label type, about ten pixels short of the chip once
+   the chip became `aligned`. The chip's width is in `ch`, which resolves in the face of the
+   element that uses it, so the placeholder is set in the chip's type — caption, at the
+   chip's medium weight (the run tree adds `orca-text-caption`) — and pads its word in by the
+   chip's own padding and border, so "skipped" starts where a status glyph does. */
 .orca-runs__skipped {
   flex: none;
-  width: 12ch;
+  width: var(--chip-aligned-width);
+  padding: 0 var(--space-1-5);
+  border-inline: var(--stroke-hairline) solid transparent;
+  font-weight: 500;
+  color: var(--ink-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .orca-runs__attempt,
 .orca-runs__loading {

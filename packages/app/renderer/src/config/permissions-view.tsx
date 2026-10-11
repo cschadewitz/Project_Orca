@@ -100,7 +100,9 @@ export function PermissionsView({ policies, live, path, exists }: PermissionsVie
                       {rows.map((row) => (
                         <li key={`${row.order}`} className="orca-config__rule">
                           <span className={`orca-config__order ${textClass("mono-id")}`}>{row.order}</span>
-                          <span className={`orca-config__rule-text ${textClass("mono-body")}`}>{row.text}</span>
+                          <span className={`orca-config__rule-text ${textClass("mono-body")}`} title={row.text}>
+                            {row.text}
+                          </span>
                           <Chip>{row.source}</Chip>
                           {row.addedAt !== undefined && (
                             <Time at={new Date(row.addedAt)} show={live ? "both" : "absolute"} />

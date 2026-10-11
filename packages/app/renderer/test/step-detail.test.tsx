@@ -15,6 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { STATUS_PRESENTATION } from "@orca/design";
 import type { NotificationMessage, RunsEventsParams, RunsEventsResult } from "@orca/protocol";
 import { ArtifactPanelProvider, useArtifactPanel, type ArtifactTarget } from "../src/artifacts/panel-context.js";
 import { StepDetail } from "../src/step/step-detail.js";
@@ -568,6 +569,16 @@ describe("a run with no step selected", () => {
 
     // No step means no output pane: there is no step whose output it would be.
     expect(screen.queryByRole("listbox", { name: /^Output of/ })).toBeNull();
+  });
+
+  it("says the run's status once, on its chip, rather than again as a caption beside it", () => {
+    renderStep(undefined);
+    const head = document.querySelector(".orca-inspector__head")!;
+    const { word } = STATUS_PRESENTATION[PARENT.run.status];
+    // The chip carries the glyph and the word (rule 4); nothing else in the head repeats it.
+    expect(head.querySelectorAll(".orca-chip")).toHaveLength(1);
+    expect(head.textContent?.split(word)).toHaveLength(2);
+    expect(within(head as HTMLElement).getByText(PARENT.run.name)).toBeTruthy();
   });
 
   it("does not read a step's log when there is no step", () => {

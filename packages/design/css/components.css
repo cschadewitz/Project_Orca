@@ -260,9 +260,23 @@
    over it — a label longer than any word ("failed ×3") grows its chip rather than overflowing
    it. The floor is the longest status word's room plus exactly the chip's other parts: `ch`
    is a zero's advance, and "succeeded", the widest word, is about nine and a half of them in
-   Plex at caption weight, so ten hold every word. */
+   Plex at caption weight, so ten hold every word.
+
+   The floor is a custom property on the shell root rather than a value on this rule because
+   one other box has to be exactly as wide: a status column has rows with no status at all —
+   the run tree's never-run step — and their placeholder has to hold the column open by the
+   same amount or the columns after it step sideways on those rows. A second copy of the
+   arithmetic is the thing that drifts, so there is one. It is unregistered, so it is carried
+   as written and `ch` resolves on the element that uses it, in that element's face: a box
+   that wants this width has to be set in the chip's type (caption, at medium) for `ch` to
+   mean the same zero it means here. */
+.orca {
+  --chip-aligned-width: calc(
+    10ch + var(--icon-sm) + var(--space-0-5) + 2 * var(--space-1-5) + 2 * var(--stroke-hairline)
+  );
+}
 .orca-chip--aligned {
-  width: calc(10ch + var(--icon-sm) + var(--space-0-5) + 2 * var(--space-1-5) + 2 * var(--stroke-hairline));
+  width: var(--chip-aligned-width);
 }
 
 .orca-dot {

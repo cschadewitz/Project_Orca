@@ -23,7 +23,7 @@
  * each of them reading for itself.
  */
 import { useCallback, useMemo, useRef, useState, type JSX, type RefObject } from "react";
-import { STATUS_PRESENTATION, type ConnectionState, type RunStatus } from "@orca/design";
+import type { ConnectionState, RunStatus } from "@orca/design";
 import type { ArtifactView, RunsGetResult, StepView } from "@orca/protocol";
 import { StepAsks } from "../attention/inline-asks.js";
 import { useArtifactPanel } from "../artifacts/panel-context.js";
@@ -257,14 +257,14 @@ function RunSummary({ detail, connection }: { detail: RunsGetResult; connection:
 
   return (
     <div className="orca-inspector orca-step">
+      {/* The chip and the name, and no third thing: the caption that followed them was the
+          status word again, which the chip had already said. A step's head has a caption
+          there because it says something the chip does not — the attempt. */}
       <div className="orca-inspector__head">
         <StatusChip status={status} />
         <span className={`orca-inspector__title ${textClass("mono-strong")}`} title={detail.run.name}>
           {detail.run.name}
         </span>
-        <Text style="caption" className="orca-faint">
-          {STATUS_PRESENTATION[status].word}
-        </Text>
       </div>
 
       {detail.run.error !== undefined && (
