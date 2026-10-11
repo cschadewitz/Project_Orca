@@ -59,13 +59,24 @@ import { useKeyboard } from "../keyboard-context.js";
 import { scopeProps } from "../keyboard-map.js";
 import { useTransientLayer } from "../layers-context.js";
 import { PolicyPanel } from "../config/policy-editor.js";
-import { Button, StateView, StatusChip, Text, Time, textClass } from "../ui/index.js";
+import {
+  Button,
+  MachineText,
+  ObjectId,
+  StateView,
+  StatusChip,
+  Text,
+  Time,
+  textClass,
+  useIdTails,
+} from "../ui/index.js";
 import { AgentCard } from "./agent-card.js";
 import {
   claimSubject,
   countLabel,
   groupByHost,
   phraseText,
+  releaseCommand,
   releaseConsequence,
   releaseRefusal,
   transportLabel,
@@ -286,6 +297,8 @@ interface ClaimsProps {
  */
 function Claims({ claims, asOf, live, feed, canRelease }: ClaimsProps): JSX.Element {
   const [armed, setArmed] = useState<string | undefined>(undefined);
+  /* Every work item and run the list names, so no two rows show one token (`useIdTails`). */
+  const tailOf = useIdTails(useMemo(() => claims.flatMap((claim) => [claim.workItemId, claim.owner.runId]), [claims]));
   /* By id, and only if it is still the armed one: a row disarming itself must not disarm a
      different row that was armed in the same event — focus leaving row A *for* row B's
      Release is exactly that event. */
@@ -321,6 +334,7 @@ function Claims({ claims, asOf, live, feed, canRelease }: ClaimsProps): JSX.Elem
             <ClaimRow
               key={`${claim.workItemId}:${claim.owner.runId}`}
               claim={claim}
+              tailOf={tailOf}
               live={live}
               feed={feed}
               canRelease={canRelease}
@@ -337,6 +351,8 @@ function Claims({ claims, asOf, live, feed, canRelease }: ClaimsProps): JSX.Elem
 
 interface ClaimRowProps {
   claim: ClaimView;
+  /** The tail each id is drawn with, decided over the whole list. */
+  tailOf: (id: string) => string;
   live: boolean;
   feed: AgentsFeed;
   canRelease: boolean;
@@ -378,7 +394,7 @@ interface ClaimRowProps {
  * transient thing), focus leaving the row, or another row being armed (`Claims`). The first
  * two hand focus back to `Release`; the last two leave it where the person put it.
  */
-function ClaimRow({ claim, live, feed, canRelease, armed, onArm, onDisarm }: ClaimRowProps): JSX.Element {
+function ClaimRow({ claim, tailOf, live, feed, canRelease, armed, onArm, onDisarm }: ClaimRowProps): JSX.Element {
   const id = claim.workItemId;
   const writability = useWritability();
   const refusal = releaseRefusal(claim);
@@ -456,16 +472,30 @@ function ClaimRow({ claim, live, feed, canRelease, armed, onArm, onDisarm }: Cla
 
   return (
     <li className={className} ref={row} onBlur={onBlur}>
-      <span className={`orca-id ${textClass("mono-id")}`}>{id}</span>
+      {/* The work item by the name a person knows it by, then its token — never a raw id
+          column first: three items minted in one millisecond printed as three identical
+          26-character heads. An item with no title is its token alone. */}
       <span className={`orca-agents__claim-title ${textClass("label")}`} title={claim.workItem?.title}>
-        {claim.workItem?.title ?? ""}
+        <ObjectId
+          id={id}
+          kind="workItem"
+          tail={tailOf(id)}
+          {...(claim.workItem?.title ? { name: claim.workItem.title } : {})}
+        />
       </span>
       {/* `DisplayStatus` and the design's `RunStatus` are the same eight words, pinned
           against each other in packages/protocol/test — so no fold and no cast here.
           `aligned` makes the statuses one column down the list. */}
       <StatusChip status={claim.owner.status} aligned />
-      <span className={`orca-id ${textClass("mono-id")} orca-agents__claim-run`}>
-        {claim.owner.name ?? claim.owner.runId}
+      {/* The run holding it, the same way: its name, then its token — runs of one workflow
+          share a name, and the token is what tells them apart. */}
+      <span className={`orca-agents__claim-run ${textClass("label")}`}>
+        <ObjectId
+          id={claim.owner.runId}
+          kind="run"
+          tail={tailOf(claim.owner.runId)}
+          {...(claim.owner.name === undefined ? {} : { name: claim.owner.name })}
+        />
       </span>
       <Time at={new Date(claim.claimedAt)} show={live ? "both" : "absolute"} />
       {canRelease &&
@@ -518,13 +548,7 @@ function ClaimRow({ claim, live, feed, canRelease, armed, onArm, onDisarm }: Cla
           title={phraseText(consequence)}
         >
           {consequence.map((phrase, at) =>
-            phrase.machine ? (
-              <span key={at} className={`orca-mono ${textClass("mono-id")}`}>
-                {phrase.text}
-              </span>
-            ) : (
-              <Fragment key={at}>{phrase.text}</Fragment>
-            ),
+            phrase.machine ? <MachineText key={at} text={phrase.text} /> : <Fragment key={at}>{phrase.text}</Fragment>,
           )}
         </span>
       ) : (
@@ -555,10 +579,11 @@ function ClaimRow({ claim, live, feed, canRelease, armed, onArm, onDisarm }: Cla
  * A claim the daemon would refuse gets no row: the palette lists commands that do something.
  *
  * The release row is the Plan surface's release row in every respect but scope
- * (`plan/use-plan-writes.ts`): its id is drawn in mono (`labelMachine`, rule 8), and it is a
- * destructive command, so it sinks below the safe ones and the first `Enter` arms it rather
- * than running it (`tone`, `confirm`). It had neither, which made it the one destructive
- * palette row that could be the first row on screen and run on a single keystroke.
+ * (`plan/use-plan-writes.ts`), worded once by `releaseCommand`: the work item by its title
+ * and its token (`labelMachine`, rule 8), never its raw id, and it is a destructive command,
+ * so it sinks below the safe ones and the first `Enter` arms it rather than running it
+ * (`tone`, `confirm`). It had neither, which made it the one destructive palette row that
+ * could be the first row on screen and run on a single keystroke.
  */
 function usePaletteActions(
   agents: readonly { id: string }[] | undefined,
@@ -574,9 +599,12 @@ function usePaletteActions(
      from re-registering on every re-read. `useIds` does that directly: it hands back the
      same array while the ids in it are the same ones. */
   const agentIds = useIds(useMemo(() => (agents ?? []).map((agent) => agent.id), [agents]));
-  const claimIds = useIds(
-    useMemo(() => claims.filter((claim) => claim.owner.releasable).map((claim) => claim.workItemId), [claims]),
-  );
+  /* The commands by their labels, which carry the title and the token: a title that changes
+     re-registers its row, and a re-read that changes nothing re-registers none. */
+  const releases = useMemo(() => claims.filter((claim) => claim.owner.releasable).map(releaseCommand), [claims]);
+  const releaseLabels = useIds(useMemo(() => releases.map((command) => command.label), [releases]));
+  const held = useRef(releases);
+  held.current = releases;
 
   useEffect(() => {
     const off = agentIds.map((id) =>
@@ -592,19 +620,17 @@ function usePaletteActions(
 
   useEffect(() => {
     if (!canRelease) return;
-    const off = claimIds.map((workItemId) =>
+    const off = held.current.map((command) =>
       keyboard.register({
         scope: "card",
-        label: `Release claim on ${workItemId}`,
-        labelMachine: workItemId,
+        ...command,
         detail: "Takes the work item back from the run holding it; the item goes back to the scheduler",
         tone: "danger",
-        confirm: `Release ${workItemId} — confirm`,
-        action: () => onRelease(workItemId),
+        action: () => onRelease(command.objectId),
       }),
     );
     return () => off.forEach((unregister) => unregister());
-  }, [claimIds, keyboard, onRelease, canRelease]);
+  }, [releaseLabels, keyboard, onRelease, canRelease]);
 }
 
 /**

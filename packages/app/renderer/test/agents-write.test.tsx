@@ -61,9 +61,14 @@ function renderAgents(connection: "live" | "disconnected" = "live"): void {
 const claimRows = async (): Promise<HTMLElement[]> =>
   within(await screen.findByRole("region", { name: "Claimed work" })).getAllByRole("listitem");
 
-/** The row for one work item — `wi-3` is the one whose owner has vanished. */
+/**
+ * The row for one work item — `wi-3` is the one whose owner has vanished. Found by the id its
+ * token carries in its title: a row leads with the work item's title, not its id.
+ */
+const isRowFor = (row: HTMLElement, workItemId: string): boolean =>
+  row.querySelector(`.orca-objid[title="${workItemId}"]`) !== null;
 const claimRow = async (workItemId: string): Promise<HTMLElement> => {
-  const row = (await claimRows()).find((r) => r.textContent?.startsWith(workItemId));
+  const row = (await claimRows()).find((r) => isRowFor(r, workItemId));
   if (!row) throw new Error(`no claim row for ${workItemId}`);
   return row;
 };
@@ -132,17 +137,49 @@ describe("what a refusal is called", () => {
     expect(phrases[0]).toEqual({ text: DEAD });
     const words = phraseText(phrases);
     expect(words).toBe(
-      `${DEAD} goes back to the scheduler. run-vanished loses its claim on it, and another run may claim it.`,
+      `${DEAD} goes back to the scheduler. ☰ run-vanished loses its claim on it, and another run may claim it.`,
     );
-    // The run is a machine string, so it is the one phrase set in mono (rule 8).
-    expect(phrases.filter((phrase) => phrase.machine).map((phrase) => phrase.text)).toEqual(["run-vanished"]);
+    // The run has no name, so it is its id token — never the raw id — and that is the one
+    // phrase set in mono (rule 8).
+    expect(phrases.filter((phrase) => phrase.machine).map((phrase) => phrase.text)).toEqual(["☰ run-vanished"]);
     // Sentence case, no apology, no exclamation (rule 13).
     expect(words).not.toMatch(/[!]|sorry|oops/i);
   });
 
-  it("falls back to the work item's id, in mono, when the item has no title", () => {
+  it("falls back to the work item's id token, in mono, when the item has no title", () => {
     const untitled: ClaimView = { ...CLAIMS[1]!, workItem: undefined };
-    expect(releaseConsequence(untitled)[0]).toEqual({ text: "wi-3", machine: true });
+    expect(releaseConsequence(untitled)[0]).toEqual({ text: "⬡ wi-3", machine: true });
+  });
+
+  it("names a run with no name by its token in words, never its raw id", () => {
+    const unnamed: ClaimView = {
+      ...CLAIMS[0]!,
+      owner: { ...CLAIMS[0]!.owner, name: undefined, runId: "run_01M4M8A1WDAQMMX98Q6KJH7X8P" },
+    };
+    expect(releaseRefusal(unnamed)).toContain("run JH7X8P is running");
+    expect(releaseRefusal(unnamed)).not.toContain("run_01M4M8A1WDAQMMX98Q6KJH7X8P");
+  });
+});
+
+describe("the claim row's ids", () => {
+  it("leads with the work item's title and the run's name, each followed by its id token", async () => {
+    renderAgents();
+    const alive = await claimRow("wi-2");
+    // No raw id column first: the row starts with what a person calls the work.
+    expect(alive.textContent?.startsWith("Wire the login button")).toBe(true);
+    const tokens = [...alive.querySelectorAll(".orca-objid")];
+    expect(tokens.map((token) => token.getAttribute("title"))).toEqual(["wi-2", "run-parent"]);
+    // Faint, because a name leads each one.
+    for (const token of tokens) expect(token.className).toContain("orca-objid--faint");
+    expect(alive.querySelector(".orca-agents__claim-run")?.textContent).toContain("Add the SSO callback");
+  });
+
+  it("draws an untitled item and an unnamed run as their tokens alone", async () => {
+    renderAgents();
+    const dead = await claimRow("wi-3");
+    const run = dead.querySelector(".orca-agents__claim-run .orca-objid")!;
+    expect(run.getAttribute("title")).toBe("run-vanished");
+    expect(run.className).not.toContain("orca-objid--faint");
   });
 });
 
@@ -207,11 +244,17 @@ describe("releasing a claim", () => {
     expect(describedBy).toBeTruthy();
     const consequence = document.getElementById(describedBy!)!;
     expect(row.contains(consequence)).toBe(true);
-    expect(consequence.textContent).toBe(phraseText(releaseConsequence(CLAIMS[1]!)));
-    // The whole sentence in its title, because it truncates rather than wrapping.
-    expect(consequence.getAttribute("title")).toBe(consequence.textContent);
-    // The run in mono and the title in sans (rule 8).
-    expect([...consequence.querySelectorAll(".orca-mono")].map((span) => span.textContent)).toEqual(["run-vanished"]);
+    // The whole sentence in its title, because it truncates rather than wrapping. The text
+    // says the same, except that the run's token says its kind as a word (visually hidden)
+    // where the title shows its glyph.
+    expect(consequence.getAttribute("title")).toBe(phraseText(releaseConsequence(CLAIMS[1]!)));
+    expect(consequence.textContent).toBe(
+      `${DEAD} goes back to the scheduler. ☰run run-vanished loses its claim on it, and another run may claim it.`,
+    );
+    // The run in mono — as its id token, since it has no name — and the title in sans (rule 8).
+    expect([...consequence.querySelectorAll(".orca-objid")].map((span) => span.textContent)).toEqual([
+      "☰run run-vanished",
+    ]);
 
     // A screen reader entering the controls hears the question it is being asked.
     const group = within(row).getByRole("group", { name: `Release ${DEAD}?` });
@@ -323,7 +366,8 @@ describe("releasing a claim", () => {
     await waitFor(async () =>
       expect((await claimRow("wi-3")).textContent).toContain("released and back with the scheduler"),
     );
-    expect(said.join(" ")).toContain("wi-3 is released");
+    // Named by its title, which is what a person knows the work by — not its id.
+    expect(said.join(" ")).toContain(`${DEAD} is released`);
   });
 
   it("shows and announces the daemon's note, when releasing did not fix everything", async () => {
@@ -360,7 +404,7 @@ describe("releasing a claim", () => {
 
     await waitFor(async () => expect((await claimRow("wi-3")).className).toContain("orca-agents__claim--note"));
     // Only the row the note is about; the rest of the list is unchanged.
-    const others = (await claimRows()).filter((row) => !row.textContent?.startsWith("wi-3"));
+    const others = (await claimRows()).filter((row) => !isRowFor(row, "wi-3"));
     expect(others.length).toBeGreaterThan(0);
     for (const row of others) expect(row.className).not.toContain("orca-agents__claim--note");
   });
@@ -454,9 +498,10 @@ describe("the palette", () => {
       expect(permissions!.shortcut).toBeUndefined();
       expect(permissions!.section).toBe("actions");
 
-      // One per releasable claim, and none for the claim the daemon would refuse.
-      expect(entries.some((entry) => entry.label === "Release claim on wi-3")).toBe(true);
-      expect(entries.some((entry) => entry.label === "Release claim on wi-2")).toBe(false);
+      // One per releasable claim, and none for the claim the daemon would refuse. Named by
+      // the work item's title and its token, never by its raw id.
+      expect(entries.some((entry) => entry.label === `Release claim on ${DEAD} ⬡ wi-3`)).toBe(true);
+      expect(entries.some((entry) => entry.objectId === "wi-2")).toBe(false);
     });
   });
 
@@ -464,17 +509,19 @@ describe("the palette", () => {
     renderAgents();
     const entries = await waitFor(() => {
       const listed = commandEntries(h.keyboard.list(), "darwin", ["card", "global"]);
-      expect(listed.some((entry) => entry.label === "Release claim on wi-3")).toBe(true);
+      expect(listed.some((entry) => entry.objectId === "wi-3")).toBe(true);
       return listed;
     });
-    const release = entries.find((entry) => entry.label === "Release claim on wi-3")!;
+    const release = entries.find((entry) => entry.objectId === "wi-3")!;
 
-    // The id is machine text inside a sentence, so the palette sets it in mono (rule 8).
-    expect(release.labelMachine).toBe("wi-3");
+    // The work item by its title and its id token: the token is machine text inside a
+    // sentence, so the palette sets it in mono (rule 8); the whole id is matched, not drawn.
+    expect(release.label).toBe(`Release claim on ${DEAD} ⬡ wi-3`);
+    expect(release.labelMachine).toBe("⬡ wi-3");
     // The Plan surface's release row has these two; this one now matches it, so the first
     // Enter arms the row rather than releasing, and it is never the first row on screen.
     expect(release.tone).toBe("danger");
-    expect(release.confirm).toBe("Release wi-3 — confirm");
+    expect(release.confirm).toBe(`Release ${DEAD} ⬡ wi-3 — confirm`);
     expect(entries[0]?.tone).toBeUndefined();
     expect(entries.indexOf(release)).toBeGreaterThan(entries.findIndex((entry) => entry.tone === undefined));
   });
