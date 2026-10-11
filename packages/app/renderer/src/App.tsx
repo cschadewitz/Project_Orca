@@ -50,7 +50,7 @@ import {
   counterpartUrl,
   type Route,
 } from "./route-table.js";
-import { Button, ObjectHeader, StateView, Text, textClass, type Crumb } from "./ui/index.js";
+import { Button, ObjectHeader, ObjectId, StateView, Text, textClass, type Crumb } from "./ui/index.js";
 
 // Attention is always first: the app's default landing surface (docs/design/10-information-architecture.md).
 // The data-driven half of the landing rule — Attention showing running runs when nothing is
@@ -513,14 +513,16 @@ function LinkNotice({
       return (
         <Landing onDismiss={onDismiss}>
           <Text style="caption">{`No ${problem.type} here matches`}</Text>
-          <span className={`orca-mono ${textClass("mono-id")}`}>{problem.id}</span>
+          {/* The id the link named, whole: it is what a person compares against the one they
+              meant, so it is never cut to a token here. */}
+          <ObjectId id={problem.id} variant="full" />
         </Landing>
       );
     case "offline":
       return (
         <Landing stale onDismiss={onDismiss}>
           <Text style="caption">{`No daemon is answering, so this ${problem.type} cannot be read:`}</Text>
-          <span className={`orca-mono ${textClass("mono-id")}`}>{problem.id}</span>
+          <ObjectId id={problem.id} variant="full" />
         </Landing>
       );
   }

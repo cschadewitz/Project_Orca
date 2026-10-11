@@ -22,7 +22,7 @@
  */
 import type { JSX, Ref } from "react";
 import type { OpenInputView } from "@orca/protocol";
-import { textClass } from "../ui/index.js";
+import { ObjectId, textClass } from "../ui/index.js";
 import { AnswerCard, type AnswerRequest } from "./answer-card.js";
 import { permissionSubject, waitedLabel } from "./card-model.js";
 
@@ -60,7 +60,10 @@ export function PermissionCard({ input, ...rest }: PermissionCardProps): JSX.Ele
           <span className={`orca-id ${textClass("mono-id")}`}>{agent?.id ?? input.runName}</span>
           {agent?.hostId ? ` on ${agent.hostId}` : ""}
           {` · step `}
-          <span className={`orca-id ${textClass("mono-id")}`}>{input.nodeId ?? input.stepRunId}</span>
+          {/* The node's name when the ask carries one; its step's id token when it does not. */}
+          <span className={`orca-id ${textClass("mono-id")}`}>
+            {input.nodeId ?? <ObjectId id={input.stepRunId} kind="step" />}
+          </span>
         </>
       }
       command={subject}

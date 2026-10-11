@@ -2,7 +2,7 @@
 import { useRef, useState, type JSX } from "react";
 import type { OpenInputView, RevisionBoundaryView } from "@orca/protocol";
 import { useAnnounce } from "../a11y/announce-context.js";
-import { Button, Card, Text, textClass } from "../ui/index.js";
+import { Button, Card, ObjectId, Text, textClass } from "../ui/index.js";
 import { ArtifactRefs } from "./artifact-refs.js";
 import { artifactsReady } from "./card-model.js";
 import { RevisionInputCard } from "./revision-input-card.js";
@@ -108,7 +108,10 @@ export function PendingCorrection({ entry, feed }: { entry: AttentionRevision; f
         <Card tone="gate" eyebrow="Recorded correction">
           <div className="orca-attn__card-body">
             <Text style="caption">{REVISION_LABELS[entry.summary.state]} correction</Text>
-            <Text style="mono-id">Run: {entry.summary.target.runId}</Text>
+            {/* A read-only summary, so the whole id, with its tail lifted out of it. */}
+            <Text style="mono-id">
+              Run: <ObjectId id={entry.summary.target.runId} kind="run" variant="full" />
+            </Text>
             <Text style="mono-id">Destination: {entry.summary.target.destinationId}</Text>
             <Text style="mono-id">Attempt: {entry.summary.target.attemptId}</Text>
             <Text style="caption">Read-only correction summary. This is separate from an unanswered gate.</Text>

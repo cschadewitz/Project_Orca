@@ -502,8 +502,11 @@ describe("the keyboard map and the palette", () => {
     fireEvent.mouseDown(within(palette).getByRole("option", { name: /Cancel the run this is waiting on/ }));
 
     /* Cancelling is destructive, so the first choice arms the row rather than running it
-       (#178): the label becomes the confirmation and nothing has been sent. */
-    const armed = await within(palette).findByRole("option", { name: /Cancel run-1 — confirm/ });
+       (#178): the label becomes the confirmation and nothing has been sent. It names the run
+       by its name and its id token, said as "run run-1" — never the raw id alone. */
+    const armed = await within(palette).findByRole("option", {
+      name: new RegExp(`Cancel ${FIVE_GATES[0]!.runName} run run-1 — confirm`),
+    });
     expect(fake.calls.some((c) => c.method === "runs.cancel")).toBe(false);
     fireEvent.mouseDown(armed);
 

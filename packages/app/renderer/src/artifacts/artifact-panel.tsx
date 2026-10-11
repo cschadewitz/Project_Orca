@@ -29,7 +29,7 @@
 import { useEffect, useLayoutEffect, useMemo, useState, type JSX } from "react";
 import type { RunsGetResult } from "@orca/protocol";
 import { useKeyboard } from "../keyboard-context.js";
-import { Menu, StateView, Text, Time, textClass, type MenuItem } from "../ui/index.js";
+import { Menu, ObjectId, StateView, Text, Time, textClass, type MenuItem } from "../ui/index.js";
 import { diffText, gutterFor, type DiffLine } from "./diff.js";
 import { useArtifactPanel, type ArtifactTarget } from "./panel-context.js";
 import { useArtifactBody, useArtifactsList } from "./use-artifacts.js";
@@ -97,6 +97,10 @@ export function ArtifactPanel({ target }: ArtifactPanelProps): JSX.Element {
   }, [keyboard, panel, versions, target.version]);
 
   const consumers = useMemo(() => consumedBy(run, current?.id), [run, current?.id]);
+  const producer = useMemo(
+    () => run?.steps.find((step) => step.id === current?.producedByStepRunId),
+    [run, current?.producedByStepRunId],
+  );
 
   const compareItems = useMemo<MenuItem[]>(
     () => [
@@ -141,7 +145,7 @@ export function ArtifactPanel({ target }: ArtifactPanelProps): JSX.Element {
         </Menu>
       </div>
 
-      <Provenance target={target} current={current} consumers={consumers} />
+      <Provenance target={target} current={current} consumers={consumers} producer={producer} />
 
       <Body
         loading={body.loading || loadingVersions || against.loading}
@@ -161,10 +165,13 @@ function Provenance({
   target,
   current,
   consumers,
+  producer,
 }: {
   target: ArtifactTarget;
   current: ReturnType<typeof useArtifactsList>["artifacts"][number] | undefined;
   consumers: readonly { stepId: string; nodeId: string; attempt: number }[];
+  /** The step that wrote this version, when it is one of this run's. */
+  producer: { nodeId: string; attempt: number } | undefined;
 }): JSX.Element {
   return (
     <div className={`orca-artifact__prov ${textClass("caption")}`}>
@@ -176,7 +183,15 @@ function Provenance({
           {current.producedByStepRunId !== undefined && (
             <>
               {" · produced by "}
-              <span className={`orca-id ${textClass("mono-id")}`}>{current.producedByStepRunId}</span>
+              {/* The step by its node and attempt, the way "read by" names its steps, then its
+                  id token; the token alone when this run's steps do not include it. */}
+              <span className={`orca-id ${textClass("mono-id")}`}>
+                <ObjectId
+                  id={current.producedByStepRunId}
+                  kind="step"
+                  {...(producer === undefined ? {} : { name: `${producer.nodeId} (attempt ${producer.attempt})` })}
+                />
+              </span>
             </>
           )}
           {current.path !== undefined && (
