@@ -2157,11 +2157,11 @@
   align-items: baseline;
   gap: var(--space-1);
   /* A crumb that links is a <button> (it navigates in-app, it is not an href): reset the
-     control chrome so the button and the current crumb's <span> render identically. */
+     control chrome so the button and the current crumb's <span> render identically. The
+     font reset is the `:where()` rule below, so the crumb's `label` class wins over it. */
   border: 0;
   padding: 0;
   background: none;
-  font: inherit;
   color: var(--accent);
   cursor: pointer;
   /* Narrower than its content once nothing is left to fold, by its name (below). */
@@ -2243,9 +2243,18 @@
   border: 0;
   padding: 0;
   background: none;
-  font: inherit;
   color: var(--accent);
   cursor: pointer;
+}
+/* A crumb and the `…` are <button>s, which take the user agent's font rather than the page's,
+   so each needs a font reset — and the reset is here, inside `:where()`, rather than in their
+   rules. A `font: inherit` in `.orca-crumb` had a class's specificity and came later in the
+   cascade than tokens.css, so it beat the `orca-text-label` on the same element and every
+   crumb, the `…` with them, was the shell's 14/20 body instead of the 13/18 label it is
+   noted as. At zero specificity the reset still beats the user agent, as any author rule
+   does, and loses to the type class, which is the order wanted. */
+:where(.orca-crumb, .orca-objhead__elision) {
+  font: inherit;
 }
 /* Where the header measures what it would take to unfold: the folded crumbs and a `…`, laid
    out at their natural width, unseen and out of reach (`inert`, `aria-hidden`). The box is
