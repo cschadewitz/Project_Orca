@@ -18,11 +18,21 @@
  *
  * It is a `<nav>` with an `aria-label`, and the trail is an ordered list, so the crumbs
  * read as a path rather than as a row of unrelated links.
+ *
+ * **A trail that does not fit folds its middle into `…`** — `request ▸ … ▸ run ▸ step`, then
+ * `request ▸ … ▸ step` — and only then cuts the current crumb's name at its end. The root and
+ * the current crumb are never folded; the order things give way in, and why folding comes
+ * before cutting, is `crumb-elision.ts`'s. Whether it fits is *measured*, never counted: a
+ * wide window shows the whole chain however long it is. `…` is a `Menu` listing the folded
+ * crumbs — type, name and token — and choosing one is `onOpen`, exactly as pressing the crumb
+ * would have been. Its accessible name says what it holds ("1 hidden level: work item
+ * Database schema"), so the list a screen reader walks still names every level, in order.
  */
-import { type JSX, type ReactNode } from "react";
-import { CHROME_GLYPHS, type ObjectKind } from "@orca/design";
+import { useLayoutEffect, useRef, useState, type JSX, type ReactNode } from "react";
+import { CHROME_GLYPHS, OBJECT_KIND_PRESENTATION, type ObjectKind } from "@orca/design";
 import { urlForCrumb } from "../route-table.js";
 import { counterpartsFor, type Counterpart, type CrumbType } from "./counterparts.js";
+import { elideTrail, sameElision, type Elision, type TrailMeasurement } from "./crumb-elision.js";
 import { Menu, type MenuItem } from "./menu.js";
 import { ObjectId } from "./object-id.js";
 import { idText, idWords } from "./object-id-model.js";
@@ -87,42 +97,251 @@ export interface ObjectHeaderProps {
   mode?: { options: readonly HeaderMode[]; active: string; onChange: (id: string) => void; label?: string };
   /** Buttons and controls for the object, pushed to the right of the header. */
   actions?: ReactNode;
-  /** Navigate to a crumb. Never called for the current crumb, which is not a link. */
+  /**
+   * Navigate to a crumb — pressed in the trail, or chosen from `…` when it is folded, which
+   * is the same act. Never called for the current crumb, which is not a link.
+   */
   onOpen?: (crumb: Crumb) => void;
   /** Navigate to one of a crumb's counterparts. Without it, no menus are offered. */
   onOpenCounterpart?: (crumb: Crumb, counterpart: Counterpart) => void;
+  /**
+   * How the trail learns what fits. The default measures the document; a test injects
+   * widths, because happy-dom has no layout engine and measures everything as zero — which
+   * folds nothing, so a header nobody can measure shows its whole chain.
+   */
+  measure?: TrailMeasurer;
 }
 
-export function ObjectHeader({ crumbs, mode, actions, onOpen, onOpenCounterpart }: ObjectHeaderProps): JSX.Element {
-  const keyOf = (crumb: Crumb): string => `${crumb.type}:${crumb.id}`;
+/**
+ * Measure the trail: `trail` is the list the crumbs are drawn in, `crumbs` every crumb's
+ * item in chain order — the folded ones where they are laid out unseen — and `elision` an
+ * unseen `…` item, there whether or not the trail is folded.
+ */
+export type TrailMeasurer = (trail: Element, crumbs: readonly Element[], elision: Element) => TrailMeasurement;
+
+const widthOf = (element: Element): number => element.getBoundingClientRect().width;
+
+/** The class of a crumb's name, the one part of a crumb that is ever cut. */
+const NAME_CLASS = "orca-crumb__name";
+
+/**
+ * A crumb's width with its name whole. The name is cut only once nothing is left to fold,
+ * and what it is cut by is how much wider its text is than its box — so the decision is
+ * always made over the widths the crumbs would have, never the ones the cut left them.
+ */
+function naturalWidth(crumb: Element): number {
+  const name = crumb.querySelector(`.${NAME_CLASS}`);
+  const cut = name === null ? 0 : Math.max(0, name.scrollWidth - name.clientWidth);
+  return widthOf(crumb) + cut;
+}
+
+const measureInDocument: TrailMeasurer = (trail, crumbs, elision) => {
+  const gap = Number.parseFloat(trail.ownerDocument.defaultView?.getComputedStyle(trail).columnGap ?? "");
+  return {
+    available: widthOf(trail),
+    crumbs: crumbs.map(naturalWidth),
+    elision: widthOf(elision),
+    gap: Number.isFinite(gap) ? gap : 0,
+  };
+};
+
+/** Marks each crumb's item with its place in the chain, so the measurer finds it wherever it is. */
+const CRUMB_ATTRIBUTE = "data-orca-crumb";
+
+const keyOf = (crumb: Crumb): string => `${crumb.type}:${crumb.id}`;
+
+/** What changes a crumb's width, as one string, so a re-render with the same trail measures nothing new. */
+const shapeOf = (crumbs: readonly Crumb[]): string =>
+  crumbs
+    .map((crumb) => [keyOf(crumb), crumb.label, crumb.version ?? "", crumb.current === true].join("\u0000"))
+    .join("\n");
+
+/**
+ * Which crumbs are folded, measured after layout and before paint — so a trail never draws
+ * one frame overflowing — and again whenever the trail, a crumb or the `…` changes size: a
+ * window drag, a docked panel, a dragged splitter, a font arriving, the actions growing.
+ */
+function useElision(crumbs: readonly Crumb[], measure: TrailMeasurer) {
+  const [elision, setElision] = useState<Elision | undefined>(undefined);
+  const nav = useRef<HTMLElement>(null);
+  const trail = useRef<HTMLOListElement>(null);
+  const marker = useRef<HTMLLIElement>(null);
+  const shape = shapeOf(crumbs);
+  const count = crumbs.length;
+
+  useLayoutEffect(() => {
+    const [root, list, unseen] = [nav.current, trail.current, marker.current];
+    if (!root || !list || !unseen) return;
+    const items = (): Element[] | undefined => {
+      const found = Array.from({ length: count }, (_, at) => root.querySelector(`[${CRUMB_ATTRIBUTE}="${at}"]`));
+      return found.every((item) => item !== null) ? found : undefined;
+    };
+    const update = (): void => {
+      const all = items();
+      if (!all) return;
+      const next = elideTrail(measure(list, all, unseen));
+      setElision((previous) => (sameElision(previous, next) ? previous : next));
+    };
+    update();
+
+    const view = root.ownerDocument.defaultView;
+    if (!view || typeof view.ResizeObserver !== "function") return;
+    const observer = new view.ResizeObserver(update);
+    for (const element of [list, unseen, ...(items() ?? [])]) observer.observe(element);
+    return () => observer.disconnect();
+    // `elision` is a dependency because folding moves crumbs between the trail and the
+    // unseen row, and the moved items are new elements to observe.
+  }, [shape, count, measure, elision]);
+
+  /* An answer about a longer trail than this one — the frame between a selection changing and
+     the measurement after it — folds nothing rather than folding the current crumb. */
+  const fits = elision !== undefined && elision.from >= 1 && elision.to < count && elision.from < elision.to;
+  return { elision: fits ? elision : undefined, nav, trail, marker };
+}
+
+export function ObjectHeader({
+  crumbs,
+  mode,
+  actions,
+  onOpen,
+  onOpenCounterpart,
+  measure = measureInDocument,
+}: ObjectHeaderProps): JSX.Element {
+  const { elision, nav, trail, marker } = useElision(crumbs, measure);
+  const folded = elision === undefined ? [] : crumbs.slice(elision.from, elision.to);
+
+  const item = (crumb: Crumb, index: number): JSX.Element => (
+    <CrumbItem
+      key={keyOf(crumb)}
+      crumbs={crumbs}
+      crumb={crumb}
+      index={index}
+      onOpen={onOpen}
+      onOpenCounterpart={onOpenCounterpart}
+    />
+  );
 
   return (
-    <nav className="orca-objhead" aria-label="Object">
-      <ol className="orca-objhead__trail">
-        {crumbs.map((crumb, index) => (
-          <li key={keyOf(crumb)} className="orca-objhead__crumb">
-            {index > 0 && (
-              <span className={`orca-crumb__sep ${textClass("caption")}`} aria-hidden="true">
-                {CHROME_GLYPHS.crumbSeparator}
-              </span>
-            )}
-            {crumb.current === true ? (
-              <span className={`orca-crumb ${textClass("label")} orca-crumb--current`} aria-current="page">
-                <CrumbLabel crumb={crumb} />
-              </span>
-            ) : (
-              <button type="button" className={`orca-crumb ${textClass("label")}`} onClick={() => onOpen?.(crumb)}>
-                <CrumbLabel crumb={crumb} />
-              </button>
-            )}
-            <CrumbMenu crumbs={crumbs} crumb={crumb} onChoose={onOpenCounterpart} />
-          </li>
-        ))}
+    <nav className="orca-objhead" aria-label="Object" ref={nav}>
+      <ol className="orca-objhead__trail" ref={trail}>
+        {crumbs.map((crumb, index) => {
+          if (elision === undefined || index < elision.from || index >= elision.to) return item(crumb, index);
+          return index === elision.from ? <FoldedCrumbs key="folded" crumbs={folded} onOpen={onOpen} /> : null;
+        })}
       </ol>
-      <span className="orca-spacer" />
       {mode && <ModeControl {...mode} />}
       {actions}
+      {/* Unseen, and never reached: the folded crumbs at their natural width, and a `…` that is
+          there whether or not anything is folded, so the header always knows what unfolding
+          would take. Each crumb is in the document once — here or in the trail. */}
+      <div className="orca-objhead__measure" aria-hidden="true" inert>
+        <ol className="orca-objhead__measure-row">
+          {folded.map((crumb, at) => item(crumb, (elision?.from ?? 0) + at))}
+          <li className="orca-objhead__crumb" ref={marker}>
+            <Separator />
+            <span className="orca-menu-anchor">
+              <span className={`orca-objhead__elision ${textClass("label")}`}>
+                <span aria-hidden="true">{ELISION_GLYPH}</span>
+              </span>
+            </span>
+          </li>
+        </ol>
+      </div>
     </nav>
+  );
+}
+
+function Separator(): JSX.Element {
+  return (
+    <span className={`orca-crumb__sep ${textClass("caption")}`} aria-hidden="true">
+      {CHROME_GLYPHS.crumbSeparator}
+    </span>
+  );
+}
+
+interface CrumbItemProps {
+  /** The whole chain, folded crumbs included: a crumb's link is built from the ones above it. */
+  crumbs: readonly Crumb[];
+  crumb: Crumb;
+  /** Its place in the chain. The root has no separator in front of it. */
+  index: number;
+  onOpen?: ((crumb: Crumb) => void) | undefined;
+  onOpenCounterpart?: ((crumb: Crumb, counterpart: Counterpart) => void) | undefined;
+}
+
+function CrumbItem({ crumbs, crumb, index, onOpen, onOpenCounterpart }: CrumbItemProps): JSX.Element {
+  return (
+    <li
+      className={`orca-objhead__crumb${crumb.current === true ? " orca-objhead__crumb--current" : ""}`}
+      {...{ [CRUMB_ATTRIBUTE]: index }}
+    >
+      {index > 0 && <Separator />}
+      {crumb.current === true ? (
+        <span className={`orca-crumb ${textClass("label")} orca-crumb--current`} aria-current="page">
+          <CrumbLabel crumb={crumb} />
+        </span>
+      ) : (
+        <button type="button" className={`orca-crumb ${textClass("label")}`} onClick={() => onOpen?.(crumb)}>
+          <CrumbLabel crumb={crumb} />
+        </button>
+      )}
+      <CrumbMenu crumbs={crumbs} crumb={crumb} onChoose={onOpenCounterpart} />
+    </li>
+  );
+}
+
+/**
+ * The trail's `…`. Typographic punctuation in the label face rather than a chrome glyph:
+ * Plex carries it (it is how the app says "cut here" everywhere), and the symbol face does not.
+ */
+const ELISION_GLYPH = "…";
+
+/**
+ * The folded crumbs, as `…` and the `Menu` it opens. Each is listed the way the crumb drew
+ * it — name, token, and its type as the item's hint — and choosing one is `onOpen`, the
+ * same route-table navigation the crumb would have taken.
+ *
+ * What the menu does not carry is each folded crumb's own menu (Copy link, Copy id, its
+ * counterparts): a `Menu` is a list of choices, not a tree of them, and a folded crumb is
+ * one choice away from being the object on screen, where all of that is.
+ *
+ * The trigger's accessible name lists what it holds, in order, so the trail a screen reader
+ * walks is still the whole chain; the menu is where to go, not the only place they are said.
+ */
+function FoldedCrumbs({
+  crumbs,
+  onOpen,
+}: {
+  crumbs: readonly Crumb[];
+  onOpen?: ((crumb: Crumb) => void) | undefined;
+}): JSX.Element {
+  const byKey = new Map(crumbs.map((crumb) => [keyOf(crumb), crumb]));
+  const items: MenuItem[] = crumbs.map((crumb) => {
+    const kind = CRUMB_KIND[crumb.type];
+    return {
+      id: keyOf(crumb),
+      label: crumbName(crumb),
+      hint: crumb.type,
+      ...(kind === undefined ? {} : { labelId: crumb.id, labelKind: kind }),
+      ...(isNameless(crumb) ? { nameless: true } : {}),
+    };
+  });
+
+  return (
+    <li className="orca-objhead__crumb">
+      <Separator />
+      <Menu
+        label={foldedName(crumbs)}
+        triggerClassName={`orca-objhead__elision ${textClass("label")}`}
+        items={items}
+        onChoose={(chosen) => {
+          const crumb = byKey.get(chosen.id);
+          if (crumb) onOpen?.(crumb);
+        }}
+      >
+        <span aria-hidden="true">{ELISION_GLYPH}</span>
+      </Menu>
+    </li>
   );
 }
 
@@ -174,6 +393,18 @@ const crumbName = (crumb: Crumb): string => {
   return kind !== undefined && isNameless(crumb) ? idWords(crumb.id, { kind }) : crumb.label;
 };
 
+/** A crumb said whole: its kind's word, then its name — "work item Database schema". */
+const spokenCrumb = (crumb: Crumb): string => {
+  const kind = CRUMB_KIND[crumb.type];
+  if (kind === undefined) return `${crumb.type} ${crumb.label}`;
+  // A nameless crumb's name is its token said as words, which already says the kind.
+  return isNameless(crumb) ? crumbName(crumb) : `${OBJECT_KIND_PRESENTATION[kind].word} ${crumb.label}`;
+};
+
+/** The `…` control's accessible name: how many levels it holds, and each of them, in order. */
+const foldedName = (crumbs: readonly Crumb[]): string =>
+  `${crumbs.length} hidden ${crumbs.length === 1 ? "level" : "levels"}: ${crumbs.map(spokenCrumb).join(", ")}`;
+
 /**
  * The type label is part of the crumb, not a tooltip: it is what makes the trail readable.
  *
@@ -188,7 +419,13 @@ function CrumbLabel({ crumb }: { crumb: Crumb }): JSX.Element {
   const nameless = isNameless(crumb);
   return (
     <>
-      {kind !== undefined && nameless ? <ObjectId id={crumb.id} kind={kind} /> : <span>{crumb.label}</span>}
+      {/* The name is the part of a crumb that is cut, and only once nothing is left to fold;
+          the type, the token and the version keep their width. */}
+      {kind !== undefined && nameless ? (
+        <ObjectId id={crumb.id} kind={kind} />
+      ) : (
+        <span className={NAME_CLASS}>{crumb.label}</span>
+      )}
       <span className={`orca-crumb__type ${textClass("eyebrow")}`} {...(nameless ? { "aria-hidden": true } : {})}>
         {crumb.type}
       </span>

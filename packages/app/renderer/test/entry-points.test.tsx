@@ -233,6 +233,36 @@ describe("the object header's links, in the chrome", () => {
     await waitFor(() => expect(landing()?.textContent).toContain("wi-1"));
   });
 
+  it("opens a folded crumb through the route table, from the trail's `…`", async () => {
+    /* A pane too narrow for the trail: every crumb 200 wide in a trail 300 wide folds the
+       work item between the request and the run. happy-dom lays nothing out, so the boxes
+       the header measures are given here; everything else keeps happy-dom's zero box. */
+    const spy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const width = this.matches(".orca-objhead__trail")
+        ? 300
+        : this.hasAttribute("data-orca-crumb")
+          ? 200
+          : this.matches(".orca-objhead__measure-row > li:last-child")
+            ? 30
+            : 0;
+      return new DOMRect(0, 0, width, 0);
+    });
+    teardown.push(() => spy.mockRestore());
+
+    mount();
+    const header = await selectARun();
+    const folded = await within(header).findByRole("button", {
+      name: /^1 hidden level: work item Add the SSO callback/,
+    });
+
+    fireEvent.click(folded);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Add the SSO callback/ }));
+
+    // Where the work item crumb itself goes: Plan, landing on the id it was holding.
+    await waitFor(() => expect(activeSurface()).toContain("Plan"));
+    await waitFor(() => expect(landing()?.textContent).toContain("wi-1"));
+  });
+
   it("says which counterpart it cannot follow yet rather than swallowing the click", async () => {
     mount();
     const header = await selectARun();

@@ -10,6 +10,7 @@ export {
 export { ConnectionIndicator, type ConnectionIndicatorProps } from "./connection-indicator.js";
 export { COUNTERPARTS, counterpartsFor, type Counterpart, type CrumbType } from "./counterparts.js";
 export { focusAfterLeaving } from "./focus-after-leaving.js";
+export { elideTrail, sameElision, type Elision, type TrailMeasurement } from "./crumb-elision.js";
 export { formatAbsolute, formatDuration, formatRelative } from "./format-time.js";
 export { Menu, type MenuItem, type MenuMeasurer, type MenuProps } from "./menu.js";
 export {
@@ -21,7 +22,13 @@ export {
   type MenuPlacement,
   type Rect,
 } from "./menu-placement.js";
-export { ObjectHeader, type Crumb, type HeaderMode, type ObjectHeaderProps } from "./object-header.js";
+export {
+  ObjectHeader,
+  type Crumb,
+  type HeaderMode,
+  type ObjectHeaderProps,
+  type TrailMeasurer,
+} from "./object-header.js";
 export { IdToken, MachineText, ObjectId, useIdTails, type ObjectIdProps } from "./object-id.js";
 export {
   OPAQUE_WHOLE,

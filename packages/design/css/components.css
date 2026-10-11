@@ -2057,6 +2057,11 @@
   padding: 0 var(--space-4);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
 }
+/* The mode control and the actions keep their width; the trail takes what is left and is
+   the one thing in the header that gives way (`ui/crumb-elision.ts`). */
+.orca-objhead > * {
+  flex: none;
+}
 /* type: label */
 .orca-crumb {
   display: inline-flex;
@@ -2070,6 +2075,18 @@
   font: inherit;
   color: var(--accent);
   cursor: pointer;
+  /* Narrower than its content once nothing is left to fold, by its name (below). */
+  min-width: 0;
+}
+/* A crumb's name, cut at its end — the current crumb's, and only after every crumb that can
+   fold has (the order is `ui/crumb-elision.ts`'s). The type label, the id token and the
+   version beside it are `flex: none`: a tail cut short is a different id. Its type is the
+   crumb's. */
+.orca-crumb__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .orca-crumb--current {
   color: var(--ink-primary);
@@ -2078,18 +2095,24 @@
 }
 /* type: eyebrow */
 .orca-crumb__type {
+  flex: none;
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
 /* type: mono-id — the run's workflow and the version it is pinned to, `ai-sdlc v11` (#177) */
 .orca-crumb__version {
+  flex: none;
+  white-space: nowrap;
   color: var(--ink-secondary);
 }
 /* type: caption */
 .orca-crumb__sep {
+  flex: none;
   color: var(--ink-tertiary);
 }
-/* The trail is an <ol>; the crumbs carry their own separators. */
+/* The trail is an <ol>; the crumbs carry their own separators. It takes the header's room
+   from zero, so its width *is* the room the crumbs have — which is what is measured to
+   decide what folds into `…`. Not a clip: a crumb's menu hangs out of it. */
 .orca-objhead__trail {
   display: flex;
   align-items: baseline;
@@ -2098,12 +2121,60 @@
   padding: 0;
   list-style: none;
 }
-/* One crumb and the counterpart menu it opens; the menu is positioned against this. */
+.orca-objhead > .orca-objhead__trail {
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* One crumb and the counterpart menu it opens; the menu is positioned against this. A crumb
+   keeps its width: what gives way first is the middle of the trail, folded into `…`. */
 .orca-objhead__crumb {
   position: relative;
   display: inline-flex;
   align-items: baseline;
   gap: var(--space-1);
+  flex: none;
+}
+/* Then the current crumb's name, cut at its end — the one name that is. The surface under the
+   header names that object whole (its selected row, its detail pane), and the root may be
+   named nowhere else; one cut name also means no crumb is ever squeezed past what its name
+   can give. */
+.orca-objhead__crumb--current {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.orca-objhead__crumb > .orca-menu-anchor {
+  flex: none;
+}
+/* type: label */
+.orca-objhead__elision {
+  display: inline-flex;
+  justify-content: center;
+  /* A glyph is narrower than a pointer target; the control is not. */
+  min-width: var(--hit-min);
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+/* Where the header measures what it would take to unfold: the folded crumbs and a `…`, laid
+   out at their natural width, unseen and out of reach (`inert`, `aria-hidden`). The box is
+   empty-sized and clips, so a row wider than the pane scrolls nothing. */
+.orca-objhead__measure {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+.orca-objhead__measure-row {
+  display: flex;
+  width: max-content;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 /* The disclosure is the crumb separator turned a quarter: the bundled symbol face carries
    ▸ and no downward triangle, and an unbundled glyph falls back per platform. */
