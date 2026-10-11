@@ -252,12 +252,16 @@ built either: the config surface renders a form over a schema, the raw document 
 the daemon already serves, and a palette row that opened a viewer over it would be a second
 way to look at the same file rather than a write. Both stay open as their own work.
 
-**A palette label sets its ids in mono.** `Shortcut.labelMachine` names the substring of the
-label (and of the confirmation) that ORCA produced — a run id, a work item id, a decision
-key — and the row draws that span in `mono-id` and the rest in sans, because mono means ORCA
-produced it and "Release claim on `wi-metrics`" is two voices in one sentence (rule 8). It
-is a substring rather than a second string so that the label stays the one thing the query
-matches and the one thing that names the option.
+**A palette label sets its ids in mono, and an id is its token.** `Shortcut.labelMachine`
+names the substring of the label (and of the confirmation) that ORCA produced — an id token,
+a decision key — and the row draws that span in `mono-id` and the rest in sans, because mono
+means ORCA produced it and "Release claim on Database schema `⬡ 5M579G`" is two voices in one
+sentence (rule 8). A label never carries a raw id: it names the object and follows the name
+with the token from `idText`, which the palette draws as an `ObjectId` token — the glyph as
+decoration, the kind as a word, so the option is named "… work item 5M579G". The whole id is
+the shortcut's `objectId`, matched and never drawn, so pasting it or typing the tail a row
+showed still finds the row. It is a substring rather than a second string so that the label
+stays the one thing the query matches and the one thing that names the option.
 
 ## Popovers are one primitive
 
@@ -647,7 +651,8 @@ review, which found the three things a popover over a list gets wrong here: the 
 in an item's eyebrow-styled `hint`, so an uppercase line wider than the window; the destructive
 item was first and focused on open, so Release then `Enter` released; and the question was asked
 in a layer over the list rather than on the row it was about. The palette's **Release claim on**
-row is the Plan surface's in every respect — `labelMachine`, `tone: "danger"`, a `confirm`.
+row is the Plan surface's in every respect — one `releaseCommand` words both, the work item by
+its title and its token, `tone: "danger"`, a `confirm`.
 There is no **Force release** here — `--force` takes an item from a run that could still
 resume, which has no undo and stays a CLI act. Nothing pushes for a release (it journals no
 event), so the claims are re-read once after the call, and the result's `note` — what releasing

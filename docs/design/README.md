@@ -99,8 +99,14 @@ Write in the app the way a careful engineer writes a commit message.
   last-known and how old it is; it does not silently display stale numbers.
 - **Machine strings stay verbatim.** Ids, node names, paths, expressions, agent output and
   artifact bodies are never re-capitalised, translated or truncated in the middle. Truncate
-  at the end with a character-count affordance, or in the middle only for ids, where the
-  head and tail are what identify them.
+  at the end with a character-count affordance.
+- **An id is shown by its name and its tail.** In a row or a header an id goes through
+  `ObjectId`: the object's name leads (a work item's title, a run's name), then a faint token
+  — the kind's glyph and the id's last six characters, `Database schema ⬡ 5M579G`. With no
+  name the token stands alone. Never the head: a ULID's first ten characters are its
+  timestamp, so ids minted together are identical there and differ only at the end. The whole
+  id is one action away — the token's hover, **Copy id** in the object header, the detail
+  pane, and the palette, which matches any part of it.
 - **No emoji, anywhere, including in empty states.**
 
 ## Colour
@@ -137,7 +143,7 @@ Write in the app the way a careful engineer writes a commit message.
   distinction is load-bearing: it is how a reader knows whether a string is a value or a
   sentence.
 - `mono-log` is the only style used for streamed output. `mono-id` is tracked out so two
-  truncated ids can be compared by eye.
+  id tails can be compared by eye.
 - The font stack is `IBM Plex Sans` and `IBM Plex Mono`, both bundled with the application as
   woff2 rather than fetched at runtime — an Electron app that needs a CDN to render its own
   text is broken offline. The files are in `packages/design/fonts`, subset to Latin plus the
@@ -149,8 +155,9 @@ Write in the app the way a careful engineer writes a commit message.
 - **The status glyphs are bundled too, and they are not Plex.** Plex contains none of
   ◐ ◆ ✕ ⊘ ▣ ⏸ ◷ ● — left to the fallback stack they render in whatever face the OS supplies,
   differently on each platform, at 11px next to the word they qualify. Two subsets of Noto
-  (Symbols 2, and Math for ⊘ alone) carry exactly the glyphs ORCA renders and no Latin at
-  all, so they sit in front of Plex in both stacks without their metrics touching text.
+  (Symbols 2, and Math for ⊘ and the gate kind's ⊓) carry exactly the glyphs ORCA renders and
+  no Latin at all, so they sit in front of Plex in both stacks without their metrics touching
+  text.
   Adding a glyph to `semantics.json` means adding it to `tools/font-build/build-fonts.js` and
   rerunning `pnpm run design:fonts`; the suite fails if you do not.
 
@@ -191,6 +198,14 @@ as inline SVG at `icon-md` on a 16px grid with a 1.5px stroke in `currentColor`.
 an icon is never the only label for an action, and a status glyph is never used for anything
 that is not that status. When an icon set is eventually chosen, pick one with a 16px optical
 grid and replace the inline SVGs; nothing else in the system depends on it.
+
+**Object kinds have glyphs too** (`objectKind` in `semantics.json`): `☰` run, `⬡` work item,
+`❝` request, `▭` step, `⊓` gate, `✦` event. A kind glyph is only ever drawn in front of an id
+tail, in an `ObjectId` token, and it is never a status: the font tests hold that no kind
+glyph is any other domain's. Two are shared on purpose — `☰` and `⬡` are the Runs and Plan
+rail glyphs, the way Attention's `◆` is the waiting status's — because a run token points at
+what the Runs surface lists and a work item token at a node of the graph Plan draws. The glyph
+is decoration; the kind's word is the token's accessible name ("run 7X8PXX").
 
 ## Building on this
 

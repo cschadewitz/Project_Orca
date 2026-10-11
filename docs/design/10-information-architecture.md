@@ -103,15 +103,19 @@ They are joined by the **object header**, which is present on every screen that 
 and is the only breadcrumb in the app:
 
 ```
-sso-rollout  ▸  auth-sso-epic  ▸  run 7f3a2c  ▸  build (attempt 2)
-  request         work item        run             step
+❝ 5BNH42  ▸  Database schema ⬡ 5M579G  ▸  Database schema ☰ JH7X8P  ▸  design (attempt 2) ▭ C6SE2Q
+ request          work item                     run                         step
 ```
 
 Every crumb is a link, every crumb has a type label, and the crumb for the object you are
-looking at is not a link. From any crumb, a menu offers the counterpart objects: from a work
-item, "runs that attempted this" and "dependencies"; from a run, "the work item it claims"
-and "the workflow it executes". This is how cross-linking works — one component, no dead ends,
-and no surface needs to embed another's navigation.
+looking at is not a link. A crumb leads with the object's name and follows its type label
+with the id's token — the kind's glyph and the last six characters, faint (`ObjectId`) — so
+two runs of one name are told apart in the trail; an object with no name on any read model,
+which today is a request, is its token in the name's place. From any crumb, a menu offers
+**Copy link**, **Copy id** (the whole id, not the six characters on screen) and the
+counterpart objects: from a work item, "runs that attempted this" and "dependencies"; from a
+run, "the work item it claims" and "the workflow it executes". This is how cross-linking
+works — one component, no dead ends, and no surface needs to embed another's navigation.
 
 ## Deep links
 

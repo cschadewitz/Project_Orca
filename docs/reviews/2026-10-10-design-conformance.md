@@ -120,6 +120,36 @@ changelog fragment.
     (`--chip-aligned-width`, defined once in `components.css`) in the chip's type.
   - The run summary drew its status word twice, on the chip and again as a caption beside it.
   - Permission rules truncate in a narrow panel and now carry their whole text in `title`.
+- **The Plan schedule's why links did not line up.** A classified item drew **why** inside its
+  tinted badge and a settled item drew it after its outcome chip, so the tint ended after
+  "why" on some rows and before it on others. Every row is now the mark, then the why — a
+  control is accent and never sits on a state's tint — and the badge and the settled chip
+  take one width in that column (`--badge-aligned-width`, the longest schedule word).
+- **Ids were printed raw, and cut at the wrong end** (follow-up 9). Rows and headers printed
+  `wi_01M4M899VKJZRZSBHNDY5M579G`; a ULID's first ten characters are its timestamp, so ids
+  minted together are identical at the start, and the Plan table's end-truncation
+  (`req_01M4M9GQ7T…`) kept exactly that half. The Runs request crumb printed one in sans.
+  - **Decided:** the name leads and the id follows as a faint token — the kind's glyph and
+    the last six characters, `Database schema ⬡ 5M579G` — through one primitive, `ObjectId`
+    (`renderer/src/ui/object-id.tsx`, over `.orca-objid`). Six characters for every format;
+    a list where two ids share six lengthens just those. The whole id is on hover (the one
+    exception to "not in a tooltip", `30-long-running-content.md`), in the object header's
+    new **Copy id**, in the detail pane (`variant="full"`) and in the palette's matching.
+  - Six kind glyphs in `semantics.json`'s `objectKind`, bundled and never a status: `☰` run
+    and `⬡` work item reuse their surfaces' rail glyphs on purpose; `❝` request, `▭` step,
+    `⊓` gate and `✦` event are new.
+  - Call sites: the claimed-work rows, the Plan table's request and claim columns (now
+    `col-id`), the Plan rail's request filters and inspector, the Runs crumbs, palette labels
+    and danger confirmations (the name and the token via `labelMachine`, the whole id as
+    `objectId`), the permission card's step fallback, the artifact panel's producer, the
+    workflow viewer's run picker. Timeline rows name an event by `#seq`; its copy menu keeps
+    the id. The link notices, the correction card and guided-launch receipts keep ids whole.
+  - Menu hints that are ids (`orca://`, an intent id, `id · vN · N nodes`, `status · vN`) were
+    uppercased by the eyebrow style; `MenuItem.hintMachine` sets them in mono, verbatim.
+  - The palette's jump row did not recognise `run_<uuid>`, so no run admitted through a
+    request or a direct launch could be jumped to by id. It does now.
+  - `renderer/test/object-id-guard.test.ts` fails on a raw id rendered as a JSX child, and on
+    an id prefix in `packages/core/src/ids.ts` that is neither a kind nor listed as never shown.
 
 ## Findings by area
 
@@ -142,7 +172,8 @@ changelog fragment.
   - Missing, undocumented:
     - Chain elision (`request ▸ … ▸ run`).
     - Risks and artifacts counterparts.
-    - Ids in mono (crumb names are sans, against rule 8).
+    - Ids in mono (crumb names are sans, against rule 8). *Fixed since: ids are tokens; see
+      "Fixed after the review".*
     - A panel toggle in the header.
 - **CommandPalette: Partial.**
   - **Matches:**
@@ -386,7 +417,9 @@ a line in `docs/design` saying it is intended.
 6. Risk matrix: decide on the axes, and document the choice or flip them.
 7. Workflow viewer: draw a pinned run's own version with `workflows.get({ id, version })`.
 8. Status bar: add the "runs active" count, which the app already reads.
-9. Object header: ids in mono; chain elision.
+9. Object header: chain elision (`request ▸ … ▸ run`) is still open. *Ids in mono: closed —
+   every crumb with an ORCA id carries its token and **Copy id**; see "Fixed after the
+   review".*
 10. Palette: the prefixes and the nearest-prefix no-results message.
 11. Workflow editor, still to build:
     - Dry run (#183).
@@ -405,6 +438,17 @@ a line in `docs/design` saying it is intended.
 15. **Claims held by finished runs.** The demo lists claims whose owning run has
     *succeeded*, and each one is releasable by hand. Should a run that ends release its
     claims itself? That is a daemon question, deferred; nothing in the app changed for it.
+16. **The CLI and the daemon take only whole ids.** A person now reads `☰ JH7X8P` in the
+    app, and **Copy id** gives the whole id to paste; accepting a unique id suffix in `orca`
+    commands and in `runs.get` would let the token itself be typed. That is a protocol
+    change, deferred.
+17. **Request crumbs have no name to lead with.** `runs.list` and the plan's read models
+    carry `requestId` and no request title, so a request is its token alone in the Runs
+    header, the Plan table and the Plan rail. Carrying the title on those read models would
+    let request crumbs lead with a name like every other object.
+18. **Run-tree rows carry no id token.** A run row shows the run's name, and runs of one
+    workflow often share one. The token would tell them apart, but the run tree's columns
+    were not re-sized for it in this pass.
 
 ## Repeating this review
 
