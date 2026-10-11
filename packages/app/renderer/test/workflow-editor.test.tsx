@@ -9,9 +9,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { DraftIssue } from "@orca/protocol";
+import { GRAPH_GEOMETRY } from "@orca/design";
 import { NODE_TYPE_MIME } from "../src/workflow/editor/editor-canvas.js";
+import { fromDirection, type GraphMetrics, type LayoutDirection } from "../src/workflow/layout.js";
 import { harness, installBridge, renderChrome, stubMatchMedia } from "./harness.js";
 import { draftBridge } from "./fixtures-workflow-drafts.js";
+
+const EDIT_METRICS: GraphMetrics = {
+  nodeW: GRAPH_GEOMETRY["node-w"],
+  nodeH: GRAPH_GEOMETRY["node-h"],
+  layerGap: GRAPH_GEOMETRY["layer-gap"],
+  rankGap: GRAPH_GEOMETRY["rank-gap"],
+};
 
 const teardown: (() => void)[] = [];
 beforeEach(() => stubMatchMedia(1440));
@@ -21,12 +30,14 @@ afterEach(() => {
 });
 
 /** The viewer on ai-sdlc, then Edit: the editor on its draft. */
-async function openEditor(options: { owner?: string; issues?: DraftIssue[] } = {}) {
+async function openEditor(options: { owner?: string; issues?: DraftIssue[]; direction?: LayoutDirection } = {}) {
   const fake = installBridge({ deepLink: "orca://workflow/ai-sdlc" });
   teardown.push(fake.install());
   const drafts = draftBridge(fake, options);
   const h = harness();
   teardown.push(h.dispose);
+  // The direction is the person's, remembered before the window ever opened.
+  if (options.direction) h.appearance.set({ canvases: { workflow: { direction: options.direction } } });
   renderChrome(h);
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const canvas = await screen.findByRole("listbox", { name: "ai-sdlc draft graph" });
@@ -88,6 +99,30 @@ describe("the workflow editor", () => {
     const [op] = drafts.ops();
     expect(op).toMatchObject({ op: "place", id: "plan" });
     expect(drafts.ops().some((o) => o.op !== "place")).toBe(false);
+  });
+
+  it("sends a drop in a top-to-bottom graph in the horizontal frame the shared layout keeps", async () => {
+    /* The pins in `.layout/<id>.json` are everybody's and the direction is one person's, so a
+       drop on a turned graph is mapped back onto the horizontal lattice before it is sent —
+       and a teammate reading left to right sees the node beside the same neighbours. */
+    const { canvas, drafts } = await openEditor({ direction: "vertical" });
+    expect(canvas.closest(".orca-wfcanvas")!.getAttribute("data-direction")).toBe("vertical");
+    const box = canvas.querySelector<HTMLElement>('[data-node-id="plan"]')!;
+    // `plan` is the second layer: one layer step down the canvas, in the first column.
+    const origin = { x: 0, y: EDIT_METRICS.nodeH + EDIT_METRICS.layerGap };
+    expect([box.style.left, box.style.top]).toEqual([
+      `${origin.x + EDIT_METRICS.rankGap}px`,
+      `${origin.y + EDIT_METRICS.rankGap}px`,
+    ]);
+
+    fireEvent.pointerDown(box, { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(box, { pointerId: 1, clientX: 180, clientY: 160 });
+    fireEvent.pointerUp(box, { pointerId: 1, clientX: 180, clientY: 160 });
+    await waitFor(() => expect(drafts.ops()).toHaveLength(1));
+    const kept = fromDirection({ x: origin.x + 80, y: origin.y + 60 }, "vertical", EDIT_METRICS);
+    expect(drafts.ops()[0]).toEqual({ op: "place", id: "plan", x: kept.x, y: kept.y });
+    // Further along the flow than its auto place, which left to right is to the right of it.
+    expect(kept.x).toBeGreaterThan(EDIT_METRICS.nodeW + EDIT_METRICS.layerGap);
   });
 
   it("deletes the selected node with Delete and leaves its edges for validation to name", async () => {

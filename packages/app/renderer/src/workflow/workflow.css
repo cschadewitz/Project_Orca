@@ -25,6 +25,9 @@
 
 /* ---------- the canvas ---------- */
 
+/* The canvas scrolls, but only to reach the group boxes an expanded container opens below the
+   drawing: the drawing itself is panned and zoomed, never scrolled. A wheel over the drawing
+   pans it to its edge and then lets this scroll on (`ui/canvas-view.ts`, `wheelPan`). */
 .orca-wfcanvas {
   flex: 1;
   min-width: 0;
@@ -33,13 +36,26 @@
   background: var(--surface-canvas);
 }
 
-/* The one tab stop. The ring is drawn here and the selection is drawn on the node, because
-   they are different things and both have to stay legible (rule 10). */
-.orca-wfcanvas__viewport {
+/* The window onto the drawing: exactly the canvas's height, and it clips. It used to grow
+   with the drawing and let the canvas scroll it, which was a second way to pan with its own
+   idea of where the view was — and a minimap needs there to be one. Positioned, so the
+   corner's controls and minimap sit over it. */
+.orca-wfcanvas__stage {
   position: relative;
-  min-height: 100%;
-  padding: var(--space-4);
+  height: 100%;
+  overflow: hidden;
+}
+
+/* The one tab stop. The ring is drawn here and the selection is drawn on the node, because
+   they are different things and both have to stay legible (rule 10). It fills the stage with
+   no padding, so its top-left corner is the scene's origin and `screen = pan + scale × world`
+   holds with nothing added; the drawing's own margin is `PAD`, inside the plane. */
+.orca-wfcanvas__viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
   cursor: grab;
+  touch-action: none;
 }
 .orca-wfcanvas__viewport:active {
   cursor: grabbing;
@@ -47,7 +63,25 @@
 
 .orca-wfcanvas__scene {
   transform-origin: top left;
+}
+/* A step — a key, a button, a click in the minimap — eases; a gesture that is following a
+   pointer or a wheel does not, because a drawing that lags the hand moving it reads as
+   broken. Reduced motion drops the transition with every other one (components.css). */
+.orca-wfcanvas__scene--eased {
   transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+/* The corner the pointer's view controls share: the minimap over the zoom group, in the
+   bottom right, which is where a drawing that starts top left reaches last whichever way its
+   layers run. Out of the canvas's keyboard scope (see `workflow-canvas.tsx`). */
+.orca-wfcanvas__corner {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
 }
 
 .orca-wfcanvas__plane {
@@ -94,6 +128,16 @@
 .orca-wfcanvas__box > .orca-node--start,
 .orca-wfcanvas__box > .orca-node--end {
   height: auto;
+}
+/* Top to bottom, edges meet a slot at its top and its bottom rather than half-way down, so a
+   pill centred in its slot would hang half the slot's slack away from its own edge. It moves
+   to the side its edges use instead: start to the bottom, which its edges leave by, and end
+   to the top, which they arrive at. */
+.orca-wfcanvas[data-direction="vertical"] .orca-wfcanvas__box:has(> .orca-node--start) {
+  align-items: flex-end;
+}
+.orca-wfcanvas[data-direction="vertical"] .orca-wfcanvas__box:has(> .orca-node--end) {
+  align-items: flex-start;
 }
 
 /* An expanded container's body: its own drawing, inside a box that says whose it is. */

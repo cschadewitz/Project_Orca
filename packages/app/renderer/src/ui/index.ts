@@ -1,4 +1,37 @@
 export { Button, type ButtonProps, type ButtonSize, type ButtonTone } from "./button.js";
+export { CanvasControls, type CanvasControlsProps } from "./canvas-controls.js";
+export {
+  REST,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  ZOOM_STOPS,
+  fitView,
+  zoomAt,
+  zoomPercent,
+  type CanvasView,
+  type Point,
+  type Size,
+} from "./canvas-view.js";
+export {
+  GraphMinimap,
+  MINIMAP_BOX,
+  type GraphMinimapProps,
+  type MinimapNode,
+  type MinimapTone,
+} from "./graph-minimap.js";
+export {
+  useCanvasView,
+  type CanvasViewHandle,
+  type CanvasViewOptions,
+  type ViewportMeasurer,
+} from "./use-canvas-view.js";
+export {
+  directionLabel,
+  minimapLabel,
+  useGraphPreferences,
+  type GraphCanvasId,
+  type GraphPreferences,
+} from "./use-graph-preferences.js";
 export { Card, type CardProps, type CardTone } from "./card.js";
 export { Chip, type ChipProps } from "./chip.js";
 export {
