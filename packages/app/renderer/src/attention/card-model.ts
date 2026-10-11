@@ -10,6 +10,7 @@
  * an option that cancels a release should not be reachable by being fast.
  */
 import type { InputsAnswerResult, OpenInputView } from "@orca/protocol";
+import { counted } from "../ui/count.js";
 
 /** The wire's own option: `{ id, label, consequence?, destructive? }`, on the wire since
  * protocol 1.4 and settable by a workflow since #247 - so `consequence` and `destructive`
@@ -67,7 +68,7 @@ export function alwaysOutcome(permission: InputsAnswerResult["permission"]): str
   if (permission.refused) return `ORCA will ask again: ${permission.refused.reason}. This answer held once.`;
   const written = permission.added.length;
   if (written > 0) {
-    const rules = written === 1 ? "a rule" : `${written} rules`;
+    const rules = written === 1 ? "a rule" : counted(written, "rule");
     return `ORCA will not ask again — ${rules} written to ${permission.file}.`;
   }
   if (permission.alreadyPresent.length > 0) return `ORCA already had this rule in ${permission.file}.`;

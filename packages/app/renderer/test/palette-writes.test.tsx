@@ -207,7 +207,7 @@ describe("starting a run", () => {
     expect(items).toHaveLength(WORKFLOWS.length);
     expect(items[0]!.textContent).toContain(WORKFLOWS[0]!.name);
     expect(items[0]!.textContent).toContain(`v${WORKFLOWS[0]!.version}`);
-    expect(items[0]!.textContent).toContain(`${WORKFLOWS[0]!.nodeCount} nodes`);
+    expect(items[0]!.textContent).toContain(`${WORKFLOWS[0]!.nodeCount}\u00a0nodes`);
 
     fireEvent.click(items[0]!);
     await waitFor(() => expect(callsTo("runs.start")).toHaveLength(1));

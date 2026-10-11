@@ -26,6 +26,7 @@
  *   be a second explanation to keep true.
  */
 import { WORK_ITEM_STATUS_PRESENTATION, type RunStatus, type ScheduleClass } from "@orca/design";
+import { countedOf } from "../ui/count.js";
 import {
   ITEM_CLASSIFICATIONS,
   type ItemClassification,
@@ -105,8 +106,7 @@ export function matchesText(item: PlanItemView, text: string): boolean {
 
 /** "9 items", or "3 of 9 items" once the text filter has narrowed what the daemon sent. */
 export function countLabel(shown: number, total: number): string {
-  const items = `${total} ${total === 1 ? "item" : "items"}`;
-  return shown === total ? items : `${shown} of ${items}`;
+  return countedOf(shown, total, "item");
 }
 
 /**

@@ -470,7 +470,7 @@ describe("on the canvases", () => {
     const status = fanout.getAttribute("aria-label")!.split(", ")[0]!;
     const line = fanout.querySelector(".orca-node__meta")!;
     expect(line.getAttribute("title")!.startsWith(`${status} · `)).toBe(true);
-    expect(line.getAttribute("title")!.endsWith("2 nested graphs")).toBe(true);
+    expect(line.getAttribute("title")!.endsWith("2\u00a0nested graphs")).toBe(true);
   });
 
   it("titles every node's name on the plan's dependency graph", async () => {

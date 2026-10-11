@@ -67,6 +67,7 @@ import {
   StatusChip,
   Text,
   Time,
+  counted,
   focusAfterLeaving,
   textClass,
   useIdTails,
@@ -236,7 +237,7 @@ function HostSection({
   onEditPermissions: (agentId: string) => void;
 }): JSX.Element {
   const transport = transportLabel(group.hostType);
-  const count = `${group.agents.length} ${group.agents.length === 1 ? "agent" : "agents"}`;
+  const count = counted(group.agents.length, "agent");
 
   return (
     <section className="orca-agents__host" aria-label={`Host ${group.hostId || "unknown"}`}>

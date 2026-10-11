@@ -247,6 +247,21 @@ describe("the workflow editor", () => {
     expect(document.activeElement).toBe(elsewhere);
   });
 
+  it("counts the graph in words that agree with the numbers", async () => {
+    const { canvas, drafts } = await openEditor();
+    fireEvent.click(
+      within(screen.getByRole("list", { name: "Nodes, in file order" })).getByRole("button", { name: /plan/ }),
+    );
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    fireEvent.click(within(inspector).getByRole("button", { name: "→ done" }));
+    fireEvent.click(await within(inspector).findByRole("button", { name: "Delete edge" }));
+    await waitFor(() => expect(drafts.ops()).toHaveLength(1));
+    // A press on the empty canvas selects nothing: the workflow's own inspector, which counts.
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 1 });
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 1 });
+    await waitFor(() => expect(inspector.textContent).toContain("3\u00a0nodes, 1\u00a0edge, starting at"));
+  });
+
   it("reviews the exact diff and publishes it, then returns to the viewer", async () => {
     const { drafts } = await openEditor();
     fireEvent.click(
@@ -302,7 +317,7 @@ describe("the workflow editor", () => {
       ],
     });
     const panel = screen.getByRole("region", { name: "Validation" });
-    expect(panel.textContent).toContain("1 error · 1 warning · 0 notes");
+    expect(panel.textContent).toContain("1\u00a0error · 1\u00a0warning · 0\u00a0notes");
     fireEvent.click(within(panel).getByRole("button", { name: "plan" }));
     await waitFor(() =>
       expect(screen.getByRole("complementary", { name: "Inspector" }).textContent).toContain("has no outgoing edges"),

@@ -14,7 +14,7 @@
  */
 import { forwardRef, useImperativeHandle, useRef, useState, type DragEvent, type JSX } from "react";
 import { draftGraphKey, type DraftGraphPath, type DraftIssue } from "@orca/protocol";
-import { Text, WorkflowNodeIcon, asNodeType, textClass } from "../../ui/index.js";
+import { Text, WorkflowNodeIcon, asNodeType, counted, textClass } from "../../ui/index.js";
 import { PALETTE, type EditorGraph } from "./draft-model.js";
 import { NODE_TYPE_MIME, type EditorSelection } from "./editor-canvas.js";
 import { SEVERITY_GLYPH, SEVERITY_WORD } from "./editor-inspector.js";
@@ -135,11 +135,7 @@ export const EditorSidebar = forwardRef<PaletteHandle, EditorSidebarProps>(funct
                     {node.id}
                   </span>
                   <span className={`orca-nodelist__meta ${textClass("caption")}`}>
-                    {[
-                      node.id === graph.start ? "start" : "",
-                      node.state ?? "",
-                      errors ? `${errors} ${errors === 1 ? "error" : "errors"}` : "",
-                    ]
+                    {[node.id === graph.start ? "start" : "", node.state ?? "", errors ? counted(errors, "error") : ""]
                       .filter(Boolean)
                       .join(" · ")}
                   </span>
@@ -173,7 +169,7 @@ export function ValidationPanel({ issues, path, onGo }: ValidationPanelProps): J
           Validation
         </h2>
         <Text style="caption">
-          {`${errors} ${errors === 1 ? "error" : "errors"} · ${warnings} ${warnings === 1 ? "warning" : "warnings"} · ${notes} ${notes === 1 ? "note" : "notes"}`}
+          {`${counted(errors, "error")} · ${counted(warnings, "warning")} · ${counted(notes, "note")}`}
         </Text>
       </header>
       {issues.length === 0 ? (

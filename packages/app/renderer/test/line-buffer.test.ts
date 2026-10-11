@@ -98,7 +98,7 @@ describe("a line that is too long", () => {
     const capped = collapse(long);
     expect(capped.text).toHaveLength(LINE_CHAR_LIMIT);
     expect(capped.folded).toBe(84_102);
-    expect(foldLabel(capped.folded)).toBe(`${ELLIPSIS} 84,102 more characters`);
+    expect(foldLabel(capped.folded)).toBe(`${ELLIPSIS} 84,102\u00a0more characters`);
     // U+2026, the bundled ellipsis — not the midline U+22EF, which no bundled face carries.
     expect(ELLIPSIS).toBe("…");
   });

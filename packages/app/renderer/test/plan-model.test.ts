@@ -62,9 +62,9 @@ describe("the filter, split between the daemon and what is held", () => {
   });
 
   it("says which half narrowed the list", () => {
-    expect(countLabel(9, 9)).toBe("9 items");
-    expect(countLabel(3, 9)).toBe("3 of 9 items");
-    expect(countLabel(1, 1)).toBe("1 item");
+    expect(countLabel(9, 9)).toBe("9\u00a0items");
+    expect(countLabel(3, 9)).toBe("3\u00a0of\u00a09\u00a0items");
+    expect(countLabel(1, 1)).toBe("1 item");
   });
 });
 

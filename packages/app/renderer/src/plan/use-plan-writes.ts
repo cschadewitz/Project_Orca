@@ -35,6 +35,7 @@ import { useAnnounce } from "../a11y/announce-context.js";
 import type { PaletteChoice } from "../keyboard-map.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
 import { releaseCommand, releasedSentence } from "../agents/agent-groups.js";
+import { counted } from "../ui/count.js";
 import { idWords } from "../ui/object-id-model.js";
 
 /**
@@ -268,8 +269,7 @@ export function usePlanWrites({ planId, item, dependencies, risks }: PlanWriteTa
 
 /** "3 dependencies", "1 dependency", "nothing" — a count said rather than a bare number. */
 function countOf(n: number): string {
-  if (n === 0) return "nothing";
-  return n === 1 ? "1 dependency" : `${n} dependencies`;
+  return n === 0 ? "nothing" : counted(n, "dependency", "dependencies");
 }
 
 /**

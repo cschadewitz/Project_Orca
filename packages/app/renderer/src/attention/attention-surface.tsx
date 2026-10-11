@@ -39,7 +39,7 @@ import { useKeyboard } from "../keyboard-context.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
 import { bindOptions, isFreeText } from "./card-model.js";
 import { VirtualList } from "../list/index.js";
-import { Button, Duration, StateView, StatusChip, Text, Time, idText, textClass } from "../ui/index.js";
+import { Button, Duration, StateView, StatusChip, Text, Time, idText, textClass, unit } from "../ui/index.js";
 import type { AnswerRequest } from "./answer-card.js";
 import { PendingCorrection } from "./revision-card.js";
 import { revisionSlotKey, type RevisionsFeed } from "./use-revisions.js";
@@ -157,7 +157,7 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
         </Text>
         <Text style="caption">
           {/* The daemon's own count, never a recount of the array (see `use-attention.ts`). */}
-          {state.waiting === 0 ? "nothing waiting" : `${state.waiting} waiting`}
+          {state.waiting === 0 ? "nothing waiting" : unit(state.waiting, "waiting")}
         </Text>
       </div>
 

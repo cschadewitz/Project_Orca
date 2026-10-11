@@ -48,6 +48,7 @@ import {
   type MinimapTone,
   type ViewportMeasurer,
 } from "../../ui/index.js";
+import { counted } from "../../ui/count.js";
 import { fromDirection, labelTransform, type GraphMetrics } from "../layout.js";
 import { editorLayout, nestedSteps, type EditorGraph, type PlacedEditorNode } from "./draft-model.js";
 
@@ -503,7 +504,7 @@ export function EditorCanvas(props: EditorCanvasProps): JSX.Element {
                 const errors = (issues.byNode.get(node.node.id) ?? []).filter((issue) => issue.severity === "error");
                 const flag =
                   errors.length > 0
-                    ? `${errors.length} ${errors.length === 1 ? "error" : "errors"}`
+                    ? counted(errors.length, "error")
                     : node.node.id === graph.start
                       ? "start"
                       : node.pinned

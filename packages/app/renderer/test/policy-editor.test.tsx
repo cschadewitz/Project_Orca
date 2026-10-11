@@ -412,7 +412,7 @@ describe("the policy editor", () => {
     expect(left[0]!.textContent).toContain("granted for Run git status");
     expect(within(aside).queryByRole("button", { name: /^(Keep|Confirm)/ })).toBeNull();
     const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
-    expect(bar.textContent).toContain("1 change");
+    expect(bar.textContent).toContain("1\u00a0change");
     expect(aside.textContent).toContain("They are written only by Save.");
     expect(configSets()).toBe(0);
 
@@ -473,7 +473,7 @@ describe("the policy editor", () => {
     await waitFor(() => expect(bar.textContent).toContain("has changed since you read it"));
     expect(within(bar).getByRole("button", { name: "Reload" })).toBeTruthy();
     // The draft survived the refusal: one change, still held, still one grant short.
-    expect(bar.textContent).toContain("1 change");
+    expect(bar.textContent).toContain("1\u00a0change");
     expect(await grants()).toHaveLength(1);
   });
 
@@ -560,7 +560,7 @@ describe("the policy editor", () => {
     expect(field(reopened[0]!, "Path prefix").value).toBe("packages");
     // Still one change, still unsaved, and nothing was written on the way through.
     const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
-    expect(bar.textContent).toContain("1 change");
+    expect(bar.textContent).toContain("1\u00a0change");
     expect(fake.calls.filter((call) => call.method === "config.set")).toHaveLength(0);
   });
 });

@@ -24,6 +24,7 @@
  */
 import type { RunStatus } from "@orca/design";
 import type { AgentUpdateParams, RunsEventsResult } from "@orca/protocol";
+import { counted } from "../../ui/count.js";
 
 type OrcaEvent = RunsEventsResult["events"][number];
 
@@ -207,12 +208,10 @@ function subjectOf(event: OrcaEvent, names: ReadonlyMap<string, string>): string
 }
 
 const updatesSummary = (subject: string, count: number): string =>
-  count === 1 ? `${subject}, agent output` : `${subject}, ${count} agent updates`;
+  count === 1 ? `${subject}, agent output` : `${subject}, ${counted(count, "agent update")}`;
 
 /** `CODE: message`, the way a person reads an error they have to act on. */
 const said = (error: { code: string; message: string }): string => `${error.code}: ${error.message}`;
-
-const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
 /**
  * One line per event type, subject first. Sentence case, no exclamation, no emoji
@@ -242,7 +241,7 @@ export function summarise(event: OrcaEvent, subject: string): string {
     case "step.started":
       return `${subject} started`;
     case "step.inputs":
-      return `${subject} read ${plural(event.payload.artifactIds.length, "artifact")}`;
+      return `${subject} read ${counted(event.payload.artifactIds.length, "artifact")}`;
     case "step.waiting":
       return event.payload.detail === undefined
         ? `${subject} waiting on ${event.payload.on}`
@@ -276,7 +275,7 @@ export function summarise(event: OrcaEvent, subject: string): string {
     case "artifact.rejected":
       return `${subject} rejected a ${event.payload.kind} artifact, ${event.payload.reason}`;
     case "plan.signals.rejected":
-      return `${subject} had ${plural(event.payload.issues.length, "planning signal")} rejected`;
+      return `${subject} had ${counted(event.payload.issues.length, "planning signal")} rejected`;
 
     case "decision.resolved":
       return event.payload.source === AUTO_GATE_SOURCE

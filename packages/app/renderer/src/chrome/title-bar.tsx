@@ -13,7 +13,7 @@ import type { JSX } from "react";
 import { STATUS_PRESENTATION } from "@orca/design";
 import { shortcutLabel } from "../keyboard-map.js";
 import { OPEN_PALETTE_KEY } from "../palette/use-command-palette.js";
-import { Button, textClass } from "../ui/index.js";
+import { Button, textClass, unit } from "../ui/index.js";
 
 export interface TitleBarProps {
   platform: string;
@@ -39,7 +39,7 @@ export function TitleBar({ platform, waitingCount, onOpenAttention, onOpenPalett
           onClick={onOpenAttention}
         >
           <span aria-hidden="true">{STATUS_PRESENTATION.waiting.glyph}</span>
-          {waitingCount} waiting
+          {unit(waitingCount, "waiting")}
         </button>
       ) : null}
       <span className="orca-spacer" />

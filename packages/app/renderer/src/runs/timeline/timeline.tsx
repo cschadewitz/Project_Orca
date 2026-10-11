@@ -30,7 +30,7 @@
 import { memo, useCallback, useMemo, type JSX, type Ref } from "react";
 import { CHROME_GLYPHS, STATUS_PRESENTATION } from "@orca/design";
 import { VirtualList, type MinimapKind, type VirtualListHandle, type VirtualListTick } from "../../list/index.js";
-import { Menu, StateView, Text, Time, idText, textClass, type MenuItem } from "../../ui/index.js";
+import { Menu, StateView, Text, Time, countedOf, idText, textClass, type MenuItem } from "../../ui/index.js";
 import { kindsOf, timelineRowId, type TimelineEntry } from "./timeline-entries.js";
 import type { EventsState } from "./use-run-events.js";
 
@@ -216,8 +216,7 @@ const eventsIn = (entries: readonly TimelineEntry[]): number => entries.reduce((
 
 /** "412 events", or "6 of 412 events" once the kind filter has narrowed them. */
 function countLabel(shown: number, total: number): string {
-  const events = `${total} ${total === 1 ? "event" : "events"}`;
-  return shown === total ? events : `${shown} of ${events}`;
+  return countedOf(shown, total, "event");
 }
 
 /**

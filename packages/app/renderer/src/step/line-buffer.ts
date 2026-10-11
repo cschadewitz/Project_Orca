@@ -32,6 +32,7 @@
  *   as it kept going, which is the one thing a live log must not do.
  */
 import type { AgentUpdateParams, RunsEventsResult } from "@orca/protocol";
+import { unit } from "../ui/count.js";
 
 /** `AgentUpdateSummary`, reached through the protocol: the app may not import `@orca/core`. */
 export type AgentUpdate = AgentUpdateParams["updates"][number];
@@ -112,7 +113,7 @@ export function textOf(update: AgentUpdate): string | undefined {
 
 /** `…  84,102 more characters` — the affordance a long line collapses to. */
 export function foldLabel(folded: number): string {
-  return `${ELLIPSIS} ${folded.toLocaleString("en-US")} more character${folded === 1 ? "" : "s"}`;
+  return `${ELLIPSIS} ${unit(folded.toLocaleString("en-US"), folded === 1 ? "more character" : "more characters")}`;
 }
 
 /** Cut a line at the limit, reporting what was left off rather than wrapping it. */

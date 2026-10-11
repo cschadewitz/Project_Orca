@@ -1,7 +1,7 @@
 /** Explicit local consent, main-owned export and separate picker/Save controls. */
 import { type JSX } from "react";
 import type { DiagnosticsBridge } from "../../../src/diagnostics-contract.js";
-import { Button, ConfigField, Menu, Text } from "../ui/index.js";
+import { Button, ConfigField, Menu, Text, counted } from "../ui/index.js";
 import { DIAGNOSTICS_MESSAGES, EARLIER_EXPORT_WARNING, SAVE_WARNING } from "./diagnostics-model.js";
 import { useDiagnostics } from "./use-diagnostics.js";
 import "./diagnostics.css";
@@ -107,7 +107,7 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
                   if (!state.busy) void state.minutes(Number(item.id));
                 }}
               >
-                {status.minutes} {status.minutes === 1 ? "minute" : "minutes"}
+                {counted(status.minutes, "minute")}
               </Menu>
             )}
           </ConfigField>
@@ -126,7 +126,7 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
           )}
           {status.checkpointAgeMs !== undefined && (
             <Text style="caption" as="p">
-              Latest completed checkpoint age: {Math.ceil(status.checkpointAgeMs / 1000)} seconds.
+              Latest completed checkpoint age: {counted(Math.ceil(status.checkpointAgeMs / 1000), "second")}.
             </Text>
           )}
           {status.enabled && status.checkpointAgeMs === undefined && (
@@ -219,9 +219,9 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
           </Text>
           <Text style="caption" as="p">
             ORCA has prepared a fixed report with omissions and coverage information. Report contents are available in
-            the saved file. It contains {state.report.byteLength} UTF-8 bytes. It expires within{" "}
-            {Math.ceil(state.report.expiresInMs / 1000)} seconds and may become unavailable sooner if its source expires
-            or changes. New events do not change these bytes.
+            the saved file. It contains {counted(state.report.byteLength, "UTF-8 byte")}. It expires within{" "}
+            {counted(Math.ceil(state.report.expiresInMs / 1000), "second")} and may become unavailable sooner if its
+            source expires or changes. New events do not change these bytes.
           </Text>
           {state.report.tailLossPossible && (
             <Text style="caption" as="p">

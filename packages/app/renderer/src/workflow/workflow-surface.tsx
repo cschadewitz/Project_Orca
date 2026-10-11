@@ -42,6 +42,7 @@ import {
 import { WorkflowEditor } from "./editor/workflow-editor.js";
 import { findNode } from "./layout.js";
 import { WorkflowCanvas } from "./workflow-canvas.js";
+import { counted } from "../ui/count.js";
 import { indexTraversal, useWorkflow } from "./use-workflow.js";
 import "./workflow.css";
 
@@ -354,7 +355,7 @@ function Inspector({ node }: { node: WorkflowNodeView | undefined }): JSX.Elemen
           is wider than the inspector at its narrowest. */}
       <div className="orca-wf__inspector-meta orca-chips">
         <Chip>{node.type}</Chip>
-        {node.maxAttempts !== undefined && <Chip>{`up to ${node.maxAttempts} attempts`}</Chip>}
+        {node.maxAttempts !== undefined && <Chip>{`up to ${counted(node.maxAttempts, "attempt")}`}</Chip>}
       </div>
       {node.description !== undefined && <Text style="caption">{node.description}</Text>}
       {Object.keys(node.fields).length === 0 ? (

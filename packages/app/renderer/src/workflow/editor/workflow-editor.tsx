@@ -26,7 +26,7 @@ import { useAnnounce } from "../../a11y/announce-context.js";
 import { diffText, gutterFor } from "../../artifacts/diff.js";
 import { PaneSplitter } from "../../chrome/pane-splitter.js";
 import { useWritability } from "../../chrome/use-connection.js";
-import { Button, StateView, Text, focusAfterLeaving, textClass } from "../../ui/index.js";
+import { Button, StateView, Text, counted, focusAfterLeaving, textClass, unit } from "../../ui/index.js";
 import { changeCount, editorGraph, freshId, issuesAt, nestedSteps, newNode, type EditorGraph } from "./draft-model.js";
 import { EditorCanvas, type CanvasHandle, type EditorSelection } from "./editor-canvas.js";
 import { EditorInspector, type InspectorHandle } from "./editor-inspector.js";
@@ -283,7 +283,7 @@ function Editor({
         aria-label="Workflow draft"
       >
         <Text style="label-strong">{`Draft of ${draft.workflowId} v${draft.base.version}`}</Text>
-        <Text style="caption">{`${owner} · ${changes} ${changes === 1 ? "change" : "changes"}${draft.dirty && changes === 0 ? " to the layout" : ""}`}</Text>
+        <Text style="caption">{`${owner} · ${counted(changes, "change")}${draft.dirty && changes === 0 ? " to the layout" : ""}`}</Text>
         <span role="status" className={textClass("caption")}>
           {controller.conflict !== undefined
             ? `Reloaded: ${controller.conflict}`
@@ -473,7 +473,7 @@ function ReviewPanel({
           {`Publish v${review.nextVersion}`}
         </h2>
         <Text style="caption">
-          {`${diff.added} added, ${diff.removed} removed. Runs already started stay on v${review.baseVersion}; runs started after publishing use v${review.nextVersion}.`}
+          {`${unit(diff.added, "added")}, ${unit(diff.removed, "removed")}. Runs already started stay on v${review.baseVersion}; runs started after publishing use v${review.nextVersion}.`}
         </Text>
         {message !== undefined && (
           <Text style="caption" role="status">

@@ -26,6 +26,7 @@ import {
   type ConfigFieldControl,
   type MenuItem,
 } from "../../ui/index.js";
+import { counted } from "../../ui/count.js";
 import { nestedSteps, type EditorGraph, type EditorNode } from "./draft-model.js";
 import type { EditorSelection } from "./editor-canvas.js";
 
@@ -566,7 +567,7 @@ function WorkflowInspector({ graph, path, workflow, readOnly, onApply }: EditorI
         )}
         <div className="orca-inspector__group">This graph</div>
         <Text style="caption">
-          {`${graph.nodes.filter((n) => n.state !== "removed").length} nodes, ${graph.edges.length} edges, starting at `}
+          {`${counted(graph.nodes.filter((n) => n.state !== "removed").length, "node")}, ${counted(graph.edges.length, "edge")}, starting at `}
           <span className={textClass("mono-body")}>{graph.start || "nothing"}</span>
           {starts.length > 1 ? " — more than one start node" : ""}
         </Text>

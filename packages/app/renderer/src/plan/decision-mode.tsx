@@ -23,7 +23,7 @@ import { useAnnounce } from "../a11y/announce-context.js";
 import { useMethodPresent, useWritability } from "../chrome/use-connection.js";
 import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { VirtualList } from "../list/index.js";
-import { Button, Chip, DecisionMatrix, StateView, Text, Time, textClass } from "../ui/index.js";
+import { Button, Chip, DecisionMatrix, StateView, Text, Time, countedOf, textClass } from "../ui/index.js";
 import { confidenceWord, decideParams, optionName, recommendedOf, reopenQuestion } from "./decision-model.js";
 import type { DecisionsState } from "./use-decisions.js";
 import { useDecisionWrites } from "./use-decision-writes.js";
@@ -92,9 +92,7 @@ function DecisionSplit({
         <div className="orca-plan__bar">
           <Text style="label-strong">Decisions</Text>
           <Text style="caption" className="orca-plan__count">
-            {decisions.length === all.length
-              ? `${all.length} ${all.length === 1 ? "decision" : "decisions"}`
-              : `${decisions.length} of ${all.length} decisions`}
+            {countedOf(decisions.length, all.length, "decision")}
           </Text>
         </div>
         {decisions.length === 0 ? (

@@ -19,7 +19,7 @@ import type { ProtocolError, WorkflowSummaryView } from "@orca/protocol";
 import { useMethodPresent } from "../chrome/use-connection.js";
 import { useNotifications } from "../notifications-context.js";
 import { workflowEditUrl, workflowUrl } from "../route-table.js";
-import { Button, StateView, Text, textClass, type Crumb } from "../ui/index.js";
+import { Button, StateView, Text, counted, textClass, type Crumb } from "../ui/index.js";
 import "./workflow.css";
 
 export interface WorkflowsSurfaceProps {
@@ -133,7 +133,7 @@ export function WorkflowsSurface({ connection, onOpen, onHeader }: WorkflowsSurf
     <div className="orca-wflist">
       <header className="orca-wflist__head">
         <h1 className={`orca-wflist__title ${textClass("heading")}`}>Workflows</h1>
-        <Text style="caption">{`${state.workflows.length} ${state.workflows.length === 1 ? "workflow" : "workflows"}`}</Text>
+        <Text style="caption">{counted(state.workflows.length, "workflow")}</Text>
       </header>
       <div className="orca-wflist__scroll">
         <table className="orca-table orca-wflist__table">
