@@ -83,7 +83,9 @@ already specced.
 `/* type: <style> */` note saying which one it expects. `class="orca-chip"` alone inherits the
 shell's 14px rather than the chip's intended size, so both classes go on the element. The
 sans/mono distinction, weight and colour still come from the component class — only the size
-moved.
+moved. And nothing in a component class may beat the type class: a `<button>`'s
+`font: inherit` reset lives in a zero-specificity `:where()` rule, never in the class's own
+rule, or every button and crumb renders at the shell's 14px (`font-reset.test.ts`).
 
 Screens live in `packages/app/renderer` — React, bundled by Vite, with `tokens.css` and
 `components.css` imported at the top of `renderer/src/main.tsx`. `pnpm --filter @orca/app dev`
@@ -91,10 +93,30 @@ runs it with hot reload; `docs/DEVELOPMENT.md` ("The renderer build") has the re
 
 The primitives are already built: `renderer/src/ui` wraps the `orca-*` classes as
 `StatusChip`, `Button`, `Chip`, `Card`, `Well`, `Text`, `Duration`, `Time`, `ConfigField`,
-`ObjectHeader`, `StateView`, `ScheduleBadge`, `ConnectionIndicator` and `Menu`. Compose those
+`ObjectHeader`, `ObjectId`, `KeyValueList`, `StateView`, `ScheduleBadge`,
+`ConnectionIndicator`, `Menu`, `WorkflowNode`, `DependencyNode`, `CanvasControls` and
+`GraphMinimap`, with the helpers `focusAfterLeaving` and `counted`/`unit`. Compose those
 rather than writing class names, and see them all in both themes at `#preview` in a dev build
 (`#type` proves the bundled faces and glyphs). If an implementation has to diverge from
 `component-api.d.ts`, correct that file in the same PR.
+
+**An id on screen is an `ObjectId`.** The object's name leads and the id follows as a faint
+token — the kind's glyph and the last six characters, `Database schema ⬡ 5M579G` — with the
+whole id in its `title`, in the crumb menu's **Copy id** and in the palette's matching. Never
+render `{x.runId}` or slice an id yourself: `object-id-guard.test.ts` fails on a raw id in JSX
+and on an id prefix that no `objectKind` in `semantics.json` decides. An event is `#seq`.
+
+**A status is a `StatusChip`, and a surface never sizes it** — no class, no width; a column of
+them is `aligned`. **Text that does not fit has one answer** (RULES.md rule 15): a chip, badge,
+pill, button or crumb part is one line and as wide as its text; a count is
+`counted(n, "change")`, which agrees and never splits from its noun; a bar is one line and its
+lowest-priority sentence is the `.orca-truncate` that gives way, whole in `title`. A run of
+chips in a card or panel is `.orca-chips` and wraps; a row never does.
+
+**Do not drop focus.** When a control holding focus leaves — a row removed from a list, a save
+bar that goes after Save, a deleted node — move focus to its neighbour (`focusAfterLeaving`)
+or the region it belonged to, and only if focus went with it. The claims list, the policy
+panel, `DraftBar`'s `returnFocus` and the workflow editor's delete are the worked examples.
 
 **Say where your screen scrolls; the window will not scroll it for you.** `body` is
 `overflow: hidden` and `.orca-window` is a fixed three-row grid, so a box that outgrows its
@@ -121,10 +143,15 @@ to the trigger on close — including on `Esc`. Placement flips rather than clip
 `Escape` handler, an outside-click listener, a `tabIndex` dance or a `useState` for open: all
 of that is the primitive's, and a second implementation is the thing #202 exists to prevent. If
 a popover's body is not a list of choices, extend `Menu` rather than growing a rival — the
-keyboard and focus contract has to stay in one place. A destructive choice is never listed
-first, an item's `hint` is a one-word meta (a sentence is the menu's `note`), and **a
-destructive act on a row confirms on the row** — a second state of it, the way the palette and
-the Agents claims list do — rather than in a popover over the list.
+keyboard and focus contract has to stay in one place. A menu stands on `surface-raised`, never
+on `surface-overlay` (a modal's scrim). A `danger` item leads with `✕`, is never listed first
+and never focused on open; an item's `hint` is a one-word meta, `hintMachine` is machine text
+in mono and never re-cased, an object's id is `labelId`, and a sentence is the menu's `note`.
+**A destructive act with no way back confirms on the row** — a second state of it, Keep first
+and focused, ✕ Confirm in the danger tone, the consequence on the row's two-line variant, the
+way the palette and the Agents claims list do — rather than in a popover over the list. **An
+edit to a draft does not confirm**: Remove a grant, Delete a node are plain buttons, because
+Save, Discard and Undo are the way back, and a resting screen carries no danger tone.
 
 **Every pane boundary is a `PaneSplitter`.** A screen with two panes does not state a width for
 either of them: the track is `var(--pane-<boundary>, var(--<token>))` and a `<PaneSplitter>` sits

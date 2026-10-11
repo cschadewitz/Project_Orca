@@ -1,9 +1,8 @@
 /**
  * The window chrome: title bar, sidebar, primary pane, docked panel, status bar and the
  * command palette, per docs/design/10-information-architecture.md. Routing here is which
- * of the five surfaces is active; Runs is the first one with real data behind it, and the
- * other four (and the per-surface object memory ⌘2 etc. should restore) arrive with the
- * issues that give each surface its content.
+ * of the six surfaces (`chrome/surfaces.ts`, from `semantics.json`'s `surface` map) is
+ * active, and what a deep link or the palette asked each one to show.
  */
 import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 import { Announcer } from "./a11y/announcer.js";

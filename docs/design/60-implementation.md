@@ -82,6 +82,103 @@ workflow editor's inspector and the launch form are `ConfigField` around a contr
 The Attention correction cards set a correction's values the same way, as indented JSON in a
 `Well`; a correction a person wrote as text stays prose.
 
+## A status, and a column of them
+
+**There is one status chip, `StatusChip`, and its box is the component layer's.** `.orca-chip`
+is `flex: none` and `min-width: max-content`: a minimum beats any `width` or `max-width` a
+surface could hand it, so no chip is ever drawn narrower than its glyph and word, and a row
+that runs out of room truncates its elastic column rather than the chip. `StatusChip` takes no
+`className` — two surfaces once gave it a `12ch` column, narrower than "✓ succeeded", and the
+word ran out past its own ground in both. A surface lays out *around* a chip.
+
+**A list of statuses is a column, and `aligned` draws it.** `StatusChip aligned`
+(`.orca-chip--aligned`) is the longest status word's room plus the chip's own parts, written as
+the width so the minimum above still wins for a longer label ("failed ×3"). The number is one
+custom property on `.orca`, `--chip-aligned-width`, because one other box must be exactly as
+wide: a status column's row with no status — the run tree's never-run step — whose placeholder
+takes the same property in the chip's type. The plan's schedule column mixes schedule badges
+and settled items' chips, so `ScheduleBadge aligned` and `StatusChip aligned="schedule"` share
+`--badge-aligned-width`, the longest schedule word ("waiting on deps"), and each row is the
+mark, then its **why** — a control is accent and never sits on a state's tint (rule 5).
+
+**`ch` in those widths is half an em.** CSS resolves `ch` against the "0" of the first face in
+the element's stack, and both stacks lead with the bundled symbol subsets, which carry no "0";
+so `ch` falls back to `0.5em` — 6px at `caption` — everywhere in the app, not to Plex's zero at
+about `0.6em`. Every `ch` width here and in the surfaces (the aligned columns, a claim's run
+column) was measured against that: `10ch` holds "succeeded" because the word is about nine and
+a half half-ems at caption, medium. An unregistered custom property also resolves `ch` on the
+element that *uses* it, so a box that borrows `--chip-aligned-width` is set in the chip's type
+for the half-em to be the same size. Do not retune one of these widths by assuming Plex's zero,
+and do not reorder the stacks to "fix" `ch`: the symbol faces lead so that no status glyph ever
+falls through to the OS.
+
+## An id on screen
+
+**An id in a row or a header goes through `ObjectId`** (`ui/object-id.tsx`, over `.orca-objid`;
+`ui/object-id-model.ts` is the plain half). The object's name leads, sans, cut at its end, and
+the id follows as a faint token: the kind's glyph from `semantics.json`'s `objectKind`, then the
+last six characters in `mono-id`, with the whole id in the token's `title`. With no name the
+token stands alone and is not faint. The token is `flex: none` and never wraps or cuts: a tail
+cut short is a different id. Its accessible name is the kind's word and the tail ("run 7X8PXX").
+
+- **Six characters for every format.** A ULID's first ten characters are its timestamp, so ids
+  minted together share their head and differ at the end; the tail is the half that differs. A
+  list where two ids share six lengthens just those, from the front, over the *whole* list's
+  data rather than the rows in the window (`useIdTails`). An id in no format ORCA mints, twelve
+  characters or fewer, is drawn whole, because nothing says which end of it identifies it.
+- **Three variants.** `row` (the default), `header` — always faint, after a crumb's name and type
+  label, and not re-saying the kind a screen reader has just heard — and `full`, the id verbatim
+  with the tail lifted out of it, for a detail pane and for the records of exactly which object:
+  a guided launch's receipt, a recorded correction, a link that could not be followed.
+- **The whole id is one action away**: the token's `title`, **Copy id** in every crumb's menu,
+  the palette's matching (`objectId` on a command, `detailId` on a row) and the detail pane.
+- **An event is named by its sequence number**, `#148` — the run's own cursor, and what "as of
+  event 148" counts — and its copy menu keeps the id. A palette label carries a token as
+  `labelMachine` and a menu item as `labelId` or `hintMachine`; a string with a token in it is
+  drawn by `MachineText`, the glyph as decoration and the kind as a word.
+
+`renderer/test/object-id-guard.test.ts` fails on a raw id rendered as a JSX child, and on an
+id prefix in `packages/core/src/ids.ts` that is neither an `objectKind` nor on its list of
+prefixes no screen shows.
+
+## Text that does not fit
+
+One policy (RULES.md rule 15), stated once at the top of `components.css` and kept by every
+class under it:
+
+- **A bounded label never wraps.** `.orca-chip`, `.orca-badge`, `.orca-pinned` and the title
+  bar's waiting pill are one line, `flex: none` and `min-width: max-content`, so the outline
+  always encloses the text. `.orca-btn`, `.orca-seg`, `.orca-kbd`, a menu item and a crumb's
+  type and version are one line and keep their width in a flex line. A label allowed to be
+  longer than any box it sits in — an artifact reference's name (`.orca-ref__label`), a crumb's
+  name, a filter's id — is cut at its end *inside* its outline, and the caller puts the whole
+  text in `title`. `text-overflow` has one value in the component layer: the end.
+- **A number and its noun are one unit.** The renderer writes a count through `counted`,
+  `countedOf` or `unit` (`renderer/src/ui/count.ts`): the noun agrees with the number, and a
+  no-break space (U+00A0) joins them, so "4 changes" or "+2 nodes · 1 removed · 3 edges" can
+  wrap only at the spaces around a ` · `. It is a character rather than a `nowrap` span so it
+  holds in a `title`, an `aria-label` and a menu hint too. `count.test.ts` sweeps the sources for
+  a count written as a bare interpolation.
+- **A bar stays one line.** `.orca-titlebar`, `.orca-statusbar` and `.orca-draftbar` are
+  `nowrap`, and the object header's height is a token. Controls and counts keep their width;
+  the sentence that gives way first — a draft bar's note, message or conflict, the editor
+  bar's status, the status bar's read-only reason — carries `.orca-truncate` and its whole text
+  in `title`. Rows never wrap either (rule 9).
+
+What wraps is a run of things in a card or a panel, between whole items: `.orca-chips` (with
+`min-width: 0`, so a run of chips never holds its parent open past the box), a filter rail, a
+review's header. Config's narrow stacked layout is the one declared multi-line control
+variant: its buttons wrap their label *and* grow with it, so the outline still holds the text.
+`text-overflow.test.tsx` reads these rules out of the stylesheet.
+
+**A control's font reset never beats its type class.** A `<button>` or an `<input>` takes the
+user agent's font, so each control class resets it with `font: inherit` — in one `:where()`
+rule, at zero specificity. Written in the class's own rule, the reset came later than
+`tokens.css` at the same specificity and beat the `orca-text-*` class on the element: every
+button, menu item, nav item, segment and crumb rendered at the shell's 14/20 body instead of
+its noted `label`, and a `.orca-bare` button set in `mono-id` was sans. `font-reset.test.ts`
+holds every stylesheet to writing the reset only inside `:where()`.
+
 ## Density
 
 Density is one attribute, `data-density="compact"`, set on a surface's root element. It
@@ -90,7 +187,7 @@ else changes — no font size, no icon size — because the point of the toggle 
 screen, not smaller text.
 
 A surface root is the element carrying `data-surface="<id>"` (`attention`, `runs`, `plan`,
-`agents`, `config`). `⌘⇧D` toggles the surface that contains focus and the choice is
+`workflows`, `agents`, `config`). `⌘⇧D` toggles the surface that contains focus and the choice is
 remembered by that id in the app's preferences, so the run tree can be compact while the
 config form stays comfortable. `packages/app/renderer/src/density.ts` is the only code that
 touches the attribute; a component that renders a surface root calls `useSurfaceDensity()`
@@ -264,7 +361,7 @@ capability, inside `methodPresent` and nowhere else.
 
 **A destructive row confirms inline, as a second state of the same row.** `Shortcut.confirm`
 and `tone: "danger"` say so, and the palette arms the row on the first `Enter`: the label
-becomes the confirmation ("Cancel run-42 — confirm"), the row takes the danger tone — the
+becomes the confirmation ("Cancel Database schema ☰ JH7X8P — confirm"), the row takes the danger tone — the
 colour *and* the `✕` it leads with, since colour is never the only channel (rule 4) — and a
 second `Enter` commits. Typing or moving the selection disarms it; `Esc` closes the palette,
 which unarms with it, since the armed row does not outlive the list it is in. Nothing has
@@ -276,8 +373,11 @@ decision and reopening one are all acts with a way back. A destructive control o
 outside the palette asks the same way, on its own row — the Agents surface's claims are the
 first ("Releasing a claim", below). An edit to a draft is not that act even when it takes
 something out: the policy panel's **Remove** drops a grant from a draft that only **Save**
-writes and **Discard** takes back, so it neither asks nor wears the danger tone ("Agents
-write", below).
+writes and **Discard** takes back, and the workflow editor's **Delete** and **Delete edge**
+take a node or an edge out of a draft that `⌘Z` restores and only **Review and publish**
+writes, so none of them asks or wears the danger tone ("Agents write", below, and
+`70-workflow-editing.md`). The rule, then: confirm only the act with no way back — cancel,
+waive, release, discard a draft — and confirm it on the row it was asked on.
 
 **A destructive row is never first.** It sorts below every other command, whatever scope it
 is in, for the reason a gate's destructive option is never bound to `1`: the first row is
@@ -347,7 +447,13 @@ destructive puts focus on the list itself, and `↓` enters it.
 stood on `surface-overlay` — the scrim behind a modal, which never carries text — until the
 design-conformance review, so every menu was see-through grey. **An item's `hint` is a one-word
 meta** (a type, a date) in the eyebrow style, uppercase and unwrapped; a sentence a menu has to
-say is its `note`, which wraps.
+say is its `note`, which wraps. **Machine text is `hintMachine`**, the same trailing meta in mono
+and never re-cased — an intent id, a workflow's `id · vN · N nodes`, `orca://` — because the
+eyebrow's uppercase turned `ai-sdlc` into `AI-SDLC`. An item that names an object with an id
+takes it as `labelId`, drawn after the label as a faint `ObjectId` token (runs of one workflow
+share a name, and the token is what tells them apart); `labelKind` names the kind of an
+unprefixed id, and `nameless` puts the token in the label's place for an object with no name,
+with the label said as words for typeahead.
 
 The arrows, `Home`, `End` and `Enter` are registered on the `KeyboardMap` in a `menu` scope,
 so the palette lists them and innermost-first resolution stops them colliding with the
@@ -401,8 +507,10 @@ all 50,000 rows, which is the freeze the virtualiser exists to prevent, and subs
 guessed height would be the second statement the design forbids.
 
 Two-line rows are `.orca-list--two-line`, whose height is `calc(var(--row-h) * 2)` — a ratio to
-the bound height, never a literal. The component layer has no two-line row class and
-`tokens.json` has no second row height; both belong there, beside the row they vary.
+the bound height, never a literal. The class is in the component layer beside the row it varies,
+and there is deliberately no second row height in `tokens.json`: a two-line row is two of the
+bound row, so density rebinds it with nothing else to keep in step. A surface's own two-line
+row — the claims list's, while it asks or says what a release did — uses the same arithmetic.
 
 ## Scrolling is structural, not remembered
 
@@ -622,6 +730,13 @@ bridge. **Disconnected and reconnecting keep the bar**, dimmed values and all, w
 change count still on it and `writability()`'s reason on Validate and Save — those are a
 daemon that would take the write if it were answering, and 40-connection-states.md asks for
 the reason on the control rather than for a control that vanishes with the draft.
+
+**The bar is one line and hands focus back when it goes.** Its count keeps its width and is one
+unit ("4 changes"); its note, message and conflict give way, cut at their end and whole in their
+`title` (rule 15). The Save or Discard that empties the draft unmounts the bar with the button
+pressed, so `DraftBar` takes `returnFocus`: if it held focus as it left, focus goes to what the
+draft was editing — on this surface the form's first section, or the YAML in the raw view; in
+the policy panel, its written grants — and focus a person had already moved stays where it is.
 
 **Nothing on the screen speaks.** A field's error is `aria-describedby` text, not an alert:
 it is on the control the person is editing, and rule 11 keeps interruption for what a person

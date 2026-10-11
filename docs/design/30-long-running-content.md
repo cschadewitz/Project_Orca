@@ -9,8 +9,10 @@ Every list in the app is virtualised above 200 rows: the run tree, the timeline,
 pane, the plan table, the journal. Rows are a fixed height (`row-comfortable` or
 `row-compact`), which is what makes fixed-height virtualisation possible and is a reason the
 density toggle changes a token rather than letting rows size to content. A row whose content
-would wrap truncates with an end ellipsis and reveals the full string in the detail pane, not
-in a tooltip. **Ids are the exception.** A row shows an id as its token — the kind's glyph and
+would wrap truncates with an end ellipsis, and the full string is in the detail pane; a tooltip
+is never the only way to it. A cut label also carries its whole text in `title` (RULES.md
+rule 15), so a pointer can read it in place — an inspector's title, a rule's sentence, a graph
+node's name. **Ids are the exception.** A row shows an id as its token — the kind's glyph and
 the last six characters (`ObjectId`) — and the token carries the whole id in its `title`,
 because an id is the one string a person routinely needs whole while looking at the row: to
 paste into a CLI, a log search or a bug report. It is also in the object header's **Copy id**,

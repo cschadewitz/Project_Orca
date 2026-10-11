@@ -42,8 +42,9 @@ YAML by hand. The editor keeps both protections:
 | Branch | — | Select an edge: **Only when** and **Label** in the inspector | A decision's edges test `choice == 'option'`; one may be unconditional, the default |
 | Rename | — | Inspector's **Id**, or `F2` | Every edge, the graph's `start` and any artifact input's `fromNode` follow the new name |
 | Reorder | Drag a row's grip in the outline | `⌥↑` / `⌥↓` | File order only; execution order is the edges |
-| Delete | Inspector's **Delete** | `⌫` or `Delete` | The node goes; its edges stay, dangling, and validation names them. Nothing is rerouted silently |
+| Delete | Inspector's **Delete** | `⌫` or `Delete` | The node goes; its edges stay, dangling, and validation names them. Nothing is rerouted silently. The selection moves to the next node in file order |
 | Delete with its connections | Inspector | `⇧Delete` | The node and every edge into or out of it |
+| Delete an edge | Inspector's **Delete edge** | `⌫` or `Delete` with the edge selected | The edge goes; the selection moves to the node it left from |
 | Change type | Inspector's **Type** | — | Fields the new type does not use are kept in the draft and flagged, not dropped |
 | Open a container | Double-click a `loop` or `parallel` | `Enter` | The canvas shows the inline graph; the trail above it leads back out |
 | Undo, redo | Draft bar | `⌘Z`, `⌘⇧Z` | One step per batch of operations, kept in the draft so it survives closing the app |
@@ -55,6 +56,15 @@ canvas's view"). Every pointer gesture has a keyboard path, and every key is in 
 The inspector's **Delete** and **Delete edge** are default-tone buttons that do not ask, like
 the keys that do the same: each edits the draft, which `⌘Z` takes back and only **Review and
 publish** writes, so the one act here that confirms and wears the danger tone is **Discard**.
+
+**A delete keeps the person where they were.** Every delete — the keys and the inspector's three
+buttons — is one path in the editor. The selection moves to a neighbour: after a node, the next
+node in file order, or the one before when it was the last (the claims list's rule,
+`focusAfterLeaving`, over the outline's order); after an edge, the node it left from. When the
+delete took focus with it — a press in the inspector, whose button goes with the node — focus
+goes to the canvas, whose active descendant now names the neighbour and where `⌘Z` is one key
+away. From the canvas's own Delete key focus is already there, and focus a person moved while
+the operation was out stays where they put it.
 
 ## Drafts
 
@@ -173,7 +183,11 @@ and the two things a reader of this file would otherwise get wrong:
   disk — ORCA keeps no copy of the one that ran." The warning-only fallback this section
   contemplates is not what shipped, but neither is the pinned model: ORCA records the version
   and cannot execute an older one, so the viewer states both facts rather than implying it is
-  showing what ran.
+  showing what ran. *As of 10 October 2026 the viewer still draws the definition on disk and
+  still says this, although ORCA has kept the pinned version since v0.6.0 and
+  `workflows.get({ id, version })` serves it ("Runs in flight", above): the sentence is now the
+  viewer's out-of-date claim, not ORCA's limit, and moving the viewer to the pinned version is
+  the design-conformance review's follow-up 7.*
 - **The run header carries the version, and not the chip.** `Crumb.version` (#177) prints
   `ai-sdlc v11` on the run crumb, from the `workflowVersion` the run recorded — that is the
   "shown wherever a run's workflow is named" above, on the run header. The `◷ pinned` chip is
@@ -202,7 +216,9 @@ system's draft states (`--added`, `--changed`, `--removed`, `--invalid`, `.orca-
 `.orca-edge--draft`), and routes edges with the viewer's `layout.ts`. The inspector is
 `ConfigField` at the inspector's narrower label column, and every field shows its YAML path.
 The validation rows are `.orca-validation`, and the draft bar is `.orca-draftbar` with Undo,
-Redo, Tidy, Discard and Review and publish. The outline is `.orca-nodelist`. Choice fields are
+Redo, Tidy, Discard and Review and publish — one line, its name and buttons keeping their
+width while its summary ("your draft · 4 changes") and status give way, cut at their end and
+whole in their `title` (RULES.md rule 15). The outline is `.orca-nodelist`. Choice fields are
 `Menu`s, and structured values the form has no control for (artifact inputs, completion, a
 decision's source) are edited as YAML in place and parsed before anything is sent.
 
