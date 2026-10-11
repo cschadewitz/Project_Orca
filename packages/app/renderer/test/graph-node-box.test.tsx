@@ -171,6 +171,14 @@ describe("the node's box", () => {
     );
   });
 
+  it("draws its type icon with the inline icon stroke, as the canvas controls do", () => {
+    /* The brand book's iconography: inline SVG on the 16px grid with a 1.5px stroke. The
+       hairline is a separator's width, not an icon's. */
+    expect(px("stroke-icon")).toBe(1.5);
+    expect(declaration(rule(componentsCssSource, ".orca-node__icon"), "stroke-width")).toBe("var(--stroke-icon)");
+    expect(declaration(rule(componentsCssSource, ".orca-canvasctl__icon"), "stroke-width")).toBe("var(--stroke-icon)");
+  });
+
   it("is tall enough for the kind, a two-line name and a meta line whole, on the 16px grid", () => {
     const node = rule(componentsCssSource, ".orca-node");
     const padding = pxOf(declaration(node, "padding")?.split(" ")[0]);

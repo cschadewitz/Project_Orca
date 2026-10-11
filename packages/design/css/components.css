@@ -1361,12 +1361,14 @@
   font-weight: 500;
 }
 /* The node type's icon: inline SVG on the 16px grid, drawn in the eyebrow's ink. Shapes
-   rather than characters, so there is no bundled face for them and no glyph token. */
+   rather than characters, so there is no bundled face for them and no glyph token. Its stroke
+   is the brand book's for inline icons, `stroke-icon`, as the canvas controls' is: the hairline
+   is a separator's width, and a 1px diamond or gate beside 12px type read as a sketch of one. */
 .orca-node__icon {
   width: var(--icon-md);
   height: var(--icon-md);
   flex: none;
-  stroke-width: var(--stroke-hairline);
+  stroke-width: var(--stroke-icon);
   stroke-linejoin: round;
   stroke-linecap: round;
 }
