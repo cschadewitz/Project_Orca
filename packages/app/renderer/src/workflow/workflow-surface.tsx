@@ -333,7 +333,9 @@ function Inspector({ node }: { node: WorkflowNodeView | undefined }): JSX.Elemen
   return (
     <aside className="orca-wf__inspector" aria-label={`Node detail: ${node.name ?? node.id}`}>
       <h2 className={`orca-wf__inspector-name ${textClass("mono-strong")}`}>{node.name ?? node.id}</h2>
-      <div className="orca-wf__inspector-meta">
+      {/* A run of chips, so it wraps: a plugin's `custom:<name>` kind beside the attempts
+          is wider than the inspector at its narrowest. */}
+      <div className="orca-wf__inspector-meta orca-chips">
         <Chip>{node.type}</Chip>
         {node.maxAttempts !== undefined && <Chip>{`up to ${node.maxAttempts} attempts`}</Chip>}
       </div>

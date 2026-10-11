@@ -154,6 +154,30 @@
   white-space: nowrap;
 }
 
+/* A run of chips in a box that is not a row — an agent's roles, a node's kind and attempts,
+   a rail of filters, the artifacts a step produced. It wraps onto as many lines as it needs,
+   because every chip in it is a fact, and a chip pushed past the edge of its box is a fact
+   nobody can read. The agent card's roles were one unwrapped flex line inside a `1fr` grid
+   track: the line's minimum was the sum of its chips, so seven roles set the track's minimum,
+   ran out past the card and were painted over by the card beside it.
+
+   `min-width: 0` is the other half of that. A flex or grid item's automatic minimum is its
+   content's, so a run of chips placed in one is still allowed to hold its parent open; with
+   it, the parent's width decides and the wrap does the rest. The chips themselves never
+   shrink (`.orca-chip` below), so the only thing a run of them cannot fit is one chip wider
+   than the whole box.
+
+   Not for rows. A row is fixed height and never wraps (RULES.md rule 9), so chips inside one
+   are a fixed column each, and a list of them would have to show what fits and name the rest
+   in its accessible name instead. No row carries a list of chips today. */
+.orca-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
 /* ---------- status chip ---------- */
 
 /* A chip is as wide as what it says and never narrower — glyph, gap, word, both paddings and
@@ -1283,9 +1307,19 @@
 
 /* ---------- agent health card ---------- */
 
+/* The header is one line of three tracks: the health, the name, the host. The name is the
+   subject and an id, so it takes the room it needs first — `minmax(0, max-content)` grows to
+   the whole name before the flexible track gets anything — and the host label is the one that
+   gives way. It was `auto 1fr auto`, which handed the leftovers to the name instead: on a
+   34ch card next to "◌ unknown" and "local · local", `scripted-slow` broke at its hyphen into
+   two lines that read as two things. The host is the right thing to lose, because the host
+   heading above the cards already says it.
+
+   Neither track has a content minimum. A bare `1fr` is `minmax(auto, 1fr)`, so whatever sat
+   in it — the roles, which span it — could hold the card's grid open wider than the card. */
 .orca-agent {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr);
   gap: var(--space-2) var(--space-3);
   align-items: center;
   padding: var(--space-3);
@@ -1329,18 +1363,31 @@
 .orca-agent__health--down {
   color: var(--status-failed);
 }
+/* Never wrapped, because an id broken across two lines is two ids. Only a name wider than the
+   whole card truncates, and then at its end (rule 8's verbatim, the brand book's "truncate at
+   the end"), with the whole id in the element's title and the card's accessible name. */
 /* type: mono-strong */
 .orca-agent__name {
   font-family: var(--font-mono);
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+/* Set against the card's far edge, and the part of the header that gives way: it truncates
+   at its end, whole in its title. */
 /* type: caption */
 .orca-agent__host {
   color: var(--ink-secondary);
+  text-align: end;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+/* Where the roles sit, under the name. How they lay out is `.orca-chips`, which the markup
+   composes with this: a run of them wraps inside the card rather than running past it. A card
+   is not a row, so it may take another line (rule 9 is about rows). */
 .orca-agent__roles {
-  display: flex;
-  gap: var(--space-1);
   grid-column: 2 / -1;
 }
 /* type: caption */
@@ -2402,22 +2449,37 @@
   background: var(--surface-selected);
   border-left-color: var(--accent);
 }
+/* A node-list row is a row: one line at `--row-h` whatever the node is called (rule 9). The
+   three parts used to wrap like prose, so an id with a hyphen in it broke onto a second line
+   the row had no height for and drew over the row below. Now each part is one line, and the
+   machine strings that can outgrow their room — a plugin's `custom:` kind in a column sized
+   to the built-in kinds, an id in a sidebar — truncate at their end, whole in their titles.
+   The id is the elastic part; the meta beside it keeps its width. */
 /* type: eyebrow */
 .orca-nodelist__type {
   text-transform: uppercase;
   color: var(--ink-tertiary);
   width: var(--col-node-kind);
   flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* type: mono-strong */
 .orca-nodelist__name {
   font-family: var(--font-mono);
   font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* type: caption */
 .orca-nodelist__meta {
   margin-left: auto;
   color: var(--ink-secondary);
+  flex: none;
+  white-space: nowrap;
 }
 .orca-nodelist__grip {
   color: var(--ink-tertiary);
@@ -2495,17 +2557,26 @@
   height: 100%;
   background: var(--surface-base);
 }
+/* One line: a chip, the thing's name, and a word about it. The words beside the title are
+   short and fixed, so `nowrap` keeps them whole and the title is the one part that gives way. */
 .orca-inspector__head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+  white-space: nowrap;
 }
+/* A node id, a run name, an edge's two ends: machine strings, and as long as their author
+   made them. Wrapped, an id with a hyphen in it broke into two that read as two things, and
+   one without ran out past the pane. It truncates at its end instead, whole in its title. */
 /* type: mono-strong */
 .orca-inspector__title {
   font-family: var(--font-mono);
   font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .orca-inspector__body {
   padding: 0 var(--space-3);

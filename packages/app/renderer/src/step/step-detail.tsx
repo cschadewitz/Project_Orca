@@ -83,7 +83,10 @@ function Step({
     <div className="orca-inspector orca-step">
       <div className="orca-inspector__head">
         <StatusChip status={status} />
-        <span className={`orca-inspector__title ${textClass("mono-strong")}`}>{step.nodeId}</span>
+        {/* Truncates at its end in a narrow pane, so the whole id is in its title. */}
+        <span className={`orca-inspector__title ${textClass("mono-strong")}`} title={step.nodeId}>
+          {step.nodeId}
+        </span>
         <Text style="caption" className="orca-faint">
           {`attempt ${step.attempt}`}
         </Text>
@@ -212,7 +215,7 @@ function StepArtifacts({ runId, stepRunId }: { runId: string; stepRunId: string 
       <Text style="eyebrow" as="div" className="orca-inspector__group">
         Produced
       </Text>
-      <div className="orca-step__chips">
+      <div className="orca-chips">
         {artifacts.map((artifact) => (
           <ArtifactChip key={artifact.id} runId={runId} artifact={artifact} />
         ))}
@@ -256,7 +259,9 @@ function RunSummary({ detail, connection }: { detail: RunsGetResult; connection:
     <div className="orca-inspector orca-step">
       <div className="orca-inspector__head">
         <StatusChip status={status} />
-        <span className={`orca-inspector__title ${textClass("mono-strong")}`}>{detail.run.name}</span>
+        <span className={`orca-inspector__title ${textClass("mono-strong")}`} title={detail.run.name}>
+          {detail.run.name}
+        </span>
         <Text style="caption" className="orca-faint">
           {STATUS_PRESENTATION[status].word}
         </Text>
@@ -288,7 +293,7 @@ function RunSummary({ detail, connection }: { detail: RunsGetResult; connection:
         <Text style="eyebrow" as="div" className="orca-inspector__group">
           {`Artifacts (${detail.artifacts.length})`}
         </Text>
-        <div className="orca-step__chips">
+        <div className="orca-chips">
           {detail.artifacts.map((artifact) => (
             <ArtifactChip key={artifact.id} runId={detail.run.id} artifact={artifact} />
           ))}

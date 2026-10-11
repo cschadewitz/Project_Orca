@@ -39,7 +39,7 @@ export function PlanSidebar({ plan, filters, onRequest, onClassification, onStat
         <Text style="eyebrow" as="h2">
           Requests
         </Text>
-        <div className="orca-plan__chips">
+        <div className="orca-chips">
           <Filter label="All requests" pressed={filters.requestId === undefined} onPress={() => onRequest(undefined)} />
           {plan.requestIds.map((requestId) => (
             <Filter
@@ -59,7 +59,7 @@ export function PlanSidebar({ plan, filters, onRequest, onClassification, onStat
         <Text style="eyebrow" as="h2">
           Schedule
         </Text>
-        <div className="orca-plan__chips">
+        <div className="orca-chips">
           {CLASSIFICATIONS.map((classification) => (
             <Filter
               key={classification}
@@ -78,7 +78,7 @@ export function PlanSidebar({ plan, filters, onRequest, onClassification, onStat
         <Text style="eyebrow" as="h2">
           Status
         </Text>
-        <div className="orca-plan__chips">
+        <div className="orca-chips">
           {ITEM_STATUSES.map((status) => (
             <Filter
               key={status}
@@ -97,6 +97,13 @@ export function PlanSidebar({ plan, filters, onRequest, onClassification, onStat
  * One filter. A button with `aria-pressed`, not a checkbox and not a chip: it is a control
  * that acts on press, and `accent` is what marks it as the one in effect — which is rule
  * 5's "accent means interactive", used for the state of an interactive thing.
+ *
+ * A `mono` filter is a request id, and a real one — `req_` and a 26-character ULID — is wider
+ * than the rail. The rail wraps its filters (`.orca-chips`) but cannot wrap one, so the
+ * label truncates at its end (`plan.css`) and the button carries the whole id in its title;
+ * its accessible name is its text, which is whole already. The label is a span of its own
+ * because the ellipsis is drawn by the block whose text overflows, and a button's text sits
+ * in an anonymous box inside it that the button's `text-overflow` does not reach.
  */
 function Filter({
   label,
@@ -116,9 +123,10 @@ function Filter({
       type="button"
       className={`orca-plan__filter ${textClass(mono ? "mono-id" : "caption")}`}
       aria-pressed={pressed}
+      title={mono ? label : undefined}
       onClick={onPress}
     >
-      {count === undefined ? label : `${label} ${count}`}
+      <span className="orca-plan__filter-label">{count === undefined ? label : `${label} ${count}`}</span>
     </button>
   );
 }

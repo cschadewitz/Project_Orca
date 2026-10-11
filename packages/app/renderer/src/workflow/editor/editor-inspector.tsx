@@ -227,7 +227,11 @@ function NodeInspector({
     <>
       <div className="orca-inspector__head">
         <Chip>{node.type}</Chip>
-        <span className={`orca-inspector__title ${textClass("mono-strong")}`}>{node.id}</span>
+        {/* The title truncates at its end when the pane is narrower than the id, so the whole
+            id is in its title (components.css, `.orca-inspector__title`). */}
+        <span className={`orca-inspector__title ${textClass("mono-strong")}`} title={node.id}>
+          {node.id}
+        </span>
         {node.state && <Text style="caption">{node.state}</Text>}
       </div>
       <div className="orca-inspector__body">
@@ -424,7 +428,9 @@ function EdgeInspector({
     <>
       <div className="orca-inspector__head">
         <Chip>edge</Chip>
-        <span className={`orca-inspector__title ${textClass("mono-strong")}`}>{`${edge.from} → ${edge.to}`}</span>
+        <span className={`orca-inspector__title ${textClass("mono-strong")}`} title={`${edge.from} → ${edge.to}`}>
+          {`${edge.from} → ${edge.to}`}
+        </span>
         {edge.added && <Text style="caption">added</Text>}
       </div>
       <div className="orca-inspector__body">
@@ -502,12 +508,13 @@ function EdgeInspector({
 
 function WorkflowInspector({ graph, path, workflow, readOnly, onApply }: EditorInspectorProps): JSX.Element {
   const starts = graph.nodes.filter((n) => n.type === "start" && n.state !== "removed");
+  const title = path.length === 0 ? (workflow?.name ?? "") : path.map((step) => step.node).join(" ▸ ");
   return (
     <>
       <div className="orca-inspector__head">
         <Chip>{path.length === 0 ? "workflow" : "inline graph"}</Chip>
-        <span className={`orca-inspector__title ${textClass("mono-strong")}`}>
-          {path.length === 0 ? (workflow?.name ?? "") : path.map((step) => step.node).join(" ▸ ")}
+        <span className={`orca-inspector__title ${textClass("mono-strong")}`} title={title}>
+          {title}
         </span>
       </div>
       <div className="orca-inspector__body">

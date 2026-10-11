@@ -27,6 +27,15 @@
   align-items: baseline;
   gap: var(--space-2);
 }
+/* The agent's id, beside "Permissions" and Close in a column of fixed width. As a plain span
+   it broke at its hyphens onto a second line, which reads as two ids; it stays one line and
+   truncates at its end instead, whole in its title and in the panel's accessible name. */
+.orca-policy__agent {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .orca-policy__section {
   display: flex;

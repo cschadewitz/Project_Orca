@@ -158,7 +158,11 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
         <Text style="heading" as="h2">
           Permissions
         </Text>
-        <span className={`orca-id ${textClass("mono-strong")}`}>{agentId}</span>
+        {/* The same id the card is named by, and kept whole the same way: one line, cut at
+            its end only when the panel cannot hold it, with the id in its title. */}
+        <span className={`orca-id ${textClass("mono-strong")} orca-policy__agent`} title={agentId}>
+          {agentId}
+        </span>
         <span className="orca-spacer" />
         {/* No warning on Close any more: the draft is held above this panel (#175's
             review), so closing it puts the edits down rather than throwing them away. */}

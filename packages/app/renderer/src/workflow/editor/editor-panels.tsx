@@ -121,9 +121,16 @@ export const EditorSidebar = forwardRef<PaletteHandle, EditorSidebarProps>(funct
                   aria-current={selected ? "true" : undefined}
                   onClick={() => onSelect({ kind: "node", id: node.id })}
                 >
-                  <span className={`orca-nodelist__type ${textClass("eyebrow")}`}>{node.type}</span>
+                  {/* The row is one line in a sidebar-wide column, so the kind and the id
+                      truncate at their ends when they do not fit — whole in their titles,
+                      and whole in the button's accessible name (components.css, the node
+                      list). */}
+                  <span className={`orca-nodelist__type ${textClass("eyebrow")}`} title={node.type}>
+                    {node.type}
+                  </span>
                   <span
                     className={`orca-nodelist__name ${textClass("mono-strong")}${node.state === "removed" ? " orca-wfedit__struck" : ""}`}
+                    title={node.id}
                   >
                     {node.id}
                   </span>

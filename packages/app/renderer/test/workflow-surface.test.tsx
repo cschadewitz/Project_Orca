@@ -312,6 +312,12 @@ describe("the inspector", () => {
     expect(within(inspector).getByText("role")).toBeTruthy();
     expect(within(inspector).getByText("builder")).toBeTruthy();
     expect(within(inspector).getByText("sdlc/build")).toBeTruthy();
+
+    /* The kind and the attempts are one run of chips, which wraps: a plugin's `custom:<name>`
+       kind beside "up to 3 attempts" is wider than the inspector at its narrowest, and an
+       unwrapped line ran past the pane's edge. */
+    const kind = within(inspector).getByText("agent").closest(".orca-chip")!;
+    expect(kind.parentElement!.classList.contains("orca-chips")).toBe(true);
   });
 
   it("shows a node selected inside an expanded branch, which is the same one selection", async () => {

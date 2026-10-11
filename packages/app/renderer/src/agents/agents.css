@@ -79,10 +79,14 @@
 }
 
 /* A card is wide enough for its widest metric row and no wider; the track count follows the
-   pane, so a narrow window stacks them rather than squeezing every card. */
+   pane, so a narrow window stacks them rather than squeezing every card. `min(100%, …)` is
+   the one exception: a pane narrower than a single card — the policy panel open in a small
+   window — gets one card as wide as the pane rather than a card that runs out past its edge,
+   which is what the card's own header and roles are built to give way inside. The same
+   floor `resources.css` gives its cards. */
 .orca-agents__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(34ch, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 34ch), 1fr));
   gap: var(--space-3);
   align-items: start;
 }
