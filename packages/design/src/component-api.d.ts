@@ -790,6 +790,42 @@ export interface WorkflowNodeProps {
   onOpen?(id: string): void;
 }
 
+/** Generated: `OBJECT_KINDS` from semantics.json's `objectKind`. */
+export type ObjectKind = "run" | "workItem" | "request" | "step" | "gate" | "event";
+
+/**
+ * Object id (built: `renderer/src/ui/object-id.tsx`, over `.orca-objid`). The one way an
+ * ORCA id reaches the screen in a row or a header; nothing prints or slices a raw id
+ * (RULES.md rule 8, held by `renderer/test/object-id-guard.test.ts`).
+ *
+ * - **Name first, id second.** Where an object has a human name it leads, sans, and is cut at
+ *   its end; the id follows as a faint **token** — the kind's glyph and the last six
+ *   characters of the id, `Database schema ⬡ 5M579G`. With no name the token stands alone
+ *   and is not faint. The token is `flex: none`: it never truncates and never wraps.
+ * - **Six characters for every format** (ULID, keyed hash, UUID). A list in which two ids
+ *   share a tail lengthens just those (`useIdTails`, over the whole list's data, suffix-
+ *   preserving) — a safety net that should almost never fire.
+ * - **The whole id is one action away**: `title` on the token, **Copy id** in the object
+ *   header's crumb menu, the palette's matching, and `variant="full"` for a detail pane.
+ * - **Accessible name is the kind's word and the tail** ("run 7X8PXX"): the glyph is
+ *   `aria-hidden` and the word is in the text, visually hidden.
+ *
+ * Events are the exception: a timeline row names its event by sequence number (`#148`), and
+ * the event's copy menu keeps the full id. There is no `copyable` prop: copying is a menu's
+ * act, and a row that is a click target already has one meaning for a click.
+ */
+export interface ObjectIdProps {
+  id: string;
+  /** Inferred from the id's prefix; required for an unprefixed id (a bare UUID). */
+  kind?: ObjectKind;
+  /** `row` (default), `header` (always faint, after a crumb's name and type), `full` (verbatim). */
+  variant?: "row" | "header" | "full";
+  /** What a person calls the object; leads, truncates. */
+  name?: string;
+  /** From `useIdTails(ids)` over the whole list; six characters otherwise. */
+  tail?: string;
+}
+
 /** `plan` is the root of the Plan surface's trail (#170): plan ▸ work item. */
 export type CrumbType = "plan" | "request" | "item" | "run" | "step" | "workflow" | "agent" | "config";
 

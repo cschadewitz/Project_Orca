@@ -92,6 +92,59 @@
   font-family: var(--font-mono);
   color: var(--ink-secondary);
 }
+
+/* ---------- object id ---------- */
+
+/* An id in a row or a header (`ObjectId`): the kind's glyph and the id's last six
+   characters, `☰ 7X8PXX`, with the whole id in its title. It takes its colour from where it
+   is put — a link's accent in a claim column, a cell's secondary ink — and `--faint` when a
+   name leads it, because then the token is the second thing on the line and not the label.
+   It never truncates and never wraps: a row is one line (RULES.md rule 9), and a tail cut
+   short is a different id. */
+/* type: mono-id */
+.orca-objid {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  flex: none;
+}
+/* The kind glyph, at the size a status glyph takes in a chip, from the bundled symbol face
+   that leads the mono stack. Decoration: the kind's word is in the text, visually hidden. */
+.orca-objid__kind {
+  font-size: var(--icon-sm);
+  line-height: 1;
+  margin-inline-end: var(--space-1);
+}
+.orca-objid--faint {
+  color: var(--ink-tertiary);
+}
+/* The verbatim form (`variant="full"`): the head recedes and the tail is lifted, so the short
+   form a row showed can be found at the end of the long one. Nothing is cut or re-cased —
+   a machine string stays verbatim. */
+.orca-objid--full {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  color: var(--ink-secondary);
+}
+.orca-objid--full .orca-objid__tail {
+  color: var(--ink-primary);
+  font-weight: 500;
+}
+/* A name and its token on one line: the name is the elastic part, cut at its end; the token
+   after it keeps its width (`.orca-objid` is `flex: none`). The name is sans — it is what a
+   person calls the object — and takes its type from where it is put. */
+.orca-objid-named {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+}
+.orca-objid-named__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .orca-muted {
   color: var(--ink-secondary);
 }

@@ -29,6 +29,7 @@ import {
   ConnectionIndicator,
   Duration,
   ObjectHeader,
+  ObjectId,
   ScheduleBadge,
   StateView,
   StatusChip,
@@ -134,6 +135,17 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
               why
             </button>
           </span>
+        </div>
+      </Section>
+
+      <Section title="Object ids">
+        {/* A name and its faint token; a token alone, where nothing has a name; and the
+            verbatim form a detail pane prints, with the tail lifted out of it. */}
+        <div className="preview__stack">
+          <ObjectId id="wi_01M4M899VKJZRZSBHNDY5M579G" name="Database schema" />
+          <ObjectId id="run_cae154fb-f778-47ba-ae71-bb4df6bb09e1" name="Export invoices as CSV" />
+          <ObjectId id="req_01M4M896DER1YQSTMV3G5BNH42" />
+          <ObjectId id="run_01M4M8A1WDAQMMX98Q6KJH7X8P" variant="full" />
         </div>
       </Section>
 

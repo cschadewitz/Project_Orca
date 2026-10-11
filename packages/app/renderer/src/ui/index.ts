@@ -21,6 +21,18 @@ export {
   type Rect,
 } from "./menu-placement.js";
 export { ObjectHeader, type Crumb, type HeaderMode, type ObjectHeaderProps } from "./object-header.js";
+export { IdToken, MachineText, ObjectId, useIdTails, type ObjectIdProps } from "./object-id.js";
+export {
+  TAIL_LENGTH,
+  idText,
+  idWords,
+  kindOf,
+  parseId,
+  parseIdText,
+  uniqueTails,
+  type IdFormat,
+  type ParsedId,
+} from "./object-id-model.js";
 export { ScheduleBadge, type ScheduleBadgeProps } from "./schedule-badge.js";
 export { DecisionMatrix, rankedTotal, type DecisionMatrixProps } from "./decision-matrix.js";
 export { DependencyNode, type DependencyNodeProps, type DependencyTarget } from "./dependency-node.js";
