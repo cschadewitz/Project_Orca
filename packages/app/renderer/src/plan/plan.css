@@ -109,12 +109,14 @@
   flex: 1;
   min-height: 0;
 }
+/* The request and claim columns hold id tokens (`ObjectId`), so they are `col-id` wide: a raw
+   id needed 128px and still truncated to the timestamp every id of a session shares. */
 .orca-plan__row,
 .orca-plan__head {
   display: grid;
   grid-template-columns:
     var(--col-classification) var(--col-slug) minmax(0, 1fr)
-    var(--col-request) var(--col-status) var(--col-score) var(--col-risk) var(--col-claim);
+    var(--col-id) var(--col-status) var(--col-score) var(--col-risk) var(--col-id);
   align-items: center;
   gap: var(--space-3);
   padding: 0 var(--space-3);

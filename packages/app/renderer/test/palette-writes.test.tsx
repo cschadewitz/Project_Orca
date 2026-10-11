@@ -322,9 +322,12 @@ describe("the plan's writes", () => {
     await selectItem("Instrument the login funnel");
     await open();
 
-    search("Release claim on wi-metrics");
+    // The work item by its title and its token; the plan supplies the title the claim lacks.
+    search("Release claim on Instrument the login funnel");
     fireEvent.keyDown(query(), { key: "Enter" });
-    await within(palette()).findByRole("option", { name: /Release wi-metrics — confirm/ });
+    await within(palette()).findByRole("option", {
+      name: /Release Instrument the login funnel work item wi-metrics — confirm/,
+    });
     fireEvent.keyDown(query(), { key: "Enter" });
 
     await waitFor(() => expect(callsTo("claims.release")).toHaveLength(1));
@@ -462,7 +465,9 @@ describe("what a daemon's answer takes away", () => {
     await screen.findByLabelText(/^Work item /);
     await open();
 
-    const release = rows().find((option) => option.textContent?.includes("Release claim on wi-metrics"));
+    const release = rows().find((option) =>
+      option.textContent?.includes("Release claim on Instrument the login funnel"),
+    );
     expect(release).toBeTruthy();
     // A daemon without the capability still cannot be written to *now*, and the row says
     // so in `useWritability()`'s words rather than disappearing.

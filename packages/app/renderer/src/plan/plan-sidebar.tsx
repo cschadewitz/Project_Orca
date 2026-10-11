@@ -15,7 +15,7 @@
  */
 import type { JSX } from "react";
 import type { ItemClassification, PlanView } from "@orca/protocol";
-import { Text, textClass } from "../ui/index.js";
+import { ObjectId, Text, textClass, useIdTails } from "../ui/index.js";
 import {
   CLASSIFICATIONS,
   CLASSIFICATION_WORDS,
@@ -33,6 +33,7 @@ export interface PlanSidebarProps {
 }
 
 export function PlanSidebar({ plan, filters, onRequest, onClassification, onStatus }: PlanSidebarProps): JSX.Element {
+  const tailOf = useIdTails(plan.requestIds);
   return (
     <nav className="orca-plan__rail" aria-label="Requests and filters">
       <div className="orca-plan__group">
@@ -44,8 +45,7 @@ export function PlanSidebar({ plan, filters, onRequest, onClassification, onStat
           {plan.requestIds.map((requestId) => (
             <Filter
               key={requestId}
-              label={requestId}
-              mono
+              request={{ id: requestId, tail: tailOf(requestId) }}
               pressed={filters.requestId === requestId}
               /* A second press on the selected request clears it: a filter rail with no
                  way back out of it is a rail a person gets stuck in. */
@@ -98,35 +98,46 @@ export function PlanSidebar({ plan, filters, onRequest, onClassification, onStat
  * that acts on press, and `accent` is what marks it as the one in effect — which is rule
  * 5's "accent means interactive", used for the state of an interactive thing.
  *
- * A `mono` filter is a request id, and a real one — `req_` and a 26-character ULID — is wider
- * than the rail. The rail wraps its filters (`.orca-chips`) but cannot wrap one, so the
- * label truncates at its end (`plan.css`) and the button carries the whole id in its title;
- * its accessible name is its text, which is whole already. The label is a span of its own
- * because the ellipsis is drawn by the block whose text overflows, and a button's text sits
- * in an anonymous box inside it that the button's `text-overflow` does not reach.
+ * A `request` filter names a request by its id, and the plan's read model carries no
+ * request title to lead with — so it is the id's token alone, `❝ 5BNH42`: the kind's glyph
+ * and the last six characters, with the whole id in the token's title (`ObjectId`). A raw
+ * id — `req_` and 26 characters whose first ten are the same for every request one session
+ * made — was wider than the rail and truncated to exactly the half that does not differ. The
+ * label is still a span of its own and still truncates at its end, should a rail ever be
+ * narrower than a token: the ellipsis is drawn by the block whose text overflows, and a
+ * button's text sits in an anonymous box inside it that the button's `text-overflow` does
+ * not reach.
  */
 function Filter({
   label,
+  request,
   count,
-  mono = false,
   pressed,
   onPress,
 }: {
-  label: string;
+  label?: string;
+  /** A request, by its id and the tail the rail draws it with (`useIdTails`). */
+  request?: { id: string; tail: string };
   count?: number;
-  mono?: boolean;
   pressed: boolean;
   onPress: () => void;
 }): JSX.Element {
   return (
     <button
       type="button"
-      className={`orca-plan__filter ${textClass(mono ? "mono-id" : "caption")}`}
+      className={`orca-plan__filter ${textClass(request === undefined ? "caption" : "mono-id")}`}
       aria-pressed={pressed}
-      title={mono ? label : undefined}
       onClick={onPress}
     >
-      <span className="orca-plan__filter-label">{count === undefined ? label : `${label} ${count}`}</span>
+      <span className="orca-plan__filter-label">
+        {request !== undefined ? (
+          <ObjectId id={request.id} kind="request" tail={request.tail} />
+        ) : count === undefined ? (
+          label
+        ) : (
+          `${label} ${count}`
+        )}
+      </span>
     </button>
   );
 }

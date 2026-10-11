@@ -134,8 +134,11 @@ describe("the schedule table", () => {
     ]);
 
     const api = rows(table).find((row) => row.id === scheduleRowId("wi-api"))!;
-    // The request, in mono: it is ORCA's own name for that object (rule 8).
-    expect(within(api).getByText("req-1").className).toContain("orca-text-mono-id");
+    // The request, as its id token in mono: it is ORCA's own name for that object (rule 8),
+    // and no read model carries a title for it to lead with. The whole id is its title.
+    const request = within(api).getByText("req-1").closest(".orca-objid")!;
+    expect(request.className).toContain("orca-text-mono-id");
+    expect(request.getAttribute("title")).toBe("req-1");
 
     // Word *and* glyph, like every status in the app (rule 4) …
     const status = WORK_ITEM_STATUS_PRESENTATION.pending;
@@ -153,9 +156,9 @@ describe("the schedule table", () => {
     const api = rows(table).find((row) => row.id === scheduleRowId("wi-api"))!;
 
     expect(within(api).getByTitle("unblocks 2 items (auth-ui, auth-docs)").textContent).toBe("6.6");
-    // The running item's claim names the run holding it.
+    // The running item's claim names the run holding it, by its id token.
     const metrics = rows(table).find((row) => row.id === scheduleRowId("wi-metrics"))!;
-    expect(within(metrics).getByRole("button", { name: "run-metrics" })).toBeTruthy();
+    expect(within(metrics).getByRole("button", { name: "run run-metrics" })).toBeTruthy();
   });
 });
 
@@ -189,10 +192,11 @@ describe("the sidebar's requests and filters", () => {
   it("filters by request, and a second press clears it", async () => {
     await openPlan();
     const page = { limit: ITEMS_PAGE, offset: 0 };
-    fireEvent.click(screen.getByRole("button", { name: "req-1" }));
+    // A request filter is the request's id token, said as "request req-1".
+    fireEvent.click(screen.getByRole("button", { name: "request req-1" }));
     await waitFor(() => expect(callsTo("items.list").at(-1)).toEqual({ planId: PLAN_ID, requestId: "req-1", ...page }));
 
-    fireEvent.click(screen.getByRole("button", { name: "req-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "request req-1" }));
     await waitFor(() => expect(callsTo("items.list").at(-1)).toEqual({ planId: PLAN_ID, ...page }));
   });
 

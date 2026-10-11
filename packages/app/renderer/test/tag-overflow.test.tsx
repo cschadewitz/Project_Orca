@@ -196,7 +196,7 @@ describe("a machine string with nowhere to wrap to", () => {
     });
   }
 
-  it("keeps a request id on the Plan rail whole in its title, in a rail of filters that wraps", () => {
+  it("draws a request on the Plan rail as its token, whole in its title, in a rail of filters that wraps", () => {
     render(
       <PlanSidebar
         plan={{ ...PLAN, requestIds: [REQUEST_ID] }}
@@ -206,11 +206,15 @@ describe("a machine string with nowhere to wrap to", () => {
         onStatus={() => {}}
       />,
     );
-    const filter = screen.getByRole("button", { name: REQUEST_ID });
-    expect(filter.getAttribute("title")).toBe(REQUEST_ID);
-    // The ellipsis is the label's to draw: a button's own `text-overflow` does not reach the
-    // anonymous box its text sits in.
-    expect(filter.querySelector(".orca-plan__filter-label")?.textContent).toBe(REQUEST_ID);
+    /* Not the raw id: `req_` and 26 characters whose first ten every request of a session
+       shares was wider than the rail and cut to exactly that shared half. It is the id's
+       token — the kind's glyph and the last six characters — with the whole id on hover. */
+    const filter = screen.getByRole("button", { name: `request ${REQUEST_ID.slice(-6)}` });
+    expect(filter.querySelector(".orca-objid")?.getAttribute("title")).toBe(REQUEST_ID);
+    expect(filter.textContent).not.toContain(REQUEST_ID);
+    // The ellipsis is still the label's to draw, should a rail be narrower than a token: a
+    // button's own `text-overflow` does not reach the anonymous box its text sits in.
+    expect(filter.querySelector(".orca-plan__filter-label .orca-objid__tail")?.textContent).toBe(REQUEST_ID.slice(-6));
     expect(filter.parentElement?.classList.contains("orca-chips")).toBe(true);
   });
 

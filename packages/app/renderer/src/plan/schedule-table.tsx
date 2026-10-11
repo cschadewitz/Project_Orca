@@ -27,7 +27,7 @@
 import { useCallback, useMemo, type JSX } from "react";
 import type { ItemClassification, PlanItemView } from "@orca/protocol";
 import { VirtualList, type MinimapKind, type VirtualListTick } from "../list/index.js";
-import { Chip, Menu, ScheduleBadge, StatusChip, textClass, type MenuItem } from "../ui/index.js";
+import { Chip, Menu, ObjectId, ScheduleBadge, StatusChip, textClass, useIdTails, type MenuItem } from "../ui/index.js";
 import { CLASSIFICATION_WORDS, classificationMark, explanationItems, workItemStatusMark } from "./plan-model.js";
 
 export interface ScheduleTableProps {
@@ -64,6 +64,11 @@ export function ScheduleTable(props: ScheduleTableProps): JSX.Element {
     const at = items.findIndex((item) => item.id === selectedId);
     return at === -1 ? undefined : at;
   }, [items, selectedId]);
+
+  /* Every id the table draws — the requests and the runs holding claims — over every item
+     held, not the rows in the window: a tail that grew only while two colliding rows were
+     both on screen would change length as a person scrolled. */
+  const tailOf = useIdTails(useMemo(() => items.flatMap((item) => [item.requestId, item.claim?.runId]), [items]));
 
   const ticks = useMemo<VirtualListTick[]>(
     () =>
@@ -103,6 +108,7 @@ export function ScheduleTable(props: ScheduleTableProps): JSX.Element {
       renderRow={(item) => (
         <Row
           item={item}
+          tailOf={tailOf}
           onExplain={onExplain}
           open={explainFor === item.id}
           lines={explainFor === item.id ? lines : undefined}
@@ -135,6 +141,8 @@ function TableHead(): JSX.Element {
 
 interface RowProps {
   item: PlanItemView;
+  /** The tail each id is drawn with, decided over the whole table (`useIdTails`). */
+  tailOf: (id: string) => string;
   onExplain: (item: PlanItemView) => void;
   open: boolean;
   lines: readonly string[] | undefined;
@@ -143,7 +151,16 @@ interface RowProps {
   onOpenRun: (runId: string) => void;
 }
 
-function Row({ item, onExplain, open, lines, explainError, onCloseExplanation, onOpenRun }: RowProps): JSX.Element {
+function Row({
+  item,
+  tailOf,
+  onExplain,
+  open,
+  lines,
+  explainError,
+  onCloseExplanation,
+  onOpenRun,
+}: RowProps): JSX.Element {
   const mark = classificationMark(item.classification);
   const status = workItemStatusMark(item.status);
   /* The first reason, as the cell's title: the whole list is in the explanation and in the
@@ -187,10 +204,12 @@ function Row({ item, onExplain, open, lines, explainError, onCloseExplanation, o
         {item.title}
       </span>
 
-      {/* The request this item was decomposed from, in mono because it is ORCA's own name
-          for that object and not prose about it (rule 8). */}
-      <span className={`orca-plan__id ${textClass("mono-id")}`} role="gridcell">
-        {item.requestId}
+      {/* The request this item was decomposed from, as its id token: the plan's read model
+          carries no request title to lead with, so the token is the whole label — the kind's
+          glyph and the last six characters, the whole id on hover. The raw id truncated at its
+          end to `req_01M4M9GQ7T…`, which is the timestamp every request of a session shares. */}
+      <span className="orca-plan__id" role="gridcell">
+        <ObjectId id={item.requestId} kind="request" tail={tailOf(item.requestId)} />
       </span>
 
       {/* The item's own status: word and glyph, in the plain chip, never the tinted one —
@@ -207,12 +226,10 @@ function Row({ item, onExplain, open, lines, explainError, onCloseExplanation, o
       </span>
       <span className="orca-plan__cell" role="gridcell">
         {item.claim === undefined ? null : (
-          <button
-            type="button"
-            className={`orca-bare orca-link ${textClass("mono-id")}`}
-            onClick={() => onOpenRun(item.claim!.runId)}
-          >
-            {item.claim.runId}
+          /* The run holding the claim, as its token: `PlanItemView.claim` is `{ runId }` and
+             nothing else, so there is no name to lead with. A link, so it takes the accent. */
+          <button type="button" className="orca-bare orca-link" onClick={() => onOpenRun(item.claim!.runId)}>
+            <ObjectId id={item.claim.runId} kind="run" tail={tailOf(item.claim.runId)} />
           </button>
         )}
       </span>
