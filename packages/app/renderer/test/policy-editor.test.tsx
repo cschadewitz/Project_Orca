@@ -672,6 +672,30 @@ describe("where focus goes when a grant leaves", () => {
     expect(document.activeElement).toBe(next);
   });
 
+  it("moves to the Written grants when Discard empties the draft and the save bar leaves", async () => {
+    renderPanel();
+    press(within((await grants())[0]!).getByRole("button", { name: "Remove grant 2" }));
+    const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+
+    /* Discard brings the count to zero, and the bar goes with the Discard that was pressed.
+       Focus goes to the list the draft was editing rather than to the page body. */
+    press(within(bar).getByRole("button", { name: "Discard" }));
+    expect(screen.queryByRole("group", { name: "Unsaved configuration changes" })).toBeNull();
+    const section = await screen.findByRole("region", { name: "Written grants" });
+    await waitFor(() => expect(document.activeElement).toBe(section));
+    expect(await grants()).toHaveLength(2);
+  });
+
+  it("moves to the Written grants when a save lands and the save bar leaves", async () => {
+    renderPanel();
+    press(within((await grants())[0]!).getByRole("button", { name: "Remove grant 2" }));
+    press(await screen.findByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(lastWrite().document).toBe("permissions"));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Unsaved configuration changes" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("region", { name: "Written grants" })));
+  });
+
   it("does not take focus back from somewhere the person moved it", async () => {
     renderPanel();
     const written = await grants();

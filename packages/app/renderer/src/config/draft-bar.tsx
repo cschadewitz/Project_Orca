@@ -22,8 +22,14 @@
  *   there afterwards to be sent against the new revision.
  * - **The count is of what would be written**, not of what was typed: an edit back to the
  *   file's own value is not a change (`patchFrom`).
+ * - **It hands focus back when it goes.** The bar is there while there is something to write,
+ *   so the Save or Discard that empties the draft unmounts the bar with the button a person
+ *   just pressed, and focus would fall to the page body. If the bar held focus as it left,
+ *   focus goes to `returnFocus()` — the region the draft was editing, which each surface names
+ *   — the way a removed row hands focus on (`focusAfterLeaving`). Focus a person had already
+ *   moved out of the bar is left where they put it.
  */
-import type { JSX } from "react";
+import { useLayoutEffect, useRef, type JSX } from "react";
 import { Button, Text, textClass } from "../ui/index.js";
 import { changeLabel } from "./config-model.js";
 
@@ -40,6 +46,13 @@ export interface DraftBarProps {
   disabledReason?: string;
   /** Which of the two drafts is live, when the person has been in both views. */
   note?: string;
+  /**
+   * Where focus goes if the bar leaves while holding it — Save or Discard brought the count to
+   * zero. The region the draft edits: the Written grants list in the policy panel, the form or
+   * the raw text on the Config surface. Read as the bar leaves, so it can name an element the
+   * same commit drew.
+   */
+  returnFocus?: () => HTMLElement | null | undefined;
   onValidate: () => void;
   onSave: () => void;
   onDiscard: () => void;
@@ -53,15 +66,37 @@ export function DraftBar({
   message,
   disabledReason,
   note,
+  returnFocus,
   onValidate,
   onSave,
   onDiscard,
   onReload,
 }: DraftBarProps): JSX.Element {
   const blocked = conflict !== undefined;
+  const bar = useRef<HTMLDivElement>(null);
+  const target = useRef(returnFocus);
+  target.current = returnFocus;
+
+  /* The last moment the bar can tell whether it holds focus: a layout effect's cleanup runs
+     before React takes the bar out of the document (as `ClaimRow` and `Grant` do it). The move
+     waits for the commit to finish, so the target is the one that commit drew, and it is made
+     only if focus has fallen to the body — nothing else in the commit claimed it. */
+  useLayoutEffect(() => {
+    const element = bar.current;
+    return () => {
+      if (!element?.contains(document.activeElement)) return;
+      const to = target.current;
+      queueMicrotask(() => {
+        const active = document.activeElement;
+        if (active !== null && active !== document.body) return;
+        to?.()?.focus();
+      });
+    };
+  }, []);
 
   return (
     <div
+      ref={bar}
       className={`orca-draftbar ${textClass("caption")}${blocked ? " orca-draftbar--blocked" : ""}`}
       role="group"
       aria-label="Unsaved configuration changes"

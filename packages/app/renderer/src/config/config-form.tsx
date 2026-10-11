@@ -38,7 +38,15 @@ export function ConfigForm({ sections, edits, errors, onChange, onShowRaw }: Con
   return (
     <div className="orca-config__form">
       {sections.map((section) => (
-        <section key={section.id} className="orca-config__section" aria-label={section.title}>
+        /* Focusable from script and never a Tab stop: the first one is where focus goes when
+           Save or Discard empties the draft and the save bar leaves (`DraftBar`). */
+        <section
+          key={section.id}
+          className="orca-config__section"
+          aria-label={section.title}
+          tabIndex={-1}
+          data-config-section=""
+        >
           <Text style="heading" as="h2">
             {section.title}
           </Text>
