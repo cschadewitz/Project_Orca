@@ -30,6 +30,7 @@ import { useArtifactPanel } from "../artifacts/panel-context.js";
 import { useArtifactsList } from "../artifacts/use-artifacts.js";
 import { Duration, StateView, StatusChip, Text, textClass } from "../ui/index.js";
 import { OutputPane, outputLabel, type OutputPaneHandle } from "./output-pane.js";
+import { RunVariables } from "./run-variables.js";
 import { sessionOf } from "./step-facts.js";
 import { foldToolCalls } from "./tool-calls.js";
 import { ToolCallRow } from "./tool-call-row.js";
@@ -228,16 +229,21 @@ function StepArtifacts({ runId, stepRunId }: { runId: string; stepRunId: string 
  * The chip, its click and the panel's open state are one seam: clicking opens the docked
  * panel *and* puts this artifact in it, which is why the target lives in a context above
  * every surface rather than in this one (`artifacts/panel-context.tsx`).
+ *
+ * A name longer than the pane truncates at its end inside the chip, whole in its title and
+ * in its accessible name, rather than being a chip wider than the run of chips it is in.
  */
 export function ArtifactChip({ runId, artifact }: { runId: string; artifact: ArtifactView }): JSX.Element {
   const panel = useArtifactPanel();
+  const label = `${artifact.name}@v${artifact.version}`;
   return (
     <button
       type="button"
       className={`orca-ref ${textClass("mono-id")}`}
+      title={label}
       onClick={() => panel.open({ runId, name: artifact.name, version: artifact.version })}
     >
-      {`${artifact.name}@v${artifact.version}`}
+      <span className="orca-ref__label">{label}</span>
     </button>
   );
 }
@@ -252,7 +258,7 @@ export function ArtifactChip({ runId, artifact }: { runId: string; artifact: Art
  */
 function RunSummary({ detail, connection }: { detail: RunsGetResult; connection: ConnectionState }): JSX.Element {
   const [showVars, setShowVars] = useState(true);
-  const vars = Object.entries(detail.vars);
+  const count = Object.keys(detail.vars).length;
   const status: RunStatus = detail.run.status;
 
   return (
@@ -275,18 +281,13 @@ function RunSummary({ detail, connection }: { detail: RunsGetResult; connection:
 
       <div className="orca-inspector__body">
         <details open={showVars} onToggle={(event) => setShowVars(event.currentTarget.open)}>
-          <summary className={`orca-inspector__group ${textClass("eyebrow")}`}>{`Variables (${vars.length})`}</summary>
-          {vars.length === 0 ? (
+          <summary className={`orca-inspector__group ${textClass("eyebrow")}`}>{`Variables (${count})`}</summary>
+          {count === 0 ? (
             <Text style="caption" className="orca-faint">
               This run was started with none.
             </Text>
           ) : (
-            vars.map(([name, value]) => (
-              <div className="orca-field" key={name}>
-                <span className={`orca-field__label ${textClass("caption")}`}>{name}</span>
-                <span className={`orca-mono ${textClass("mono-body")}`}>{format(value)}</span>
-              </div>
-            ))
+            <RunVariables vars={detail.vars} />
           )}
         </details>
 
@@ -307,14 +308,4 @@ function RunSummary({ detail, connection }: { detail: RunsGetResult; connection:
       </div>
     </div>
   );
-}
-
-/** A variable as one line of mono. `JSON.stringify` so a string reads as a string. */
-function format(value: unknown): string {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value) ?? String(value);
-  } catch {
-    return String(value);
-  }
 }

@@ -19,16 +19,21 @@ export function ArtifactRefs({ input, ready }: { input: OpenInputView; ready: bo
   if (input.artifacts.length === 0) return null;
   return (
     <div className="orca-card__refs">
-      {input.artifacts.map((artifact) => (
-        <button
-          key={artifact.id}
-          type="button"
-          className={`orca-ref ${textClass("mono-id")}`}
-          onClick={() => panel.open({ runId: input.runId, name: artifact.name, version: artifact.version })}
-        >
-          {`${artifact.name}@v${artifact.version}`}
-        </button>
-      ))}
+      {input.artifacts.map((artifact) => {
+        // Truncates at its end inside the chip, whole in its title (`.orca-ref__label`).
+        const label = `${artifact.name}@v${artifact.version}`;
+        return (
+          <button
+            key={artifact.id}
+            type="button"
+            className={`orca-ref ${textClass("mono-id")}`}
+            title={label}
+            onClick={() => panel.open({ runId: input.runId, name: artifact.name, version: artifact.version })}
+          >
+            <span className="orca-ref__label">{label}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
