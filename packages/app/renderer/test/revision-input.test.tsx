@@ -76,6 +76,30 @@ it("retains the draft and same intent key on recoverable response loss", async (
   const calls = vi.mocked(p.onSubmit).mock.calls;
   expect(calls[0]![1]).toBe(calls[1]![1]);
 });
+it("sets pending values as their indented JSON in a sunken well, and pending text as prose", () => {
+  const p = props();
+  const values = { maxAttempts: 2, scope: { paths: ["src/auth"] } };
+  p.pending = {
+    target: { runId: "run", revisionId: "revision", destinationId: "dest", attemptId: "attempt" },
+    expectedRevision: "v1",
+    state: "pending",
+    payload: { kind: "values", values },
+    replacementAllowed: true,
+  };
+  const view = render(<RevisionInputCard {...p} />);
+  // Machine text, so the system's ground for it (rule 8), rather than a bare inline-styled block.
+  const well = document.querySelector("pre.orca-well")!;
+  expect(well).toBeTruthy();
+  expect(well.classList.contains("orca-text-mono-log")).toBe(true);
+  expect(well.textContent).toBe(JSON.stringify(values, null, 2));
+
+  view.rerender(
+    <RevisionInputCard {...p} pending={{ ...p.pending, payload: { kind: "text", text: "Use the token bucket" } }} />,
+  );
+  const prose = screen.getByText("Use the token bucket", { selector: "pre" });
+  expect(prose.classList.contains("orca-well")).toBe(false);
+  expect(prose.classList.contains("orca-text-body")).toBe(true);
+});
 it("shows pending text before replacement and preserves stale drafts until explicit review", async () => {
   const p = props();
   p.pending = {

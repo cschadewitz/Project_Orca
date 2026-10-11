@@ -7,7 +7,7 @@ import type {
   ReplacePendingRevisionCommand,
   RevisionResult,
 } from "../../../../protocol/src/revision-input.js";
-import { Button, Card, Text, textClass } from "../ui/index.js";
+import { Button, Card, Text, Well, textClass } from "../ui/index.js";
 import { useWritability } from "../chrome/use-connection.js";
 import { useUpdateDraft } from "../update-drafts.js";
 import { revisionDraftScope, revisionDraftPayload, REVISION_LABELS, REVISION_REASONS } from "./revision-input-model.js";
@@ -129,16 +129,17 @@ export function RevisionInputCard(props: RevisionInputCardProps): JSX.Element {
           <>
             <Text style="caption">{REVISION_LABELS[props.pending.state]}</Text>
             <Text style="caption">Current correction</Text>
-            <pre
-              className={textClass(props.pending.payload?.kind === "values" ? "mono-log" : "body")}
-              style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
-            >
-              {props.pending.payload
-                ? props.pending.payload.kind === "text"
+            {/* Values are machine text, so their indented JSON is in a well (rule 8); a person's
+                text, and the sentence said when there is none, stay sans. */}
+            {props.pending.payload?.kind === "values" ? (
+              <Well>{JSON.stringify(props.pending.payload.values, null, 2)}</Well>
+            ) : (
+              <pre className={textClass("body")} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                {props.pending.payload?.kind === "text"
                   ? props.pending.payload.text
-                  : JSON.stringify(props.pending.payload.values, null, 2)
-                : "Correction content is unavailable."}
-            </pre>
+                  : "Correction content is unavailable."}
+              </pre>
+            )}
             {props.pending.unavailableReason && (
               <Text style="caption">{REVISION_REASONS[props.pending.unavailableReason]}</Text>
             )}
