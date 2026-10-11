@@ -4,9 +4,13 @@ import { mkdtemp, readFile, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AutoUpdater } from "electron";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it as platformIt, vi } from "vitest";
 import { MacNativeHandoff, type MacNativeCommitRequest } from "../src/main/mac-native-handoff.js";
 import { readMacManifest, sha256 } from "../src/main/mac-candidate-manifest.js";
+
+// Prepared candidate storage requires POSIX private modes and owner. Windows must refuse
+// it, so cases that need that storage accepted skip Windows; refusal cases run everywhere.
+const it = platformIt.skipIf(process.platform === "win32");
 
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -76,7 +80,7 @@ async function fixture(outcome: "ready" | "refused" | "unknown" = "ready") {
   };
 }
 
-it("defaults to unavailable and never calls native or a recovery owner", async () => {
+platformIt("defaults to unavailable and never calls native or a recovery owner", async () => {
   const f = await fixture();
   expect(await new MacNativeHandoff({ zipBytes: 100_000, operationMs: 10_000 }).activate(f.request)).toBe("refused");
   expect(f.prepare).not.toHaveBeenCalled();
@@ -108,7 +112,7 @@ it.each(["valid", undefined, "throws"])(
   },
 );
 
-it.each(["bytes", "manifest", "target", "symlink", "budget"])(
+platformIt.each(["bytes", "manifest", "target", "symlink", "budget"])(
   "refuses %s before the commit owner touches state",
   async (fault) => {
     const f = await fixture();

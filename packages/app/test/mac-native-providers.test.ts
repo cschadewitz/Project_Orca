@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it as platformIt, vi } from "vitest";
 import type { HelloResult } from "@orca/protocol";
 import { AdmissionIntents } from "../src/main/admission-intents.js";
 import { createManagedMacNativeProviders, type MacNativePolicyRecord } from "../src/main/mac-native-providers.js";
@@ -13,6 +13,9 @@ import type { MacCandidateBinding } from "../src/main/mac-candidate-download.js"
 import { DaemonClient } from "../src/client/daemon-client.js";
 import type { BundledDaemonOptions, DaemonChild } from "../src/main/daemon-process.js";
 
+// Native proofs need a macOS bundle path and POSIX private directories and files. Windows
+// must refuse them, so cases that need them accepted skip Windows; refusal cases run everywhere.
+const it = platformIt.skipIf(process.platform === "win32");
 const roots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -92,7 +95,7 @@ async function fixture() {
 }
 const signal = () => new AbortController().signal;
 
-it("unsupported native execution never reaches policy, OS storage, permissions or a child", async () => {
+platformIt("unsupported native execution never reaches policy, OS storage, permissions or a child", async () => {
   const h = await fixture(),
     providers = createManagedMacNativeProviders({
       ...h.options,
@@ -119,7 +122,7 @@ it("uses independently pinned policy and both actual sealed-copy proofs", async 
   );
   expect(await h.providers.verifyBinary(join(h.root, "saved-binary"), sha256(h.bytes), h.policy, signal())).toBe(true);
 });
-it.each(["missing-policy", "wrong-pin", "duplicate-copy", "wrong-daemon", "wrong-identity", "extra-field"])(
+platformIt.each(["missing-policy", "wrong-pin", "duplicate-copy", "wrong-daemon", "wrong-identity", "extra-field"])(
   "refuses or retains unknown for %s without inferred trust",
   async (fault) => {
     const h = await fixture();
@@ -197,7 +200,7 @@ it("continuity reads existing intent/key wrappers and OS grants without encrypti
   h.storage.decryptStringAsync.mockResolvedValue({ result: "", shouldReEncrypt: true });
   await expect(h.providers.continuity(signal())).rejects.toThrow();
 });
-it.each(["unknown-grant", "missing-keychain", "invalid-intents", "unfinished-wrapper"])(
+platformIt.each(["unknown-grant", "missing-keychain", "invalid-intents", "unfinished-wrapper"])(
   "continuity refuses %s without reset",
   async (fault) => {
     const h = await fixture();

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, readFile, readdir, cp, rm } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID, randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it as platformIt, vi } from "vitest";
 import {
   MacReplacementJournal,
   MacProtectedPairSchema,
@@ -19,6 +19,8 @@ import { PosixFixtureNativeAdapter, type DiagnosticsKeyAdapter } from "../src/ma
 import { nodeRecoveryFiles } from "../src/main/diagnostics/recovery-files.js";
 import { sha256 } from "../src/main/mac-candidate-manifest.js";
 import { barrier } from "../../daemon/test/runtime-maintenance-fixture.js";
+// The POSIX fixture adapter requires private modes and refuses a Windows journal root.
+const it = platformIt.skipIf(process.platform === "win32");
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
