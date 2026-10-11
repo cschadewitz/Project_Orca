@@ -1,5 +1,6 @@
 /** Managed composition and held authority over the real authenticated Workspace fixture. */
 import { EventEmitter } from "node:events";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createManagedMacUpdateApplication } from "../src/main/mac-managed-update-application.js";
 import { macUpdateRehearsal } from "./mac-update-rehearsal-fixture.js";
@@ -86,7 +87,7 @@ it("captures only the current authenticated managed owner and retains it through
   const h = await fixture(false, false);
   const facts = h.f.workspace.captureMacUpdateOwnerFacts(h.f.target);
   expect(facts?.check()).toBe(true);
-  expect(facts?.storeDir).toBe(facts!.configDir + "/.orca");
+  expect(facts?.storeDir).toBe(join(facts!.configDir, ".orca"));
   expect(facts?.previousTarget).toMatchObject({
     workspaceId: h.f.target.workspaceId,
     instanceId: h.f.target.instanceId,
