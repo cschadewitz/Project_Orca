@@ -112,6 +112,28 @@ describe("preferences", () => {
     expect(new PreferencesFile(file.path).read().panes).toEqual({ sidebar: 300 });
   });
 
+  it("merges a graph canvas's view by canvas and by field, and never mentions graphs until one is set", () => {
+    const file = new PreferencesFile(join(dir, "canvases", "preferences.json"));
+    // A person who has never turned a graph has a file that does not say anything about graphs.
+    expect("canvases" in file.write({ theme: "dark" })).toBe(false);
+
+    expect(file.write({ canvases: { workflow: { direction: "vertical" } } }).canvases).toEqual({
+      workflow: { direction: "vertical" },
+    });
+    // Hiding the minimap says only that: the direction chosen a moment ago is kept.
+    expect(file.write({ canvases: { workflow: { minimap: false } } }).canvases).toEqual({
+      workflow: { direction: "vertical", minimap: false },
+    });
+    // A second canvas is a second key: the plan graph is read its own way.
+    expect(file.write({ canvases: { "plan-graph": { direction: "horizontal" } } }).canvases).toEqual({
+      workflow: { direction: "vertical", minimap: false },
+      "plan-graph": { direction: "horizontal" },
+    });
+    expect(new PreferencesFile(file.path).read().canvases?.workflow).toEqual({ direction: "vertical", minimap: false });
+    // Two directions and no third.
+    expect(() => file.write({ canvases: { workflow: { direction: "diagonal" } } })).toThrow();
+  });
+
   it("merges alert tiers one at a time, so turning gates on says only that", () => {
     const file = new PreferencesFile(join(dir, "alerts", "preferences.json"));
     expect(file.write({ alerts: { gate: true } }).alerts).toEqual({

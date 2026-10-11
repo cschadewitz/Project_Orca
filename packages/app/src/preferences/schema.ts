@@ -83,6 +83,28 @@ export const PaneSizeSchema = z
     message: "a pane size is a whole number of px, or a fraction of its container below 1",
   });
 
+/**
+ * How a person likes a graph canvas drawn: which way its layers run, and whether the minimap
+ * is in its corner. Per canvas id — `workflow` (the viewer and
+ * the editor, which are one canvas with and without hands) and `plan-graph` — the way density
+ * is per surface, so a person can read workflows top to bottom and the plan left to right.
+ *
+ * **A view of the graph, not the graph.** The direction never goes in the workflow YAML or in
+ * `.layout/<id>.json`: both are shared by everybody who edits the workflow, and this is one
+ * person's way of looking at it. The editor keeps its pinned positions in the horizontal
+ * frame either way (`renderer/src/workflow/layout.ts`, `toDirection`), so turning the graph
+ * writes nothing to the draft.
+ *
+ * Both fields are optional and an absent one is the default — left to right, minimap shown —
+ * the same "the record holds only what somebody chose" rule the pane sizes keep.
+ */
+export const GRAPH_DIRECTIONS = ["horizontal", "vertical"] as const;
+export const GraphViewSchema = z.object({
+  direction: z.enum(GRAPH_DIRECTIONS).optional(),
+  minimap: z.boolean().optional(),
+});
+export type GraphViewPreference = z.infer<typeof GraphViewSchema>;
+
 const DaemonUrlSchema = z.string().refine((value) => {
   try {
     return daemonEndpoint(value) === value;
@@ -98,6 +120,11 @@ export const PreferencesSchema = z.object({
   density: z.record(z.string(), DensitySchema).default({}),
   /** Pane size per boundary id (`renderer/src/panes.ts`), so a resize survives a relaunch (#276). */
   panes: z.record(z.string(), PaneSizeSchema).default({}),
+  /**
+   * Graph view per canvas id. Optional rather than defaulted to `{}`: a person who has never
+   * turned a graph or hidden a minimap has a preferences file that does not mention graphs.
+   */
+  canvases: z.record(z.string(), GraphViewSchema).optional(),
   alerts: AlertPreferencesSchema.prefault({}),
 });
 export type Preferences = z.infer<typeof PreferencesSchema>;
@@ -112,6 +139,8 @@ export const PreferencesPatchSchema = z.object({
    * the token's value (which is what "absent means default" costs — and is worth).
    */
   panes: z.record(z.string(), PaneSizeSchema.nullable()).optional(),
+  /** Merges by canvas and then by field, so hiding a minimap leaves that canvas's direction alone. */
+  canvases: z.record(z.string(), GraphViewSchema).optional(),
   /** Merges by tier, so turning gates on says only that. */
   alerts: AlertPreferencesPatchSchema.optional(),
 });
@@ -143,12 +172,28 @@ function mergePanes(
   return merged;
 }
 
+/**
+ * The canvases record with the patch applied, canvas by canvas and field by field — or
+ * `undefined` when neither side has one, so a file that never mentioned graphs still does not.
+ */
+export function mergeCanvases(
+  current: Readonly<Record<string, GraphViewPreference>> | undefined,
+  patch: Readonly<Record<string, GraphViewPreference>> | undefined,
+): Record<string, GraphViewPreference> | undefined {
+  if (current === undefined && patch === undefined) return undefined;
+  const merged: Record<string, GraphViewPreference> = { ...current };
+  for (const [id, view] of Object.entries(patch ?? {})) merged[id] = { ...merged[id], ...definedOnly(view) };
+  return merged;
+}
+
 export function mergePreferences(current: Preferences, patch: PreferencesPatch): Preferences {
+  const canvases = mergeCanvases(current.canvases, patch.canvases);
   return {
     ...(current.daemonUrl ? { daemonUrl: current.daemonUrl } : {}),
     theme: patch.theme ?? current.theme,
     density: { ...current.density, ...(patch.density ?? {}) },
     panes: mergePanes(current.panes, patch.panes),
+    ...(canvases === undefined ? {} : { canvases }),
     /* Spread of a `Partial`, so an explicitly-undefined tier would overwrite a set one:
        the entries are filtered rather than spread blind. */
     alerts: { ...current.alerts, ...definedOnly(patch.alerts ?? {}) },
