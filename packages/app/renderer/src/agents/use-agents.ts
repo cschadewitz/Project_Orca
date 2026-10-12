@@ -33,7 +33,7 @@ import type { AgentView, ClaimView, ProtocolError } from "@orca/protocol";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { useSubscriptionGeneration } from "../chrome/use-connection.js";
 import { useNotifications } from "../notifications-context.js";
-import { applyAgentChanged } from "./agent-groups.js";
+import { applyAgentChanged, releasedSentence } from "./agent-groups.js";
 
 export type AgentsState =
   | { phase: "loading" }
@@ -82,6 +82,9 @@ export function useAgents(): AgentsFeed {
   const [releasing, setReleasing] = useState<ReadonlySet<string>>(new Set());
   const [release, setRelease] = useState<ReleaseReport | undefined>(undefined);
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
+  /* The claims as last read, for naming the one a release was about once it lands. */
+  const held = useRef(state);
+  held.current = state;
 
   useEffect(() => {
     let live = true;
@@ -135,7 +138,9 @@ export function useAgents(): AgentsFeed {
              Missing or safely cancelled abandoned children are repaired for dispatch;
              live/parked children and recorded terminal outcomes keep their own state. */
           const note = result.result.note;
-          const message = note ?? `${workItemId} is released and back with the scheduler.`;
+          const now = held.current;
+          const claim = now.phase === "ready" ? now.claims.find((c) => c.workItemId === workItemId) : undefined;
+          const message = note ?? releasedSentence(claim, workItemId);
           setRelease({ workItemId, failed: false, message });
           announce(message);
           // Nothing pushes for a release — see the file header. One read, on purpose.

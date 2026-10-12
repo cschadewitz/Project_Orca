@@ -39,7 +39,7 @@ import { useKeyboard } from "../keyboard-context.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
 import { bindOptions, isFreeText } from "./card-model.js";
 import { VirtualList } from "../list/index.js";
-import { Button, Duration, StateView, StatusChip, Text, Time, textClass } from "../ui/index.js";
+import { Button, Duration, StateView, StatusChip, Text, Time, idText, textClass } from "../ui/index.js";
 import type { AnswerRequest } from "./answer-card.js";
 import { PendingCorrection } from "./revision-card.js";
 import { revisionSlotKey, type RevisionsFeed } from "./use-revisions.js";
@@ -499,11 +499,13 @@ function useCardWrites(
         scope: "card",
         method: "runs.cancel",
         label: "Cancel the run this is waiting on",
-        // The run id is ORCA's and is set in mono where the confirmation names it (rule 8).
-        labelMachine: held.runId,
+        // The confirmation names the run — its name and its id token, never the raw id; the
+        // token is set in mono (rule 8) and the full id is matched, so pasting it finds this.
+        labelMachine: idText(held.runId, { kind: "run" }),
+        objectId: held.runId,
         detail: "Stops the run; the answer is not given",
         tone: "danger",
-        confirm: `Cancel ${held.runId} — confirm`,
+        confirm: `Cancel ${held.runName} ${idText(held.runId, { kind: "run" })} — confirm`,
         action: () => {
           const { input: now, actions: act } = current.current;
           if (now) act.cancel(now.runId);

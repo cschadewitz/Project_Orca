@@ -20,6 +20,7 @@
  * become a row, this notification *is* the row.
  */
 import type { AgentHostType, AgentView, ClaimView } from "@orca/protocol";
+import { idText, idWords } from "../ui/object-id-model.js";
 
 /** Every agent spawned on one host, with that host's transport when it has one. */
 export interface HostGroup {
@@ -101,15 +102,21 @@ export function transportLabel(hostType: AgentHostType | undefined): string | un
  */
 export function releaseRefusal(claim: ClaimView): string | undefined {
   if (claim.owner.releasable) return undefined;
-  const run = claim.owner.name ?? claim.owner.runId;
+  // A sentence a person reads (a disabled control's reason), so an unnamed run is said the
+  // way a screen reader says its token — "run 7X8PXX" — never as 26 raw characters.
+  const run = claim.owner.name ?? idWords(claim.owner.runId, { kind: "run" });
   return `The run could still resume: ${run} is ${claim.owner.status}. Resume or cancel it first, or force the release from the command line.`;
 }
 
 /**
- * A span of a sentence, and whether ORCA produced it — the run's name and any id are set
- * in mono and the rest in sans, because "mono means ORCA produced it" holds inside a
- * sentence as well as in a column (RULES.md rule 8). The palette's `labelMachine` is the
- * same split for a label with one id in it; a consequence has two machine strings.
+ * A span of a sentence, and whether ORCA produced it — an id is set in mono and the rest in
+ * sans, because "mono means ORCA produced it" holds inside a sentence as well as in a column
+ * (RULES.md rule 8). The palette's `labelMachine` is the same split for a label with one id in
+ * it; a consequence can have two.
+ *
+ * An id in a sentence is its token (`idText`, `⬡ 5M579G`), never the raw id: the machine span
+ * is drawn through `MachineText`, which draws a token as one — the glyph as decoration and
+ * the kind as a word.
  */
 export interface Phrase {
   text: string;
@@ -118,11 +125,58 @@ export interface Phrase {
 
 /**
  * What a claim is called in a sentence: its work item's title, which is what a person knows
- * the work by, or the work item's id when the item has no title to give.
+ * the work by, or the work item's id token when the item has no title to give.
  */
 export function claimSubject(claim: ClaimView): Phrase {
   const title = claim.workItem?.title;
-  return title === undefined || title === "" ? { text: claim.workItemId, machine: true } : { text: title };
+  return title === undefined || title === ""
+    ? { text: idText(claim.workItemId, { kind: "workItem" }), machine: true }
+    : { text: title };
+}
+
+/** What owns a claim, in a sentence: the run's name, or its token when it has none. */
+function claimOwner(claim: ClaimView): Phrase {
+  return claim.owner.name === undefined
+    ? { text: idText(claim.owner.runId, { kind: "run" }), machine: true }
+    : { text: claim.owner.name };
+}
+
+/**
+ * The palette's release row for a claim — worded once, because the Agents surface and the
+ * Plan surface both offer it and the two must read the same (#178).
+ *
+ * The work item is named by its title and its token, `Release claim on Database schema
+ * ⬡ 5M579G`, never by its raw id: the title is what a person knows the work by and the
+ * token tells two of one title apart. The token is `labelMachine`, so the palette draws it
+ * as one; the full id is `objectId`, so pasting it, or typing the tail a row showed, still
+ * finds the row.
+ */
+export function releaseCommand(claim: ClaimView): {
+  label: string;
+  labelMachine: string;
+  confirm: string;
+  objectId: string;
+} {
+  const token = idText(claim.workItemId, { kind: "workItem" });
+  const title = claim.workItem?.title;
+  const subject = title === undefined || title === "" ? token : `${title} ${token}`;
+  return {
+    label: `Release claim on ${subject}`,
+    labelMachine: token,
+    confirm: `Release ${subject} — confirm`,
+    objectId: claim.workItemId,
+  };
+}
+
+/**
+ * What a release that landed says, when the daemon adds no note of its own: the work, by
+ * the name a person knows it by, or by its token said as words — this is announced as well
+ * as shown.
+ */
+export function releasedSentence(claim: ClaimView | undefined, workItemId: string): string {
+  const title = claim?.workItem?.title;
+  const subject = title === undefined || title === "" ? idWords(workItemId, { kind: "workItem" }) : title;
+  return `${subject} is released and back with the scheduler.`;
 }
 
 /**
@@ -136,7 +190,7 @@ export function releaseConsequence(claim: ClaimView): readonly Phrase[] {
   return [
     claimSubject(claim),
     { text: " goes back to the scheduler. " },
-    { text: claim.owner.name ?? claim.owner.runId, machine: true },
+    claimOwner(claim),
     { text: " loses its claim on it, and another run may claim it." },
   ];
 }

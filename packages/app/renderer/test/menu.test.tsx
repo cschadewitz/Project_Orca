@@ -78,9 +78,11 @@ function mount(ui: ReactNode): Harness {
   return h;
 }
 
+/* A crumb's label is what a person calls the object and its id is ORCA's; the two differ,
+   which is how the header knows to draw the id as a token after the name. */
 const crumbs = [
-  { type: "item", id: "auth-sso-epic", label: "auth-sso-epic" },
-  { type: "run", id: "7f3a2c", label: "7f3a2c", current: true },
+  { type: "item", id: "wi-sso", label: "auth-sso-epic" },
+  { type: "run", id: "run-7f3a2c", label: "7f3a2c", current: true },
 ] as const;
 
 const header = (onChoose: (crumb: Crumb, counterpart: Counterpart) => void = () => {}): ReactNode => (
@@ -102,8 +104,8 @@ afterEach(() => {
   while (teardown.length) teardown.pop()?.();
 });
 
-/* The crumb menu is Copy link and then the counterparts (#165), so the first row of an
-   item crumb's menu is the link and the two counterparts follow it. */
+/* The crumb menu is Copy link, Copy id and then the counterparts (#165), so the first two
+   rows of an item crumb's menu copy its address and its id, and the counterparts follow. */
 describe("the crumb menu, over the Menu primitive", () => {
   it("walks with the arrow keys, activates with Enter, and puts focus back on the trigger", () => {
     const chosen = vi.fn();
@@ -114,6 +116,7 @@ describe("the crumb menu, over the Menu primitive", () => {
     expect(document.activeElement).toBe(items()[0]);
     expect(items().map((item) => item.textContent)).toEqual([
       "Copy linkorca://",
+      "Copy id⬡work item wi-sso",
       "Runs that attempted thisrun",
       "Dependenciesitem",
     ]);
@@ -122,10 +125,12 @@ describe("the crumb menu, over the Menu primitive", () => {
     expect(document.activeElement).toBe(items()[1]);
     press("ArrowDown");
     expect(document.activeElement).toBe(items()[2]);
+    press("ArrowDown");
+    expect(document.activeElement).toBe(items()[3]);
     press("ArrowDown"); // wraps round the end
     expect(document.activeElement).toBe(items()[0]);
     press("ArrowUp");
-    expect(document.activeElement).toBe(items()[2]);
+    expect(document.activeElement).toBe(items()[3]);
 
     press("Enter");
     expect(chosen).toHaveBeenCalledTimes(1);
@@ -153,21 +158,21 @@ describe("the crumb menu, over the Menu primitive", () => {
     fireEvent.click(trigger());
 
     press("End");
-    expect(document.activeElement).toBe(items()[2]);
+    expect(document.activeElement).toBe(items()[3]);
     press("Home");
     expect(document.activeElement).toBe(items()[0]);
 
     // Typeahead is a local handler on the list, so it is fired there rather than at the window.
     fireEvent.keyDown(document.activeElement!, { key: "d", code: "KeyD" });
-    expect(document.activeElement).toBe(items()[2]);
+    expect(document.activeElement).toBe(items()[3]);
     fireEvent.keyDown(document.activeElement!, { key: "r", code: "KeyR" });
-    expect(document.activeElement).toBe(items()[1]);
+    expect(document.activeElement).toBe(items()[2]);
     // A letter no item starts with leaves focus where it is rather than moving it oddly.
     fireEvent.keyDown(document.activeElement!, { key: "z", code: "KeyZ" });
-    expect(document.activeElement).toBe(items()[1]);
+    expect(document.activeElement).toBe(items()[2]);
     // A modified key is somebody else's shortcut, not typeahead.
     fireEvent.keyDown(document.activeElement!, { key: "d", code: "KeyD", metaKey: true });
-    expect(document.activeElement).toBe(items()[1]);
+    expect(document.activeElement).toBe(items()[2]);
   });
 
   it("dismisses on a press outside without dragging focus back to the trigger", () => {
@@ -192,16 +197,35 @@ describe("the crumb menu, over the Menu primitive", () => {
     expect(menu()).toBeTruthy();
   });
 
-  it("renders no disclosure at all for a crumb with neither a link nor counterparts", () => {
+  it("renders no disclosure at all for a crumb with no link, no id and no counterparts", () => {
     mount(
       <ObjectHeader
-        crumbs={[{ type: "step", id: "build.2", label: "build", current: true }]}
+        crumbs={[{ type: "plan", id: "plan-auth", label: "Auth rollout", current: true }]}
         onOpenCounterpart={() => {}}
       />,
     );
-    /* A step crumb on its own: its canonical URL needs the run above it in the trail, and
-       a step has no counterparts — so there is nothing to disclose. */
+    /* A plan: no canonical URL, no id a person is shown and no counterparts — so there is
+       nothing to disclose. */
     expect(screen.queryByRole("button", { name: /Links for/ })).toBeNull();
+  });
+
+  it("copies the whole id from a crumb that otherwise offers nothing", () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    teardown.push(() => Reflect.deleteProperty(navigator, "clipboard"));
+    const id = "step_01M4M899NFEG7WR79H3HC6SE2Q";
+    mount(
+      <ObjectHeader crumbs={[{ type: "step", id, label: "design", current: true }]} onOpenCounterpart={() => {}} />,
+    );
+
+    /* A step crumb on its own has no URL (that needs the run above it) and no counterparts,
+       but it shows its id only as a token — so Copy id is the one thing it offers, and it
+       copies the whole id, not the six characters on screen. */
+    fireEvent.click(screen.getByRole("button", { name: "Links for design" }));
+    const copy = screen.getByRole("menuitem", { name: "Copy id step C6SE2Q" });
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+    fireEvent.click(copy);
+    expect(writeText).toHaveBeenCalledWith(id);
   });
 });
 
@@ -460,6 +484,62 @@ describe("a menu's hint", () => {
       }
     }
     expect(sentences).toEqual([]);
+  });
+});
+
+describe("a menu's machine hint and labelled id", () => {
+  it("sets an id, a version or a link in mono and leaves its case alone", () => {
+    /* The eyebrow's uppercase turned `ai-sdlc · v3` into `AI-SDLC · V3` and `orca://` into
+       `ORCA://`: machine text re-cased is a different-looking string (rule 8). */
+    mount(
+      <Menu
+        label="Workflows"
+        items={[
+          { id: "a", label: "AI SDLC", hintMachine: "ai-sdlc · v3 · 7 nodes" },
+          { id: "b", label: "Copy id", hintMachine: "☰ JH7X8P" },
+        ]}
+        onChoose={() => {}}
+      >
+        w
+      </Menu>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
+    const [plain, token] = screen.getAllByRole("menuitem");
+    const meta = plain!.querySelector(".orca-menu__machine")!;
+    expect(meta.textContent).toBe("ai-sdlc · v3 · 7 nodes");
+    expect(meta.className).toContain("orca-text-mono-id");
+    expect(plain!.querySelector(".orca-menu__type")).toBeNull();
+    // An id token is drawn as one: a decorative glyph and the kind said as a word.
+    expect(token!.querySelector(".orca-objid__kind")?.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.getByRole("menuitem", { name: "Copy id run JH7X8P" })).toBeTruthy();
+
+    const css = componentsCssSource.replace(/\/\*[\s\S]*?\*\//g, "");
+    const rule = /\.orca-menu__machine\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(rule).toMatch(/font-family:\s*var\(--font-mono\)/);
+    expect(rule).not.toMatch(/text-transform/);
+  });
+
+  it("follows a label with the id token that tells two of one name apart", () => {
+    mount(
+      <Menu
+        label="Runs"
+        items={[
+          { id: "run_01M4M8A1WDAQMMX98Q6KJH7X8P", label: "Database schema", labelId: "run_01M4M8A1WDAQMMX98Q6KJH7X8P" },
+          { id: "run_01M4M8A1WDAQMMX98Q6KJ0C46Q", label: "Database schema", labelId: "run_01M4M8A1WDAQMMX98Q6KJ0C46Q" },
+        ]}
+        onChoose={() => {}}
+      >
+        r
+      </Menu>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Runs" }));
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Database schema☰run JH7X8P",
+      "Database schema☰run J0C46Q",
+    ]);
+    expect(screen.getAllByRole("menuitem")[0]!.querySelector(".orca-objid")!.getAttribute("title")).toBe(
+      "run_01M4M8A1WDAQMMX98Q6KJH7X8P",
+    );
   });
 });
 

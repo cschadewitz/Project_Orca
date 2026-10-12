@@ -386,8 +386,8 @@ The desktop app's **Plan** surface (#170, v0.5.0) is those reads drawn. The sche
 lists every work item in the order the scheduler put it, with its classification, slug, title,
 the request it was decomposed from, its own status — which is not the classification beside
 it; an item is routinely `pending` *and* `ready` — its priority score, its risk exposure and
-the run holding its claim; the badge's **why** opens `schedule.explain`'s lines verbatim in a
-popover. The sidebar is requests and filters rather than sub‑screens: classification, status
+the run holding its claim; the **why** beside the badge opens `schedule.explain`'s lines
+verbatim in a popover. The sidebar is requests and filters rather than sub‑screens: classification, status
 and request are `items.list` parameters the daemon applies to the whole plan, and the count
 says what is held. Selecting a row opens the work‑item inspector in the docked panel — the
 priority reasons, the dependencies with *both* the status stored on the document and the

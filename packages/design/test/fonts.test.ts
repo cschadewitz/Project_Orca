@@ -145,3 +145,78 @@ describe("status glyphs", () => {
     }
   });
 });
+
+describe("object kind glyphs", () => {
+  interface Kind {
+    prefix?: string;
+    word?: string;
+    glyph?: string;
+  }
+  const semantics = JSON.parse(read("semantics.json")) as Record<string, unknown> & {
+    objectKind?: Record<string, Kind>;
+    surface?: Record<string, { glyph?: string }>;
+  };
+  const kinds = semantics.objectKind ?? {};
+
+  /* A kind glyph may be a surface's only where the two mean the same thing on purpose: the
+     run's ☰ is the Runs rail's and the work item's ⬡ is the Plan rail's, the way Attention's
+     ◆ is the waiting status's. Any other overlap is a glyph saying two things. */
+  const SHARED_WITH_SURFACE: Readonly<Record<string, string>> = { run: "runs", workItem: "plan" };
+
+  /** Every glyph in semantics.json outside `objectKind`, by the domain that gives it a word. */
+  const elsewhere = (): Map<string, string[]> => {
+    const found = new Map<string, string[]>();
+    const walk = (node: unknown, path: string): void => {
+      if (!node || typeof node !== "object") return;
+      const record = node as Record<string, unknown>;
+      if (typeof record.glyph === "string") found.set(record.glyph, [...(found.get(record.glyph) ?? []), path]);
+      for (const [key, value] of Object.entries(record)) walk(value, path === "" ? key : `${path}.${key}`);
+    };
+    for (const [domain, value] of Object.entries(semantics)) if (domain !== "objectKind") walk(value, domain);
+    return found;
+  };
+
+  test("semantics.json declares each kind with its id prefix, a word and one glyph", () => {
+    assert.ok(Object.keys(kinds).length > 0, "semantics.json has no `objectKind` map: an id token has no glyph");
+    for (const [kind, presentation] of Object.entries(kinds)) {
+      assert.match(presentation.prefix ?? "", /^[a-z]+$/, `object kind ${kind} has no id prefix`);
+      assert.ok(presentation.word, `object kind ${kind} has no word — it is the token's accessible name`);
+      assert.equal([...(presentation.glyph ?? "")].length, 1, `object kind ${kind}'s glyph must be one character`);
+    }
+    const prefixes = Object.values(kinds).map((k) => k.prefix);
+    assert.equal(new Set(prefixes).size, prefixes.length, `two kinds claim one prefix: ${prefixes.join(" ")}`);
+  });
+
+  /* Six kinds told apart by shape in front of a six-character tail. Two sharing a glyph
+     would make "☰ 7X8P8P" ambiguous in exactly the way the token exists to prevent. */
+  test("no two kinds share a glyph", () => {
+    const glyphs = Object.values(kinds).map((k) => k.glyph);
+    assert.equal(new Set(glyphs).size, glyphs.length, `two kinds share a glyph: ${glyphs.join(" ")}`);
+  });
+
+  test("a kind glyph is never a status, and is a surface's only where that is the point", () => {
+    const others = elsewhere();
+    for (const [kind, presentation] of Object.entries(kinds)) {
+      const uses = others.get(presentation.glyph ?? "") ?? [];
+      const allowed = SHARED_WITH_SURFACE[kind];
+      assert.deepEqual(
+        uses,
+        allowed === undefined ? [] : [`surface.${allowed}`],
+        `object kind ${kind}'s ${presentation.glyph} is also ${uses.join(", ")} — a status glyph is never used for ` +
+          `anything that is not that status, and a kind glyph says a kind and nothing else`,
+      );
+    }
+    // And the allowance is not a dead letter: each shared pair really is the same glyph.
+    for (const [kind, surface] of Object.entries(SHARED_WITH_SURFACE)) {
+      assert.equal(kinds[kind]?.glyph, semantics.surface?.[surface]?.glyph, `${kind} and the ${surface} rail`);
+    }
+  });
+
+  test("come from a face we bundle", () => {
+    const build = readFileSync(join(here, "..", "..", "..", "tools", "font-build", "build-fonts.js"), "utf8");
+    for (const [kind, presentation] of Object.entries(kinds)) {
+      const cp = `0x${presentation.glyph!.codePointAt(0)!.toString(16)}`;
+      assert.ok(build.includes(cp), `object kind ${kind}'s ${presentation.glyph} (${cp}) is not in build-fonts.js`);
+    }
+  });
+});

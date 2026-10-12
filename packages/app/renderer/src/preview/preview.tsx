@@ -29,6 +29,7 @@ import {
   ConnectionIndicator,
   Duration,
   ObjectHeader,
+  ObjectId,
   ScheduleBadge,
   StateView,
   StatusChip,
@@ -119,10 +120,32 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
       </Section>
 
       <Section title="Schedule classes">
-        <div className="preview__row">
+        {/* The schedule column: each mark at the aligned badge's width, a settled item's
+            outcome chip at the same width, and the why beside each — never inside the tint —
+            so every why starts at one edge. */}
+        <div className="preview__stack">
           {SCHEDULE_CLASSES.map((classification) => (
-            <ScheduleBadge key={classification} classification={classification} onExplain={noop} />
+            <span key={classification}>
+              <ScheduleBadge classification={classification} onExplain={noop} aligned />
+            </span>
           ))}
+          <span>
+            <StatusChip status="succeeded" aligned="schedule" />
+            <button type="button" className={`orca-badge__why ${textClass("caption")}`} onClick={noop}>
+              why
+            </button>
+          </span>
+        </div>
+      </Section>
+
+      <Section title="Object ids">
+        {/* A name and its faint token; a token alone, where nothing has a name; and the
+            verbatim form a detail pane prints, with the tail lifted out of it. */}
+        <div className="preview__stack">
+          <ObjectId id="wi_01M4M899VKJZRZSBHNDY5M579G" name="Database schema" />
+          <ObjectId id="run_cae154fb-f778-47ba-ae71-bb4df6bb09e1" name="Export invoices as CSV" />
+          <ObjectId id="req_01M4M896DER1YQSTMV3G5BNH42" />
+          <ObjectId id="run_01M4M8A1WDAQMMX98Q6KJH7X8P" variant="full" />
         </div>
       </Section>
 
@@ -180,7 +203,9 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
           <p className={`orca-card__q ${textClass("body-strong")}`}>
             Ship the migration behind a flag, or hold for review?
           </p>
-          <p className={`orca-card__sub ${textClass("caption")}`}>auth-sso-epic · run 7f3a2c</p>
+          <p className={`orca-card__sub ${textClass("caption")}`}>
+            <ObjectId id="run_01M4M8A1WDAQMMX98Q6KJH7X8P" name="Database schema" />
+          </p>
           <div className="orca-card__options">
             <Button tone="primary">Ship behind a flag</Button>
             <Button>Hold for review</Button>
@@ -269,11 +294,19 @@ function ObjectHeaderDemo(): JSX.Element {
   return (
     <>
       <ObjectHeader
+        /* Real ids from the dev demo store: the request has no title on any read model, so
+           its label is its id and the crumb draws the token; the rest lead with their names. */
         crumbs={[
-          { type: "request", id: "sso-rollout", label: "sso-rollout" },
-          { type: "item", id: "auth-sso-epic", label: "auth-sso-epic" },
-          { type: "run", id: "7f3a2c", label: "7f3a2c" },
-          { type: "step", id: "build.2", label: "build (attempt 2)", current: true },
+          { type: "request", id: "req_01M4M896DER1YQSTMV3G5BNH42", label: "req_01M4M896DER1YQSTMV3G5BNH42" },
+          { type: "item", id: "wi_01M4M899VKJZRZSBHNDY5M579G", label: "Database schema" },
+          {
+            type: "run",
+            id: "run_01M4M8A1WDAQMMX98Q6KJH7X8P",
+            label: "Database schema",
+            version: "ai-sdlc v1",
+            counterpartIds: { workflow: "ai-sdlc" },
+          },
+          { type: "step", id: "step_01M4M899NFEG7WR79H3HC6SE2Q", label: "design (attempt 2)", current: true },
         ]}
         actions={<Button size="sm">Cancel run</Button>}
         onOpen={(crumb) => setChosen(`open ${crumb.type} ${crumb.id}`)}

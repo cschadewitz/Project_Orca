@@ -111,7 +111,8 @@ describe("cancel and resume", () => {
     /* Armed: the palette is still open, the row now says what the next Enter will do, and
        nothing has been sent. */
     expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeNull();
-    await within(palette()).findByRole("option", { name: /Cancel run-gate — confirm/ });
+    // The run by its name and its id token, said as "run run-gate" — never the raw id alone.
+    await within(palette()).findByRole("option", { name: /^✕?Cancel .+ run run-gate — confirm$/ });
     expect(callsTo("runs.cancel")).toHaveLength(0);
 
     fireEvent.keyDown(query(), { key: "Enter" });
@@ -130,7 +131,7 @@ describe("cancel and resume", () => {
     expect(cancel.getAttribute("aria-selected")).toBe("false");
     fireEvent.mouseDown(cancel);
 
-    const armed = await within(palette()).findByRole("option", { name: /Cancel run-gate — confirm/ });
+    const armed = await within(palette()).findByRole("option", { name: /Cancel .+ run run-gate — confirm/ });
     expect(armed.getAttribute("aria-selected")).toBe("true");
     expect(callsTo("runs.cancel")).toHaveLength(0);
 
@@ -322,9 +323,12 @@ describe("the plan's writes", () => {
     await selectItem("Instrument the login funnel");
     await open();
 
-    search("Release claim on wi-metrics");
+    // The work item by its title and its token; the plan supplies the title the claim lacks.
+    search("Release claim on Instrument the login funnel");
     fireEvent.keyDown(query(), { key: "Enter" });
-    await within(palette()).findByRole("option", { name: /Release wi-metrics — confirm/ });
+    await within(palette()).findByRole("option", {
+      name: /Release Instrument the login funnel work item wi-metrics — confirm/,
+    });
     fireEvent.keyDown(query(), { key: "Enter" });
 
     await waitFor(() => expect(callsTo("claims.release")).toHaveLength(1));
@@ -462,7 +466,9 @@ describe("what a daemon's answer takes away", () => {
     await screen.findByLabelText(/^Work item /);
     await open();
 
-    const release = rows().find((option) => option.textContent?.includes("Release claim on wi-metrics"));
+    const release = rows().find((option) =>
+      option.textContent?.includes("Release claim on Instrument the login funnel"),
+    );
     expect(release).toBeTruthy();
     // A daemon without the capability still cannot be written to *now*, and the row says
     // so in `useWritability()`'s words rather than disappearing.

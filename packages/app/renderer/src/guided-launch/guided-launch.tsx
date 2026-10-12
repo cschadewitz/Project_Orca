@@ -1,7 +1,7 @@
 /** Guided launch workspace composed from shared primitives and injected protected admission ports. */
 import { useEffect, useState, useSyncExternalStore, type JSX, type ReactNode } from "react";
 import type { WorkflowInputDeclarationView } from "@orca/protocol";
-import { Button, Card, ConfigField, Menu, Text } from "../ui/index.js";
+import { Button, Card, ConfigField, Menu, ObjectId, Text } from "../ui/index.js";
 import type { GuidedLaunchController } from "./controller.js";
 import { launchReceipt } from "./controller.js";
 import type { LaunchDraft, LaunchRoot } from "./contracts.js";
@@ -382,10 +382,19 @@ export function GuidedLaunch({
           Original target {state.draftTarget.endpointId} / {state.draftTarget.workspaceId} /{" "}
           {"operationId" in state.result ? `Operation ${state.result.operationId} / ` : ""}
           {receipt === undefined ? "In progress" : `Admission ${receipt.admissionId} / ${receipt.state}`}
-          {receipt !== undefined && "requestId" in receipt && typeof receipt.requestId === "string"
-            ? ` / Request ${receipt.requestId}`
-            : ""}
-          {receipt?.state === "accepted" ? ` / run ${receipt.runId}` : ""}
+          {/* A receipt keeps its ids whole: it is the record of what was admitted. */}
+          {receipt !== undefined && "requestId" in receipt && typeof receipt.requestId === "string" ? (
+            <>
+              {" / Request "}
+              <ObjectId id={receipt.requestId} kind="request" variant="full" />
+            </>
+          ) : null}
+          {receipt?.state === "accepted" ? (
+            <>
+              {" / run "}
+              <ObjectId id={receipt.runId} kind="run" variant="full" />
+            </>
+          ) : null}
         </Text>
       )}
       <div className="orca-guided-launch__actions">

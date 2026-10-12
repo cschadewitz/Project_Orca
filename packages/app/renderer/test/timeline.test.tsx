@@ -14,7 +14,7 @@
  * sequence range where a coalesced batch has no id, and the auto-approved gate naming its
  * source rather than a condition nobody sent.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { NotificationMessage, RunsEventsResult } from "@orca/protocol";
 import { RunsSurface } from "../src/runs/runs-surface.js";
@@ -32,6 +32,7 @@ import {
 } from "./fixtures-events.js";
 import { installBridge, harness, type Harness } from "./harness.js";
 import type { FakeBridge } from "./fake-bridge.js";
+import { parseId } from "../src/ui/object-id-model.js";
 
 let fake: FakeBridge;
 let h: Harness;
@@ -145,16 +146,29 @@ describe("the event timeline", () => {
     expect(auto.classList.contains("orca-timeline-entry")).toBe(true);
   });
 
-  it("says the event kind verbatim and offers the event id from a Menu", async () => {
+  it("says the event kind verbatim, names the row by its sequence number, and copies the id from a Menu", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     await openTimeline();
 
     const last = entries()[entries().length - 1]!;
     expect(within(last).getByText("run.completed")).toBeTruthy();
 
-    const trigger = within(last).getByRole("button", { name: /^Event evt-many-/ });
+    /* The row is `#<seq>`, not an id tail: the sequence is the run's own cursor, and it
+       orders. The event id is one step away in the menu, as its token, and copied whole. */
+    const seq = EVENT_COUNT - 1;
+    const trigger = within(last).getByRole("button", { name: `Event #${seq}` });
+    expect(trigger.textContent).toBe(`#${seq}`);
+    expect(last.textContent).not.toContain(`evt-many-${seq}`);
     fireEvent.click(trigger);
-    expect(screen.getByRole("menuitem", { name: `Copy the event id evt-many-${EVENT_COUNT - 1}` })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: `Copy the sequence number ${EVENT_COUNT - 1}` })).toBeTruthy();
+    const copyId = screen.getByRole("menuitem", {
+      name: `Copy the event id event ${parseId(`evt-many-${seq}`).tail()}`,
+    });
+    expect(copyId.querySelector(".orca-objid__kind")?.textContent).toBe("✦");
+    expect(screen.getByRole("menuitem", { name: `Copy the sequence number ${seq}` })).toBeTruthy();
+    fireEvent.click(copyId);
+    expect(writeText).toHaveBeenCalledWith(`evt-many-${seq}`);
+    Reflect.deleteProperty(navigator, "clipboard");
   });
 
   it("draws a run of agent updates as one row, addressed by its sequence range", async () => {
@@ -163,7 +177,7 @@ describe("the event timeline", () => {
     const batch = entries().find((row) => (row.textContent ?? "").includes(`${UPDATES_PER_NODE} agent updates`))!;
     expect(batch).toBeTruthy();
     // No one event id addresses five events, so the row offers the range instead.
-    const trigger = within(batch).getByRole("button", { name: /^Event \d+-\d+$/ });
+    const trigger = within(batch).getByRole("button", { name: /^Event #\d+-\d+$/ });
     fireEvent.click(trigger);
     expect(screen.getByRole("menuitem", { name: /^Copy the sequence range \d+-\d+$/ })).toBeTruthy();
   });

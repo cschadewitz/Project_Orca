@@ -98,7 +98,8 @@ export function GuidedLaunchRoute({
                 items={session.retained.map((intent) => ({
                   id: intent.intentId,
                   label: `${intent.workflowId} (${intent.mode})`,
-                  hint: intent.operationId ?? intent.intentId,
+                  // An id, so mono and verbatim rather than the eyebrow's uppercase.
+                  hintMachine: intent.operationId ?? intent.intentId,
                 }))}
                 onChoose={(item) => session.select(item.id)}
               >

@@ -26,7 +26,8 @@ non-negotiables are here.
    the grounds it sits on. `pnpm exec vitest run packages/design/test/contrast.test.ts` enforces the floors.
 8. **Mono means ORCA produced it.** Ids, step and node names, paths, expressions, tool names,
    agent output, artifact bodies. Sans is for prose a person wrote. The distinction is
-   load-bearing.
+   load-bearing. An id in a row or a header goes through `ObjectId` — the name, then the kind
+   glyph and the last six characters — and is never printed or sliced raw.
 9. **Rows are fixed height and never wrap.** Row height comes from `--row-h`, which
    `data-density` rebinds. Anything needing two lines is a declared two-line variant, not a row
    that grew.

@@ -429,7 +429,8 @@ describe("Agents: health in the name, before the id", () => {
     /* A write this app made is not something the daemon pushes, so it goes through
        `useAnnounce()` into the *same* region every notification does — and the surface grows
        no second one for it (AGENTS.md, "`renderer/src/a11y/` is not a surface"). */
-    await waitFor(() => expect(announcer.textContent).toContain("wi-3 is released"));
+    // The work by the name a person knows it by, not its id.
+    await waitFor(() => expect(announcer.textContent).toContain("Document the rollout is released"));
     expect(document.querySelectorAll(".orca-agents [aria-live]")).toHaveLength(0);
     expect(announcers()).toHaveLength(1);
   });
@@ -600,7 +601,7 @@ describe("Plan: two lists, one tab stop each, and nothing that speaks", () => {
     renderChrome(h);
     await goTo("Plan");
     /* A `grid` of `row`s, not the `listbox` of `option`s every other list in the app is:
-       the schedule's rows hold controls — the badge's **why** and the claim's run — and a
+       the schedule's rows hold controls — the **why** beside each badge and the claim's run — and a
        control inside an `option` is one nothing can reach, which axe reports as
        `nested-interactive` (#170). Everything the sweep claims below is the same either
        way: one tab stop, `aria-activedescendant`, `aria-selected` per row. */

@@ -34,6 +34,8 @@ import type { ClaimView, DependencyView, PlanItemView, RisksUpdateParams, RiskVi
 import { useAnnounce } from "../a11y/announce-context.js";
 import type { PaletteChoice } from "../keyboard-map.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
+import { releaseCommand, releasedSentence } from "../agents/agent-groups.js";
+import { idWords } from "../ui/object-id-model.js";
 
 /**
  * A risk's lifecycle, in the order `plan-control.ts` writes it: `open -> mitigating ->
@@ -229,21 +231,29 @@ export function usePlanWrites({ planId, item, dependencies, risks }: PlanWriteTa
        because `owner.releasable` predicts that refusal exactly and forcing one is
        `orca claims release --force` (#176). */
     if (claimed?.owner.releasable === true) {
+      /* `claims.list` may leave the work item out; the plan holds it, and its title is what a
+         person knows the work by. */
+      const named: ClaimView = {
+        ...claimed,
+        workItem: claimed.workItem ?? {
+          id: subject.id,
+          slug: subject.slug,
+          title: subject.title,
+          status: subject.status,
+        },
+      };
       rows.push({
         scope: "list",
         method: "claims.release",
-        label: `Release claim on ${claimed.workItemId}`,
-        labelMachine: claimed.workItemId,
-        detail: `Takes it back from ${claimed.owner.name ?? claimed.owner.runId}; the item goes back to the scheduler`,
+        // Worded by the Agents surface's own helper, so the two release rows read the same.
+        ...releaseCommand(named),
+        detail: `Takes it back from ${claimed.owner.name ?? idWords(claimed.owner.runId, { kind: "run" })}; the item goes back to the scheduler`,
         tone: "danger",
-        confirm: `Release ${claimed.workItemId} — confirm`,
         action: () => {
           void window.orca.claims.release({ workItemId: claimed.workItemId }).then((result) => {
             settle(
               result.ok,
-              result.ok
-                ? (result.result.note ?? `${claimed.workItemId} is released and back with the scheduler.`)
-                : result.error.message,
+              result.ok ? (result.result.note ?? releasedSentence(named, claimed.workItemId)) : result.error.message,
             );
           });
         },

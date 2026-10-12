@@ -86,6 +86,8 @@ export interface PaletteChoice {
   label: string;
   /** A trailing note: a workflow's version and node count, a decision option's rationale. */
   hint?: string;
+  /** The same note when it is machine text — an id, `ai-sdlc · v3 · 7 nodes` — in mono, never re-cased. */
+  hintMachine?: string;
 }
 
 /**
@@ -127,8 +129,18 @@ export interface Shortcut {
    * It is a substring rather than a second label so that the label stays one string: it is
    * what the palette matches a query against, what `aria-activedescendant` names, and what
    * a person reads back. A value that does not occur in the text draws nothing special.
+   *
+   * An id in a label is never the raw id: it is the object's name and its token,
+   * `Release claim on Database schema ⬡ 5M579G`, with the token (`idText`) as this value —
+   * the palette draws it as an `ObjectId` token, glyph and all.
    */
   labelMachine?: string;
+  /**
+   * The full id of the object the command acts on. Never drawn — the label carries the
+   * object's name and token — but matched, so a person who pastes the whole id, or types
+   * the tail a row showed them, finds the command.
+   */
+  objectId?: string;
   action: () => void;
   /** Where the palette files it. Defaults to `actions` — most shortcuts act on the current object. */
   section?: ShortcutSection;

@@ -18,6 +18,11 @@
  * same bug stayed in the second. The box is `components.css`'s alone now (`.orca-chip`
  * never draws narrower than its word, `.orca-chip--aligned` is the column), so a fix to it
  * is a fix everywhere a status is drawn.
+ *
+ * `aligned="schedule"` is the same idea in the one column that mixes chips with schedule
+ * badges: the plan's schedule column, where a settled item draws its outcome as a chip and
+ * every other item draws a `ScheduleBadge`. There the chip takes the badge's aligned width
+ * (`--badge-aligned-width`), so the **why** after either one starts at one edge.
  */
 import type { JSX } from "react";
 import { STATUS_PRESENTATION, type RunStatus } from "@orca/design";
@@ -31,9 +36,10 @@ export interface StatusChipProps {
   /**
    * Draw the chip at the longest status word's width, so a list of them is one column. A
    * floor, not a clamp: a longer `label` still grows its chip. Ignored with `glyphOnly`,
-   * which is already one fixed square.
+   * which is already one fixed square. `"schedule"` is the column a chip shares with
+   * aligned `ScheduleBadge`s, at the badge's width.
    */
-  aligned?: boolean;
+  aligned?: boolean | "schedule";
 }
 
 export function StatusChip({ status, label, glyphOnly = false, aligned = false }: StatusChipProps): JSX.Element {
@@ -46,7 +52,13 @@ export function StatusChip({ status, label, glyphOnly = false, aligned = false }
         "orca-chip",
         textClass("caption"),
         `orca-chip--${status}`,
-        glyphOnly ? "orca-chip--glyph-only" : aligned ? "orca-chip--aligned" : "",
+        glyphOnly
+          ? "orca-chip--glyph-only"
+          : aligned === "schedule"
+            ? "orca-chip--aligned-schedule"
+            : aligned
+              ? "orca-chip--aligned"
+              : "",
       ]
         .filter(Boolean)
         .join(" ")}

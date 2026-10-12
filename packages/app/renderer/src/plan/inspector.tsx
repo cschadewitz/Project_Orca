@@ -19,7 +19,7 @@
  */
 import type { JSX } from "react";
 import type { DependencyView, PlanItemView, RiskView } from "@orca/protocol";
-import { Chip, ScheduleBadge, StatusChip, Text, textClass } from "../ui/index.js";
+import { Chip, ObjectId, ScheduleBadge, StatusChip, Text, textClass } from "../ui/index.js";
 import { classificationMark } from "./plan-model.js";
 
 export interface InspectorProps {
@@ -51,7 +51,11 @@ export function Inspector({ item, dependencies, risks, onOpenRun }: InspectorPro
         )}
         <Chip>{item.status}</Chip>
         <Chip>{item.kind}</Chip>
-        <Chip>{`request ${item.requestId}`}</Chip>
+        {/* The request as its token, whole on hover; there is no request title to lead with. */}
+        <Chip>
+          {"request "}
+          <ObjectId id={item.requestId} kind="request" />
+        </Chip>
       </div>
 
       {item.priority !== undefined && item.priority.reasons.length > 0 && (
@@ -121,12 +125,10 @@ export function Inspector({ item, dependencies, risks, onOpenRun }: InspectorPro
         {item.claim === undefined ? (
           <Text style="caption">No run is holding this item.</Text>
         ) : (
-          <button
-            type="button"
-            className={`orca-bare orca-link ${textClass("mono-id")}`}
-            onClick={() => onOpenRun(item.claim!.runId)}
-          >
-            {item.claim.runId}
+          /* The detail pane is where the whole id belongs: verbatim, with the tail the table
+             showed lifted out of it so the two can be matched by eye. */
+          <button type="button" className="orca-bare orca-link" onClick={() => onOpenRun(item.claim!.runId)}>
+            <ObjectId id={item.claim.runId} kind="run" variant="full" />
           </button>
         )}
       </section>

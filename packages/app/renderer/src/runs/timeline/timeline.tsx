@@ -19,14 +19,18 @@
  *   there is no single number to put there (#163). Here there *is* one, because this list
  *   is about one run, so it is said here.
  *
- * The event id is `mono-id` at the end of the row and copied from the row's `Menu`, which
- * is the app's one popover primitive — a hand-rolled context menu would be a second copy of
- * the keyboard and focus contract, which is the thing #202 exists to prevent.
+ * A row names its event by **sequence number**, `#148`, at the end of the row — not by an id
+ * tail. The sequence is the run's own cursor, it is what "as of event 148" in the header
+ * counts, and it orders: two rows' numbers say which came first, which no tail does. The
+ * event id is one step away, in the row's `Menu` with its kind's token (`✦ 4BFJ1C`), and
+ * copying it copies the whole id. The menu is the app's one popover primitive — a
+ * hand-rolled context menu would be a second copy of the keyboard and focus contract, which
+ * is the thing #202 exists to prevent.
  */
 import { memo, useCallback, useMemo, type JSX, type Ref } from "react";
 import { CHROME_GLYPHS, STATUS_PRESENTATION } from "@orca/design";
 import { VirtualList, type MinimapKind, type VirtualListHandle, type VirtualListTick } from "../../list/index.js";
-import { Menu, StateView, Text, Time, textClass, type MenuItem } from "../../ui/index.js";
+import { Menu, StateView, Text, Time, idText, textClass, type MenuItem } from "../../ui/index.js";
 import { kindsOf, timelineRowId, type TimelineEntry } from "./timeline-entries.js";
 import type { EventsState } from "./use-run-events.js";
 
@@ -301,12 +305,14 @@ function TimelineEntryRow({ entry }: { entry: TimelineEntry }): JSX.Element {
   );
 }
 
-/** How a row names itself when it has no event id: by the range of sequence numbers it spans. */
+/** How a row names itself: by its sequence number, or the range a coalesced batch spans. */
 const rangeOf = (entry: TimelineEntry): string =>
   entry.fromSeq === entry.seq ? String(entry.seq) : `${entry.fromSeq}-${entry.seq}`;
 
 /**
- * The row's copy menu — a `Menu`, because every popover in this app is one.
+ * The row's copy menu — a `Menu`, because every popover in this app is one. Its trigger is
+ * the row's sequence number, `#148`; the event id is an item in it, drawn as its token and
+ * copied whole.
  *
  * A coalesced `agent.update` batch has no event id to copy: the notification carries a
  * sequence range and the updates, and no ids (see `timeline-entries.ts`). Those rows offer
@@ -321,7 +327,7 @@ function EntryMenu({ entry }: { entry: TimelineEntry }): JSX.Element | null {
       eventId === undefined
         ? [{ id: "seq", label: `Copy the sequence range ${range}` }]
         : [
-            { id: "id", label: `Copy the event id ${eventId}` },
+            { id: "id", label: "Copy the event id", hintMachine: idText(eventId, { kind: "event" }) },
             { id: "seq", label: `Copy the sequence number ${seq}` },
           ],
     [eventId, seq, range],
@@ -339,12 +345,12 @@ function EntryMenu({ entry }: { entry: TimelineEntry }): JSX.Element | null {
 
   return (
     <Menu
-      label={`Event ${eventId ?? range}`}
+      label={`Event #${range}`}
       items={items}
       triggerClassName={`orca-bare ${textClass("mono-id")} orca-runs__event-id`}
       onChoose={copy}
     >
-      <span aria-hidden="true">{eventId ?? range}</span>
+      <span aria-hidden="true">{`#${range}`}</span>
     </Menu>
   );
 }

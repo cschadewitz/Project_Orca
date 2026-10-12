@@ -28,6 +28,8 @@ import { useState, type CSSProperties, type JSX, type ReactNode } from "react";
 import {
   CHROME_GLYPHS,
   CONNECTION_PRESENTATION,
+  OBJECT_KIND_PRESENTATION,
+  OBJECT_KINDS,
   RUN_STATUSES,
   STATE_VIEW_PRESENTATION,
   STATUS_PRESENTATION,
@@ -37,7 +39,7 @@ import {
   type TextStyle,
   type ThemeId,
 } from "@orca/design";
-import { Button, ConnectionIndicator, StatusChip, Text, Well } from "../ui/index.js";
+import { Button, ConnectionIndicator, ObjectId, StatusChip, Text, Well } from "../ui/index.js";
 import { BUNDLED_FAMILIES, FALLBACK_STACKS, TYPE_STYLES, metrics, type TypeStyle } from "./type-sources.js";
 import "./type-proof.css";
 
@@ -179,6 +181,20 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
       </Section>
 
       <Section
+        title="Object ids"
+        note="A name, then the kind's glyph and the id's last six characters, at mono-id — the glyph beside the tail it leads, which is where it has to read."
+      >
+        <div className="type-proof__stack">
+          {OBJECT_KINDS.map((kind) => (
+            <ObjectId key={kind} id={SAMPLE_IDS[kind]} name={SAMPLE_NAMES[kind]} />
+          ))}
+          {OBJECT_KINDS.map((kind) => (
+            <ObjectId key={kind} id={SAMPLE_IDS[kind]} />
+          ))}
+        </div>
+      </Section>
+
+      <Section
         title="Every declared glyph"
         note="Large, then at the 11px the chip sets, in sans and in mono. Plex carries none of these."
       >
@@ -302,6 +318,25 @@ ${bottom}
 ── reconnected 14:07:22 ──
 › 412 new lines… ↓`;
 
+/* Real ids from the dev demo store, one per kind, for the object-id section. The kinds are
+   `OBJECT_KINDS`, so a seventh kind without a sample is a type error here. */
+const SAMPLE_IDS: Record<(typeof OBJECT_KINDS)[number], string> = {
+  run: "run_01M4M8A1WDAQMMX98Q6KJH7X8P",
+  workItem: "wi_01M4M899VKJZRZSBHNDY5M579G",
+  request: "req_01M4M896DER1YQSTMV3G5BNH42",
+  step: "step_01M4M899NFEG7WR79H3HC6SE2Q",
+  gate: "hi_01M4M9GJ07FBCJC9NNGJQBY7RQ",
+  event: "evt_01M4M9G8FA79TQJVJ8GR4BFJ1C",
+};
+const SAMPLE_NAMES: Record<(typeof OBJECT_KINDS)[number], string> = {
+  run: "Database schema",
+  workItem: "Database schema",
+  request: "Add authentication",
+  step: "design · attempt 2",
+  gate: "Signed cookies or a server-side store?",
+  event: "#148",
+};
+
 /** Every glyph the design system declares, with what declares it. Nothing is written twice. */
 interface GlyphUse {
   glyph: string;
@@ -322,6 +357,7 @@ const GLYPHS: readonly GlyphUse[] = (() => {
   for (const [kind, presentation] of Object.entries(STATE_VIEW_PRESENTATION)) add(presentation.glyph, `${kind} view`);
   for (const [id, presentation] of Object.entries(SURFACE_PRESENTATION)) add(presentation.glyph, `${id} surface`);
   for (const [name, glyph] of Object.entries(CHROME_GLYPHS)) add(glyph, name);
+  for (const [kind, presentation] of Object.entries(OBJECT_KIND_PRESENTATION)) add(presentation.glyph, `${kind} id`);
 
   return [...found].map(([glyph, names]) => ({ glyph, names }));
 })();

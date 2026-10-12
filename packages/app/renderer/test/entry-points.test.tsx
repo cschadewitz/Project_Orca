@@ -237,7 +237,8 @@ describe("the object header's links, in the chrome", () => {
     mount();
     const header = await selectARun();
 
-    fireEvent.click(within(header).getAllByRole("button", { name: /^Links for/ })[0]!);
+    // The work item's menu: the request crumb before it has one too now (Copy id).
+    fireEvent.click(within(header).getAllByRole("button", { name: /^Links for Add the SSO callback/ })[0]!);
     fireEvent.click(await screen.findByRole("menuitem", { name: /Runs that attempted this/ }));
 
     await waitFor(() => expect(landing()?.textContent).toContain("not something this app can open yet"));

@@ -153,22 +153,24 @@
   border-radius: var(--radius-sm);
   background: var(--surface-base);
 }
-/* The title is the one elastic column; everything else is sized to its content. */
+/* The title is the one elastic column; everything else is sized to its content. It holds
+   the title and the work item's token (`ObjectId`), and the title is the part that is cut. */
 .orca-agents__claim-title {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 /* The status column is `StatusChip`'s `aligned` variant, sized in components.css. It was a
    `width: 12ch` here, narrower than "✓ succeeded", so the chip's ground stopped short of its
    own word — the bug the run tree had and fixed in its own stylesheet alone. */
+/* The run column: the run's name, cut at its end, then its token, which never is
+   (`ObjectId`). Wide enough for a token and a name worth reading beside it. type: label */
 .orca-agents__claim-run {
   flex: none;
-  width: 24ch;
+  width: 28ch;
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 /* type: caption */
 .orca-agents__none {

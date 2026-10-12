@@ -257,6 +257,37 @@ describe("palette entries", () => {
     expect(filterEntries(entries, "theme").map((e) => e.label)).toEqual(["Cycle theme"]);
     expect(filterEntries(entries, "nothing here")).toEqual([]);
   });
+
+  /* A label names the object and its token, never its whole id — so the id has to be matched
+     some other way, or pasting it from a log finds nothing. */
+  it("finds a command by the whole id it acts on, or by the tail a row showed", () => {
+    const id = "wi_01M4M899VKJZRZSBHNDY5M579G";
+    const release: RegisteredShortcut = {
+      id: "release",
+      scope: "card",
+      label: "Release claim on Database schema ⬡ 5M579G",
+      labelMachine: "⬡ 5M579G",
+      objectId: id,
+      action: () => {},
+    };
+    const entries = commandEntries([...shortcuts, release], "darwin", ["global"]);
+    expect(filterEntries(entries, id).map((e) => e.label)).toEqual([release.label]);
+    expect(filterEntries(entries, "5m579g").map((e) => e.label)).toEqual([release.label]);
+    // A match in what the row says still outranks one in an id it never draws.
+    expect(filterEntries(entries, "release")[0]?.label).toBe(release.label);
+  });
+
+  it("matches a run's id drawn as a token in the detail column", () => {
+    const run = {
+      id: "run:1",
+      section: "navigation" as const,
+      label: "Database schema",
+      detailId: "run_01M4M8A1WDAQMMX98Q6KJH7X8P",
+      run: () => {},
+    };
+    expect(filterEntries([run], "run_01M4M8A1WDAQMMX98Q6KJH7X8P")).toEqual([run]);
+    expect(filterEntries([run], "jh7x8p")).toEqual([run]);
+  });
 });
 
 describe("jump targets", () => {
@@ -265,6 +296,25 @@ describe("jump targets", () => {
     expect(parseJump(id)?.url).toBe(`orca://run/run_${id}`);
     expect(parseJump(`run_${id}`)?.url).toBe(`orca://run/run_${id}`);
     expect(parseJump(`  run_${id.toLowerCase()}  `)?.url).toBe(`orca://run/run_${id}`);
+  });
+
+  /* Every run admitted through `requests.submit` or a direct launch is `run_<uuid>`, and the
+     jump row recognised only the 26-character form — so the runs a person started from the
+     app were the ones that could not be jumped to by id. */
+  it("recognises a run admitted with a UUID id, prefix and all, and canonicalises it", () => {
+    const id = "run_cae154fb-f778-47ba-ae71-bb4df6bb09e1";
+    expect(parseJump(id)).toEqual({ url: `orca://run/${id}`, label: "Open run", detail: id });
+    expect(parseJump(`  ${id.toUpperCase().replace("RUN_", "run_")}  `)?.url).toBe(`orca://run/${id}`);
+    expect(parseJump(id.toUpperCase())?.url).toBe(`orca://run/${id}`);
+  });
+
+  it("does not take a bare UUID for a run: it is as likely an intent or an operation", () => {
+    expect(parseJump("cae154fb-f778-47ba-ae71-bb4df6bb09e1")).toBeUndefined();
+    // Nor junk that only looks like one.
+    expect(parseJump("run_cae154fb-f778-47ba-ae71-bb4df6bb09e")).toBeUndefined();
+    expect(parseJump("run_cae154fb-f778-47ba-ae71-bb4df6bb09e1x")).toBeUndefined();
+    expect(parseJump("run_zae154fb-f778-47ba-ae71-bb4df6bb09e1")).toBeUndefined();
+    expect(parseJump("req_cae154fb-f778-47ba-ae71-bb4df6bb09e1")).toBeUndefined();
   });
 
   it("recognises an orca:// URL as typed", () => {

@@ -88,8 +88,9 @@ export function PaletteObjectSources({ onOpen }: PaletteObjectSourcesProps): JSX
           .map((run) => ({
             id: run.id,
             label: run.name,
-            detail: run.id,
-            detailIsMachine: true,
+            /* The id as its token beside the name — two runs of one workflow share a name —
+               and matched whole, so the full id pasted or the tail a row showed finds it. */
+            detailId: run.id,
             run: () => onOpen(runUrl(run.id)),
           }));
       },

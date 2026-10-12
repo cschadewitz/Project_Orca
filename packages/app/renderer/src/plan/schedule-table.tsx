@@ -12,14 +12,14 @@
  *
  * The **status** column and the **classification** column are not the same fact and are
  * drawn so they cannot be mistaken for each other. The classification is where the
- * scheduler put the item and is a tinted `ScheduleBadge` with a **why**; the status is
- * what the item says about itself, is a plain `Chip` with its own word and glyph
+ * scheduler put the item and is a tinted `ScheduleBadge` with a **why** beside it; the
+ * status is what the item says about itself, is a plain `Chip` with its own word and glyph
  * (`WORK_ITEM_STATUS_PRESENTATION`), and nothing opens off it. An item can be `pending`
  * and `ready`, or `pending` and `waiting on deps` — which is exactly why both are on
  * screen.
  *
- * The badge's **why** opens the explanation, and it opens in the app's one `Menu`: the
- * lines are `schedule.explain`'s, verbatim, one per row, in the order it returned them.
+ * The **why** beside the badge opens the explanation, and it opens in the app's one `Menu`:
+ * the lines are `schedule.explain`'s, verbatim, one per row, in the order it returned them.
  * Choosing a row copies that line, which is the only thing a read-only popover can
  * usefully do and is what keeps the menu's focus contract intact — a list of items that
  * are all disabled is a popover focus cannot enter.
@@ -27,14 +27,14 @@
 import { useCallback, useMemo, type JSX } from "react";
 import type { ItemClassification, PlanItemView } from "@orca/protocol";
 import { VirtualList, type MinimapKind, type VirtualListTick } from "../list/index.js";
-import { Chip, Menu, ScheduleBadge, StatusChip, textClass, type MenuItem } from "../ui/index.js";
+import { Chip, Menu, ObjectId, ScheduleBadge, StatusChip, textClass, useIdTails, type MenuItem } from "../ui/index.js";
 import { CLASSIFICATION_WORDS, classificationMark, explanationItems, workItemStatusMark } from "./plan-model.js";
 
 export interface ScheduleTableProps {
   items: readonly PlanItemView[];
   selectedId: string | undefined;
   onSelect: (item: PlanItemView) => void;
-  /** `Enter` on a row, and the badge's **why**: both open the explanation. */
+  /** `Enter` on a row, and the **why** beside its badge: both open the explanation. */
   onExplain: (item: PlanItemView) => void;
   /** The item whose explanation is open, and its lines once they have been read. */
   explainFor: string | undefined;
@@ -65,6 +65,11 @@ export function ScheduleTable(props: ScheduleTableProps): JSX.Element {
     return at === -1 ? undefined : at;
   }, [items, selectedId]);
 
+  /* Every id the table draws — the requests and the runs holding claims — over every item
+     held, not the rows in the window: a tail that grew only while two colliding rows were
+     both on screen would change length as a person scrolled. */
+  const tailOf = useIdTails(useMemo(() => items.flatMap((item) => [item.requestId, item.claim?.runId]), [items]));
+
   const ticks = useMemo<VirtualListTick[]>(
     () =>
       items.flatMap((item, index) => {
@@ -89,7 +94,7 @@ export function ScheduleTable(props: ScheduleTableProps): JSX.Element {
       noun="work item"
       scope="list"
       /* A `grid`, not the substrate's default `listbox`: a row here holds controls — the
-         badge's **why** and the claim's run — and a control inside an `option` is a
+         **why** beside the badge and the claim's run — and a control inside an `option` is a
          control nothing can reach (`nested-interactive`). The cells below carry
          `role="gridcell"`, which is what makes those controls legal and reachable. */
       role="grid"
@@ -103,6 +108,7 @@ export function ScheduleTable(props: ScheduleTableProps): JSX.Element {
       renderRow={(item) => (
         <Row
           item={item}
+          tailOf={tailOf}
           onExplain={onExplain}
           open={explainFor === item.id}
           lines={explainFor === item.id ? lines : undefined}
@@ -135,6 +141,8 @@ function TableHead(): JSX.Element {
 
 interface RowProps {
   item: PlanItemView;
+  /** The tail each id is drawn with, decided over the whole table (`useIdTails`). */
+  tailOf: (id: string) => string;
   onExplain: (item: PlanItemView) => void;
   open: boolean;
   lines: readonly string[] | undefined;
@@ -143,7 +151,16 @@ interface RowProps {
   onOpenRun: (runId: string) => void;
 }
 
-function Row({ item, onExplain, open, lines, explainError, onCloseExplanation, onOpenRun }: RowProps): JSX.Element {
+function Row({
+  item,
+  tailOf,
+  onExplain,
+  open,
+  lines,
+  explainError,
+  onCloseExplanation,
+  onOpenRun,
+}: RowProps): JSX.Element {
   const mark = classificationMark(item.classification);
   const status = workItemStatusMark(item.status);
   /* The first reason, as the cell's title: the whole list is in the explanation and in the
@@ -162,19 +179,22 @@ function Row({ item, onExplain, open, lines, explainError, onCloseExplanation, o
 
   return (
     <>
+      {/* Every row is the mark, then the why: never the why inside the badge's tint, because
+          it is a control and accent is never a state (rule 5), and because the settled rows
+          draw a chip with nothing inside it — so a why inside the badge ended its tint on some
+          rows and not others, and the links did not line up. Both marks take the badge's
+          aligned width, so every why starts at one edge. */}
       <span className="orca-plan__cell" role="gridcell">
         {mark.kind === "badge" ? (
-          <ScheduleBadge classification={mark.classification} explanation={why} />
+          <ScheduleBadge classification={mark.classification} aligned />
         ) : (
           /* A settled item is not in the ordering, so it has no schedule badge to draw:
              what it has is an outcome, in the run status that means the same thing. The
              explanation is still one press away, because `schedule.explain` answers for a
              settled item too. */
-          <>
-            <StatusChip status={mark.status} />
-            {why}
-          </>
+          <StatusChip status={mark.status} aligned="schedule" />
         )}
+        {why}
       </span>
 
       <span className={`orca-plan__id ${textClass("mono-id")}`} role="gridcell">
@@ -184,10 +204,12 @@ function Row({ item, onExplain, open, lines, explainError, onCloseExplanation, o
         {item.title}
       </span>
 
-      {/* The request this item was decomposed from, in mono because it is ORCA's own name
-          for that object and not prose about it (rule 8). */}
-      <span className={`orca-plan__id ${textClass("mono-id")}`} role="gridcell">
-        {item.requestId}
+      {/* The request this item was decomposed from, as its id token: the plan's read model
+          carries no request title to lead with, so the token is the whole label — the kind's
+          glyph and the last six characters, the whole id on hover. The raw id truncated at its
+          end to `req_01M4M9GQ7T…`, which is the timestamp every request of a session shares. */}
+      <span className="orca-plan__id" role="gridcell">
+        <ObjectId id={item.requestId} kind="request" tail={tailOf(item.requestId)} />
       </span>
 
       {/* The item's own status: word and glyph, in the plain chip, never the tinted one —
@@ -204,12 +226,10 @@ function Row({ item, onExplain, open, lines, explainError, onCloseExplanation, o
       </span>
       <span className="orca-plan__cell" role="gridcell">
         {item.claim === undefined ? null : (
-          <button
-            type="button"
-            className={`orca-bare orca-link ${textClass("mono-id")}`}
-            onClick={() => onOpenRun(item.claim!.runId)}
-          >
-            {item.claim.runId}
+          /* The run holding the claim, as its token: `PlanItemView.claim` is `{ runId }` and
+             nothing else, so there is no name to lead with. A link, so it takes the accent. */
+          <button type="button" className="orca-bare orca-link" onClick={() => onOpenRun(item.claim!.runId)}>
+            <ObjectId id={item.claim.runId} kind="run" tail={tailOf(item.claim.runId)} />
           </button>
         )}
       </span>
