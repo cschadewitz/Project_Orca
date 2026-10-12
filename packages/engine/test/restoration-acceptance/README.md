@@ -55,6 +55,9 @@ Under Vitest each worker is a fresh `node` process running a bundle of `worker.t
 `launch.ts` builds once per run; the JEV adapter is built into the same bundle, so a
 generated plugin and the worker share one `@orca/core`. With no run directory
 (`ORCA_TEST_BUNDLES=0`) the worker starts from its TypeScript sources through tsx instead.
+The parent hashes the Node executable once and sends its path, size and mtime with the
+hash; a worker whose own executable matches them by `stat` reports that hash, and any
+mismatch is hashed again inside the worker.
 
 Reports contain stable IDs, counters and leak flags. Raw child logs, credential resolver
 exceptions and plugin diagnostics never cross IPC. Canary checks inspect diagnostics

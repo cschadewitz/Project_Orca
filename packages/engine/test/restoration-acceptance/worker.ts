@@ -17,6 +17,7 @@ import {
   type Report,
   type VerificationRecord,
   providerTrace,
+  runtimeSha256,
 } from "./fixture.js";
 
 async function run(command: Command): Promise<Report> {
@@ -24,9 +25,7 @@ async function run(command: Command): Promise<Report> {
     pid: process.pid,
     bootId: randomUUID(),
     nodeVersion: process.version,
-    runtimeSha256: createHash("sha256")
-      .update(await readFile(process.execPath))
-      .digest("hex"),
+    runtimeSha256: await runtimeSha256(command.runtime),
     outcome: "ok",
     provisioned: 0,
     providerCalls: 0,

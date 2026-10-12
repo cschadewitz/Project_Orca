@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   assertOwned,
   containsCanary,
+  runtimeIdentity,
   type Action,
   type AuthorityMode,
   type Fixture,
@@ -32,6 +33,9 @@ export class ProcessHarness {
   }
   async start(fixture: Fixture, action: Action, authority?: AuthorityMode, verification?: VerificationMode) {
     await assertOwned(fixture);
+    // Measured before the fork, once for the process: the worker confirms its own executable
+    // against it by stat instead of reading and hashing 90 MB again.
+    const runtime = await runtimeIdentity();
     const { script, execArgv } = workerLaunch();
     const env: NodeJS.ProcessEnv = {};
     for (const name of ["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP"])
@@ -113,6 +117,7 @@ export class ProcessHarness {
         action,
         root: fixture.root,
         owner: fixture.owner,
+        runtime,
         ...(authority ? { authority } : {}),
         ...(verification ? { verification } : {}),
       },
