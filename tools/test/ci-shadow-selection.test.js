@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { canonical, digest, git, parseChanges, snapshot, validPath } from "../ci-shadow/git.js";
+import { canonical, digest, git, identities, parseChanges, snapshot, validPath } from "../ci-shadow/git.js";
 import { consumers, coveredInventory, graph, imports, MANIFEST_PATH, TOOL_PATHS } from "../ci-shadow/graph.js";
 import { createPlan, loadManifest, validateExecution, validatePlan } from "../ci-shadow/selector.js";
 import { executionPlan, runSelected, selectedResult } from "../ci-shadow/execute.js";
@@ -702,6 +702,32 @@ it("rejects unavailable/abbreviated bases and unrelated candidates without a gre
   }
   expect(failure?.status).toBe(1);
   expect(failure?.stdout).toBe("");
+});
+
+it("accepts only present full commit ids inside the candidate's history, and caches snapshots by full id alone", () => {
+  reset();
+  write("probe/one.txt", "one\n");
+  const one = save();
+  reset();
+  write("probe/two.txt", "two\n");
+  const two = save();
+  const tree = command("rev-parse", `${base}^{tree}`);
+  expect(identities(directory, base, one, one)).toEqual({ base, head: one, mergeBase: base, candidate: one });
+  expect(() => identities(directory, "f".repeat(40), one, one)).toThrow("commit_unavailable");
+  expect(() => identities(directory, base, one, tree)).toThrow("commit_unavailable");
+  expect(() => identities(directory, base, one, one.slice(0, 12))).toThrow("identity_requires_full_commit_sha");
+  // Siblings: the cheap whole-history proof must not stand in for the strict ancestry check.
+  expect(() => identities(directory, base, one, two)).toThrow(/merge-base --is-ancestor/);
+  const first = snapshot(directory, one);
+  expect(snapshot(directory, one)).toBe(first);
+  // A name that can move is read afresh every time; only a full commit id is remembered.
+  command("checkout", "-q", "--detach", one);
+  const atOne = snapshot(directory, "HEAD");
+  command("checkout", "-q", "--detach", two);
+  const atTwo = snapshot(directory, "HEAD");
+  expect([atOne.files.has("probe/one.txt"), atOne.files.has("probe/two.txt")]).toEqual([true, false]);
+  expect([atTwo.files.has("probe/one.txt"), atTwo.files.has("probe/two.txt")]).toEqual([false, true]);
+  expect(atTwo.tree).toBe(command("rev-parse", `${two}^{tree}`));
 });
 
 it("includes base-only merge-candidate changes and rejects reuse on a moved base", () => {
