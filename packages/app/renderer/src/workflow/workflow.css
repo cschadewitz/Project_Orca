@@ -118,10 +118,9 @@
   color: var(--ink-primary);
 }
 
+/* Where the kind and attempt chips sit. How they lay out is `.orca-chips` in the component
+   layer, which wraps them; this says only how far the fields start below them. */
 .orca-wf__inspector-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
   margin-bottom: var(--space-3);
 }
 

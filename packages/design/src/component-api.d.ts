@@ -51,7 +51,13 @@ export interface StatusDotProps {
   label?: string;
 }
 
-/** A chip that is not a status (built): a count, a filter, a role. Always `orca-chip--plain`. */
+/**
+ * A chip that is not a status (built): a count, a filter, a role. Always `orca-chip--plain`.
+ *
+ * Several of them in a card or a panel go in `.orca-chips`, the one class for a run of chips,
+ * which wraps rather than running past its box. A row never wraps (RULES.md rule 9), so a row
+ * gives a chip a column of its own instead.
+ */
 export interface ChipProps {
   children: unknown;
   /** Decorative; the label beside it carries the meaning. */
@@ -644,7 +650,12 @@ export interface DecisionMatrixProps {
 export interface AgentHealthCardProps {
   /** The agent's id. There is no separate display name; ids are what config and runs use. */
   name: string;
+  /**
+   * Gives way to `name` on the card's one header line: it truncates at its end, whole in its
+   * title, because the host heading above the cards already says it.
+   */
   host: { id: string; transport?: "local" | "ssh" };
+  /** Every one of them, as a run of chips that wraps inside the card (`.orca-chips`). */
   roles: ReadonlyArray<string>;
   state: "unknown" | "ok" | "degraded" | "down";
   /** The last handshake attempt, successful or not. Absent while `unknown`. */

@@ -65,11 +65,8 @@
   padding: 0 var(--space-3) var(--space-2);
   flex: none;
 }
-.orca-step__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-}
+/* The artifact chips wrap in the component layer's `.orca-chips`, which is where this
+   surface's own copy of that rule went. */
 
 /* ---------- the output pane ---------- */
 

@@ -86,7 +86,7 @@ export function DepsMode(props: DepsModeProps): JSX.Element {
           <Text style="eyebrow" as="h2">
             Edges
           </Text>
-          <div className="orca-plan__chips">
+          <div className="orca-chips">
             {DEPENDENCY_KINDS.map((kind) => (
               <button
                 key={kind}

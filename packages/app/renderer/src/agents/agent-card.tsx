@@ -61,14 +61,25 @@ export function AgentCard({ agent, live, onEditPermissions }: AgentCardProps): J
         <span aria-hidden="true">{glyph}</span>
         <span>{word}</span>
       </span>
-      <span className={`orca-agent__name ${textClass("mono-strong")}`}>{agent.id}</span>
-      <span className={`orca-agent__host ${textClass("caption")}`}>
+      {/* One line each. The name takes the room it needs and the host label gives way, and
+          either one that runs out truncates at its end — so each carries its whole value in
+          its title (components.css, `.orca-agent`). */}
+      <span className={`orca-agent__name ${textClass("mono-strong")}`} title={agent.id}>
+        {agent.id}
+      </span>
+      <span
+        className={`orca-agent__host ${textClass("caption")}`}
+        title={transport === undefined ? agent.hostId : `${agent.hostId} · ${transport}`}
+      >
         <span className={`orca-id ${textClass("mono-id")}`}>{agent.hostId}</span>
         {transport !== undefined && <Text style="caption">{` · ${transport}`}</Text>}
       </span>
 
+      {/* Every role, wrapping inside the card: a workflow picks an agent by role, so a role
+          that ran out past the card's edge — or hid behind a "+3" — is the one a person
+          was looking for. A card is not a row, so it may take the extra line. */}
       {agent.roles.length > 0 && (
-        <span className="orca-agent__roles">
+        <span className="orca-agent__roles orca-chips">
           {agent.roles.map((role) => (
             <Chip key={role}>{role}</Chip>
           ))}
