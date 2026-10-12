@@ -883,6 +883,10 @@
   color: var(--ink-tertiary);
   font-variant-numeric: tabular-nums;
 }
+/* Breaks inside a token as well as at spaces, as `.orca-well` does. The body is a call's
+   arguments and result verbatim, which are usually compact JSON with no space between its
+   tokens, and `.orca-tool` clips: a token wider than the pane was not wrapped, it was cut off
+   at the card's edge. */
 /* type: mono-log */
 .orca-tool__body {
   border-top: var(--stroke-hairline) solid var(--border-hairline);
@@ -890,6 +894,7 @@
   padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .orca-tool--failed {
   border-color: var(--status-failed);
@@ -948,19 +953,33 @@
   gap: var(--space-1);
   margin-bottom: var(--space-3);
 }
+/* A reference to an artifact by name and version: one line, `badge-md` tall, and as wide as
+   its name up to the width of the box it is in — never wider. An artifact name is as long
+   as its author made it, and a chip with no ceiling was a chip wider than the narrow pane it
+   sat in, which held a run of `.orca-chips` open past that pane and scrolled the pane
+   sideways. Past the ceiling the name truncates at its end inside `.orca-ref__label`, and the
+   caller puts the whole name in the chip's title; the accessible name is the whole text
+   either way. */
 /* type: mono-id */
 .orca-ref {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   height: var(--badge-md);
+  max-width: 100%;
   padding: 0 var(--space-2);
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-xs);
   background: var(--surface-base);
   font-family: var(--font-mono);
   color: var(--accent);
+  white-space: nowrap;
   cursor: pointer;
+}
+.orca-ref__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .orca-card__options {
   display: flex;
@@ -973,6 +992,8 @@
   color: var(--ink-secondary);
   margin-top: var(--space-2);
 }
+/* Breaks inside a token as well as at spaces, as `.orca-well` does: a path or a flag with no
+   space in it is wider than an inline card in a narrow pane, and ran out past the card. */
 /* type: mono-log */
 .orca-card__cmd {
   font-family: var(--font-mono);
@@ -981,6 +1002,7 @@
   padding: var(--space-2) var(--space-3);
   margin-bottom: var(--space-3);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ---------- attention list ---------- */
@@ -1509,9 +1531,15 @@
 
 /* ---------- config form field ---------- */
 
+/* A label and its value, side by side. The value column is `minmax(0, 1fr)` and not `1fr`:
+   a bare `1fr` keeps an `auto` floor, which is the widest thing in the column that cannot
+   break, so one long unbroken value — a line of compact JSON, a path, an id — can set the
+   column wider than its container. The run summary's variables did, and scrolled the step
+   detail pane sideways. The value's own box is what wraps or truncates it; the column is the
+   column's share of the width and never its content's. */
 .orca-field {
   display: grid;
-  grid-template-columns: var(--col-label) 1fr;
+  grid-template-columns: var(--col-label) minmax(0, 1fr);
   gap: var(--space-3);
   align-items: start;
   padding: var(--space-3) 0;
@@ -2725,13 +2753,17 @@
 }
 .orca-inspector .orca-field {
   /* The same column as .orca-field's, at the inspector's width — one column, two widths. */
-  grid-template-columns: var(--col-label-narrow) 1fr;
+  grid-template-columns: var(--col-label-narrow) minmax(0, 1fr);
   gap: var(--space-2);
   padding: var(--space-2) 0;
 }
+/* The label column is a fixed width, so a name longer than it cannot widen it: it ran on
+   under the value beside it instead, and past the pane when it was long enough. It breaks
+   inside the word once it has no other way to fit. */
 /* type: caption */
 .orca-inspector .orca-field__label {
   padding-top: var(--space-1);
+  overflow-wrap: anywhere;
 }
 
 /* ---------- validation + dry run ---------- */

@@ -7,7 +7,7 @@
  * emitted is whitespace the reader sees; a well that reflowed a command would be a well
  * that changed it.
  */
-import type { JSX, ReactNode } from "react";
+import type { JSX, ReactNode, Ref } from "react";
 import type { TextStyle } from "@orca/design";
 import { textClass } from "./text.js";
 
@@ -18,11 +18,17 @@ export interface WellProps {
   /** Names the block for a screen reader, which reads it as a region on demand. */
   label?: string;
   className?: string;
+  /** So a control that opens or closes the well can name it in `aria-controls`. */
+  id?: string;
+  /** The `<pre>` itself, for a caller that has to ask whether the block is cut short. */
+  ref?: Ref<HTMLPreElement>;
 }
 
-export function Well({ children, style = "mono-log", label, className }: WellProps): JSX.Element {
+export function Well({ children, style = "mono-log", label, className, id, ref }: WellProps): JSX.Element {
   return (
     <pre
+      ref={ref}
+      {...(id === undefined ? {} : { id })}
       className={["orca-well", textClass(style), className].filter(Boolean).join(" ")}
       {...(label === undefined ? {} : { role: "region", "aria-label": label })}
     >

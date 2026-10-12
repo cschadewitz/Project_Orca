@@ -107,6 +107,8 @@ export interface WellProps {
   style?: TextStyleName;
   /** Names the block, which a screen reader then reads as a region on demand. */
   label?: string;
+  /** So a disclosure that clamps or opens the well can name it in `aria-controls`. */
+  id?: string;
 }
 
 /** The generated union of `orca-text-*` class names; see `TextStyle` in src/tokens.ts. */
