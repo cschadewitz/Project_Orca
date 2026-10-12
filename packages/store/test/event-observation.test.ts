@@ -3,8 +3,10 @@ import { spawn } from "node:child_process";
 import { mkdtemp, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { consoleLogger, parseWorkflow, type OrcaEvent, type OrcaEventInput } from "@orca/core";
+import { childBundle } from "../../testing/src/child-bundle.js";
 import { InMemoryEventStore } from "../src/event-store.js";
 import { FileExecutionStore } from "../src/execution-store.js";
 import { JsonlEventStore } from "../src/jsonl-event-store.js";
@@ -288,28 +290,21 @@ describe("complete existing event observations", () => {
   it("waits for another process to finish a partial append and lets its store continue writing", async () => {
     const { dir, file, events, created, started } = await fixture();
     const next = { ...started, seq: 2, id: "process-event" };
-    const lockSource = new URL("../src/file-lock.ts", import.meta.url).href;
-    const storeSource = new URL("../src/jsonl-event-store.ts", import.meta.url).href;
-    const script = `
-      import { appendFile } from 'node:fs/promises';
-      import { withFileLock } from ${JSON.stringify(lockSource)};
-      import { JsonlEventStore } from ${JSON.stringify(storeSource)};
-      await withFileLock(${JSON.stringify(`${file}.lock`)}, async () => {
-        const bytes = ${JSON.stringify(serialize([next]))};
-        const middle = Math.floor(bytes.length / 2);
-        await appendFile(${JSON.stringify(file)}, bytes.slice(0, middle));
-        process.send('partial');
-        await new Promise(resolve => process.once('message', resolve));
-        await appendFile(${JSON.stringify(file)}, bytes.slice(middle));
-      });
-      await new Promise(resolve => process.once('message', resolve));
-      await new JsonlEventStore(${JSON.stringify(dir)}).append(${JSON.stringify(startedInput)});
-      process.disconnect();
-    `;
-    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      stdio: ["ignore", "ignore", "pipe", "ipc"],
-    });
+    // The writer is a real second process holding the real append lock. Under the test runner it
+    // starts from the run's prebuilt bundle with plain node, not from sources transpiled by tsx.
+    const writerSource = fileURLToPath(new URL("./fixtures/event-observation-writer.ts", import.meta.url));
+    const bundle = childBundle("event-observation-writer", { entries: { writer: writerSource } })?.writer;
+    const child = spawn(
+      process.execPath,
+      [
+        ...(bundle ? [bundle] : ["--import", "tsx", writerSource]),
+        dir,
+        file,
+        serialize([next]),
+        JSON.stringify(startedInput),
+      ],
+      { cwd: process.cwd(), stdio: ["ignore", "ignore", "pipe", "ipc"] },
+    );
     let errors = "";
     child.stderr!.on("data", (chunk: Buffer) => {
       errors += chunk.toString();

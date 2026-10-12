@@ -17,6 +17,7 @@ import {
   parseToken,
   readLocalToken,
 } from "../src/auth/index.js";
+import { childBundle } from "../../testing/src/child-bundle.js";
 
 let dir: string;
 beforeEach(async () => {
@@ -28,12 +29,16 @@ afterEach(async () => {
 
 const mode = async (file: string) => (await stat(file)).mode & 0o777;
 
+const writerSource = fileURLToPath(new URL("./auth-credential-writer.ts", import.meta.url));
+
 function writer(file: string, operation: string, id = "", release = "", tokenFile = "") {
-  const child = fork(
-    fileURLToPath(new URL("./auth-credential-writer.ts", import.meta.url)),
-    [file, operation, id, release, tokenFile],
-    { execArgv: ["--import", "tsx"], silent: true },
-  );
+  // Every writer is still its own fresh process. Under the test runner it starts from the run's
+  // prebuilt bundle with plain node; transpiling the sources through tsx cost about a second a start.
+  const bundle = childBundle("auth-credential-writer", { entries: { writer: writerSource } })?.writer;
+  const child = fork(bundle ?? writerSource, [file, operation, id, release, tokenFile], {
+    execArgv: bundle ? [] : ["--import", "tsx"],
+    silent: true,
+  });
   const messages: { kind: string; message?: string }[] = [];
   const waiters = new Set<() => void>();
   child.on("message", (message: { kind: string; message?: string }) => {

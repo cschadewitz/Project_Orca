@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { JsonFileDocumentStore } from "@orca/store";
+import { childBundle } from "../../testing/src/child-bundle.js";
 
 const run = promisify(execFile);
 
@@ -86,7 +87,11 @@ describe("JsonFileDocumentStore across processes", () => {
   it("keeps every document two real child processes write", async () => {
     const file = await makeFile();
     const script = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "document-store-writer.ts");
-    const child = (prefix: string) => run(process.execPath, ["--import", "tsx", script, file, prefix, "15"]);
+    // Both writers are still real processes racing on one file. Under the test runner they start
+    // from the run's prebuilt bundle with plain node, not from sources transpiled through tsx.
+    const bundle = childBundle("document-store-writer", { entries: { writer: script } })?.writer;
+    const child = (prefix: string) =>
+      run(process.execPath, bundle ? [bundle, file, prefix, "15"] : ["--import", "tsx", script, file, prefix, "15"]);
     await Promise.all([child("a"), child("b")]);
 
     const written = await onDisk(file);
