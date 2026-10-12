@@ -6,7 +6,9 @@
 # pnpm on PATH, provisioning them with .claude/cloud/setup.sh if the environment's setup
 # script did not, and runs the frozen install CI runs, without the Electron binary: a cloud
 # session cannot open the app's window, and CI skips the download for the same reason. Set
-# ORCA_CLOUD_ELECTRON=1 in the environment's variables to keep the download.
+# ORCA_CLOUD_ELECTRON=1 in the environment's variables to keep the download. Then it builds,
+# as CI does before testing: the production acceptance tests launch the compiled daemon and
+# refuse a dist older than the sources. The build is incremental, so a resume costs seconds.
 #
 # What it prints goes to Claude as context, so the last line says whether the session is
 # ready and, if not, what to run to see why. It always exits 0: a failed install should be
@@ -56,8 +58,13 @@ fi
 
 pnpm install --frozen-lockfile >>"$log" 2>&1 || fail "pnpm install --frozen-lockfile"
 
+# A branch that does not compile is still a session worth starting; say so and go on.
+build_note="built"
+pnpm run build >>"$log" 2>&1 || build_note="NOT built ('pnpm run build' failed; log: $log)"
+
 electron_note="Electron binary skipped, so app:smoke and app dev will not launch"
 [ -z "$skip_electron" ] && electron_note="Electron binary downloaded"
-echo "ORCA cloud session ready: node $(node --version), pnpm $(pnpm --version), dependencies installed; $electron_note." \
-  "The whole suite takes tens of minutes on $workers workers: run the affected files with" \
+echo "ORCA cloud session ready: node $(node --version), pnpm $(pnpm --version), dependencies installed, $build_note;" \
+  "$electron_note. Rebuild before testing after an edit: the production acceptance tests refuse a stale dist." \
+  "The whole suite takes over half an hour on $workers workers: run the affected files with" \
   "'pnpm exec vitest run <paths>' in the foreground and 'pnpm test' only in the background."

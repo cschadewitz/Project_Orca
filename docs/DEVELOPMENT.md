@@ -50,13 +50,21 @@ ships Node 22, so two pieces get it to this toolchain:
 
 - **The repo's SessionStart hook** (`.claude/settings.json` →
   `.claude/hooks/session-start.sh`) runs on every cloud start and resume, and does nothing
-  locally. It puts Node 24 and the `packageManager` pnpm on `PATH` for Claude's shells and runs
-  `pnpm install --frozen-lockfile` with `ELECTRON_SKIP_BINARY_DOWNLOAD=1`, as CI does. Its
-  last line, which Claude reads, says whether the session is ready.
+  locally. It puts Node 24 and the `packageManager` pnpm on `PATH` for Claude's shells, bounds
+  Vitest to CI's two workers, and runs `pnpm install --frozen-lockfile` with
+  `ELECTRON_SKIP_BINARY_DOWNLOAD=1` and then `pnpm run build`, as CI does. Its last line,
+  which Claude reads, says whether the session is ready.
 - **The environment's setup script**, configured once in the claude.ai environment dialog:
   paste `.claude/cloud/setup.sh`. It provisions Node 24.21.0 and pnpm 12.4.2 under
-  `/opt/node24` before Claude starts, and is cached between sessions. Without it the hook
-  provisions them itself on every new session, which works but is slower.
+  `/opt/node24` before Claude starts, and is cached between sessions. It also writes an
+  `/etc/machine-id` when the image has none, since the first-run fence refuses an empty one.
+  Without the script the hook does all of this itself on every new session, which works but
+  is slower.
+
+The whole suite takes over half an hour on two workers, so a session runs the affected files
+with `pnpm exec vitest run <paths>` and leaves `pnpm test` to the background. Rebuild after an
+edit before running the production acceptance tests: they launch the compiled daemon and
+refuse a `dist` older than the sources.
 
 The rest of the environment: **Trusted** network access is enough (it allows nodejs.org,
 the npm registry and GitHub), and no variables are required. Set `ORCA_CLOUD_ELECTRON=1`
