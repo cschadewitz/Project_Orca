@@ -127,7 +127,10 @@ screen now:
   shell (`DependencyNode`); a dependency's **kind is its stroke** (blocks solid, soft dashed,
   informs dotted, from `semantics.json`'s `dependencyKind` and the `stroke-dash-*` tokens)
   and its **state is its colour and a word** (`dependencyState`), never colour alone. The
-  `blocks` cycles `schedule.get` reports are drawn heavy in the failed colour.
+  `blocks` cycles `schedule.get` reports are drawn heavy in the failed colour. A node is
+  the workflow canvas's fixed box (`70-workflow-editing.md`): its name — a slug or a key — at
+  most two lines and its state one, each cut at its end and whole in its `title` and in the
+  accessible name.
 - **Shared selection and filters, a second rail, a pinned strip.** The selected schedule
   row is the focused node and the reverse; the request-and-filter rail applies to the
   graph as to the table; the graph's own controls sit in a second rail that shares the

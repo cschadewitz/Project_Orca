@@ -774,20 +774,29 @@ export interface DraftBarProps {
  *
  * `onOpen` is optional: a node drawn inside an expanded group box in a read-only viewer is
  * a picture of a node, and a click target that does nothing is worse than none.
+ *
+ * The box is `node-w` × `node-h` and never grows, because the layout routes every edge
+ * against that box. So no prop's text sets the height: the kind and the meta line are one
+ * line each and the name at most two, cut at their end and whole in each part's `title`
+ * (`DependencyNode` takes the same box and the same rule).
  */
 export interface WorkflowNodeProps {
   id: string;
   /** One of the nine, or undefined for a `custom:*` with no icon of its own. */
   type?: WorkflowNodeType;
-  /** The type as written, which is what the kind eyebrow prints. */
+  /** The type as written, which is what the kind eyebrow prints. One line, cut at its end. */
   typeLabel: string;
+  /** Drawn in mono, at most two lines, cut at the end of the second. */
   name: string;
   /** Present only when a run is overlaid. Absent means 'definition view'. */
   runState?: { status: RunStatus; attempts?: number; current?: boolean };
   /** True when a run is overlaid and this node was not traversed. */
   untaken?: boolean;
   selected?: boolean;
-  /** What a collapsed container is hiding, counted: `2 nested graphs`. */
+  /**
+   * What a collapsed container is hiding, counted: `2 nested graphs`. The last thing on the
+   * one meta line, so it is the part that gives way when the line runs out of room.
+   */
   collapsed?: string;
   onOpen?(id: string): void;
 }

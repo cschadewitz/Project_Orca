@@ -200,6 +200,17 @@ Redo, Tidy, Discard and Review and publish. The outline is `.orca-nodelist`. Cho
 `Menu`s, and structured values the form has no control for (artifact inputs, completion, a
 decision's source) are edited as YAML in place and parsed before anything is sent.
 
+**A node is a fixed box.** On the viewer, the editor and the plan's dependency graph, every
+node is `node-w` × `node-h`, because that is the box `layout.ts` routes the edges against: a
+forward edge meets a node half-way down and a back edge on its top. The kind eyebrow is one
+line, the name at most two and the meta line one; each is cut at its end, never in the
+middle, and the whole text is in that part's `title`. The name and the status are also in the
+node's accessible name, status first, and the inspector prints the name whole. `node-h`
+(112px) holds the eyebrow, a two-line name and a meta line with a status chip at the
+current type sizes, so nothing is cut in half to fit. The start and end pills are as tall as
+their text and are centred in their slot. `renderer/test/graph-node-box.test.tsx` holds
+the rule and recomputes the budget from `tokens.json`.
+
 The code is in `packages/app/renderer/src/workflow/editor/` (`draft-model.ts` is the pure
 part, with its own test), `packages/daemon/src/workflow-drafts.ts` and the
 `workflowDrafts.*` contract in `packages/protocol/src/workflow-drafts.ts`.

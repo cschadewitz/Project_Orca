@@ -62,10 +62,16 @@ export function DependencyNode({
     >
       <span className={`orca-node__kind ${textClass("eyebrow")}`}>
         <TargetIcon target={target} />
-        {TARGET_WORD[target]}
+        <span className="orca-node__kind-label">{TARGET_WORD[target]}</span>
       </span>
-      <span className={`orca-node__name ${textClass("mono-strong")}`}>{name}</span>
-      <span className={`orca-node__meta ${textClass("caption")}`}>{words.join(" · ")}</span>
+      {/* The workflow node's box and its rule: the name two lines at most and the meta line
+          one, each cut at its end and whole in its title (and in the accessible name). */}
+      <span className={`orca-node__name ${textClass("mono-strong")}`} title={name}>
+        {name}
+      </span>
+      <span className={`orca-node__meta ${textClass("caption")}`} title={words.join(" · ")}>
+        <span className="orca-node__fact">{words.join(" · ")}</span>
+      </span>
     </div>
   );
 }

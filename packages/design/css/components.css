@@ -1270,27 +1270,68 @@
 
 /* ---------- graph nodes (workflow + dependency) ---------- */
 
+/* A graph node is a fixed box, `--node-h` tall, and never grows; the start and end pills
+   below may be shorter, never taller. The layout that places it (`renderer/src/workflow/
+   layout.ts`, for the workflow canvas, the editor and the plan's dependency graph) knows a
+   node as `node-w` × `node-h` and nothing else: a forward edge leaves at half of `node-h`
+   and a back edge lands on the top. The box used to grow with its text, so "Design:
+   requirements + design spec" on two lines, or a running node whose meta line wrapped
+   "attempt 2" and "3 nested graphs" onto two more, moved its own middle, and its edges
+   attached where the middle would have been.
+
+   So the text fits the box: the kind is one line, the name at most two and the meta line
+   one, each cut at its end with the whole string in its `title`. The whole name is also in
+   the accessible name, after the status, and in the inspector, as before. `--node-h` is
+   those lines at their type styles plus the padding and the heaviest border, rounded up to
+   the grid, so no line is ever cut in half; each part is `flex: none` so the column cannot
+   squeeze one either. The content is centred, so what a short name leaves over is shared
+   above and below the line the edges attach to. */
 .orca-node {
   display: inline-flex;
   flex-direction: column;
+  justify-content: center;
   gap: var(--space-0-5);
   min-width: var(--node-min-width);
+  height: var(--node-h);
   padding: var(--space-2) var(--space-3);
   background: var(--surface-raised);
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-md);
   text-align: left;
 }
+/* One line. A plugin's `custom:` kind can be wider than the box; it is cut at its end rather
+   than pushing the name down, the way the editor's node list cuts it. */
 /* type: eyebrow */
 .orca-node__kind {
   display: flex;
   align-items: center;
   gap: var(--space-1);
+  flex: none;
+  min-width: 0;
+  white-space: nowrap;
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
+/* The kind's word, in an element of its own because `text-overflow` does not reach the
+   anonymous box a flex container puts bare text in. */
+.orca-node__kind-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* At most two lines, the second ending in an ellipsis when there is more. The name still
+   breaks where it would — at a space or a hyphen — and `overflow-wrap: anywhere` only splits
+   a word wider than the whole box, which would otherwise run off the first line with no mark
+   that it had; either way the cut is at the end and the start of the name stays whole. */
 /* type: mono-strong */
 .orca-node__name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
   font-family: var(--font-mono);
   font-weight: 500;
 }
@@ -1304,17 +1345,40 @@
   stroke-linejoin: round;
   stroke-linecap: round;
 }
+/* One line: the status chip, then the facts — "attempt 2", "3 nested graphs", "open · on a
+   cycle". The chip never shrinks (`.orca-chip`) and nor do the facts before the last; the
+   last is the one that gives way, cut at its end, so the line keeps its start and the whole
+   of it is in the meta line's `title`. */
 /* type: caption */
 .orca-node__meta {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   color: var(--ink-secondary);
 }
+.orca-node__fact {
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.orca-node__fact:last-child {
+  flex-shrink: 1;
+  min-width: 0;
+}
+/* The two pills are as tall as what they say, with `--node-h` as their ceiling rather than
+   their height: at the full box a full radius draws a lozenge three times the height of the
+   word in it, the heaviest shape on a canvas where these two are the lightest marks. The
+   canvas centres a pill in its slot, so its middle is the slot's and its edges meet it there. */
 .orca-node--start,
 .orca-node--end {
   border-radius: var(--radius-full);
   min-width: 0;
+  height: auto;
+  max-height: var(--node-h);
   align-items: center;
 }
 .orca-node--decision {
