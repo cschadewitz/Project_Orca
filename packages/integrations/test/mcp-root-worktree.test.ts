@@ -14,17 +14,29 @@ const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 it("a six-grant owned-only MCP client admits isolated direct roots without plan associations", async () => {
-  const f = (fixture = await ProductionFixture.create());
-  await f.stop();
+  const f = (fixture = await ProductionFixture.create(undefined, {
+    async configure(dir) {
+      const repo = join(dir, "repo");
+      await mkdir(repo);
+      git(repo, "init", "-q", "-b", "main");
+      git(
+        repo,
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "base",
+      );
+      const configPath = join(dir, "orca.config.yaml");
+      const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+      config.workspace = { provider: "git-worktree", repo: "repo", worktreeRoot: "trees", isolateRoots: true };
+      await writeFile(configPath, JSON.stringify(config));
+    },
+  }));
   const repo = join(f.dir, "repo");
-  await mkdir(repo);
-  git(repo, "init", "-q", "-b", "main");
-  git(repo, "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "base");
-  const configPath = join(f.dir, "orca.config.yaml");
-  const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
-  config.workspace = { provider: "git-worktree", repo: "repo", worktreeRoot: "trees", isolateRoots: true };
-  await writeFile(configPath, JSON.stringify(config));
-  await f.boot();
   const issued = await f.issue({
     principal: "isolated-root-client",
     permissions: ["runs.read", "artifacts.read", "workflows.read", "runs.start", "runs.control", "inputs.answer"],

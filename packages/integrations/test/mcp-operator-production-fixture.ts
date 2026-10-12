@@ -73,6 +73,14 @@ export interface Peer {
 
 const peerProgress = new WeakMap<Client, FixtureProgress>();
 
+/** What a test needs in place before the first daemon starts, so it never boots one only to stop it again. */
+export interface CreateOptions {
+  /** Edit the disposable assets (config, workflows, repositories) while no daemon is running. */
+  configure?(dir: string): Promise<void>;
+  /** Source for `--import` into the first daemon; derived from the directory the fixture just created. */
+  preload?(dir: string): string;
+}
+
 export class ProductionFixture {
   readonly progress = new FixtureProgress();
   private failurePublished = false;
@@ -85,7 +93,7 @@ export class ProductionFixture {
   token = "";
   daemon!: ChildProcessWithoutNullStreams;
 
-  static async create(onAcquired?: (fixture: ProductionFixture) => void) {
+  static async create(onAcquired?: (fixture: ProductionFixture) => void, options: CreateOptions = {}) {
     for (const file of [
       cli,
       join(root, "packages/integrations/dist/mcp/transport.js"),
@@ -102,7 +110,8 @@ export class ProductionFixture {
     try {
       onAcquired?.(f);
       await f.prepare();
-      await f.boot();
+      await options.configure?.(f.dir);
+      await f.boot(options.preload?.(f.dir));
       // Persistent non-bootstrap identity survives another daemon's bootstrap rotation.
       f.token = (await f.issue({ principal: "acceptance-owner", preset: "owner" })).token;
       return f;

@@ -14,15 +14,15 @@ import {
   until,
 } from "./mcp-operator-production-fixture.js";
 
-let f: ProductionFixture;
-beforeEach(async () => {
-  f = await ProductionFixture.create();
-});
-afterEach(async () => {
-  await f?.close();
-});
-
 describe.each(transports)("compiled production recovery via %s", (transport) => {
+  let f: ProductionFixture;
+  beforeEach(async () => {
+    f = await ProductionFixture.create();
+  });
+  afterEach(async () => {
+    await f?.close();
+  });
+
   for (const method of ["operator.admitRun", "operator.submitRequest"] as const)
     it(`R01 loses a committed ${method} acknowledgement, replays and correlates the actual receipt`, async (ctx) => {
       const direct = await f.connect(transport);
@@ -171,10 +171,54 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
     expect(runs.items).toHaveLength(1);
   });
 
+  it("R05 loses a revision acknowledgement and replays protected state across restart without re-delivery", async (ctx) => {
+    const originalPeer = await f.connect(transport);
+    await f.requireProduction(ctx, originalPeer);
+    const { runId } = await f.start(originalPeer, "revision");
+    const input = await until(
+      () => f.pending(originalPeer, runId),
+      (row) => row.revisionState === "available",
+      "revision boundary",
+    );
+    const proxy = await f.loseAcknowledgement("operator.revise");
+    const peer = await f.connect(transport, f.token, proxy.endpoint);
+    const command = {
+      target: input.revision!.target,
+      actionId: input.revisionActionId!,
+      payload: { kind: "text" as const, text: "PRIVATE_RECOVERED_REVISION" },
+    };
+    const params = { target: peer.target, command, retry: { idempotencyKey: "revision-ack-loss" } };
+    await refused(peer, "revise_input", params, "AGENT_TRANSPORT");
+    expect(proxy.count()).toBe(1);
+    const first = resolved(OperatorMutationContracts["operator.revise"].result.parse(proxy.dropped()));
+    await f.stop(f.daemon, "SIGKILL");
+    await f.boot();
+    const restarted = await f.connect(transport);
+    expect(await f.mutation(restarted, "operator.revise", { ...params, target: restarted.target })).toEqual({
+      ...first,
+      replayed: true,
+    });
+    await f.status(restarted, runId, "waiting");
+    const events = await f.events(runId);
+    expect(JSON.stringify(events)).not.toContain("PRIVATE_RECOVERED_REVISION");
+    expect(JSON.stringify(await f.audit())).not.toContain("PRIVATE_RECOVERED_REVISION");
+    expect(events.filter((event) => event.type === "agent.session.opened")).toHaveLength(0);
+  });
+});
+
+describe.each(transports)("compiled production recovery via %s", (transport) => {
+  let f: ProductionFixture;
+  let crash: ReturnType<typeof journalCrashBarrier>;
+  beforeEach(async () => {
+    // The barrier's files live in the fixture directory, so it is built from the directory create() just
+    // made, and the first daemon loads its preload rather than being stopped to start a second one.
+    f = await ProductionFixture.create(undefined, { preload: (dir) => (crash = journalCrashBarrier(dir)).preload });
+  });
+  afterEach(async () => {
+    await f?.close();
+  });
+
   it("R04 loses a combined answer/continuation acknowledgement and recovers its durable correlation after restart", async (ctx) => {
-    const crash = journalCrashBarrier(f.dir);
-    await f.stop();
-    await f.boot(crash.preload);
     const originalPeer = await f.connect(transport);
     await f.requireProduction(ctx, originalPeer);
     const { runId } = await f.start(originalPeer);
@@ -246,39 +290,5 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
     const events = await f.events(runId);
     expect(events.filter((event) => event.type === "continuation.recorded" && event.payload.decision)).toHaveLength(1);
     expect(JSON.stringify(await f.audit())).not.toContain("PRIVATE_CONTINUATION_RATIONALE");
-  });
-
-  it("R05 loses a revision acknowledgement and replays protected state across restart without re-delivery", async (ctx) => {
-    const originalPeer = await f.connect(transport);
-    await f.requireProduction(ctx, originalPeer);
-    const { runId } = await f.start(originalPeer, "revision");
-    const input = await until(
-      () => f.pending(originalPeer, runId),
-      (row) => row.revisionState === "available",
-      "revision boundary",
-    );
-    const proxy = await f.loseAcknowledgement("operator.revise");
-    const peer = await f.connect(transport, f.token, proxy.endpoint);
-    const command = {
-      target: input.revision!.target,
-      actionId: input.revisionActionId!,
-      payload: { kind: "text" as const, text: "PRIVATE_RECOVERED_REVISION" },
-    };
-    const params = { target: peer.target, command, retry: { idempotencyKey: "revision-ack-loss" } };
-    await refused(peer, "revise_input", params, "AGENT_TRANSPORT");
-    expect(proxy.count()).toBe(1);
-    const first = resolved(OperatorMutationContracts["operator.revise"].result.parse(proxy.dropped()));
-    await f.stop(f.daemon, "SIGKILL");
-    await f.boot();
-    const restarted = await f.connect(transport);
-    expect(await f.mutation(restarted, "operator.revise", { ...params, target: restarted.target })).toEqual({
-      ...first,
-      replayed: true,
-    });
-    await f.status(restarted, runId, "waiting");
-    const events = await f.events(runId);
-    expect(JSON.stringify(events)).not.toContain("PRIVATE_RECOVERED_REVISION");
-    expect(JSON.stringify(await f.audit())).not.toContain("PRIVATE_RECOVERED_REVISION");
-    expect(events.filter((event) => event.type === "agent.session.opened")).toHaveLength(0);
   });
 });
