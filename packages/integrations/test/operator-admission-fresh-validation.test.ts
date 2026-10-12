@@ -4,7 +4,14 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { OPERATOR_MAX_RESULT_BYTES, OperatorMutationContracts, RunsEventsResultSchema } from "@orca/protocol";
 import { withFileLock } from "../../store/src/file-lock.js";
-import { ProductionFixture, accepted, rpcResult, transports, until } from "./mcp-operator-production-fixture.js";
+import {
+  ProductionFixture,
+  accepted,
+  rpcResult,
+  sharedFixture,
+  transports,
+  until,
+} from "./mcp-operator-production-fixture.js";
 
 const fixtures: ProductionFixture[] = [];
 afterEach(async () => {
@@ -32,12 +39,23 @@ async function pointerCount(f: ProductionFixture): Promise<number> {
   }
 }
 
+// A refused busy-catalog call publishes nothing, so these tests share one daemon. They still compare
+// against the counts they found, in case an earlier test left something behind.
+const shared = sharedFixture();
+
 describe.each(transports)("fresh admission validation over %s", (transport) => {
+  let f: ProductionFixture;
+  shared.use((fixture) => {
+    f = fixture;
+  });
+
   for (const method of ["operator.admitRun", "operator.submitRequest"] as const)
     it(`${method} refuses a deliberately busy catalog without publishing a fresh claim`, async () => {
-      const f = await ProductionFixture.create();
-      fixtures.push(f);
       const first = await f.connect(transport);
+      const claims = await claimCount(f);
+      const pointers = await pointerCount(f);
+      const runs = await f.page(first, "runs");
+      const requests = await f.page(first, "requests");
       const guards = await f.guards(first, "gate", method === "operator.submitRequest" ? "request" : "workflow");
       const command =
         method === "operator.submitRequest"
@@ -61,17 +79,19 @@ describe.each(transports)("fresh admission validation over %s", (transport) => {
         expect(Buffer.byteLength(encoded)).toBeLessThanOrEqual(OPERATOR_MAX_RESULT_BYTES);
         expect(encoded).not.toContain(retry.idempotencyKey);
         expect(encoded).not.toContain(first.token);
-        expect(await claimCount(f)).toBe(0);
-        expect(await pointerCount(f)).toBe(0);
+        expect(await claimCount(f)).toBe(claims);
+        expect(await pointerCount(f)).toBe(pointers);
       });
       // No subsequent mutation: releasing our lock does not mean another daemon's
       // background recovery has relinquished the shared catalog.
-      expect(await claimCount(f)).toBe(0);
-      expect(await pointerCount(f)).toBe(0);
-      expect(await f.page(first, "runs")).toMatchObject({ items: [], restartRequired: false });
-      expect(await f.page(first, "requests")).toMatchObject({ items: [], restartRequired: false });
+      expect(await claimCount(f)).toBe(claims);
+      expect(await pointerCount(f)).toBe(pointers);
+      expect(await f.page(first, "runs")).toMatchObject({ items: runs.items, restartRequired: false });
+      expect(await f.page(first, "requests")).toMatchObject({ items: requests.items, restartRequired: false });
     });
+});
 
+describe.each(transports)("fresh admission validation over %s", (transport) => {
   for (const method of ["operator.admitRun", "operator.submitRequest"] as const)
     it(`${method} refuses a stale target without a claim, then accepts the original key once`, async () => {
       const f = await ProductionFixture.create();
