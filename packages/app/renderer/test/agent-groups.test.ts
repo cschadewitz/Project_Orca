@@ -1,6 +1,6 @@
 /**
  * The Agents surface's arithmetic, without a DOM: grouping by host, folding one
- * `agent.changed`, and the two labels.
+ * `agent.changed`, the two labels, and where focus goes when a claim row leaves.
  *
  * It is a plain test of a plain module for the same reason `run-rows.test.ts` is — the
  * decisions that are not markup should be readable without mounting anything, and the
@@ -9,7 +9,13 @@
  */
 import { describe, expect, it } from "vitest";
 import type { AgentView } from "@orca/protocol";
-import { applyAgentChanged, countLabel, groupByHost, transportLabel } from "../src/agents/agent-groups.js";
+import {
+  applyAgentChanged,
+  countLabel,
+  focusAfterLeaving,
+  groupByHost,
+  transportLabel,
+} from "../src/agents/agent-groups.js";
 import { AGENTS, changed } from "./fixtures-agents.js";
 
 describe("groupByHost", () => {
@@ -76,5 +82,24 @@ describe("the labels", () => {
     expect(transportLabel("local")).toBe("local");
     expect(transportLabel("ssh")).toBe("ssh");
     expect(transportLabel(undefined)).toBeUndefined();
+  });
+});
+
+describe("focusAfterLeaving", () => {
+  it("takes the row after the one that left, or the one before it when it was the last", () => {
+    expect(focusAfterLeaving(["a", "b", "c"], ["a", "c"], "b")).toBe(1);
+    expect(focusAfterLeaving(["a", "b", "c"], ["a", "b"], "c")).toBe(1);
+    expect(focusAfterLeaving(["a", "b", "c"], ["b", "c"], "a")).toBe(0);
+  });
+
+  it("lands only on a row the person had seen, passing over one the re-read brought", () => {
+    expect(focusAfterLeaving(["a", "b", "c"], ["a", "n", "c"], "b")).toBe(2);
+    // Two gone in one read: the nearest one that is still there.
+    expect(focusAfterLeaving(["a", "b", "c", "d"], ["a", "d"], "b")).toBe(1);
+  });
+
+  it("names no row when none of them is left, so the section takes focus", () => {
+    expect(focusAfterLeaving(["b"], [], "b")).toBeUndefined();
+    expect(focusAfterLeaving(["b"], ["n"], "b")).toBeUndefined();
   });
 });

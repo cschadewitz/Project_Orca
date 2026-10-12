@@ -16,6 +16,11 @@
  * danger tone, the consequence on a second line — and only Confirm sends anything. happy-dom
  * does not move focus on a click the way a browser does, so a "click" here is `focus()` and
  * then `click`, which is what a person's press does in the app.
+ *
+ * **A released row leaves.** The default fake answers `claims.list` from a fixture that never
+ * changes, so every row in "releasing a claim" outlives its own release. The real daemon takes
+ * the claim out of the store, and `holding` below is a daemon that does — which is what makes
+ * where focus goes after a row leaves the list something a test can see.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -105,6 +110,52 @@ async function releaseDead(): Promise<void> {
 
 const releaseCalls = (): unknown[] =>
   fake.calls.filter((call) => call.method === "claims.release").map((call) => call.params);
+
+/** A claim whose run has finished, so the daemon lets it go: `wi-3`'s shape under another item. */
+function finished(workItemId: string, title: string): ClaimView {
+  return {
+    ...CLAIMS[1]!,
+    workItemId,
+    workItem: { ...CLAIMS[1]!.workItem!, id: workItemId, slug: workItemId, title },
+    owner: {
+      runId: `run-${workItemId}`,
+      name: `${workItemId}-run`,
+      status: "succeeded",
+      missing: false,
+      releasable: true,
+    },
+  };
+}
+
+/** `wi-9`, a releasable claim to put after `wi-3`. */
+const AUDIT = finished("wi-9", "Ship the audit log");
+
+/**
+ * A daemon holding these claims, in this order, that does what the real one does with a
+ * release: the claim leaves the store, so the re-read after it no longer has it and its row
+ * leaves the list.
+ */
+function holding(claims: readonly ClaimView[]): void {
+  let held = [...claims];
+  fake.script({
+    "agents.list": () => ({ ok: true, result: { ...AGENTS_LIST, claims: held } }),
+    "claims.list": () => ({ ok: true, result: { claims: held, asOf: AS_OF } }),
+    "claims.release": ({ workItemId }) => {
+      const claim = held.find((c) => c.workItemId === workItemId);
+      if (!claim) return { ok: false, error: { code: "CLAIM_NOT_FOUND", message: `${workItemId} is not claimed` } };
+      held = held.filter((c) => c !== claim);
+      return { ok: true, result: { claim, asOf: AS_OF } };
+    },
+  });
+}
+
+/** Wait for a work item's row to have left the list. */
+async function gone(workItemId: string): Promise<void> {
+  await waitFor(() => {
+    const rows = within(screen.getByRole("region", { name: "Claimed work" })).queryAllByRole("listitem");
+    expect(rows.some((row) => row.textContent?.startsWith(workItemId))).toBe(false);
+  });
+}
 
 beforeEach(() => {
   fake = installBridge();
@@ -446,6 +497,113 @@ describe("releasing a claim", () => {
 
     const dead = await claimRow("wi-3");
     expect(within(dead).queryByRole("button")).toBeNull();
+  });
+});
+
+describe("where focus goes when a released row leaves", () => {
+  /* After Confirm, focus is on the row's own busy Release. When the re-read no longer has the
+     claim, that row — and the control holding focus — leaves the document, and without
+     somewhere to go focus falls to the page body: a keyboard user's place in the list, gone
+     with the row. */
+
+  it("moves to the next row's Release when the row was in the middle", async () => {
+    holding([CLAIMS[0]!, CLAIMS[1]!, AUDIT]);
+    renderAgents();
+    const next = within(await claimRow("wi-9")).getByRole("button", { name: "Release Ship the audit log" });
+
+    await releaseDead();
+    await gone("wi-3");
+
+    // The row that slid into the gap: where the next Tab from the released row would have gone.
+    expect(document.activeElement).toBe(next);
+  });
+
+  it("moves to the previous row's Release when the row was the last", async () => {
+    holding([CLAIMS[0]!, CLAIMS[1]!]);
+    renderAgents();
+    const previous = within(await claimRow("wi-2")).getByRole("button", { name: "Release Wire the login button" });
+
+    await releaseDead();
+    await gone("wi-3");
+
+    /* Refused, and still a stop: `Button` disables with `aria-disabled` rather than the
+       attribute so the reason stays reachable, and `Tab` would land here as well. */
+    expect(document.activeElement).toBe(previous);
+    expect(previous.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("moves to the section when the row was the only one, and the list says it is empty", async () => {
+    holding([CLAIMS[1]!]);
+    renderAgents();
+    const section = await screen.findByRole("region", { name: "Claimed work" });
+
+    await releaseDead();
+    await gone("wi-3");
+
+    expect(document.activeElement).toBe(section);
+    // Programmatically focusable and never a Tab stop of its own.
+    expect(section.getAttribute("tabindex")).toBe("-1");
+    expect(section.textContent).toContain("Nothing is claimed right now.");
+  });
+
+  it("stays on the same row's Release when the daemon refuses, because the row stays", async () => {
+    fake.script({
+      "claims.release": () => ({ ok: false, error: { code: "RUN_STATE", message: "run-vanished is running" } }),
+    });
+    renderAgents();
+
+    await releaseDead();
+    await waitFor(async () => expect((await claimRow("wi-3")).textContent).toContain("RUN_STATE"));
+
+    const row = await claimRow("wi-3");
+    const release = within(row).getByRole("button", { name: `Release ${DEAD}` });
+    expect(document.activeElement).toBe(release);
+    // No longer busy, so it can be pressed again from where the person already is.
+    await waitFor(() => expect(release.getAttribute("aria-disabled")).toBeNull());
+    // The refusal is on the row it was about, and only there.
+    expect(document.querySelector(".orca-agents__claims-note")).toBeNull();
+  });
+
+  it("does not take focus back from somewhere the person moved it while the release was in flight", async () => {
+    holding([CLAIMS[0]!, CLAIMS[1]!, AUDIT]);
+    const answer = fake.hold("claims.release");
+    renderAgents();
+
+    await releaseDead();
+    await waitFor(() => expect(releaseCalls()).toHaveLength(1));
+    const elsewhere = screen.getByRole("button", { name: "Permissions for claude" });
+    act(() => elsewhere.focus());
+
+    answer();
+    await gone("wi-3");
+
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it("says the result under the section's heading once its row has gone, and still announces it", async () => {
+    holding([CLAIMS[0]!, CLAIMS[1]!, AUDIT]);
+    const said: string[] = [];
+    renderAgents();
+    teardown.push(h.announcements.subscribe((sentence) => said.push(sentence)));
+    const section = await screen.findByRole("region", { name: "Claimed work" });
+
+    await releaseDead();
+    await gone("wi-3");
+
+    // Said once into the app's one live region, whether or not the row survives.
+    expect(said.filter((sentence) => sentence.includes("Document the rollout is released"))).toHaveLength(1);
+
+    /* And left where it can still be read: the section's caption line, under its heading and
+       above the rows. It names its work item, so it reads without the row it was about. */
+    const note = section.querySelector<HTMLElement>(".orca-agents__claims-note");
+    expect(note?.textContent).toBe("Document the rollout is released and back with the scheduler.");
+    expect(note?.closest("li")).toBeNull();
+    const list = within(section).getByRole("list");
+    expect(note!.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Not a second live region: the announcer has already said it.
+    expect(note?.closest("[aria-live], [role='status']")).toBeNull();
+    // The rows that stayed are one line each; none of them took the note.
+    for (const row of await claimRows()) expect(row.className).not.toContain("orca-agents__claim--note");
   });
 });
 
