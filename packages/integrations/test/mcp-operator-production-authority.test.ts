@@ -19,33 +19,34 @@ import {
   refused,
   resolved,
   rpcResult,
+  sharedFixture,
   tool,
   transports,
   until,
 } from "./mcp-operator-production-fixture.js";
 
-let f: ProductionFixture;
-let fixtureReady = false;
-let fixtureSetup: Promise<ProductionFixture>;
-beforeEach(async () => {
-  fixtureReady = false;
-  fixtureSetup = ProductionFixture.create((acquired) => {
-    f = acquired;
-    fixtureReady = true;
-  });
-  f = await fixtureSetup;
-});
-afterEach(async (ctx) => {
-  if (fixtureReady && ctx.task.result?.state === "fail") f.reportFailure();
-  // Setup owns cleanup on rejection. A hook timeout must retain that owner and
-  // its root until setup settles, rather than racing late acquired work.
-  await fixtureSetup?.then(
-    (fixture) => fixture.close(),
-    () => undefined,
-  );
-});
+// These tests only add runs, requests and credentials, so one daemon serves all of them. The ones
+// that restart or kill the daemon, or that need a store nobody else has written to, have a daemon of
+// their own below.
+const shared = sharedFixture();
 
 describe.each(transports)("compiled production authority via %s", (transport) => {
+  let f: ProductionFixture;
+  shared.use((fixture) => {
+    f = fixture;
+  });
+  // Retry keys belong to the principal, which every test on this daemon shares, so each is made
+  // unique to its transport; a reused key would replay the other transport's run instead of admitting one.
+  const intent = (name: string) => `${name}-${transport}`;
+  const auditLength = () =>
+    f.audit().then(
+      (entries) => entries.length,
+      (error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+        throw error;
+      },
+    );
+
   it("A01 rechecks revocation before dispatch for all ten tool names on an already connected client", async () => {
     const issued = await f.issue({ principal: "revocable", preset: "owner" });
     const peer = await f.connect(transport, issued.token);
@@ -65,52 +66,6 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
     );
     if (response) expect(response).toMatchObject({ ok: false, error: { code: "AUTH_INVALID" } });
     expect(JSON.stringify(await f.audit())).not.toContain("PRIVATE_MALFORMED_INPUT");
-  });
-
-  it("A02 enforces current grant combinations and workflow/owner scope without disclosing strong boundaries", async (ctx) => {
-    const owner = await f.connect(transport);
-    await f.requireProduction(ctx, owner);
-    const { runId } = await f.start(owner, "revision");
-    const input = await until(
-      () => f.pending(owner, runId),
-      (row) => row.revisionState === "available",
-      "strong revision projection",
-    );
-    for (const permissions of [["runs.read"], ["runs.read", "inputs.answer"], ["runs.read", "runs.control"]] as const) {
-      const issued = await f.issue({ principal: "weak", permissions, scope: { workflows: "*", runs: "all" } });
-      const peer = await f.connect(transport, issued.token);
-      const rows = await f.page(peer, "inputs", { runId });
-      expect(rows.items).toHaveLength(1);
-      expect(rows.items[0]).not.toHaveProperty("revision");
-      expect(rows.items[0]?.revisionState).not.toBe("available");
-      expect(rows.items[0]?.revisionActionId).toBe("changes");
-      const run = await f.page(peer, "runs", { runId });
-      const legacy = rpcResult(await f.rpc("runs.get", { runId }, issued.token)) as {
-        continuation?: { expectedBoundary: string };
-      };
-      expect(run.items[0]?.expectedBoundary).toBe(legacy.continuation?.expectedBoundary);
-      await refused(peer, "revise_input", {
-        target: peer.target,
-        command: {
-          target: input.revision!.target,
-          actionId: "changes",
-          payload: { kind: "text", text: "NO_GRANT_PAYLOAD" },
-        },
-        retry: { idempotencyKey: randomUUID() },
-      });
-    }
-    for (const scope of [
-      { workflows: "*" as const, runs: "owned" as const },
-      { workflows: ["gate"], runs: "all" as const },
-    ]) {
-      const issued = await f.issue({ principal: "outsider", preset: "client", scope });
-      const peer = await f.connect(transport, issued.token);
-      expect((await f.page(peer, "runs")).items).toEqual([]);
-      for (const name of ["list_runs", "list_approvals", "get_events"])
-        await refused(peer, name, { target: peer.target, runId });
-      await refused(peer, "cancel_run", { target: peer.target, runId });
-    }
-    expect((await f.events(runId)).filter((event) => event.type === "human.answered")).toHaveLength(0);
   });
 
   it("A03 rejects changed deployment, exact durable input, caller authority injection and cross-run artifacts", async (ctx) => {
@@ -161,84 +116,11 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
         expectedBoundary: await f.boundary(peer, runId),
         decision: { requestId: input.requestId!, optionId: "approve" },
       },
-      retry: { idempotencyKey: "produce-artifact" },
+      retry: { idempotencyKey: intent("produce-artifact") },
     });
     await f.status(peer, runId, "succeeded");
     const artifactId = (await f.page(peer, "artifacts", { runId })).items[0]!.artifactId!;
     await refused(peer, "get_artifact", { target: peer.target, runId: other.runId, artifactId });
-  });
-
-  it("A04 requires every live identity field, rejects another owner, and delivers exactly once to the original callback", async (ctx) => {
-    const peer = await f.connect(transport);
-    await f.requireProduction(ctx, peer);
-    const { runId } = await f.start(peer, "live");
-    const input = await f.pending(peer, runId);
-    expect(input.live?.state).toBe("pending");
-    const live = input.live!.target;
-    expect(live).toMatchObject({
-      instanceId: peer.target.instanceId,
-      runId,
-      stepRunId: input.stepRunId,
-      requestId: input.requestId,
-    });
-    for (const field of [
-      "instanceId",
-      "sessionId",
-      "turnId",
-      "invocationId",
-      "runId",
-      "stepRunId",
-      "requestId",
-    ] as const) {
-      await refused(peer, "respond_to_approval", {
-        target: peer.target,
-        decision: { lifetime: "live", live: { ...live, [field]: "wrong" }, optionId: "allow" },
-      });
-    }
-    const ownerEndpoint = peer.endpoint;
-    await f.boot();
-    const observer = await f.connect(transport);
-    // Publication was established on the actual owner above; this different instance
-    // must expose owner-unavailable, not satisfy the current-owner readiness check.
-    const observed = (await f.page(observer, "inputs", { runId })).items[0]!;
-    expect(observed.requestId).toBe(input.requestId);
-    expect(observed.live?.state).toBe("owner-unavailable");
-    await refused(observer, "respond_to_approval", {
-      target: observer.target,
-      decision: { lifetime: "live", live, optionId: "allow" },
-    });
-    expect((await f.events(runId)).filter((event) => event.type === "human.answered")).toHaveLength(0);
-    const receipt = await f.mutation(peer, "operator.answer", {
-      target: peer.target,
-      decision: { lifetime: "live", live, optionId: "allow", note: "LIVE_RATIONALE_ONLY" },
-    });
-    expect(receipt).toMatchObject({ runId, requestId: live.requestId });
-    await f.status(peer, runId, "succeeded");
-    await refused(peer, "respond_to_approval", {
-      target: peer.target,
-      decision: { lifetime: "live", live, optionId: "allow" },
-    });
-    expect(peer.endpoint).toBe(ownerEndpoint);
-    expect((await f.events(runId)).filter((event) => event.type === "human.answered")).toHaveLength(1);
-  });
-
-  it("A05 owner death expires the live callback and cannot be approved after restart", async (ctx) => {
-    const peer = await f.connect(transport);
-    await f.requireProduction(ctx, peer);
-    const { runId } = await f.start(peer, "live");
-    const input = await f.pending(peer, runId);
-    expect(input.live?.state).toBe("pending");
-    await f.stop(f.daemon, "SIGKILL");
-    await f.boot();
-    const restarted = await f.connect(transport);
-    const current = (await f.page(restarted, "inputs", { runId })).items[0]!;
-    expect(current.requestId).toBe(input.requestId);
-    expect(["expired", "owner-unavailable"]).toContain(current.live?.state);
-    await refused(restarted, "respond_to_approval", {
-      target: restarted.target,
-      decision: { lifetime: "live", live: input.live!.target, optionId: "allow" },
-    });
-    expect((await f.events(runId)).filter((event) => event.type === "human.answered")).toHaveLength(0);
   });
 
   it("A06 bounds reads, invalidates cursors on boundary changes, and never enriches an unscoped page", async (ctx) => {
@@ -264,7 +146,7 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
         actionId: "changes",
         payload: { kind: "text", text: "PRIVATE_BOUNDARY_CHANGE" },
       },
-      retry: { idempotencyKey: "change-boundary" },
+      retry: { idempotencyKey: intent("change-boundary") },
     });
     const next = await f.page(peer, "events", { runId, limit: 1, cursor: first.nextCursor! });
     expect(next.restartRequired).toBe(true);
@@ -311,9 +193,11 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
   });
 
   it("A08 audits authenticated identity and receipt correlations while excluding payloads, keys, rationale and credentials", async (ctx) => {
+    // The audit log is the daemon's, not this test's: assert on what this test added to it.
+    const earlier = await auditLength();
     const peer = await f.connect(transport);
     await f.requireProduction(ctx, peer);
-    const { runId, receipt } = await f.start(peer, "gate", "PRIVATE_AUDIT_RETRY_KEY");
+    const { runId, receipt } = await f.start(peer, "gate", intent("PRIVATE_AUDIT_RETRY_KEY"));
     const input = await f.pending(peer, runId);
     await f.mutation(peer, "operator.answer", {
       target: peer.target,
@@ -328,7 +212,7 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
       },
     });
     const audit = await until(
-      () => f.audit(),
+      async () => (await f.audit()).slice(earlier),
       (entries) => entries.some((entry) => entry.operation === "operator.answer" && entry.outcome === "succeeded"),
       "durable audit flush",
     );
@@ -346,7 +230,7 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
     const failure = await refused(peer, "start_workflow", {
       target: peer.target,
       command: { ...(await f.guards(peer)), vars: {}, expectedWorkflowRevision: "STALE_PRIVATE_GUARD" },
-      retry: { idempotencyKey: "PRIVATE_ERROR_KEY" },
+      retry: { idempotencyKey: intent("PRIVATE_ERROR_KEY") },
     });
     expect(failure).not.toMatch(/STALE_PRIVATE_GUARD|PRIVATE_ERROR_KEY|stack|details/);
   });
@@ -430,6 +314,103 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
     await authenticationRefused(revocable, "list_approvals", { target: revocable.target, runId });
   });
 
+  it("A11 executes all ten aliases successfully through both backing transports using real receipts and effects", async (ctx) => {
+    const peer = await f.connect(transport);
+    await f.requireProduction(ctx, peer);
+    const socket = await f.socket();
+    for (const [wire, rpc] of [
+      ["http", (method: string, params: unknown) => f.rpc(method, params)],
+      ["ws", socket],
+    ] as const) {
+      const invoke = async <N extends OperatorMutationName>(
+        method: N,
+        params: OperatorMutationParams<N>,
+      ): Promise<OperatorMutationResult<N>> => {
+        const result = rpcResult(await rpc(method, params));
+        const parsed = OperatorMutationContracts[method].result.parse(result);
+        expect(result).toEqual(parsed);
+        return parsed as OperatorMutationResult<N>;
+      };
+      const direct = resolved(
+        await invoke("operator.admitRun", {
+          target: peer.target,
+          command: { ...(await f.guards(peer)), vars: {} },
+          retry: { idempotencyKey: intent(`${wire}-direct`) },
+        }),
+      );
+      if (direct.result.state !== "accepted") throw new Error("Backing admission not accepted");
+      const request = resolved(
+        await invoke("operator.submitRequest", {
+          target: peer.target,
+          command: { ...(await f.guards(peer, "gate", "request")), title: "Parity", body: "Parity workload" },
+          retry: { idempotencyKey: intent(`${wire}-request`) },
+        }),
+      );
+      expect(request.result.requestId).toBeTruthy();
+      expect(direct.result).not.toHaveProperty("requestId");
+      for (const method of ["operator.admission", "operator.reconcileAdmission"] as const)
+        expect(resolved(await invoke(method, { target: peer.target, operationId: direct.operationId })).result).toEqual(
+          direct.result,
+        );
+      const runId = direct.result.runId;
+      const input = await f.pending(peer, runId);
+      expect(
+        await invoke("operator.answer", {
+          target: peer.target,
+          decision: {
+            lifetime: "durable",
+            runId,
+            stepRunId: input.stepRunId!,
+            requestId: input.requestId!,
+            optionId: "stop",
+            resume: false,
+          },
+        }),
+      ).toMatchObject({ runId, requestId: input.requestId });
+      const continuation = resolved(
+        await invoke("operator.continueRun", {
+          target: peer.target,
+          command: { runId, expectedBoundary: await f.boundary(peer, runId) },
+          retry: { idempotencyKey: intent(`${wire}-continue`) },
+        }),
+      );
+      const lookup = { target: peer.target, continuationId: continuation.result.continuationId };
+      const identity = {
+        operationId: continuation.operationId,
+        runId,
+        continuationId: continuation.result.continuationId,
+      };
+      expect(await invoke("operator.continuation", lookup)).toMatchObject(identity);
+      await f.status(peer, runId, "succeeded");
+      expect(await invoke("operator.reconcileContinuation", lookup)).toMatchObject({ ...identity, state: "settled" });
+      if (request.result.state !== "accepted") throw new Error("Backing Request not accepted");
+      await f.pending(peer, request.result.runId);
+      expect(await invoke("operator.cancel", { target: peer.target, runId: request.result.runId })).toMatchObject({
+        runId: request.result.runId,
+      });
+      await f.status(peer, request.result.runId, "cancelled");
+      const revisionRun = await f.start(peer, "revision");
+      const revision = await until(
+        () => f.pending(peer, revisionRun.runId),
+        (row) => row.revisionState === "available",
+        "backing revision boundary",
+      );
+      const receipt = resolved(
+        await invoke("operator.revise", {
+          target: peer.target,
+          command: {
+            target: revision.revision!.target,
+            actionId: "changes",
+            payload: { kind: "text", text: "BACKING_PARITY_PRIVATE" },
+          },
+          retry: { idempotencyKey: intent(`${wire}-revision`) },
+        }),
+      );
+      expect(receipt.result).toMatchObject({ state: "pending", target: revision.revision!.target });
+      expect(JSON.stringify(await f.events(revisionRun.runId))).not.toContain("BACKING_PARITY_PRIVATE");
+    }
+  });
+
   it("A12 keeps cold-read uncertainty safe without waiting, retrying or turning store failures into empty success", async (ctx) => {
     const peer = await f.connect(transport);
     await f.requireProduction(ctx, peer);
@@ -467,101 +448,146 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
     // A cold read cannot replace the subsequent, stronger settled assertion.
     expect((await f.pending(peer, runId)).revisionState).toBe("available");
   });
+});
 
-  it("A11 executes all ten aliases successfully through both backing transports using real receipts and effects", async (ctx) => {
+describe.each(transports)("compiled production authority via %s", (transport) => {
+  let f: ProductionFixture;
+  let fixtureReady = false;
+  let fixtureSetup: Promise<ProductionFixture>;
+  beforeEach(async () => {
+    fixtureReady = false;
+    fixtureSetup = ProductionFixture.create((acquired) => {
+      f = acquired;
+      fixtureReady = true;
+    });
+    f = await fixtureSetup;
+  });
+  afterEach(async (ctx) => {
+    if (fixtureReady && ctx.task.result?.state === "fail") f.reportFailure();
+    // Setup owns cleanup on rejection. A hook timeout must retain that owner and
+    // its root until setup settles, rather than racing late acquired work.
+    await fixtureSetup?.then(
+      (fixture) => fixture.close(),
+      () => undefined,
+    );
+  });
+
+  it("A02 enforces current grant combinations and workflow/owner scope without disclosing strong boundaries", async (ctx) => {
+    const owner = await f.connect(transport);
+    await f.requireProduction(ctx, owner);
+    const { runId } = await f.start(owner, "revision");
+    const input = await until(
+      () => f.pending(owner, runId),
+      (row) => row.revisionState === "available",
+      "strong revision projection",
+    );
+    for (const permissions of [["runs.read"], ["runs.read", "inputs.answer"], ["runs.read", "runs.control"]] as const) {
+      const issued = await f.issue({ principal: "weak", permissions, scope: { workflows: "*", runs: "all" } });
+      const peer = await f.connect(transport, issued.token);
+      const rows = await f.page(peer, "inputs", { runId });
+      expect(rows.items).toHaveLength(1);
+      expect(rows.items[0]).not.toHaveProperty("revision");
+      expect(rows.items[0]?.revisionState).not.toBe("available");
+      expect(rows.items[0]?.revisionActionId).toBe("changes");
+      const run = await f.page(peer, "runs", { runId });
+      const legacy = rpcResult(await f.rpc("runs.get", { runId }, issued.token)) as {
+        continuation?: { expectedBoundary: string };
+      };
+      expect(run.items[0]?.expectedBoundary).toBe(legacy.continuation?.expectedBoundary);
+      await refused(peer, "revise_input", {
+        target: peer.target,
+        command: {
+          target: input.revision!.target,
+          actionId: "changes",
+          payload: { kind: "text", text: "NO_GRANT_PAYLOAD" },
+        },
+        retry: { idempotencyKey: randomUUID() },
+      });
+    }
+    for (const scope of [
+      { workflows: "*" as const, runs: "owned" as const },
+      { workflows: ["gate"], runs: "all" as const },
+    ]) {
+      const issued = await f.issue({ principal: "outsider", preset: "client", scope });
+      const peer = await f.connect(transport, issued.token);
+      expect((await f.page(peer, "runs")).items).toEqual([]);
+      for (const name of ["list_runs", "list_approvals", "get_events"])
+        await refused(peer, name, { target: peer.target, runId });
+      await refused(peer, "cancel_run", { target: peer.target, runId });
+    }
+    expect((await f.events(runId)).filter((event) => event.type === "human.answered")).toHaveLength(0);
+  });
+
+  it("A04 requires every live identity field, rejects another owner, and delivers exactly once to the original callback", async (ctx) => {
     const peer = await f.connect(transport);
     await f.requireProduction(ctx, peer);
-    const socket = await f.socket();
-    for (const [wire, rpc] of [
-      ["http", (method: string, params: unknown) => f.rpc(method, params)],
-      ["ws", socket],
+    const { runId } = await f.start(peer, "live");
+    const input = await f.pending(peer, runId);
+    expect(input.live?.state).toBe("pending");
+    const live = input.live!.target;
+    expect(live).toMatchObject({
+      instanceId: peer.target.instanceId,
+      runId,
+      stepRunId: input.stepRunId,
+      requestId: input.requestId,
+    });
+    for (const field of [
+      "instanceId",
+      "sessionId",
+      "turnId",
+      "invocationId",
+      "runId",
+      "stepRunId",
+      "requestId",
     ] as const) {
-      const invoke = async <N extends OperatorMutationName>(
-        method: N,
-        params: OperatorMutationParams<N>,
-      ): Promise<OperatorMutationResult<N>> => {
-        const result = rpcResult(await rpc(method, params));
-        const parsed = OperatorMutationContracts[method].result.parse(result);
-        expect(result).toEqual(parsed);
-        return parsed as OperatorMutationResult<N>;
-      };
-      const direct = resolved(
-        await invoke("operator.admitRun", {
-          target: peer.target,
-          command: { ...(await f.guards(peer)), vars: {} },
-          retry: { idempotencyKey: `${wire}-direct` },
-        }),
-      );
-      if (direct.result.state !== "accepted") throw new Error("Backing admission not accepted");
-      const request = resolved(
-        await invoke("operator.submitRequest", {
-          target: peer.target,
-          command: { ...(await f.guards(peer, "gate", "request")), title: "Parity", body: "Parity workload" },
-          retry: { idempotencyKey: `${wire}-request` },
-        }),
-      );
-      expect(request.result.requestId).toBeTruthy();
-      expect(direct.result).not.toHaveProperty("requestId");
-      for (const method of ["operator.admission", "operator.reconcileAdmission"] as const)
-        expect(resolved(await invoke(method, { target: peer.target, operationId: direct.operationId })).result).toEqual(
-          direct.result,
-        );
-      const runId = direct.result.runId;
-      const input = await f.pending(peer, runId);
-      expect(
-        await invoke("operator.answer", {
-          target: peer.target,
-          decision: {
-            lifetime: "durable",
-            runId,
-            stepRunId: input.stepRunId!,
-            requestId: input.requestId!,
-            optionId: "stop",
-            resume: false,
-          },
-        }),
-      ).toMatchObject({ runId, requestId: input.requestId });
-      const continuation = resolved(
-        await invoke("operator.continueRun", {
-          target: peer.target,
-          command: { runId, expectedBoundary: await f.boundary(peer, runId) },
-          retry: { idempotencyKey: `${wire}-continue` },
-        }),
-      );
-      const lookup = { target: peer.target, continuationId: continuation.result.continuationId };
-      const identity = {
-        operationId: continuation.operationId,
-        runId,
-        continuationId: continuation.result.continuationId,
-      };
-      expect(await invoke("operator.continuation", lookup)).toMatchObject(identity);
-      await f.status(peer, runId, "succeeded");
-      expect(await invoke("operator.reconcileContinuation", lookup)).toMatchObject({ ...identity, state: "settled" });
-      if (request.result.state !== "accepted") throw new Error("Backing Request not accepted");
-      await f.pending(peer, request.result.runId);
-      expect(await invoke("operator.cancel", { target: peer.target, runId: request.result.runId })).toMatchObject({
-        runId: request.result.runId,
+      await refused(peer, "respond_to_approval", {
+        target: peer.target,
+        decision: { lifetime: "live", live: { ...live, [field]: "wrong" }, optionId: "allow" },
       });
-      await f.status(peer, request.result.runId, "cancelled");
-      const revisionRun = await f.start(peer, "revision");
-      const revision = await until(
-        () => f.pending(peer, revisionRun.runId),
-        (row) => row.revisionState === "available",
-        "backing revision boundary",
-      );
-      const receipt = resolved(
-        await invoke("operator.revise", {
-          target: peer.target,
-          command: {
-            target: revision.revision!.target,
-            actionId: "changes",
-            payload: { kind: "text", text: "BACKING_PARITY_PRIVATE" },
-          },
-          retry: { idempotencyKey: `${wire}-revision` },
-        }),
-      );
-      expect(receipt.result).toMatchObject({ state: "pending", target: revision.revision!.target });
-      expect(JSON.stringify(await f.events(revisionRun.runId))).not.toContain("BACKING_PARITY_PRIVATE");
     }
+    const ownerEndpoint = peer.endpoint;
+    await f.boot();
+    const observer = await f.connect(transport);
+    // Publication was established on the actual owner above; this different instance
+    // must expose owner-unavailable, not satisfy the current-owner readiness check.
+    const observed = (await f.page(observer, "inputs", { runId })).items[0]!;
+    expect(observed.requestId).toBe(input.requestId);
+    expect(observed.live?.state).toBe("owner-unavailable");
+    await refused(observer, "respond_to_approval", {
+      target: observer.target,
+      decision: { lifetime: "live", live, optionId: "allow" },
+    });
+    expect((await f.events(runId)).filter((event) => event.type === "human.answered")).toHaveLength(0);
+    const receipt = await f.mutation(peer, "operator.answer", {
+      target: peer.target,
+      decision: { lifetime: "live", live, optionId: "allow", note: "LIVE_RATIONALE_ONLY" },
+    });
+    expect(receipt).toMatchObject({ runId, requestId: live.requestId });
+    await f.status(peer, runId, "succeeded");
+    await refused(peer, "respond_to_approval", {
+      target: peer.target,
+      decision: { lifetime: "live", live, optionId: "allow" },
+    });
+    expect(peer.endpoint).toBe(ownerEndpoint);
+    expect((await f.events(runId)).filter((event) => event.type === "human.answered")).toHaveLength(1);
+  });
+
+  it("A05 owner death expires the live callback and cannot be approved after restart", async (ctx) => {
+    const peer = await f.connect(transport);
+    await f.requireProduction(ctx, peer);
+    const { runId } = await f.start(peer, "live");
+    const input = await f.pending(peer, runId);
+    expect(input.live?.state).toBe("pending");
+    await f.stop(f.daemon, "SIGKILL");
+    await f.boot();
+    const restarted = await f.connect(transport);
+    const current = (await f.page(restarted, "inputs", { runId })).items[0]!;
+    expect(current.requestId).toBe(input.requestId);
+    expect(["expired", "owner-unavailable"]).toContain(current.live?.state);
+    await refused(restarted, "respond_to_approval", {
+      target: restarted.target,
+      decision: { lifetime: "live", live: input.live!.target, optionId: "allow" },
+    });
+    expect((await f.events(runId)).filter((event) => event.type === "human.answered")).toHaveLength(0);
   });
 });
