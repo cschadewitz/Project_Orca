@@ -10,17 +10,19 @@ import {
   refused,
   resolved,
   rpcResult,
+  sharedFixture,
   transports,
   until,
 } from "./mcp-operator-production-fixture.js";
 
+// R01 only admits runs under keys of its own, so its four cases share one daemon. The others kill or
+// restart the daemon, or run a second one beside it, and each gets a daemon of its own below.
+const shared = sharedFixture();
+
 describe.each(transports)("compiled production recovery via %s", (transport) => {
   let f: ProductionFixture;
-  beforeEach(async () => {
-    f = await ProductionFixture.create();
-  });
-  afterEach(async () => {
-    await f?.close();
+  shared.use((fixture) => {
+    f = fixture;
   });
 
   for (const method of ["operator.admitRun", "operator.submitRequest"] as const)
@@ -37,7 +39,7 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
       const params = OperatorMutationContracts[method].params.parse({
         target: peer.target,
         command,
-        retry: { idempotencyKey: "ACK_PRIVATE_KEY" },
+        retry: { idempotencyKey: `ACK_PRIVATE_KEY-${method}-${transport}` },
       });
       await refused(
         peer,
@@ -72,6 +74,16 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
       expect((await f.events(original.result.runId)).filter((event) => event.type === "run.created")).toHaveLength(1);
       expect(JSON.stringify(await f.audit())).not.toMatch(/ACK_PRIVATE_KEY|PRIVATE_ACK_BODY/);
     });
+});
+
+describe.each(transports)("compiled production recovery via %s", (transport) => {
+  let f: ProductionFixture;
+  beforeEach(async () => {
+    f = await ProductionFixture.create();
+  });
+  afterEach(async () => {
+    await f?.close();
+  });
 
   it("R02 keeps one intent across daemon death and rejects the old instance target", async (ctx) => {
     const old = await f.connect(transport);
