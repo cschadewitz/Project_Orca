@@ -111,7 +111,13 @@ it("validates immutable decoded bytes even if the source Buffer changes during a
   const pending = validateDiagnosticReportAsync(input);
   await setImmediate();
   input.fill(0);
-  expect(await pending).toEqual(Buffer.from(json));
+  const validated = await pending;
+  const expected = Buffer.from(json);
+  // Byte for byte, as `toEqual` would say, but `toEqual` walks two 1 MB Buffers through the matcher
+  // and takes seconds where `equals` takes a millisecond. The lengths go first so that a failure
+  // says how far apart the two are.
+  expect(validated.byteLength).toBe(expected.byteLength);
+  expect(validated.equals(expected), "the validated bytes differ from the report that was submitted").toBe(true);
 });
 
 it("retains exact rejection of extra/duplicate fields, framing, invalid UTF-8 and event semantics", async () => {

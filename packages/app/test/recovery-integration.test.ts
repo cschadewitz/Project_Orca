@@ -1092,7 +1092,14 @@ describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", ()
         expect(fixture.controller.status().payloadReservedBytes).toBeLessThanOrEqual(RECOVERY_LIMITS.payloadBytes);
       };
       value(await fixture.controller.save(preview.handle, destination.token));
-      expect(await readFile(fixture.picker.destination)).toEqual(Buffer.from(preview.text));
+      // The saved file is a full-size report, about 1 MB. Byte for byte, as `toEqual` would say,
+      // but `toEqual` walks two Buffers that size through the matcher and takes seconds where
+      // `equals` takes a millisecond. The lengths go first so that a failure says how far apart
+      // the two are.
+      const saved = await readFile(fixture.picker.destination);
+      const expected = Buffer.from(preview.text);
+      expect(saved.byteLength).toBe(expected.byteLength);
+      expect(saved.equals(expected), "the saved file differs from the previewed report").toBe(true);
       await fixture.controller.cleanExit();
     });
   });
