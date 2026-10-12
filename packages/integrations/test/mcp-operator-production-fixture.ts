@@ -214,6 +214,8 @@ export interface CreateOptions {
   preload?(dir: string): string;
   /** A new process for every credential change, for the one test that asserts each was a distinct process. */
   freshAdmin?: boolean;
+  /** Start no daemon, for a test that launches its own. Issuing the owner credential needs none. */
+  boot?: boolean;
 }
 
 export class ProductionFixture {
@@ -251,7 +253,7 @@ export class ProductionFixture {
       onAcquired?.(f);
       await f.prepare();
       await options.configure?.(f.dir);
-      await f.boot(options.preload?.(f.dir));
+      if (options.boot !== false) await f.boot(options.preload?.(f.dir));
       // Persistent non-bootstrap identity survives another daemon's bootstrap rotation.
       f.token = (await f.issue({ principal: "acceptance-owner", preset: "owner" })).token;
       return f;
