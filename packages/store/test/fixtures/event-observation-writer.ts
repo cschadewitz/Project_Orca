@@ -17,4 +17,4 @@ await withFileLock(`${file}.lock`, async () => {
 });
 await next();
 await new JsonlEventStore(dir).append(JSON.parse(started) as Parameters<JsonlEventStore["append"]>[0]);
-process.disconnect();
+process.disconnect?.();
