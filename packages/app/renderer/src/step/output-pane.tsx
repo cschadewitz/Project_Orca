@@ -49,7 +49,7 @@ import {
 } from "react";
 import { useKeyboard } from "../keyboard-context.js";
 import { VirtualList, type VirtualListHandle } from "../list/index.js";
-import { Text, textClass } from "../ui/index.js";
+import { Text, counted, textClass } from "../ui/index.js";
 import { foldLabel, type LineRow, type OutputRow } from "./line-buffer.js";
 
 /** The first row of the pane: what is, or is not, in front of what the buffer holds. */
@@ -280,7 +280,7 @@ export function OutputPane(props: OutputPaneProps): JSX.Element {
         <button type="button" className={`orca-jump ${textClass("caption")}`} onClick={onJumpToLatest}>
           {/* The count is the point: "go to the end" is worth less than "412 lines have
               happened since you stopped looking". */}
-          {`↓ ${pending} new line${pending === 1 ? "" : "s"}`}
+          {`↓ ${counted(pending, "new line")}`}
         </button>
       )}
     </div>

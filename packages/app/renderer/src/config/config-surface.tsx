@@ -99,6 +99,8 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
   const live = connection === "live";
 
   const [view, setView] = useState<View>(open === "config" ? "raw" : "form");
+  /* The document being edited, form or raw: where focus goes back to when the save bar leaves. */
+  const documentView = useRef<HTMLDivElement>(null);
   /** The path **raw** was pressed on. Only the YAML has a "show raw" on this screen. */
   const [target, setTarget] = useState<string | undefined>(undefined);
 
@@ -220,7 +222,7 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
       {/* Last-known values dim; the labels around them do not (40-connection-states.md). */}
       <div key="config-body" className="orca-config__body">
         <DiagnosticsSection key="diagnostics" />
-        <div className={`orca-config__form${live ? "" : " orca-stale-value"}`}>
+        <div ref={documentView} className={`orca-config__form${live ? "" : " orca-stale-value"}`}>
           {/* Visible, and not a live region (RULES.md rule 11). The first error's sentence is
             announced once by `use-config.ts` when the Validate or the Save comes back; a
             second region repeating the list would interrupt with what is already on screen
@@ -297,6 +299,14 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
             draft.kind === "raw"
               ? "Editing the raw text replaced the form's edits: the last edited wins."
               : "Editing a field replaces any raw text you had typed: the last edited wins."
+          }
+          /* Save or Discard emptied the draft and the bar goes with the button pressed: focus
+             goes back to the document it was editing — the YAML's text in the raw view, the
+             form's first section in the form — as the policy panel's goes to its grants. */
+          returnFocus={() =>
+            documentView.current?.querySelector<HTMLElement>(
+              view === "raw" ? "[data-config-editor]" : "[data-config-section]",
+            )
           }
           onValidate={() => feed.validate("config")}
           onSave={onSave}

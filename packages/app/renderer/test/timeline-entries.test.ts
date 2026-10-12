@@ -102,7 +102,7 @@ describe("an event as a row", () => {
  * emit; the rest are asserted here or nowhere.
  *
  * Every row is subject first (rule 13), sentence case, and says nothing the payload does
- * not carry (rule 12) — the two `plural` cases are here because "1 artifacts" is the kind
+ * not carry (rule 12) — the two `counted` cases are here because "1 artifacts" is the kind
  * of wrong a person notices and a test does not, unless it asks.
  *
  * A new event type does not need adding here to be safe: `summarise` switches over the
@@ -165,11 +165,11 @@ describe("what a row says, per event type", () => {
     { event: { type: "step.started", payload: { stepRunId: STEP, inputArtifactIds: [] } }, reads: "build started" },
     {
       event: { type: "step.inputs", payload: { stepRunId: STEP, artifactIds: ["art-1"] } },
-      reads: "build read 1 artifact",
+      reads: "build read 1\u00a0artifact",
     },
     {
       event: { type: "step.inputs", payload: { stepRunId: STEP, artifactIds: ["art-1", "art-2"] } },
-      reads: "build read 2 artifacts",
+      reads: "build read 2\u00a0artifacts",
     },
     {
       event: { type: "step.waiting", payload: { stepRunId: STEP, on: "child-run" } },
@@ -272,14 +272,14 @@ describe("what a row says, per event type", () => {
         type: "plan.signals.rejected",
         payload: { stepRunId: STEP, artifactId: "art-1", issues: ["unknown node"] },
       },
-      reads: "build had 1 planning signal rejected",
+      reads: "build had 1\u00a0planning signal rejected",
     },
     {
       event: {
         type: "plan.signals.rejected",
         payload: { stepRunId: STEP, artifactId: "art-1", issues: ["unknown node", "a cycle"] },
       },
-      reads: "build had 2 planning signals rejected",
+      reads: "build had 2\u00a0planning signals rejected",
     },
 
     {
@@ -401,7 +401,7 @@ describe("a coalesced batch", () => {
     ]);
     const batch = rows[5]!;
     expect(batch.count).toBe(UPDATES_PER_NODE);
-    expect(batch.summary).toBe(`node-0, ${UPDATES_PER_NODE} agent updates`);
+    expect(batch.summary).toBe(`node-0, ${UPDATES_PER_NODE}\u00a0agent updates`);
     expect(batch.fromSeq).toBe(5);
     expect(batch.seq).toBe(9);
     // No one id addresses five events, so the row is addressed by its range instead.

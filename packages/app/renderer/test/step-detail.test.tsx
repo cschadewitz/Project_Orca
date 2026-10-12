@@ -216,7 +216,7 @@ describe("the step detail pane", () => {
     await screen.findByRole("listbox", { name: /^Output of build/ });
 
     await waitFor(() => expect(screen.getByText(/more characters/)).toBeTruthy());
-    expect(screen.getByText(/more characters/).textContent).toBe("\u2026 500 more characters");
+    expect(screen.getByText(/more characters/).textContent).toBe("\u2026 500\u00a0more characters");
   });
 
   it("opens the docked panel on the artifacts the step produced, by name and version", async () => {
@@ -388,7 +388,7 @@ describe("following and holding", () => {
 
     // Nothing scrolled under the reader's eyes, ever.
     expect(element.scrollTop).toBe(where);
-    expect(held.textContent).toBe("\u2193 400 new lines");
+    expect(held.textContent).toBe("\u2193 400\u00a0new lines");
 
     // And the button takes them back to the end, following again.
     fireEvent.click(held);

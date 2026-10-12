@@ -91,6 +91,7 @@ export function RawView({ path, text, target, onChange, label, autoFocus = false
       <textarea
         ref={area}
         className={`orca-yaml orca-config__editor ${textClass("mono-log")}`}
+        data-config-editor=""
         aria-label={label}
         value={text}
         spellCheck={false}

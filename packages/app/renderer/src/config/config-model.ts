@@ -36,6 +36,7 @@ import type {
   EffectiveAgentPolicy,
   EffectivePermissionRule,
 } from "@orca/protocol";
+import { counted } from "../ui/count.js";
 
 /* ---------------------------------------------------------------- paths -- */
 
@@ -372,7 +373,7 @@ export function patchFrom(draft: Draft, parsed: unknown): ConfigPatchEntry[] {
 
 /** "N changes", or "1 change". Sentence case, and a count that is a fact. */
 export function changeLabel(count: number): string {
-  return `${count} ${count === 1 ? "change" : "changes"}`;
+  return counted(count, "change");
 }
 
 /* ----------------------------------------------------------- validation -- */

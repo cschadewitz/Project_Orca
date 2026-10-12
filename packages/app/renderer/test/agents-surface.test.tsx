@@ -74,7 +74,7 @@ describe("the Agents surface", () => {
     const [local, remote] = groups();
     expect(within(local!).getByRole("heading", { name: "local" })).toBeTruthy();
     expect(within(remote!).getByRole("heading", { name: "build-box" })).toBeTruthy();
-    expect(local!.textContent).toContain("2 agents");
+    expect(local!.textContent).toContain("2\u00a0agents");
     // The transport, not the id, is what says how the host is reached.
     expect(remote!.textContent).toContain("ssh");
 

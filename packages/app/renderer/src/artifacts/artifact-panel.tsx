@@ -29,7 +29,7 @@
 import { useEffect, useLayoutEffect, useMemo, useState, type JSX } from "react";
 import type { RunsGetResult } from "@orca/protocol";
 import { useKeyboard } from "../keyboard-context.js";
-import { Menu, ObjectId, StateView, Text, Time, textClass, type MenuItem } from "../ui/index.js";
+import { Menu, ObjectId, StateView, Text, Time, textClass, unit, type MenuItem } from "../ui/index.js";
 import { diffText, gutterFor, type DiffLine } from "./diff.js";
 import { useArtifactPanel, type ArtifactTarget } from "./panel-context.js";
 import { useArtifactBody, useArtifactsList } from "./use-artifacts.js";
@@ -276,7 +276,7 @@ function DiffBody({
   return (
     <div className={`orca-artifact__body ${textClass("mono-body")}`}>
       <Text style="caption" className="orca-faint" as="div">
-        {`v${fromVersion} → v${toVersion}: ${diff.added} added, ${diff.removed} removed`}
+        {`v${fromVersion} → v${toVersion}: ${unit(diff.added, "added")}, ${unit(diff.removed, "removed")}`}
         {diff.coarse && " — too far apart to line up, shown as a whole-file replacement"}
       </Text>
       <div role="group" aria-label={`Diff of v${fromVersion} and v${toVersion}`}>

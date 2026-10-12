@@ -99,21 +99,36 @@ Write in the app the way a careful engineer writes a commit message.
   last-known and how old it is; it does not silently display stale numbers.
 - **Machine strings stay verbatim.** Ids, node names, paths, expressions, agent output and
   artifact bodies are never re-capitalised, translated or truncated in the middle. Truncate
-  at the end with a character-count affordance.
+  at the end, with the whole string in the element's `title` and in the detail pane where
+  there is one; a long line in a stream collapses to a count of the characters left off.
+- **A number and its noun are one unit.** "4 changes", "1 edge", "3 of 9 items": the noun
+  agrees with the number, and the two never break across a line (`counted` joins them with a
+  no-break space). A list of counts breaks only between them, at the ` · `.
 - **An id is shown by its name and its tail.** In a row or a header an id goes through
   `ObjectId`: the object's name leads (a work item's title, a run's name), then a faint token
   — the kind's glyph and the id's last six characters, `Database schema ⬡ 5M579G`. With no
   name the token stands alone. Never the head: a ULID's first ten characters are its
   timestamp, so ids minted together are identical there and differ only at the end. The whole
   id is one action away — the token's hover, **Copy id** in the object header, the detail
-  pane, and the palette, which matches any part of it.
+  pane, and the palette, which matches any part of it. An event is named by its sequence
+  number, `#148`, the run's own cursor; a record of exactly which object — a receipt, a
+  correction, a link that could not be followed — prints the id whole.
+- **Say the consequence before an act with no way back, on the row it is about.** "Database
+  schema goes back to the scheduler. ☰ JH7X8P loses its claim on it, and another run may claim
+  it." Subject first, ids as tokens, and the safe answer — **Keep** — offered first. An edit
+  to a draft is not such an act and asks nothing: Save, Discard and Undo are the way back.
 - **No emoji, anywhere, including in empty states.**
 
 ## Colour
 
 - Ground the window in `surface-canvas`; put every reading pane on `surface-base`; put
   machine text in a well of `surface-sunken`; float only menus, popovers, dialogs and the
-  command palette on `surface-raised`.
+  command palette on `surface-raised`. `surface-overlay` is the scrim behind a modal and the
+  palette, and never carries text: a menu on it is see-through.
+- **The danger tone is for the control that commits.** An armed row's **✕ Confirm**, an armed
+  **Discard every change**, a destructive menu item: the tone and the `✕` together, never the
+  colour alone. A control at rest — **Release**, **Remove**, **Delete** — is the default tone,
+  because a resting screen's only saturation is status.
 - `accent` means *interactive*, never *state*. Links, the primary button, the active nav
   item, the selection edge and the focus ring are teal; a running step is not.
 - Status colour is the only saturation in a resting screen. If a screen shows a colour that
@@ -135,8 +150,11 @@ Write in the app the way a careful engineer writes a commit message.
 
 ## Type
 
-- `body` is the interface default. `label` is the workhorse for rows and tables; `caption`
-  for the second line of a two-line row.
+- `body` is the interface default. `label` is the workhorse for rows, tables and controls —
+  buttons, menu items, crumbs, segments; `caption` for the second line of a two-line row. A
+  component class carries no type size, so an element takes its `orca-text-*` class as well,
+  and nothing in the component layer may beat it: a `<button>`'s font reset is written at zero
+  specificity (`:where()`), or every control falls back to the shell's 14px body.
 - **Mono means "ORCA produced this".** Run ids, step and node names, variable and config key
   names, file paths, expressions, tool names, agent output and artifact bodies are set in the
   Machine group. Prose a person wrote — a request summary, a gate question, a decision
@@ -160,6 +178,13 @@ Write in the app the way a careful engineer writes a commit message.
   text.
   Adding a glyph to `semantics.json` means adding it to `tools/font-build/build-fonts.js` and
   rerunning `pnpm run design:fonts`; the suite fails if you do not.
+- **`ch` is half an em in this app, not a Plex zero.** CSS takes `ch` from the "0" of the
+  *first* face in the stack, and both stacks lead with the symbol subsets, which have no
+  "0" — so every `ch` falls back to `0.5em` (6px at `caption`), where a Plex zero is `0.6em`.
+  Every `ch`-sized width in the component layer and the surfaces (the aligned chip and badge
+  columns, a claim's run column) is already sized against that half-em. Do not "fix" one by
+  assuming Plex's zero: measure the word at its style, divide by half the size, and leave the
+  stacks' order alone, because it is what keeps the glyphs off the OS.
 
 ## Structure, not shadow
 
@@ -171,6 +196,17 @@ Write in the app the way a careful engineer writes a commit message.
   graph nodes, `radius-lg` for floating surfaces. Tables and the risk matrix are square.
 - Controls and graph nodes take `border-control`, which holds 3:1 in both themes. Row rules
   and pane splits take `border-hairline`, which does not need to and should not try.
+- **The window has one frame, its own.** The title bar is the app's: hidden OS title bar,
+  the macOS traffic lights inset into it, a Windows caption overlay themed from the tokens
+  (Linux keeps its window manager's frame). Nothing sits between the title bar and the
+  sidebar: a connection bar or a link's notice is the primary pane's, under its object header,
+  because a notice is a claim about the pane it is on.
+- **Text that does not fit has one answer** (RULES.md rule 15). A bounded label — a chip, a
+  badge, a pill, a button, a crumb's parts — is one line and as wide as its text, so its
+  outline always holds it; one that may outgrow its box is cut at its end inside it, whole in
+  its `title`. A bar is one line: its controls and counts keep their width and its
+  lowest-priority sentence gives way (`.orca-truncate`). What wraps is a run of things in a
+  card or a panel (`.orca-chips`, a filter rail), and only between whole items.
 
 ## Density and rhythm
 
@@ -181,20 +217,31 @@ Write in the app the way a careful engineer writes a commit message.
   Past six levels, stop indenting and show the ancestor chain in the sticky header instead.
 - Horizontal row padding is `space-3`; pane padding is `space-4`; the gap between sections in
   a pane is `space-6`.
+- **A status column lines up.** A list of statuses draws `StatusChip aligned`, every chip at
+  the longest word's width (`--chip-aligned-width`), and the schedule column's badges and
+  chips share one width (`--badge-aligned-width`), with each **why** beside its mark rather
+  than on its tint. A chip is never narrower than its word, wherever it is put.
+- **A graph node is a fixed box**, `node-w` × `node-h` (96px): the kind on one line, the name
+  on at most two, the meta on one, each cut at its end and whole in its `title`, because the
+  layout routes every edge against that box.
 
 ## Motion
 
 Motion orients; it never decorates. `duration-fast` for disclosure, `duration-medium` for the
 right panel and the palette, `duration-pulse` for the running dot and the streaming caret.
 Hover and selection use `duration-instant` so a fast keyboard user never chases a lagging
-highlight. Under `prefers-reduced-motion` every transition is dropped and the running pulse
+highlight; a hover tints and never moves a selection. A graph canvas eases a zoom or pan
+*step* — a key, a button, a click in the minimap — over `duration-fast`, and never a gesture
+that tracks the pointer, which must not lag it. Under `prefers-reduced-motion` every transition is dropped and the running pulse
 is replaced by a static filled glyph — the state is still legible without the animation.
 
 ## Iconography
 
 No icon library is bundled. Status is drawn with the eight glyphs listed above, set in the
-sans family at `icon-sm` or `icon-md`; node types, tool kinds and connection states are drawn
-as inline SVG at `icon-md` on a 16px grid with a 1.5px stroke in `currentColor`. Two rules:
+sans family at `icon-sm` or `icon-md`; node types, tool kinds, connection states and the graph
+canvases' view controls are drawn as inline SVG at `icon-md` on a 16px grid with a 1.5px
+stroke in `currentColor` — the `stroke-icon` token, never the hairline, which is a
+separator's width. Two rules:
 an icon is never the only label for an action, and a status glyph is never used for anything
 that is not that status. When an icon set is eventually chosen, pick one with a 16px optical
 grid and replace the inline SVGs; nothing else in the system depends on it.
@@ -224,12 +271,15 @@ the token; do not inline the number.
 | Question | File |
 | --- | --- |
 | How the surfaces relate, window layout, palette, deep links | `10-information-architecture.md` |
+| The object header: ids on crumbs, **Copy id**, folding the trail into `…` | `10-information-architecture.md` |
 | Gates, permission asks, counts, notifications | `20-attention-and-gates.md` |
 | Virtualisation, following vs held, buffers, time | `30-long-running-content.md` |
 | Live, reconnecting, disconnected, file mode, version mismatch | `40-connection-states.md` |
 | Contrast, status without colour, focus, the keyboard map, live regions | `50-accessibility-and-keyboard.md` |
 | Theming, density, virtualised rows, streaming, and what ORCA cannot supply | `60-implementation.md` |
+| Ids, status columns, names and values, menus, confirming in place, text that does not fit | `60-implementation.md` |
 | The workflow editor: structured edits, drafts, validation, run pinning | `70-workflow-editing.md` |
+| The graph canvases: fixed node boxes, zoom, direction, the minimap | `70-workflow-editing.md`, keys in `50-accessibility-and-keyboard.md` |
 | The two dependency-graph options and the recommendation | `80-dependency-graph-options.md` |
 | The brief the system was designed from | `claude-design-prompt.md` |
 | How closely the app matched the Claude Design artifact, and the drift still open | [`../reviews/2026-10-10-design-conformance.md`](../reviews/2026-10-10-design-conformance.md) |

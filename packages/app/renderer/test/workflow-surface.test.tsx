@@ -201,7 +201,7 @@ describe("collapsing a container", () => {
     const canvas = await open("orca://workflow/sdlc");
     const fanout = named(canvas, "fanout");
     // Collapsed is the default: the branches are not drawn and the node says what is behind it.
-    expect(fanout.textContent).toContain("2 nested graphs");
+    expect(fanout.textContent).toContain("2\u00a0nested graphs");
     expect(screen.queryByRole("region", { name: /^Inside Fan out/ })).toBeNull();
     expect(nodes(canvas).map((n) => n.id)).not.toContain(nodeDomId("ui-build"));
   });

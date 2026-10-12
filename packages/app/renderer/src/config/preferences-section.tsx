@@ -35,7 +35,7 @@ import { useAppearance } from "../appearance-context.js";
 import { PANE_BOUNDARIES, PANE_IDS } from "../panes.js";
 import { Button, ConfigField, Menu, Text } from "../ui/index.js";
 
-/** The surfaces a density is remembered for — `data-surface`'s five ids, in sidebar order. */
+/** The surfaces a density is remembered for — `data-surface`'s ids, in sidebar order. */
 export interface PreferencesSectionProps {
   surfaces: readonly { id: string; label: string }[];
 }

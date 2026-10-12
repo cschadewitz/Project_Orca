@@ -213,6 +213,14 @@ the scripted agent plus its `demo-playbook.yaml` — so `orca --config <path>/or
 run <workflow>` exercises any workflow without an LLM. Edit the playbook to change what
 the agent delivers per artifact kind.
 
+To look at a UI change in the real app with data on every surface, one script does all of
+that and starts both halves: `node .claude/skills/orca-demo-dev/scripts/start.mjs --seed`
+builds a demo workspace once (with editable copies of the workflows), seeds it through the
+daemon's own requests so there are succeeded, running, failed and cancelled runs, waiting
+gates and a plan, rebuilds `@orca/design`'s dist, and starts `orca serve` and
+`pnpm --filter @orca/app dev` against it. `.claude/skills/orca-demo-dev/SKILL.md` has the
+flags and what each step does.
+
 ## The primitive preview, and the type proof
 
 `packages/app/renderer/src/ui` is the React layer over `packages/design/css/components.css`:
@@ -327,7 +335,9 @@ z-values in component code — is enforced by `pnpm run lint`** (#153), in two h
 The CSS side rejects hex colours, the colour functions, CSS colour names, `px`/`rem`/`ms`/`s`
 quantities and a `z-index` that is not a `var(--z-*)`. It allows `0`, percentages and the
 relative units (`fr`, `em`, `ch`, `vh`, `vw`, `deg`) — those describe a ratio to something
-already chosen rather than making a new decision — and it does not scan comments, quoted
+already chosen rather than making a new decision. (`ch` is half an em in this app, because
+both font stacks lead with symbol faces that have no "0"; size a `ch` width against that, not
+against Plex's zero — `docs/design/README.md`, Type.) It does not scan comments, quoted
 strings, `url()` or at-rule preludes, so `@media (max-width: 900px)` is fine while a literal
 inside that block is not. The TSX side rejects a colour notation or a `px`/`rem`/`ms` string
 in an inline style, and a non-zero bare number for `width`, `height` or any `padding*`, since

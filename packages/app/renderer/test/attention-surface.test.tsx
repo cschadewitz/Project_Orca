@@ -76,7 +76,7 @@ describe("clearing what is waiting", () => {
     renderChrome(h);
 
     // The one number, in both places it appears, before anything is answered.
-    expect(await screen.findByRole("button", { name: /5 waiting/ })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /5\swaiting/ })).toBeTruthy();
     // The sidebar's Attention row carries the same number, which is why its accessible
     // name is "Attention 5" and not "Attention".
     expect(screen.getByRole("button", { name: "Attention 5" })).toBeTruthy();
@@ -281,7 +281,7 @@ describe("the push stream", () => {
     const scoped = () =>
       fake.calls.filter((c) => c.method === "inputs.list" && (c.params as { runId?: string }).runId !== undefined);
     expect(scoped()).toHaveLength(1);
-    expect(await screen.findByRole("button", { name: /1 waiting/ })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /1\swaiting/ })).toBeTruthy();
 
     // A second frame about the same ask asks nothing further.
     fake.notify(
@@ -306,7 +306,7 @@ describe("the push stream", () => {
     );
 
     await waitFor(() => expect(screen.queryByRole("region", { name: cardName("gate", "Ship release 1?") })).toBeNull());
-    expect(await screen.findByRole("button", { name: /1 waiting/ })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /1\swaiting/ })).toBeTruthy();
   });
 });
 

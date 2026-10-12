@@ -239,7 +239,8 @@ describe("what is said when the record is thin", () => {
     expect(screen.getByText("1 decision")).toBeTruthy();
     // Only the held item is left, and the one decision gates an item that is not.
     fireEvent.click(screen.getByRole("button", { name: /^held/ }));
-    await screen.findByText("0 of 1 decisions");
+    // The noun agrees with the total, and the count is one unit (RULES.md rule 15).
+    await screen.findByText("0 of 1 decision");
     expect(screen.getByText("No decisions here")).toBeTruthy();
     expect(screen.queryByRole("grid", { name: "Decisions" })).toBeNull();
   });

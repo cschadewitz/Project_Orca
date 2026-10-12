@@ -227,6 +227,68 @@ describe("the pushes", () => {
   });
 });
 
+describe("where focus goes when the save bar leaves", () => {
+  /* Save or Discard brings the count to zero and the bar unmounts with the button that was
+     pressed. Focus goes back to the document the draft was editing, not to the page body.
+     happy-dom does not move focus on a click, so a press is `focus()` and then `click`. */
+  const press = (button: HTMLElement): void => {
+    act(() => button.focus());
+    fireEvent.click(button);
+  };
+
+  it("goes to the form when Discard empties a form draft", async () => {
+    renderConfig();
+    await screen.findByRole("region", { name: "Agents" });
+    fireEvent.change(field("Command"), { target: { value: "claude-code-next" } });
+    const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+
+    press(within(bar).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Unsaved configuration changes" })).toBeNull());
+    // The form's first section: focusable from script, and never a Tab stop.
+    const first = screen.getByRole("region", { name: "General" });
+    await waitFor(() => expect(document.activeElement).toBe(first));
+    expect(first.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("goes back into the YAML when a raw save lands", async () => {
+    renderConfig();
+    await screen.findByRole("region", { name: "Agents" });
+    fireEvent.click(screen.getByRole("button", { name: "Raw" }));
+    const editor = await screen.findByRole<HTMLTextAreaElement>("textbox", { name: "orca.config.yaml" });
+    fireEvent.change(editor, {
+      target: {
+        value: `${CONFIG_TEXT}# and a new comment
+`,
+      },
+    });
+
+    press(
+      within(await screen.findByRole("group", { name: "Unsaved configuration changes" })).getByRole("button", {
+        name: "Save",
+      }),
+    );
+    await waitFor(() => expect(setsOf()).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Unsaved configuration changes" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "orca.config.yaml" })));
+  });
+
+  it("stays where a person moved it while the save was out", async () => {
+    renderConfig();
+    await screen.findByRole("region", { name: "Agents" });
+    fireEvent.change(field("Command"), { target: { value: "claude-code-next" } });
+    press(
+      within(await screen.findByRole("group", { name: "Unsaved configuration changes" })).getByRole("button", {
+        name: "Save",
+      }),
+    );
+    const elsewhere = screen.getByRole("button", { name: "Raw" });
+    act(() => elsewhere.focus());
+
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Unsaved configuration changes" })).toBeNull());
+    expect(document.activeElement).toBe(elsewhere);
+  });
+});
+
 describe("the raw view", () => {
   it("sends the bytes, not a patch, and says which write replaced which", async () => {
     renderConfig();

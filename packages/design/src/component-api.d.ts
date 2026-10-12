@@ -60,6 +60,12 @@ export interface StatusDotProps {
  * Several of them in a card or a panel go in `.orca-chips`, the one class for a run of chips,
  * which wraps rather than running past its box. A row never wraps (RULES.md rule 9), so a row
  * gives a chip a column of its own instead.
+ *
+ * A chip is one line and as wide as what it says (`min-width: max-content`, RULES.md rule 15):
+ * it never wraps out of its outline and is never cut. A count in it is one unit
+ * (`counted(3, "attempt")`, a no-break space between the two). A label that can be longer than
+ * the box it sits in is not a chip's: it is a sentence (a caption) or a reference that cuts its
+ * name inside its outline (`.orca-ref`).
  */
 export interface ChipProps {
   children: unknown;
@@ -69,7 +75,14 @@ export interface ChipProps {
 
 /**
  * Button (built). Tone is meaning: `primary` is the accent (interactive, never a state),
- * `danger` is the control that cancels or denies, `ghost` must not compete with content.
+ * `ghost` must not compete with content, and `danger` is the control that *commits* an act with
+ * no way back — an armed row's **✕ Confirm**, an armed **Discard every change** — led by `✕`
+ * so the colour is not the only channel. Never a resting control (**Release**, **Remove**,
+ * **Delete** are the default tone until armed) and never a draft edit, which Save, Discard
+ * or Undo takes back (RULES.md rule 17).
+ *
+ * One line, set in `label`, and `flex: none`: a bar that runs out of room gives up its caption,
+ * never a button's width or its words (rule 15).
  *
  * Disabled is `aria-disabled` plus a swallowed click, not the `disabled` attribute: a
  * disabled button is unfocusable, and 40-connection-states.md requires its reason to be
@@ -109,6 +122,8 @@ export interface WellProps {
   label?: string;
   /** So a disclosure that clamps or opens the well can name it in `aria-controls`. */
   id?: string;
+  /** The `<pre>`, for the disclosure that measures whether its clamp cut anything off. */
+  ref?: unknown;
 }
 
 /**
@@ -146,6 +161,19 @@ export interface TextProps {
   /** The element to render. Defaults to `span`. */
   as?: unknown;
 }
+
+/**
+ * `.orca-truncate` (built, in the CSS layer only): the text in a bar or a row that gives way
+ * when there is no room — cut at its end, never in the middle, with the caller putting the
+ * whole text in `title`. The draft bars' notes and status, the status bar's read-only reason.
+ * A class rather than a component for `.orca-visually-hidden`'s reason below.
+ *
+ * Its counterpart for counts is a function, not a class: `counted(n, "change")`,
+ * `countedOf(shown, total, "run")` and `unit(n, "waiting")` in `renderer/src/ui/count.ts` give
+ * the noun that agrees with the number and join the two with a no-break space, so "4 changes"
+ * never breaks across a line (RULES.md rule 15).
+ */
+export type TruncateClass = "orca-truncate";
 
 /**
  * `.orca-visually-hidden` (built, in the CSS layer only — #262): in the accessibility tree
@@ -758,6 +786,10 @@ export interface ConfigFieldProps {
  * is no `config.set` to call at all — file mode, and a `--read-only` daemon — which is the
  * caller's decision; `disabledReason` is for the states where the daemon would take the
  * write if it were answering, and it comes from `useWritability()`.
+ *
+ * One line (RULES.md rule 15): the count is one unit and keeps its width with the buttons, and
+ * the note, the message and the conflict give way first, each `.orca-truncate` with its whole
+ * text in `title`.
  */
 export interface DraftBarProps {
   changes: number;
@@ -771,6 +803,13 @@ export interface DraftBarProps {
   disabledReason?: string;
   /** Which of the form and the raw editor holds the live draft: the last edited wins. */
   note?: string;
+  /**
+   * Where focus goes if the bar leaves holding it — Save or Discard brought the count to zero
+   * and the bar went with the pressed button. The region the draft edits (the policy panel's
+   * written grants; the Config form's first section, or its raw YAML). Moved only if focus fell
+   * to the page body, so focus a person put elsewhere stays (RULES.md rule 10).
+   */
+  returnFocus?(): Element | null | undefined;
   onValidate(): void;
   onSave(): void;
   onDiscard(): void;
@@ -801,6 +840,10 @@ export interface DraftBarProps {
  * against that box. So no prop's text sets the height: the kind and the meta line are one
  * line each and the name at most two, cut at their end and whole in each part's `title`
  * (`DependencyNode` takes the same box and the same rule).
+ *
+ * The type icon (`WorkflowNodeIcon`, also the editor palette's) is inline SVG at `icon-md` with
+ * the `stroke-icon` stroke, 1.5px — the brand book's iconography, as the canvas controls are —
+ * never the hairline.
  */
 export interface WorkflowNodeProps {
   id: string;
@@ -982,11 +1025,11 @@ export interface ObjectHeaderProps {
    * header gains a mode segmented control, which is a new `ObjectHeader` variant". It
    * draws `.orca-seg` to the right of the trail, before `actions`.
    *
-   * The modes are the object's views, not destinations — Plan's Schedule and Journal — and
-   * a mode this build does not have is **absent** rather than disabled: the dependency
-   * graph (#171), the risk matrix (#172) and the decision matrix (#173) are v0.6.0, and a
+   * The modes are the object's views, not destinations — Plan's Schedule, Risks, Decisions,
+   * Dependencies and Journal (Risks, Decisions and Dependencies shipped in v0.6.0,
+   * #171–#173) — and a mode a build does not have is **absent** rather than disabled, because a
    * segment that never does anything is a dead end. `aria-pressed` on buttons in a named
-   * group, not a tablist: one pane, two views, and no arrow-key contract to promise.
+   * group, not a tablist: one pane, several views, and no arrow-key contract to promise.
    */
   mode?: {
     options: ReadonlyArray<{ id: string; label: string }>;
@@ -1017,6 +1060,9 @@ export interface ObjectHeaderProps {
    * the room), every crumb's item in chain order — the folded ones from the unseen, `inert`
    * `.orca-objhead__measure` row — and an unseen `…`. The default measures the document; a
    * test injects widths, because happy-dom measures every box as zero, which folds nothing.
+   *
+   * Crumbs and `…` are set in `label` (`orca-text-label`, 13/18): their `<button>` font reset
+   * is a zero-specificity `:where()` rule, so the type class wins over it (RULES.md rule 14).
    */
   measure?: (
     trail: Element,
@@ -1042,6 +1088,9 @@ export interface ObjectHeaderProps {
  *  - placement that flips rather than clips, above the trigger when the window has no room
  *    below and aligned to the trailing edge when it has none to the right
  *    (`.orca-menu--above`, `.orca-menu--end`).
+ *
+ * It stands on `surface-raised` with `shadow-popover`, never on `surface-overlay`, the scrim
+ * behind a modal that carries no text (RULES.md rule 16). An item is one line in `label`.
  *
  * An empty `items` renders nothing at all, trigger included: a disclosure that opens an
  * empty list is worse than no disclosure.
@@ -1125,11 +1174,37 @@ export interface MenuProps {
   note?: unknown;
 }
 
+/**
+ * **Confirming in place — a pattern, not a primitive.** A destructive act with no way back is
+ * confirmed as a second state of the row it was asked on, never in a `Menu` or a dialog over
+ * the list (RULES.md rule 17). The palette's armed row (`Shortcut.confirm`, `tone: "danger"`)
+ * and the Agents claims list's armed row (`ClaimRow` in `renderer/src/agents/agents-surface.tsx`,
+ * over `.orca-agents__claim--armed`) are the two instances:
+ *
+ *  - At rest the control is the default tone, named for the object ("Release Database schema").
+ *  - Pressed, the row arms: its edge takes the danger tone; the control becomes **Keep** — first,
+ *    and where focus lands — and **✕ Confirm release**, `Button tone="danger"` led by `✕`; the
+ *    pair is a `group` named as the question; the row grows into its declared two-line variant
+ *    to say what the act does, subject first, ids as tokens, cut at its end and whole in its
+ *    `title`; Confirm is `aria-describedby` that sentence. Nothing is sent until Confirm.
+ *  - Keep, `Esc` (the armed row is on the transient layer stack), focus leaving the row and
+ *    arming another disarm it; one row asks at a time; Keep, `Esc` and Confirm hand focus back.
+ *
+ * It is not lifted into `ui/` because one list outside the palette has such an act today. The
+ * second list that does takes `ClaimRow`'s state machine into a primitive, not a copy of it.
+ * An edit to a draft never arms: it is a plain button (Remove a grant, Delete a node).
+ */
+
 /** Built — rendering only; the state machine that decides which state is live is #163. */
 export interface ConnectionIndicatorProps {
   state: ConnectionState;
   /** For 'reconnecting': when the attempt started. For 'disconnected': the last event. */
   since: Date;
+  /**
+   * Kept for a cursor the status bar could show; nothing supplies one. Sequence numbers are per
+   * run and the bar outlives any one run's selection, so its cell stays empty by decision
+   * (60-implementation.md, "Every view has a cursor") — the per-run cursor is the timeline's.
+   */
   eventCursor?: number;
   versions?: { app: string; daemon: string };
 }
@@ -1240,10 +1315,11 @@ export interface VirtualListProps<T> {
   header?: unknown;
   className?: string;
   /**
-   * Which `ShortcutScope` the list's keys are registered in. One list per scope; three
-   * scopes, so one screen can hold a run tree, a timeline and a stream. Defaults to `list`.
+   * Which `ShortcutScope` the list's keys are registered in. One list per scope; four
+   * scopes, so one screen can hold a run tree, a timeline and a stream, and the plan's journal
+   * can sit beside its schedule (`plan-journal`). Defaults to `list`.
    */
-  scope?: "list" | "run-tree" | "stream";
+  scope?: "list" | "run-tree" | "stream" | "plan-journal";
   /**
    * What the rows are, as ARIA sees them: a `listbox` of `option`s (the default, a flat
    * list of choices), a `tree` of `treeitem`s (rows with depth — the run tree, #156) or a

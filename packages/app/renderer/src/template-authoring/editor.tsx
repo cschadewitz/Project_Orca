@@ -2,7 +2,7 @@
 import { useEffect, useState, useSyncExternalStore, type JSX } from "react";
 import { useKeyboard } from "../keyboard-context.js";
 import { scopeProps } from "../keyboard-map.js";
-import { Button, ConfigField, Text, textClass } from "../ui/index.js";
+import { Button, ConfigField, Text, counted, textClass } from "../ui/index.js";
 import { TemplateAuthoringController } from "./controller.js";
 import { catalogErrors, resolveTemplate, type FixtureInputs } from "./model.js";
 import "./editor.css";
@@ -299,7 +299,7 @@ export function TemplateAuthoringEditor({
         </div>
       )}
       <div className={`orca-draftbar ${textClass("caption")}`} role="group" aria-label="Unsaved template changes">
-        <Text style="caption">{state.edits.length} changed sources</Text>
+        <Text style="caption">{counted(state.edits.length, "changed source")}</Text>
         <Button
           disabled={state.busy || writeReason !== undefined}
           {...(writeReason === undefined ? {} : { disabledReason: writeReason })}

@@ -187,7 +187,7 @@
     "commandKey": { "glyph": "⌘", "note": "In keyboard hints, the command palette and menus." },
     "danger": {
       "glyph": "✕",
-      "note": "A destructive command in the palette, so the danger is a glyph as well as a colour (rule 4). The failed run's shape, because what it leads to is a run that stops."
+      "note": "A destructive command in the palette, a danger menu item and an armed row's Confirm, so the danger is a glyph as well as a colour (rule 4). The failed run's shape, because what it leads to is a run that stops."
     }
   },
   "dependencyKind": { "blocks": "solid", "soft": "dashed", "informs": "dotted" },

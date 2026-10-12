@@ -91,7 +91,7 @@ describe("the event timeline", () => {
        everything before a sequence number no run can reach. Worth #208's attention. */
     expect(calls[0]!.params).toEqual({ runId: MANY_RUN_ID, before: Number.MAX_SAFE_INTEGER, limit: PAGE });
 
-    expect(count()).toBe(`${PAGE} events`);
+    expect(count()).toBe(`${PAGE}\u00a0events`);
     expect(cursor()).toBe(`as of event ${EVENT_COUNT - 1}`);
   });
 
@@ -115,7 +115,7 @@ describe("the event timeline", () => {
 
     expect(pages).toBe(EVENT_COUNT / PAGE);
     // Exactly the log: a gap would leave this short, a duplicate would take it past.
-    expect(count()).toBe(`${EVENT_COUNT} events`);
+    expect(count()).toBe(`${EVENT_COUNT}\u00a0events`);
     // And the reader is where they were — the substrate's `shiftBy` held the window.
     expect(entries().map((row) => row.id)).toEqual(onScreen);
     expect(cursor()).toBe(`as of event ${EVENT_COUNT - 1}`);
@@ -126,7 +126,7 @@ describe("the event timeline", () => {
     await act(async () => {
       fireEvent.click(earlierButton()!);
     });
-    await waitFor(() => expect(count()).toBe(`${PAGE * 2} events`));
+    await waitFor(() => expect(count()).toBe(`${PAGE * 2}\u00a0events`));
 
     const anchors = fake.calls
       .filter((c) => c.method === "runs.events")
@@ -174,7 +174,7 @@ describe("the event timeline", () => {
   it("draws a run of agent updates as one row, addressed by its sequence range", async () => {
     await openTimeline();
 
-    const batch = entries().find((row) => (row.textContent ?? "").includes(`${UPDATES_PER_NODE} agent updates`))!;
+    const batch = entries().find((row) => (row.textContent ?? "").includes(`${UPDATES_PER_NODE}\u00a0agent updates`))!;
     expect(batch).toBeTruthy();
     // No one event id addresses five events, so the row offers the range instead.
     const trigger = within(batch).getByRole("button", { name: /^Event #\d+-\d+$/ });
@@ -189,7 +189,7 @@ describe("the event timeline", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "run.completed" }));
 
     await waitFor(() => expect(entries()).toHaveLength(1));
-    expect(count()).toBe(`1 of ${PAGE} events`);
+    expect(count()).toBe(`1\u00a0of\u00a0${PAGE}\u00a0events`);
     // Local: the daemon was not asked again.
     expect(fake.calls.filter((c) => c.method === "runs.events")).toHaveLength(1);
   });
@@ -198,19 +198,19 @@ describe("the event timeline", () => {
     await openTimeline();
     // The list is a window over the log, so what grows is the log and the cursor, not the
     // number of rows in the document.
-    expect(count()).toBe(`${PAGE} events`);
+    expect(count()).toBe(`${PAGE}\u00a0events`);
 
     act(() => fake.notify(appended(EVENT_COUNT)));
     await waitFor(() => expect(cursor()).toBe(`as of event ${EVENT_COUNT}`));
-    expect(count()).toBe(`${PAGE + 1} events`);
+    expect(count()).toBe(`${PAGE + 1}\u00a0events`);
     expect(entries()[entries().length - 1]!.textContent).toContain("Run resumed");
 
     act(() => fake.notify(agentBatch(EVENT_COUNT + 1, EVENT_COUNT + 6)));
     await waitFor(() => expect(cursor()).toBe(`as of event ${EVENT_COUNT + 6}`));
     // One row for the batch, not one per update — the daemon coalesced it on purpose, and
     // the count is of events rather than of rows.
-    expect(entries()[entries().length - 1]!.textContent).toContain("6 agent updates");
-    expect(count()).toBe(`${PAGE + 7} events`);
+    expect(entries()[entries().length - 1]!.textContent).toContain("6\u00a0agent updates");
+    expect(count()).toBe(`${PAGE + 7}\u00a0events`);
   });
 
   it("selects the step a row is about, and the tree follows", async () => {

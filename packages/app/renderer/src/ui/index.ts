@@ -43,6 +43,7 @@ export {
 export { ConnectionIndicator, type ConnectionIndicatorProps } from "./connection-indicator.js";
 export { COUNTERPARTS, counterpartsFor, type Counterpart, type CrumbType } from "./counterparts.js";
 export { focusAfterLeaving } from "./focus-after-leaving.js";
+export { NBSP, counted, countedOf, unit } from "./count.js";
 export { elideTrail, sameElision, type Elision, type TrailMeasurement } from "./crumb-elision.js";
 export { formatAbsolute, formatDuration, formatRelative } from "./format-time.js";
 export { KeyValueList, type KeyValueListProps } from "./key-value-list.js";

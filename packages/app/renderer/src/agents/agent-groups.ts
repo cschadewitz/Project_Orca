@@ -20,6 +20,7 @@
  * become a row, this notification *is* the row.
  */
 import type { AgentHostType, AgentView, ClaimView } from "@orca/protocol";
+import { counted } from "../ui/count.js";
 import { idText, idWords } from "../ui/object-id-model.js";
 
 /** Every agent spawned on one host, with that host's transport when it has one. */
@@ -72,7 +73,7 @@ export function applyAgentChanged(agents: readonly AgentView[], next: AgentView)
 
 /** "4 agents on 2 hosts", or "1 agent on 1 host". Sentence case, subject first (rule 13). */
 export function countLabel(agents: number, hosts: number): string {
-  return `${agents} ${agents === 1 ? "agent" : "agents"} on ${hosts} ${hosts === 1 ? "host" : "hosts"}`;
+  return `${counted(agents, "agent")} on ${counted(hosts, "host")}`;
 }
 
 /**

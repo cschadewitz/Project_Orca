@@ -37,7 +37,7 @@ import type { VirtualListHandle } from "../list/index.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { useControls } from "../attention/use-controls.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
-import { Menu, StateView, Text, idText, textClass, type Crumb, type MenuItem } from "../ui/index.js";
+import { Menu, StateView, Text, countedOf, idText, textClass, type Crumb, type MenuItem } from "../ui/index.js";
 import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { StepDetail } from "../step/index.js";
 import { matchesText } from "./run-rows.js";
@@ -92,8 +92,7 @@ const statusLabel = (status: StatusFilter): string =>
 
 /** "7 runs", or "3 of 7 runs" once the text filter has narrowed what the daemon sent. */
 function countLabel(shown: number, total: number): string {
-  const runs = `${total} ${total === 1 ? "run" : "runs"}`;
-  return shown === total ? runs : `${shown} of ${runs}`;
+  return countedOf(shown, total, "run");
 }
 
 export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): JSX.Element {

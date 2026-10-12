@@ -22,6 +22,7 @@
 import { useMemo, type JSX } from "react";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { runUrl } from "../route-table.js";
+import { counted } from "../ui/count.js";
 import { usePaletteWrites, type PaletteWrite } from "./use-write-actions.js";
 
 export interface PaletteStartRunProps {
@@ -54,7 +55,7 @@ export function PaletteStartRun({ onOpen }: PaletteStartRunProps): JSX.Element |
               // The id as well as the name: two workflows may be called the same thing and
               // only one of them is the one about to run. Machine text, so mono and never
               // re-cased — the eyebrow's uppercase made `ai-sdlc` read `AI-SDLC`.
-              hintMachine: `${workflow.id} · v${workflow.version} · ${workflow.nodeCount} nodes`,
+              hintMachine: `${workflow.id} · v${workflow.version} · ${counted(workflow.nodeCount, "node")}`,
             }));
           },
           choose: (workflowId) => {

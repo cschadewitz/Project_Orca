@@ -69,3 +69,24 @@
   border: var(--stroke-hairline) solid var(--border-hairline);
   border-radius: var(--radius-md);
 }
+
+/* The menu drawn open, in the flow of the page rather than hung off a trigger: the gallery
+   shows every kind of item in both themes at once, and a real open menu would take focus. */
+.preview__menu > .orca-menu {
+  position: static;
+  margin: 0;
+}
+
+/* A box as narrow as the narrowest side pane, for text that does not fit (RULES.md rule 15):
+   what gives way, what keeps its width, and where a run of units may wrap. */
+.preview__narrow {
+  width: var(--pane-min-side);
+  max-width: 100%;
+  padding: var(--space-2);
+  border: var(--stroke-hairline) dashed var(--border-control);
+  border-radius: var(--radius-sm);
+}
+/* The save bar at the dock's width: room for its count and buttons, not for its sentence. */
+.preview__narrow--bar {
+  width: var(--panel-width);
+}

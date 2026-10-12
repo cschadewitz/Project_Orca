@@ -30,16 +30,16 @@ published 19 September 2026). It is a dated record, not a living spec. The livin
 
 | Area | At the pin | After this review's fixes |
 | --- | --- | --- |
-| Tokens | **Matches**: all 103 design tokens present with identical values; 65 added, plus bundled fonts | Unchanged; three title-bar tokens now exported as numbers |
-| CSS class layer | **Matches**: one class dropped, about 63 added, type sizes removed (#211) | Unchanged |
-| Component API | **Matches** by name: all 22 types survive, many props reshaped around the protocol | Unchanged |
+| Tokens | **Matches**: all 103 design tokens present with identical values; 65 added, plus bundled fonts | Three title-bar tokens exported as numbers; `col-id`, `minimap-w`/`-h` and `stroke-icon` added; `node-h` 64 → 96px; six `objectKind` glyphs in `semantics.json` |
+| CSS class layer | **Matches**: one class dropped, about 63 added, type sizes removed (#211) | `.orca-chips`, `.orca-objid`, `.orca-kv`, `.orca-canvasctl`, `.orca-graphmap`, `.orca-truncate` added; menus on `surface-raised`; control font resets moved into `:where()`; one text-overflow policy |
+| Component API | **Matches** by name: all 22 types survive, many props reshaped around the protocol | `ObjectId`, `KeyValueList`, `CanvasControls`, `GraphMinimap` added; `StatusChip` `aligned` (no `className`); `MenuItem` `danger`, `hintMachine`, `labelId`; `DraftBar` `returnFocus` |
 | Shell and keyboard | Mostly **matches**; three bugs (below) | Bugs fixed |
-| Runs, step detail, artifacts | **Partial** | Run-tree indent, chip width and column overlap fixed |
-| Attention | **Partial**: ordering, the one count and answering in place are right | Unchanged |
-| Agents | **Diverged**, mostly documented data gaps | Unchanged |
-| Config | **Partial** | Unchanged |
-| Plan | **Partial**: dependency graph shipped as the design's recommended option | Unchanged |
-| Workflow viewer | **Partial** | Now on its own Workflows surface |
+| Runs, step detail, artifacts | **Partial** | Run-tree indent, chip width and column overlap fixed; object variables in a clamped well, and step detail no longer scrolls sideways |
+| Attention | **Partial**: ordering, the one count and answering in place are right | A correction's values in a `Well`; ids as tokens |
+| Agents | **Diverged**, mostly documented data gaps | Release confirms on its row; claims lead with names and id tokens; focus kept when a claim or a grant leaves |
+| Config | **Partial** | The save bar hands focus back and stays one line; the policy panel's Remove is quiet |
+| Plan | **Partial**: dependency graph shipped as the design's recommended option | Schedule column aligned with **why** beside its mark; ids as tokens; the graph gets zoom, direction and a minimap |
+| Workflow viewer | **Partial** | Now on its own Workflows surface; fixed node boxes, zoom, direction and a minimap |
 | Workflow editor | **Deferred** (#180–#183) | **Built**: drafts, visual editor, validation panel (#180–#182); dry run (#183) still deferred |
 
 ## Fixed after the review
@@ -171,6 +171,116 @@ changelog fragment.
   - Tests: `crumb-elision.test.ts` across widths, `object-header-elision.test.tsx` for the
     menu, the keyboard and the names, and an `entry-points.test.tsx` case that opens a folded
     work item from the chrome.
+- **The claims list's status chips stopped short of "succeeded" too**, after the run tree's
+  copy of the same bug was fixed alone. `StatusChip` took a `className` and both lists sized it
+  `12ch`. The chip is now never narrower than its word (`min-width: max-content`, `flex: none`),
+  takes no `className`, and a column is its `aligned` variant (`--chip-aligned-width`).
+- **A card's chips ran past its edge, and ids broke at their hyphens.** A run of chips in a card
+  or panel is `.orca-chips` and wraps between chips; ids and names that cannot wrap are cut at
+  their end with the whole value in `title` (inspector heads, the editor outline, the policy
+  panel's agent, the Plan rail's filters).
+- **Focus fell to the page body when a focused row left a list**: a released claim, a removed
+  grant. Focus moves to the next row's control, the previous one's, or the list's own landing
+  place (`focusAfterLeaving`, now in `renderer/src/ui/`).
+- **Draft edits wore the danger tone at rest.** The policy panel's **Remove** and the workflow
+  editor's **Delete** and **Delete edge** were red on every row and selection. They edit a draft
+  that Save, Discard or `⌘Z` takes back, so they are quiet buttons that do not ask.
+- **Object variables were one compact line of JSON, and step detail scrolled sideways.** An
+  object or array is indented JSON in a `Well`, clamped to eight lines with **Show all**; the
+  value column is `minmax(0, 1fr)`. The same display is now `KeyValueList`, with names in mono,
+  in step detail, the Workflows inspector and the guided launch's review; an Attention
+  correction's values are in a `Well` too.
+- **Graph nodes grew with their text** (167px in a 64px slot), so edges met them where their
+  middle would have been. A node is a fixed `node-w` × `node-h` box — 96px, the exact sum of its
+  anatomy — with the name clamped at two lines and every part whole in its `title`.
+- **The graph canvases had no zoom controls, no fit and no overview.** The workflow viewer, the
+  editor and the plan graph share a corner of view controls (zoom, the readout as rest, fit,
+  direction, minimap), ⌘/Ctrl-wheel zoom, a left-to-right or top-to-bottom layout remembered per
+  person, and an `aria-hidden` minimap.
+- **This pass** (the design-system sync):
+  - The workflow editor's inspector deletes dropped focus to the page body; the selection now
+    moves to a neighbour and focus to the canvas. Save and Discard did the same when they
+    emptied a draft and the save bar left; `DraftBar` hands focus back to what it was editing.
+  - Counts disagreed with their nouns ("1 edges", "0 of 1 decisions", "1 changed sources") and
+    could break from them; `counted`/`unit` fix both, with a no-break space.
+  - Crumbs, and every button, menu item, nav item and segment, rendered at the shell's 14px
+    instead of their noted `label`, and `.orca-bare` buttons set in `mono-id` were sans: each
+    control's `font: inherit` beat its type class. The resets are in one `:where()` rule.
+  - Node type icons drew a 1px hairline; they take `stroke-icon` (1.5px), as the brand book says.
+  - Labels wrapped out of their outlines and a draft bar's count split from its noun; see
+    "Text that does not fit" under "Decisions made after the review".
+
+## Decisions made after the review
+
+Each is one line here; the doc it links to is where it is now written down.
+
+- **Window:** nothing between the title bar and the sidebar; the connection bars and the link
+  notice sit in the primary pane under the object header, the notice only when a link cannot be
+  honoured, and Dismiss hides only the notice. The window is frameless.
+  [10](../design/10-information-architecture.md#the-window),
+  [40](../design/40-connection-states.md)
+- **Workflows is the sixth surface** (⑂, `⌘4`; Agents `⌘5`, Config `⌘6`), with a visual editor
+  over drafts, validation and a reviewed publish; layout pins live in `.layout/<id>.json`.
+  [10](../design/10-information-architecture.md#six-surfaces),
+  [70](../design/70-workflow-editing.md)
+- **Palette hover tints and never moves the selection.**
+  [10](../design/10-information-architecture.md#command-palette)
+- **One status chip, never narrower than its word**; a surface never sizes it, and a column is
+  `aligned`. [RULES 3](../design/RULES.md),
+  [60](../design/60-implementation.md#a-status-and-a-column-of-them)
+- **Runs of chips in a card wrap (`.orca-chips`); rows never do; machine strings are cut at
+  their end, whole in `title`.** [RULES 8, 9](../design/RULES.md),
+  [30](../design/30-long-running-content.md#virtualisation)
+- **Menus stand on `surface-raised`; a `danger` item leads with ✕, is never first and never
+  focused on open; `hint` is one word, `hintMachine` is mono and verbatim, a sentence is the
+  `note`.** [RULES 16](../design/RULES.md),
+  [60](../design/60-implementation.md#popovers-are-one-primitive)
+- **Confirm only what has no way back, on its own row** (Keep first and focused, ✕ Confirm, the
+  consequence on the two-line variant, `Esc` through the layer stack); draft edits are plain
+  buttons; a resting screen carries no danger tone. [RULES 17](../design/RULES.md),
+  [60](../design/60-implementation.md#agents-write-as-built-v050),
+  [README, Colour](../design/README.md#colour)
+- **Focus is never dropped** when the control holding it leaves: claims, grants, the editor's
+  deletes, the save bar. [RULES 10](../design/RULES.md),
+  [50](../design/50-accessibility-and-keyboard.md#focus)
+- **Ids are shown by name and tail** through `ObjectId` (the kind glyph and the last six
+  characters, the whole id in `title`, **Copy id** in crumb menus, `#seq` for events, `full`
+  where the whole id must show; ☰ ⬡ ❝ ◫ ⊓ ✦); palette labels carry tokens; the jump row takes
+  `run_<uuid>`. [README, Voice](../design/README.md#voice),
+  [60](../design/60-implementation.md#an-id-on-screen),
+  [10](../design/10-information-architecture.md#dual-spine)
+- **The schedule column's why sits beside its mark**, outside the tint, with the badge and the
+  settled chip one width. [60](../design/60-implementation.md#a-status-and-a-column-of-them)
+- **Graph nodes are a fixed 96px box** (6px vertical padding), the name at most two lines, the
+  meta one, the whole text in `title`. [70](../design/70-workflow-editing.md#what-the-editor-reuses)
+- **A name and its value is `KeyValueList`** (mono names, pretty JSON in a sunken well, an
+  eight-line clamp with Show all); corrections' values in a `Well`.
+  [60](../design/60-implementation.md#a-name-and-its-value)
+- **The object header folds its middle into `…`** before it cuts the current crumb's name; the
+  root and the current crumb never fold.
+  [10](../design/10-information-architecture.md#dual-spine),
+  [50](../design/50-accessibility-and-keyboard.md#screen-readers-and-live-regions)
+- **The graph canvases share view controls** (zoom, fit, direction, minimap toggle),
+  ⌘/Ctrl-wheel zoom, a per-person direction and minimap (`preferences.json` `canvases`), and
+  an `aria-hidden` minimap. [70](../design/70-workflow-editing.md#the-canvass-view-zoom-direction-and-the-minimap),
+  [50](../design/50-accessibility-and-keyboard.md#the-graph-canvases-view-controls),
+  [60](../design/60-implementation.md#graph-view)
+- **Inline icons are 1.5px (`stroke-icon`)**, node type icons included.
+  [README, Iconography](../design/README.md#iconography)
+- **`ch` is half an em in this app**: both font stacks lead with symbol faces that have no
+  "0", so every `ch` width is sized against `0.5em`, not Plex's zero.
+  [README, Type](../design/README.md#type),
+  [60](../design/60-implementation.md#a-status-and-a-column-of-them)
+- **A control's type class wins over its font reset**: `font: inherit` lives only in
+  `:where()`. [RULES 14](../design/RULES.md), [60](../design/60-implementation.md#text-that-does-not-fit)
+- **Text that doesn't fit has one answer**: a bounded label never wraps (one line, outline
+  encloses it, or cut at its end inside it with `title`); a number and its noun are one unit
+  (`counted`, a no-break space); a bar stays one line and its lowest-priority sentence gives way
+  (`.orca-truncate`). [RULES 15](../design/RULES.md),
+  [README, Structure](../design/README.md#structure-not-shadow),
+  [60](../design/60-implementation.md#text-that-does-not-fit)
+- **Demo tooling:** `node .claude/skills/orca-demo-dev/scripts/start.mjs --seed` builds, seeds
+  and starts a workspace with data on every surface. [DEVELOPMENT](../DEVELOPMENT.md)
 
 ## Findings by area
 
@@ -396,14 +506,20 @@ since has changed issue by issue, almost all of it deliberate.
 - **Docs:** the repo says the artifact is "the review surface, not the source". Contradictions
   found:
   - `40-connection-states.md`: line 11 says writes queue until reconnect, but line 89 says
-    there is no queue.
+    there is no queue. *Fixed since: the table says writes are disabled with the reason, and
+    names "will send on reconnect" as the intent for when an outbox exists.*
   - `60-implementation.md:325-327` says there is no two-line row class, but
-    `components.css:491` defines one.
+    `components.css:491` defines one. *Fixed since: it says where the class is, and why there
+    is no second row height.*
   - `70-workflow-editing.md`'s "As built (v0.5.0) — historical" section still says ORCA keeps
     no copy of a pinned run's definition. It is labelled superseded, but it reads as a
-    contradiction.
+    contradiction. *Fixed since: the bullet says the viewer still prints that sentence and that
+    moving it to the pinned version is follow-up 7.*
   - `10-information-architecture.md:136` said workflow editing "remains v0.6.0". Fixed in
     this review.
+  - Text this branch's own changes made stale: "five surfaces", "five glyphs", `▭` for a
+    step, "Cancel run-42 — confirm" in the palette's example, and "not in a tooltip" for a cut
+    label that now carries its whole text in `title`. *Fixed since.*
 - **CSS:** the one class dropped is `.orca-timeline-entry--succeeded` (#224), which leaves the
   status modifiers lopsided. `components.css` sets no hard-coded sizes or colours except
   `font-weight: 500/600` (about 26 times, with no weight tokens) and one `letter-spacing`.
@@ -411,9 +527,13 @@ since has changed issue by issue, almost all of it deliberate.
   - The `mode` comment, around line 811, lists only Schedule and Journal.
   - `VirtualListProps.scope`, around line 1014, omits `plan-journal`.
   - `eventCursor` is kept although nothing supplies it.
+
+  *All three fixed since: the mode comment lists Plan's five modes, `scope` includes
+  `plan-journal`, and `eventCursor` says why the status bar's cell stays empty.*
 - **Protocol version:** the template methods and now `workflowDrafts.*` were added at 2.0
   without the minor bump the version rule calls for. **Open decision.**
-- **The artifact was never republished.** It still shows the v0.3-era state.
+- **The artifact was never republished.** It still shows the v0.3-era state. Republishing it
+  from `docs/design` and `packages/design` is follow-up 13, and is next.
 
 ## Open follow-ups
 
@@ -435,7 +555,8 @@ a line in `docs/design` saying it is intended.
    - Show a modified field's previous value.
    - Show unknown keys.
    - Open the raw view at the path in the studio.
-   - Reuse `DraftBar`.
+   - Reuse `DraftBar`. The template editor's bar also draws `.orca-draftbar` by hand, and so
+     without `returnFocus` or a note that gives way.
 6. Risk matrix: decide on the axes, and document the choice or flip them.
 7. Workflow viewer: draw a pinned run's own version with `workflows.get({ id, version })`.
 8. Status bar: add the "runs active" count, which the app already reads.
@@ -450,8 +571,13 @@ a line in `docs/design` saying it is intended.
     - The count of runs pinned to the base version.
     - The validation rules the runtime lacks.
 12. Docs: fix the `40` and `60` contradictions and the stale `component-api.d.ts` comments.
+    *Closed: see "The design-system source layer".*
 13. Republish the Claude Design artifact from `docs/design` and `packages/design` so the
-    review surface matches the source again.
+    review surface matches the source again. *Closed: republished as version 8 on
+    2026-10-11. Every card was re-synced, seven were added (ObjectId, KeyValueList, Menu,
+    CanvasControls, GraphMinimap, InlineConfirm, TextOverflow), RULES.md became a section,
+    and the bundled fonts travel with it. The previews draw what the app draws, and their
+    READMEs name the gaps below where they apply.*
 14. Links to objects that aren't there. Plan and Workflows report one. Two gaps remain:
     - Runs and Agents say nothing for an id they don't have.
     - `orca://agent/<id>` lands on Agents without selecting that agent's card. The route
@@ -471,6 +597,43 @@ a line in `docs/design` saying it is intended.
 18. **Run-tree rows carry no id token.** A run row shows the run's name, and runs of one
     workflow often share one. The token would tell them apart, but the run tree's columns
     were not re-sized for it in this pass.
+19. **The type-proof baselines are stale on Linux and macOS.** The object-kind glyphs (❝ ◫ ⊓ ✦),
+    the Workflows rail's ⑂ and ObjectId's id samples changed `#type`. The Windows baseline is
+    regenerated (locally, `pnpm run app:type-proof:update`, and checked by eye); the Linux and
+    macOS ones need a manually dispatched App smoke run (`docs/DEVELOPMENT.md`, "Screenshot
+    baselines").
+20. **A long linear workflow fits at 25% and is still too small to read.** Zoom to fit
+    centres a graph too wide even for 25% on its middle, with the minimap for the rest. An
+    idea: open a long chain top to bottom by default, where its length runs down the pane.
+21. **The armed row is one surface's.** Confirming in place is a pattern with one list
+    instance (`ClaimRow`) and the palette's; the second list with an act that has no way back
+    should lift `ClaimRow`'s state machine into `renderer/src/ui/` rather than copy it
+    (`component-api.d.ts`, "Confirming in place").
+22. **Found while republishing the artifact.** Drawing every card against the app's real
+    markup turned up these app defects. None is fixed yet:
+    - **Destructive confirmations that break rule 17.** In each case the danger choice comes
+      first or lacks its `✕`:
+      - the workflow editor's armed "Discard every change" (no `✕`);
+      - the dependency graph's waive question ("Waive, unblocking …" before "Keep it", no `✕`);
+      - the decision list's reopen ("Reopen <key>" before Keep, no `✕`).
+    - **The Plan schedule's "why" menu is clipped.** It sits inside `.orca-plan__cell`, which
+      is `overflow: hidden`, so the open explanation does not show.
+    - **The risk matrix does not hold its plot.** `.orca-risk` is `table-layout: fixed` with no
+      width, so a long pin widens its column. A pin button stays as wide as its unwrapped text
+      and runs past its cell. The score is drawn over the first pin. Pins carry their text in
+      `aria-label` but not in `title`.
+    - **The workflow viewer ignores positions pinned in the editor.** `layoutWorkflow` takes no
+      pins, and `workflows.get` carries no layout.
+    - **Classes with no rule:** `.orca-link`, `.orca-menu__item[aria-disabled]`, the run
+      picker's `orca-button*`, `orca-kv__well`, `orca-agents__claim-keep` / `-confirm`. The
+      editor inspector's textareas are clipped, and its group headings have no type class.
+    - **Tone and text slips:**
+      - Attention gives failed rows the waiting rail.
+      - A config group card's eyebrow takes the gate card's `status-waiting` tone.
+      - The `risk.updated` journal line prints a raw `risk_…` id.
+      - A few counts still join with a plain space (`${n} inside`).
+    - **The configuration studio (#333) hand-rolls its save bar.** It has no change count, no
+      `returnFocus` and no giving-way note, unlike `DraftBar`.
 
 ## Repeating this review
 
@@ -481,6 +644,8 @@ a line in `docs/design` saying it is intended.
    It is a list format, not DTCG.
 3. Review each area's components and screens against `packages/app/renderer/src`. For every
    divergence, check `docs/design`, `RULES.md`, ADRs and comments before calling it drift.
-4. Run the app (`pnpm run demo --dir <dir>`, `pnpm run orca --config <dir>/orca.config.yaml serve`,
-   `pnpm --filter @orca/app dev`) and look. This review did not, and the three layout bugs above
-   were found by looking.
+4. Run the app and look: `node .claude/skills/orca-demo-dev/scripts/start.mjs --seed` builds a
+   workspace with data on every surface and starts the daemon and the app. The first pass of
+   this review did not, and the three layout bugs above were found by looking. Measure what a
+   test cannot: happy-dom has no cascade or layout, and the crumbs' 14px and the `ch` half-em
+   were found in a real Chromium.

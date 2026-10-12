@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 import type { PlanJournalEntryView } from "@orca/protocol";
 import { VirtualList } from "../list/index.js";
-import { Chip, Text, Time, textClass } from "../ui/index.js";
+import { Chip, Text, Time, counted, textClass } from "../ui/index.js";
 import { newestFirst } from "./plan-model.js";
 
 export interface JournalProps {
@@ -88,7 +88,7 @@ export function Journal({ entries, hasEarlier, loadingEarlier, loadEarlier, live
           </button>
         )}
         <Text style="caption" className="orca-plan__count">
-          {`${rows.length} ${rows.length === 1 ? "entry" : "entries"}`}
+          {counted(rows.length, "entry", "entries")}
         </Text>
       </div>
 

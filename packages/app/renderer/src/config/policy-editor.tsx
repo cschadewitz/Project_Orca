@@ -266,7 +266,8 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
           </section>
 
           {/* The written half. Focusable from script and never a `Tab` stop: it is where focus
-              goes when the last grant leaves with no Add a grant to land on. */}
+              goes when the last grant leaves with no Add a grant to land on, and when Save or
+              Discard empties the draft and the save bar leaves. */}
           <section ref={section} className="orca-policy__section" aria-label="Written grants" tabIndex={-1}>
             <div className="orca-policy__section-head">
               <Text style="label-strong">Written by &quot;allow always&quot;</Text>
@@ -376,6 +377,10 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
           {...(save.message === undefined ? {} : { message: save.message })}
           {...(writability.can ? {} : { disabledReason: writability.reason })}
           note="Saving replaces the whole sidecar. Rules you did not touch keep when they were added and what for."
+          /* Save or Discard emptied the draft, and the bar went with the button pressed: focus goes
+             to the Written grants, the list the draft was editing, as the Config surface's goes
+             to its document. */
+          returnFocus={() => section.current}
           onValidate={() => feed.validate(DOCUMENT)}
           onSave={() => feed.save(DOCUMENT)}
           onDiscard={() => feed.discard(DOCUMENT)}

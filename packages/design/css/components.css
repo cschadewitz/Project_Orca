@@ -84,6 +84,36 @@
   flex: 1 1 auto;
 }
 
+/* ---------- text that does not fit (RULES.md rule 15) ----------
+
+   Three rules, and every class below keeps them:
+
+   1. A bounded label never wraps. A chip, a badge, a pill, a button, a segment, a key cap, a
+      crumb's parts: one line, `white-space: nowrap`, and as wide as its text
+      (`min-width: max-content`, `flex: none`), so its outline always encloses it. A label that
+      can be longer than any box it sits in (an artifact name, a filter's id, a crumb's name)
+      is the one exception: it is cut at its end inside its outline, never in the middle, and
+      the caller puts the whole text in `title`.
+   2. A number and its noun are one unit. The renderer writes a count through `counted` or
+      `unit` (`ui/count.ts`), which join the two with a no-break space, so a run of counts
+      ("+2 nodes · 1 changed · 3 edges") wraps only between units, at the separators.
+   3. A bar stays one line. The title bar, the object header, the status bar and the draft
+      bar are a fixed height: their controls and counts keep their width, and when the bar
+      runs out of room the lowest-priority text in it, a caption or a summary that carries
+      `.orca-truncate`, is cut at its end with the whole of it in `title`. Rows never wrap
+      either (rule 9). What wraps is a run of things in a panel or a card, between whole
+      items: `.orca-chips`, a filter rail. */
+
+/* The text in a bar or a row that gives way when there is no room: cut at its end, the whole
+   of it in the element's `title`, which the caller sets. */
+.orca-truncate {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .orca-mono {
   font-family: var(--font-mono);
 }
@@ -394,8 +424,29 @@
   border: 0;
   background: none;
   color: inherit;
-  font: inherit;
   cursor: pointer;
+}
+/* Every control class's font reset, in one place and at zero specificity. A <button> or an
+   <input> takes the user agent's font rather than the page's, so each of these resets it — and
+   written in the class's own rule, at a class's specificity and later in the cascade than
+   tokens.css, that `font: inherit` beat the `orca-text-*` class on the same element. Every
+   button, menu item, nav item and segmented button was the shell's 14/20 body instead of the
+   13/18 label it is noted as, the badge's why 14px instead of caption, and a `.orca-bare`
+   button set in `mono-id` was sans, so the cascade broke rule 8. Inside `:where()` the reset
+   still beats the user agent, as any author rule does, and loses to any type class. A control
+   class added later keeps to this: its `font` reset goes in this list, never in its own rule
+   (`font-reset.test.ts`). The crumbs' is beside the object header's rules. */
+:where(
+  .orca-bare,
+  .orca-btn,
+  .orca-badge__why,
+  .orca-nav,
+  .orca-crumb__more,
+  .orca-menu__item,
+  .orca-palette__input,
+  .orca-seg__btn
+) {
+  font: inherit;
 }
 
 /* type: label */
@@ -410,9 +461,10 @@
   border-radius: var(--radius-sm);
   background: var(--surface-base);
   color: var(--ink-primary);
-  font: inherit;
   cursor: pointer;
   white-space: nowrap;
+  /* A control keeps its width: a bar that runs out of room gives up its caption, not this. */
+  flex: none;
 }
 .orca-btn:hover {
   background: var(--surface-hover);
@@ -476,6 +528,9 @@
   line-height: 1;
   color: var(--ink-secondary);
   background: var(--surface-base);
+  /* A chord is one key cap: "⌘ ⇧ D" never breaks across two. */
+  white-space: nowrap;
+  flex: none;
 }
 
 /* ---------- run tree ---------- */
@@ -1116,7 +1171,6 @@
   border: 0;
   padding: 0;
   background: none;
-  font: inherit;
   color: var(--accent);
   cursor: pointer;
   text-decoration: underline;
@@ -1342,12 +1396,14 @@
   font-weight: 500;
 }
 /* The node type's icon: inline SVG on the 16px grid, drawn in the eyebrow's ink. Shapes
-   rather than characters, so there is no bundled face for them and no glyph token. */
+   rather than characters, so there is no bundled face for them and no glyph token. Its stroke
+   is the brand book's for inline icons, `stroke-icon`, as the canvas controls' is: the hairline
+   is a separator's width, and a 1px diamond or gate beside 12px type read as a sketch of one. */
 .orca-node__icon {
   width: var(--icon-md);
   height: var(--icon-md);
   flex: none;
-  stroke-width: var(--stroke-hairline);
+  stroke-width: var(--stroke-icon);
   stroke-linejoin: round;
   stroke-linecap: round;
 }
@@ -1875,6 +1931,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  white-space: nowrap;
   padding: 0 var(--space-3);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-canvas);
@@ -1909,12 +1966,19 @@
   border: var(--stroke-hairline) solid var(--status-waiting);
   font-weight: 500;
   cursor: pointer;
+  /* A pill, so it is as wide as "◆ 3 waiting" and never narrower (rule 15). */
+  white-space: nowrap;
+  flex: none;
+  min-width: max-content;
 }
 /* type: mono-id */
 .orca-statusbar {
   display: flex;
   align-items: center;
   gap: var(--space-4);
+  /* A bar is one line; the read-only reason is what gives way (`.orca-truncate`). */
+  white-space: nowrap;
+  min-width: 0;
   padding: 0 var(--space-3);
   border-top: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-canvas);
@@ -2045,7 +2109,6 @@
   border: none;
   border-radius: var(--radius-sm);
   background: none;
-  font: inherit;
   text-align: left;
   color: var(--ink-secondary);
   cursor: default;
@@ -2157,11 +2220,11 @@
   align-items: baseline;
   gap: var(--space-1);
   /* A crumb that links is a <button> (it navigates in-app, it is not an href): reset the
-     control chrome so the button and the current crumb's <span> render identically. */
+     control chrome so the button and the current crumb's <span> render identically. The
+     font reset is the `:where()` rule below, so the crumb's `label` class wins over it. */
   border: 0;
   padding: 0;
   background: none;
-  font: inherit;
   color: var(--accent);
   cursor: pointer;
   /* Narrower than its content once nothing is left to fold, by its name (below). */
@@ -2185,6 +2248,7 @@
 /* type: eyebrow */
 .orca-crumb__type {
   flex: none;
+  white-space: nowrap;
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
@@ -2243,9 +2307,18 @@
   border: 0;
   padding: 0;
   background: none;
-  font: inherit;
   color: var(--accent);
   cursor: pointer;
+}
+/* A crumb and the `…` are <button>s, which take the user agent's font rather than the page's,
+   so each needs a font reset — and the reset is here, inside `:where()`, rather than in their
+   rules. A `font: inherit` in `.orca-crumb` had a class's specificity and came later in the
+   cascade than tokens.css, so it beat the `orca-text-label` on the same element and every
+   crumb, the `…` with them, was the shell's 14/20 body instead of the 13/18 label it is
+   noted as. At zero specificity the reset still beats the user agent, as any author rule
+   does, and loses to the type class, which is the order wanted. */
+:where(.orca-crumb, .orca-objhead__elision) {
+  font: inherit;
 }
 /* Where the header measures what it would take to unfold: the folded crumbs and a `…`, laid
    out at their natural width, unseen and out of reach (`inert`, `aria-hidden`). The box is
@@ -2271,7 +2344,6 @@
   border: 0;
   background: none;
   padding: 0;
-  font: inherit;
   font-size: var(--icon-sm);
   color: var(--ink-tertiary);
   cursor: pointer;
@@ -2340,7 +2412,6 @@
   border-radius: var(--radius-xs);
   background: none;
   color: var(--ink-primary);
-  font: inherit;
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
@@ -2537,7 +2608,6 @@
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
   border-radius: 0;
   background: none;
-  font: inherit;
   color: var(--ink-primary);
 }
 .orca-palette__input::placeholder {
@@ -2790,6 +2860,7 @@
 
 .orca-seg {
   display: inline-flex;
+  flex: none;
   align-items: center;
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-sm);
@@ -2803,7 +2874,6 @@
   border: 0;
   background: var(--surface-base);
   color: var(--ink-secondary);
-  font: inherit;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -2923,6 +2993,7 @@
   background: var(--surface-raised);
   border: var(--stroke-hairline) solid var(--border-control);
   color: var(--ink-secondary);
+  white-space: nowrap;
 }
 .orca-port {
   width: var(--mark-port);
@@ -3036,10 +3107,15 @@
 
 /* ---------- draft bar ---------- */
 
+/* One line (rule 15): the count and the buttons keep their width, and the note, the message
+   and a conflict carry `.orca-truncate` and give way first, whole in their `title`. The count
+   is one unit (`changeLabel`), so "4 changes" never breaks between the number and the noun. */
 .orca-draftbar {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  white-space: nowrap;
+  min-width: 0;
   padding: var(--space-2) var(--space-4);
   background: var(--accent-subtle);
   border-top: var(--stroke-hairline) solid var(--accent);
@@ -3063,6 +3139,11 @@
   color: var(--ink-secondary);
   border: var(--stroke-hairline) solid var(--border-control);
   font-weight: 500;
+  /* A pill like a chip: "◷ pinned to v3" ran onto a second line outside its outline in a
+     narrow header, so it is one line and as wide as what it says (rule 15). */
+  white-space: nowrap;
+  flex: none;
+  min-width: max-content;
 }
 
 /* ---------- graph filter rail ---------- */

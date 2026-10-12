@@ -136,8 +136,8 @@ describe("the draft", () => {
   });
 
   it("counts writes, not keystrokes", () => {
-    expect(changeLabel(1)).toBe("1 change");
-    expect(changeLabel(3)).toBe("3 changes");
+    expect(changeLabel(1)).toBe("1\u00a0change");
+    expect(changeLabel(3)).toBe("3\u00a0changes");
   });
 });
 

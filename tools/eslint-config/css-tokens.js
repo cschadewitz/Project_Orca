@@ -26,6 +26,14 @@ const NAMED_COLOUR =
 // Absolute lengths and durations: the quantities a token is supposed to own. Relative and
 // intrinsic units (`%`, `fr`, `em`, `ch`, `vh`, `vw`, `deg`) describe a ratio to something
 // already chosen, so they are not a hardcoded design decision and are allowed.
+//
+// `ch` in this app is half an em, not the width of Plex's zero. CSS measures it on the "0" of
+// the *first* face in the element's stack, and both of the design system's stacks lead with
+// the bundled symbol subsets, which carry no "0" — so every `ch` falls back to `0.5em` (6px at
+// caption), where a Plex zero is about `0.6em`. Every `ch` width in the component layer and the
+// renderer was measured against that half-em; retuning one by assuming Plex would make it
+// wrong, and reordering the stacks would put the status glyphs back on the OS's faces
+// (docs/design/README.md, Type; docs/design/60-implementation.md, "A status, and a column").
 const SIZED_NUMBER = /(?:^|[^\w.#-])(-?\d*\.?\d+)(px|rem|ms|s)(?![\w-])/gi;
 
 /** `z-index: 3` is a stacking decision; the layer order lives in the `--z-*` tokens. */

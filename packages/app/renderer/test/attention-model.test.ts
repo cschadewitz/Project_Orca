@@ -75,7 +75,7 @@ describe("what an always answer may promise", () => {
 
   it("promises only when something was written", () => {
     expect(alwaysOutcome(record({ added: [rule] }))).toContain("ORCA will not ask again");
-    expect(alwaysOutcome(record({ added: [rule, rule] }))).toContain("2 rules");
+    expect(alwaysOutcome(record({ added: [rule, rule] }))).toContain("2\u00a0rules");
   });
 
   it("does not promise when the rule was already there, and says where it is", () => {

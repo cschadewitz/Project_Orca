@@ -3,7 +3,7 @@ import { useEffect, useId, type JSX, type ReactNode } from "react";
 import { CONNECTION_PRESENTATION } from "@orca/design";
 import type { ResourceMetric } from "@orca/protocol";
 import { useAnnounce } from "../a11y/announce-context.js";
-import { Card, Chip, Text } from "../ui/index.js";
+import { Card, Chip, Text, counted, unit } from "../ui/index.js";
 import {
   bytes,
   displayedSnapshot,
@@ -171,11 +171,11 @@ export function ResourceView({ state }: { state: ResourceViewState }): JSX.Eleme
             >
               {(v) => (
                 <>
-                  <Value>{v.effectiveCores} effective cores</Value>
+                  <Value>{counted(v.effectiveCores, "effective core")}</Value>
                   <Text as="p" style="body">
-                    Visible cgroup hierarchy · cpuset {v.cpusetCores} cores ·{" "}
-                    {v.quotaCores === null ? "no finite visible CPU quota" : `quota ${v.quotaCores} cores`}. Hidden
-                    ancestors and process affinity are unmeasured.
+                    Visible cgroup hierarchy · cpuset {counted(v.cpusetCores, "core")} ·{" "}
+                    {v.quotaCores === null ? "no finite visible CPU quota" : `quota ${counted(v.quotaCores, "core")}`}.
+                    Hidden ancestors and process affinity are unmeasured.
                   </Text>
                 </>
               )}
@@ -283,9 +283,9 @@ export function ResourceView({ state }: { state: ResourceViewState }): JSX.Eleme
                     This is not a count of all host jobs.
                   </Text>
                   <Text as="p" style="body">
-                    Runs: {v.executingRuns} executing · {v.waitingRuns} waiting · {v.blockedRuns} blocked ·{" "}
-                    {v.uncertainRuns} uncertain. Run counts can exceed roots; a workstream includes its root and
-                    descendants.
+                    Runs: {unit(v.executingRuns, "executing")} · {unit(v.waitingRuns, "waiting")} ·{" "}
+                    {unit(v.blockedRuns, "blocked")} · {unit(v.uncertainRuns, "uncertain")}. Run counts can exceed
+                    roots; a workstream includes its root and descendants.
                   </Text>
                 </>
               )}

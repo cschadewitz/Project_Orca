@@ -14,6 +14,7 @@
  *   the risk all come back without a list of event types to keep in step.
  */
 import type { PlanItemView, PlanJournalEntryView, RiskView } from "@orca/protocol";
+import { countedOf } from "../ui/count.js";
 
 /** Whether any string anywhere in `value` is one of `needles`. Iterative: a payload is data. */
 export function mentions(value: unknown, needles: ReadonlySet<string>): boolean {
@@ -56,6 +57,5 @@ export function risksForRail(
 
 /** "2 risks", or "1 of 2 risks" once the rail has narrowed them. */
 export function riskCountLabel(shown: number, total: number): string {
-  const risks = `${total} ${total === 1 ? "risk" : "risks"}`;
-  return shown === total ? risks : `${shown} of ${risks}`;
+  return countedOf(shown, total, "risk");
 }

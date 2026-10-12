@@ -166,7 +166,7 @@ describe("persistent diagnostics choice", () => {
     expect(f.bridge.prepareExport).not.toHaveBeenCalled();
     expect(f.bridge.chooseDestination).not.toHaveBeenCalled();
     expect(f.bridge.save).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Diagnostic lookback" }).textContent).toBe("5 minutes");
+    expect(screen.getByRole("button", { name: "Diagnostic lookback" }).textContent).toBe("5\u00a0minutes");
     expect(screen.getByText(/Production capture is unavailable/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Export current diagnostics" }).getAttribute("aria-disabled")).toBe(
       "true",

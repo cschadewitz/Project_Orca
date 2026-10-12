@@ -40,6 +40,25 @@ Selection and focus are separate and look different: selection is `surface-selec
 2px `accent` left rail, focus is the ring. A row can be selected without being focused (the
 list has selection, the palette has focus), and the design must keep both legible at once.
 
+**Focus is never dropped.** When the control holding it leaves the document, focus would fall
+to the page body and a keyboard user would be thrown out of the place they were working. So
+whatever removes a focused control says where focus goes next, and the answer is always a
+neighbour or the region the control belonged to:
+
+- **A row leaves a list** — a released claim, a removed grant: the row that slides into the
+  gap, the one before it when it was the last, then the list's own add control or section
+  (`focusAfterLeaving`, `renderer/src/ui/`).
+- **The workflow editor deletes** from the inspector: the selection moves to the next node in
+  file order (the previous one when it was the last; after an edge, the node it left from) and
+  focus goes to the canvas, whose active descendant names it.
+- **A save bar leaves** because Save or Discard emptied the draft: focus goes to what the
+  draft was editing — the policy panel's written grants, the Config form's first section or the
+  raw YAML.
+- **An armed row disarms** (Keep, `Esc`): focus goes back to the control that armed it.
+
+The move is made only if focus went with the control: focus a person moved somewhere else in
+the meantime stays where they put it.
+
 ## Keyboard map
 
 | Scope | Key | Action |
@@ -64,7 +83,7 @@ list has selection, the palette has focus), and the design must keep both legibl
 | Workflow canvas | `⇧↑` `⇧↓` `⇧←` `⇧→` | Pan |
 | Workflow editor | `↑` / `↓` / `←` / `→` | Select the nearest node in that direction, by where the boxes are drawn |
 | Workflow editor | `Enter` | Open the selected `loop` or `parallel` node's inline graph |
-| Workflow editor | `⌫` / `Delete`, `⇧Delete` | Delete the selection (edges stay, dangling); delete a node with its connections |
+| Workflow editor | `⌫` / `Delete`, `⇧Delete` | Delete the selection (edges stay, dangling); delete a node with its connections. The selection moves to the next node in file order |
 | Workflow editor | `F2`, `C` | Rename the selected node; connect it to another |
 | Workflow editor | `⌘⏎` | Go to the palette, to add a node after the selected one |
 | Workflow editor | `⌥↑` / `⌥↓` | Move the selected node up or down the file |
@@ -158,6 +177,12 @@ in the bottom-right corner, under a minimap. They add **no key**, and that is th
   Database schema". Its menu holds the same levels as items to choose. The folded crumbs are
   measured in an unseen row that is `inert` and `aria-hidden`, so they are never a second,
   invisible tab stop.
+- An id token is read as its kind and its tail — "run 7X8PXX" — never as twenty-six
+  characters: the glyph is `aria-hidden` and the kind's word is in the text. The live region
+  names a finished run the same way ("Run JH7X8P failed"), and an event by its sequence number.
+- An armed row (a claim's release) is a `group` named as the question — "Release Database
+  schema?" — holding **Keep** and **✕ Confirm release**; Confirm is `aria-describedby` the
+  consequence sentence on the row's second line, and Keep, first, is where focus lands.
 
 ## Reduced motion and other preferences
 
@@ -191,7 +216,7 @@ primary pane; below 960px the sidebar collapses to icons. Neither of those two l
 splitter, and a boundary dragged wider than a narrowed window allows shows what fits while
 keeping what was asked for: a dragged width never fights one of these rules. There is no phone
 layout and
-none is planned. The five glyphs that rail collapses to are designed and declared — they are
+none is planned. The six glyphs that rail collapses to are designed and declared — they are
 `semantics.json`'s `surface` map, bundled in the symbol face and listed in
 `10-information-architecture.md` beside the surfaces they name (#261). Each button keeps its
 label as its accessible name and its `⌘1`–`⌘6` address at every width, so the rail loses the

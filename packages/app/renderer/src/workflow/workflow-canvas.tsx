@@ -68,6 +68,7 @@ import {
   type ViewportMeasurer,
   type WorkflowNodeRunState,
 } from "../ui/index.js";
+import { counted } from "../ui/count.js";
 import { arrowLabel, labelTransform, layoutWorkflow, stepSelection, type Arrow, type GraphMetrics } from "./layout.js";
 import type { OverlayIndex } from "./use-workflow.js";
 
@@ -416,8 +417,7 @@ function Graph({ layout, overlay, selected, onSelect, expanded, owns }: GraphPro
 export const nodeDomId = (nodeId: string): string => `orca-wfnode-${nodeId}`;
 
 /** `3 nodes` — what a group box's header says it is holding, counted rather than estimated. */
-export const countLabel = (workflow: WorkflowView): string =>
-  `${workflow.nodes.length} ${workflow.nodes.length === 1 ? "node" : "nodes"}`;
+export const countLabel = (workflow: WorkflowView): string => counted(workflow.nodes.length, "node");
 
 /**
  * What a collapsed container says it is hiding: the number of nested graphs, which for a
@@ -429,7 +429,7 @@ export const countLabel = (workflow: WorkflowView): string =>
 export function collapsedOf(node: WorkflowNodeView, expanded: ReadonlySet<string>): { collapsed?: string } {
   const nested = node.nested ?? [];
   if (nested.length === 0 || expanded.has(node.id)) return {};
-  return { collapsed: `${nested.length} nested ${nested.length === 1 ? "graph" : "graphs"}` };
+  return { collapsed: counted(nested.length, "nested graph") };
 }
 
 /** What the run did at this node, or nothing at all when no run is overlaid. */

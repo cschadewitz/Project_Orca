@@ -24,7 +24,10 @@
 
 A custom title bar with `-webkit-app-region: drag`, no OS chrome relied upon, inset for the
 macOS traffic lights and for the Windows caption buttons by platform-detected padding only —
-nothing else about the layout changes per platform.
+nothing else about the layout changes per platform. The window is frameless so that this is
+the only title bar: the OS title bar is hidden, macOS's traffic lights sit centred in their
+inset, and Windows draws its caption buttons as a Window Controls Overlay themed from the
+tokens. Linux keeps its window manager's frame (`src/main/window-chrome.ts`).
 
 Nothing sits between the title bar and the sidebar. The connection bars
 (`40-connection-states.md`) and a link's landing notice are the primary pane's: under the
@@ -64,8 +67,8 @@ rail. With no workflow named, the surface lists every registered workflow, with 
 size and whether a draft is open; **Open** is the viewer and **Edit** the editor. It sits after
 Plan, with the surfaces about work, so Agents and Config moved to `⌘5` and `⌘6`.
 
-Phase 2 is the configuration and monitoring wave, and as of v0.5.0 all five surfaces have
-content. Plan is the schedule table, the scheduler's explanations, a requests sidebar and the
+Phase 2 is the configuration and monitoring wave, and as of v0.5.0 every surface the design
+then had — the five before Workflows — has content. Plan is the schedule table, the scheduler's explanations, a requests sidebar and the
 journal, and as of v0.6.0 its object header's mode control has five positions — Schedule,
 Risks, Decisions, Dependencies, Journal — with the risk matrix (#172), the decision matrix
 (#173) and the dependency graph (#171) behind them. **The docked panel is a Plan surface as
@@ -120,8 +123,8 @@ works — one component, no dead ends, and no surface needs to embed another's n
 A trail that does not fit **folds its middle into `…`**:
 
 ```
-❝ 5BNH42  ▸  …  ▸  Database schema ☰ JH7X8P  ▸  design (attempt 2) ▭ C6SE2Q
-❝ 5BNH42  ▸  …  ▸  design (attempt 2) ▭ C6SE2Q
+❝ 5BNH42  ▸  …  ▸  Database schema ☰ JH7X8P  ▸  design (attempt 2) ◫ C6SE2Q
+❝ 5BNH42  ▸  …  ▸  design (attempt 2) ◫ C6SE2Q
 ```
 
 Things give way in one order. First the middle folds, nearest the root first, until what is
@@ -138,7 +141,8 @@ width. `…` is a button in the tab order that opens a menu of the folded crumbs
 and token — and choosing one goes where the crumb would have. Its accessible name lists what
 it holds ("2 hidden levels: work item Database schema, run Database schema"), so the trail a
 screen reader walks still names every level, in order. A folded crumb's own menu is reached by
-opening it; `…` lists objects, not their menus.
+opening it; `…` lists objects, not their menus. Crumbs and `…` are set in `label`, like
+every control, and the header is one line (`bar-object`) whatever folds.
 
 ## Deep links
 
@@ -199,7 +203,11 @@ rather than opening a second one onto the same store.
 dependency, decide or reopen a decision, update a risk, release a claim, toggle density —
 every write the daemon serves, as of #178), **navigation**
 (recent runs, work items, agents, config files, workflows), and **search** (step and artifact
-names). Typing a bare run id or an `orca://` URL jumps straight to it. The
+names). Typing a bare run id — `run_` and a ULID, or `run_` and a UUID, which is what a
+run started from a request or the app is given — or an `orca://` URL jumps straight to it. A
+row that acts on an object names it and follows the name with its id token
+(`labelMachine`), and matches the whole id it never draws, so pasting an id or typing the
+six characters a row showed finds the row. The
 palette is the only place a phase-2 write action needs to be discoverable, which keeps the
 chrome of phase-1 screens empty.
 

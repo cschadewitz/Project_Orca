@@ -8,7 +8,7 @@ wrong.**
 | State | Status bar | Banner | Data shown | Writes |
 | --- | --- | --- | --- | --- |
 | **Live** | `● connected` in `status-succeeded` | none | live | enabled |
-| **Reconnecting** | `◌ reconnecting… 3s` in `status-waiting`, spinner | none for the first 5s, then a thin bar on affected screens | last-known, values at `opacity-stale` | queued, buttons show "will send on reconnect" |
+| **Reconnecting** | `◌ reconnecting… 3s` in `status-waiting`, spinner | none for the first 5s, then a thin bar under the object header on affected screens | last-known, values at `opacity-stale` | disabled with the reason on the control; the design's "will send on reconnect" waits on an outbox that does not exist (below) |
 | **Disconnected** | `◷ disconnected · 2m ago` in `status-stale` | persistent bar on every screen with data | last-known, values at `opacity-stale`, every timestamp switched to absolute | disabled with the reason on the control |
 | **File mode** | `◷ file mode · read-only` in `status-stale` | persistent bar naming the store being replayed | whatever the event log and artifact files contain, replayed | disabled, and the buttons are absent rather than disabled |
 | **Version mismatch** | `▣ daemon 0.11 · app 0.9` in `status-blocked` | blocking dialog on first detection, then a persistent bar | last-known | disabled |
@@ -88,8 +88,12 @@ One thing above is still not true, and is written here rather than approximated 
 
 - **Writes are not queued while reconnecting.** There is no outbox — that belongs with the
   control methods — so a control says "the daemon is not answering; wait for the connection to
-  come back" rather than promise a send the app cannot make. The table's "will send on
-  reconnect" is the intent, not the behaviour.
+  come back" rather than promise a send the app cannot make. "Will send on reconnect" is the
+  design's intent for when an outbox exists, which is why the table names it as such.
+
+The bars and the link-landing notice are the primary pane's, under its object header — never a
+row across the window between the title bar and the sidebar, which would read as an alert
+about the whole app (`10-information-architecture.md`).
 
 The two classes this spec needs are now in the component layer (#240): `.orca-stale-rule` for
 the 2px bar, and the `.orca-dialog` family for a blocking dialog that is not the command
