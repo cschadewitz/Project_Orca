@@ -27,7 +27,18 @@ import type { ConnectionState } from "@orca/design";
 import type { RunSummaryView, WorkflowNodeView } from "@orca/protocol";
 import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { useMethodPresent } from "../chrome/use-connection.js";
-import { Button, Chip, Menu, StateView, StatusChip, Text, textClass, type Crumb, type MenuItem } from "../ui/index.js";
+import {
+  Button,
+  Chip,
+  KeyValueList,
+  Menu,
+  StateView,
+  StatusChip,
+  Text,
+  textClass,
+  type Crumb,
+  type MenuItem,
+} from "../ui/index.js";
 import { WorkflowEditor } from "./editor/workflow-editor.js";
 import { findNode } from "./layout.js";
 import { WorkflowCanvas } from "./workflow-canvas.js";
@@ -322,7 +333,11 @@ function useWorkflowRuns(workflowId: string): readonly RunSummaryView[] {
  *
  * `fields` is `unknown`-valued on purpose — "a `custom:<name>` node is a plugin's, and the
  * protocol has nothing true to say about its shape" — so a value that is not a string is
- * printed as JSON rather than coerced into a sentence the node never said.
+ * printed as JSON rather than coerced into a sentence the node never said. It is a
+ * `KeyValueList`, the display a run's variables use: a key in mono, a scalar on the line, and
+ * an object or an array — a gate's `options`, an agent's `completion` — as its indented JSON
+ * in a well, clamped, rather than one compact line nobody could read. Keyed by the node, so a
+ * block opened on one node is not still open on the next.
  */
 function Inspector({ node }: { node: WorkflowNodeView | undefined }): JSX.Element {
   if (!node) {
@@ -332,7 +347,6 @@ function Inspector({ node }: { node: WorkflowNodeView | undefined }): JSX.Elemen
       </aside>
     );
   }
-  const entries = Object.entries(node.fields);
   return (
     <aside className="orca-wf__inspector" aria-label={`Node detail: ${node.name ?? node.id}`}>
       <h2 className={`orca-wf__inspector-name ${textClass("mono-strong")}`}>{node.name ?? node.id}</h2>
@@ -343,21 +357,11 @@ function Inspector({ node }: { node: WorkflowNodeView | undefined }): JSX.Elemen
         {node.maxAttempts !== undefined && <Chip>{`up to ${node.maxAttempts} attempts`}</Chip>}
       </div>
       {node.description !== undefined && <Text style="caption">{node.description}</Text>}
-      {entries.length === 0 ? (
+      {Object.keys(node.fields).length === 0 ? (
         <Text style="caption">This node type carries no configuration.</Text>
       ) : (
-        <dl className="orca-wf__fields">
-          {entries.map(([key, value]) => (
-            <div key={key} className="orca-wf__field">
-              <dt className={textClass("label-strong")}>{key}</dt>
-              <dd className={`orca-wf__value ${textClass("mono-body")}`}>{show(value)}</dd>
-            </div>
-          ))}
-        </dl>
+        <KeyValueList key={node.id} values={node.fields} className="orca-wf__fields" />
       )}
     </aside>
   );
 }
-
-/** A field value as ORCA sent it. A string is itself; anything else is its JSON. */
-const show = (value: unknown): string => (typeof value === "string" ? value : JSON.stringify(value));

@@ -28,6 +28,7 @@ import {
   ConfigField,
   ConnectionIndicator,
   Duration,
+  KeyValueList,
   ObjectHeader,
   ObjectId,
   ScheduleBadge,
@@ -214,6 +215,10 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
         <Well label="Handshake result">{'{\n  "protocol": "1.0",\n  "daemon": "0.3.0"\n}'}</Well>
       </Section>
 
+      <Section title="Names and values">
+        <KeyValueList values={NAMES_AND_VALUES} withheld={["apiToken"]} />
+      </Section>
+
       <Section title="Config field">
         <ConfigField
           label="Daemon URL"
@@ -261,6 +266,24 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
     </section>
   );
 }
+
+/* One of each way a value is set: on the line, a block that fits, a block past the clamp (a
+   browser draws Show all under it), and a value withheld. Fixed, like the instants above. */
+const NAMES_AND_VALUES: Readonly<Record<string, unknown>> = {
+  branch: "feat/sso",
+  maxBuildAttempts: 3,
+  dryRun: false,
+  apiToken: "never drawn",
+  workItem: { slug: "seed-rate-limit", title: "Rate-limit the login endpoint" },
+  request: {
+    id: "req_01M4M896DER1YQSTMV3G5BNH42",
+    title: "Rate-limit the login endpoint",
+    source: { kind: "cli", actor: "casey" },
+    status: "open",
+    createdAt: "2026-10-10T09:00:00.000Z",
+    labels: ["security", "auth"],
+  },
+};
 
 /* Sentence case, subject first, no exclamation marks (rule 13). Each body says what to do. */
 const STATE_TITLES: Record<

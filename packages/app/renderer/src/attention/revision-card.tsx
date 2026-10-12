@@ -2,7 +2,7 @@
 import { useRef, useState, type JSX } from "react";
 import type { OpenInputView, RevisionBoundaryView } from "@orca/protocol";
 import { useAnnounce } from "../a11y/announce-context.js";
-import { Button, Card, ObjectId, Text, textClass } from "../ui/index.js";
+import { Button, Card, ObjectId, Text, Well, textClass } from "../ui/index.js";
 import { ArtifactRefs } from "./artifact-refs.js";
 import { artifactsReady } from "./card-model.js";
 import { RevisionInputCard } from "./revision-input-card.js";
@@ -122,15 +122,16 @@ export function PendingCorrection({ entry, feed }: { entry: AttentionRevision; f
             {entry.summary.unavailableReason && (
               <Text style="caption">{REVISION_REASONS[entry.summary.unavailableReason]}</Text>
             )}
+            {/* Text a person wrote is prose, and stays sans; values are machine text, and are
+                their indented JSON in a well (rule 8). */}
             {pending?.payload ? (
-              <pre
-                className={textClass(pending.payload.kind === "text" ? "body" : "mono-log")}
-                style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
-              >
-                {pending.payload.kind === "text"
-                  ? pending.payload.text
-                  : JSON.stringify(pending.payload.values, null, 2)}
-              </pre>
+              pending.payload.kind === "text" ? (
+                <pre className={textClass("body")} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                  {pending.payload.text}
+                </pre>
+              ) : (
+                <Well>{JSON.stringify(pending.payload.values, null, 2)}</Well>
+              )
             ) : (
               !entry.reading && <Text style="caption">Correction content is unavailable.</Text>
             )}

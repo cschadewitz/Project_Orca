@@ -137,11 +137,11 @@ Write in the app the way a careful engineer writes a commit message.
 
 - `body` is the interface default. `label` is the workhorse for rows and tables; `caption`
   for the second line of a two-line row.
-- **Mono means "ORCA produced this".** Run ids, step and node names, file paths, expressions,
-  tool names, agent output and artifact bodies are set in the Machine group. Prose a person
-  wrote — a request summary, a gate question, a decision rationale — is set in sans. The
-  distinction is load-bearing: it is how a reader knows whether a string is a value or a
-  sentence.
+- **Mono means "ORCA produced this".** Run ids, step and node names, variable and config key
+  names, file paths, expressions, tool names, agent output and artifact bodies are set in the
+  Machine group. Prose a person wrote — a request summary, a gate question, a decision
+  rationale — is set in sans. The distinction is load-bearing: it is how a reader knows
+  whether a string is a value or a sentence.
 - `mono-log` is the only style used for streamed output. `mono-id` is tracked out so two
   id tails can be compared by eye.
 - The font stack is `IBM Plex Sans` and `IBM Plex Mono`, both bundled with the application as

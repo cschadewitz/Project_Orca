@@ -28,9 +28,8 @@ import type { ArtifactView, RunsGetResult, StepView } from "@orca/protocol";
 import { StepAsks } from "../attention/inline-asks.js";
 import { useArtifactPanel } from "../artifacts/panel-context.js";
 import { useArtifactsList } from "../artifacts/use-artifacts.js";
-import { Duration, StateView, StatusChip, Text, textClass } from "../ui/index.js";
+import { Duration, KeyValueList, StateView, StatusChip, Text, textClass } from "../ui/index.js";
 import { OutputPane, outputLabel, type OutputPaneHandle } from "./output-pane.js";
-import { RunVariables } from "./run-variables.js";
 import { sessionOf } from "./step-facts.js";
 import { foldToolCalls } from "./tool-calls.js";
 import { ToolCallRow } from "./tool-call-row.js";
@@ -255,6 +254,10 @@ export function ArtifactChip({ runId, artifact }: { runId: string; artifact: Art
  * artifacts it produced between them, and the error it ended on. It is deliberately
  * *minimal* — the run tree above it already says what happened, and a second, fuller run
  * screen here would be a rival to it.
+ *
+ * The variables are a `KeyValueList`, the one display a node's configuration in the
+ * Workflows inspector and a launch's review card use too, so a value reads the same in all
+ * three: a scalar on the line, an object as its indented JSON in a well.
  */
 function RunSummary({ detail, connection }: { detail: RunsGetResult; connection: ConnectionState }): JSX.Element {
   const [showVars, setShowVars] = useState(true);
@@ -287,7 +290,7 @@ function RunSummary({ detail, connection }: { detail: RunsGetResult; connection:
               This run was started with none.
             </Text>
           ) : (
-            <RunVariables vars={detail.vars} />
+            <KeyValueList values={detail.vars} />
           )}
         </details>
 

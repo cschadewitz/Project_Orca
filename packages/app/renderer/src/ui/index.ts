@@ -12,6 +12,7 @@ export { COUNTERPARTS, counterpartsFor, type Counterpart, type CrumbType } from 
 export { focusAfterLeaving } from "./focus-after-leaving.js";
 export { elideTrail, sameElision, type Elision, type TrailMeasurement } from "./crumb-elision.js";
 export { formatAbsolute, formatDuration, formatRelative } from "./format-time.js";
+export { KeyValueList, type KeyValueListProps } from "./key-value-list.js";
 export { Menu, type MenuItem, type MenuMeasurer, type MenuProps } from "./menu.js";
 export {
   DEFAULT_PLACEMENT,
@@ -61,6 +62,7 @@ export { StatusDot, type StatusDotProps } from "./status-dot.js";
 export { Text, textClass, type TextProps } from "./text.js";
 export { useTick } from "./ticker.js";
 export { Duration, Time, type DurationProps, type TimeProps } from "./time.js";
+export { valueText, type ValueText } from "./value-text.js";
 export { Well, type WellProps } from "./well.js";
 export {
   WorkflowNode,

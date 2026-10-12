@@ -85,3 +85,25 @@ export function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+/** The launch preview card, found by its eyebrow. */
+export function launchPreview(): HTMLElement {
+  const eyebrow = [...document.querySelectorAll(".orca-card__eyebrow")].find((e) => e.textContent === "Launch preview");
+  const card = eyebrow?.closest<HTMLElement>(".orca-card");
+  if (!card) throw new Error("no launch preview on screen");
+  return card;
+}
+
+/**
+ * What the launch preview says beside an input's name — its value, or "Withheld" — read off
+ * the `KeyValueList` it lists the command's variables in, the way a screen reader pairs a
+ * `<dt>` with its `<dd>`.
+ */
+export function previewed(name: string): string {
+  const term = [...launchPreview().querySelectorAll("dl.orca-kv > .orca-kv__item > dt")].find(
+    (dt) => dt.textContent === name,
+  );
+  const value = term?.nextElementSibling;
+  if (!value || value.tagName !== "DD") throw new Error(`no ${name} in the launch preview`);
+  return value.textContent ?? "";
+}

@@ -4,10 +4,11 @@
    Everything with a look already has a class in components.css: the pane is `.orca-inspector`,
    the header is `.orca-inspector__head`, a tool call is `.orca-tool`, a line of log is
    `.orca-log__line` inside `.orca-log`, the jump button is `.orca-jump` and the reconnect
-   seam is `.orca-timeline-rule`. What is left here is this surface's own geometry — how the
-   four bands of the pane divide the height, what a metric cell is, and how a run's variables
-   are set — and two corrections that only arise because a system class is being used inside
-   a virtualised row.
+   seam is `.orca-timeline-rule`, and a run's variables are `.orca-kv`, the `KeyValueList`
+   every detail pane lists names and values with. What is left here is this surface's own
+   geometry — how the four bands of the pane divide the height and what a metric cell is —
+   and two corrections that only arise because a system class is being used inside a
+   virtualised row.
 
    The pane is a column of the window and nothing in it may decide its width: it scrolls
    downwards only. Every string in it that a machine wrote — an id, a path, a value, an
@@ -15,7 +16,7 @@
    flex track that holds one has a floor of zero rather than its content's width.
 
    No literal colours, sizes, radii or durations: every value below is a token reference, a
-   ratio (`ch`, `%`, `fr`), a count of lines or zero (docs/design/RULES.md rule 1). */
+   ratio (`ch`, `%`, `fr`) or zero (docs/design/RULES.md rule 1). */
 
 .orca-step {
   display: flex;
@@ -82,60 +83,6 @@
 /* The artifact chips wrap in the component layer's `.orca-chips`, which is where this
    surface's own copy of that rule went, and a name longer than the pane truncates inside its
    own chip (`.orca-ref__label`). */
-
-/* ---------- the run summary's variables ---------- */
-
-/* A `<dl>` of `.orca-field`s: the component layer draws the name and the value side by side
-   with a hairline under each, and this undoes only what the user agent gives a `<dl>` and a
-   `<dd>` — the block margins and the indent — which the field's own padding replaces. */
-.orca-step__vars {
-  margin: 0;
-}
-/* The value's column is `minmax(0, 1fr)` in the component layer, so it cannot be held open;
-   what is left is the value itself, which breaks anywhere rather than running out past that
-   column. A string with spaces in it never needs to. */
-.orca-step__var-value {
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-/* An object or an array is a block of indented JSON, and it sits under its name across the
-   pane's whole width rather than beside it in the value column, which at the pane's
-   narrowest is too few characters wide for one indented key. The field is not a row
-   (rule 9), so it may be as tall as the block. Two classes deep, because the component
-   layer states the inspector's two columns two classes deep (`.orca-inspector .orca-field`)
-   and a one-class rule here lost to it whatever order the sheets arrived in. */
-.orca-step__vars > .orca-step__var--block {
-  grid-template-columns: minmax(0, 1fr);
-}
-.orca-step__var--block > .orca-step__var-value {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-/* Closed, the block is its first eight lines and stops on a line boundary with an ellipsis,
-   which is the system's mark for "this goes on" (docs/design/30-long-running-content.md).
-   Eight is room for a whole object of six keys — most of what a workflow puts in a variable
-   — before anybody has to open it. The rest of the value is still in the document, so a
-   screen reader reads all of it either way.
-
-   Clamped by line rather than by a height, so the box ends on a line boundary; and clipped
-   at the *content* edge, because the lines after the clamp are still laid out below it.
-   `overflow: hidden` clips at the padding edge, and in Chromium the ninth line showed
-   through the well's bottom padding as the top half of a line. `clip` rather than `hidden`
-   also leaves the well something that is not a scroll container, so nothing can scroll a
-   value inside its own box while it is closed. */
-.orca-step__var-well--clamped {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 8;
-  overflow: clip;
-  overflow-clip-margin: content-box;
-}
-/* Under the block, at its start: it is about the block, not about the pane. */
-.orca-step__var-more {
-  align-self: flex-start;
-}
 
 /* ---------- the output pane ---------- */
 

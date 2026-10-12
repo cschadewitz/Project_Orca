@@ -46,6 +46,42 @@ surface arrive with that surface; the shared ones belong here. When an implement
 diverge from `component-api.d.ts`, that file is corrected in the same change, so it stays a
 description of what exists rather than a draft of what was once intended.
 
+## A name and its value
+
+Three places read out a set of names and the values ORCA holds under them: the variables a
+run was started with (step detail's run summary), a node's configuration (the Workflows
+inspector) and the variables a launch will send (the guided launch's review card). They are
+one primitive, `KeyValueList` (`ui/key-value-list.tsx`, over `.orca-kv` in the component
+layer), so a value reads the same wherever it appears. Editing a value is not this: the
+workflow editor's inspector and the launch form are `ConfigField` around a control.
+
+- **It is a `<dl>`**, so a screen reader hears each value as the value *of* its name. The
+  name sits in the inspector's narrow label column and the value beside it, a hairline under
+  each — the inspector field's geometry without its control. The value column is
+  `minmax(0, 1fr)`, never a bare `1fr`, and every string in it breaks inside itself rather
+  than widening the pane. It is not a list of rows (rule 9): an item is as tall as its value.
+- **Names are mono.** A variable or a config key — `maxBuildAttempts`, `workItem`,
+  `autoApproveWhen` — is an identifier a workflow file, a plugin or the runtime declared, not
+  a label a person wrote for the screen, so rule 8 puts it in the Machine group. It is
+  `mono-id`, the mono style at the 12/16 the label had as `caption`, so the switch moved
+  nothing; `.orca-kv__name` sets it medium, so a mono name is told from the mono value beside
+  it by more than position.
+- **How a value is set is `ui/value-text.ts`'s decision, and never what it says.** A string
+  is itself, without JSON's quotes; a number, a boolean, `null`, `{}` or `[]` is its JSON on
+  the line, in `mono-body`. An object or an array is its two-space-indented JSON in a `Well`
+  under its name across the list's width, clamped to eight lines with a **Show all** /
+  **Show less** button (`aria-expanded`, `aria-controls`). The button is there only when the
+  clamp, measured after layout and on every resize, actually cuts something off, and the whole
+  value stays in the document for a screen reader either way. No recognised shape gets a
+  friendlier rendering: the wire declares no type for any of these values, so the keys are
+  printed verbatim in the order the value has them (rule 12).
+- **A value can be withheld.** The launch review lists a sensitive input by name with the
+  word *Withheld* in sans in its place; the list never reads that value, so it never reaches
+  the document. An empty record draws nothing — why there is nothing is the caller's sentence.
+
+The Attention correction cards set a correction's values the same way, as indented JSON in a
+`Well`; a correction a person wrote as text stays prose.
+
 ## Density
 
 Density is one attribute, `data-density="compact"`, set on a surface's root element. It
