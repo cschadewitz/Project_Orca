@@ -50,6 +50,10 @@ YAML by hand. The editor keeps both protections:
 Pan, zoom and selection work as in the viewer. Every pointer gesture has a keyboard path, and
 every key is in the `workflow-edit` scope, so the palette lists them.
 
+The inspector's **Delete** and **Delete edge** are default-tone buttons that do not ask, like
+the keys that do the same: each edits the draft, which `⌘Z` takes back and only **Review and
+publish** writes, so the one act here that confirms and wears the danger tone is **Discard**.
+
 ## Drafts
 
 Editing does not touch the live file. **Edit** on the workflow viewer opens a **draft**, owned

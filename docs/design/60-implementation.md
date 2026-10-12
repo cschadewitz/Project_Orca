@@ -620,6 +620,14 @@ control that commits a destructive act rather than to one that drafts it.
 `policy-editor.test.tsx` holds the panel to no danger tone at rest, and to a Remove that
 sends nothing until Save.
 
+**A removed grant does not take focus with it.** When the grant holding focus leaves the list
+— its own Remove, or a re-read that no longer has it — focus moves to the next grant's
+**Remove**, the previous one's if it was the last, or **Add a grant** when none is left. It is
+the claims list's rule, from the same `focusAfterLeaving` (`renderer/src/ui/`), and focus a
+person has already moved elsewhere stays where they put it. A grant is keyed by when it was
+added rather than by its place (`grantKeys`), so the grants after a removed one keep their
+rows and the one that slides into the gap is the control focus lands on.
+
 **It is the Config surface's draft model, mounted elsewhere.** The panel lives in
 `renderer/src/config/` and reads the app's one feed through `ConfigProvider`: the same
 `expectedRevision`, the same `CONFIG_STALE` conflict with **Reload**, the same rule that a

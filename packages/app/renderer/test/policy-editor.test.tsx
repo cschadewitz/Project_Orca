@@ -10,16 +10,17 @@
  *
  * The screen half then asserts the three things the editor promises: the configured rules
  * are shown and cannot be edited here, the written ones can, and a refused write keeps the
- * draft.
+ * draft — and then where keyboard focus goes when a grant leaves the list holding it.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PermissionPolicyFileSchema } from "@orca/protocol";
 import { ConfigProvider } from "../src/config/config-context.js";
 import { PolicyPanel } from "../src/config/policy-editor.js";
 import {
   EMPTY_SIDECAR,
   HAND_GRANT,
+  grantKeys,
   handRule,
   parseSidecar,
   ruleChanges,
@@ -208,6 +209,28 @@ describe("the sidecar as a document", () => {
     const next = withRules(doc(), "claude", [...rulesOf(doc(), "claude"), handRule("2026-09-21T12:00:00.000Z")]);
     const parsed = PermissionPolicyFileSchema.safeParse(JSON.parse(serializeSidecar(next)));
     expect(parsed.success).toBe(true);
+  });
+
+  it("names each rule by when it was added, so a removal leaves the others their names", () => {
+    const rules = rulesOf(doc(), "claude");
+    const keys = grantKeys(rules);
+    expect(new Set(keys).size).toBe(2);
+    // The first goes, and the second keeps its own name rather than taking the first's place.
+    expect(grantKeys(rules.slice(1))).toEqual([keys[1]]);
+    // An edit to a rule's decision or match is the same rule, so its row is not drawn again.
+    expect(grantKeys([{ ...rules[0]!, decision: "deny" }, rules[1]!])).toEqual(keys);
+  });
+
+  it("tells apart rules that share a stamp, or have none, by their order among themselves", () => {
+    // A sidecar written by hand need not stamp anything, and two grants can share a time.
+    const bare = { match: { kind: "read" as const }, decision: "allow" as const };
+    const stamped = handRule("2026-09-21T12:00:00.000Z");
+    const keys = grantKeys([bare, stamped, bare, stamped]);
+    expect(new Set(keys).size).toBe(4);
+    // Taking out an unstamped rule renames none of the stamped ones.
+    const after = grantKeys([stamped, bare, stamped]);
+    expect(after[0]).toBe(keys[1]);
+    expect(after[2]).toBe(keys[3]);
   });
 });
 
@@ -539,5 +562,127 @@ describe("the policy editor", () => {
     const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
     expect(bar.textContent).toContain("1 change");
     expect(fake.calls.filter((call) => call.method === "config.set")).toHaveLength(0);
+  });
+});
+
+describe("where focus goes when a grant leaves", () => {
+  /* Remove takes its own row out of the document, and the Remove focused inside it with the
+     row; without somewhere to go, focus falls to the page body, and a keyboard user's place in
+     the list goes with the grant. happy-dom does not move focus on a click the way a browser
+     does, so a press here is `focus()` and then `click`, which is what a person's press does
+     in the app. */
+  beforeEach(() => {
+    fake = installBridge();
+    teardown.push(fake.install());
+  });
+  afterEach(() => {
+    cleanup();
+    while (teardown.length) teardown.pop()?.();
+  });
+
+  const press = (button: HTMLElement): void => {
+    act(() => button.focus());
+    fireEvent.click(button);
+  };
+
+  /** Somebody else rewrote the sidecar to hold only `rules`, and the daemon says so. */
+  function rewritten(rules: (doc: SidecarDocument) => SidecarDocument): void {
+    const text = serializeSidecar(rules(parseSidecar(PERMISSIONS_TEXT)!));
+    fake.script({
+      "config.get": () => ({
+        ok: true,
+        result: { ...CONFIG_GET, permissions: { ...CONFIG_GET.permissions, revision: "rewritten", text } },
+      }),
+    });
+    fake.notify({
+      kind: "notification",
+      method: "config.changed",
+      params: {
+        subscriptionId: "sub-1",
+        at: AS_OF,
+        document: "permissions",
+        revision: "rewritten",
+        path: "/workspace/orca.permissions.json",
+      },
+    });
+  }
+
+  it("moves to the next grant's Remove when the grant was in the middle", async () => {
+    renderPanel();
+    await panel();
+    // A third grant, so that there is a middle one: the fixture's two, then one added by hand.
+    fireEvent.click(screen.getByRole("button", { name: "Add a grant" }));
+    const written = await grants();
+    expect(written).toHaveLength(3);
+    const next = within(written[2]!).getByRole("button", { name: "Remove grant 4" });
+
+    press(within(written[1]!).getByRole("button", { name: "Remove grant 3" }));
+
+    const left = await grants();
+    expect(left).toHaveLength(2);
+    /* The grant that slid into the gap: where the next Tab from the removed one would have
+       gone. Its row is kept rather than drawn again, so it is the same control, numbered for
+       its new place. */
+    expect(document.activeElement).toBe(next);
+    expect(left[1]!.contains(next)).toBe(true);
+    expect(next.getAttribute("aria-label")).toBe("Remove grant 3");
+    expect(left[1]!.textContent).toContain(`granted for ${HAND_GRANT}`);
+  });
+
+  it("moves to the previous grant's Remove when the grant was the last", async () => {
+    renderPanel();
+    const written = await grants();
+    const previous = within(written[0]!).getByRole("button", { name: "Remove grant 2" });
+
+    press(within(written[1]!).getByRole("button", { name: "Remove grant 3" }));
+
+    expect(await grants()).toHaveLength(1);
+    expect(document.activeElement).toBe(previous);
+  });
+
+  it("moves to Add a grant when the grant was the only one", async () => {
+    renderPanel();
+    const written = await grants();
+    const second = within(written[1]!).getByRole("button", { name: "Remove grant 3" });
+
+    // The first of two goes, and the second slides up under focus...
+    press(within(written[0]!).getByRole("button", { name: "Remove grant 2" }));
+    expect(document.activeElement).toBe(second);
+
+    // ...and then the only one, which leaves no grant to land on.
+    press(second);
+    const section = await screen.findByRole("region", { name: "Written grants" });
+    await waitFor(() => expect(within(section).queryAllByRole("listitem")).toHaveLength(0));
+    expect(section.textContent).toContain("Nothing has been granted");
+    expect(document.activeElement).toBe(within(section).getByRole("button", { name: "Add a grant" }));
+    // The section is the last resort behind it: focusable from script, and never a Tab stop.
+    expect(section.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("moves the same way when a re-read takes the grant a field in it was focused in", async () => {
+    renderPanel();
+    const written = await grants();
+    const next = within(written[1]!).getByRole("button", { name: "Remove grant 3" });
+    act(() => field(written[0]!, "Path prefix").focus());
+
+    // A run's "always" rewrote the file without the first grant, and nothing was drafted here.
+    rewritten((doc) => withRules(doc, "claude", rulesOf(doc, "claude").slice(1)));
+
+    await waitFor(async () => expect(await grants()).toHaveLength(1));
+    expect(document.activeElement).toBe(next);
+  });
+
+  it("does not take focus back from somewhere the person moved it", async () => {
+    renderPanel();
+    const written = await grants();
+    act(() => within(written[0]!).getByRole("button", { name: "Remove grant 2" }).focus());
+    const elsewhere = screen.getByRole("button", { name: "Close" });
+    act(() => elsewhere.focus());
+
+    rewritten((doc) => withRules(doc, "claude", []));
+
+    const section = await screen.findByRole("region", { name: "Written grants" });
+    await waitFor(() => expect(within(section).queryAllByRole("listitem")).toHaveLength(0));
+    expect(document.activeElement).toBe(elsewhere);
   });
 });

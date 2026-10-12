@@ -382,9 +382,17 @@ function NodeInspector({
                   Make this the start
                 </Button>
               )}
+              {/* The default tone, and no confirmation - the policy panel's Remove, for the same
+                  reason. Delete edits the draft and nothing else: the node is struck through in
+                  it, Undo (⌘Z) brings it back, and the workflow file is untouched until Review
+                  and publish, which shows the diff before it writes. A destructive control
+                  confirms only an act with no way back (docs/design/60-implementation.md), and
+                  in this editor that act is Discard, which asks. Red on every resting inspector
+                  was saturation no status put there (the brand book's Colour); the danger tone
+                  is for the control that commits, like the armed Discard every change. */}
               {!removed && node.id !== graph.start && (
                 <>
-                  <Button size="sm" tone="danger" onClick={() => void onApply([{ op: "removeNode", id: node.id }])}>
+                  <Button size="sm" onClick={() => void onApply([{ op: "removeNode", id: node.id }])}>
                     Delete
                   </Button>
                   <Button
@@ -486,11 +494,12 @@ function EdgeInspector({
             />
           )}
         </ConfigField>
+        {/* Quiet like the node's Delete: it takes the edge out of the draft, which Undo puts
+            back and only Review and publish writes. */}
         {!readOnly && (
           <div className="orca-wfedit__row">
             <Button
               size="sm"
-              tone="danger"
               onClick={() =>
                 void onApply([{ op: "removeEdge", index: edge.index }]).then((ok) => ok && onSelect(undefined))
               }

@@ -199,30 +199,3 @@ export function releaseConsequence(claim: ClaimView): readonly Phrase[] {
 export function phraseText(phrases: readonly Phrase[]): string {
   return phrases.map((phrase) => phrase.text).join("");
 }
-
-/**
- * Which row takes focus when the claim row holding it leaves the list — a release the daemon
- * took, after which the re-read no longer has the claim, so its row and the Release focused
- * inside it go out of the document and focus would otherwise fall to the page (`Claims` in
- * agents-surface.tsx).
- *
- * **The row that was after it, or the one before it when it was the last.** The list closes
- * up under a person moving down it, and the row that slides into the gap is the one their
- * next `Tab` would have reached anyway. Only a row that was there *before* counts: the same
- * re-read can bring claims nobody has looked at yet, and focus landing on one of those is
- * focus landing somewhere the person never was. `undefined` when none is left — the list is
- * empty, or every row on it is new — and the section takes focus instead.
- *
- * Rows are named by their keys, the strings React keys them by, and the answer is a position
- * in `now`.
- */
-export function focusAfterLeaving(before: readonly string[], now: readonly string[], gone: string): number | undefined {
-  const at = before.indexOf(gone);
-  const after = before.slice(at + 1);
-  const prior = before.slice(0, Math.max(at, 0)).reverse();
-  for (const key of [...after, ...prior]) {
-    const index = now.indexOf(key);
-    if (index !== -1) return index;
-  }
-  return undefined;
-}
