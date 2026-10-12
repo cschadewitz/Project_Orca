@@ -40,7 +40,19 @@ export const faults = {
 export async function processFixture(dir: string, boundary: (name: Boundary) => Promise<void>) {
   const stores = fileStores(dir);
   const admissions = new FileAdmissionStore(dir);
-  const store = new FileRetryClaimStore({ storeDir: dir, execution: stores.execution, faults, lockTimeoutMs: 5_000 });
+  // How long a lock held by another process is waited for. Generous, because the catalog mutex
+  // is held through a fsync'd publication and a loaded runner must not turn a healthy claim into
+  // a timeout. The store reads it on every acquisition, so a worker that has lost the race, and
+  // will only wait on the owner's operation lock from here, can shorten it.
+  const lockBudget = { timeoutMs: 5_000 };
+  const store = new FileRetryClaimStore({
+    storeDir: dir,
+    execution: stores.execution,
+    faults,
+    get lockTimeoutMs() {
+      return lockBudget.timeoutMs;
+    },
+  });
   const claims = new RegisteredRetryClaims(store, faults);
   const workflow = parseWorkflow(`
 id: program
@@ -156,5 +168,5 @@ edges: [{ from: s, to: e }]
           authority,
         )
       : direct.admitRun({ workflowId: "program" }, { idempotencyKey: "same-key" }, authority);
-  return { stores, admissions, store, orc, submit, starts: () => starts };
+  return { stores, admissions, store, orc, submit, starts: () => starts, lockBudget };
 }

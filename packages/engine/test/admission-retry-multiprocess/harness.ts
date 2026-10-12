@@ -33,10 +33,21 @@ export class Worker {
   private ended = false;
   private stderr = "";
 
-  constructor(dir: string, kind: AdmissionKind, stopAt: Boundary | "none" = "none", mode = "normal") {
+  /**
+   * `contenderLockMs` replaces the fixture's lock wait for a "race" worker once it has lost the
+   * claim; which of two workers that is only becomes known after they are started.
+   */
+  constructor(
+    dir: string,
+    kind: AdmissionKind,
+    stopAt: Boundary | "none" = "none",
+    mode = "normal",
+    contenderLockMs?: number,
+  ) {
     compiled ??= compileRetryWorker();
     compiled.verify();
-    this.child = fork(compiled.entry, [dir, kind, stopAt, mode], {
+    const lockArgs = contenderLockMs === undefined ? [] : [String(contenderLockMs)];
+    this.child = fork(compiled.entry, [dir, kind, stopAt, mode, ...lockArgs], {
       execArgv: [],
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
