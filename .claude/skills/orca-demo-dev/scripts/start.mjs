@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Start the ORCA demo daemon and the desktop app in dev mode, in one foreground command.
 //
-//   node .claude/skills/orca-demo-dev/scripts/start.mjs [--dir <path>] [--fresh] [--daemon-only]
+//   node .claude/skills/orca-demo-dev/scripts/start.mjs [--dir <path>] [--fresh] [--seed] [--daemon-only]
 //
 // 1. Makes a demo workspace once (`orca demo --dir`): scripted agents, a finished program
 //    run, a plan with risks and decisions. Reused on later starts; --fresh rebuilds it.
@@ -11,33 +11,34 @@
 // 3. Rebuilds @orca/design's dist. The renderer reads the package through dist, and a dist
 //    older than semantics.json is a sidebar with the wrong surfaces in it.
 // 4. Starts `orca serve` on the workspace and waits for it to say it is listening.
-// 5. Starts `pnpm --filter @orca/app dev` against it (Vite on :5273 plus Electron).
+// 5. With --seed, submits more work through the daemon so every surface is populated
+//    (seed.mjs): a running run, gates waiting for an answer, a failure, a cancellation and a
+//    second request's plan. The seed agents are added to the config before the daemon starts.
+// 6. Starts `pnpm --filter @orca/app dev` against it (Vite on :5273 plus Electron).
 //
 // Ctrl-C, or closing the app window, stops both. If the daemon dies, the app is stopped
 // too, so a session never outlives half of itself.
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
+import { prepareSeedConfig, seed } from "./seed.mjs";
+import { defaultWorkspace, repoRoot, say } from "./workspace.mjs";
 
-// scripts -> orca-demo-dev -> skills -> .claude -> repository root
-const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const isWindows = process.platform === "win32";
 const READY_TIMEOUT_MS = 120_000;
 
 function parseArgs(argv) {
-  const options = { dir: undefined, fresh: false, daemonOnly: false };
+  const options = { dir: undefined, fresh: false, seed: false, daemonOnly: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--fresh") options.fresh = true;
+    else if (arg === "--seed") options.seed = true;
     else if (arg === "--daemon-only") options.daemonOnly = true;
     else if (arg === "--dir") options.dir = argv[++i];
     else if (arg.startsWith("--dir=")) options.dir = arg.slice("--dir=".length);
     else if (arg === "--help" || arg === "-h") {
-      process.stdout.write("usage: start.mjs [--dir <path>] [--fresh] [--daemon-only]\n");
+      process.stdout.write("usage: start.mjs [--dir <path>] [--fresh] [--seed] [--daemon-only]\n");
       process.exit(0);
     } else {
       console.error(`[orca-demo] unknown option: ${arg}`);
@@ -48,17 +49,10 @@ function parseArgs(argv) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-// One workspace per checkout, so two worktrees never share a store.
-const defaultDir = join(
-  tmpdir(),
-  `orca-dev-demo-${createHash("sha256").update(resolve(repoRoot)).digest("hex").slice(0, 8)}`,
-);
-const dir = resolve(options.dir ?? defaultDir);
+const dir = resolve(options.dir ?? defaultWorkspace());
 const configFile = join(dir, "orca.config.yaml");
 const tokenFile = join(dir, "auth", "local-client.token");
 
-/** Plain stdout lines: this is a launcher, and its output is the log a person reads. */
-const say = (line) => process.stdout.write(`${line}\n`);
 const log = (message) => say(`[orca-demo] ${message}`);
 
 /** Quote one argument for cmd.exe, which is what `shell: true` runs on Windows. */
@@ -152,6 +146,8 @@ if (!block.includes(`- ${LOCAL_WORKFLOWS}`)) {
   log(`copied ${files.length} workflows into ${target} so the editor can change them`);
 }
 
+if (options.seed && prepareSeedConfig(dir)) log("added the seed agents, and gates now wait for an answer");
+
 // ---------- 3. a current @orca/design ----------
 
 log("building @orca/design");
@@ -202,11 +198,19 @@ daemon.on("exit", (code) => {
 
 log(`daemon listening on ${daemonUrl}`);
 
+if (options.seed) {
+  log("seeding: submitting work through the daemon");
+  await seed({ dir, url: daemonUrl }).catch((error) => {
+    console.error(`[orca-demo] seeding failed: ${error.message}`);
+    shutdown(1);
+  });
+}
+
 if (options.daemonOnly) {
   log(`daemon only. Point the app at it with ORCA_WORKSPACE=${dir} ORCA_DAEMON_TOKEN_FILE=${tokenFile}`);
   log("press Ctrl-C to stop");
 } else {
-  // ---------- 5. the app ----------
+  // ---------- 6. the app ----------
 
   log("starting the app (Vite renderer + Electron)");
   app = spawnPnpm(["--filter", "@orca/app", "dev"], {

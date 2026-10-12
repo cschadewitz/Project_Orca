@@ -47,8 +47,35 @@ with it.
 | Option | Effect |
 | --- | --- |
 | `--dir <path>` | Use this workspace instead of the default `<os tmp>/orca-dev-demo-<hash of the checkout>`. Each worktree gets its own default. |
+| `--seed` | Populate every surface (below). Seeds a workspace once; `--fresh --seed` gives a new seeded one. |
 | `--fresh` | Delete the workspace and build a new one. It refuses a non-empty directory that has no `demo-playbook.yaml`, so it never deletes something it did not make. |
 | `--daemon-only` | Start only the daemon. It prints the two environment variables the app needs. |
+
+## Populated screens (`--seed`)
+
+The demo alone leaves only finished runs. `--seed` (`scripts/seed.mjs`) submits more work
+through the daemon's own `requests.submit` and `runs.cancel`, so the store holds real runs and
+events, not hand-made files. Before the daemon starts it changes the config in two ways:
+
+- It adds four scripted agents, each with its own playbook: `scripted-slow`, `scripted-flaky`,
+  `scripted-risky` and `scripted-planner`. They have no roles, so a request only gets one
+  through its role overrides.
+- It sets `humanInput: { mode: pause }`, so gates wait for an answer instead of approving
+  themselves.
+
+| Request | Agent override | What it shows |
+| --- | --- | --- |
+| Export invoices as CSV | none | A succeeded run |
+| Rate-limit the login endpoint | builder → slow | A run still **running**. Its build step takes 25 minutes. |
+| Rotate the API signing keys | designer → risky | A run **waiting** at the spec gate. It's on Attention. |
+| Fix the flaky checkout test | tester → flaky | A run **failed** after three build attempts |
+| Move sessions to Redis | builder → slow | A run **cancelled** mid-build, with a reason |
+| Billing export (program) | decomposer, planner → planner | **Waiting** at the plan gate. It adds 5 work items, 3 risks and a decision to the plan. |
+
+The Agents surface lists five agents. Answering the two gates in the app moves the runs on:
+approving the plan dispatches the Billing items. `node scripts/seed.mjs` seeds a daemon that is
+already running on a prepared workspace. If the workspace isn't prepared, it prepares it and
+says to restart with `--seed`, because a running daemon doesn't load new agents.
 
 ## When it fails
 
