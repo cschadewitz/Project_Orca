@@ -45,7 +45,7 @@ list has selection, the palette has focus), and the design must keep both legibl
 | Scope | Key | Action |
 | --- | --- | --- |
 | Global | `⌘K` | Command palette |
-| Global | `⌘1`–`⌘5` | Attention, Runs, Plan, Agents, Config |
+| Global | `⌘1`–`⌘6` | Attention, Runs, Plan, Workflows, Agents, Config |
 | Global | `⌘\` | Toggle the docked panel |
 | Global | `⌘⇧D` | Toggle density on the focused surface |
 | Global | `⌘⇧L` | Cycle theme: system, light, dark |
@@ -62,6 +62,14 @@ list has selection, the palette has focus), and the design must keep both legibl
 | Workflow canvas | `Enter` | Expand or collapse the selected `subworkflow` or `parallel` |
 | Workflow canvas | `+` / `-` / `0` | Zoom in, zoom out, back to rest |
 | Workflow canvas | `⇧↑` `⇧↓` `⇧←` `⇧→` | Pan |
+| Workflow editor | `↑` / `↓` / `←` / `→` | Select the nearest node in that direction, by where the boxes are drawn |
+| Workflow editor | `Enter` | Open the selected `loop` or `parallel` node's inline graph |
+| Workflow editor | `⌫` / `Delete`, `⇧Delete` | Delete the selection (edges stay, dangling); delete a node with its connections |
+| Workflow editor | `F2`, `C` | Rename the selected node; connect it to another |
+| Workflow editor | `⌘⏎` | Go to the palette, to add a node after the selected one |
+| Workflow editor | `⌥↑` / `⌥↓` | Move the selected node up or down the file |
+| Workflow editor | `⌘Z`, `⌘⇧Z` | Undo, redo |
+| Workflow editor | `+` / `-` / `0`, `⇧↑` `⇧↓` `⇧←` `⇧→` | Zoom and pan, as on the viewer's canvas |
 | Schedule table | `Enter` | Explain the selected work item |
 | Plan journal | `J` / `K`, `↑` / `↓` | Move selection |
 | Plan graph | `↑` / `↓` | Move the selection within a layer |
@@ -80,7 +88,11 @@ two the focus is in. The schedule table is `list`, like every other primary list
 dependency graph (#171) is a third scope, `plan-graph`: it is a canvas with the workflow
 canvas's keys, and two canvases in one scope would register `↑` twice, which the map throws
 on. The risk register (#172) and the decision list (#173) are lists that show in place of the
-schedule table, so they take `list` when the schedule is not mounted.
+schedule table, so they take `list` when the schedule is not mounted. The workflow editor
+(#181) is its own scope, `workflow-edit`, rather than the viewer's `workflow`: it adds keys
+that change a draft, and the viewer must not have them. Every pointer gesture in the editor
+(dragging a palette item, a node or a connection) has one of these keys or a palette or
+inspector control as its keyboard path.
 
 Every action in this map is also in the command palette, with its key shown beside it. The
 converse does not hold, and deliberately: a command may register with **no key at all** and be
@@ -139,7 +151,7 @@ layout and
 none is planned. The five glyphs that rail collapses to are designed and declared — they are
 `semantics.json`'s `surface` map, bundled in the symbol face and listed in
 `10-information-architecture.md` beside the surfaces they name (#261). Each button keeps its
-label as its accessible name and its `⌘1`–`⌘5` address at every width, so the rail loses the
+label as its accessible name and its `⌘1`–`⌘6` address at every width, so the rail loses the
 word on screen and nothing else.
 
 ## How this is enforced

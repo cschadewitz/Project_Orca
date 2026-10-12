@@ -177,6 +177,27 @@ export class ConfigurationGenerations {
     if (!this.active) throw unavailable();
     return this.active;
   }
+  /**
+   * What a workflow draft is validated against (#180): the active generation's templates,
+   * workflows and agents, and the node executors that validate custom node types - the same
+   * checks `prepare` runs before a generation is activated, so a draft that validates clean
+   * here is one publication will accept.
+   */
+  validationContext(): NonNullable<Parameters<typeof validateWorkflow>[1]> {
+    const material = this.current;
+    const custom = this.options.validateCustomNode;
+    const executors = material.executors;
+    return {
+      hasTemplate: (id) => material.templates.has(id),
+      hasWorkflow: (id) => material.workflows.has(id),
+      hasAgent: (selector) => material.agents.canResolve(selector),
+      ...(custom
+        ? { validateCustomNode: custom }
+        : executors
+          ? { validateCustomNode: (node) => executors.validateNode(node) }
+          : {}),
+    };
+  }
   onChange(listener: (status: GenerationStatus, workflows: WorkflowChange[]) => void): () => void {
     this.listeners.add(listener);
     return () => {

@@ -37,16 +37,16 @@ describe("the surface nav", () => {
     }
   });
 
-  it("gives the five surfaces the digits ⌘1–⌘5 in sidebar order", () => {
-    expect(SURFACES.map((s) => s.shortcut)).toEqual([1, 2, 3, 4, 5]);
+  it("gives the six surfaces the digits ⌘1–⌘6 in sidebar order", () => {
+    expect(SURFACES.map((s) => s.shortcut)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 });
 
 describe("the collapsed rail", () => {
-  it("renders five named items, each with its designed glyph, in both themes", () => {
+  it("renders six named items, each with its designed glyph, in both themes", () => {
     inBothThemes(rail(true), ({ container, theme }) => {
       const items = buttons(container);
-      expect(items, theme).toHaveLength(5);
+      expect(items, theme).toHaveLength(6);
 
       items.forEach((item, index) => {
         const surface = SURFACES[index]!;
@@ -76,8 +76,8 @@ describe("the collapsed rail", () => {
       const drawn = buttons(container).map((item) => item.querySelector(".orca-nav__glyph")?.textContent);
       const declared = SURFACE_IDS.map((id) => SURFACE_PRESENTATION[id].glyph);
       expect(drawn).toEqual(declared);
-      /* Five destinations told apart by shape alone once the labels go. */
-      expect(new Set(drawn).size).toBe(5);
+      /* Six destinations told apart by shape alone once the labels go. */
+      expect(new Set(drawn).size).toBe(6);
     });
   });
 });

@@ -145,25 +145,30 @@ async function fixture(enabled = true, closed = false, activationAllowed = true)
   };
 }
 
-it("exact approval durably closes admission; defer settles preparation before reopening", async () => {
-  const h = await fixture(true, true);
-  const command = await h.offer();
-  expect(await h.bridge.macUpdates!.act({ ...command, offerId: "stale" })).toMatchObject({ ok: false });
-  expect(h.window!.snapshot.phase).toBe("open");
-  expect(await h.bridge.macUpdates!.act(command)).toMatchObject({ ok: true, result: { phase: "waiting" } });
-  const attempt = h.window!.snapshot.attempt;
-  await expect(enterUpdateWriter(h.data)).rejects.toThrow();
-  expect(await h.bridge.macUpdates!.act(command)).toMatchObject({ ok: true });
-  expect(h.window!.snapshot.attempt).toBe(attempt);
-  expect(await h.bridge.macUpdates!.act({ ...command, action: "defer" })).toMatchObject({ ok: true });
-  expect(h.window!.snapshot.phase).toBe("open");
-  const lease = await enterUpdateWriter(h.data);
-  expect(lease?.check()).toBe(true);
-  await lease?.close();
-  expect(await h.bridge.macUpdates!.act(command)).toMatchObject({ ok: false });
-  expect(h.window!.snapshot.phase).toBe("open");
-  expect(h.resolveWindow).toHaveBeenCalledTimes(1);
-});
+// Approval downloads the candidate, which requires POSIX private modes. Windows must refuse
+// it, so the cases that approve a download skip Windows.
+it.skipIf(process.platform === "win32")(
+  "exact approval durably closes admission; defer settles preparation before reopening",
+  async () => {
+    const h = await fixture(true, true);
+    const command = await h.offer();
+    expect(await h.bridge.macUpdates!.act({ ...command, offerId: "stale" })).toMatchObject({ ok: false });
+    expect(h.window!.snapshot.phase).toBe("open");
+    expect(await h.bridge.macUpdates!.act(command)).toMatchObject({ ok: true, result: { phase: "waiting" } });
+    const attempt = h.window!.snapshot.attempt;
+    await expect(enterUpdateWriter(h.data)).rejects.toThrow();
+    expect(await h.bridge.macUpdates!.act(command)).toMatchObject({ ok: true });
+    expect(h.window!.snapshot.attempt).toBe(attempt);
+    expect(await h.bridge.macUpdates!.act({ ...command, action: "defer" })).toMatchObject({ ok: true });
+    expect(h.window!.snapshot.phase).toBe("open");
+    const lease = await enterUpdateWriter(h.data);
+    expect(lease?.check()).toBe(true);
+    await lease?.close();
+    expect(await h.bridge.macUpdates!.act(command)).toMatchObject({ ok: false });
+    expect(h.window!.snapshot.phase).toBe("open");
+    expect(h.resolveWindow).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("the production activation hold keeps a constructed session unavailable and leaves admission open", async () => {
   const h = await fixture(true, true, false);
@@ -176,16 +181,19 @@ it("the production activation hold keeps a constructed session unavailable and l
   expect(h.f.runtimeEvents).toEqual([]);
 });
 
-it("defer cannot reopen a window once native daemon shutdown has begun", async () => {
-  const h = await fixture(true, true);
-  const command = await h.offer();
-  await h.bridge.macUpdates!.act(command);
-  h.window!.beginStop();
-  expect(await h.bridge.macUpdates!.act({ ...command, action: "defer" })).toMatchObject({ ok: false });
-  expect(h.window!.snapshot.phase).toBe("stopping");
-  expect(h.session.state.phase).toBe("waiting");
-  await expect(enterUpdateWriter(h.data)).rejects.toThrow();
-});
+it.skipIf(process.platform === "win32")(
+  "defer cannot reopen a window once native daemon shutdown has begun",
+  async () => {
+    const h = await fixture(true, true);
+    const command = await h.offer();
+    await h.bridge.macUpdates!.act(command);
+    h.window!.beginStop();
+    expect(await h.bridge.macUpdates!.act({ ...command, action: "defer" })).toMatchObject({ ok: false });
+    expect(h.window!.snapshot.phase).toBe("stopping");
+    expect(h.session.state.phase).toBe("waiting");
+    await expect(enterUpdateWriter(h.data)).rejects.toThrow();
+  },
+);
 
 it("actual production-default IPC/preload is unavailable, with no candidate or native operation", async () => {
   const h = await fixture(false);
@@ -197,50 +205,53 @@ it("actual production-default IPC/preload is unavailable, with no candidate or n
   expect(h.f.runtimeEvents).toEqual([]);
 });
 
-it("routes exact approval/defer and intermediate snapshots through actual sandboxed preload without native capability", async () => {
-  const h = await fixture();
-  const changed = vi.fn();
-  const unsubscribe = h.bridge.macUpdates!.subscribe(changed);
-  const command = await h.offer();
-  expect(changed).toHaveBeenLastCalledWith(
-    expect.objectContaining({ phase: "available", offerId: command.offerId, manifestSha256: command.manifestSha256 }),
-  );
-  const available = h.bridge.macUpdates!.read();
-  expect(Object.keys(available).sort()).toEqual([
-    "channel",
-    "compatibilityPlanId",
-    "manifestSha256",
-    "offerId",
-    "phase",
-    "recoveryPlanId",
-    "version",
-  ]);
-  expect(await h.bridge.macUpdates!.act(command)).toMatchObject({
-    ok: true,
-    result: { phase: "waiting", blocker: "candidate" },
-  });
-  expect(changed.mock.calls.map(([state]) => state.phase)).toEqual([
-    "available",
-    "preparing",
-    "downloading",
-    "preparing",
-    "waiting",
-  ]);
-  expect(h.invoke).toHaveBeenCalledWith("orca:macUpdate.act", command, h.f.target.epoch);
-  expect(h.f.inspect).toHaveBeenCalledOnce();
-  h.held(true);
-  expect(await h.bridge.macUpdates!.act({ ...command, action: "defer" })).toMatchObject({
-    ok: true,
-    result: { phase: "deferred" },
-  });
-  await h.session.settled();
-  unsubscribe();
-  const count = changed.mock.calls.length;
-  await h.offer();
-  expect(changed).toHaveBeenCalledTimes(count);
-  expect(h.f.stop).not.toHaveBeenCalled();
-  expect(h.f.activate).not.toHaveBeenCalled();
-});
+it.skipIf(process.platform === "win32")(
+  "routes exact approval/defer and intermediate snapshots through actual sandboxed preload without native capability",
+  async () => {
+    const h = await fixture();
+    const changed = vi.fn();
+    const unsubscribe = h.bridge.macUpdates!.subscribe(changed);
+    const command = await h.offer();
+    expect(changed).toHaveBeenLastCalledWith(
+      expect.objectContaining({ phase: "available", offerId: command.offerId, manifestSha256: command.manifestSha256 }),
+    );
+    const available = h.bridge.macUpdates!.read();
+    expect(Object.keys(available).sort()).toEqual([
+      "channel",
+      "compatibilityPlanId",
+      "manifestSha256",
+      "offerId",
+      "phase",
+      "recoveryPlanId",
+      "version",
+    ]);
+    expect(await h.bridge.macUpdates!.act(command)).toMatchObject({
+      ok: true,
+      result: { phase: "waiting", blocker: "candidate" },
+    });
+    expect(changed.mock.calls.map(([state]) => state.phase)).toEqual([
+      "available",
+      "preparing",
+      "downloading",
+      "preparing",
+      "waiting",
+    ]);
+    expect(h.invoke).toHaveBeenCalledWith("orca:macUpdate.act", command, h.f.target.epoch);
+    expect(h.f.inspect).toHaveBeenCalledOnce();
+    h.held(true);
+    expect(await h.bridge.macUpdates!.act({ ...command, action: "defer" })).toMatchObject({
+      ok: true,
+      result: { phase: "deferred" },
+    });
+    await h.session.settled();
+    unsubscribe();
+    const count = changed.mock.calls.length;
+    await h.offer();
+    expect(changed).toHaveBeenCalledTimes(count);
+    expect(h.f.stop).not.toHaveBeenCalled();
+    expect(h.f.activate).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["offer", "digest", "extra", "iframe", "external", "stale-epoch", "new-target", "held"])(
   "refuses %s without download/admission or native touch",

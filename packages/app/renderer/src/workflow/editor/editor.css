@@ -1,0 +1,268 @@
+/* The workflow editor's layout (#181). The boxes, edges, node list, inspector, validation
+   rows and draft bar are the design system's (`.orca-node`, `.orca-edge`, `.orca-nodelist`,
+   `.orca-inspector`, `.orca-validation`, `.orca-draftbar`); what is here is where they sit
+   and the few states only the editor has - a box that can be moved, a port, an edge that is
+   selected or about to take a drop. No literal colours, sizes or durations (RULES.md rule 1). */
+
+.orca-wfedit {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.orca-wfedit__body {
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+  flex: 1;
+}
+
+.orca-wfedit__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.orca-wfedit__canvas {
+  flex: 1;
+}
+
+/* ---------- the trail into nested graphs ---------- */
+
+.orca-wfedit__trail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-4);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+  background: var(--surface-base);
+}
+.orca-wfedit__crumb {
+  color: var(--accent);
+  cursor: pointer;
+}
+.orca-wfedit__crumb[aria-current] {
+  color: var(--ink-primary);
+  cursor: default;
+}
+
+/* ---------- the sidebar: palette and outline ---------- */
+
+.orca-wfedit__sidebar {
+  flex: none;
+  width: var(--sidebar-width);
+  overflow: auto;
+  border-right: var(--stroke-hairline) solid var(--border-hairline);
+  background: var(--surface-base);
+}
+.orca-wfedit__sidebar .orca-inspector__group {
+  margin: 0;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+}
+.orca-wfedit__palette {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0 var(--space-2) var(--space-2);
+  list-style: none;
+}
+.orca-wfedit__palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 0 var(--space-2);
+  border: var(--stroke-hairline) solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--ink-primary);
+  cursor: grab;
+}
+.orca-wfedit__palette-item:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-hairline);
+}
+.orca-wfedit__palette-item:active {
+  cursor: grabbing;
+}
+.orca-wfedit__palette-item .orca-node__icon {
+  flex: none;
+  width: var(--icon-md);
+  height: var(--icon-md);
+  color: var(--ink-secondary);
+}
+.orca-wfedit__sidebar .orca-nodelist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.orca-wfedit__outline-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.orca-wfedit__row--dragging {
+  opacity: var(--opacity-stale);
+}
+.orca-wfedit__struck {
+  text-decoration: line-through;
+  text-decoration-thickness: var(--stroke-hairline);
+  color: var(--ink-tertiary);
+}
+
+/* ---------- the canvas ---------- */
+
+/* A node that can be dragged says so, and the box carries the port. */
+.orca-wfedit__box .orca-node {
+  position: relative;
+}
+.orca-wfedit__box--movable > .orca-node {
+  cursor: grab;
+}
+.orca-wfedit__box--movable:active > .orca-node {
+  cursor: grabbing;
+}
+.orca-wfedit__port {
+  position: absolute;
+  top: 50%;
+  right: calc(-1 * var(--mark-port) / 2);
+  transform: translateY(-50%);
+  cursor: crosshair;
+}
+.orca-wfedit__port:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+}
+
+/* The invisible, wide stroke an edge is clicked and dropped on. The SVG under the boxes does
+   not take the pointer; these paths do, and only along their stroke. */
+.orca-wfedit__hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: var(--hit-min);
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.orca-wfedit__edge--selected {
+  stroke: var(--accent);
+  stroke-width: var(--stroke-edge-active);
+}
+.orca-wfedit__edge--invalid {
+  stroke: var(--status-failed);
+}
+.orca-wfedit__edge--drop {
+  stroke: var(--accent);
+  stroke-width: var(--stroke-edge-active);
+  stroke-dasharray: var(--stroke-dash-draft);
+}
+.orca-wfedit__viewport--drop {
+  background: var(--accent-subtle);
+}
+
+/* ---------- validation ---------- */
+
+.orca-wfedit__validation {
+  flex: none;
+  max-height: var(--palette-max-height);
+  overflow: auto;
+}
+.orca-wfedit__validation-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+.orca-wfedit__heading {
+  margin: 0;
+}
+.orca-wfedit__validation-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.orca-validation__row--note {
+  border-left-color: var(--border-control);
+}
+
+/* ---------- the inspector ---------- */
+
+.orca-wfedit__inspector {
+  flex: none;
+  width: var(--pane-panel, var(--panel-width));
+  border-left: 0;
+}
+.orca-wfedit__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+}
+.orca-wfedit__textarea {
+  width: 100%;
+  resize: vertical;
+}
+.orca-wfedit__issues,
+.orca-wfedit__edges {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.orca-wfedit__issues {
+  padding-top: var(--space-2);
+  color: var(--status-failed);
+}
+.orca-wfedit__edge {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-0-5) 0;
+}
+.orca-wfedit__edge-link {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+/* ---------- review ---------- */
+
+.orca-wfedit__review {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.orca-wfedit__review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+}
+.orca-wfedit__review-head h2 {
+  margin: 0;
+}
+.orca-wfedit__diff {
+  flex: 1;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  overflow: auto;
+  background: var(--surface-sunken);
+  color: var(--ink-primary);
+}
+.orca-wfedit__diff .orca-diff__line {
+  display: block;
+  white-space: pre;
+}
+.orca-wfedit__diff-note {
+  color: var(--ink-secondary);
+}

@@ -15,6 +15,7 @@
  * it states what is waiting, and the main process has no verdict to give back.
  */
 import type { TemplateBridge } from "./template-bridge.js";
+import type { WorkflowDraftBridge } from "./workflow-draft-bridge.js";
 import type { DiagnosticsBridge } from "./diagnostics-contract.js";
 import type { FirstRunBridge } from "./first-run-contract.js";
 import type { DaemonConnectionBridge } from "./daemon-connection.js";
@@ -419,6 +420,8 @@ export interface OrcaBridge {
   };
   /** Optional until the integration owner registers the typed template IPC dispatcher. */
   templates?: TemplateBridge;
+  /** Workflow drafts (#180) for the visual editor. Optional: absent, the workflow viewer stays read-only. */
+  workflowDrafts?: WorkflowDraftBridge;
   notifications: {
     /**
      * Daemon-initiated messages: run and step transitions, coalesced agent output, inputs

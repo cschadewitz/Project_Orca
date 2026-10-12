@@ -1,5 +1,5 @@
 /**
- * The five top-level surfaces from docs/design/10-information-architecture.md, in sidebar
+ * The six top-level surfaces from docs/design/10-information-architecture.md, in sidebar
  * order — read from `@orca/design`, never re-declared here.
  *
  * The order, the word and the glyph are `packages/design/semantics.json`'s (#261). What is

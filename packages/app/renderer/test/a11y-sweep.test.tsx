@@ -664,7 +664,8 @@ describe("Plan: two lists, one tab stop each, and nothing that speaks", () => {
    * `role="status"`, saying that what is on screen is the last the daemon said — on Runs
    * (`runs-surface.tsx`), Attention (`attention-surface.tsx`), Config
    * (`config-surface.tsx`), Plan (`plan-surface.tsx`) and in the chrome itself
-   * (`App.tsx`'s deep-link landing, `chrome/connection-banner.tsx`). It is *not* moved
+   * (`App.tsx`'s landing for a link that arrived with no daemon answering,
+   * `chrome/connection-banner.tsx`, both drawn under the object header). It is *not* moved
    * above the surfaces here: each one puts it inside its own scroll and stale region, at
    * the top of the pane it makes a claim about, and a single banner in the chrome would
    * have to say "something on this screen is stale" without saying which pane — which is

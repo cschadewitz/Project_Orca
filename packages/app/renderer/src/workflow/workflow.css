@@ -143,3 +143,47 @@
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }
+
+/* ---------- the Workflows surface: the list ---------- */
+
+/* Bounded down to the scroll region, so the table scrolls inside the pane rather than
+   pushing it (the scroll sweep's rule). */
+.orca-wflist {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.orca-wflist__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-2);
+}
+.orca-wflist__title {
+  margin: 0;
+}
+.orca-wflist__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--space-4) var(--space-4);
+}
+.orca-wflist__table td {
+  vertical-align: top;
+}
+.orca-wflist__name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.orca-wflist__description {
+  display: block;
+  color: var(--ink-secondary);
+  max-width: var(--measure-prose);
+}
+.orca-wflist__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}

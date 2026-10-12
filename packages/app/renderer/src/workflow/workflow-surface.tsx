@@ -6,9 +6,11 @@
  * (`layout.ts`), the data in one hook (`use-workflow.ts`), the markup composed from `ui/`.
  * What is particular to this one:
  *
- * - **Nothing here writes.** The editor is #181; this surface asks nothing of
- *   `useWritability()` and offers no control that changes a file, which is why the overlay
- *   picker is the only `Menu` on it.
+ * - **Nothing here writes; the editor does.** The viewer offers no control that changes a
+ *   file. **Edit** (or **Continue editing**, when a draft exists) swaps the body for the
+ *   visual editor (#181, `editor/workflow-editor.tsx`), which edits a draft and publishes
+ *   only on an explicit, reviewed confirmation. The button is absent - not disabled - when
+ *   this daemon has no draft methods, which is the file-mode rule (docs/design/40).
  * - **The version is said twice when it has to be.** A run is pinned to the workflow version
  *   it started with, and ORCA keeps no copy of that definition — so when the overlaid run's
  *   version is not the one on disk the header carries the `◷ pinned` chip *and* a caption
@@ -24,7 +26,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type React
 import type { ConnectionState } from "@orca/design";
 import type { RunSummaryView, WorkflowNodeView } from "@orca/protocol";
 import { PaneSplitter } from "../chrome/pane-splitter.js";
-import { Chip, Menu, StateView, StatusChip, Text, textClass, type Crumb, type MenuItem } from "../ui/index.js";
+import { useMethodPresent } from "../chrome/use-connection.js";
+import { Button, Chip, Menu, StateView, StatusChip, Text, textClass, type Crumb, type MenuItem } from "../ui/index.js";
+import { WorkflowEditor } from "./editor/workflow-editor.js";
 import { findNode } from "./layout.js";
 import { WorkflowCanvas } from "./workflow-canvas.js";
 import { indexTraversal, useWorkflow } from "./use-workflow.js";
@@ -34,18 +38,31 @@ export interface WorkflowSurfaceProps {
   workflowId: string;
   /** The run to overlay, from `orca://workflow/<name>?run=<id>` or from the picker. */
   runId?: string | undefined;
+  /** `orca://workflow/<name>?edit`: open on the editor rather than the viewer (#181). */
+  edit?: boolean;
   connection: ConnectionState;
   /** The crumbs and the header controls, handed up for the chrome to draw (as Runs does). */
   onHeader?: (header: { crumbs: readonly Crumb[]; actions: ReactNode }) => void;
 }
 
-export function WorkflowSurface({ workflowId, runId, connection, onHeader }: WorkflowSurfaceProps): JSX.Element {
+export function WorkflowSurface({
+  workflowId,
+  runId,
+  edit = false,
+  connection,
+  onHeader,
+}: WorkflowSurfaceProps): JSX.Element {
   /* The run being overlaid: the URL's until a person picks another, and then theirs. A URL
      that arrives afterwards wins again, which is what the effect's dependency says. */
   const [picked, setPicked] = useState<string | undefined>(runId);
   useEffect(() => setPicked(runId), [runId]);
 
   const { state, overlay, overlayError, reload } = useWorkflow(workflowId, picked);
+  const [editing, setEditing] = useState(edit);
+  useEffect(() => {
+    if (edit) setEditing(true);
+  }, [edit]);
+  const { editable, hasDraft, refresh: refreshDraft } = useDraftPresence(workflowId, editing);
   const [selected, setSelected] = useState<string | undefined>(undefined);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const runs = useWorkflowRuns(workflowId);
@@ -78,22 +95,33 @@ export function WorkflowSurface({ workflowId, runId, connection, onHeader }: Wor
         <div className="orca-wf__actions">
           {/* `ai-sdlc v11` — the version shown wherever a run's workflow is named. */}
           <span className={`orca-id ${textClass("mono-id")}`}>{`${workflow.id} v${workflow.version}`}</span>
-          {pinned && (
+          {pinned && !editing && (
             <span className={`orca-pinned ${textClass("caption")}`}>
               <span aria-hidden="true">◷</span> pinned
             </span>
           )}
-          <Menu
-            label="Overlay a run"
-            items={runOptions(runs, picked)}
-            onChoose={(item) => setPicked(item.id === NO_RUN ? undefined : item.id)}
-            triggerClassName={`orca-button orca-button--ghost orca-button--sm ${textClass("label")}`}
-          >
-            {picked === undefined ? "No run overlaid" : "Change the run"}
-          </Menu>
+          {editing ? (
+            <Text style="caption">Editing a draft</Text>
+          ) : (
+            editable && (
+              <Button size="sm" tone={hasDraft ? "primary" : "default"} onClick={() => setEditing(true)}>
+                {hasDraft ? "Continue editing" : "Edit"}
+              </Button>
+            )
+          )}
+          {!editing && (
+            <Menu
+              label="Overlay a run"
+              items={runOptions(runs, picked)}
+              onChoose={(item) => setPicked(item.id === NO_RUN ? undefined : item.id)}
+              triggerClassName={`orca-button orca-button--ghost orca-button--sm ${textClass("label")}`}
+            >
+              {picked === undefined ? "No run overlaid" : "Change the run"}
+            </Menu>
+          )}
         </div>
       ) : null,
-    [workflow, pinned, runs, picked],
+    [workflow, pinned, runs, picked, editing, editable, hasDraft],
   );
 
   /* Handed up rather than drawn here: the object header is the chrome's, on every screen
@@ -122,6 +150,22 @@ export function WorkflowSurface({ workflowId, runId, connection, onHeader }: Wor
       />
     );
   }
+
+  if (editing)
+    return (
+      <WorkflowEditor
+        workflowId={workflowId}
+        onClose={() => {
+          setEditing(false);
+          refreshDraft();
+        }}
+        onPublished={() => {
+          setEditing(false);
+          refreshDraft();
+          reload();
+        }}
+      />
+    );
 
   /* Across the nested graphs too (#177): clicking a node inside an expanded `parallel` branch
      selects it, and a lookup over `workflow.nodes` alone would leave the inspector saying
@@ -192,6 +236,41 @@ export function WorkflowSurface({ workflowId, runId, connection, onHeader }: Wor
       </div>
     </div>
   );
+}
+
+/**
+ * Whether this workflow can be edited here, and whether a draft of it is waiting. Asked of
+ * the daemon (`workflowDrafts.get`) rather than assumed: a workflow from a managed release or
+ * outside the configuration directory is viewable and not editable, and says so.
+ */
+function useDraftPresence(
+  workflowId: string,
+  editing: boolean,
+): { editable: boolean; hasDraft: boolean; refresh: () => void } {
+  const present = useMethodPresent("workflowDrafts.open");
+  const [state, setState] = useState({ editable: false, hasDraft: false });
+  const [generation, setGeneration] = useState(0);
+  useEffect(() => {
+    const bridge = window.orca.workflowDrafts;
+    if (!bridge || !present || editing) return;
+    let live = true;
+    void bridge.call("workflowDrafts.get", { workflowId }).then((result) => {
+      if (!live) return;
+      setState(
+        result.ok
+          ? { editable: result.result.editable, hasDraft: result.result.draft !== null }
+          : { editable: false, hasDraft: false },
+      );
+    });
+    return () => {
+      live = false;
+    };
+  }, [workflowId, present, editing, generation]);
+  return {
+    editable: present && state.editable,
+    hasDraft: state.hasDraft,
+    refresh: () => setGeneration((n) => n + 1),
+  };
 }
 
 /** The menu row for "no run at all", which is a choice and not an empty list. */

@@ -51,6 +51,7 @@ import {
   systemClock,
   WritablePermissionPolicyFileSchema,
   type Clock,
+  type ValidationContext,
   type PermissionPolicyFile,
 } from "@orca/core";
 import {
@@ -73,6 +74,7 @@ import { describeConfigFormSchema } from "./config-form-schema.js";
 import { lowerConfigEdits } from "./config-collection-edits.js";
 import { configReferenceErrors } from "./config-references.js";
 import { TemplateAuthoringService } from "./template-authoring.js";
+import { WorkflowDraftService } from "./workflow-drafts.js";
 
 /** The default name a `config.set` creates when the workspace has no config file yet. */
 export const DEFAULT_CONFIG_FILENAME = "orca.config.yaml";
@@ -91,6 +93,8 @@ export interface ConfigGenerationProvider {
   onChange(
     listener: (status: ConfigGenerationStatus, workflows: { id: string; version: string; removed?: boolean }[]) => void,
   ): () => void;
+  /** The active generation's references, for validating a workflow draft (#180). */
+  validationContext?(): ValidationContext;
 }
 
 export interface ConfigModelOptions {
@@ -129,6 +133,8 @@ export interface ConfigChange {
  */
 export class ConfigModel {
   readonly templates: TemplateAuthoringService;
+  /** Workflow drafts (#180): edited beside the workflow, published through the same lock and apply. */
+  readonly workflowDrafts: WorkflowDraftService;
   private readonly generations: ConfigGenerationProvider | undefined;
   private readonly configFile: string;
   private readonly permissionsFile: string;
@@ -149,6 +155,23 @@ export class ConfigModel {
       },
       applyLocked: (params, recheck) => this.applyLocked(params, recheck),
       changed: () => this.announce("config"),
+    });
+    this.workflowDrafts = new WorkflowDraftService({
+      baseDir: opts.configDir,
+      readConfig: () => this.get(),
+      exclusive: async (command) => {
+        await mkdir(dirname(this.configFile), { recursive: true });
+        return withFileLock(`${this.configFile}.lock`, command);
+      },
+      applyLocked: (params, recheck) => this.applyLocked(params, recheck),
+      validationContext: () => {
+        try {
+          return this.generations?.validationContext?.();
+        } catch {
+          return undefined;
+        }
+      },
+      clock: this.clock,
     });
     this.generations?.onChange((generation, workflows) => {
       const change: ConfigChange = {

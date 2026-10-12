@@ -110,59 +110,67 @@ async function fixture(options: { ignoreOldTerm?: boolean; external?: boolean } 
   };
 }
 
-it("stops the exact Workspace child cleanly once and keeps calls, reconnect, drafts and restart admission sealed", async () => {
-  const f = await fixture();
-  const admission = await f.guards.prepareAdmission(f.target, randomUUID());
-  if (admission.outcome !== "ready") throw new Error("Expected fixture admission");
-  const finish = deferred<string>();
-  const entered = deferred<void>();
-  const late = callInConnection(f.workspace, f.target.epoch, () => {
-    entered.resolve();
-    return finish.promise;
-  });
-  const lateResult = expect(late).rejects.toThrow("admission is closed");
-  await entered.promise;
-  const stopping = admission.lease.stopOwned!(new AbortController().signal, 10_000);
-  expect(() => f.workspace.assertEpoch(f.target.epoch)).toThrow("admission is closed");
-  finish.resolve("late old reply");
-  await lateResult;
-  const result = await stopping;
-  expect(result).toMatchObject({ outcome: "stopped", receipt: { target: f.old.ready.target } });
-  expect(await admission.lease.stopOwned!(new AbortController().signal, 10_000)).toBe(result);
-  expect(f.old.child.signals).toEqual(["SIGTERM"]);
-  expect(f.old.child.child.exitCode).toBe(0);
-  expect(f.old.child.child.signalCode).toBeNull();
-  expect(f.onExit).not.toHaveBeenCalled();
-  expect(f.streamClose).toHaveBeenCalledOnce();
-  expect(await admission.lease.release()).toBe("unknown");
-  await expect(f.workspace.connect()).rejects.toThrow("busy");
-  await expect(f.workspace.connectLive()).rejects.toThrow("progress");
-  await expect(f.workspace.prepareConnection(null)).rejects.toThrow("busy");
-  await expect(f.workspace.prepareFirstRunConnection(f.workspace.snapshot.path)).rejects.toThrow("busy");
-  await expect(f.workspace.cancelUpdate("unrelated")).rejects.toThrow("busy");
-  expect(f.start).toHaveBeenCalledOnce();
-  expect(f.frozen()).toBe(true);
-  await f.workspace.close();
-  expect(f.stop).not.toHaveBeenCalled();
-});
+// Node on Windows cannot deliver the catchable POSIX SIGTERM that these two owned-stop cases
+// observe through the restart fixture. The cases that never signal still run there.
+it.skipIf(process.platform === "win32")(
+  "stops the exact Workspace child cleanly once and keeps calls, reconnect, drafts and restart admission sealed",
+  async () => {
+    const f = await fixture();
+    const admission = await f.guards.prepareAdmission(f.target, randomUUID());
+    if (admission.outcome !== "ready") throw new Error("Expected fixture admission");
+    const finish = deferred<string>();
+    const entered = deferred<void>();
+    const late = callInConnection(f.workspace, f.target.epoch, () => {
+      entered.resolve();
+      return finish.promise;
+    });
+    const lateResult = expect(late).rejects.toThrow("admission is closed");
+    await entered.promise;
+    const stopping = admission.lease.stopOwned!(new AbortController().signal, 10_000);
+    expect(() => f.workspace.assertEpoch(f.target.epoch)).toThrow("admission is closed");
+    finish.resolve("late old reply");
+    await lateResult;
+    const result = await stopping;
+    expect(result).toMatchObject({ outcome: "stopped", receipt: { target: f.old.ready.target } });
+    expect(await admission.lease.stopOwned!(new AbortController().signal, 10_000)).toBe(result);
+    expect(f.old.child.signals).toEqual(["SIGTERM"]);
+    expect(f.old.child.child.exitCode).toBe(0);
+    expect(f.old.child.child.signalCode).toBeNull();
+    expect(f.onExit).not.toHaveBeenCalled();
+    expect(f.streamClose).toHaveBeenCalledOnce();
+    expect(await admission.lease.release()).toBe("unknown");
+    await expect(f.workspace.connect()).rejects.toThrow("busy");
+    await expect(f.workspace.connectLive()).rejects.toThrow("progress");
+    await expect(f.workspace.prepareConnection(null)).rejects.toThrow("busy");
+    await expect(f.workspace.prepareFirstRunConnection(f.workspace.snapshot.path)).rejects.toThrow("busy");
+    await expect(f.workspace.cancelUpdate("unrelated")).rejects.toThrow("busy");
+    expect(f.start).toHaveBeenCalledOnce();
+    expect(f.frozen()).toBe(true);
+    await f.workspace.close();
+    expect(f.stop).not.toHaveBeenCalled();
+  },
+);
 
-it("never escalates or repeats an unknown owned stop, including ordinary quit and a late clean close", async () => {
-  const f = await fixture({ ignoreOldTerm: true });
-  const admission = await f.guards.prepareAdmission(f.target, randomUUID());
-  if (admission.outcome !== "ready") throw new Error("Expected fixture admission");
-  const result = await admission.lease.stopOwned!(new AbortController().signal, 1000);
-  expect(result).toEqual({ outcome: "unknown" });
-  expect(await admission.lease.stopOwned!(new AbortController().signal, 10_000)).toBe(result);
-  expect(f.old.child.signals).toEqual(["SIGTERM"]);
-  expect(f.old.child.child.exitCode).toBeNull();
-  expect(await admission.lease.release()).toBe("unknown");
-  await f.workspace.close();
-  expect(f.stop).not.toHaveBeenCalled();
-  await f.old.child.cleanup(); // Explicit fixture teardown, never product recovery/retry.
-  expect(f.old.child.child.exitCode).toBe(0);
-  expect(result).toEqual({ outcome: "unknown" });
-  expect(f.frozen()).toBe(true);
-});
+it.skipIf(process.platform === "win32")(
+  "never escalates or repeats an unknown owned stop, including ordinary quit and a late clean close",
+  async () => {
+    const f = await fixture({ ignoreOldTerm: true });
+    const admission = await f.guards.prepareAdmission(f.target, randomUUID());
+    if (admission.outcome !== "ready") throw new Error("Expected fixture admission");
+    const result = await admission.lease.stopOwned!(new AbortController().signal, 1000);
+    expect(result).toEqual({ outcome: "unknown" });
+    expect(await admission.lease.stopOwned!(new AbortController().signal, 10_000)).toBe(result);
+    expect(f.old.child.signals).toEqual(["SIGTERM"]);
+    expect(f.old.child.child.exitCode).toBeNull();
+    expect(await admission.lease.release()).toBe("unknown");
+    await f.workspace.close();
+    expect(f.stop).not.toHaveBeenCalled();
+    await f.old.child.cleanup(); // Explicit fixture teardown, never product recovery/retry.
+    expect(f.old.child.child.exitCode).toBe(0);
+    expect(result).toEqual({ outcome: "unknown" });
+    expect(f.frozen()).toBe(true);
+  },
+);
 
 it.each(["lost", "wrong-instance", "wrong-process", "legacy", "drafts"] as const)(
   "refuses positive stop evidence after a %s fresh proof and never signals or reopens",

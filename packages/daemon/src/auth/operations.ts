@@ -151,6 +151,46 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
     resource: "none",
     audit: "mutation",
   },
+  // Workflow drafts (#180) edit workflow files under the configuration directory: reading one
+  // is a configuration read, and opening, editing and publishing one are configuration writes.
+  "workflowDrafts.get": { permission: "config.read", resource: "none" },
+  "workflowDrafts.open": {
+    permission: "config.write",
+    additionalPermissions: ["config.read"],
+    resource: "none",
+    audit: "mutation",
+  },
+  "workflowDrafts.apply": {
+    permission: "config.write",
+    additionalPermissions: ["config.read"],
+    resource: "none",
+    audit: "mutation",
+  },
+  "workflowDrafts.undo": {
+    permission: "config.write",
+    additionalPermissions: ["config.read"],
+    resource: "none",
+    audit: "mutation",
+  },
+  "workflowDrafts.redo": {
+    permission: "config.write",
+    additionalPermissions: ["config.read"],
+    resource: "none",
+    audit: "mutation",
+  },
+  "workflowDrafts.review": { permission: "config.write", additionalPermissions: ["config.read"], resource: "none" },
+  "workflowDrafts.publish": {
+    permission: "config.write",
+    additionalPermissions: ["config.read"],
+    resource: "none",
+    audit: "mutation",
+  },
+  "workflowDrafts.discard": {
+    permission: "config.write",
+    additionalPermissions: ["config.read"],
+    resource: "none",
+    audit: "mutation",
+  },
   "config.get": { permission: "config.read", resource: "none" },
   "config.apply": { permission: "config.write", resource: "none", audit: "mutation" },
   // Every Save/validation receipt includes unredacted document bytes, even for an empty patch.

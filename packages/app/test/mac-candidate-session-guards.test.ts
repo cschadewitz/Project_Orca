@@ -3,10 +3,14 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it as platformIt, vi } from "vitest";
 import { createMacCandidateSession } from "../src/main/mac-candidate-controller.js";
 import type { MacCandidatePrepared } from "../src/main/mac-update-candidates.js";
 import { macUpdateRehearsal, barrier, type ProofFault } from "./mac-update-rehearsal-fixture.js";
+
+// The candidate download requires POSIX private modes. Windows must refuse it, so only
+// the cases that never reach the download run there.
+const it = platformIt.skipIf(process.platform === "win32");
 
 const closers: (() => Promise<void>)[] = [];
 async function reached(checkpoint: ReturnType<typeof barrier>, operation: Promise<unknown>) {
@@ -61,16 +65,19 @@ async function fixture() {
   return { f, root, check, session, input, offer, directory };
 }
 
-it("never downloads or prepares on activity notifications without this exact candidate's approval", async () => {
-  const h = await fixture();
-  const id = await h.offer();
-  await h.session.reconsider();
-  await h.session.approve("replayed-other-offer");
-  expect(h.session.state).toEqual({ phase: "available", offerId: id });
-  expect(h.f.downloadFetch).not.toHaveBeenCalled();
-  expect(h.f.runtimeEvents).toEqual([]);
-  expect(h.f.windows.active).toBe(false);
-});
+platformIt(
+  "never downloads or prepares on activity notifications without this exact candidate's approval",
+  async () => {
+    const h = await fixture();
+    const id = await h.offer();
+    await h.session.reconsider();
+    await h.session.approve("replayed-other-offer");
+    expect(h.session.state).toEqual({ phase: "available", offerId: id });
+    expect(h.f.downloadFetch).not.toHaveBeenCalled();
+    expect(h.f.runtimeEvents).toEqual([]);
+    expect(h.f.windows.active).toBe(false);
+  },
+);
 
 it("waits for actual runtime work, reuses approved owned bytes and reaches only a closed preparation checkpoint", async () => {
   const h = await fixture();
@@ -141,7 +148,7 @@ it("defers a busy session, discards only after settlement and requires a fresh o
   expect(h.f.inspect).toHaveBeenCalledTimes(2);
 });
 
-it("does not resurrect approval when defer arrives before a reserved operation starts", async () => {
+platformIt("does not resurrect approval when defer arrives before a reserved operation starts", async () => {
   const h = await fixture();
   const id = await h.offer();
   const pending = h.session.approve(id);

@@ -168,6 +168,9 @@ export function RunTree({ tree, selectedRunId, selectedStepRunId, onSelect, onOp
         // different facts, and a screen reader says so.
         ...(row.hasChildren ? { "aria-expanded": row.expanded } : {}),
       })}
+      /* The depth `.orca-tree-row` indents by. `indent`, not `level`: it stops climbing at
+         MAX_INDENT, where the sticky header takes over saying how deep the row is. */
+      rowStyle={(row) => ({ "--level": row.indent })}
       items={rows}
       ticks={ticks}
       header={<TreeHeader row={selected} filtered={tree.attentionOnly} />}

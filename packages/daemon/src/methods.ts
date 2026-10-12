@@ -202,6 +202,7 @@ import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
 
 import type { LiveInputChangeSource } from "./live-input-notifications.js";
 import { templateMethods } from "./template-methods.js";
+import { workflowDraftMethods } from "./workflow-draft-methods.js";
 
 export interface MethodContext {
   /** Guard-owned current workspace authority, rechecked after reads and under the config writer lock. */
@@ -970,7 +971,10 @@ export function methodsFor(ctx: MethodContext): MethodTable {
   if (ctx.agents) Object.assign(table, agentMethods);
   if (ctx.config) {
     Object.assign(table, configMethods);
-    if (ctx.config.canApply && ctx.identity) Object.assign(table, templateMethods(Boolean(ctx.control)));
+    if (ctx.config.canApply && ctx.identity) {
+      Object.assign(table, templateMethods(Boolean(ctx.control)));
+      Object.assign(table, workflowDraftMethods(Boolean(ctx.control)));
+    }
     // Reading the configuration is a read; writing it is a write, and a read-only daemon
     // has no `control`. Two facts, one `if`, so the two can never drift apart.
     if (ctx.control) {

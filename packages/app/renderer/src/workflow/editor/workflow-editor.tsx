@@ -1,0 +1,507 @@
+/**
+ * The visual workflow editor (#181, #182) over a workflow draft (#180).
+ *
+ * ```
+ * ┌ draft bar: draft of ai-sdlc v3 · 4 changes   Undo Redo Tidy  Review and publish  Discard  Close ┐
+ * ├ palette ─┬─────────────── canvas ───────────────┬─ inspector ─┤
+ * │ outline  │                                       │             │
+ * │          ├──────────── validation ──────────────┤             │
+ * └──────────┴───────────────────────────────────────┴─────────────┘
+ * ```
+ *
+ * One selection, shared by the outline, the canvas and the inspector (docs/design/70). Every
+ * change is a draft operation the daemon applies and validates, so the editor never holds an
+ * edit the daemon has not seen: closing the window, or the editor, loses nothing, and the
+ * workflow itself changes only when a person reviews the diff and publishes it.
+ */
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import type {
+  DraftGraphPath,
+  DraftIssue,
+  DraftOperation,
+  WorkflowDraftReview,
+  WorkflowDraftView,
+} from "@orca/protocol";
+import { useAnnounce } from "../../a11y/announce-context.js";
+import { diffText, gutterFor } from "../../artifacts/diff.js";
+import { PaneSplitter } from "../../chrome/pane-splitter.js";
+import { useWritability } from "../../chrome/use-connection.js";
+import { Button, StateView, Text, textClass } from "../../ui/index.js";
+import { changeCount, editorGraph, freshId, issuesAt, nestedSteps, newNode, type EditorGraph } from "./draft-model.js";
+import { EditorCanvas, type EditorSelection } from "./editor-canvas.js";
+import { EditorInspector, type InspectorHandle } from "./editor-inspector.js";
+import { EditorSidebar, ValidationPanel, type PaletteHandle } from "./editor-panels.js";
+import { useWorkflowDraft } from "./use-workflow-draft.js";
+import "./editor.css";
+
+export interface WorkflowEditorProps {
+  workflowId: string;
+  /** Back to the viewer. The draft stays, and opening the editor again resumes it. */
+  onClose: () => void;
+  /** A publish landed: the viewer re-reads the workflow at its new version. */
+  onPublished: (version: string) => void;
+}
+
+export function WorkflowEditor({ workflowId, onClose, onPublished }: WorkflowEditorProps): JSX.Element {
+  const controller = useWorkflowDraft(workflowId);
+  const { state } = controller;
+  if (state.phase === "loading") return <StateView kind="loading" title="Opening the draft" />;
+  if (state.phase === "unavailable")
+    return (
+      <StateView
+        kind="empty"
+        title="Editing is not available"
+        body={state.reason}
+        action={{ label: "Back to the viewer", onClick: onClose }}
+      />
+    );
+  if (state.phase === "error")
+    return (
+      <StateView
+        kind="error"
+        title="Could not open a draft"
+        body={state.error}
+        action={{ label: "Back to the viewer", onClick: onClose }}
+      />
+    );
+  return <Editor draft={state.draft} controller={controller} onClose={onClose} onPublished={onPublished} />;
+}
+
+function Editor({
+  draft,
+  controller,
+  onClose,
+  onPublished,
+}: {
+  draft: WorkflowDraftView;
+  controller: ReturnType<typeof useWorkflowDraft>;
+  onClose: () => void;
+  onPublished: (version: string) => void;
+}): JSX.Element {
+  const writable = useWritability();
+  const announce = useAnnounce();
+  const readOnly = !draft.owner.you || !writable.can;
+  const [path, setPath] = useState<DraftGraphPath>([]);
+  const [selection, setSelection] = useState<EditorSelection | undefined>(undefined);
+  const [review, setReview] = useState<WorkflowDraftReview | undefined>(undefined);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const workflows = useWorkflowIds();
+  const inspector = useRef<InspectorHandle>(null);
+  const palette = useRef<PaletteHandle>(null);
+
+  /* A path into a graph the draft no longer has - its container was deleted or undone away -
+     falls back to the nearest graph that still exists. */
+  const graph = useMemo<EditorGraph | undefined>(() => {
+    for (let depth = path.length; depth >= 0; depth -= 1) {
+      const found = editorGraph(draft.document, draft.base.document, path.slice(0, depth));
+      if (found) return found;
+    }
+    return undefined;
+  }, [draft, path]);
+  useEffect(() => {
+    if (graph && path.length > 0 && !editorGraph(draft.document, draft.base.document, path)) setPath([]);
+  }, [graph, draft, path]);
+
+  const issues = useMemo(() => issuesAt(draft.issues, path), [draft.issues, path]);
+  const changes = useMemo(() => changeCount(draft.document, draft.base.document), [draft]);
+  const scoped = useCallback(
+    (ops: DraftOperation[]): DraftOperation[] =>
+      path.length === 0 ? ops : ops.map((op) => (op.op === "setWorkflow" ? op : { ...op, graph: path })),
+    [path],
+  );
+  const apply = useCallback((ops: DraftOperation[]) => controller.apply(scoped(ops)), [controller, scoped]);
+
+  if (!graph)
+    return (
+      <StateView
+        kind="error"
+        title="The draft does not parse"
+        body="Its YAML cannot be read. Undo the last change, or discard the draft."
+        action={{ label: "Undo", onClick: () => void controller.undo() }}
+      />
+    );
+
+  const ids = graph.nodes.map((node) => node.id);
+  const selectedNode = selection?.kind === "node" ? graph.nodes.find((node) => node.id === selection.id) : undefined;
+
+  /* ---------- operations the gestures turn into ---------- */
+
+  const addAfterSelection = (type: string) => {
+    const id = freshId(type, ids);
+    const node = newNode(type, { workflows });
+    const from =
+      selectedNode && selectedNode.state !== "removed" && selectedNode.type !== "end" ? selectedNode : undefined;
+    let ops: DraftOperation[];
+    if (!from) ops = [{ op: "addNode", id, node }];
+    else {
+      const out = graph.edges.filter((edge) => edge.from === from.id);
+      const only = out.length === 1 && out[0]!.when === undefined ? out[0] : undefined;
+      ops = only
+        ? [{ op: "insertNode", id, node, edge: only.index }]
+        : [
+            { op: "addNode", id, node },
+            { op: "addEdge", from: from.id, to: id },
+          ];
+    }
+    void apply(ops).then((ok) => ok && setSelection({ kind: "node", id }));
+  };
+
+  const addAt = (type: string, at?: { x: number; y: number }) => {
+    const id = freshId(type, ids);
+    const ops: DraftOperation[] = [{ op: "addNode", id, node: newNode(type, { workflows }) }];
+    if (at) ops.push({ op: "place", id, x: at.x, y: at.y });
+    void apply(ops).then((ok) => ok && setSelection({ kind: "node", id }));
+  };
+
+  const insertOn = (type: string, edgeIndex: number) => {
+    const id = freshId(type, ids);
+    void apply([{ op: "insertNode", id, node: newNode(type, { workflows }), edge: edgeIndex }]).then(
+      (ok) => ok && setSelection({ kind: "node", id }),
+    );
+  };
+
+  const remove = (detach: boolean) => {
+    if (selection?.kind === "edge") {
+      void apply([{ op: "removeEdge", index: selection.index }]).then((ok) => ok && setSelection(undefined));
+      return;
+    }
+    if (!selectedNode || selectedNode.state === "removed") return;
+    if (selectedNode.id === graph.start) {
+      announce("The start node stays. Connect it to something else instead.");
+      return;
+    }
+    void apply([{ op: "removeNode", id: selectedNode.id, ...(detach ? { detach: true } : {}) }]).then(
+      (ok) => ok && setSelection(undefined),
+    );
+  };
+
+  const reorder = (delta: -1 | 1) => {
+    if (!selectedNode || selectedNode.state === "removed") return;
+    const order = graph.nodes.filter((node) => node.state !== "removed").map((node) => node.id);
+    const at = order.indexOf(selectedNode.id);
+    const target = at + delta;
+    if (target < 0 || target >= order.length) return;
+    const without = order.filter((id) => id !== selectedNode.id);
+    void apply([
+      { op: "moveNode", id: selectedNode.id, ...(without[target] !== undefined ? { before: without[target] } : {}) },
+    ]);
+  };
+
+  const openNested = (step: { node: string; branch?: string; forEach?: true }) => {
+    setPath((current) => [
+      ...current,
+      {
+        node: step.node,
+        ...(step.branch !== undefined ? { branch: step.branch } : {}),
+        ...(step.forEach ? { forEach: true as const } : {}),
+      },
+    ]);
+    setSelection(undefined);
+  };
+
+  const goTo = (issue: DraftIssue) => {
+    setPath(issue.graph);
+    setSelection(
+      issue.node !== undefined
+        ? { kind: "node", id: issue.node }
+        : issue.edge !== undefined
+          ? { kind: "edge", index: issue.edge }
+          : undefined,
+    );
+  };
+
+  const startReview = async () => {
+    const result = await controller.review();
+    if (result) setReview(result);
+  };
+
+  const publish = async () => {
+    if (!review) return;
+    const result = await controller.publish(review.reviewToken);
+    if (!result) return;
+    announce(`Published ${draft.workflowId} version ${result.version}.`);
+    onPublished(result.version);
+  };
+
+  const discard = async () => {
+    if (!confirmDiscard) {
+      setConfirmDiscard(true);
+      return;
+    }
+    if (await controller.discard()) {
+      announce("Draft discarded.");
+      onClose();
+    }
+  };
+
+  /* ---------- drawing ---------- */
+
+  const yamlPrefix = path
+    .map(
+      (step) =>
+        `nodes.${step.node}.${step.branch !== undefined ? `branches.${step.branch}.` : step.forEach ? "forEach.body." : "body."}graph.`,
+    )
+    .join("");
+  const errors = draft.issues.filter((issue) => issue.severity === "error").length;
+  const owner = draft.owner.you ? "your draft" : `${draft.owner.principalId}'s draft, read-only`;
+  const blocked = controller.conflict !== undefined;
+
+  return (
+    <div className="orca-wfedit">
+      <div
+        className={`orca-draftbar ${textClass("caption")}${blocked || !draft.base.current ? " orca-draftbar--blocked" : ""}`}
+        role="group"
+        aria-label="Workflow draft"
+      >
+        <Text style="label-strong">{`Draft of ${draft.workflowId} v${draft.base.version}`}</Text>
+        <Text style="caption">{`${owner} · ${changes} ${changes === 1 ? "change" : "changes"}${draft.dirty && changes === 0 ? " to the layout" : ""}`}</Text>
+        <span role="status" className={textClass("caption")}>
+          {controller.conflict !== undefined
+            ? `Reloaded: ${controller.conflict}`
+            : controller.message !== undefined
+              ? controller.message
+              : !draft.base.current
+                ? "The workflow file changed since this draft was taken; it cannot be published."
+                : !writable.can
+                  ? writable.reason
+                  : controller.busy
+                    ? "Saving…"
+                    : "Saved in the draft"}
+        </span>
+        <span className="orca-spacer" />
+        {!readOnly && (
+          <>
+            <Button
+              size="sm"
+              tone="ghost"
+              onClick={() => void controller.undo()}
+              disabled={!draft.canUndo}
+              disabledReason="Nothing to undo"
+            >
+              Undo
+            </Button>
+            <Button
+              size="sm"
+              tone="ghost"
+              onClick={() => void controller.redo()}
+              disabled={!draft.canRedo}
+              disabledReason="Nothing to redo"
+            >
+              Redo
+            </Button>
+            <Button size="sm" tone="ghost" onClick={() => void apply([{ op: "tidy" }])}>
+              Tidy layout
+            </Button>
+            <Button
+              size="sm"
+              tone={confirmDiscard ? "danger" : "ghost"}
+              onClick={() => void discard()}
+              onBlur={() => setConfirmDiscard(false)}
+            >
+              {confirmDiscard ? "Discard every change" : "Discard draft"}
+            </Button>
+            <Button
+              size="sm"
+              tone="primary"
+              onClick={() => void startReview()}
+              disabled={draft.publishBlocked !== undefined || controller.busy}
+              {...(draft.publishBlocked !== undefined ? { disabledReason: draft.publishBlocked } : {})}
+            >
+              Review and publish
+            </Button>
+          </>
+        )}
+        <Button size="sm" onClick={onClose}>
+          Close the editor
+        </Button>
+      </div>
+
+      {path.length > 0 && (
+        <nav className={`orca-wfedit__trail ${textClass("caption")}`} aria-label="Graph">
+          <button
+            type="button"
+            className={`orca-bare orca-wfedit__crumb ${textClass("mono-id")}`}
+            onClick={() => {
+              setPath([]);
+              setSelection(undefined);
+            }}
+          >
+            {draft.workflowId}
+          </button>
+          {path.map((step, index) => (
+            <span key={index}>
+              <span aria-hidden="true"> ▸ </span>
+              <button
+                type="button"
+                className={`orca-bare orca-wfedit__crumb ${textClass("mono-id")}`}
+                aria-current={index === path.length - 1 ? "location" : undefined}
+                onClick={() => {
+                  setPath(path.slice(0, index + 1));
+                  setSelection(undefined);
+                }}
+              >
+                {`${step.node}${step.branch !== undefined ? ` [${step.branch}]` : step.forEach ? " [each]" : ""}`}
+              </button>
+            </span>
+          ))}
+        </nav>
+      )}
+
+      {review ? (
+        <ReviewPanel
+          review={review}
+          busy={controller.busy}
+          errors={errors}
+          message={controller.message}
+          onBack={() => setReview(undefined)}
+          onPublish={() => void publish()}
+        />
+      ) : (
+        <div className="orca-wfedit__body">
+          <EditorSidebar
+            ref={palette}
+            graph={graph}
+            selection={selection}
+            readOnly={readOnly}
+            issues={issues}
+            onAdd={addAfterSelection}
+            onSelect={setSelection}
+            onMove={(id, before) => void apply([{ op: "moveNode", id, ...(before !== undefined ? { before } : {}) }])}
+          />
+          <div className="orca-wfedit__main">
+            <EditorCanvas
+              graph={graph}
+              layout={draft.layout}
+              path={path}
+              issues={issues}
+              selection={selection}
+              onSelect={setSelection}
+              readOnly={readOnly}
+              label={`${draft.workflowId} draft graph`}
+              onPlace={(id, x, y) => void apply([{ op: "place", id, x, y }])}
+              onConnect={(from, to) => void apply([{ op: "addEdge", from, to }])}
+              onAdd={addAt}
+              onInsert={insertOn}
+              onDelete={remove}
+              onOpenNested={(id) => {
+                const node = graph.nodes.find((n) => n.id === id);
+                const first = node ? nestedSteps(node)[0] : undefined;
+                if (first) openNested(first);
+              }}
+              onRename={() => inspector.current?.focusName()}
+              onConnectMenu={() => inspector.current?.openConnect()}
+              onAddMenu={() => palette.current?.focus()}
+              onReorder={reorder}
+              onUndo={() => void controller.undo()}
+              onRedo={() => void controller.redo()}
+            />
+            <ValidationPanel issues={draft.issues} path={path} onGo={goTo} />
+          </div>
+          <PaneSplitter boundary="panel" label="Resize the inspector" />
+          <EditorInspector
+            ref={inspector}
+            graph={graph}
+            path={path}
+            yamlPrefix={yamlPrefix}
+            selection={selection}
+            issues={issues}
+            readOnly={readOnly}
+            workflow={workflowFields(draft.document)}
+            workflows={workflows}
+            onApply={apply}
+            onSelect={setSelection}
+            onOpenNested={openNested}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The exact bytes publish will write, as a diff against the live file, and the one button that writes them. */
+function ReviewPanel({
+  review,
+  busy,
+  errors,
+  message,
+  onBack,
+  onPublish,
+}: {
+  review: WorkflowDraftReview;
+  busy: boolean;
+  errors: number;
+  message: string | undefined;
+  onBack: () => void;
+  onPublish: () => void;
+}): JSX.Element {
+  const diff = useMemo(() => diffText(review.baseText, review.text), [review]);
+  return (
+    <section className="orca-wfedit__review" aria-labelledby="orca-wfedit-review">
+      <header className="orca-wfedit__review-head">
+        <h2 id="orca-wfedit-review" className={textClass("heading")}>
+          {`Publish v${review.nextVersion}`}
+        </h2>
+        <Text style="caption">
+          {`${diff.added} added, ${diff.removed} removed. Runs already started stay on v${review.baseVersion}; runs started after publishing use v${review.nextVersion}.`}
+        </Text>
+        {message !== undefined && (
+          <Text style="caption" role="status">
+            {message}
+          </Text>
+        )}
+        <span className="orca-spacer" />
+        <Button size="sm" tone="ghost" onClick={onBack}>
+          Back to editing
+        </Button>
+        <Button
+          size="sm"
+          tone="primary"
+          onClick={onPublish}
+          disabled={busy || errors > 0}
+          {...(errors > 0 ? { disabledReason: "Fix the validation errors first" } : {})}
+        >
+          {`Publish v${review.nextVersion}`}
+        </Button>
+      </header>
+      <pre className={`orca-wfedit__diff ${textClass("mono-log")}`} aria-label="Changes to the workflow file">
+        {diff.coarse && (
+          <span className="orca-wfedit__diff-note">
+            {"The files are too far apart to line up; this is the whole new file.\n"}
+          </span>
+        )}
+        {diff.lines.map((line, index) => (
+          <span
+            key={index}
+            className={`orca-diff__line${line.op === "add" ? " orca-diff__line--add" : line.op === "del" ? " orca-diff__line--del" : ""}`}
+          >
+            {`${gutterFor(line.op)} ${line.text}\n`}
+          </span>
+        ))}
+      </pre>
+    </section>
+  );
+}
+
+function workflowFields(document: unknown): { name?: string; description?: string } | undefined {
+  if (!document || typeof document !== "object") return undefined;
+  const record = document as Record<string, unknown>;
+  return {
+    ...(typeof record.name === "string" ? { name: record.name } : {}),
+    ...(typeof record.description === "string" ? { description: record.description } : {}),
+  };
+}
+
+/** Registered workflow ids, for a subworkflow's target. One read; the list rarely changes mid-edit. */
+function useWorkflowIds(): readonly string[] {
+  const [ids, setIds] = useState<readonly string[]>([]);
+  useEffect(() => {
+    let live = true;
+    void window.orca.workflows.list().then((result) => {
+      if (live && result.ok) setIds(result.result.workflows.map((workflow) => workflow.id));
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  return ids;
+}

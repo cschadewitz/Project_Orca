@@ -93,7 +93,7 @@ describe("spawned daemon credentials", () => {
     expect(client).toHaveBeenLastCalledWith("http://127.0.0.1:6799", {
       workspace: "/fixture/chosen",
       bundled: true,
-      tokenFile: "/fixture/chosen/auth/local-client.token",
+      tokenFile: join("/fixture/chosen", "auth/local-client.token"),
     });
     expect(JSON.stringify(workspace.snapshot)).not.toContain("token");
     await workspace.close();

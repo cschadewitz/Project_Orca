@@ -220,6 +220,14 @@ that the two match. A method that is missing from the table is refused with
 | `templates.save` | `config.write` | additionally config.read; one reviewed source under config lock | mutation |
 | `templates.assign` | `config.write` | additionally config.read; reviewed YAML node assignment and new workflow version | mutation |
 | `templates.publish` | `config.write` | additionally config.read; guarded catalog and generation Apply | mutation |
+| `workflowDrafts.get` | `config.read` | the caller's draft, or another principal's read-only; published layout | — |
+| `workflowDrafts.open` | `config.write` | additionally config.read; creates the caller's draft file beside the workflow, never the workflow | mutation |
+| `workflowDrafts.apply` | `config.write` | additionally config.read; owner-only, revision-checked semantic edits to the draft's YAML and layout | mutation |
+| `workflowDrafts.undo` | `config.write` | additionally config.read; owner-only, revision-checked | mutation |
+| `workflowDrafts.redo` | `config.write` | additionally config.read; owner-only, revision-checked | mutation |
+| `workflowDrafts.review` | `config.write` | additionally config.read; owner-only; the exact bytes publish would write; no writes | — |
+| `workflowDrafts.publish` | `config.write` | additionally config.read; owner-only, reviewed bytes under the config lock, base re-checked, generation Apply, file restored on refusal | mutation |
+| `workflowDrafts.discard` | `config.write` | additionally config.read; owner-only, revision-checked; deletes the draft file only | mutation |
 | `config.get` | `config.read` | workspace-wide | — |
 | `config.set` | `config.write` | additionally config.read; workspace-wide unredacted Save/validation receipt | mutation |
 | `config.apply` | `config.write` | workspace-wide | mutation |

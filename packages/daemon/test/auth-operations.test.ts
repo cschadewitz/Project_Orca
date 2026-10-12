@@ -20,6 +20,7 @@ import {
   READ_METHODS,
   SUBSCRIPTION_METHODS,
   TEMPLATE_METHOD_CONTRACTS,
+  WORKFLOW_DRAFT_METHOD_CONTRACTS,
 } from "@orca/protocol";
 import { methodsFor, type MethodContext, type MethodTable } from "@orca/daemon";
 import { Maintenance } from "../src/maintenance.js";
@@ -88,6 +89,7 @@ describe("the operation inventory", () => {
       ...AGENT_METHODS,
       ...SUBSCRIPTION_METHODS,
       ...Object.keys(TEMPLATE_METHOD_CONTRACTS),
+      ...Object.keys(WORKFLOW_DRAFT_METHOD_CONTRACTS),
       ...everyAnsweredMethod(),
       WORKFLOWS_VALIDATE_INPUTS_OPERATION,
     ]);

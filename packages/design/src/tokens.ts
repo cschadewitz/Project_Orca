@@ -173,6 +173,22 @@ export const PANE_GEOMETRY: Record<PaneGeometryToken, number> = {
   'pane-min-stack': 120,
 };
 
+export type TitlebarGeometryToken = 'bar-title' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'stroke-hairline';
+
+/**
+ * The title bar and the room it leaves for the OS's window buttons, in px. The main process
+ * hands these to `BrowserWindow` — the overlay height on Windows, the traffic-light position
+ * on macOS — which takes numbers, not custom properties. The renderer keeps reading the
+ * same values as `var()`, so the native buttons and the padding that clears them cannot
+ * disagree.
+ */
+export const TITLEBAR_GEOMETRY: Record<TitlebarGeometryToken, number> = {
+  'bar-title': 36,
+  'titlebar-inset-traffic-lights': 78,
+  'titlebar-inset-caption-buttons': 138,
+  'stroke-hairline': 1,
+};
+
 export type RunStatus = 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'blocked' | 'held' | 'stale';
 export const RUN_STATUSES: readonly RunStatus[] = ['running', 'waiting', 'succeeded', 'failed', 'cancelled', 'blocked', 'held', 'stale'] as const;
 
@@ -269,10 +285,10 @@ export const STATE_VIEW_PRESENTATION: Record<StateViewKind, {
   'no-results': { word: 'no results', glyph: '◌', fg: 'var(--ink-tertiary)', fgToken: 'ink-tertiary' },
 };
 
-export type SurfaceId = 'attention' | 'runs' | 'plan' | 'agents' | 'config';
-export const SURFACE_IDS: readonly SurfaceId[] = ['attention', 'runs', 'plan', 'agents', 'config'] as const;
+export type SurfaceId = 'attention' | 'runs' | 'plan' | 'workflows' | 'agents' | 'config';
+export const SURFACE_IDS: readonly SurfaceId[] = ['attention', 'runs', 'plan', 'workflows', 'agents', 'config'] as const;
 /**
- * The five top-level surfaces, in sidebar order (docs/design/10-information-architecture.md).
+ * The six top-level surfaces, in sidebar order (docs/design/10-information-architecture.md).
  * Word and glyph are not optional: below the sidebar breakpoint the label is hidden and the
  * glyph is the whole of the navigation, so the word stays on as the accessible name (#261).
  */
@@ -280,6 +296,7 @@ export const SURFACE_PRESENTATION: Record<SurfaceId, { word: string; glyph: stri
   attention: { word: 'Attention', glyph: '◆' },
   runs: { word: 'Runs', glyph: '☰' },
   plan: { word: 'Plan', glyph: '⬡' },
+  workflows: { word: 'Workflows', glyph: '⑂' },
   agents: { word: 'Agents', glyph: '◉' },
   config: { word: 'Config', glyph: '❋' },
 };

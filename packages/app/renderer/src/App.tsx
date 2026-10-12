@@ -5,7 +5,7 @@
  * other four (and the per-surface object memory ⌘2 etc. should restore) arrive with the
  * issues that give each surface its content.
  */
-import { useCallback, useEffect, useState, type JSX, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 import { Announcer } from "./a11y/announcer.js";
 import { SURFACES, type SurfaceId } from "./chrome/surfaces.js";
 import { Sidebar } from "./chrome/sidebar.js";
@@ -28,6 +28,7 @@ import { ConfigProvider } from "./config/config-context.js";
 import { ConfigSurface } from "./config/config-surface.js";
 import { AttentionSurface } from "./attention/attention-surface.js";
 import { WorkflowSurface } from "./workflow/workflow-surface.js";
+import { WorkflowsSurface } from "./workflow/workflows-surface.js";
 import { PlanSurface, type PlanHeader, type PlanPanel } from "./plan/index.js";
 import { useAttention } from "./attention/use-attention.js";
 import { InlineAsksProvider } from "./attention/inline-asks.js";
@@ -66,10 +67,10 @@ export function App(): JSX.Element {
      `open-url`, a second launch's, and the palette's jump row — and this is the one place
      the answer is held, so all four select the same object (#165). */
   const [route, setRoute] = useState<Route | undefined>(undefined);
-  /** A URL this version of the app does not understand; said out loud rather than dropped. */
-  const [unresolved, setUnresolved] = useState<string | undefined>(undefined);
-  /** A counterpart the app cannot follow yet, in words — see `DeepLinkLanding`. */
-  const [unavailable, setUnavailable] = useState<string | undefined>(undefined);
+  /* What a link could not do, said out loud rather than dropped — see `LinkNotice`. Held
+     apart from `route`: dismissing the sentence is not leaving the place it was about, and
+     on Workflows the route is what puts the viewer on screen rather than the list. */
+  const [notice, setNotice] = useState<LinkProblem | undefined>(undefined);
   const [panelOpen, setPanelOpen] = useState(false);
   /* The object header is the chrome's, on every screen that has an object
      (docs/design/10-information-architecture.md): one breadcrumb in the app, drawn in one
@@ -104,7 +105,7 @@ export function App(): JSX.Element {
   );
   const onWorkflowHeader = useCallback(
     (reported: { crumbs: readonly Crumb[]; actions: ReactNode }) =>
-      setHeader({ surface: "config", crumbs: reported.crumbs, actions: reported.actions }),
+      setHeader({ surface: "workflows", crumbs: reported.crumbs, actions: reported.actions }),
     [],
   );
   const onPlanHeader = useCallback(
@@ -134,6 +135,15 @@ export function App(): JSX.Element {
   }, []);
 
   const connection = useConnection();
+  /* Read by `navigate` when a link arrives, without making the opener a new function on
+     every connection change: whether a daemon was answering *then* is what the landing says. */
+  const live = useRef(connection.state === "live");
+  live.current = connection.state === "live";
+  /* A link that landed with no daemon answering stops being a problem once one answers: the
+     surface it landed on reads the object then, and the sentence would be out of date. */
+  useEffect(() => {
+    if (connection.state === "live") setNotice((current) => (current?.kind === "offline" ? undefined : current));
+  }, [connection.state]);
   /* What needs a person, read *here* rather than inside the Attention surface, because the
      title bar and the sidebar carry the same number and it is only one number
      (docs/design/20-attention-and-gates.md). A count hook of its own beside the surface's
@@ -147,32 +157,44 @@ export function App(): JSX.Element {
   const sidebarCollapsed = useSidebarCollapsed();
   const panelOverlay = usePanelOverlay();
 
-  const selectSurface = useCallback((id: SurfaceId) => setActive(id), []);
+  /* The Workflows nav item means the list: arriving there by the rail leaves whichever
+     workflow a link last opened, rather than reopening it (#181). Every other surface keeps
+     its route, as it always has. */
+  const selectSurface = useCallback((id: SurfaceId) => {
+    setActive(id);
+    if (id === "workflows") setRoute((current) => (current?.kind === "workflow" ? undefined : current));
+  }, []);
 
   /**
    * Open an `orca://` URL. The surface is selected first and always — including for
    * `orca://item/…` and `orca://workflow/…`, whose surfaces do not exist until v0.5.0 and
    * v0.6.0, because landing on an unbuilt surface with the id in hand is honest and
    * dropping the link is not (docs/design/10-information-architecture.md).
+   *
+   * A link that worked says nothing: the object header names what is open, and a bar
+   * repeating it on every row clicked, crumb followed and palette jump was an alert with
+   * nothing to report. A link that did not work says why.
    */
   const navigate = useCallback((url: string) => {
     const next = resolveRoute(url);
     if (!next) {
-      setUnresolved(url);
+      setNotice({ kind: "unresolved", url });
       return;
     }
-    setUnresolved(undefined);
-    setUnavailable(undefined);
     setRoute(next);
     setActive(next.surface);
+    setNotice(live.current ? undefined : { kind: "offline", ...describeRoute(next) });
   }, []);
 
   const closeLaunch = useCallback(() => {
     setRoute(undefined);
-    setUnresolved(undefined);
-    setUnavailable(undefined);
+    setNotice(undefined);
     setActive("config");
   }, []);
+
+  /* Plan is the one surface that reports a link's object is not there (#170): a work item
+     the plan does not hold. The others do not say so yet (docs/reviews/2026-10-10-design-conformance.md). */
+  const onPlanMissing = useCallback((id: string) => setNotice({ kind: "missing", type: "work item", id }), []);
 
   /* Held rather than written inline: Plan memoises its inspector on the callbacks it was
      handed, and a fresh arrow on every render of the chrome would be a fresh inspector on
@@ -221,24 +243,6 @@ export function App(): JSX.Element {
         onOpenAttention={() => selectSurface("attention")}
         onOpenPalette={palette.openPalette}
       />
-      {/* Under the chrome and over every surface: the state is one state, so the bar that
-          says the data is last-known is drawn once rather than by each screen (#163). The
-          five seconds of silence in front of it are the main process's. */}
-      <ConnectionBanner connection={connection} />
-      {/* Where a link that arrived lands. A deep link to an object the daemon cannot
-          currently produce "lands on the object's screen in its disconnected state with the
-          id shown, never on a blank window or a generic error". */}
-      <DeepLinkLanding
-        route={route}
-        unresolved={unresolved}
-        unavailable={unavailable}
-        live={connection.state === "live"}
-        onDismiss={() => {
-          setRoute(undefined);
-          setUnresolved(undefined);
-          setUnavailable(undefined);
-        }}
-      />
       <div
         className={bodyClassName}
         data-sidebar={sidebarCollapsed ? "collapsed" : undefined}
@@ -276,10 +280,28 @@ export function App(): JSX.Element {
                      not hold, and the surfaces that answer them are v0.5.0's. Saying so is
                      what a person gets instead of a menu item that did nothing. */
                   if (url) navigate(url);
-                  else setUnavailable(`${counterpart.label} is not something this app can open yet.`);
+                  else
+                    setNotice({
+                      kind: "unavailable",
+                      text: `${counterpart.label} is not something this app can open yet.`,
+                    });
                 }}
               />
             ) : undefined
+          }
+          notices={
+            <>
+              {/* Drawn by the chrome, once, under whichever header is showing: the state is
+                  one state (#163), and the bar that says the data is last-known goes where
+                  docs/design/40 puts it. The five seconds of silence in front of it are the
+                  main process's. */}
+              <ConnectionBanner connection={connection} />
+              {/* What a link could not do. One that worked says nothing; one to an object the
+                  daemon cannot currently produce "lands on the object's screen in its
+                  disconnected state with the id shown, never on a blank window or a generic
+                  error". */}
+              <LinkNotice problem={notice} onDismiss={() => setNotice(undefined)} />
+            </>
           }
         >
           {activeSurface.id === "attention" ? (
@@ -321,28 +343,35 @@ export function App(): JSX.Element {
               onHeader={onPlanHeader}
               onInspector={showInspector}
               onOpenRun={openRun}
+              onMissing={onPlanMissing}
             />
           ) : activeSurface.id === "agents" ? (
             /* `onOpen` is the route table's, as everywhere else: the policy panel's link to
                the Config form is a link to another object and there is one resolver (#165). */
             <AgentsSurface connection={connection.state} onOpen={navigate} />
-          ) : activeSurface.id === "config" && route?.kind === "workflow" ? (
-            /* The workflow viewer lands on Config, which is where the route table has always
-               put `orca://workflow/…` — "how the system is wired, and what the workflows
-               are" (docs/design/10-information-architecture.md). A person reaches a workflow
-               by link, by the run header's "the workflow it executes", or from the palette;
-               with no workflow named, Config shows its own two documents (#175). */
-            <WorkflowSurface
-              workflowId={route.workflowId}
-              runId={route.runId}
-              connection={connection.state}
-              onHeader={onWorkflowHeader}
-            />
+          ) : activeSurface.id === "workflows" ? (
+            /* Workflows has its own place in the rail since the editor (#181): with no
+               workflow named it is the list of them, and `orca://workflow/…` - a link, the
+               run header's "the workflow it executes", the palette, a row of the list - is
+               the viewer, or the editor with `?edit`. Keyed by the workflow, so following a
+               link from one workflow to another starts the viewer afresh. */
+            route?.kind === "workflow" ? (
+              <WorkflowSurface
+                key={route.workflowId}
+                workflowId={route.workflowId}
+                runId={route.runId}
+                {...(route.edit ? { edit: true } : {})}
+                connection={connection.state}
+                onHeader={onWorkflowHeader}
+              />
+            ) : (
+              <WorkflowsSurface connection={connection.state} onOpen={navigate} onHeader={onWorkflowHeader} />
+            )
           ) : activeSurface.id === "config" ? (
             /* Its own header rather than the chrome's: the two documents Config shows are
                its objects, and the segmented control that switches between the form and the
                raw text is an action on the one in view (#175). A workflow route lands on the
-               viewer above (#177) rather than on a config document. */
+               Workflows surface above (#177, #181) rather than on a config document. */
             <ConfigSurface
               connection={connection.state}
               {...(window.orca.guidedLaunch ? { onLaunch: () => navigate(launchUrl()) } : {})}
@@ -427,63 +456,91 @@ function useDeepLinks(navigate: (url: string) => void): void {
   }, [navigate]);
 }
 
-interface DeepLinkLandingProps {
-  route: Route | undefined;
-  unresolved: string | undefined;
-  unavailable: string | undefined;
-  live: boolean;
-  onDismiss: () => void;
-}
+/** Something a link could not do. A link that worked is not one of these, and says nothing. */
+type LinkProblem =
+  /** A URL this version does not understand. */
+  | { kind: "unresolved"; url: string }
+  /** A counterpart the app cannot follow yet, in words. */
+  | { kind: "unavailable"; text: string }
+  /** A URL that arrived while no daemon was answering. */
+  | { kind: "offline"; type: string; id: string }
+  /** A URL whose surface says the object is not there. */
+  | { kind: "missing"; type: string; id: string };
 
 /**
- * What a link that arrived says about itself.
+ * What a link that could not be honoured says about itself.
  *
- * Three cases and each one is a different sentence, because "nothing happened" is the
+ * Four cases and each one is a different sentence, because "nothing happened" is the
  * failure this component exists to prevent:
  *
  * - a counterpart the app cannot follow yet — say which, rather than swallow the click;
  * - a URL this version does not understand — say the URL, because a newer app may know it;
  * - a URL that arrived while no daemon is answering — the disconnected landing, naming the
  *   object it is holding, which is the information architecture's rule;
- * - a URL that resolved — name what was opened, so a person who pasted a link can see the
- *   app agreed about which object they meant.
+ * - a URL to an object the surface does not have — name the id it was holding, because "a
+ *   link is never dropped and never answered with something that was not asked for".
+ *
+ * A link that resolved used to say "Opened …" too, on every row, crumb and palette jump. The
+ * object header already names what is open, so that was a bar with nothing to report, drawn
+ * in the stale banner's colours.
+ *
+ * Only the disconnected landing is drawn as stale, because it is the one that is about the
+ * data. The other three are about the link, and are the plain banner.
  */
-function DeepLinkLanding({
-  route,
-  unresolved,
-  unavailable,
-  live,
+function LinkNotice({
+  problem,
   onDismiss,
-}: DeepLinkLandingProps): JSX.Element | null {
-  if (unavailable !== undefined) {
-    return (
-      <Landing onDismiss={onDismiss}>
-        <Text style="caption">{unavailable}</Text>
-      </Landing>
-    );
+}: {
+  problem: LinkProblem | undefined;
+  onDismiss: () => void;
+}): JSX.Element | null {
+  if (problem === undefined) return null;
+  switch (problem.kind) {
+    case "unavailable":
+      return (
+        <Landing onDismiss={onDismiss}>
+          <Text style="caption">{problem.text}</Text>
+        </Landing>
+      );
+    case "unresolved":
+      return (
+        <Landing onDismiss={onDismiss}>
+          <Text style="caption">This app does not know how to open</Text>
+          <span className={`orca-mono ${textClass("mono-id")}`}>{problem.url}</span>
+        </Landing>
+      );
+    case "missing":
+      return (
+        <Landing onDismiss={onDismiss}>
+          <Text style="caption">{`No ${problem.type} here matches`}</Text>
+          <span className={`orca-mono ${textClass("mono-id")}`}>{problem.id}</span>
+        </Landing>
+      );
+    case "offline":
+      return (
+        <Landing stale onDismiss={onDismiss}>
+          <Text style="caption">{`No daemon is answering, so this ${problem.type} cannot be read:`}</Text>
+          <span className={`orca-mono ${textClass("mono-id")}`}>{problem.id}</span>
+        </Landing>
+      );
   }
-  if (unresolved !== undefined) {
-    return (
-      <Landing onDismiss={onDismiss}>
-        <Text style="caption">This app does not know how to open</Text>
-        <span className={`orca-mono ${textClass("mono-id")}`}>{unresolved}</span>
-      </Landing>
-    );
-  }
-  if (route === undefined) return null;
-  const { type, id } = describeRoute(route);
-  return (
-    <Landing onDismiss={onDismiss}>
-      <Text style="caption">{live ? `Opened ${type}` : `No daemon is answering, so this ${type} cannot be read:`}</Text>
-      <span className={`orca-mono ${textClass("mono-id")}`}>{id}</span>
-    </Landing>
-  );
 }
 
-/** The bar itself: one weight, one dismissal, and never a live region — it is not urgent. */
-function Landing({ children, onDismiss }: { children: ReactNode; onDismiss: () => void }): JSX.Element {
+/**
+ * The bar itself: one weight, one dismissal. Dismissing it hides the sentence and nothing
+ * else — the surface the link landed on stays where it is.
+ */
+function Landing({
+  children,
+  stale = false,
+  onDismiss,
+}: {
+  children: ReactNode;
+  stale?: boolean;
+  onDismiss: () => void;
+}): JSX.Element {
   return (
-    <div className={`orca-banner ${textClass("caption")} orca-banner--stale`} role="status">
+    <div className={`orca-banner ${textClass("caption")}${stale ? " orca-banner--stale" : ""}`} role="status">
       {children}
       <span className="orca-spacer" />
       <Button size="sm" tone="ghost" onClick={onDismiss}>

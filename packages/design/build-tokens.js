@@ -126,10 +126,23 @@ const PANE_GEOMETRY = [
   "pane-min-stack",
 ];
 
+/**
+ * The tokens the main process sizes the native window chrome with: the bar the title bar is
+ * drawn in, the insets it leaves for the OS's own buttons, and the hairline under it. A
+ * `BrowserWindow` option is a number handed to the OS, and no `var()` reaches one — the same
+ * reason `canvasColor` reads `rawTokens`. Family first, because the hairline is a border.
+ */
+const TITLEBAR_GEOMETRY = [
+  ["size", "bar-title"],
+  ["size", "titlebar-inset-traffic-lights"],
+  ["size", "titlebar-inset-caption-buttons"],
+  ["border", "stroke-hairline"],
+];
+
 /** One size token's value, or a hard failure — a missing geometry token must not emit NaN. */
-function sizeValue(name, needs) {
-  const token = T.size.tokens.find((t) => t.name === name);
-  if (!token) throw new Error(`tokens.json has no size token ${name}, which ${needs} needs`);
+function sizeValue(name, needs, family = "size") {
+  const token = T[family].tokens.find((t) => t.name === name);
+  if (!token) throw new Error(`tokens.json has no ${family} token ${name}, which ${needs} needs`);
   return token.value;
 }
 
@@ -224,6 +237,19 @@ export const PANE_GEOMETRY: Record<PaneGeometryToken, number> = {
 ${PANE_GEOMETRY.map((name) => `  ${quote(name)}: ${Number.parseInt(sizeValue(name, "PANE_GEOMETRY"), 10)},`).join("\n")}
 };
 
+export type TitlebarGeometryToken = ${union(TITLEBAR_GEOMETRY.map(([, name]) => name))};
+
+/**
+ * The title bar and the room it leaves for the OS's window buttons, in px. The main process
+ * hands these to \`BrowserWindow\` — the overlay height on Windows, the traffic-light position
+ * on macOS — which takes numbers, not custom properties. The renderer keeps reading the
+ * same values as \`var()\`, so the native buttons and the padding that clears them cannot
+ * disagree.
+ */
+export const TITLEBAR_GEOMETRY: Record<TitlebarGeometryToken, number> = {
+${TITLEBAR_GEOMETRY.map(([family, name]) => `  ${quote(name)}: ${Number.parseInt(sizeValue(name, "TITLEBAR_GEOMETRY", family), 10)},`).join("\n")}
+};
+
 export type RunStatus = ${union(Object.keys(S.runStatus))};
 export const RUN_STATUSES: readonly RunStatus[] = [${Object.keys(S.runStatus).map(quote).join(", ")}] as const;
 
@@ -295,7 +321,7 @@ ${presentation(S.stateView, true)}
 export type SurfaceId = ${union(Object.keys(S.surface))};
 export const SURFACE_IDS: readonly SurfaceId[] = [${Object.keys(S.surface).map(quote).join(", ")}] as const;
 /**
- * The five top-level surfaces, in sidebar order (docs/design/10-information-architecture.md).
+ * The six top-level surfaces, in sidebar order (docs/design/10-information-architecture.md).
  * Word and glyph are not optional: below the sidebar breakpoint the label is hidden and the
  * glyph is the whole of the navigation, so the word stays on as the accessible name (#261).
  */

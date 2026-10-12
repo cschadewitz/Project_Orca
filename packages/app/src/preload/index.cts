@@ -277,6 +277,9 @@ const bridge: OrcaBridge = {
   templates: {
     call: (method, params) => call("orca:templates", { method, params }),
   },
+  workflowDrafts: {
+    call: (method, params) => call("orca:workflowDrafts", { method, params }),
+  },
   config: {
     get: (params = {}) => call("orca:config.get", params),
     set: (params) => call("orca:config.set", params),

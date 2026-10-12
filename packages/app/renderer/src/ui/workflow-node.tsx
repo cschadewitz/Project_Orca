@@ -82,6 +82,16 @@ export interface WorkflowNodeProps {
   selected?: boolean;
   /** A container's hidden children, as a count: `2 nested graphs`. Absent when nothing is hidden. */
   collapsed?: string;
+  /**
+   * In the editor (#181): how the draft differs from the published workflow here. Drawn with
+   * the design system's draft states, and said in the accessible name, because a border colour
+   * alone carries nothing (rule 4).
+   */
+  draft?: "added" | "changed" | "removed";
+  /** In the editor: validation found errors on this node. */
+  invalid?: boolean;
+  /** A short word pinned to the box's corner - `start`, `2 errors` - spelled out, never an icon alone. */
+  flag?: string;
   onOpen?: (id: string) => void;
 }
 
@@ -110,11 +120,14 @@ function overlayModifier(status: RunStatus, current: boolean): string {
  * name starts with the type, because that is then the first thing true about the node.
  */
 export function workflowNodeName(
-  props: Pick<WorkflowNodeProps, "typeLabel" | "name" | "runState" | "untaken">,
+  props: Pick<WorkflowNodeProps, "typeLabel" | "name" | "runState" | "untaken" | "draft" | "invalid" | "flag">,
 ): string {
   const parts: string[] = [];
   if (props.runState) parts.push(STATUS_PRESENTATION[props.runState.status].word);
   parts.push(props.typeLabel, props.name);
+  if (props.draft) parts.push(props.draft);
+  if (props.invalid) parts.push("has errors");
+  if (props.flag !== undefined && !props.invalid) parts.push(props.flag);
   if (props.runState?.current) parts.push("current node");
   if (props.runState?.attempts !== undefined && props.runState.attempts > 1) {
     parts.push(`attempt ${props.runState.attempts}`);
@@ -132,12 +145,17 @@ export function WorkflowNode({
   untaken,
   selected,
   collapsed,
+  draft,
+  invalid,
+  flag,
   onOpen,
 }: WorkflowNodeProps): JSX.Element {
   const classes = ["orca-node"];
   if (type) classes.push(`orca-node--${type}`);
   if (runState) classes.push(overlayModifier(runState.status, runState.current === true));
   if (untaken) classes.push("orca-node--untaken");
+  if (draft) classes.push(`orca-node--${draft}`);
+  if (invalid) classes.push("orca-node--invalid");
   if (selected) classes.push("orca-node--selected");
 
   return (
@@ -150,12 +168,20 @@ export function WorkflowNode({
         name,
         ...(runState ? { runState } : {}),
         ...(untaken ? { untaken } : {}),
+        ...(draft ? { draft } : {}),
+        ...(invalid ? { invalid } : {}),
+        ...(flag !== undefined ? { flag } : {}),
       })}
       className={classes.join(" ")}
       onClick={onOpen ? () => onOpen(id) : undefined}
     >
+      {flag !== undefined && (
+        <span className={`orca-node__flag ${textClass("eyebrow")}`} aria-hidden="true">
+          {flag}
+        </span>
+      )}
       <span className={`orca-node__kind ${textClass("eyebrow")}`}>
-        <NodeIcon type={type} />
+        <WorkflowNodeIcon type={type} />
         {typeLabel}
       </span>
       <span className={`orca-node__name ${textClass("mono-strong")}`}>{name}</span>
@@ -186,7 +212,7 @@ export function WorkflowNode({
  * A type with no icon (a plugin's `custom:*`) draws the generic square, which is the
  * protocol's instruction rather than a fallback this file invented.
  */
-function NodeIcon({ type }: { type: WorkflowNodeType | undefined }): JSX.Element {
+export function WorkflowNodeIcon({ type }: { type: WorkflowNodeType | undefined }): JSX.Element {
   const shape = ((): JSX.Element => {
     switch (type) {
       case "start":

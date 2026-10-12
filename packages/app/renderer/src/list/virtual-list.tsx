@@ -151,6 +151,12 @@ export interface VirtualListProps<T> {
    * owns, and intended for nothing else — a row's *content* is `renderRow`'s.
    */
   rowProps?: (item: T, index: number, selected: boolean) => Record<string, string | number | boolean | undefined>;
+  /**
+   * Per-row custom properties the row's own class reads: `--level` on a tree row, which
+   * `.orca-tree-row` indents by. Custom properties only — how a row looks stays its class's;
+   * this is how a value only the surface knows (how deep the row is) reaches that class.
+   */
+  rowStyle?: (item: T, index: number, selected: boolean) => Record<`--${string}`, string | number>;
   /** The imperative half: `reveal` and `shiftBy`. */
   ref?: Ref<VirtualListHandle>;
 }
@@ -177,6 +183,7 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
     onHold,
     role = "listbox",
     rowProps,
+    rowStyle,
     ref,
   } = props;
 
@@ -288,6 +295,7 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
                    the role, the id, the selection and the click — cannot be overwritten by
                    a surface that meant to add `aria-level` and reached too far. */
                 {...rowProps?.(item, index, isSelected)}
+                style={rowStyle?.(item, index, isSelected)}
                 role={ROW_ROLE[role]}
                 aria-selected={isSelected}
                 className={["orca-list__row", rowClassName?.(item, index, isSelected) ?? ""].filter(Boolean).join(" ")}

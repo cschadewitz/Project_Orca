@@ -15,7 +15,7 @@ import {
   utimes,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it as platformIt, vi } from "vitest";
 import { ClosedUpdateWindow, enterUpdateWriter, provisionUpdateWindow } from "@orca/protocol/update-window";
 import { createPairTreePort, type PairTreePort } from "../src/main/mac-fixed-path-files.js";
 import { MacFixedPathRecovery, type FixedPathRecoveryPorts } from "../src/main/mac-fixed-path-recovery.js";
@@ -25,6 +25,8 @@ import { readMacManifest, sha256 } from "../src/main/mac-candidate-manifest.js";
 import type { MacNativeCommitRequest } from "../src/main/mac-native-handoff.js";
 import { randomUUID } from "node:crypto";
 
+// The "posix-fixture" pair tree port is Linux-only fixture evidence and refuses elsewhere.
+const it = platformIt.skipIf(process.platform !== "linux");
 const roots: string[] = [],
   closers: (() => Promise<void>)[] = [];
 const signal = () => new AbortController().signal;

@@ -17,9 +17,10 @@
  *   bar, and a later reconnection onto another incompatible daemon is a new detection and
  *   asks again, because it is new news.
  *
- * The rule sits where an object header's underline would, at the top of the content area,
- * because no surface mounts an `ObjectHeader` yet. When one does, this is the element that
- * moves under it.
+ * The chrome draws it into the primary pane's notices, under the object header where a
+ * surface has one and at the top of the pane where it has not (`PrimaryPane`). It used to
+ * sit across the whole window under the title bar, above the sidebar: a placement made
+ * before any surface mounted an `ObjectHeader`.
  */
 import { useEffect, useRef, useState, type JSX } from "react";
 import { CONNECTION_PRESENTATION } from "@orca/design";
