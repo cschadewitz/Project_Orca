@@ -854,7 +854,10 @@ export interface ObjectHeaderProps {
  *    first letter), registered in the keyboard map's `menu` scope so the command palette
  *    lists it;
  *  - focus into the menu on open and back to the trigger on close, `Esc` included — `Esc`
- *    is the layer stack's, never the component's;
+ *    is the layer stack's, never the component's. Focus lands on the first item that is
+ *    neither disabled nor `danger`, so an `Enter` pressed out of habit destroys nothing; and
+ *    **a destructive item is never first** in the list a caller passes, the rule a gate's
+ *    options and the palette's rows keep too;
  *  - placement that flips rather than clips, above the trigger when the window has no room
  *    below and aligned to the trailing edge when it has none to the right
  *    (`.orca-menu--above`, `.orca-menu--end`).
@@ -865,10 +868,19 @@ export interface ObjectHeaderProps {
 export interface MenuItem {
   id: string;
   label: string;
-  /** Trailing meta in `.orca-menu__type` — the type a counterpart leads to, a version date. */
+  /**
+   * A one-word meta in `.orca-menu__type` — the type a counterpart leads to, a version date.
+   * Eyebrow style, so uppercase and unwrapped: never a sentence (that is the menu's `note`)
+   * and never an id, which uppercase would re-capitalise.
+   */
   hint?: string;
   /** Shown, named and skipped by the arrow keys rather than hidden. */
   disabled?: boolean;
+  /**
+   * A destructive choice: `.orca-menu__item--danger`, led by `✕` so the colour is not the
+   * only channel, and never focused when the menu opens. List it after the safe choices.
+   */
+  danger?: boolean;
 }
 
 export interface MenuProps {
@@ -899,10 +911,11 @@ export interface MenuProps {
   onOpenChange?(open: boolean): void;
   /**
    * Something the popover has to *say* rather than offer (#170): an error where a list of
-   * choices was expected. Rendered above the items, never a `menuitem`, never focused,
-   * typed to or chosen — so it cannot be copied as though it were one of them. A menu with
-   * a note and no items still renders its trigger and still opens; focus lands on the list
-   * itself, so `Esc` returns it to the trigger.
+   * choices was expected, or a sentence an item would otherwise have carried as its `hint`.
+   * Rendered above the items, never a `menuitem`, never focused, typed to or chosen — so it
+   * cannot be copied as though it were one of them. A menu with a note and no items still
+   * renders its trigger and still opens; focus lands on the list itself, so `Esc` returns
+   * it to the trigger.
    *
    * It is deliberately not a disabled item: a disabled item is still counted and read as
    * one of the choices, and a menu whose only row is a disabled error is a popover focus

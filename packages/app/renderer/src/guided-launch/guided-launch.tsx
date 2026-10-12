@@ -4,11 +4,26 @@ import type { WorkflowInputDeclarationView } from "@orca/protocol";
 import { Button, Card, ConfigField, Menu, Text } from "../ui/index.js";
 import type { GuidedLaunchController } from "./controller.js";
 import { launchReceipt } from "./controller.js";
-import type { LaunchDraft } from "./contracts.js";
+import type { LaunchDraft, LaunchRoot } from "./contracts.js";
 import { inputSensitive, parseInput } from "./input-model.js";
 import { RequestOverrides, type RequestOverrideChoices } from "./request-overrides.js";
 import { launchSelectionLines } from "../../../src/launch-provenance.js";
 import "./guided-launch.css";
+
+/**
+ * The workspace-root menu's note: each root that cannot be chosen, named, with the reason
+ * its evidence gives. Nothing at all when every root is verified, so the menu is the plain
+ * list of choices it otherwise is.
+ */
+function rootNote(roots: readonly LaunchRoot[]): { note?: ReactNode } {
+  const unavailable = roots.flatMap((root) =>
+    root.evidence.state === "unavailable" ? [{ id: root.id, label: root.label, reason: root.evidence.reason }] : [],
+  );
+  if (unavailable.length === 0) return {};
+  return {
+    note: unavailable.map((root) => <div key={root.id}>{`${root.label}: ${root.reason}`}</div>),
+  };
+}
 
 function InputField({
   name,
@@ -174,8 +189,11 @@ export function GuidedLaunch({
               id: root.id,
               label: root.label,
               disabled: locked || root.evidence.state !== "verified",
-              ...(root.evidence.state === "unavailable" ? { hint: root.evidence.reason } : {}),
             }))}
+            /* Why a root cannot be chosen is a sentence, so it is the menu's note rather
+               than the item's `hint`: a hint is a one-word meta set uppercase and unwrapped,
+               and a reason set there runs out past the menu's edge in capitals. */
+            {...rootNote(context.roots)}
             onChoose={(item) => edit({ ...draft, rootId: item.id })}
           >
             {context.roots.find((root) => root.id === draft.rootId)?.label ?? "Choose a verified root"}

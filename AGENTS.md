@@ -116,12 +116,15 @@ end, and has its last child on screen when it gets there (#277).
 floor a `VirtualList` needs inside a scrolling root.
 
 **Every popover is a `Menu`.** Roving focus with `↑`/`↓`/`Home`/`End`, `Enter` to choose,
-typeahead on a letter, focus onto the first item on open and back to the trigger on close —
-including on `Esc`. Placement flips rather than clips. Do not add an `Escape` handler, an
-outside-click listener, a `tabIndex` dance or a `useState` for open: all of that is the
-primitive's, and a second implementation is the thing #202 exists to prevent. If a popover's
-body is not a list of choices, extend `Menu` rather than growing a rival — the keyboard and
-focus contract has to stay in one place.
+typeahead on a letter, focus onto the first safe item on open (never a `danger` one) and back
+to the trigger on close — including on `Esc`. Placement flips rather than clips. Do not add an
+`Escape` handler, an outside-click listener, a `tabIndex` dance or a `useState` for open: all
+of that is the primitive's, and a second implementation is the thing #202 exists to prevent. If
+a popover's body is not a list of choices, extend `Menu` rather than growing a rival — the
+keyboard and focus contract has to stay in one place. A destructive choice is never listed
+first, an item's `hint` is a one-word meta (a sentence is the menu's `note`), and **a
+destructive act on a row confirms on the row** — a second state of it, the way the palette and
+the Agents claims list do — rather than in a popover over the list.
 
 **Every pane boundary is a `PaneSplitter`.** A screen with two panes does not state a width for
 either of them: the track is `var(--pane-<boundary>, var(--<token>))` and a `<PaneSplitter>` sits

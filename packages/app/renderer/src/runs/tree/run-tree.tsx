@@ -288,7 +288,9 @@ function RunTreeRow({ row, live, onToggle }: RunTreeRowProps): JSX.Element {
       </button>
 
       {row.status === undefined ? (
-        <span className={`orca-tree-row__note ${textClass("label")} orca-runs__skipped`}>{SKIPPED_WORD}</span>
+        /* Caption, the chip's type, so the shared column width resolves to the same pixels
+           here as on a chip (runs.css, `.orca-runs__skipped`). */
+        <span className={`orca-runs__skipped ${textClass("caption")}`}>{SKIPPED_WORD}</span>
       ) : (
         <StatusChip status={row.status} aligned />
       )}

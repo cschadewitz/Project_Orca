@@ -95,6 +95,31 @@ changelog fragment.
 - **The workflow editor (#180–#182)** shipped on the visual model that #181 now specifies:
   drag and drop, layout as separate metadata, reviewed publish. See
   `docs/design/70-workflow-editing.md`.
+- **Releasing a claim looked broken, and was unsafe.** Agents' **Release** opened a `Menu`:
+  - Every menu was see-through grey: `.orca-menu` stood on `surface-overlay`, the dialog
+    scrim. Menus now stand on `surface-raised` with `shadow-popover`, as `tokens.json` says
+    things that float do; the two scrims are the token's only grounds.
+  - The consequence sentence was the item's `hint`, drawn in the eyebrow style: uppercase,
+    unwrapped, a menu about 1500px wide that still ran off its edge.
+  - The destructive item was first and focused on open, so Release then `Enter` released.
+  - The labels led with the raw id in sans, and every row carried a red Release at rest.
+  - **Decided:** Release confirms inline, as a second state of the row — the palette's
+    destructive-row pattern. A quiet Release arms the row: the danger tone, **Keep**
+    (first, focused) and **✕ Confirm release**, and the row's declared two-line variant
+    saying what releasing does. Keep, `Esc`, focus leaving and arming another row disarm it
+    (`agents/agents-surface.tsx`, `60-implementation.md`).
+  - `Menu` gained `danger` items (✕ and the danger tone, never focused on open; a caller
+    never lists one first), and `hint` is documented as a one-word meta. Guided launch's
+    workspace-root menu was the other caller passing a sentence as a hint; that reason is
+    now the menu's `note`.
+  - The palette's Agents **Release claim on** row now matches the Plan one: its id in mono,
+    sunk below the safe commands, and armed by the first `Enter`. It had none of the three.
+- **Smaller leftovers from the earlier fixes:**
+  - The run tree's never-run placeholder was `12ch` of label type, about 10px short of the
+    aligned status chip, so those rows sat off the column. It now takes the chip's own width
+    (`--chip-aligned-width`, defined once in `components.css`) in the chip's type.
+  - The run summary drew its status word twice, on the chip and again as a caption beside it.
+  - Permission rules truncate in a narrow panel and now carry their whole text in `title`.
 
 ## Findings by area
 
@@ -377,6 +402,9 @@ a line in `docs/design` saying it is intended.
     - `orca://agent/<id>` lands on Agents without selecting that agent's card. The route
       never reaches the surface, although `10-information-architecture.md` promises "that
       agent's card".
+15. **Claims held by finished runs.** The demo lists claims whose owning run has
+    *succeeded*, and each one is releasable by hand. Should a run that ends release its
+    claims itself? That is a daemon question, deferred; nothing in the app changed for it.
 
 ## Repeating this review
 

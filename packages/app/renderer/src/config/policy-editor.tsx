@@ -217,7 +217,9 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
                 {configured.map((row) => (
                   <li key={row.order} className="orca-config__rule">
                     <span className={`orca-config__order ${textClass("mono-id")}`}>{row.order}</span>
-                    <span className={`orca-config__rule-text ${textClass("mono-body")}`}>{row.text}</span>
+                    <span className={`orca-config__rule-text ${textClass("mono-body")}`} title={row.text}>
+                      {row.text}
+                    </span>
                     <Chip>{row.source}</Chip>
                   </li>
                 ))}
@@ -289,7 +291,9 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
                 {defaults.map((row) => (
                   <li key={row.order} className="orca-config__rule">
                     <span className={`orca-config__order ${textClass("mono-id")}`}>{row.order}</span>
-                    <span className={`orca-config__rule-text ${textClass("mono-body")}`}>{row.text}</span>
+                    <span className={`orca-config__rule-text ${textClass("mono-body")}`} title={row.text}>
+                      {row.text}
+                    </span>
                     <Chip>{row.source}</Chip>
                   </li>
                 ))}
@@ -375,14 +379,16 @@ function Grant({
   /* The path into the sidecar this row writes, which is what `ConfigField` says it is for:
      a form over a file a person also hand-edits has to name the key each row changes. */
   const base = `agents.${agentId}.rules[${index}]`;
+  const text = describeRule({ ...rule, source: "permissions" });
   return (
     <li className="orca-policy__grant">
       <div className="orca-policy__grant-head">
         <span className={`orca-config__order ${textClass("mono-id")}`}>{order}</span>
         {/* The same sentence the Config surface's read-only list draws, tagged with the
-            document it is in — which for a rule in this section is always the sidecar. */}
-        <span className={`orca-config__rule-text ${textClass("mono-body")}`}>
-          {describeRule({ ...rule, source: "permissions" })}
+            document it is in — which for a rule in this section is always the sidecar. It
+            truncates at its end in a narrow panel, so the whole of it is in its title. */}
+        <span className={`orca-config__rule-text ${textClass("mono-body")}`} title={text}>
+          {text}
         </span>
         <span className="orca-spacer" />
         {editable && (

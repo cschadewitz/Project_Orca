@@ -24,6 +24,20 @@
  *  - **Focus moves in on open and back to the trigger on close**, including an `Esc` close.
  *    The one case it deliberately does not is a click outside — focus is already going
  *    where the person clicked.
+ *  - **A destructive item is never focused on open, and never listed first.** Focus lands
+ *    on the first item that is neither disabled nor `danger`, because the item focus lands
+ *    on is the one a second `Enter` chooses — a person who opened a menu and pressed `Enter`
+ *    out of habit must not have destroyed something. That half is the primitive's. The other
+ *    half is the caller's, and is the rule a gate's options and the palette's rows keep too
+ *    (docs/design/20-attention-and-gates.md, 60-implementation.md): **a destructive item is
+ *    never first.** The menu does not re-sort what it is given, because the order of a list
+ *    is the caller's to mean something by, so a caller with a destructive choice puts the
+ *    safe one above it. A destructive item draws in the danger tone and leads with `✕`,
+ *    since colour is never the only channel (RULES.md rule 4).
+ *  - **A sentence is a `note`, never a `hint`.** `hint` is drawn in the eyebrow style —
+ *    uppercase, unwrapped, at the trailing edge — which is right for a type or a date and
+ *    wrong for anything a person has to read: a consequence set there was an uppercase line
+ *    that blew the menu out past the window (the Agents surface's release confirmation).
  *  - **Placement flips rather than clips**, decided by `placeMenu` over measurements this
  *    component takes through an injectable measurer (see `menu-placement.ts` for why).
  */
@@ -37,6 +51,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
+import { CHROME_GLYPHS } from "@orca/design";
 import { useOptionalKeyboard } from "../keyboard-context.js";
 import { useTransientLayer } from "../layers-context.js";
 import { scopeProps, type KeyboardMap, type Shortcut } from "../keyboard-map.js";
@@ -53,10 +68,20 @@ import { textClass } from "./text.js";
 export interface MenuItem {
   id: string;
   label: string;
-  /** A trailing note in the menu's meta style — the type a counterpart leads to, a date. */
+  /**
+   * A one-word meta at the item's trailing edge — the type a counterpart leads to, a date.
+   * It is set in the eyebrow style, so uppercase and unwrapped: never a sentence (put that
+   * in the menu's `note`) and never an id, which uppercase would re-capitalise.
+   */
   hint?: string;
   /** Listed, named and skipped by the arrow keys; a menu never hides what it cannot do. */
   disabled?: boolean;
+  /**
+   * A destructive choice: drawn in the danger tone and led by `✕`, and never the item focus
+   * lands on when the menu opens. The caller still lists it below the safe choices — see
+   * the file header.
+   */
+  danger?: boolean;
 }
 
 /**
@@ -111,7 +136,8 @@ export interface MenuProps {
   onOpenChange?: (open: boolean) => void;
   /**
    * Something the popover has to *say* rather than offer: an error where a list of choices
-   * was expected, and nothing else. It is rendered above the items, is not a `menuitem`,
+   * was expected, or a sentence about the choices that an item's `hint` cannot carry (why
+   * one of them is unavailable). It is rendered above the items, is not a `menuitem`,
    * is never focused, never typed to and never chosen — so it cannot be mistaken for, or
    * copied as, one of them.
    *
@@ -127,6 +153,8 @@ export interface MenuProps {
 const MENU_ATTRIBUTE = "data-orca-menu";
 /** The item's label, for typeahead: its text node also carries the hint. */
 const LABEL_ATTRIBUTE = "data-orca-menu-label";
+/** On a destructive item, so the open menu can step past it when it chooses where to land. */
+const DANGER_ATTRIBUTE = "data-orca-menu-danger";
 
 const rectOf = (element: Element): Rect => {
   const { top, left, width, height } = element.getBoundingClientRect();
@@ -145,12 +173,17 @@ function itemsOf(menu: Element): HTMLElement[] {
   return items.filter((item) => item.getAttribute("aria-disabled") !== "true");
 }
 
-/** Where focus is, expressed as a menu: `undefined` when it is not in one at all. */
+/**
+ * Where focus is, expressed as a menu: `undefined` when it is not in one at all. `at` is
+ * `-1` when focus is on the list itself rather than an item — a menu that opened with no
+ * item it was willing to land on (only a note, or only destructive choices).
+ */
 function focusedMenu(): { items: HTMLElement[]; at: number } | undefined {
   const active = document.activeElement;
   const menu = active?.closest(`[${MENU_ATTRIBUTE}]`);
   if (!menu) return undefined;
   const items = itemsOf(menu);
+  if (active === menu) return { items, at: -1 };
   const at = items.indexOf(active as HTMLElement);
   return at === -1 ? undefined : { items, at };
 }
@@ -161,8 +194,19 @@ function moveFocus(delta: number, to?: (count: number) => number): void {
   if (!found) return;
   const { items, at } = found;
   if (items.length === 0) return;
-  const next = to ? to(items.length) : (at + delta + items.length) % items.length;
+  // From the list itself, ↓ enters at the top and ↑ at the bottom, as from outside a list.
+  const from = at === -1 ? (delta > 0 ? -1 : 0) : at;
+  const next = to ? to(items.length) : (from + delta + items.length) % items.length;
   items[next]?.focus();
+}
+
+/**
+ * The item focus lands on when the menu opens: the first that is neither disabled (the
+ * arrow keys skip those, so `itemsOf` already has) nor destructive. `undefined` when there
+ * is none, and the list itself takes focus instead.
+ */
+function landingItem(menu: Element): HTMLElement | undefined {
+  return itemsOf(menu).find((item) => !item.hasAttribute(DANGER_ATTRIBUTE));
 }
 
 /**
@@ -295,16 +339,17 @@ export function Menu({
   useTransientLayer(open, { name: "menu", close });
   useMenuKeys(open);
 
-  /* Focus moves into the menu on open: the first item, so ↓ and Enter work immediately.
-     A menu that is only a note has no item to land on, so focus goes to the list itself —
-     which is what keeps the layer something focus is *inside*, so `Esc` returns it to the
-     trigger rather than stranding it. */
+  /* Focus moves into the menu on open: the first safe item, so ↓ and Enter work
+     immediately and Enter cannot destroy anything (`landingItem`). A menu that is only a
+     note — or only destructive choices — has no item to land on, so focus goes to the list
+     itself, which is what keeps the layer something focus is *inside*, so `Esc` returns it
+     to the trigger rather than stranding it; ↓ from there enters the items. */
   useEffect(() => {
     if (!open) return;
     const menu = list.current;
     if (!menu) return;
-    const first = itemsOf(menu)[0];
-    if (first) first.focus();
+    const landing = landingItem(menu);
+    if (landing) landing.focus();
     else menu.focus();
   }, [open]);
 
@@ -381,7 +426,7 @@ export function Menu({
           {...scopeProps("menu")}
         >
           {note === undefined ? null : (
-            <li className="orca-menu__note" role="none">
+            <li className={`orca-menu__note ${textClass("caption")}`} role="none">
               {note}
             </li>
           )}
@@ -390,11 +435,12 @@ export function Menu({
               <button
                 type="button"
                 role="menuitem"
-                className={`orca-menu__item ${textClass("label")}`}
+                className={`orca-menu__item${item.danger ? " orca-menu__item--danger" : ""} ${textClass("label")}`}
                 /* Roving focus: the menu is one tab stop, and focus inside it moves with
                    the arrow keys. Tab leaves the menu rather than walking it. */
                 tabIndex={-1}
                 {...(item.disabled ? { "aria-disabled": true } : {})}
+                {...(item.danger ? { [DANGER_ATTRIBUTE]: "" } : {})}
                 {...{ [LABEL_ATTRIBUTE]: item.label }}
                 onClick={() => {
                   if (item.disabled) return;
@@ -404,6 +450,14 @@ export function Menu({
                   onChoose(item);
                 }}
               >
+                {/* The glyph as well as the colour (rule 4). Hidden from the accessible name,
+                    which the label already makes, so typeahead and a screen reader both
+                    meet the word first — the palette's danger row does the same. */}
+                {item.danger ? (
+                  <span className="orca-menu__glyph" aria-hidden="true">
+                    {CHROME_GLYPHS.danger}
+                  </span>
+                ) : null}
                 <span>{item.label}</span>
                 {item.hint === undefined ? null : (
                   <span className={`orca-menu__type ${textClass("eyebrow")}`}>{item.hint}</span>
