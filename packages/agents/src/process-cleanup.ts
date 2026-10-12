@@ -5,8 +5,11 @@ import type { AgentProcessHandle } from "./host.js";
 /** Each signal gets at most two seconds to produce an observed direct-child exit. */
 const EXIT_GRACE_MS = 2000;
 
-/** Only this live handle is owned. No descendant or remote-process exit is implied. */
-export function processCleanup(proc: AgentProcessHandle): () => Promise<void> {
+/**
+ * Only this live handle is owned. No descendant or remote-process exit is implied.
+ * `graceMs` replaces the per-signal wait; production leaves it at `EXIT_GRACE_MS`.
+ */
+export function processCleanup(proc: AgentProcessHandle, graceMs: number = EXIT_GRACE_MS): () => Promise<void> {
   let exited = false;
   const exit = proc.exited.then(() => {
     exited = true;
@@ -24,7 +27,7 @@ export function processCleanup(proc: AgentProcessHandle): () => Promise<void> {
           () => false,
         ),
         new Promise<boolean>((resolve) => {
-          timer = setTimeout(() => resolve(false), EXIT_GRACE_MS);
+          timer = setTimeout(() => resolve(false), graceMs);
         }),
       ]);
     } finally {
