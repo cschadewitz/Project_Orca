@@ -3,7 +3,9 @@ import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { childBundle } from "../../testing/src/child-bundle.js";
 import { JsonlLogDir } from "../src/jsonl-log.js";
 import { JsonlEventStore } from "../src/jsonl-event-store.js";
 import { ProtectedEventStore } from "../src/protected-event-store.js";
@@ -94,28 +96,12 @@ describe("durable unique journal append", () => {
 
   it("recovers after a writer process exits during the actual append", async () => {
     const { dir, file } = await fixture();
-    const source = new URL("../src/jsonl-log.ts", import.meta.url).href;
-    const script = `
-      import { open } from 'node:fs/promises';
-      import { JsonlLogDir } from ${JSON.stringify(source)};
-      const probe = await open(${JSON.stringify(file)}, 'a+');
-      const prototype = Object.getPrototypeOf(probe);
-      await probe.close();
-      const writeFile = prototype.writeFile;
-      prototype.writeFile = async function(bytes, ...args) {
-        if (typeof bytes === 'string' && bytes.includes('continuation-1')) {
-          await writeFile.call(this, bytes.slice(0, Math.floor(bytes.length / 2)), ...args);
-          process.exit(87);
-        }
-        return writeFile.call(this, bytes, ...args);
-      };
-      await new JsonlLogDir(${JSON.stringify(dir)}).appendDurableUnique('run', {
-        expectedSeq: 0, findExisting: () => undefined,
-        build: seq => ({seq, correlation:'continuation-1', value:'accepted'})
-      });
-    `;
+    // The writer is a real process that really exits mid-append. Under the test runner it starts
+    // from the run's prebuilt bundle with plain node, not from sources transpiled by tsx.
+    const writerSource = fileURLToPath(new URL("./fixtures/continuation-append-writer.ts", import.meta.url));
+    const bundle = childBundle("continuation-append-writer", { entries: { writer: writerSource } })?.writer;
     const code = await new Promise<number | null>((resolve, reject) => {
-      const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      const child = spawn(process.execPath, [...(bundle ? [bundle] : ["--import", "tsx", writerSource]), dir, file], {
         cwd: process.cwd(),
         stdio: "pipe",
       });
