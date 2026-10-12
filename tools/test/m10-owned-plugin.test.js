@@ -71,7 +71,7 @@ async function boot(f, launcher, value) {
   const capture = (chunk) => (output = (output + chunk.toString()).slice(-32768));
   child.stdout.on("data", capture);
   child.stderr.on("data", capture);
-  f.cleanup.push(() => f.stop(child));
+  f.daemons.push(() => f.stop(child));
   f.processes.push({ child, output: () => output });
   await until(
     async () => {
@@ -181,7 +181,7 @@ it("refuses tampered installed bundle bytes in the compiled adapter before readi
     env: { PATH: process.env.PATH ?? "", LANG: "C.UTF-8" },
     stdio: "pipe",
   });
-  f.cleanup.push(() => f.stop(child));
+  f.daemons.push(() => f.stop(child));
   let output = "";
   child.stderr.on("data", (chunk) => (output = (output + chunk.toString()).slice(-32768)));
   const code = await new Promise((resolve, reject) => {

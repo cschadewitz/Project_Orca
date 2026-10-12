@@ -84,7 +84,10 @@ export interface CreateOptions {
 export class ProductionFixture {
   readonly progress = new FixtureProgress();
   private failurePublished = false;
+  /** Peers, sockets, proxies and bridges: nothing but connections to a daemon, so they close together and first. */
   readonly cleanup: (() => Promise<unknown>)[] = [];
+  /** Daemons, in the order they started: stopped one at a time, after every connection to them has closed. */
+  readonly daemons: (() => Promise<unknown>)[] = [];
   readonly processes: { child: ChildProcessWithoutNullStreams; output: () => string }[] = [];
   readonly tokenSecrets: string[] = [];
   dir = "";
@@ -228,7 +231,7 @@ export class ProductionFixture {
       );
   }
 
-  private process(args: string[], env = environment()) {
+  private process(args: string[], env = environment(), owner = this.cleanup) {
     const child = spawn(process.execPath, args, { cwd: this.dir, env, stdio: "pipe" });
     let output = "";
     const capture = (chunk: Buffer) => {
@@ -237,7 +240,7 @@ export class ProductionFixture {
     child.stdout.on("data", capture);
     child.stderr.on("data", capture);
     this.processes.push({ child, output: () => output });
-    this.cleanup.push(() => this.stop(child));
+    owner.push(() => this.stop(child));
     return { child, output: () => output };
   }
 
@@ -260,15 +263,19 @@ export class ProductionFixture {
     return this.progress.measure("daemon.boot", () => this.bootDaemon(testPreload));
   }
   private async bootDaemon(testPreload?: string) {
-    const proc = this.process([
-      ...(testPreload ? ["--import", `data:text/javascript,${encodeURIComponent(testPreload)}`] : []),
-      cli,
-      "serve",
-      "--config",
-      join(this.dir, "orca.config.yaml"),
-      "--port",
-      "0",
-    ]);
+    const proc = this.process(
+      [
+        ...(testPreload ? ["--import", `data:text/javascript,${encodeURIComponent(testPreload)}`] : []),
+        cli,
+        "serve",
+        "--config",
+        join(this.dir, "orca.config.yaml"),
+        "--port",
+        "0",
+      ],
+      environment(),
+      this.daemons,
+    );
     await until(
       async () => {
         if (proc.child.exitCode !== null)
@@ -824,9 +831,13 @@ export class ProductionFixture {
 
   async close() {
     const errors: unknown[] = [];
-    for (const close of this.cleanup.splice(0).reverse()) {
+    // Each peer, socket, proxy and bridge waits on its own process or socket, so closing them one
+    // after another only adds those waits up. The daemons they talk to stop after all of them.
+    const settled = await Promise.allSettled(this.cleanup.splice(0).map(async (close) => close()));
+    for (const result of settled) if (result.status === "rejected") errors.push(result.reason);
+    for (const stop of this.daemons.splice(0).reverse()) {
       try {
-        await close();
+        await stop();
       } catch (error) {
         errors.push(error);
       }
