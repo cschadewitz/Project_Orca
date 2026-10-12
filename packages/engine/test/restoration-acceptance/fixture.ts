@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
-import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const canaries = ["fixture-credential-canary-396", "fixture-sensitive-input-396"];
 export const pluginKinds = [
@@ -222,9 +221,8 @@ export async function prepareJevFixture(
   if (fixture.kind === "builtin") throw new Error("Prepare JEV from a fixture with a plugin entry");
   await configure(fixture, era);
   await writeFile(join(fixture.root, "jev-settings.json"), JSON.stringify({ era, failure }), { mode: 0o600 });
-  const adapterModule = pathToFileURL(
-    fileURLToPath(new URL("../../../integrations/src/jev/plugin.ts", import.meta.url)),
-  ).href;
+  // Imported here, not at the top: worker.ts bundles this file, and launch.ts needs @orca/testing.
+  const { jevAdapter: adapterModule } = (await import("./launch.js")).workerLaunch();
   const source = `import {createRestorableJevEvalPlugin} from ${JSON.stringify(adapterModule)};
 import {appendFile,readFile} from "node:fs/promises";
 const data=${JSON.stringify(jevFixtureData)};

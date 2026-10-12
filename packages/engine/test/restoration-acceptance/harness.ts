@@ -13,9 +13,9 @@ import {
   type Report,
   type VerificationMode,
 } from "./fixture.js";
+import { workerLaunch } from "./launch.js";
 
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
-const entry = fileURLToPath(new URL("worker.ts", import.meta.url));
 const maxOutput = 16 * 1024;
 
 export class ProcessHarness {
@@ -32,13 +32,14 @@ export class ProcessHarness {
   }
   async start(fixture: Fixture, action: Action, authority?: AuthorityMode, verification?: VerificationMode) {
     await assertOwned(fixture);
+    const { script, execArgv } = workerLaunch();
     const env: NodeJS.ProcessEnv = {};
     for (const name of ["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP"])
       if (process.env[name] !== undefined) env[name] = process.env[name];
-    const child = fork(entry, [], {
+    const child = fork(script, [], {
       cwd: root,
       execPath: process.execPath,
-      execArgv: ["--import", "tsx"],
+      execArgv,
       env,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
