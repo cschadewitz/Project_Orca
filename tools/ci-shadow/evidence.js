@@ -27,6 +27,88 @@ export const INTENTIONAL_SKIPS = [
     reason: "credential-dependent live provider smoke is opt-in",
   },
 ];
+// Cases the Linux runner cannot exercise. Unlike the opt-ins above, these files stay selected so
+// everything else in them still runs; a file may skip exactly its listed names (no more, no fewer)
+// while its blob is unchanged, and a changed blob takes full. A skip is still never a pass.
+export const RUNNER_SKIPS = [
+  {
+    path: "packages/app/test/diagnostics-windows-refusal.test.ts",
+    reason: "Windows-only",
+    names: ["repeated actual Windows off/refused attempts and recreation retain no files or key/picker authority"],
+  },
+  {
+    path: "packages/app/test/first-run-windows.test.ts",
+    reason: "Windows-only",
+    names: [
+      "native Windows first-run reviews a missing private child, creates exact samples and preserves the receipt across recreation",
+      "native Windows first-run refuses a replaced reviewed parent before creating its child",
+      "native Windows first-run refuses hard-linked, reparse and replaced sample assets without changing the receipt",
+      "native Windows first-run refuses inherited non-private ACLs and unsafe path namespaces",
+      "native Windows first-run refuses physical workspace replacement and uncertified legacy Windows receipts",
+      "native Windows first-run releases short recovery locks, refuses competing writers and uses stable native boot identity",
+      "native Windows first-run retains a native writer lock across ordinary release and garbage collection",
+    ],
+  },
+  {
+    path: "packages/app/test/first-run.test.ts",
+    reason: "runs only without POSIX owner ids (Windows)",
+    names: ["unknown owner identity fails closed"],
+  },
+  {
+    path: "packages/app/test/guided-launch-adapter.test.ts",
+    reason: "Windows-only",
+    names: [
+      "reserved harmless first-run sample binding reports unavailable ownership on Windows without starting the sample",
+    ],
+  },
+  {
+    path: "packages/app/test/mac-fixed-path-native.test.ts",
+    reason: "native suite opts in through ORCA_REPLACEMENT_NATIVE_TEST_HEADERS",
+    names: [
+      "compiled fixed-path descriptor backend provisions native namespaces once and refuses lost/replaced identity",
+      "compiled fixed-path descriptor backend refuses a missing established journal, unsafe namespace and stale backend",
+      "compiled fixed-path descriptor backend copies and restores the actual protected trees and binary without changing live root inodes",
+      "compiled fixed-path descriptor backend refuses a changed source identity before native destructive restore",
+      "compiled fixed-path descriptor backend retains private modes, internal links and xattrs through the native mutation path",
+      "compiled fixed-path descriptor backend full descriptor flush refuses unsafe/nonprivate handles",
+      "compiled fixed-path descriptor backend a real supervisor SIGKILL after clearing a live root resumes the retained complete pair on the same boot",
+    ],
+  },
+  {
+    path: "packages/app/test/mac-replacement-native-storage.test.ts",
+    reason: "native suite opts in through ORCA_REPLACEMENT_NATIVE_TEST_HEADERS",
+    names: [
+      "disposable native replacement syscall/Node-API path a missing updater root remains unknown without recreating lost recovery authority",
+      "disposable native replacement syscall/Node-API path persists an encrypted >4 KiB identity and keeps fresh bootstrap closed across normal quit",
+      "disposable native replacement syscall/Node-API path refuses competing journal handles, retaining the first owner and durable identity",
+      "disposable native replacement syscall/Node-API path lost before-rename acknowledgement preserves evidence and refuses fresh ordinary startup",
+      "disposable native replacement syscall/Node-API path lost after-rename acknowledgement preserves evidence and refuses fresh ordinary startup",
+      "disposable native replacement syscall/Node-API path refuses ciphertext damage without reset or evidence deletion",
+      "disposable native replacement syscall/Node-API path refuses key damage without reset or evidence deletion",
+      "disposable native replacement syscall/Node-API path refuses symlink damage without reset or evidence deletion",
+      "disposable native replacement syscall/Node-API path refuses hardlink damage without reset or evidence deletion",
+      "disposable native replacement syscall/Node-API path refuses permissions damage without reset or evidence deletion",
+      "disposable native replacement syscall/Node-API path isolates namespaces, refuses evidence removal/export, and fails closed at the 40 KiB envelope bound",
+      "disposable native replacement syscall/Node-API path a root replaced while owned cannot redirect journal writes or reopen that owner",
+      "disposable native replacement syscall/Node-API path a process crash at temp retains closure and releases only its kernel lock",
+      "disposable native replacement syscall/Node-API path a process crash at committed retains closure and releases only its kernel lock",
+    ],
+  },
+  {
+    path: "packages/app/test/mac-update-candidates.test.ts",
+    reason: "Windows-only",
+    names: ["refuses Windows storage before transport, inspection or owned writes"],
+  },
+];
+/** Whether a normalized file's skips are exactly its reviewed runner skips (duplicates included). */
+export function runnerSkipsReviewed(file) {
+  const policy = RUNNER_SKIPS.find((skip) => skip.path === file.path);
+  return (
+    Boolean(policy) &&
+    Array.isArray(file.skips) &&
+    isDeepStrictEqual([...file.skips].sort(), policy.names.map((name) => hash(name)).sort())
+  );
+}
 const exactKeys = (value, keys) =>
   value &&
   typeof value === "object" &&
@@ -254,16 +336,10 @@ export function compareLane(plan, evidence, { repo, trusted, node, job, source }
   for (const file of suite.files) {
     if (!filePassed(file)) {
       const policy = INTENTIONAL_SKIPS.find((skip) => skip.path === file.path);
+      const optIn = !selected && policy && file.passed === 0 && isDeepStrictEqual(file.skips, [hash(policy.name)]);
+      const runner = runnerSkipsReviewed(file) && RUNNER_SKIPS.find((skip) => skip.path === file.path);
       let allowed = false;
-      if (
-        !selected &&
-        policy &&
-        file.status === "passed" &&
-        file.failed === 0 &&
-        file.passed === 0 &&
-        file.todo === 0 &&
-        isDeepStrictEqual(file.skips, [hash(policy.name)])
-      ) {
+      if ((optIn || runner) && file.status === "passed" && file.failed === 0 && file.todo === 0) {
         try {
           allowed = git(repo, ["rev-parse", `${trusted}:${file.path}`]).equals(
             git(repo, ["rev-parse", `${plan.identities.candidate}:${file.path}`]),
@@ -272,7 +348,8 @@ export function compareLane(plan, evidence, { repo, trusted, node, job, source }
           allowed = false;
         }
       }
-      if (allowed) result.intentionalSkips.push({ path: file.path, reason: policy.reason, status: "skipped" });
+      if (allowed)
+        result.intentionalSkips.push({ path: file.path, reason: (optIn ? policy : runner).reason, status: "skipped" });
       else add("unexpected_skip_failure_or_empty_file");
     }
     if ((file.failed || file.status === "failed") && !plan.wouldRun.vitestFiles.includes(file.path))

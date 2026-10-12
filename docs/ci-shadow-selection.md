@@ -13,7 +13,7 @@ worker continues to own fixture optimization.
 ## Current PR execution
 
 The preparation branch starts from main `65606fbce827cba914a67b999b1a47c0aab2797a`.
-Selector **1.2.0** uses the versioned `packagePolicy` in `ownership.v1.json`:
+Selector **1.3.0** uses the versioned `packagePolicy` in `ownership.v1.json`:
 
 - Supported package source/test files and renderer CSS select **whole package test
   domains plus downstream consumers**, using the union of base/candidate static
@@ -66,13 +66,24 @@ fetched with Git credentials disabled. The plan is independently recomputed befo
 execution; HEAD/tracked source are checked before running and before/after result
 acceptance. Old reports are removed. Argument-array file paths invoke Vitest without
 a shell. Fresh JSON must contain every selected file exactly once with passing,
-nonempty assertions and no failures, skips or todos. Missing/stale/duplicate/extra
-results fail the job. Reports bind the actual Node major and candidate.
+nonempty assertions and no failures, skips or todos, except reviewed runner skips (below).
+Missing/stale/duplicate/extra results fail the job. Reports bind the actual Node major
+and candidate.
 
 The three intentional opt-in skips retain their exact assertion/hash and unchanged-blob
 policy in full reports. Selected execution omits those unchanged opt-ins: the two retry
 cases run independently on Node 24; the provider-live test remains outside credential-free
 CI. A changed opt-in source forces full so new assertions cannot disappear behind this rule.
+
+Reviewed runner skips (`RUNNER_SKIPS` in `tools/ci-shadow/evidence.js`) are cases the Linux
+runner cannot exercise: Windows-only behaviour, the no-POSIX-owner path and the two native
+suites that opt in through `ORCA_REPLACEMENT_NATIVE_TEST_HEADERS`. Unlike the opt-ins, their
+files stay selected, so every other assertion in them still has to pass. A selected file may
+skip exactly its listed names, by `fullName` hash, no more and no fewer, and a file made only
+of listed assertions may pass none. No retry file is listed, so the retry lane still allows
+no skips. Any change to one of these files forces full (`runner_skip_source_changed`), so a
+reviewer re-lists its skips before the next PR can be targeted again. Every other skip still
+fails.
 
 ## Reporting, adoption and rollback
 
@@ -292,9 +303,11 @@ The event adapter below grants no merge/release authority.
 Observed execution belongs in a separately versioned evidence sidecar linked to
 the same candidate and plan digest. The exported `validateExecution` checks a strict
 normalized file report: `{candidate,node,lane,success,files}` with lane `suite` or
-`retry`, Node 24 and each file `{path,status,passed,failed,skipped}`. It rejects
-missing/extra/duplicate files, zero assertions, failure/cancellation, skips and stale
-identity. The retry lane requires both named CLI/ACP files to pass with no skips.
+`retry`, Node 24 and each file `{path,status,passed,failed,skipped}`, plus its skip
+hashes `skips` when it skipped anything. It rejects missing/extra/duplicate files, zero
+assertions, failure/cancellation, skips other than a file's exact reviewed
+runner skips, and stale identity. The retry lane requires both named CLI/ACP files to
+pass with no skips.
 The report adapter derives counts/statuses from actual runner results;
 passing claimed counts to this helper is not proof that a process ran. Ordinary
 full-suite intentional opt-in skips need an explicit reviewed evidence model; this
@@ -368,8 +381,9 @@ Three existing Linux opt-in skips have an explicit bounded policy:
 
 Each also requires the candidate test blob to equal trusted policy source. Skips
 remain `skipped`, never passed. Different names/counts, changed source, empty/todo
-files or other skips make evidence unknown. Strict `validateExecution` is unchanged;
-this full-suite sidecar does not relax targeted/retry validation. A bounded seeded
+files or other skips make evidence unknown. Reviewed runner skips are recorded the
+same way, in full and selected lanes, under the same unchanged-blob and exact-name rule;
+`validateExecution` accepts those and nothing else. A bounded seeded
 omitted-failure regression checks incident reporting, not live targeted execution.
 
 Browser/native runners remain `unknown/outside_CI_workflow`. Coverage and compiled

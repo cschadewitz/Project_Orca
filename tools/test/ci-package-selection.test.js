@@ -7,7 +7,7 @@ import { git } from "../ci-shadow/git.js";
 import { TOOL_PATHS, MANIFEST_PATH } from "../ci-shadow/graph.js";
 import { createPlan, loadManifest, validatePlan } from "../ci-shadow/selector.js";
 import { executionPlan, runSelected } from "../ci-shadow/execute.js";
-import { INTENTIONAL_SKIPS } from "../ci-shadow/evidence.js";
+import { INTENTIONAL_SKIPS, RUNNER_SKIPS } from "../ci-shadow/evidence.js";
 import { createGitFixture } from "./git-fixture.js";
 const root = fileURLToPath(new URL("../../", import.meta.url));
 let fixture, repo, base, manifest;
@@ -135,6 +135,15 @@ it.each([
   write(path, path.endsWith(".json") ? `${text}\n` : `/** Changed input. */\n${text}\n`);
   const input = candidate();
   expect(createPlan(input, manifest).wouldRun.tier).toBe("full");
+  expect(executionPlan(input, "pull_request", 24, manifest).mode).toBe("full");
+});
+it("retains full checks when a file with reviewed runner skips changes, so its list is re-reviewed", () => {
+  reset();
+  write(RUNNER_SKIPS[0].path, "/** Changed runner-skip source. */\n");
+  const input = candidate();
+  const plan = createPlan(input, manifest);
+  expect(plan.wouldRun.tier).toBe("full");
+  expect(plan.wouldRun.reasonCodes).toContain("runner_skip_source_changed");
   expect(executionPlan(input, "pull_request", 24, manifest).mode).toBe("full");
 });
 it("selects real changelog checks for consumed release fragments and CSS package domains", () => {

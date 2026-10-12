@@ -4,11 +4,11 @@ import { isDeepStrictEqual } from "node:util";
 import { changes, digest, hash, identities, sorted, snapshot, validPath } from "./git.js";
 import { consumers, graph, imports, MANIFEST_PATH, TOOL_PATHS, validateManifest } from "./graph.js";
 import { docsOnly, loadDocs } from "./docs.js";
-import { CI_NODES, INTENTIONAL_SKIPS } from "./evidence.js";
+import { CI_NODES, INTENTIONAL_SKIPS, RUNNER_SKIPS, runnerSkipsReviewed } from "./evidence.js";
 
 export const ARTIFACT = "orca-ci-shadow-plan";
 export const SCHEMA_VERSION = 1;
-export const SELECTOR_VERSION = "1.2.0";
+export const SELECTOR_VERSION = "1.3.0";
 export const loadManifest = () =>
   validateManifest(JSON.parse(readFileSync(new URL("./ownership.v1.json", import.meta.url), "utf8")));
 export const selectorIdentity = (manifest) => ({
@@ -222,6 +222,15 @@ export function createPlan({ repo, base, head, candidate, forceFull = false }, m
     reasons.push("intentional_skip_source_changed");
     tier = "full";
   }
+  // Reviewed runner skips are names in an unchanged file; an edited file is re-proven in full.
+  if (
+    manifest.packagePolicy &&
+    tier === "targeted" &&
+    RUNNER_SKIPS.some(({ path }) => snaps[0].files.get(path)?.oid !== snaps[1].files.get(path)?.oid)
+  ) {
+    reasons.push("runner_skip_source_changed");
+    tier = "full";
+  }
   let vitestFiles =
     tier === "full"
       ? graphs[1].tests
@@ -310,15 +319,18 @@ export function validateExecution(plan, report) {
     !expected.length ||
     !isDeepStrictEqual(sorted(report.files.map((file) => file.path)), sorted(expected)) ||
     report.files.length !== expected.length ||
-    report.files.some(
-      (file) =>
+    report.files.some((file) => {
+      // A file may skip only its exact reviewed runner skips; no retry file is listed.
+      const reviewed = file.skipped > 0 && file.skipped === file.skips?.length && runnerSkipsReviewed(file);
+      return (
         !validPath(file.path) ||
         !Number.isSafeInteger(file.passed) ||
-        file.passed < 1 ||
+        file.passed < (reviewed ? 0 : 1) ||
         file.failed !== 0 ||
-        file.skipped !== 0 ||
-        file.status !== "passed",
-    )
+        (file.skipped !== 0 && !reviewed) ||
+        file.status !== "passed"
+      );
+    })
   )
     throw new Error("missing_duplicate_failed_or_skipped_selected_file");
   return { candidate: report.candidate, node: report.node, lane: report.lane, selectedFilesPassed: expected.length };

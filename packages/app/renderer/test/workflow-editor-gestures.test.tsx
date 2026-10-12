@@ -399,7 +399,9 @@ describe("the draft bar", () => {
     expect(discard().textContent).toBe("Discard draft");
     fireEvent.click(discard());
     fireEvent.click(discard());
-    await screen.findByRole("listbox", { name: /graph$/ });
+    // The viewer's Edit, not a `… graph` listbox: the editor's own canvas is the "ai-sdlc draft
+    // graph", which would be found before the editor has closed.
+    await screen.findByRole("button", { name: "Edit" });
     expect(drafts.calls.map((c) => c.method)).toContain("workflowDrafts.discard");
     expect(said).toContain("Draft discarded.");
     expect(screen.queryByRole("group", { name: "Workflow draft" })).toBeNull();

@@ -12,6 +12,7 @@ import {
   normalizeVitest,
   readJSON,
   RETRY_FILES,
+  RUNNER_SKIPS,
   validateEvidence,
 } from "../ci-shadow/evidence.js";
 import { consume, resolveSource, summary } from "../ci-shadow/consume.js";
@@ -292,6 +293,30 @@ it("requires the independently passing retry lane and frozen skipped test source
   e.retry.files[0].skips = [hash(INTENTIONAL_SKIPS[0].name)];
   expect(compare(e).lanes[0].reasons).toContain("retry_acceptance_not_proven");
   expect(compare(evidence(), job(), plan(), { trusted: "0".repeat(40) }).lanes[0].reasons).toContain(
+    "unexpected_skip_failure_or_empty_file",
+  );
+});
+
+it("records exact reviewed runner skips in full and selected lanes while the trusted source is unchanged", () => {
+  const runner = RUNNER_SKIPS[0];
+  const listed = { ...file(runner.path), skips: runner.names.map((name) => hash(name)).sort() };
+  const full = evidence();
+  full.suite.files.push(listed);
+  const fullPlan = { ...plan(), graphs: [{}, { discoveredVitestFiles: [...discovered, runner.path].sort() }] };
+  const compared = compare(full, job(), fullPlan).lanes[0];
+  expect(compared.status).toBe("compared");
+  expect(compared.intentionalSkips).toContainEqual({ path: runner.path, reason: runner.reason, status: "skipped" });
+
+  const selected = { ...selectedEvidence(), suite: { success: true, files: [file(ordinary), listed] } };
+  const withRunner = {
+    ...selectedPlan(),
+    wouldRun: { ...selectedPlan().wouldRun, vitestFiles: [ordinary, runner.path] },
+  };
+  expect(compare(selected, selectedJob(), withRunner).lanes[0].status).toBe("selected_verified");
+  const extra = structuredClone(selected);
+  extra.suite.files[1].skips = [...listed.skips, hash("an unreviewed skip")].sort();
+  expect(compare(extra, selectedJob(), withRunner).lanes[0].reasons).toContain("unexpected_skip_failure_or_empty_file");
+  expect(compare(selected, selectedJob(), withRunner, { trusted: "0".repeat(40) }).lanes[0].reasons).toContain(
     "unexpected_skip_failure_or_empty_file",
   );
 });
