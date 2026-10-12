@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { canonical, digest, git, identities, parseChanges, snapshot, validPath } from "../ci-shadow/git.js";
+import { canonical, digest, git, hash, identities, parseChanges, snapshot, validPath } from "../ci-shadow/git.js";
+import { RETRY_FILES, RUNNER_SKIPS } from "../ci-shadow/evidence.js";
 import { consumers, coveredInventory, graph, imports, MANIFEST_PATH, TOOL_PATHS } from "../ci-shadow/graph.js";
 import { createPlan, loadManifest, validateExecution, validatePlan } from "../ci-shadow/selector.js";
 import { executionPlan, runSelected, selectedResult } from "../ci-shadow/execute.js";
@@ -911,4 +912,55 @@ it("rejects missing/duplicate/failed/skipped file results and stale result ident
   retry.files[0].skipped = 1;
   expect(() => validateExecution(result, retry)).toThrow();
   expect(digest(canonical(result))).toMatch(/^[a-f0-9]{64}$/);
+});
+
+it("accepts a selected file's exact reviewed runner skips in the suite lane, and nothing near them", () => {
+  const [partial, whole] = [RUNNER_SKIPS[0], RUNNER_SKIPS[1]];
+  const result = { identities: { candidate: base }, wouldRun: { vitestFiles: [partial.path, whole.path] } };
+  const skipped = (policy, passed, names = policy.names) => ({
+    path: policy.path,
+    status: "passed",
+    passed,
+    failed: 0,
+    skipped: names.length,
+    skips: names.map((name) => hash(name)).sort(),
+  });
+  const report = {
+    candidate: base,
+    node: 24,
+    lane: "suite",
+    success: true,
+    files: [skipped(partial, 4), skipped(whole, 0)],
+  };
+  expect(validateExecution(result, report).selectedFilesPassed).toBe(2);
+  // The retry lane's two files must pass with no skips, so neither may ever be listed.
+  expect(RUNNER_SKIPS.filter(({ path }) => RETRY_FILES.includes(path))).toEqual([]);
+  for (const mutate of [
+    (copy) => Object.assign(copy.files[1], skipped(whole, 0, whole.names.slice(1))),
+    (copy) => Object.assign(copy.files[0], skipped(partial, 4, [...partial.names, "an unreviewed skip"])),
+    (copy) => Object.assign(copy.files[0], skipped(partial, 4, [`${partial.names[0]} renamed`])),
+    (copy) => Object.assign(copy.files[0], skipped(partial, 4, [partial.names[0], partial.names[0]])),
+    (copy) => delete copy.files[0].skips,
+    (copy) => (copy.files[0].skipped = 2),
+  ]) {
+    const copy = structuredClone(report);
+    mutate(copy);
+    expect(() => validateExecution(result, copy)).toThrow();
+  }
+  // The same names under a file the list does not name are just skips.
+  const elsewhere = { ...report.files[0], path: "packages/app/test/unreviewed.test.ts" };
+  expect(() =>
+    validateExecution({ ...result, wouldRun: { vitestFiles: [elsewhere.path] } }, { ...report, files: [elsewhere] }),
+  ).toThrow();
+  // End to end from a Vitest report: the listed names skip and every other assertion passes.
+  const raw = selectedRaw([partial.path], "/selected");
+  raw.testResults[0].assertionResults.push(...partial.names.map((fullName) => ({ status: "skipped", fullName })));
+  raw.numTotalTests += partial.names.length;
+  raw.numPendingTests = partial.names.length;
+  const plan = { identities: { candidate: base }, wouldRun: { vitestFiles: [partial.path] } };
+  expect(selectedResult(plan, raw, "/selected").selectedFilesPassed).toBe(1);
+  raw.testResults[0].assertionResults.push({ status: "skipped", fullName: "an unreviewed skip" });
+  raw.numTotalTests++;
+  raw.numPendingTests++;
+  expect(() => selectedResult(plan, raw, "/selected")).toThrow("missing_duplicate_failed_or_skipped_selected_file");
 });
