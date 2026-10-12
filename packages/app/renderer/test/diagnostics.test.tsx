@@ -46,6 +46,40 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+/**
+ * Hold the one timer set for `delay` and run it on demand, instead of waiting the delay out. A
+ * preview's expiry has to land after the steps a test takes before it: a short real timer races
+ * those steps and a long one is a wait. Every other timer, Testing Library's included, stays real.
+ */
+function holdTimer(delay: number) {
+  const held = new Map<number, () => void>();
+  let last = 0;
+  const realSet = globalThis.setTimeout.bind(globalThis);
+  const realClear = globalThis.clearTimeout.bind(globalThis);
+  const set = vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, ms?: number) => {
+    if (ms !== delay) return realSet(handler, ms);
+    held.set(--last, handler);
+    return last;
+  }) as unknown as typeof setTimeout);
+  const clear = vi.spyOn(globalThis, "clearTimeout").mockImplementation(((id?: number) => {
+    if (id === undefined || !held.delete(id)) realClear(id);
+  }) as unknown as typeof clearTimeout);
+  disposals.push(() => {
+    set.mockRestore();
+    clear.mockRestore();
+  });
+  return {
+    armed: () => held.size,
+    run: () =>
+      act(() => {
+        for (const [id, handler] of [...held]) {
+          held.delete(id);
+          handler();
+        }
+      }),
+  };
+}
+
 function fakeBridge(patch: Partial<DiagnosticsStatus> = {}) {
   let state: DiagnosticsStatus = { ...defaults, ...patch };
   const listeners = new Set<(status: DiagnosticsStatus) => void>();
@@ -435,10 +469,14 @@ describe("descriptor-only export and separate local Save", () => {
   it.each(["close", "expiry"] as const)(
     "allows a fresh explicit Save after known refusal and preview %s without changing consent",
     async (dismissal) => {
+      // An odd delay, so that no other timer shares it; the test runs the preview's own expiry timer
+      // once the refusal is showing rather than waiting out, or racing, a real one.
+      const expiresInMs = 1_234;
+      const expiry = dismissal === "expiry" ? holdTimer(expiresInMs) : undefined;
       const f = fakeBridge({ ...enabled, previous: true });
       vi.mocked(f.bridge.prepareExport).mockImplementationOnce(async () => {
         f.emit({ ...f.state(), activeExportHandle: preview.handle });
-        return ok({ ...preview, expiresInMs: dismissal === "expiry" ? 1000 : preview.expiresInMs });
+        return ok({ ...preview, expiresInMs: expiry === undefined ? preview.expiresInMs : expiresInMs });
       });
       await open(f);
       fireEvent.click(screen.getByRole("button", { name: "Choose destination" }));
@@ -450,7 +488,11 @@ describe("descriptor-only export and separate local Save", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save report" }));
       await waitFor(() => expect(f.bridge.save).toHaveBeenCalledOnce());
       await screen.findAllByText("This diagnostics action was refused. Review the current status before trying again.");
-      if (dismissal === "close") fireEvent.click(screen.getByRole("button", { name: "Cancel export" }));
+      if (expiry === undefined) fireEvent.click(screen.getByRole("button", { name: "Cancel export" }));
+      else {
+        expect(expiry.armed()).toBe(1);
+        expiry.run();
+      }
       await waitFor(() => expect(screen.queryByRole("region", { name: "Diagnostic export" })).toBeNull(), {
         timeout: 2000,
       });
