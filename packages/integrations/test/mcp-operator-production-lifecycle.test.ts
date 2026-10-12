@@ -1,7 +1,7 @@
 /** Production lifecycle acceptance: discovery, admission, exact answers, continuation and protected revision delivery. */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   HelloResultSchema,
   OperatorDiscoverySchema,
@@ -19,33 +19,31 @@ import {
   refused,
   resolved,
   rpcResult,
+  sharedFixture,
   tool,
   transports,
   until,
 } from "./mcp-operator-production-fixture.js";
 
-let f: ProductionFixture;
-let fixtureReady = false;
-let fixtureSetup: Promise<ProductionFixture>;
-beforeEach(async () => {
-  fixtureReady = false;
-  fixtureSetup = ProductionFixture.create((acquired) => {
-    f = acquired;
-    fixtureReady = true;
-  });
-  f = await fixtureSetup;
-});
-afterEach(async (ctx) => {
-  if (fixtureReady && ctx.task.result?.state === "fail") f.reportFailure();
-  // Setup owns cleanup on rejection. A hook timeout must retain that owner and
-  // its root until setup settles, rather than racing late acquired work.
-  await fixtureSetup?.then(
-    (fixture) => fixture.close(),
-    () => undefined,
-  );
-});
+// Every test here only adds runs, requests and credentials, so one daemon serves the whole file.
+const shared = sharedFixture();
 
 describe.each(transports)("compiled production lifecycle via %s", (transport) => {
+  let f: ProductionFixture;
+  shared.use((fixture) => {
+    f = fixture;
+  });
+  // Retry keys belong to the principal, which every test on this daemon shares, so each is made
+  // unique to its transport; a reused key would replay the other transport's run instead of admitting one.
+  const intent = (name: string) => `${name}-${transport}`;
+  // The scripted agent appends every prompt to one log for the daemon's life. A test that asserts on
+  // prompts reads only what its own runs added after `seen`.
+  const prompts = () =>
+    readFile(join(f.dir, "worker-prompts.jsonl"), "utf8").catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+      throw error;
+    });
+
   it("F01 authenticates actual discovery and backing HTTP/WS parity without inventing capabilities", async () => {
     const peer = await f.connect(transport);
     const discovery = OperatorDiscoverySchema.parse(await tool(peer.client, "discover_orca", {}));
@@ -69,7 +67,7 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
     const peer = await f.connect(transport);
     const command = await f.guards(peer);
     const admitted = RunsAdmitResultSchema.parse(
-      rpcResult(await f.rpc("runs.admit", { ...command, idempotencyKey: "fixture-proof" })),
+      rpcResult(await f.rpc("runs.admit", { ...command, idempotencyKey: intent("fixture-proof") })),
     );
     if (admitted.state !== "accepted") throw new Error("Fixture legacy admission did not accept");
     const input = await f.pending(peer, admitted.runId);
@@ -90,7 +88,10 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
       const peer = await f.connect(transport);
       const admitted = RunsAdmitResultSchema.parse(
         rpcResult(
-          await f.rpc("runs.admit", { ...(await f.guards(peer, workflowId)), idempotencyKey: `fixture-${workflowId}` }),
+          await f.rpc("runs.admit", {
+            ...(await f.guards(peer, workflowId)),
+            idempotencyKey: intent(`fixture-${workflowId}`),
+          }),
         ),
       );
       if (admitted.state !== "accepted") throw new Error("Fixture workload was not admitted");
@@ -121,10 +122,14 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
 
   for (const workflowId of ["gate", "revision"])
     it(`F04 proves ${workflowId} continuation and scripted execution using existing production RPCs`, async () => {
+      const seen = (await prompts()).length;
       const peer = await f.connect(transport);
       const admitted = RunsAdmitResultSchema.parse(
         rpcResult(
-          await f.rpc("runs.admit", { ...(await f.guards(peer, workflowId)), idempotencyKey: `execute-${workflowId}` }),
+          await f.rpc("runs.admit", {
+            ...(await f.guards(peer, workflowId)),
+            idempotencyKey: intent(`execute-${workflowId}`),
+          }),
         ),
       );
       if (admitted.state !== "accepted") throw new Error("Fixture workload was not admitted");
@@ -142,7 +147,7 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
                   actionId: "changes",
                   payload: { kind: "text", text: "FIXTURE_PROTECTED_CORRECTION" },
                 },
-                retry: { idempotencyKey: "fixture-revision" },
+                retry: { idempotencyKey: intent("fixture-revision") },
               }),
             ),
           ),
@@ -164,16 +169,16 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
           rpcResult(
             await f.rpc("runs.continue", {
               command: { runId, expectedBoundary: run.continuation!.expectedBoundary },
-              retry: { idempotencyKey: "fixture-continuation" },
+              retry: { idempotencyKey: intent(`fixture-continuation-${workflowId}`) },
             }),
           ),
         ),
       );
       expect(continuation.result.runId).toBe(runId);
       await f.status(peer, runId, "succeeded");
-      const prompts = await readFile(join(f.dir, "worker-prompts.jsonl"), "utf8");
-      expect(prompts).not.toContain("FIXTURE_RATIONALE_ONLY");
-      if (workflowId === "revision") expect(prompts).toContain("FIXTURE_PROTECTED_CORRECTION");
+      const added = (await prompts()).slice(seen);
+      expect(added).not.toContain("FIXTURE_RATIONALE_ONLY");
+      if (workflowId === "revision") expect(added).toContain("FIXTURE_PROTECTED_CORRECTION");
       expect((await f.page(peer, "artifacts", { runId })).items).toHaveLength(1);
     });
 
@@ -192,7 +197,7 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
       await f.mutation(peer, "operator.submitRequest", {
         target: peer.target,
         command,
-        retry: { idempotencyKey: "request-intent" },
+        retry: { idempotencyKey: intent("request-intent") },
       }),
     );
     expect(request.replayed).toBe(false);
@@ -214,6 +219,7 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
   });
 
   it("L02 records an exact durable answer without resuming; rationale never becomes agent input", async (ctx) => {
+    const seen = (await prompts()).length;
     const peer = await f.connect(transport);
     await f.requireProduction(ctx, peer);
     const { runId } = await f.start(peer);
@@ -237,7 +243,7 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
       await f.mutation(peer, "operator.continueRun", {
         target: peer.target,
         command: { runId, expectedBoundary },
-        retry: { idempotencyKey: "continue-answered" },
+        retry: { idempotencyKey: intent("continue-answered") },
       }),
     );
     expect(continuation.operationId).toBe(continuation.result.operationId);
@@ -256,9 +262,9 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
       ...identity,
       state: "settled",
     });
-    const prompts = await readFile(join(f.dir, "worker-prompts.jsonl"), "utf8");
-    expect(prompts).toContain("ORIGINAL TASK");
-    expect(prompts).not.toContain("RATIONALE_ONLY_327");
+    const added = (await prompts()).slice(seen);
+    expect(added).toContain("ORIGINAL TASK");
+    expect(added).not.toContain("RATIONALE_ONLY_327");
     const artifacts = await f.page(peer, "artifacts", { runId });
     const artifactId = artifacts.items[0]!.artifactId!;
     const artifact = await tool(peer.client, "get_artifact", { target: peer.target, runId, artifactId });
@@ -289,7 +295,7 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
     await refused(peer, "continue_run", {
       target: peer.target,
       command: { runId: childId, expectedBoundary: parentBoundary },
-      retry: { idempotencyKey: "child-must-not-resume" },
+      retry: { idempotencyKey: intent("child-must-not-resume") },
     });
     const params = {
       target: peer.target,
@@ -298,7 +304,7 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
         expectedBoundary: parentBoundary,
         decision: { requestId: rootInput.requestId!, optionId: "stop", note: "ROOT_RATIONALE" },
       },
-      retry: { idempotencyKey: "root-answer-and-continue" },
+      retry: { idempotencyKey: intent("root-answer-and-continue") },
     };
     const first = resolved(await f.mutation(peer, "operator.continueRun", params));
     const replay = resolved(await f.mutation(peer, "operator.continueRun", params));
@@ -308,7 +314,7 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
       result: { continuationId: first.result.continuationId },
     });
     await f.status(peer, root.runId, "succeeded");
-    await refused(peer, "continue_run", { ...params, retry: { idempotencyKey: "new-terminal-intent" } });
+    await refused(peer, "continue_run", { ...params, retry: { idempotencyKey: intent("new-terminal-intent") } });
     const records = (await f.observedEvents(peer, root.runId)).filter(
       (event) => event.type === "continuation.recorded",
     );
@@ -330,6 +336,7 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
   });
 
   it("L04 submits a pinned revision, replays its receipt, validates destination and delivers protected text once", async (ctx) => {
+    const seen = (await prompts()).length;
     const peer = await f.connect(transport);
     await f.requireProduction(ctx, peer);
     const { runId } = await f.start(peer, "revision");
@@ -348,19 +355,19 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
         actionId: boundary.capability.actionId,
         payload: { kind: "text" as const, text: "PROTECTED_CORRECTION_327" },
       },
-      retry: { idempotencyKey: "revision-intent" },
+      retry: { idempotencyKey: intent("revision-intent") },
     };
     for (const field of ["runId", "stepRunId", "requestId", "destinationId", "expectedRevision"] as const) {
       await refused(peer, "revise_input", {
         ...params,
         command: { ...params.command, target: { ...boundary.target, [field]: "wrong" } },
-        retry: { idempotencyKey: `wrong-${field}` },
+        retry: { idempotencyKey: intent(`wrong-${field}`) },
       });
     }
     await refused(peer, "revise_input", {
       ...params,
       command: { ...params.command, actionId: "undeclared-action" },
-      retry: { idempotencyKey: "wrong-action" },
+      retry: { idempotencyKey: intent("wrong-action") },
     });
     await refused(peer, "respond_to_approval", {
       target: peer.target,
@@ -396,11 +403,11 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
     await f.mutation(peer, "operator.continueRun", {
       target: peer.target,
       command: { runId, expectedBoundary: await f.boundary(peer, runId) },
-      retry: { idempotencyKey: "deliver-revision" },
+      retry: { idempotencyKey: intent("deliver-revision") },
     });
     await f.status(peer, runId, "succeeded");
-    const prompts = (await readFile(join(f.dir, "worker-prompts.jsonl"), "utf8")).trim().split("\n");
-    expect(prompts.filter((line) => line.includes("PROTECTED_CORRECTION_327"))).toHaveLength(1);
+    const added = (await prompts()).slice(seen).trim().split("\n");
+    expect(added.filter((line) => line.includes("PROTECTED_CORRECTION_327"))).toHaveLength(1);
     expect(JSON.stringify(await f.events(runId))).toContain(first.result.revisionId);
   });
 

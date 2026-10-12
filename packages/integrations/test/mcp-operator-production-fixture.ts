@@ -9,8 +9,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { Client, SdkHttpError, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { afterAll, expect, type TestContext } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, type TestContext } from "vitest";
 import {
+  PROTOCOL_VERSION,
   OperatorMutationContracts,
   OperatorDiscoverySchema,
   OperatorBoundaryPageResultSchema,
@@ -955,12 +956,40 @@ export class ProductionFixture {
     };
   }
 
+  /**
+   * What a test opens on a daemon that outlives it. Closing the scope closes exactly those peers,
+   * sockets, proxies and bridges, and leaves the daemon and its store for the next test.
+   */
+  scope(): { close(): Promise<void> } {
+    const opened = this.cleanup.length;
+    // Failure evidence belongs to the test that failed, not to the first one on this daemon.
+    this.failurePublished = false;
+    return {
+      close: async () => {
+        const errors = await this.closeConnections(opened);
+        if (errors.length) throw new AggregateError(errors, "Fixture cleanup failed");
+      },
+    };
+  }
+
+  /** A daemon shared between tests has to be answering before the next one relies on it. */
+  async healthy() {
+    if (this.daemon.exitCode !== null || this.daemon.signalCode !== null)
+      throw new Error(`The shared production daemon exited (${this.daemon.exitCode ?? this.daemon.signalCode})`);
+    const response = await this.rpc("hello", { client: "orca-production-acceptance", protocol: PROTOCOL_VERSION });
+    if (!response.ok) throw new Error(`The shared production daemon refused hello: ${response.error.code}`);
+  }
+
+  /** Each peer, socket, proxy and bridge waits on its own process or socket, so closing them one
+   *  after another only adds those waits up. */
+  private async closeConnections(from: number) {
+    const settled = await Promise.allSettled(this.cleanup.splice(from).map(async (close) => close()));
+    return settled.flatMap((result) => (result.status === "rejected" ? [result.reason as unknown] : []));
+  }
+
   async close() {
-    const errors: unknown[] = [];
-    // Each peer, socket, proxy and bridge waits on its own process or socket, so closing them one
-    // after another only adds those waits up. The daemons they talk to stop after all of them.
-    const settled = await Promise.allSettled(this.cleanup.splice(0).map(async (close) => close()));
-    for (const result of settled) if (result.status === "rejected") errors.push(result.reason);
+    // The daemons they talk to stop after all of the connections have.
+    const errors = await this.closeConnections(0);
     for (const stop of this.daemons.splice(0).reverse()) {
       try {
         await stop();
@@ -971,6 +1000,50 @@ export class ProductionFixture {
     if (this.dir) await rm(this.dir, { recursive: true, force: true });
     if (errors.length) throw new AggregateError(errors, "Fixture cleanup failed");
   }
+}
+
+/**
+ * One daemon for the tests of a file that neither restart it nor need a store nobody has written to.
+ * The first test to ask starts it and the file's afterAll stops it; each test in between gets a scope
+ * that closes what it opened. A group of tests opts in by calling `use` inside its own describe, and a
+ * group that needs a daemon of its own simply does not.
+ */
+export function sharedFixture(options?: CreateOptions) {
+  let setup: Promise<ProductionFixture> | undefined;
+  let owner: ProductionFixture | undefined;
+  afterAll(async () => {
+    // Setup owns cleanup on rejection. A hook timeout must retain that owner and its root
+    // until setup settles, rather than racing late acquired work.
+    await setup?.then(
+      (fixture) => fixture.close(),
+      () => undefined,
+    );
+  });
+  return {
+    use(assign: (fixture: ProductionFixture) => void) {
+      let scope: ReturnType<ProductionFixture["scope"]> | undefined;
+      beforeEach(async () => {
+        setup ??= ProductionFixture.create((acquired) => {
+          owner = acquired;
+        }, options);
+        const fixture = await setup;
+        await fixture.healthy();
+        scope = fixture.scope();
+        assign(fixture);
+      });
+      afterEach(async (ctx) => {
+        const closing = scope;
+        scope = undefined;
+        try {
+          if (ctx.task.result?.state === "fail") owner?.reportFailure();
+          // A daemon that a passing test left unable to answer is that test's failure, not the next one's.
+          else await (await setup)?.healthy();
+        } finally {
+          await closing?.close();
+        }
+      });
+    },
+  };
 }
 
 export function tool(client: Client, name: string, args: object): Promise<unknown> {
