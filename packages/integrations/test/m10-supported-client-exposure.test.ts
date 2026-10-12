@@ -9,7 +9,7 @@ import { OperatorDiscoverySchema } from "@orca/protocol";
 import { submissionFixture } from "../../engine/test/request-submission-fixture.js";
 import { DaemonOperatorBackend } from "../src/mcp/backend.js";
 import { createOperatorServer } from "../src/mcp/server.js";
-import { ProductionFixture, refused, tool, transports } from "./mcp-operator-production-fixture.js";
+import { ProductionFixture, refused, sharedFixture, tool, transports } from "./mcp-operator-production-fixture.js";
 import { join } from "node:path";
 
 const cleanups: (() => Promise<unknown>)[] = [];
@@ -18,10 +18,16 @@ afterEach(async () => {
 });
 const gated = ["submit_request", "list_requests", "list_work_items", "get_configuration_status", "list_launch_choices"];
 
+// Neither transport publishes a run or a Request, and each compares the stores with what it found.
+const shared = sharedFixture();
+
 describe.each(transports)("#327/#328 production exposure via %s", (transport) => {
+  let f: ProductionFixture;
+  shared.use((fixture) => {
+    f = fixture;
+  });
+
   it("the six-grant Cal-shaped principal omits Request/config/choice tools; explicit fixture grants expose only their own operations", async () => {
-    const f = await ProductionFixture.create();
-    cleanups.push(() => f.close());
     const stores = fileStores(join(f.dir, "state"));
     const issued = await f.issue({
       principal: "synthetic-cal-six-grants",
