@@ -3109,3 +3109,109 @@
 .orca-legend__swatch--informs {
   border-top-style: dotted;
 }
+
+/* ---------- canvas controls ---------- */
+
+/* The zoom group in a graph canvas's corner: zoom out, the level, zoom in, fit, and the
+   direction and minimap toggles, all ghost buttons so none competes with the drawing. It
+   floats over the drawing, so it stands on surface-raised — with a hairline and no shadow:
+   structure, not shadow, and a menu opened over the canvas has to be the one shadow on screen. */
+.orca-canvasctl {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
+  background: var(--surface-raised);
+  border: var(--stroke-hairline) solid var(--border-hairline);
+  border-radius: var(--radius-sm);
+}
+/* An icon button is square: the small control's height, both ways. */
+.orca-canvasctl__icon-btn {
+  width: var(--control-sm);
+  padding: 0;
+}
+/* The zoom level, which is also the way back to 100%. Tabular figures, so 75% and 150% do
+   not shift the buttons beside them by a digit's difference in width. */
+/* type: caption */
+.orca-canvasctl__level {
+  font-variant-numeric: tabular-nums;
+}
+/* Inline SVG on the 16px grid, in the button's ink (the brand book's iconography rule). */
+.orca-canvasctl__icon {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: var(--stroke-icon);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* Zoom on one side, the view of the graph on the other. */
+.orca-canvasctl__rule {
+  align-self: stretch;
+  width: 0;
+  margin: var(--space-0-5);
+  border-left: var(--stroke-hairline) solid var(--border-hairline);
+}
+
+/* ---------- graph minimap ---------- */
+
+/* The whole drawing, small, over the canvas controls: boxes in their tone and a rectangle
+   for what the canvas shows. Not `.orca-minimap`, the list's status gutter. It floats, so
+   surface-raised with a hairline and no shadow, as the controls under it. */
+.orca-graphmap {
+  display: block;
+  background: var(--surface-raised);
+  border: var(--stroke-hairline) solid var(--border-hairline);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.orca-graphmap__svg {
+  display: block;
+  width: var(--minimap-w);
+  height: var(--minimap-h);
+  cursor: pointer;
+  touch-action: none;
+}
+/* A node is a box and a colour, nothing more; the canvas beside it carries the glyph and the
+   word (rule 4). border-control holds 3:1 on surface-raised in both themes. */
+.orca-graphmap__node {
+  fill: var(--border-control);
+}
+.orca-graphmap__node--strong {
+  fill: var(--border-strong);
+}
+.orca-graphmap__node--running {
+  fill: var(--status-running);
+}
+.orca-graphmap__node--waiting {
+  fill: var(--status-waiting);
+}
+.orca-graphmap__node--failed {
+  fill: var(--status-failed);
+}
+/* At this size a box is a chip's scale, which is the one scale success is allowed (rule 6):
+   the editor's added node, and a plan dependency that is satisfied. */
+.orca-graphmap__node--succeeded {
+  fill: var(--status-succeeded);
+}
+.orca-graphmap__node--faint {
+  opacity: var(--opacity-untaken);
+}
+/* The selection is accent, as it is everywhere (rule 5). */
+.orca-graphmap__node--selected {
+  fill: var(--accent);
+}
+/* What the canvas shows: an accent frame, because it is the thing on the minimap a person
+   drags. Unfilled, so the boxes under it stay visible. */
+.orca-graphmap__view {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: var(--stroke-rail);
+  pointer-events: all;
+  cursor: grab;
+}
+.orca-graphmap__svg:active .orca-graphmap__view {
+  cursor: grabbing;
+}

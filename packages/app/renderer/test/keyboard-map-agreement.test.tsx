@@ -199,9 +199,10 @@ async function chromeOnAWorkflow(): Promise<Harness> {
   renderChrome(h);
   await screen.findByRole("listbox", { name: /graph$/ });
   // The canvas exists before its effect registers the scope. Wait on the registry itself:
-  // under full-suite load, reading it immediately after the role appeared raced all twelve
+  // under full-suite load, reading it immediately after the role appeared raced all the
   // workflow bindings and made the agreement check report the entire scope as missing.
-  await waitFor(() => expect(h.keyboard.list().filter((shortcut) => shortcut.scope === "workflow")).toHaveLength(12));
+  // Fifteen: the twelve keys and three keyless commands (fit, direction, minimap).
+  await waitFor(() => expect(h.keyboard.list().filter((shortcut) => shortcut.scope === "workflow")).toHaveLength(15));
   return h;
 }
 
@@ -214,8 +215,9 @@ async function chromeOnTheEditor(): Promise<Harness> {
   renderChrome(h);
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   await screen.findByRole("listbox", { name: "ai-sdlc draft graph" });
+  // Twenty-five: the twenty-two keys and the same three keyless canvas commands as the viewer.
   await waitFor(() =>
-    expect(h.keyboard.list().filter((shortcut) => shortcut.scope === "workflow-edit")).toHaveLength(22),
+    expect(h.keyboard.list().filter((shortcut) => shortcut.scope === "workflow-edit")).toHaveLength(25),
   );
   return h;
 }

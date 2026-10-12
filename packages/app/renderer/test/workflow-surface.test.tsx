@@ -292,8 +292,13 @@ describe("the keyboard", () => {
   it("lists every one of them in the command palette", async () => {
     await open("orca://workflow/ai-sdlc");
     const shortcuts = h.keyboard.list().filter((s) => s.scope === "workflow");
-    // Twelve: four arrows, Enter, three zoom keys and four shifted arrows.
-    expect(shortcuts).toHaveLength(12);
+    // Fifteen: four arrows, Enter, three zoom keys and four shifted arrows — and three keyless
+    // commands, the canvas controls' fit, direction and minimap, which the palette is the
+    // keyboard's way to (#205).
+    expect(shortcuts).toHaveLength(15);
+    expect(shortcuts.filter((s) => s.key === undefined).map((s) => s.label)).toEqual(
+      expect.arrayContaining(["Zoom to fit the whole graph", "Lay out top to bottom", "Hide the minimap"]),
+    );
 
     const entries = commandEntries(h.keyboard.list(), "darwin", ["workflow", "global"]);
     for (const shortcut of shortcuts) {

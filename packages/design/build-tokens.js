@@ -106,11 +106,12 @@ const union = (keys) => keys.map((k) => `'${k}'`).join(" | ");
 const quote = (s) => `'${String(s).replace(/'/g, "\\'")}'`;
 
 /**
- * The four size tokens the workflow canvas does arithmetic with (#177). Named here rather
- * than guessed from a prefix, so adding a `node-*` token does not silently change what the
- * layout module is handed.
+ * The size tokens the graph canvases do arithmetic with (#177): the box and the two gaps the
+ * layout module places nodes with, and the minimap's box, which is a scale computed from the
+ * drawing's extent. Named here rather than guessed from a prefix, so adding a `node-*` token
+ * does not silently change what the layout module is handed.
  */
-const GRAPH_GEOMETRY = ["node-w", "node-h", "layer-gap", "rank-gap"];
+const GRAPH_GEOMETRY = ["node-w", "node-h", "layer-gap", "rank-gap", "minimap-w", "minimap-h"];
 
 /**
  * The size tokens a pane splitter does arithmetic with (#276). A drag is a pointer
@@ -215,10 +216,11 @@ ${T.breakpoint.tokens.map((t) => `  ${quote(t.name)}: ${Number.parseInt(t.value,
 export type GraphGeometryToken = ${union(GRAPH_GEOMETRY)};
 
 /**
- * The workflow canvas's box and gaps in px, for the same reason \`BREAKPOINTS\` is here: an
+ * The graph canvas's box and gaps in px, for the same reason \`BREAKPOINTS\` is here: an
  * SVG path's \`d\` attribute and a node's \`x\`/\`y\` are arithmetic, and no \`var()\` can be
  * written inside either. The layout module takes these as an argument rather than reaching
- * for them, so the algorithm stays a plain module with a plain test.
+ * for them, so the algorithm stays a plain module with a plain test. The minimap's box is
+ * here for the same reason: the overview is the drawing scaled to fit it, which is a division.
  */
 export const GRAPH_GEOMETRY: Record<GraphGeometryToken, number> = {
 ${GRAPH_GEOMETRY.map((name) => `  ${quote(name)}: ${Number.parseInt(sizeValue(name, "GRAPH_GEOMETRY"), 10)},`).join("\n")}

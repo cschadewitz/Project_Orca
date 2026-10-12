@@ -31,8 +31,8 @@ export interface Appearance {
    */
   preferences: () => Preferences;
   /**
-   * Choose a theme, a density for a named surface, or a size for a named pane boundary,
-   * outright. Applied first and persisted after, exactly as the shortcuts are — and through
+   * Choose a theme, a density for a named surface, a size for a named pane boundary, or how
+   * a named graph canvas is drawn, outright. Applied first and persisted after, exactly as the shortcuts are — and through
    * this rather than through `window.orca.preferences` directly, so that the attribute on the
    * document and the file on disk keep one owner (`density.ts` is the only code that touches
    * `data-density`).
@@ -42,6 +42,10 @@ export interface Appearance {
    * is a custom property on *the container whose grid track reads it*, and only the splitter
    * standing in that container knows which element that is. So `chrome/pane-splitter.tsx`
    * applies it through `panes.ts` and this persists it (#276).
+   *
+   * A graph view (a canvas's layout direction, its minimap) is not applied here either: it is
+   * not an attribute at all but a fact the canvas lays itself out by, so the canvas reads it
+   * through `preferences()` and hears it change through `subscribe` (`ui/use-graph-preferences.ts`).
    */
   set: (patch: PreferencesPatch) => void;
   /**
@@ -132,12 +136,28 @@ export function installAppearance(
     return merged;
   };
 
+  /* The graph views merge by canvas and then by field, so hiding the workflow canvas's minimap
+     leaves its direction alone — `mergeCanvases` in the schema, written out for the same reason
+     the panes' merge is. */
+  const mergeCanvases = (patch: NonNullable<PreferencesPatch["canvases"]>): NonNullable<Preferences["canvases"]> => {
+    const merged = { ...current.canvases };
+    for (const [id, view] of Object.entries(patch)) {
+      merged[id] = {
+        ...merged[id],
+        ...(view.direction === undefined ? {} : { direction: view.direction }),
+        ...(view.minimap === undefined ? {} : { minimap: view.minimap }),
+      };
+    }
+    return merged;
+  };
+
   const set = (patch: PreferencesPatch) => {
     current = {
       ...current,
       ...(patch.theme === undefined ? {} : { theme: patch.theme }),
       ...(patch.density === undefined ? {} : { density: { ...current.density, ...patch.density } }),
       ...(patch.panes === undefined ? {} : { panes: mergePanes(patch.panes) }),
+      ...(patch.canvases === undefined ? {} : { canvases: mergeCanvases(patch.canvases) }),
     };
     if (patch.theme !== undefined) applyTheme(doc.documentElement, patch.theme);
     if (patch.density !== undefined) applyDensities(doc, current.density);

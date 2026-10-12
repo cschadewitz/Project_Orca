@@ -36,9 +36,35 @@
  *    is to call it unreachable (70-workflow-editing.md); this module's job is to draw it.
  *
  * Layers run left to right and order runs top to bottom, which is the reading direction the
- * design's canvas sketch uses.
+ * design's canvas sketch uses — unless a person turns the graph on its side.
+ *
+ * ## Two directions, one layering
+ *
+ * `direction` is a view preference (a person's, remembered with their pane sizes, never the
+ * workflow's), and it changes *where* the layers go and nothing about *what* they are. The
+ * layering, the back edges and the order within a layer are computed exactly as above; only
+ * the last step — layer and order to x and y — and the edge routing read it:
+ *
+ * - **`horizontal`** (the default): a layer is a column, layers run left to right, a forward
+ *   edge leaves a node's right side and enters the next one's left, and a back edge leaves the
+ *   top and runs through the gutter above.
+ * - **`vertical`**: a layer is a row, layers run top to bottom, a forward edge leaves a node's
+ *   bottom and enters the next one's top, and a back edge leaves the *left* side and runs
+ *   through the gutter beside — the one side no forward edge uses, which is the same reason
+ *   the horizontal layout routes them over the top.
+ *
+ * The box is `node-w` × `node-h` either way: a node is the same component in both, and turning
+ * the graph does not turn its text. So the two lattices differ — a layer step is `node-w +
+ * layer-gap` across and `node-h + layer-gap` down — and `toDirection` / `fromDirection` map a
+ * point between them, which is how the editor keeps one set of pinned positions for both.
  */
 import type { WorkflowEdgeView, WorkflowNodeView, WorkflowView } from "@orca/protocol";
+
+/** Which way the layers run. A person's view preference; the layering is the same either way. */
+export type LayoutDirection = "horizontal" | "vertical";
+
+/** The layers run left to right unless a person has said otherwise. */
+export const DEFAULT_DIRECTION: LayoutDirection = "horizontal";
 
 /**
  * ## Any graph, not only a workflow (#171)
@@ -75,9 +101,9 @@ export interface GraphMetrics {
   nodeW: number;
   /** `node-h` — the height every node is laid out at. */
   nodeH: number;
-  /** `layer-gap` — the horizontal space between two layers, where the edges are drawn. */
+  /** `layer-gap` — the space between two layers, where the edges are drawn. */
   layerGap: number;
-  /** `rank-gap` — the vertical space between two nodes in one layer. */
+  /** `rank-gap` — the space between two nodes in one layer. */
   rankGap: number;
 }
 
@@ -86,7 +112,7 @@ export interface PlacedNode<N extends GraphNode = WorkflowNodeView> {
   node: N;
   /** Dependency depth: 0 is `start`. */
   layer: number;
-  /** Position within the layer, top to bottom. */
+  /** Position within the layer: top to bottom, or left to right when the layers are rows. */
   order: number;
   x: number;
   y: number;
@@ -117,6 +143,12 @@ export interface PlacedEdge<E extends GraphEdge = WorkflowEdgeView> {
   /** Where the `when` expression or the author's label is printed, when there is one. */
   labelX: number;
   labelY: number;
+  /**
+   * How far the label is turned, in degrees about its point: `-90` for a back edge in a
+   * top-to-bottom layout, whose label runs up the gutter beside the columns — the one place
+   * with room for it — and absent everywhere else.
+   */
+  labelAngle?: number;
 }
 
 export interface GraphLayout<N extends GraphNode = WorkflowNodeView, E extends GraphEdge = WorkflowEdgeView> {
@@ -246,16 +278,22 @@ function depths(
  * Collapsing is not a parameter, and that is the point: a `subworkflow` or a `parallel` is
  * one box in its parent's graph whether or not its body is on screen, so expanding one
  * cannot move anything around it. An expanded body is a `WorkflowView` of its own and is
- * laid out by another call to this function, inside its own group box.
+ * laid out by another call to this function, inside its own group box — in the same
+ * direction as the graph that holds it, so turning a workflow turns its branches too.
  */
-export function layoutWorkflow(workflow: WorkflowView, metrics: GraphMetrics): GraphLayout {
-  return layoutGraph({ nodes: workflow.nodes, edges: workflow.edges, roots: [workflow.start] }, metrics);
+export function layoutWorkflow(
+  workflow: WorkflowView,
+  metrics: GraphMetrics,
+  direction: LayoutDirection = DEFAULT_DIRECTION,
+): GraphLayout {
+  return layoutGraph({ nodes: workflow.nodes, edges: workflow.edges, roots: [workflow.start] }, metrics, direction);
 }
 
 /** The layout of any graph: `layoutWorkflow`'s contract, over `{ nodes, edges, roots? }`. */
 export function layoutGraph<N extends GraphNode, E extends GraphEdge>(
   graph: PlainGraph<N, E>,
   metrics: GraphMetrics,
+  direction: LayoutDirection = DEFAULT_DIRECTION,
 ): GraphLayout<N, E> {
   const ids = new Set(graph.nodes.map((n) => n.id));
   const edges = graph.edges.filter((edge) => isDrawable(edge, ids));
@@ -322,32 +360,93 @@ export function layoutGraph<N extends GraphNode, E extends GraphEdge>(
     byLayer.set(layer, sorted);
   }
 
-  const step = { x: metrics.nodeW + metrics.layerGap, y: metrics.nodeH + metrics.rankGap };
+  /* Layer and order to a point: the one step the direction changes. A layer step is a box and
+     a layer gap along the flow, an order step a box and a rank gap across it. */
+  const step = lattice(metrics, direction);
   const placed: PlacedNode<N>[] = [];
   for (let layer = 0; layer < layerCount; layer += 1) {
     (byLayer.get(layer) ?? []).forEach((node, order) => {
-      placed.push({ node, layer, order, x: layer * step.x, y: order * step.y });
+      placed.push({ node, layer, order, ...point(layer * step.layer, order * step.rank, direction) });
     });
   }
 
-  const tallest = placed.reduce((most, node) => Math.max(most, node.order + 1), 0);
+  const widest = placed.reduce((most, node) => Math.max(most, node.order + 1), 0);
   const boxes = new Map(placed.map((node) => [node.node.id, node]));
-  /* The gutter a back edge is routed through: half a rank gap above the top row, so a back
-     edge never runs under a node and never leaves the drawing. */
+  /* The gutter a back edge is routed through: half a rank gap before the first rank — above
+     the top row, or left of the first column — so a back edge never runs under a node and
+     never leaves the drawing. */
   const gutter = -metrics.rankGap / 2;
 
   const routed = edges.map((edge, index) => {
     const key = edgeKey(edge, index);
-    return route(edge, key, boxes, metrics, back.has(key), gutter);
+    return route(edge, key, boxes, metrics, back.has(key), gutter, direction);
   });
 
+  // The extent is the boxes, not the trailing gap, along the flow and across it.
+  const along = layerCount === 0 ? 0 : layerCount * step.layer - metrics.layerGap;
+  const across = widest === 0 ? 0 : widest * step.rank - metrics.rankGap;
   return {
     nodes: placed,
     edges: routed,
-    width: layerCount === 0 ? 0 : layerCount * step.x - metrics.layerGap,
-    height: tallest === 0 ? 0 : tallest * step.y - metrics.rankGap,
+    ...(direction === "vertical" ? { width: across, height: along } : { width: along, height: across }),
     layers: layerCount,
   };
+}
+
+/**
+ * One layer step and one rank step in px, for a direction. Horizontal, a layer is a column
+ * `node-w + layer-gap` wide and a rank a row `node-h + rank-gap` tall; vertical, a layer is a
+ * row `node-h + layer-gap` tall and a rank a column `node-w + rank-gap` wide. The box does not
+ * turn, so the two lattices are not each other's transpose — which is why the editor's pins go
+ * through `toDirection` rather than through a swap of x and y.
+ */
+export function lattice(metrics: GraphMetrics, direction: LayoutDirection): { layer: number; rank: number } {
+  return direction === "vertical"
+    ? { layer: metrics.nodeH + metrics.layerGap, rank: metrics.nodeW + metrics.rankGap }
+    : { layer: metrics.nodeW + metrics.layerGap, rank: metrics.nodeH + metrics.rankGap };
+}
+
+/** A distance along the flow and one across it, as x and y in this direction. */
+const point = (along: number, across: number, direction: LayoutDirection): { x: number; y: number } =>
+  direction === "vertical" ? { x: across, y: along } : { x: along, y: across };
+
+/**
+ * A point in the horizontal layout's coordinates, where the same place is in `direction`'s.
+ *
+ * **The horizontal frame is the canonical one**, because it is the frame every pinned
+ * position in a `.layout/<id>.json` was written in before there was a choice, and that file
+ * is shared by everybody who edits the workflow while the direction is one person's view of
+ * it. So a pin is stored horizontal and drawn through this: it is measured in layer steps
+ * along the flow and rank steps across it, and those are what carry over. A node pinned half
+ * a layer past `plan` and a rank below it is half a layer *below* `plan` and a rank to its
+ * right when the graph is turned — still beside the same neighbours, which an x/y swap of
+ * pixels would not keep, because the box is wider than it is tall.
+ *
+ * An automatically placed node lands on exactly the same lattice point both ways, so this
+ * maps the whole horizontal layout onto the vertical one; `fromDirection` is its inverse.
+ */
+export function toDirection(
+  at: { x: number; y: number },
+  direction: LayoutDirection,
+  metrics: GraphMetrics,
+): { x: number; y: number } {
+  if (direction === "horizontal") return { x: at.x, y: at.y };
+  const from = lattice(metrics, "horizontal");
+  const to = lattice(metrics, "vertical");
+  return point((at.x / from.layer) * to.layer, (at.y / from.rank) * to.rank, "vertical");
+}
+
+/** The inverse of `toDirection`: a point drawn in `direction`, in the horizontal frame the pins are kept in. */
+export function fromDirection(
+  at: { x: number; y: number },
+  direction: LayoutDirection,
+  metrics: GraphMetrics,
+): { x: number; y: number } {
+  if (direction === "horizontal") return { x: at.x, y: at.y };
+  const from = lattice(metrics, "vertical");
+  const to = lattice(metrics, "horizontal");
+  // Vertical, y runs along the flow and x across it.
+  return point((at.y / from.layer) * to.layer, (at.x / from.rank) * to.rank, "horizontal");
 }
 
 /**
@@ -403,6 +502,11 @@ export function findNode(workflow: WorkflowView, id: string | undefined): Workfl
  * review-to-build loop drawn as a back edge") and it is why it cannot be the same curve: a
  * cubic from a right edge to a left edge that is to its left passes straight back through
  * every node between them.
+ *
+ * Vertical, the same two shapes turned a quarter: a forward edge leaves the bottom and enters
+ * the top, and a back edge leaves the *left* side, runs through the gutter beside the columns
+ * and comes back in at the target's left side. It stays dotted (`isBack`), so a loop reads as
+ * a loop whichever way the graph runs.
  */
 export function route<E extends GraphEdge>(
   edge: E,
@@ -411,10 +515,13 @@ export function route<E extends GraphEdge>(
   metrics: GraphMetrics,
   isBack: boolean,
   gutter: number,
+  direction: LayoutDirection = DEFAULT_DIRECTION,
 ): PlacedEdge<E> {
   const from = boxes.get(edge.from)!;
   const to = boxes.get(edge.to)!;
   const pair = edgePair(edge);
+
+  if (direction === "vertical") return routeVertical(edge, key, pair, from, to, metrics, isBack, gutter);
 
   if (isBack) {
     const x1 = from.x + metrics.nodeW / 2;
@@ -445,4 +552,120 @@ export function route<E extends GraphEdge>(
     labelX: (x1 + x2) / 2,
     labelY: (y1 + y2) / 2,
   };
+}
+
+/**
+ * `route`, with the layers running top to bottom.
+ *
+ * **The labels move, because the room did.** Left to right, two edges fanning out of a
+ * decision have their midpoints a rank apart *vertically*, and a line of text between them
+ * fits. Top to bottom, the midpoints are side by side in a gap one line tall, and two `when`
+ * expressions at them print over each other. So a forward edge's label sits just above its
+ * target, where the edge arrives — the targets of a fan-out are a rank apart, which a label
+ * fits in — and a back edge's label is turned to run up the gutter its edge runs through,
+ * which is the one strip beside the columns with room for a line of text.
+ */
+function routeVertical<E extends GraphEdge>(
+  edge: E,
+  key: string,
+  pair: string,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  metrics: GraphMetrics,
+  isBack: boolean,
+  gutter: number,
+): PlacedEdge<E> {
+  if (isBack) {
+    const y1 = from.y + metrics.nodeH / 2;
+    const y2 = to.y + metrics.nodeH / 2;
+    const side = Math.min(from.x, to.x) + gutter;
+    return {
+      edge,
+      key,
+      pair,
+      isBack: true,
+      path: `M ${from.x} ${y1} L ${side} ${y1} L ${side} ${y2} L ${to.x} ${y2}`,
+      labelX: side,
+      labelY: (y1 + y2) / 2,
+      labelAngle: -90,
+    };
+  }
+
+  const x1 = from.x + metrics.nodeW / 2;
+  const y1 = from.y + metrics.nodeH;
+  const x2 = to.x + metrics.nodeW / 2;
+  const y2 = to.y;
+  const bend = (y2 - y1) / 2;
+  return {
+    edge,
+    key,
+    pair,
+    isBack: false,
+    path: `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`,
+    // A quarter of the layer gap above the target, on the line the edge comes in down.
+    labelX: x2,
+    labelY: y2 - metrics.layerGap / 4,
+  };
+}
+
+/** An edge label's SVG `transform`: its turn about its own point, or nothing for a level one. */
+export const labelTransform = (
+  edge: Pick<PlacedEdge<GraphEdge>, "labelX" | "labelY" | "labelAngle">,
+): string | undefined =>
+  edge.labelAngle === undefined ? undefined : `rotate(${edge.labelAngle} ${edge.labelX} ${edge.labelY})`;
+
+/** An arrow key, as the canvases name it. */
+export type Arrow = "up" | "down" | "left" | "right";
+
+/**
+ * What an arrow does on a laid-out graph: move along the layer the selection is in (`rank`)
+ * or across to the next or previous layer (`layer`), forwards or back.
+ *
+ * **The arrow points where the selection goes.** Horizontal, the layers are columns, so `→`
+ * is the next layer and `↓` the next node down the column, which is what the canvas has
+ * always done. Turned vertical, the layers are rows: `↓` is the next layer and `→` the next
+ * node along the row. Keeping `↓` as "next in this layer" would have made every arrow point
+ * a quarter-turn away from where the selection went.
+ */
+export function arrowMove(arrow: Arrow, direction: LayoutDirection): { axis: "rank" | "layer"; delta: 1 | -1 } {
+  const delta = arrow === "down" || arrow === "right" ? 1 : -1;
+  const upDown = arrow === "up" || arrow === "down";
+  // Horizontal, up and down run along a column, which is a layer; vertical, they cross rows.
+  return { axis: upDown === (direction === "horizontal") ? "rank" : "layer", delta };
+}
+
+/** The palette's words for an arrow on a laid-out graph, in this direction. */
+export function arrowLabel(arrow: Arrow, direction: LayoutDirection): string {
+  const { axis, delta } = arrowMove(arrow, direction);
+  if (axis === "layer") return delta === 1 ? "Next layer" : "Previous layer";
+  return delta === 1 ? "Next node in this layer" : "Previous node in this layer";
+}
+
+/**
+ * The node an arrow key moves to — the viewer's rule and the plan graph's, which were two
+ * copies of one function until the direction made it worth having once.
+ *
+ * Within a layer it is the neighbour by order. Across layers it is the node in the next
+ * layer along whose order is closest to this one's, which keeps a move across a fan-out near
+ * where the eye already is instead of snapping to the start of the next layer.
+ */
+export function stepSelection<N extends GraphNode>(
+  nodes: readonly PlacedNode<N>[],
+  from: PlacedNode<N>,
+  arrow: Arrow,
+  direction: LayoutDirection,
+): PlacedNode<N> | undefined {
+  const { axis, delta } = arrowMove(arrow, direction);
+  if (axis === "rank") {
+    const wanted = from.order + delta;
+    return nodes.find((placed) => placed.layer === from.layer && placed.order === wanted);
+  }
+  const wanted = from.layer + delta;
+  return nodes
+    .filter((placed) => placed.layer === wanted)
+    .reduce<PlacedNode<N> | undefined>(
+      (best, placed) =>
+        best === undefined || Math.abs(placed.order - from.order) < Math.abs(best.order - from.order) ? placed : best,
+      undefined,
+    );
 }

@@ -163,6 +163,25 @@ Five rules it keeps:
   of them at once. A boundary at its default is not listed: five rows reading "default" would
   bury the two preferences worth reading. Both write the same deletion the splitter writes.
 
+## Graph view
+
+How a graph canvas is drawn — which way its layers run, and whether its minimap shows — is the
+third thing remembered per person beside densities and pane sizes. It lives in the same
+`preferences.json`, under `canvases`, keyed by canvas the way density is keyed by surface:
+`workflow` for the workflow viewer and the editor (one canvas, with and without hands) and
+`plan-graph` for the dependency graph. Both fields are optional and absent means the default
+(left to right, minimap shown), so a file stays silent about graphs until somebody turns one.
+It goes through `Appearance.set` like every other preference; the canvas reads it with
+`preferences()` and hears it change through `subscribe` (`ui/use-graph-preferences.ts`),
+because it is not an attribute anything else could watch — it is what the layout is computed
+from.
+
+**It is never written into the workflow.** Not into the YAML, and not into
+`workflows/.layout/<id>.json`, which holds pinned positions for everybody who edits the
+workflow. The editor keeps those pins in the horizontal frame they have always been in and
+draws them through `toDirection` (`workflow/layout.ts`) when a person reads top to bottom, so
+the direction is a view and nothing a draft has to record.
+
 ## The keyboard map and the palette
 
 There is one registry and the palette is a view of it. A component registers

@@ -9,23 +9,36 @@
  *   and its state its colour (`.orca-dep-edge--*`); an edge on a `blocks` cycle is heavier
  *   and coloured as a failure, since nothing on it can ever start.
  * - **One tab stop, `aria-activedescendant`**, and the keys in their own `plan-graph` scope:
- *   `↑`/`↓` within a layer, `←`/`→` across, `+`/`-`/`0` zoom, `⇧` with an arrow pans,
- *   `Enter` opens the relationships in the dock. Registered once, here.
+ *   the arrows along a layer and across layers (pointing the way the graph is laid out),
+ *   `+`/`-`/`0` zoom, `⇧` with an arrow pans, `Enter` opens the relationships in the dock.
+ *   Registered once, here and in `useCanvasView`.
+ * - **The workflow canvas's view controls**, shared rather than copied: `useCanvasView` for
+ *   zoom and pan, `CanvasControls` and `GraphMinimap` in the corner, and a direction and a
+ *   minimap the person chooses for this canvas (`plan-graph`) apart from the workflow's.
  */
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type JSX,
-  type PointerEvent as ReactPointerEvent,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, type JSX, type PointerEvent as ReactPointerEvent } from "react";
 import { GRAPH_GEOMETRY } from "@orca/design";
 import { useKeyboard } from "../keyboard-context.js";
 import { scopeProps } from "../keyboard-map.js";
-import { DependencyNode, textClass } from "../ui/index.js";
-import { layoutGraph, type GraphMetrics, type PlacedNode } from "../workflow/layout.js";
+import {
+  CanvasControls,
+  DependencyNode,
+  GraphMinimap,
+  textClass,
+  useCanvasView,
+  useGraphPreferences,
+  type MinimapNode,
+  type MinimapTone,
+  type ViewportMeasurer,
+} from "../ui/index.js";
+import {
+  arrowLabel,
+  labelTransform,
+  layoutGraph,
+  stepSelection,
+  type Arrow,
+  type GraphMetrics,
+} from "../workflow/layout.js";
 import { edgeState, type DepEdge, type DepNode } from "./graph-model.js";
 
 const METRICS: GraphMetrics = {
@@ -35,8 +48,6 @@ const METRICS: GraphMetrics = {
   rankGap: GRAPH_GEOMETRY["rank-gap"],
 };
 const PAD = METRICS.rankGap;
-const ZOOMS = [0.5, 0.75, 1, 1.5, 2];
-const DEFAULT_ZOOM = ZOOMS.indexOf(1);
 const PAN_STEP = METRICS.nodeW + METRICS.layerGap;
 
 export const depNodeDomId = (id: string): string => `orca-depnode-${id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
@@ -50,9 +61,9 @@ export interface DependencyGraphProps {
   onSelect: (nodeId: string) => void;
   /** `Enter` on the selection: show its relationships. */
   onOpen: (nodeId: string) => void;
+  /** How the viewport is measured. The document by default; a test injects a size. */
+  measure?: ViewportMeasurer;
 }
-
-type Direction = "up" | "down" | "left" | "right";
 
 export function DependencyGraph({
   nodes,
@@ -61,10 +72,24 @@ export function DependencyGraph({
   selected,
   onSelect,
   onOpen,
+  measure,
 }: DependencyGraphProps): JSX.Element {
-  const layout = useMemo(() => layoutGraph({ nodes, edges }, METRICS), [nodes, edges]);
-  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const graphView = useGraphPreferences("plan-graph", "plan-graph");
+  const { direction } = graphView;
+  const layout = useMemo(() => layoutGraph({ nodes, edges }, METRICS, direction), [nodes, edges, direction]);
+  const content = useMemo(
+    () => ({ width: layout.width + PAD * 2, height: layout.height + PAD * 2 }),
+    [layout.width, layout.height],
+  );
+  const canvas = useCanvasView({ scope: "plan-graph", content, panStep: PAN_STEP, measure });
+  // Turning the graph puts the view back at rest, as on the workflow canvas.
+  const { rest, panBy } = canvas;
+  const turned = useRef(direction);
+  useEffect(() => {
+    if (turned.current === direction) return;
+    turned.current = direction;
+    rest();
+  }, [direction, rest]);
   const onCycle = useMemo(() => {
     const ids = new Set<string>();
     for (const edge of edges) {
@@ -76,28 +101,35 @@ export function DependencyGraph({
   }, [edges, cycle]);
 
   const move = useCallback(
-    (direction: Direction) => {
+    (arrow: Arrow) => {
       const from = layout.nodes.find((placed) => placed.node.id === selected);
       if (!from) {
         const first = layout.nodes[0];
         if (first) onSelect(first.node.id);
         return;
       }
-      const next = step(layout.nodes, from, direction);
+      const next = stepSelection(layout.nodes, from, arrow, direction);
       if (next) onSelect(next.node.id);
     },
-    [layout, selected, onSelect],
+    [layout, selected, onSelect, direction],
   );
 
   const keyboard = useKeyboard();
   const latest = useRef({ move, onOpen, selected });
   latest.current = { move, onOpen, selected };
   useEffect(() => {
+    const arrows: [string, Arrow][] = [
+      ["ArrowDown", "down"],
+      ["ArrowUp", "up"],
+      ["ArrowRight", "right"],
+      ["ArrowLeft", "left"],
+    ];
     const registrations = [
-      { key: "ArrowDown", label: "Next node in this layer", action: () => latest.current.move("down") },
-      { key: "ArrowUp", label: "Previous node in this layer", action: () => latest.current.move("up") },
-      { key: "ArrowRight", label: "Next layer", action: () => latest.current.move("right") },
-      { key: "ArrowLeft", label: "Previous layer", action: () => latest.current.move("left") },
+      ...arrows.map(([key, arrow]) => ({
+        key,
+        label: arrowLabel(arrow, direction),
+        action: () => latest.current.move(arrow),
+      })),
       {
         key: "Enter",
         label: "Show the selected node's relationships",
@@ -106,23 +138,9 @@ export function DependencyGraph({
           if (id !== undefined) latest.current.onOpen(id);
         },
       },
-      { key: "+", label: "Zoom in", action: () => setZoom((z) => Math.min(z + 1, ZOOMS.length - 1)) },
-      { key: "-", label: "Zoom out", action: () => setZoom((z) => Math.max(z - 1, 0)) },
-      {
-        key: "0",
-        label: "Reset the zoom and the pan",
-        action: () => {
-          setZoom(DEFAULT_ZOOM);
-          setPan({ x: 0, y: 0 });
-        },
-      },
-      { key: "Shift+ArrowRight", label: "Pan right", action: () => setPan((p) => ({ ...p, x: p.x - PAN_STEP })) },
-      { key: "Shift+ArrowLeft", label: "Pan left", action: () => setPan((p) => ({ ...p, x: p.x + PAN_STEP })) },
-      { key: "Shift+ArrowDown", label: "Pan down", action: () => setPan((p) => ({ ...p, y: p.y - PAN_STEP })) },
-      { key: "Shift+ArrowUp", label: "Pan up", action: () => setPan((p) => ({ ...p, y: p.y + PAN_STEP })) },
     ].map((shortcut) => keyboard.register({ scope: "plan-graph", ...shortcut }));
     return () => registrations.forEach((unregister) => unregister());
-  }, [keyboard]);
+  }, [keyboard, direction]);
 
   /* An empty patch of canvas pans; a press on a node selects it and never moves it. */
   const drag = useRef<{ x: number; y: number } | null>(null);
@@ -131,12 +149,15 @@ export function DependencyGraph({
     drag.current = { x: event.clientX, y: event.clientY };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }, []);
-  const onPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    const from = drag.current;
-    if (!from) return;
-    setPan((p) => ({ x: p.x + (event.clientX - from.x), y: p.y + (event.clientY - from.y) }));
-    drag.current = { x: event.clientX, y: event.clientY };
-  }, []);
+  const onPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const from = drag.current;
+      if (!from) return;
+      panBy(event.clientX - from.x, event.clientY - from.y);
+      drag.current = { x: event.clientX, y: event.clientY };
+    },
+    [panBy],
+  );
   const onPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     drag.current = null;
     if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
@@ -144,106 +165,139 @@ export function DependencyGraph({
     }
   }, []);
 
-  const width = layout.width + PAD * 2;
-  const height = layout.height + PAD * 2;
+  const overview = useMemo<MinimapNode[]>(
+    () =>
+      layout.nodes.map((placed) => ({
+        id: placed.node.id,
+        x: placed.x + PAD,
+        y: placed.y + PAD,
+        width: METRICS.nodeW,
+        height: METRICS.nodeH,
+        tone: onCycle.has(placed.node.id) ? "failed" : DEPENDENCY_TONE[placed.node.state],
+        selected: placed.node.id === selected,
+      })),
+    [layout, onCycle, selected],
+  );
+
+  const width = content.width;
+  const height = content.height;
 
   return (
-    <div className="orca-wfcanvas orca-plan__canvas" {...scopeProps("plan-graph")}>
-      <div
-        className="orca-wfcanvas__viewport"
-        role="listbox"
-        aria-label="Dependency graph"
-        {...(selected !== undefined && layout.nodes.some((p) => p.node.id === selected)
-          ? { "aria-activedescendant": depNodeDomId(selected) }
-          : {})}
-        tabIndex={0}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-      >
+    <div className="orca-wfcanvas orca-plan__canvas" data-direction={direction}>
+      <div className="orca-wfcanvas__stage">
         <div
-          className="orca-wfcanvas__scene"
-          role="presentation"
-          style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${ZOOMS[zoom]!})` }}
+          ref={canvas.ref}
+          className="orca-wfcanvas__viewport"
+          {...scopeProps("plan-graph")}
+          role="listbox"
+          aria-label="Dependency graph"
+          {...(selected !== undefined && layout.nodes.some((p) => p.node.id === selected)
+            ? { "aria-activedescendant": depNodeDomId(selected) }
+            : {})}
+          tabIndex={0}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
         >
           <div
-            className="orca-wfcanvas__plane"
+            className={`orca-wfcanvas__scene${canvas.eased ? " orca-wfcanvas__scene--eased" : ""}`}
             role="presentation"
-            style={{ width: `${width}px`, height: `${height}px` }}
+            style={{ transform: canvas.transform }}
           >
-            <svg
-              className="orca-wfcanvas__edges"
-              viewBox={`${-PAD} ${-PAD} ${width} ${height}`}
-              width={width}
-              height={height}
-              aria-hidden="true"
-              focusable="false"
+            <div
+              className="orca-wfcanvas__plane"
+              role="presentation"
+              style={{ width: `${width}px`, height: `${height}px` }}
             >
-              {layout.edges.map((placed) => {
-                const d = placed.edge.dependency;
-                const classes = ["orca-edge", `orca-dep-edge--${d.type}`, `orca-dep-edge--${edgeState(d)}`];
-                if (cycle.has(d.id)) classes.push("orca-dep-edge--cycle");
-                if (placed.isBack) classes.push("orca-edge--back");
-                return (
-                  <g key={placed.key} data-dependency={d.id}>
-                    <path className={classes.join(" ")} d={placed.path} />
-                    {d.target.kind === "work-item" && d.target.stage !== undefined && (
-                      <text
-                        className={`orca-edge__label ${textClass("mono-id")}`}
-                        x={placed.labelX}
-                        y={placed.labelY}
-                        textAnchor="middle"
-                      >
-                        {d.target.stage}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
-            </svg>
-            {layout.nodes.map((placed) => (
-              <div
-                key={placed.node.id}
-                className="orca-wfcanvas__box"
-                role="presentation"
-                style={{ left: `${placed.x + PAD}px`, top: `${placed.y + PAD}px` }}
+              <svg
+                className="orca-wfcanvas__edges"
+                viewBox={`${-PAD} ${-PAD} ${width} ${height}`}
+                width={width}
+                height={height}
+                aria-hidden="true"
+                focusable="false"
               >
-                <DependencyNode
-                  id={depNodeDomId(placed.node.id)}
-                  name={placed.node.name}
-                  title={placed.node.title}
-                  target={placed.node.target}
-                  state={placed.node.state}
-                  inCycle={onCycle.has(placed.node.id)}
-                  selected={placed.node.id === selected}
-                  onOpen={() => onSelect(placed.node.id)}
-                />
-              </div>
-            ))}
+                {layout.edges.map((placed) => {
+                  const d = placed.edge.dependency;
+                  const classes = ["orca-edge", `orca-dep-edge--${d.type}`, `orca-dep-edge--${edgeState(d)}`];
+                  if (cycle.has(d.id)) classes.push("orca-dep-edge--cycle");
+                  if (placed.isBack) classes.push("orca-edge--back");
+                  return (
+                    <g key={placed.key} data-dependency={d.id}>
+                      <path className={classes.join(" ")} d={placed.path} />
+                      {d.target.kind === "work-item" && d.target.stage !== undefined && (
+                        <text
+                          className={`orca-edge__label ${textClass("mono-id")}`}
+                          x={placed.labelX}
+                          y={placed.labelY}
+                          transform={labelTransform(placed)}
+                          textAnchor="middle"
+                        >
+                          {d.target.stage}
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
+              </svg>
+              {layout.nodes.map((placed) => (
+                <div
+                  key={placed.node.id}
+                  className="orca-wfcanvas__box"
+                  role="presentation"
+                  style={{ left: `${placed.x + PAD}px`, top: `${placed.y + PAD}px` }}
+                >
+                  <DependencyNode
+                    id={depNodeDomId(placed.node.id)}
+                    name={placed.node.name}
+                    title={placed.node.title}
+                    target={placed.node.target}
+                    state={placed.node.state}
+                    inCycle={onCycle.has(placed.node.id)}
+                    selected={placed.node.id === selected}
+                    onOpen={() => onSelect(placed.node.id)}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
+        </div>
+        <div className="orca-wfcanvas__corner">
+          {graphView.minimap && (
+            <GraphMinimap
+              content={content}
+              nodes={overview}
+              view={canvas.view}
+              viewport={canvas.viewport}
+              onPan={canvas.panTo}
+            />
+          )}
+          <CanvasControls
+            label="Dependency graph view"
+            scale={canvas.view.scale}
+            onZoomIn={canvas.zoomIn}
+            onZoomOut={canvas.zoomOut}
+            onRest={canvas.rest}
+            onFit={canvas.fit}
+            direction={direction}
+            onToggleDirection={graphView.toggleDirection}
+            minimap={graphView.minimap}
+            onToggleMinimap={graphView.toggleMinimap}
+          />
         </div>
       </div>
     </div>
   );
 }
 
-/** The node an arrow moves to — the workflow canvas's rule, over any placed node. */
-function step<N extends { id: string }>(
-  nodes: readonly PlacedNode<N>[],
-  from: PlacedNode<N>,
-  direction: Direction,
-): PlacedNode<N> | undefined {
-  if (direction === "up" || direction === "down") {
-    const wanted = from.order + (direction === "down" ? 1 : -1);
-    return nodes.find((placed) => placed.layer === from.layer && placed.order === wanted);
-  }
-  const wanted = from.layer + (direction === "right" ? 1 : -1);
-  return nodes
-    .filter((placed) => placed.layer === wanted)
-    .reduce<PlacedNode<N> | undefined>(
-      (best, placed) =>
-        best === undefined || Math.abs(placed.order - from.order) < Math.abs(best.order - from.order) ? placed : best,
-      undefined,
-    );
-}
+/**
+ * A dependency node's tone in the minimap: its state's colour, as `.orca-dep--<state>` draws
+ * its border. A node on a `blocks` cycle is failed whatever its state, as on the canvas.
+ */
+const DEPENDENCY_TONE: Record<DepNode["state"], MinimapTone> = {
+  open: "plain",
+  satisfied: "succeeded",
+  failed: "failed",
+  waived: "faint",
+};

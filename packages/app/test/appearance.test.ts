@@ -280,6 +280,31 @@ describe("keyboard map", () => {
     expect(p.writes.length).toBe(before);
   });
 
+  it("remembers a graph canvas's view by canvas and field, and tells whoever is listening", () => {
+    /* The direction and the minimap are not attributes: a canvas lays itself out by them, so
+       it reads `preferences()` and hears `subscribe`. Set applies, persists and announces, as
+       for every other preference. */
+    const p = page({}, { canvases: { workflow: { minimap: false } } });
+    const appearance = installAppearance(p.win, p.store, new KeyboardMap("darwin"));
+    let heard = 0;
+    appearance.subscribe(() => (heard += 1));
+
+    appearance.set({ canvases: { workflow: { direction: "vertical" } } });
+    // The minimap choice already remembered for this canvas is kept.
+    expect(appearance.preferences().canvases).toEqual({ workflow: { direction: "vertical", minimap: false } });
+    appearance.set({ canvases: { "plan-graph": { minimap: false } } });
+    expect(appearance.preferences().canvases).toEqual({
+      workflow: { direction: "vertical", minimap: false },
+      "plan-graph": { minimap: false },
+    });
+    // What goes to the file is the patch, never the merged record: the main process merges too.
+    expect(p.writes).toEqual([
+      { canvases: { workflow: { direction: "vertical" } } },
+      { canvases: { "plan-graph": { minimap: false } } },
+    ]);
+    expect(heard).toBe(2);
+  });
+
   it("refuses two registrations of one key in one scope, and frees the key on unregister", () => {
     const map = new KeyboardMap("darwin");
     const off = map.register({ scope: "global", key: "mod+shift+l", label: "a", action: () => {} });

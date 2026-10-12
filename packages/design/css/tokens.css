@@ -290,6 +290,8 @@
   --node-h: 96px;
   --layer-gap: 64px;
   --rank-gap: 32px;
+  --minimap-w: 160px;
+  --minimap-h: 112px;
   --risk-cell-width: 92px;
   --risk-cell-height: 62px;
   --measure-prose: 68ch;
@@ -316,6 +318,7 @@
   --bp-panel-overlay: 1100px;
   /* border */
   --stroke-hairline: 1px;
+  --stroke-icon: 1.5px;
   --stroke-rail: 2px;
   --stroke-focus: 2px;
   --stroke-edge-active: 2px;

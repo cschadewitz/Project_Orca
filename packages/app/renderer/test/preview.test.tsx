@@ -25,4 +25,10 @@ describe("the primitive preview", () => {
       expect(markup, kind).toContain(`orca-state--${kind}`);
     }
   });
+
+  it("renders the graph canvas's corner — the controls and the minimap — in each theme", () => {
+    expect(markup.match(/class="orca-canvasctl"/g)).toHaveLength(THEMES.length);
+    expect(markup.match(/class="orca-graphmap"/g)).toHaveLength(THEMES.length);
+    expect(markup).toContain('aria-label="Lay out top to bottom"');
+  });
 });

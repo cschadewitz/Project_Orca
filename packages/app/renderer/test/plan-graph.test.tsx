@@ -211,6 +211,25 @@ describe("keys and links", () => {
     ).toBe("plan-graph");
   });
 
+  it("has the workflow canvas's view controls and minimap, with a direction of its own", async () => {
+    const graph = await openGraph();
+    const controls = screen.getByRole("group", { name: "Dependency graph view" });
+    const scene = graph.querySelector<HTMLElement>(".orca-wfcanvas__scene")!;
+    // The same zoom as the keys: a click, then a press back.
+    fireEvent.click(within(controls).getByRole("button", { name: "Zoom in" }));
+    await waitFor(() => expect(scene.style.transform).toContain("scale(1.5)"));
+    press(graph, "-", "Minus");
+    await waitFor(() => expect(scene.style.transform).toContain("scale(1)"));
+    expect(document.querySelector(".orca-plan__canvas .orca-graphmap")?.getAttribute("aria-hidden")).toBe("true");
+
+    // Turned top to bottom here, and only here: the plan is read apart from the workflows.
+    fireEvent.click(within(controls).getByRole("button", { name: "Lay out top to bottom" }));
+    await waitFor(() => expect(h.appearance.preferences().canvases?.["plan-graph"]?.direction).toBe("vertical"));
+    expect(h.appearance.preferences().canvases?.workflow).toBeUndefined();
+    const down = h.keyboard.list().find((s) => s.scope === "plan-graph" && s.key === "ArrowDown")!;
+    expect(down.label).toBe("Next layer");
+  });
+
   it("lands on orca://plan?mode=deps&focus=<slug> with that item focused", async () => {
     mount({ deepLink: planUrl("deps", "auth-docs") });
     const graph = await screen.findByRole("listbox", { name: "Dependency graph" });
@@ -370,11 +389,13 @@ describe("the canvas's keys", () => {
     await waitFor(() => expect(scene.style.transform).toContain("scale(1.5)"));
     press(graph, "-", "Minus");
     await waitFor(() => expect(scene.style.transform).toBe(rest));
-    // The zoom is clamped at both ends rather than running off the table.
+    // The zoom is clamped at both ends rather than running off the table: a quarter, which is
+    // what zoom to fit needs to show a wide graph whole, and twice.
     press(graph, "-", "Minus");
     press(graph, "-", "Minus");
     press(graph, "-", "Minus");
-    await waitFor(() => expect(scene.style.transform).toContain("scale(0.5)"));
+    press(graph, "-", "Minus");
+    await waitFor(() => expect(scene.style.transform).toContain("scale(0.25)"));
     for (let i = 0; i < 6; i++) press(graph, "+", "Equal", true);
     await waitFor(() => expect(scene.style.transform).toContain("scale(2)"));
 

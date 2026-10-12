@@ -142,6 +142,14 @@
   background: var(--accent-subtle);
   border-color: var(--accent);
 }
+/* Top to bottom, a node's edges leave by its bottom, so that is where the port is. */
+.orca-wfcanvas[data-direction="vertical"] .orca-wfedit__port {
+  top: auto;
+  right: auto;
+  bottom: calc(-1 * var(--mark-port) / 2);
+  left: 50%;
+  transform: translateX(-50%);
+}
 
 /* The invisible, wide stroke an edge is clicked and dropped on. The SVG under the boxes does
    not take the pointer; these paths do, and only along their stroke. */

@@ -30,30 +30,45 @@
  * selection (70-workflow-editing.md), two places it can be. The viewport stays the only tab
  * stop; the group listboxes are reached by the same arrows, through the same scope.
  *
- * **The keys are the map's, and they are registered once.** `↑`/`↓` move within a layer,
- * `←`/`→` between layers, `Enter` expands or collapses a container, `+`/`-`/`0` zoom and `⇧`
- * with an arrow pans — all in the `workflow` scope, so the palette lists every one of them.
- * The arrows move the *selection* rather than the viewport, because that is what an arrow
- * does everywhere else in this app; panning is the shifted form, and dragging an empty patch
- * of canvas is the pointer's way to the same thing. An expanded nested graph draws through
+ * **The keys are the map's, and they are registered once.** The arrows move the selection —
+ * along a layer and across to the next one, pointing the way the graph is laid out (`↓` is
+ * the next node down a column left to right, and the next layer top to bottom; `layout.ts`,
+ * `arrowMove`) — `Enter` expands or collapses a container, `+`/`-`/`0` zoom and `⇧` with an
+ * arrow pans — all in the `workflow` scope, so the palette lists every one of them. The
+ * arrows move the *selection* rather than the viewport, because that is what an arrow does
+ * everywhere else in this app; panning is the shifted form, and dragging an empty patch of
+ * canvas is the pointer's way to the same thing. An expanded nested graph draws through
  * `Graph` below, which registers nothing: two registrations of `↑` in one scope is an error
  * by design, and a graph inside a graph is one canvas with more drawing in it.
+ *
+ * **The view is `useCanvasView`'s, and the corner is the pointer's way to it.** Zoom and pan
+ * are one state shared with the zoom keys, the controls in the canvas's corner, a ⌘/Ctrl
+ * wheel or a pinch, and the minimap above the controls — so a click on `+` and a press of `+`
+ * are one zoom. The layout direction and whether the minimap shows are the person's
+ * (`useGraphPreferences`), remembered with their other view preferences rather than in the
+ * workflow. The corner sits outside the `workflow` scope: inside it, `Enter` on a focused
+ * button would be the canvas's `Enter`, and the map would win.
  */
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type JSX,
-  type PointerEvent as ReactPointerEvent,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, type JSX, type PointerEvent as ReactPointerEvent } from "react";
 import { GRAPH_GEOMETRY } from "@orca/design";
 import type { WorkflowNodeView, WorkflowView } from "@orca/protocol";
 import { useKeyboard } from "../keyboard-context.js";
 import { scopeProps } from "../keyboard-map.js";
-import { Text, WorkflowNode, asNodeType, textClass, type WorkflowNodeRunState } from "../ui/index.js";
-import { layoutWorkflow, type GraphMetrics, type PlacedNode } from "./layout.js";
+import {
+  CanvasControls,
+  GraphMinimap,
+  Text,
+  WorkflowNode,
+  asNodeType,
+  textClass,
+  useCanvasView,
+  useGraphPreferences,
+  type MinimapNode,
+  type MinimapTone,
+  type ViewportMeasurer,
+  type WorkflowNodeRunState,
+} from "../ui/index.js";
+import { arrowLabel, labelTransform, layoutWorkflow, stepSelection, type Arrow, type GraphMetrics } from "./layout.js";
 import type { OverlayIndex } from "./use-workflow.js";
 
 /** The tokens, in the shape `layout.ts` takes them. One statement of the mapping. */
@@ -70,9 +85,6 @@ const METRICS: GraphMetrics = {
  */
 const PAD = METRICS.rankGap;
 
-/** The zoom stops. A list rather than a multiplier, so `+` and `-` are exactly reversible. */
-const ZOOMS = [0.5, 0.75, 1, 1.5, 2];
-const DEFAULT_ZOOM = ZOOMS.indexOf(1);
 /** How far one pan press moves the viewport: one layer step, so a press crosses a column. */
 const PAN_STEP = METRICS.nodeW + METRICS.layerGap;
 
@@ -88,6 +100,8 @@ export interface WorkflowCanvasProps {
   onToggleExpanded: (nodeId: string) => void;
   /** The accessible name of the canvas — the workflow, said once. */
   label: string;
+  /** How the viewport is measured. The document by default; a test injects a size, since happy-dom has no layout. */
+  measure?: ViewportMeasurer;
 }
 
 export function WorkflowCanvas({
@@ -98,16 +112,35 @@ export function WorkflowCanvas({
   expanded,
   onToggleExpanded,
   label,
+  measure,
 }: WorkflowCanvasProps): JSX.Element {
-  const layout = useMemo(() => layoutWorkflow(workflow, METRICS), [workflow]);
-  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const graphView = useGraphPreferences("workflow", "workflow");
+  const { direction } = graphView;
+  const layout = useMemo(() => layoutWorkflow(workflow, METRICS, direction), [workflow, direction]);
+  /* The drawing's extent with its margin: the plane the scene holds, which is what fit fits,
+     what a wheel scrolls over and what the minimap shows the whole of. */
+  const content = useMemo(
+    () => ({ width: layout.width + PAD * 2, height: layout.height + PAD * 2 }),
+    [layout.width, layout.height],
+  );
+  const canvas = useCanvasView({ scope: "workflow", content, panStep: PAN_STEP, measure });
 
-  /* Moving the selection. `↑`/`↓` step within the layer, `←`/`→` to the node in the next
-     layer along whose order is nearest this one's, so a move across a fan-out lands where
-     the eye already is rather than at the top of the column. */
+  /* Turning the graph puts the view back at rest. The pan was a place in the old drawing,
+     and the same numbers over the turned one point at wherever that happens to be now —
+     usually nothing. Rest is where both drawings start: `start`, top left. */
+  const { rest } = canvas;
+  const turned = useRef(direction);
+  useEffect(() => {
+    if (turned.current === direction) return;
+    turned.current = direction;
+    rest();
+  }, [direction, rest]);
+
+  /* Moving the selection: along the layer, or to the node in the next layer along whose order
+     is nearest this one's, so a move across a fan-out lands where the eye already is rather
+     than at the start of the layer. Which arrow is which follows the direction. */
   const move = useCallback(
-    (direction: Direction) => {
+    (arrow: Arrow) => {
       const from = layout.nodes.find((placed) => placed.node.id === selected);
       if (!from) {
         // Nothing selected yet: the first arrow selects the entry node rather than moving.
@@ -115,25 +148,34 @@ export function WorkflowCanvas({
         if (first) onSelect(first.node.id);
         return;
       }
-      const next = step(layout.nodes, from, direction);
+      const next = stepSelection(layout.nodes, from, arrow, direction);
       if (next) onSelect(next.node.id);
     },
-    [layout, selected, onSelect],
+    [layout, selected, onSelect, direction],
   );
 
   const keyboard = useKeyboard();
   // Through a ref so a canvas whose handlers are rebuilt on every push — which is every
-  // canvas with a live run overlaid — does not unregister and re-register twelve shortcuts
-  // on each frame. The same reason `useListKeys` does it.
+  // canvas with a live run overlaid — does not unregister and re-register its shortcuts on
+  // each frame. The same reason `useListKeys` does it. The zoom and pan keys are
+  // `useCanvasView`'s; the arrows are re-registered only when the direction turns, because
+  // their labels say which way the layers run.
   const latest = useRef({ move, onToggleExpanded, selected });
   latest.current = { move, onToggleExpanded, selected };
 
   useEffect(() => {
+    const arrows: [string, Arrow][] = [
+      ["ArrowDown", "down"],
+      ["ArrowUp", "up"],
+      ["ArrowRight", "right"],
+      ["ArrowLeft", "left"],
+    ];
     const registrations = [
-      { key: "ArrowDown", label: "Next node in this layer", action: () => latest.current.move("down") },
-      { key: "ArrowUp", label: "Previous node in this layer", action: () => latest.current.move("up") },
-      { key: "ArrowRight", label: "Next layer", action: () => latest.current.move("right") },
-      { key: "ArrowLeft", label: "Previous layer", action: () => latest.current.move("left") },
+      ...arrows.map(([key, arrow]) => ({
+        key,
+        label: arrowLabel(arrow, direction),
+        action: () => latest.current.move(arrow),
+      })),
       {
         key: "Enter",
         label: "Expand or collapse the selected node",
@@ -142,39 +184,29 @@ export function WorkflowCanvas({
           if (id !== undefined) latest.current.onToggleExpanded(id);
         },
       },
-      { key: "+", label: "Zoom in", action: () => setZoom((z) => Math.min(z + 1, ZOOMS.length - 1)) },
-      { key: "-", label: "Zoom out", action: () => setZoom((z) => Math.max(z - 1, 0)) },
-      {
-        key: "0",
-        label: "Reset the zoom and the pan",
-        action: () => {
-          setZoom(DEFAULT_ZOOM);
-          setPan({ x: 0, y: 0 });
-        },
-      },
-      { key: "Shift+ArrowRight", label: "Pan right", action: () => setPan((p) => ({ ...p, x: p.x - PAN_STEP })) },
-      { key: "Shift+ArrowLeft", label: "Pan left", action: () => setPan((p) => ({ ...p, x: p.x + PAN_STEP })) },
-      { key: "Shift+ArrowDown", label: "Pan down", action: () => setPan((p) => ({ ...p, y: p.y - PAN_STEP })) },
-      { key: "Shift+ArrowUp", label: "Pan up", action: () => setPan((p) => ({ ...p, y: p.y + PAN_STEP })) },
     ].map((shortcut) => keyboard.register({ scope: "workflow", ...shortcut }));
     return () => registrations.forEach((unregister) => unregister());
-  }, [keyboard]);
+  }, [keyboard, direction]);
 
   /* Dragging an empty patch of canvas pans it. A drag that starts on a node is not a pan and
      is not a move either — nothing on this canvas is dragged (70-workflow-editing.md) — so
      the capture is taken only when the press landed on the viewport itself. */
+  const { panBy } = canvas;
   const drag = useRef<{ x: number; y: number } | null>(null);
   const onPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
     drag.current = { x: event.clientX, y: event.clientY };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }, []);
-  const onPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    const from = drag.current;
-    if (!from) return;
-    setPan((p) => ({ x: p.x + (event.clientX - from.x), y: p.y + (event.clientY - from.y) }));
-    drag.current = { x: event.clientX, y: event.clientY };
-  }, []);
+  const onPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const from = drag.current;
+      if (!from) return;
+      panBy(event.clientX - from.x, event.clientY - from.y);
+      drag.current = { x: event.clientX, y: event.clientY };
+    },
+    [panBy],
+  );
   const onPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     drag.current = null;
     if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
@@ -182,43 +214,86 @@ export function WorkflowCanvas({
     }
   }, []);
 
-  const scale = ZOOMS[zoom]!;
+  /* The minimap's boxes: every node of this graph, in the tone the run left it in. */
+  const overview = useMemo<MinimapNode[]>(
+    () =>
+      layout.nodes.map((placed) => ({
+        id: placed.node.id,
+        x: placed.x + PAD,
+        y: placed.y + PAD,
+        width: METRICS.nodeW,
+        height: METRICS.nodeH,
+        tone: minimapToneOf(placed.node, overlay),
+        selected: placed.node.id === selected,
+      })),
+    [layout, overlay, selected],
+  );
+
   const groups = layout.nodes
     .filter((placed) => expanded.has(placed.node.id))
     .flatMap((placed) => (placed.node.nested ?? []).map((nested) => ({ owner: placed.node, nested })));
 
   return (
-    <div className="orca-wfcanvas" {...scopeProps("workflow")}>
-      <div
-        className="orca-wfcanvas__viewport"
-        role="listbox"
-        aria-label={label}
-        {...(selected !== undefined && layout.nodes.some((p) => p.node.id === selected)
-          ? { "aria-activedescendant": nodeDomId(selected) }
-          : {})}
-        tabIndex={0}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-      >
+    <div className="orca-wfcanvas" data-direction={direction}>
+      <div className="orca-wfcanvas__stage">
         <div
-          className="orca-wfcanvas__scene"
-          role="presentation"
-          style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}
+          ref={canvas.ref}
+          className="orca-wfcanvas__viewport"
+          {...scopeProps("workflow")}
+          role="listbox"
+          aria-label={label}
+          {...(selected !== undefined && layout.nodes.some((p) => p.node.id === selected)
+            ? { "aria-activedescendant": nodeDomId(selected) }
+            : {})}
+          tabIndex={0}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
         >
-          <Graph layout={layout} overlay={overlay} selected={selected} onSelect={onSelect} expanded={expanded} />
+          <div
+            className={`orca-wfcanvas__scene${canvas.eased ? " orca-wfcanvas__scene--eased" : ""}`}
+            role="presentation"
+            style={{ transform: canvas.transform }}
+          >
+            <Graph layout={layout} overlay={overlay} selected={selected} onSelect={onSelect} expanded={expanded} />
+          </div>
+        </div>
+        <div className="orca-wfcanvas__corner">
+          {graphView.minimap && (
+            <GraphMinimap
+              content={content}
+              nodes={overview}
+              view={canvas.view}
+              viewport={canvas.viewport}
+              onPan={canvas.panTo}
+            />
+          )}
+          <CanvasControls
+            label={`${label} view`}
+            scale={canvas.view.scale}
+            onZoomIn={canvas.zoomIn}
+            onZoomOut={canvas.zoomOut}
+            onRest={canvas.rest}
+            onFit={canvas.fit}
+            direction={direction}
+            onToggleDirection={graphView.toggleDirection}
+            minimap={graphView.minimap}
+            onToggleMinimap={graphView.toggleMinimap}
+          />
         </div>
       </div>
 
       {/* An expanded container's body, laid out by the same function in a group box of its
           own. It is beside the canvas rather than inside it because a nested graph is a
           graph — its own start, its own layers, its own back edges — and inlining one would
-          move every node around the container that holds it. */}
+          move every node around the container that holds it. It runs the same way as the
+          graph that holds it, and it is in the `workflow` scope like the viewport is. */}
       {groups.map(({ owner, nested }) => (
         <section
           key={nested.id}
           className="orca-wfcanvas__group"
+          {...scopeProps("workflow")}
           /* Named by the graph, not just by the container: a `parallel` has one group box
              per branch, and two regions called "Inside Fan out the pieces" would be two
              things a screen reader could not tell apart. */
@@ -230,7 +305,7 @@ export function WorkflowCanvas({
           </header>
           <div className="orca-wfcanvas__scene" role="presentation">
             <Graph
-              layout={layoutWorkflow(nested, METRICS)}
+              layout={layoutWorkflow(nested, METRICS, direction)}
               overlay={overlay}
               selected={selected}
               onSelect={onSelect}
@@ -247,8 +322,6 @@ export function WorkflowCanvas({
     </div>
   );
 }
-
-type Direction = "up" | "down" | "left" | "right";
 
 interface GraphProps {
   layout: ReturnType<typeof layoutWorkflow>;
@@ -305,6 +378,7 @@ function Graph({ layout, overlay, selected, onSelect, expanded, owns }: GraphPro
                   className={`orca-edge__label ${textClass("mono-id")}`}
                   x={placed.labelX}
                   y={placed.labelY}
+                  transform={labelTransform(placed)}
                   textAnchor="middle"
                 >
                   {label}
@@ -378,23 +452,27 @@ export function runStateOf(
 }
 
 /**
- * The node an arrow key moves to.
- *
- * Within a layer it is the neighbour by order. Across layers it is the node in the next
- * layer along whose order is closest to this one's, which keeps a move across a fan-out near
- * where the eye already is instead of snapping to the top of the column.
+ * A node's tone in the minimap, from the same facts `runStateOf` hands the node: the four
+ * overlay states `WorkflowNode` draws, and faint for a node the run never reached. With no
+ * run overlaid there is no state to show, and every box is plain.
  */
-function step(nodes: readonly PlacedNode[], from: PlacedNode, direction: Direction): PlacedNode | undefined {
-  if (direction === "up" || direction === "down") {
-    const wanted = from.order + (direction === "down" ? 1 : -1);
-    return nodes.find((placed) => placed.layer === from.layer && placed.order === wanted);
+export function minimapToneOf(node: WorkflowNodeView, overlay: OverlayIndex | undefined): MinimapTone {
+  const { runState, untaken } = runStateOf(node, overlay);
+  if (untaken) return "faint";
+  if (!runState) return "plain";
+  if (runState.current) return "running";
+  switch (runState.status) {
+    case "running":
+      return "running";
+    case "waiting":
+    case "blocked":
+    case "held":
+      return "waiting";
+    case "failed":
+    case "cancelled":
+      return "failed";
+    case "succeeded":
+    case "stale":
+      return "strong";
   }
-  const wanted = from.layer + (direction === "right" ? 1 : -1);
-  return nodes
-    .filter((placed) => placed.layer === wanted)
-    .reduce<PlacedNode | undefined>(
-      (best, placed) =>
-        best === undefined || Math.abs(placed.order - from.order) < Math.abs(best.order - from.order) ? placed : best,
-      undefined,
-    );
 }

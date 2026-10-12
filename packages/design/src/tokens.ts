@@ -6,8 +6,8 @@ export type ColorToken = 'surface-canvas' | 'surface-base' | 'surface-raised' | 
 
 export type SpacingToken = 'space-0-5' | 'space-1' | 'space-1-5' | 'space-2' | 'space-2-5' | 'space-3' | 'space-4' | 'space-5' | 'space-6' | 'space-8' | 'space-12' | 'space-16';
 export type RadiusToken = 'radius-none' | 'radius-xs' | 'radius-sm' | 'radius-md' | 'radius-lg' | 'radius-full';
-export type SizeToken = 'row-comfortable' | 'row-compact' | 'row-log' | 'hit-min' | 'mark-sm' | 'mark-md' | 'mark-port' | 'mark-skeleton' | 'mark-swatch' | 'hatch-period' | 'bar-status' | 'bar-pane' | 'bar-title' | 'bar-object' | 'badge-sm' | 'badge-md' | 'col-time' | 'col-lineno' | 'col-label' | 'col-label-narrow' | 'col-node-kind' | 'col-matrix-axis' | 'col-classification' | 'col-slug' | 'col-request' | 'col-status' | 'col-score' | 'col-risk' | 'col-claim' | 'col-id' | 'control-xs' | 'control-sm' | 'control-sm-5' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'panel-w-policy' | 'node-min-width' | 'node-w' | 'node-h' | 'layer-gap' | 'rank-gap' | 'risk-cell-width' | 'risk-cell-height' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'palette-width' | 'palette-max-height' | 'palette-offset-top' | 'editor-min-height' | 'splitter-thickness' | 'pane-step' | 'pane-min-sidebar' | 'pane-max-sidebar' | 'pane-min-side' | 'pane-max-side' | 'pane-min-stack';
-export type BorderToken = 'stroke-hairline' | 'stroke-rail' | 'stroke-focus' | 'stroke-edge-active' | 'stroke-double' | 'stroke-dash-untaken' | 'stroke-dash-back' | 'stroke-dash-draft' | 'stroke-dash-soft' | 'stroke-dash-informs';
+export type SizeToken = 'row-comfortable' | 'row-compact' | 'row-log' | 'hit-min' | 'mark-sm' | 'mark-md' | 'mark-port' | 'mark-skeleton' | 'mark-swatch' | 'hatch-period' | 'bar-status' | 'bar-pane' | 'bar-title' | 'bar-object' | 'badge-sm' | 'badge-md' | 'col-time' | 'col-lineno' | 'col-label' | 'col-label-narrow' | 'col-node-kind' | 'col-matrix-axis' | 'col-classification' | 'col-slug' | 'col-request' | 'col-status' | 'col-score' | 'col-risk' | 'col-claim' | 'col-id' | 'control-xs' | 'control-sm' | 'control-sm-5' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'panel-w-policy' | 'node-min-width' | 'node-w' | 'node-h' | 'layer-gap' | 'rank-gap' | 'minimap-w' | 'minimap-h' | 'risk-cell-width' | 'risk-cell-height' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'palette-width' | 'palette-max-height' | 'palette-offset-top' | 'editor-min-height' | 'splitter-thickness' | 'pane-step' | 'pane-min-sidebar' | 'pane-max-sidebar' | 'pane-min-side' | 'pane-max-side' | 'pane-min-stack';
+export type BorderToken = 'stroke-hairline' | 'stroke-icon' | 'stroke-rail' | 'stroke-focus' | 'stroke-edge-active' | 'stroke-double' | 'stroke-dash-untaken' | 'stroke-dash-back' | 'stroke-dash-draft' | 'stroke-dash-soft' | 'stroke-dash-informs';
 export type ShadowToken = 'shadow-none' | 'shadow-popover' | 'shadow-modal' | 'shadow-sticky';
 export type DurationToken = 'duration-instant' | 'duration-fast' | 'duration-medium' | 'duration-pulse';
 export type EasingToken = 'ease-standard' | 'ease-entrance' | 'ease-linear';
@@ -140,19 +140,22 @@ export const BREAKPOINTS: Record<BreakpointToken, number> = {
   'bp-panel-overlay': 1100,
 };
 
-export type GraphGeometryToken = 'node-w' | 'node-h' | 'layer-gap' | 'rank-gap';
+export type GraphGeometryToken = 'node-w' | 'node-h' | 'layer-gap' | 'rank-gap' | 'minimap-w' | 'minimap-h';
 
 /**
- * The workflow canvas's box and gaps in px, for the same reason `BREAKPOINTS` is here: an
+ * The graph canvas's box and gaps in px, for the same reason `BREAKPOINTS` is here: an
  * SVG path's `d` attribute and a node's `x`/`y` are arithmetic, and no `var()` can be
  * written inside either. The layout module takes these as an argument rather than reaching
- * for them, so the algorithm stays a plain module with a plain test.
+ * for them, so the algorithm stays a plain module with a plain test. The minimap's box is
+ * here for the same reason: the overview is the drawing scaled to fit it, which is a division.
  */
 export const GRAPH_GEOMETRY: Record<GraphGeometryToken, number> = {
   'node-w': 192,
   'node-h': 96,
   'layer-gap': 64,
   'rank-gap': 32,
+  'minimap-w': 160,
+  'minimap-h': 112,
 };
 
 export type PaneGeometryToken = 'pane-step' | 'pane-min-sidebar' | 'pane-max-sidebar' | 'pane-min-side' | 'pane-max-side' | 'pane-min-stack';

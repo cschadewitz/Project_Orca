@@ -23,14 +23,17 @@ import {
 } from "@orca/design";
 import {
   Button,
+  CanvasControls,
   Card,
   Chip,
   ConfigField,
   ConnectionIndicator,
   Duration,
+  GraphMinimap,
   KeyValueList,
   ObjectHeader,
   ObjectId,
+  REST,
   ScheduleBadge,
   StateView,
   StatusChip,
@@ -38,8 +41,14 @@ import {
   Text,
   Time,
   Well,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  ZOOM_STOPS,
   textClass,
+  type CanvasView,
+  type MinimapNode,
 } from "../ui/index.js";
+import type { LayoutDirection } from "../workflow/layout.js";
 import "./preview.css";
 
 /* Derived, never re-declared: the design system owns the list of states. */
@@ -247,6 +256,10 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
         </div>
       </Section>
 
+      <Section title="Graph canvas controls">
+        <CanvasCornerDemo />
+      </Section>
+
       <Section title="State views">
         {STATE_VIEW_KINDS.map((kind) => (
           <div className="preview__pane" key={kind}>
@@ -339,6 +352,60 @@ function ObjectHeaderDemo(): JSX.Element {
         {chosen ?? "Nothing chosen yet."}
       </Text>
     </>
+  );
+}
+
+/**
+ * The corner of a graph canvas: the minimap over the zoom group, on a stand-in drawing with
+ * one node in each tone. The zoom here steps through the real stops so the readout and the
+ * disabled ends show; the canvases themselves drive both from `useCanvasView`, which needs a
+ * keyboard map the gallery does not have.
+ */
+function CanvasCornerDemo(): JSX.Element {
+  const [view, setView] = useState<CanvasView>(REST);
+  const [direction, setDirection] = useState<LayoutDirection>("horizontal");
+  const [minimap, setMinimap] = useState(true);
+  const step = (way: 1 | -1) => {
+    const index = ZOOM_STOPS.indexOf(view.scale);
+    const next = ZOOM_STOPS[Math.min(ZOOM_STOPS.length - 1, Math.max(0, index + way))] ?? view.scale;
+    setView({ ...view, scale: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next)) });
+  };
+  const turned = direction === "vertical";
+  // Five boxes in a row (or a column, turned), one per tone, the third selected.
+  const nodes: MinimapNode[] = (["plain", "strong", "running", "waiting", "failed"] as const).map((tone, i) => ({
+    id: tone,
+    x: turned ? 32 : 32 + i * 256,
+    y: turned ? 32 + i * 176 : 32,
+    width: 192,
+    height: 112,
+    tone,
+    selected: i === 2,
+  }));
+  const content = turned ? { width: 256, height: 944 } : { width: 1344, height: 176 };
+  return (
+    <div className="preview__corner">
+      {minimap && (
+        <GraphMinimap
+          content={content}
+          nodes={nodes}
+          view={view}
+          viewport={{ width: 640, height: 400 }}
+          onPan={(pan) => setView({ ...view, pan })}
+        />
+      )}
+      <CanvasControls
+        label="Preview graph view"
+        scale={view.scale}
+        onZoomIn={() => step(1)}
+        onZoomOut={() => step(-1)}
+        onRest={() => setView(REST)}
+        onFit={() => setView({ scale: 0.5, pan: { x: 0, y: 0 } })}
+        direction={direction}
+        onToggleDirection={() => setDirection(turned ? "horizontal" : "vertical")}
+        minimap={minimap}
+        onToggleMinimap={() => setMinimap(!minimap)}
+      />
+    </div>
   );
 }
 
