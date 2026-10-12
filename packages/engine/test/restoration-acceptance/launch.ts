@@ -8,7 +8,7 @@
  * TypeScript sources through tsx, as before. Either way each launch is a new, real process.
  */
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { childBundle } from "@orca/testing";
+import { childBundle } from "@orca/testing/child-bundle";
 
 const workerSource = fileURLToPath(new URL("worker.ts", import.meta.url));
 const jevAdapterSource = fileURLToPath(new URL("../../../integrations/src/jev/plugin.ts", import.meta.url));

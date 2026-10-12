@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { JsonFileDocumentStore } from "@orca/store";
-import { childBundle } from "../../testing/src/child-bundle.js";
+import { childBundle } from "@orca/testing/child-bundle";
 
 const run = promisify(execFile);
 

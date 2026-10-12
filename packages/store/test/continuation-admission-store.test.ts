@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { childBundle } from "../../testing/src/child-bundle.js";
+import { childBundle } from "@orca/testing/child-bundle";
 import { JsonlLogDir } from "../src/jsonl-log.js";
 import { JsonlEventStore } from "../src/jsonl-event-store.js";
 import { ProtectedEventStore } from "../src/protected-event-store.js";

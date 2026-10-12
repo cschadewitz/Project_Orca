@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { consoleLogger, parseWorkflow, type OrcaEvent, type OrcaEventInput } from "@orca/core";
-import { childBundle } from "../../testing/src/child-bundle.js";
+import { childBundle } from "@orca/testing/child-bundle";
 import { InMemoryEventStore } from "../src/event-store.js";
 import { FileExecutionStore } from "../src/execution-store.js";
 import { JsonlEventStore } from "../src/jsonl-event-store.js";

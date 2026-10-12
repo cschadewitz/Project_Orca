@@ -17,7 +17,7 @@ import {
   parseToken,
   readLocalToken,
 } from "../src/auth/index.js";
-import { childBundle } from "../../testing/src/child-bundle.js";
+import { childBundle } from "@orca/testing/child-bundle";
 
 let dir: string;
 beforeEach(async () => {

@@ -1,7 +1,7 @@
 /** Bounded real-adapter subprocess runner; synthetic disposable profiles only. */
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { childBundle } from "../../../testing/src/child-bundle.js";
+import { childBundle } from "@orca/testing/child-bundle";
 import { compiledFixtureHelper } from "./implementation-fixture.js";
 
 export interface OptOutCrashEvidence {

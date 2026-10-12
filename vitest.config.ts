@@ -17,6 +17,7 @@ export default defineConfig({
       "@orca/store": pkg("store"),
       "@orca/agents": pkg("agents"),
       "@orca/engine": pkg("engine"),
+      "@orca/testing/child-bundle": src("testing", "child-bundle"),
       "@orca/testing": pkg("testing"),
       "@orca/integrations/mcp": src("integrations", "mcp/index"),
       "@orca/integrations": pkg("integrations"),

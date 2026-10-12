@@ -5,7 +5,7 @@
  */
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { childBundle } from "@orca/testing";
+import { childBundle } from "@orca/testing/child-bundle";
 
 /**
  * The `node` arguments that run the entry file `entry` with `args`. Under Vitest that is the
