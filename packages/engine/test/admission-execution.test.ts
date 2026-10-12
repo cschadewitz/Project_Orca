@@ -11,7 +11,10 @@ import {
   requireAdmissionExecutionPolicy,
 } from "../src/admission-execution.js";
 import { actor, admissionRuntime } from "./admission-execution-fixture.js";
+import { childCommand } from "./child-command.js";
 
+/** The second process of the two tests below that start one: it races, or it dies at a boundary. */
+const childEntry = new URL("./admission-execution-child.ts", import.meta.url);
 const directories: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -236,21 +239,9 @@ it("two independent processes racing the same admitted root execute its effect o
   const f = await diskFixture();
   const { runId } = await f.admit();
   const effectFile = join(f.dir, "effect.log");
-  const fixtureSource = new URL("./admission-execution-fixture.ts", import.meta.url).href;
-  const storeSource = new URL("../../store/src/index.ts", import.meta.url).href;
-  const script = `
-    import { appendFile } from 'node:fs/promises';
-    import { fileStores } from ${JSON.stringify(storeSource)};
-    import { admissionRuntime } from ${JSON.stringify(fixtureSource)};
-    const f = await admissionRuntime(fileStores(${JSON.stringify(f.dir)}), {
-      effect: async () => { await appendFile(${JSON.stringify(effectFile)}, 'effect\\n'); await new Promise(r => setTimeout(r, 250)); }
-    });
-    try { await f.orc.run(${JSON.stringify(runId)}); process.stdout.write('attached'); }
-    catch (error) { if (error.code !== 'RUN_LEASED') throw error; process.stdout.write('leased'); }
-  `;
   const run = () =>
     new Promise<string>((resolve, reject) => {
-      const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      const child = spawn(process.execPath, childCommand(childEntry, ["race", f.dir, runId, effectFile]), {
         cwd: process.cwd(),
         stdio: "pipe",
       });
@@ -286,49 +277,9 @@ it.each([
     const f = await diskFixture();
     const { runId } = await f.admit();
     const effectFile = join(f.dir, "crash-effects.log");
-    const fixtureSource = new URL("./admission-execution-fixture.ts", import.meta.url).href;
-    const storeSource = new URL("../../store/src/index.ts", import.meta.url).href;
-    const script = `
-    import { appendFile } from 'node:fs/promises';
-    import { fileStores } from ${JSON.stringify(storeSource)};
-    import { admissionRuntime } from ${JSON.stringify(fixtureSource)};
-    const boundary = ${JSON.stringify(boundary)};
-    const runId = ${JSON.stringify(runId)};
-    const f = await admissionRuntime(fileStores(${JSON.stringify(f.dir)}), {
-      effect: async () => {
-        await appendFile(${JSON.stringify(effectFile)}, 'effect\\n');
-        if (boundary === 'effect-after') process.exit(87);
-      }
-    });
-    const put = f.stores.execution.putGeneration.bind(f.stores.execution);
-    f.stores.execution.putGeneration = async (id, value) => {
-      const type = id === 'admission-execution-attempt:' + runId ? 'attempt' : id === 'admission-execution-start:' + runId ? 'witness' : '';
-      if (boundary === type + '-before') process.exit(87);
-      await put(id, value);
-      if (boundary === type + '-after') process.exit(87);
-    };
-    const append = f.stores.events.append.bind(f.stores.events);
-    f.stores.events.append = async event => {
-      if (event.type === 'run.started' && boundary === 'start-before') process.exit(87);
-      const result = await append(event);
-      if (event.type === 'run.started' && boundary === 'start-after') process.exit(87);
-      return result;
-    };
-    const sync = f.stores.events.synchronizeEvent.bind(f.stores.events);
-    f.stores.events.synchronizeEvent = async event => {
-      if (event.type === 'run.started' && boundary === 'sync-before') process.exit(87);
-      const result = await sync(event);
-      if (event.type === 'run.started' && boundary === 'sync-after') process.exit(87);
-      return result;
-    };
-    await f.orc.run(runId);
-    throw new Error('Expected abrupt process termination');
-  `;
     const code = await new Promise<number | null>((resolve, reject) => {
-      const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-        cwd: process.cwd(),
-        stdio: "pipe",
-      });
+      const command = childCommand(childEntry, ["crash", f.dir, runId, effectFile, boundary]);
+      const child = spawn(process.execPath, command, { cwd: process.cwd(), stdio: "pipe" });
       let errors = "";
       child.stderr.on("data", (chunk: Buffer) => {
         errors += chunk.toString();

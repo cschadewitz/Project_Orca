@@ -15,7 +15,10 @@ import { RegisteredRetryClaims } from "../src/admission-retry.js";
 import { RevisionInputService, registerRevisionInputOperation, type RetryClaims } from "../src/revision-input.js";
 import { createRevisionRuntime } from "../src/revision-runtime.js";
 import { RunContext } from "../src/run-context.js";
+import { childCommand } from "./child-command.js";
 
+/** The other process in the three tests below that start one: a second writer, a reader, an observer. */
+const childEntry = new URL("./revision-runtime-retry-child.ts", import.meta.url);
 const dirs: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -535,49 +538,7 @@ describe("revision retry run fence", () => {
     });
     const parent = f.submit();
     await enteredClaim.promise;
-    const script = `
-      import { fileStores, FileRetryClaimStore } from ${JSON.stringify(new URL("../../store/src/index.ts", import.meta.url).href)};
-      import { OrcaError } from ${JSON.stringify(new URL("../../core/src/errors.ts", import.meta.url).href)};
-      import { createRevisionRuntime } from ${JSON.stringify(new URL("../src/revision-runtime.ts", import.meta.url).href)};
-      import { RegisteredRetryClaims } from ${JSON.stringify(new URL("../src/admission-retry.ts", import.meta.url).href)};
-      import { RevisionInputService, registerRevisionInputOperation } from ${JSON.stringify(new URL("../src/revision-input.ts", import.meta.url).href)};
-      const stores = fileStores(${JSON.stringify(f.dir)});
-      const faults = {
-        conflict: () => new OrcaError('RETRY_CONFLICT', 'conflict'),
-        limit: () => new OrcaError('RETRY_LIMIT', 'limit'),
-      };
-      const claimStore = new FileRetryClaimStore({storeDir: ${JSON.stringify(f.dir)}, execution: stores.execution, faults});
-      let claimCalls = 0;
-      const claim = claimStore.claim.bind(claimStore);
-      claimStore.claim = async (...args) => { claimCalls++; return claim(...args); };
-      const claims = new RegisteredRetryClaims(claimStore, faults);
-      const runtime = createRevisionRuntime({stores, authorizeExecution: async () => {}});
-      const service = new RevisionInputService({
-        journal: runtime.journal, retries: runtime.fenceRetries(claims), assertRetryFence: runtime.assertRetryFence,
-        stale: () => new OrcaError('REVISION_STALE', 'stale'),
-        access: {principalId: 'user', workspaceId: 'workspace', actor: async () => ({principalId: 'user'}),
-          read: async () => ({content: true, mutate: true}), mutate: async () => {}},
-      });
-      registerRevisionInputOperation(claims, service.submitOperation, runtime.journal);
-      registerRevisionInputOperation(claims, service.replaceOperation, runtime.journal);
-      const authority = {principalId: 'user', workspaceId: 'workspace', authorize: async () => {}};
-      const submit = () => service.submit(${JSON.stringify(f.command)}, {idempotencyKey: 'submit'}, authority);
-      const acquire = stores.leases.acquire.bind(stores.leases);
-      let announced = false;
-      stores.leases.acquire = async (request) => {
-        if (!announced) { announced = true; process.stdout.write('contending\\n'); }
-        return acquire(request);
-      };
-      let first;
-      try { first = await submit(); }
-      catch (error) { first = {state: 'refused', code: error.code}; }
-      const retry = new Promise(resolve => process.stdin.once('data', resolve));
-      process.stdout.write(JSON.stringify({first, claimCalls}) + '\\n');
-      await retry;
-      process.stdin.pause();
-      process.stdout.write(JSON.stringify(await submit()) + '\\n');
-    `;
-    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+    const child = spawn(process.execPath, childCommand(childEntry, ["writer", f.dir, JSON.stringify(f.command)]), {
       cwd: process.cwd(),
       stdio: "pipe",
     });
@@ -622,21 +583,7 @@ describe("revision retry run fence", () => {
 
   it("observes a writer-owned transaction in another process before claiming a key", async () => {
     const f = await fixture();
-    const script = `
-      import { fileStores } from ${JSON.stringify(new URL("../../store/src/index.ts", import.meta.url).href)};
-      import { createRevisionRuntime } from ${JSON.stringify(new URL("../src/revision-runtime.ts", import.meta.url).href)};
-      const stores = fileStores(${JSON.stringify(f.dir)});
-      const runtime = createRevisionRuntime({stores, authorizeExecution: async () => {}});
-      const release = stores.leases.release.bind(stores.leases);
-      stores.leases.release = async (lease) => {
-        process.stdout.write('held\\n');
-        await new Promise(resolve => process.stdin.once('data', resolve));
-        process.stdin.pause();
-        await release(lease);
-      };
-      await runtime.journal.withRun('run', () => runtime.readBoundaries('run'));
-    `;
-    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+    const child = spawn(process.execPath, childCommand(childEntry, ["reader", f.dir]), {
       cwd: process.cwd(),
       stdio: "pipe",
     });
@@ -672,22 +619,7 @@ describe("revision retry run fence", () => {
 
 it("allows a writer while another process holds an observational transaction", async () => {
   const f = await fixture();
-  const script = `
-    import { fileStores } from ${JSON.stringify(new URL("../../store/src/index.ts", import.meta.url).href)};
-    import { createRevisionRuntime } from ${JSON.stringify(new URL("../src/revision-runtime.ts", import.meta.url).href)};
-    const runtime = createRevisionRuntime({stores: fileStores(${JSON.stringify(f.dir)}), authorizeExecution: async () => {}});
-    try {
-      await runtime.readJournal.withRun('run', async () => {
-        console.log('ready');
-        await new Promise(resolve => process.stdin.once('data', resolve));
-        process.stdin.pause();
-      });
-      throw new Error('changed observation unexpectedly succeeded');
-    } catch (error) {
-      if (error.code !== 'RUN_STATE') throw error;
-    }
-  `;
-  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+  const child = spawn(process.execPath, childCommand(childEntry, ["observer", f.dir]), {
     cwd: process.cwd(),
     stdio: "pipe",
   });
