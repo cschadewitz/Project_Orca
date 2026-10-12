@@ -43,20 +43,27 @@ it("actual auth/init CLI routes refuse before protected writes while help remain
   const f = await fixture();
   f.owner.closeAdmission("a".repeat(64));
   expect(await f.owner.capture()).toBe(true);
-  for (const args of [
+  // Three independent CLI processes, each paying for tsx to load the CLI: start them together
+  // rather than one after another. Help writes nothing, so the check below still sees only what
+  // the two refused routes could have left behind.
+  const refusals = [
     ["auth", "list", "--cwd", f.workspace],
     ["init", "--dir", f.workspace],
-  ])
-    await expect(
+  ].map((args) =>
+    expect(
       promisify(execFile)(process.execPath, ["--import", "tsx", cli, ...args], {
         timeout: 10000,
         env: { ...process.env, ORCA_UPDATE_LAUNCH: undefined, ORCA_UPDATE_ATTEMPT: undefined },
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(),
+  );
+  const [help] = await Promise.all([
+    promisify(execFile)(process.execPath, ["--import", "tsx", cli, "--help", "--cwd", f.workspace], {
+      timeout: 10000,
+    }),
+    ...refusals,
+  ]);
   expect(await readdir(f.workspace)).not.toContain("auth");
-  const help = await promisify(execFile)(process.execPath, ["--import", "tsx", cli, "--help", "--cwd", f.workspace], {
-    timeout: 10000,
-  });
   expect(help.stdout).toContain("usage:");
 });
 it("replacement capability refuses ordinary serve and auth commands rather than weakening authentication", async () => {
@@ -65,14 +72,18 @@ it("replacement capability refuses ordinary serve and auth commands rather than 
   await f.owner.capture();
   const permit = await f.owner.beginMigration();
   const env = { ...process.env, ORCA_UPDATE_ATTEMPT: permit.attempt, ORCA_UPDATE_LAUNCH: permit.token };
-  for (const args of [
-    ["serve", "--cwd", f.workspace],
-    ["auth", "list", "--cwd", f.workspace],
-    ["serve", "--cwd", f.workspace, "--read-only", "--no-resume", "--unauthenticated-loopback"],
-  ])
-    await expect(
-      promisify(execFile)(process.execPath, ["--import", "tsx", cli, ...args], { timeout: 10000, env }),
-    ).rejects.toThrow();
+  // Each refusal is its own process and writes nothing, so they run together.
+  await Promise.all(
+    [
+      ["serve", "--cwd", f.workspace],
+      ["auth", "list", "--cwd", f.workspace],
+      ["serve", "--cwd", f.workspace, "--read-only", "--no-resume", "--unauthenticated-loopback"],
+    ].map((args) =>
+      expect(
+        promisify(execFile)(process.execPath, ["--import", "tsx", cli, ...args], { timeout: 10000, env }),
+      ).rejects.toThrow(),
+    ),
+  );
   expect(await readdir(f.workspace)).not.toContain("auth");
 });
 async function retainFirstRun(workspace: string) {

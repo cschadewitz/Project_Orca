@@ -1,39 +1,27 @@
 /** Exercise the actual positive docs classifier over immutable Git histories, including both rename paths. */
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { chmodSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, afterAll, expect, it } from "vitest";
 import { docsOnly, DOCS_PATH, loadDocs } from "../ci-shadow/docs.js";
 import { checkDocumentation } from "../ci-shadow/check-docs.js";
-import { git } from "../ci-shadow/git.js";
+import { createGitFixture } from "./git-fixture.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
+let fixture;
 let repo;
 let base;
-const command = (...args) => git(repo, args).toString().trim();
-const write = (path, content) => {
-  mkdirSync(dirname(join(repo, path)), { recursive: true });
-  writeFileSync(join(repo, path), content);
-};
-const save = () => {
-  command("add", "-A");
-  command("commit", "-qm", "classification fixture");
-  return command("rev-parse", "HEAD");
-};
-const reset = () => {
-  command("checkout", "--detach", base);
-  command("clean", "-fdq");
-};
+const command = (...args) => fixture.command(...args);
+const write = (path, content) => fixture.write(path, content);
+const save = () => fixture.save();
+const reset = () => fixture.reset(base);
 const input = () => {
   const head = save();
   return { repo, base, head, candidate: head };
 };
 beforeAll(() => {
-  repo = mkdtempSync(join(tmpdir(), "orca-ci-docs-"));
-  command("init", "-q");
-  command("config", "user.name", "CI fixture");
-  command("config", "user.email", "ci@example.invalid");
+  fixture = createGitFixture({ prefix: "orca-ci-docs-", message: "classification fixture" });
+  repo = fixture.directory;
   for (const path of [DOCS_PATH, "tools/ci-shadow/docs.js", "tools/ci-shadow/git.js"])
     write(path, readFileSync(join(root, path)));
   for (const path of [
@@ -47,7 +35,7 @@ beforeAll(() => {
     write(path, path.endsWith(".md") ? "# Existing prose\n" : "/** Existing source. */\n");
   base = save();
 });
-afterAll(() => rmSync(repo, { recursive: true, force: true }));
+afterAll(() => fixture?.remove());
 
 it.each(["README.md", "docs/DEVELOPMENT.md", "changelog.d/README.md"])(
   "avoids both expensive runtime suites for audited ordinary %s",

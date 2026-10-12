@@ -18,7 +18,13 @@ afterEach(async () => {
   for (const dir of fixtures.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 
-async function fixture(mode = "success") {
+// A child that answers or exits does so in well under 300 ms, so 1500 ms is slack for a slow
+// host. A child that never answers can only be proven wrong by the bound running out, so those
+// cases wait for a shorter one: still twice the slowest real answer.
+const ANSWER_TIMEOUT_MS = 1500;
+const UNANSWERED_TIMEOUT_MS = 600;
+
+async function fixture(mode = "success", timeoutMs = ANSWER_TIMEOUT_MS) {
   const dir = await mkdtemp(join(tmpdir(), "orca-synthetic-probe-test-"));
   fixtures.push(dir);
   const bundlePath = join(dir, "fixture.mjs");
@@ -92,7 +98,7 @@ else {
 }
 `,
   );
-  return { bundlePath, tempParent: dir, contract, timeoutMs: 1500, stopTimeoutMs: 100 };
+  return { bundlePath, tempParent: dir, contract, timeoutMs, stopTimeoutMs: 100 };
 }
 
 async function expectClean(options) {
@@ -131,7 +137,7 @@ it("authenticates the owned child with current hello and cleans only its workspa
 
 it.each([
   ["early-exit", "EARLY_EXIT"],
-  ["silent", "TIMEOUT"],
+  ["silent", "TIMEOUT", UNANSWERED_TIMEOUT_MS],
   ["flood", "OUTPUT_LIMIT"],
   ["missing-token", "AUTH_REQUIRED"],
   ["wrong-token", "AUTH_INVALID"],
@@ -144,11 +150,11 @@ it.each([
   ["no-controls", "HELLO_CONTRACT"],
   ["remote-readiness", "READINESS"],
   ["other-token-path", "AUTH_METADATA"],
-  ["hung-hello", "TIMEOUT"],
+  ["hung-hello", "TIMEOUT", UNANSWERED_TIMEOUT_MS],
   ["oversized-response", "RESPONSE_LIMIT"],
   ["redirect", "HTTP_RESPONSE"],
-])("fails safely for %s and removes the owned temporary files", async (mode, code) => {
-  const options = await fixture(mode);
+])("fails safely for %s and removes the owned temporary files", async (mode, code, timeoutMs) => {
+  const options = await fixture(mode, timeoutMs);
   await expect(probeBundledDaemon(options)).rejects.toThrow(`Bundled daemon probe failed [${code}]`);
   await expectClean(options);
 });

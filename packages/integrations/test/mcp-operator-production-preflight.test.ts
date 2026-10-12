@@ -9,27 +9,28 @@ import { ProductionFixture, accepted, refused, tool, transports } from "./mcp-op
 
 let f: ProductionFixture;
 beforeEach(async () => {
-  f = await ProductionFixture.create();
-  // Change only disposable fixture assets while its compiled daemon is stopped.
-  await f.stop();
-  const definition = JSON.parse(await readFile(join(f.dir, "workflows/gate.yaml"), "utf8")) as object;
-  await writeFile(
-    join(f.dir, "workflows/typed.yaml"),
-    JSON.stringify({
-      ...definition,
-      id: "typed",
-      name: "Typed acceptance gate",
-      inputSchema: {
-        unknown: "reject",
-        fields: {
-          count: { type: "integer", required: true },
-          // Request submission injects its own Request object; direct launches omit it.
-          request: { type: "object" },
-        },
-      },
-    }),
-  );
-  await f.boot();
+  // Change only disposable fixture assets, before the compiled daemon first starts.
+  f = await ProductionFixture.create(undefined, {
+    async configure(dir) {
+      const definition = JSON.parse(await readFile(join(dir, "workflows/gate.yaml"), "utf8")) as object;
+      await writeFile(
+        join(dir, "workflows/typed.yaml"),
+        JSON.stringify({
+          ...definition,
+          id: "typed",
+          name: "Typed acceptance gate",
+          inputSchema: {
+            unknown: "reject",
+            fields: {
+              count: { type: "integer", required: true },
+              // Request submission injects its own Request object; direct launches omit it.
+              request: { type: "object" },
+            },
+          },
+        }),
+      );
+    },
+  });
 });
 afterEach(async () => {
   await f?.close();

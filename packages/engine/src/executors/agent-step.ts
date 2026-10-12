@@ -244,11 +244,18 @@ const WATCH_MAX_POLL_MS = 30_000;
  * in-flight checks (on an SSH host each check is a process). Errors are transient
  * by assumption - the turn ends on its own anyway - so they back off exponentially
  * instead of aborting the watch. Returns a function that stops the watcher.
+ *
+ * `pollMs` replaces the 1.5 s base delay, for a caller that knows its host answers at once.
  */
-export function watchForArtifacts(fs: HostFileSystem, paths: string[], onPresent: () => void): () => void {
+export function watchForArtifacts(
+  fs: HostFileSystem,
+  paths: string[],
+  onPresent: () => void,
+  pollMs: number = WATCH_POLL_MS,
+): () => void {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let errorDelay = WATCH_POLL_MS;
+  let errorDelay = pollMs;
 
   const schedule = (delayMs: number): void => {
     if (stopped) return;
@@ -260,7 +267,7 @@ export function watchForArtifacts(fs: HostFileSystem, paths: string[], onPresent
     let flags: boolean[];
     try {
       flags = await fs.existsMany(paths);
-      errorDelay = WATCH_POLL_MS;
+      errorDelay = pollMs;
     } catch {
       errorDelay = Math.min(errorDelay * 2, WATCH_MAX_POLL_MS);
       schedule(errorDelay);
@@ -272,10 +279,10 @@ export function watchForArtifacts(fs: HostFileSystem, paths: string[], onPresent
       onPresent();
       return;
     }
-    schedule(Math.max(WATCH_POLL_MS, Date.now() - started));
+    schedule(Math.max(pollMs, Date.now() - started));
   };
 
-  schedule(WATCH_POLL_MS);
+  schedule(pollMs);
   return () => {
     stopped = true;
     if (timer) clearTimeout(timer);
@@ -339,6 +346,7 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
               ctx.agents.resolve(spec.agent).host.fs,
               watched.map((d) => d.path),
               () => void session.cancel(),
+              ctx.artifactWatchPollMs,
             )
           : undefined;
       let stopReason: string;

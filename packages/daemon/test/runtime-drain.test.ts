@@ -1,7 +1,8 @@
 /** Actual authenticated maintenance drains over production stores/models; no install or native proof. */
 import { afterEach, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { RuntimeDrainResultSchema, RuntimeMaintenanceResultSchema } from "@orca/protocol";
+import { request } from "node:http";
+import { RuntimeDrainResultSchema, RuntimeMaintenanceResultSchema, type ResponseMessage } from "@orca/protocol";
 import { barrier, runtimeMaintenanceFixture } from "./runtime-maintenance-fixture.js";
 
 const closers: (() => Promise<void>)[] = [];
@@ -17,6 +18,21 @@ async function fixture(gated = false) {
   const defer = (token = "update-owner") => f.call("maintenance.runtime", { action: "defer", token, target: f.target });
   return { ...f, drain, defer };
 }
+/**
+ * The fixture's `call` over node:http. While setTimeout is faked, fetch's client stalls for about
+ * six seconds on every other request, so a test that fakes it makes its calls this way.
+ */
+const callOverHttp = (url: string, token: string, method: string, params: unknown) =>
+  new Promise<ResponseMessage>((resolve, reject) => {
+    const req = request(`${url}/rpc`, { method: "POST", headers: { authorization: `Bearer ${token}` } }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("end", () => resolve(JSON.parse(Buffer.concat(chunks).toString()) as ResponseMessage));
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    req.end(JSON.stringify({ kind: "request", id: 1, method, params }));
+  });
 it("seals a no-work drain, retains exact ownership on repetition and exposes existing idle proof", async () => {
   const f = await fixture();
   const result = await f.drain();
@@ -151,15 +167,44 @@ it("bounds stuck inventory reads, allows defer, and never seals from a late comp
     settled.release();
     return ids;
   });
+  const maintenance = (action: "drain" | "defer") =>
+    callOverHttp(f.daemon.url, f.owner.token, "maintenance.runtime", {
+      action,
+      token: "update-owner",
+      target: f.target,
+    });
+  const begin = vi.spyOn(f.runtime.activity, "beginDrain");
+  // beginDrain and the bound's timer are set in one synchronous run, so once the drain's
+  // beginDrain has been called the bound is armed. setImmediate and Date stay real.
+  const untilArmed = async (drains: number) => {
+    const giveUp = Date.now() + 10_000;
+    while (begin.mock.calls.length < drains) {
+      if (Date.now() > giveUp) throw new Error("the drain never began");
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+  // The read stays stuck, so the one-second bound is what ends each drain. Fake only the timers
+  // that bound sets and clears, and advance them by the bound once the drain has armed it.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
-    for (let i = 0; i < 2; i++)
-      expect(await f.drain()).toMatchObject({
+    for (let i = 1; i <= 2; i++) {
+      const draining = maintenance("drain");
+      let ended = false;
+      const end = () => void (ended = true);
+      void draining.then(end, end);
+      await untilArmed(i);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(ended).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await draining).toMatchObject({
         ok: true,
         result: { outcome: "draining", active: ["unavailable"], truncated: true },
       });
+    }
     expect(observe).toHaveBeenCalledTimes(1);
-    expect(await f.defer()).toMatchObject({ ok: true, result: { outcome: "released" } });
+    expect(await maintenance("defer")).toMatchObject({ ok: true, result: { outcome: "released" } });
   } finally {
+    vi.useRealTimers();
     finish.release();
     await settled.promise;
   }

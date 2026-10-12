@@ -25,16 +25,22 @@ afterEach(async () => {
   for (const fixture of fixtures.splice(0)) await fixture.close();
 });
 
+// The candidate depends only on the checked-in example, which no test here changes, so it is composed once.
+let composed;
+const release = () =>
+  (composed ??= composePluginRelease({ plugins: [{ entry: source, id: "m10-owned", schemaVersion: 1 }] }));
+
 async function prepare() {
-  const f = await ProductionFixture.create((fixture) => fixtures.push(fixture));
-  await f.stop();
-  const candidate = await composePluginRelease({ plugins: [{ entry: source, id: "m10-owned", schemaVersion: 1 }] });
+  // The owned launcher below is this test's only daemon. The fixture supplies the directory, its
+  // workflows and the persistent identity; nothing in it needs a stock daemon started and stopped first.
+  const f = await ProductionFixture.create((fixture) => fixtures.push(fixture), { boot: false });
+  const candidate = await release();
   await mkdir(join(f.dir, "plugins"));
   await writeFile(join(f.dir, "plugins/m10-owned.mjs"), candidate.bundles[0].bytes);
   await writeFile(join(f.dir, "plugin-release.json"), candidate.manifestBytes);
   await writeFile(join(f.dir, "workflows/m10.yaml"), await readFile("examples/m10-plugin/workflow.yaml"));
   const config = JSON.parse(await readFile(join(f.dir, "orca.config.yaml"), "utf8"));
-  // Keep the existing isolated stores, auth directory and persistent synthetic identity/grants.
+  // Keep the fixture's auth directory and persistent synthetic identity/grants; the launcher creates the stores.
   config.plugins = ["./plugins/m10-owned.mjs"];
   await writeFile(join(f.dir, "orca.config.yaml"), JSON.stringify(config));
   // Independently maintained harness-only composition: literal pin, no runtime candidate reads.
@@ -71,7 +77,7 @@ async function boot(f, launcher, value) {
   const capture = (chunk) => (output = (output + chunk.toString()).slice(-32768));
   child.stdout.on("data", capture);
   child.stderr.on("data", capture);
-  f.cleanup.push(() => f.stop(child));
+  f.daemons.push(() => f.stop(child));
   f.processes.push({ child, output: () => output });
   await until(
     async () => {
@@ -181,7 +187,7 @@ it("refuses tampered installed bundle bytes in the compiled adapter before readi
     env: { PATH: process.env.PATH ?? "", LANG: "C.UTF-8" },
     stdio: "pipe",
   });
-  f.cleanup.push(() => f.stop(child));
+  f.daemons.push(() => f.stop(child));
   let output = "";
   child.stderr.on("data", (chunk) => (output = (output + chunk.toString()).slice(-32768)));
   const code = await new Promise((resolve, reject) => {

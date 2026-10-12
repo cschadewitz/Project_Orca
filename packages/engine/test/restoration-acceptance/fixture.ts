@@ -1,9 +1,8 @@
 /** Synthetic fixtures only. Every config, plugin, input and store belongs to a fresh test root. */
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
-import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const canaries = ["fixture-credential-canary-396", "fixture-sensitive-input-396"];
 export const pluginKinds = [
@@ -42,6 +41,15 @@ export interface Command {
   owner: string;
   authority?: AuthorityMode;
   verification?: VerificationMode;
+  /** The parent's measurement of the Node executable, so the worker need not hash it again. */
+  runtime?: RuntimeIdentity;
+}
+/** The Node executable the parent runs on, as it measured it. */
+export interface RuntimeIdentity {
+  execPath: string;
+  size: number;
+  mtimeMs: number;
+  sha256: string;
 }
 export interface Receipt {
   runId: string;
@@ -100,6 +108,45 @@ export interface VerificationRecord {
 }
 export const containsCanary = (value: unknown): boolean =>
   canaries.some((canary) => (JSON.stringify(value) ?? "").includes(canary));
+
+let measuredRuntime: Promise<RuntimeIdentity> | undefined;
+/**
+ * Hash the Node executable once per process. It is about 90 MB (a third of a second to read
+ * and hash), and every fixture records its hash as a dependency identity and every worker
+ * reports it, so hashing it each time added a large share to each launch.
+ */
+export function runtimeIdentity(): Promise<RuntimeIdentity> {
+  measuredRuntime ??= (async () => {
+    // Size, mtime and bytes from one open file, so they describe the same executable.
+    const file = await open(process.execPath);
+    try {
+      const { size, mtimeMs } = await file.stat();
+      const sha256 = createHash("sha256")
+        .update(await file.readFile())
+        .digest("hex");
+      return { execPath: process.execPath, size, mtimeMs, sha256 };
+    } finally {
+      await file.close();
+    }
+  })();
+  return measuredRuntime;
+}
+
+/**
+ * The SHA-256 of this process's Node executable. When the parent's measurement still
+ * describes the file this process runs (same path, size and mtime) it is reused; anything
+ * else is hashed here, so a changed or substituted executable is never reported as the
+ * parent's.
+ */
+export async function runtimeSha256(expected?: RuntimeIdentity): Promise<string> {
+  if (expected?.execPath === process.execPath) {
+    const current = await stat(process.execPath).catch(() => undefined);
+    if (current?.size === expected.size && current.mtimeMs === expected.mtimeMs) return expected.sha256;
+  }
+  return createHash("sha256")
+    .update(await readFile(process.execPath))
+    .digest("hex");
+}
 
 export async function makeFixture(kind: PluginKind = "builtin"): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), "orca-restoration-acceptance-396-"));
@@ -222,9 +269,8 @@ export async function prepareJevFixture(
   if (fixture.kind === "builtin") throw new Error("Prepare JEV from a fixture with a plugin entry");
   await configure(fixture, era);
   await writeFile(join(fixture.root, "jev-settings.json"), JSON.stringify({ era, failure }), { mode: 0o600 });
-  const adapterModule = pathToFileURL(
-    fileURLToPath(new URL("../../../integrations/src/jev/plugin.ts", import.meta.url)),
-  ).href;
+  // Imported here, not at the top: worker.ts bundles this file, and launch.ts needs @orca/testing.
+  const { jevAdapter: adapterModule } = (await import("./launch.js")).workerLaunch();
   const source = `import {createRestorableJevEvalPlugin} from ${JSON.stringify(adapterModule)};
 import {appendFile,readFile} from "node:fs/promises";
 const data=${JSON.stringify(jevFixtureData)};
@@ -400,9 +446,7 @@ export default {name:identity.id,register(api){
   await writeFile(join(fixture.root, "plugin.mjs"), firstSource);
   await writeFile(join(fixture.root, "second.mjs"), secondSource);
   await writeFile(join(fixture.root, "legacy.mjs"), 'export default {name:"legacy",register(){}};\n');
-  const dependencyIdentity = `sha256:${createHash("sha256")
-    .update(await readFile(process.execPath))
-    .digest("hex")}`;
+  const dependencyIdentity = `sha256:${(await runtimeIdentity()).sha256}`;
   const identity: FixtureIdentity = {
     id: "fixture-396",
     schemaVersion: 1,

@@ -1,50 +1,40 @@
 /** Golden plans and fail-closed probes over isolated real Git histories, without launching runtime fixtures. */
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { canonical, digest, git, parseChanges, snapshot, validPath } from "../ci-shadow/git.js";
+import { canonical, digest, git, identities, parseChanges, snapshot, validPath } from "../ci-shadow/git.js";
 import { consumers, coveredInventory, graph, imports, MANIFEST_PATH, TOOL_PATHS } from "../ci-shadow/graph.js";
 import { createPlan, loadManifest, validateExecution, validatePlan } from "../ci-shadow/selector.js";
 import { executionPlan, runSelected, selectedResult } from "../ci-shadow/execute.js";
+import { createGitFixture } from "./git-fixture.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const goldens = JSON.parse(readFileSync(new URL("./ci-shadow/golden.v1.json", import.meta.url), "utf8"));
 const ownedManifest = loadManifest();
 // Preserve historical island regressions alongside the separate package-policy suite.
 delete ownedManifest.packagePolicy;
+let fixture;
 let directory;
 let base;
 let manifest;
-const command = (...args) => git(directory, args).toString().trim();
-const write = (path, content) => {
-  mkdirSync(dirname(join(directory, path)), { recursive: true });
-  writeFileSync(join(directory, path), content);
-};
-const save = () => {
-  command("add", "-A");
-  command("commit", "-qm", "synthetic selector scenario");
-  return command("rev-parse", "HEAD");
-};
+const command = (...args) => fixture.command(...args);
+const write = (path, content) => fixture.write(path, content);
+const save = () => fixture.save();
 const wording = (path, text) =>
   path.endsWith("/src/ui/format-time.ts")
     ? text.replace('return "just now";', 'return "a moment ago";')
     : text.replace('"never renders three units"', '"uses two units"');
 
-const reset = () => {
-  command("checkout", "-q", "--detach", base);
-  command("clean", "-fdq");
-};
+const reset = () => fixture.reset(base);
 const plan = (head = command("rev-parse", "HEAD"), options = {}) =>
   createPlan({ repo: directory, base, head, candidate: head, ...options }, manifest);
 
 beforeAll(() => {
-  directory = mkdtempSync(join(tmpdir(), "orca-ci-shadow-"));
-  command("init", "-q");
-  command("config", "user.name", "Selector fixture");
-  command("config", "user.email", "selector-fixture@example.invalid");
+  fixture = createGitFixture({ prefix: "orca-ci-shadow-", message: "synthetic selector scenario" });
+  directory = fixture.directory;
   const paths = new Set([
     ...ownedManifest.edges
       .flatMap((edge) => [edge.from, edge.to])
@@ -101,7 +91,7 @@ beforeAll(() => {
   base = save();
 }, 30_000);
 
-afterAll(() => rmSync(directory, { recursive: true, force: true }));
+afterAll(() => fixture?.remove());
 
 const eligibleCandidate = () => {
   reset();
@@ -712,6 +702,32 @@ it("rejects unavailable/abbreviated bases and unrelated candidates without a gre
   }
   expect(failure?.status).toBe(1);
   expect(failure?.stdout).toBe("");
+});
+
+it("accepts only present full commit ids inside the candidate's history, and caches snapshots by full id alone", () => {
+  reset();
+  write("probe/one.txt", "one\n");
+  const one = save();
+  reset();
+  write("probe/two.txt", "two\n");
+  const two = save();
+  const tree = command("rev-parse", `${base}^{tree}`);
+  expect(identities(directory, base, one, one)).toEqual({ base, head: one, mergeBase: base, candidate: one });
+  expect(() => identities(directory, "f".repeat(40), one, one)).toThrow("commit_unavailable");
+  expect(() => identities(directory, base, one, tree)).toThrow("commit_unavailable");
+  expect(() => identities(directory, base, one, one.slice(0, 12))).toThrow("identity_requires_full_commit_sha");
+  // Siblings: the cheap whole-history proof must not stand in for the strict ancestry check.
+  expect(() => identities(directory, base, one, two)).toThrow(/merge-base --is-ancestor/);
+  const first = snapshot(directory, one);
+  expect(snapshot(directory, one)).toBe(first);
+  // A name that can move is read afresh every time; only a full commit id is remembered.
+  command("checkout", "-q", "--detach", one);
+  const atOne = snapshot(directory, "HEAD");
+  command("checkout", "-q", "--detach", two);
+  const atTwo = snapshot(directory, "HEAD");
+  expect([atOne.files.has("probe/one.txt"), atOne.files.has("probe/two.txt")]).toEqual([true, false]);
+  expect([atTwo.files.has("probe/one.txt"), atTwo.files.has("probe/two.txt")]).toEqual([false, true]);
+  expect(atTwo.tree).toBe(command("rev-parse", `${two}^{tree}`));
 });
 
 it("includes base-only merge-candidate changes and rejects reuse on a moved base", () => {

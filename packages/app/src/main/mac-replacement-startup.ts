@@ -45,6 +45,8 @@ export function createNativeMacReplacementStartup(options: {
   const storage = loadNativeMacReplacementStorage(options.root);
   return createMacReplacementStartup(options.root, {
     ...storage,
-    keys: createSafeStorageKeyAdapter(options.safeStorage),
+    // Mac replacement keys are macOS keychain keys. The adapter's default platform would
+    // also accept Windows' safeStorage, so anywhere else the keys stay unavailable.
+    keys: createSafeStorageKeyAdapter(options.safeStorage, process.platform === "darwin" ? "darwin" : "unsupported"),
   });
 }

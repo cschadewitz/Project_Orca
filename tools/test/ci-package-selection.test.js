@@ -1,7 +1,6 @@
 /** Package-policy regression probes over real Git histories: package closure, non-import triggers and exact runtime reports. */
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { git } from "../ci-shadow/git.js";
@@ -9,22 +8,13 @@ import { TOOL_PATHS, MANIFEST_PATH } from "../ci-shadow/graph.js";
 import { createPlan, loadManifest, validatePlan } from "../ci-shadow/selector.js";
 import { executionPlan, runSelected } from "../ci-shadow/execute.js";
 import { INTENTIONAL_SKIPS } from "../ci-shadow/evidence.js";
+import { createGitFixture } from "./git-fixture.js";
 const root = fileURLToPath(new URL("../../", import.meta.url));
-let repo, base, manifest;
-const command = (...args) => git(repo, args).toString().trim();
-const write = (path, content) => {
-  mkdirSync(dirname(join(repo, path)), { recursive: true });
-  writeFileSync(join(repo, path), content);
-};
-const save = () => {
-  command("add", "-A");
-  command("commit", "-qm", "package fixture");
-  return command("rev-parse", "HEAD");
-};
-const reset = () => {
-  command("checkout", "--detach", base);
-  command("clean", "-fdq");
-};
+let fixture, repo, base, manifest;
+const command = (...args) => fixture.command(...args);
+const write = (path, content) => fixture.write(path, content);
+const save = () => fixture.save();
+const reset = () => fixture.reset(base);
 const candidate = () => {
   const head = save();
   const merge = git(repo, ["commit-tree", `${head}^{tree}`, "-p", base, "-p", head], "candidate\n")
@@ -34,10 +24,8 @@ const candidate = () => {
   return { repo, base, head, candidate: merge };
 };
 beforeAll(() => {
-  repo = mkdtempSync(join(tmpdir(), "orca-ci-packages-"));
-  command("init", "-q");
-  command("config", "user.name", "CI fixture");
-  command("config", "user.email", "ci@example.invalid");
+  fixture = createGitFixture({ prefix: "orca-ci-packages-", message: "package fixture" });
+  repo = fixture.directory;
   manifest = loadManifest();
   manifest.edges = [];
   manifest.runners = [];
@@ -63,7 +51,7 @@ beforeAll(() => {
   write("docs/daemon-security.md", "# Consumed matrix\n");
   base = save();
 });
-afterAll(() => rmSync(repo, { recursive: true, force: true }));
+afterAll(() => fixture?.remove());
 
 it.each([24])("selects engine plus downstream CLI domains on Node %s, without unrelated app tests", (node) => {
   reset();

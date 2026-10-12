@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./child-bundle": {
+      "types": "./dist/child-bundle.d.ts",
+      "import": "./dist/child-bundle.js"
     }
   },
   "files": [

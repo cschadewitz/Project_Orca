@@ -1,6 +1,12 @@
 import { processFixture, type AdmissionKind, type Boundary } from "./fixture.js";
 
-const [dir, kind, stopAt, mode] = process.argv.slice(2) as [string, AdmissionKind, Boundary | "none", string];
+const [dir, kind, stopAt, mode, contenderLockMs] = process.argv.slice(2) as [
+  string,
+  AdmissionKind,
+  Boundary | "none",
+  string,
+  string?,
+];
 process.on("disconnect", () => process.exit(0));
 const send = (type: string, data?: unknown) =>
   new Promise<void>((resolve, reject) => {
@@ -37,7 +43,12 @@ try {
     if (stopAt === "claimed") await gate("boundary", { name: "claimed" });
     // Both callers entered claim on an empty ledger. Delay the non-owner until
     // the owner holds the operation mutex, then prove bounded live contention.
-    if (mode === "race" && !value.fresh) await gate("contender");
+    if (mode === "race" && !value.fresh) {
+      await gate("contender");
+      // Its catalog mutex is behind it. From here it waits only on the owner's operation lock,
+      // which a test that wants the bounded refusal holds until that refusal arrives.
+      if (contenderLockMs !== undefined) f.lockBudget.timeoutMs = Number(contenderLockMs);
+    }
     return value;
   };
   await gate("ready", { operations: await f.store.batch(), runs: await f.orc.listRuns(), starts: f.starts() });

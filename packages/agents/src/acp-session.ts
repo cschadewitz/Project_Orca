@@ -56,6 +56,12 @@ export interface OpenSessionOptions {
   onPermission?: (info: { toolCallId?: string; title: string; decision: string }) => void;
   handshakeTimeoutMs?: number;
   /**
+   * How long closing the session waits, after each of SIGTERM and SIGKILL, for the agent
+   * process to exit. Defaults to two seconds. A test whose real child ignores SIGTERM
+   * shortens it instead of waiting the whole grace out.
+   */
+  exitGraceMs?: number;
+  /**
    * How long a turn may keep running after `session/cancel` before the agent is
    * treated as wedged and its process killed. Overrides `agent.cancelGraceMs`.
    */
@@ -216,7 +222,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   const closed = conn.closed.then(() => undefined);
   void closed.then(() => activeTurn?.abort.abort("agent connection closed"));
   void proc.exited.then(() => activeTurn?.abort.abort("agent process exited"));
-  const cleanupProcess = processCleanup(proc);
+  const cleanupProcess = processCleanup(proc, opts.exitGraceMs);
   /** Startup failure, close and cancellation all share one bounded cleanup. */
   let terminating: Promise<void> | undefined;
   const terminate = (reason?: unknown): Promise<void> => {

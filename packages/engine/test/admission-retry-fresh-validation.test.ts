@@ -241,12 +241,12 @@ async function admissionFixture() {
   await f.ready();
   const capture = vi.fn(f.generations.captureLaunch);
   const directAuthority = { ...f.authority, authorize: vi.fn(async () => {}) };
-  const services = () => {
+  const services = (lockTimeoutMs = 2_000) => {
     const store = new FileRetryClaimStore({
       storeDir: dir,
       execution: f.stores.execution,
       faults,
-      lockTimeoutMs: 2_000,
+      lockTimeoutMs,
     });
     const claims = new RegisteredRetryClaims(store, faults);
     const direct = new DirectAdmissionService({
@@ -425,7 +425,9 @@ describe.each(["direct", "request"] as const)("fresh %s admission", (kind) => {
     "bounds a held-owner contender and rechecks authority on same-key retry (revoked=%s)",
     async (revoked) => {
       const f = await admissionFixture();
-      const other = f.services();
+      // Only the contender's wait is shortened: it spends all of it, because the owner is held
+      // until it gives up. The owner's service keeps the fixture's two seconds.
+      const other = f.services(150);
       let entered!: () => void;
       let release!: () => void;
       const ready = new Promise<void>((resolve) => {
@@ -435,7 +437,8 @@ describe.each(["direct", "request"] as const)("fresh %s admission", (kind) => {
         release = resolve;
       });
       // Fresh validation succeeds. Hold prepare under the operation lock until the
-      // contender exhausts the fixture's unchanged two-second acquisition budget.
+      // contender exhausts its own acquisition budget (150 ms for `other`; the owner's service
+      // keeps the fixture's two seconds).
       f.capture.mockImplementationOnce(f.generations.captureLaunch).mockImplementationOnce(async (selection) => {
         entered();
         await held;

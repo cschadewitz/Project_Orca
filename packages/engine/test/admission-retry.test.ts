@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { OrcaError } from "@orca/core";
 import { FileExecutionStore } from "@orca/store";
@@ -9,8 +9,11 @@ import { FileRetryClaimStore } from "../../store/src/admission-retry-store.js";
 import type { RetryContext, RetryOperation, RetryRecord } from "../../core/src/model/admission-retry.js";
 import { RegisteredRetryClaims, canonicalJson } from "../src/admission-retry.js";
 import { RequestSubmissionService } from "../src/program/request-submission.js";
+import { childCommand } from "./child-command.js";
 import { submissionFixture } from "./request-submission-fixture.js";
 
+/** The other process of the one test below that starts one: it claims a key and runs its operation. */
+const childEntry = new URL("./admission-retry-child.ts", import.meta.url);
 const directories: string[] = [];
 afterEach(async () => {
   for (const dir of directories.splice(0)) await rm(dir, { recursive: true, force: true });
@@ -215,29 +218,10 @@ describe("durable registered retry claims", () => {
   });
   it("separate processes racing a key recover one bound operation after owner death", async () => {
     const { dir } = await fixture();
-    const source = `
-      import { FileRetryClaimStore } from ${JSON.stringify(resolve("packages/store/src/admission-retry-store.ts"))};
-      import { FileExecutionStore } from ${JSON.stringify(resolve("packages/store/src/execution-store.ts"))};
-      import { RegisteredRetryClaims } from ${JSON.stringify(resolve("packages/engine/src/admission-retry.ts"))};
-      import { OrcaError } from ${JSON.stringify(resolve("packages/core/src/errors.ts"))};
-      import { appendFile } from 'node:fs/promises';
-      const faults = { conflict: () => new OrcaError('RUN_STATE','conflict'), limit: () => new OrcaError('RUN_STATE','limit') };
-      const store = new FileRetryClaimStore({storeDir: ${JSON.stringify(dir)}, execution: new FileExecutionStore(${JSON.stringify(dir)}), faults, lockTimeoutMs: 2000});
-      const claims = new RegisteredRetryClaims(store, faults);
-      const operation = claims.register({kind:'run.admit',canonicalize:c=>c,
-        prepare:async(c,ctx)=>{ await ctx.bind({id:ctx.operationId}); await appendFile(${JSON.stringify(join(dir, "effects"))},ctx.operationId+'\\n'); if(process.env.CRASH==='yes') process.exit(17); return {id:ctx.operationId}; },
-        recover:async(c,ctx)=>({id:(await ctx.readBinding()).id})});
-      const result = await claims.execute(operation,{value:'same'},{idempotencyKey:'key'},{principalId:'alice',workspaceId:'workspace',authorize:async()=>{}});
-      await appendFile(process.env.RESULT_FILE, JSON.stringify(result));
-    `;
-    const worker = join(dir, "worker.mts");
-    await writeFile(worker, source);
     const run = (crash = false) =>
       new Promise<{ code: number | null; output: string }>((done, reject) => {
         const resultFile = join(dir, `result-${Math.random()}`);
-        const child = spawn(process.execPath, ["--import", resolve("node_modules/tsx/dist/loader.mjs"), worker], {
-          env: { ...process.env, CRASH: crash ? "yes" : "no", RESULT_FILE: resultFile },
-        });
+        const child = spawn(process.execPath, childCommand(childEntry, [dir, resultFile, ...(crash ? ["crash"] : [])]));
         let output = "",
           errors = "";
         child.stdout.on("data", (data: Buffer) => {

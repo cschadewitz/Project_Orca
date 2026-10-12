@@ -9,8 +9,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { Client, SdkHttpError, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { expect, type TestContext } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, type TestContext } from "vitest";
 import {
+  PROTOCOL_VERSION,
   OperatorMutationContracts,
   OperatorDiscoverySchema,
   OperatorBoundaryPageResultSchema,
@@ -63,6 +64,138 @@ export async function until<T>(read: () => Promise<T>, ready: (value: T) => bool
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+/**
+ * Credential administration and the private HTTP bridges of every fixture in a test file, served by
+ * one compiled process instead of one fresh `node -e` for each credential change and each HTTP peer.
+ * It is told what to do, one JSON line per request, and runs the same production modules the per-call
+ * scripts did: the narrow auth import and the production `createOperatorHttpHandler`.
+ */
+const helperSource = `import { createServer } from 'node:http';
+  import { createInterface } from 'node:readline';
+  import { openAuthDirectory } from ${JSON.stringify(moduleUrl("packages/daemon/dist/auth/bootstrap.js"))};
+  import { createOperatorHttpHandler } from ${JSON.stringify(moduleUrl("packages/integrations/dist/mcp/transport.js"))};
+  const bridges = new Map(); let bridgeCount = 0;
+  const operations = {
+    async administer({action, value, dir}) {
+      const auth = openAuthDirectory(dir);
+      return action === 'issue' ? await auth.credentials.issue(value) : await auth.credentials.revoke(value);
+    },
+    async bridge({daemonEndpoint}) {
+      const handler = createOperatorHttpHandler({daemonEndpoint, origin: 'https://acceptance.invalid'});
+      const server = createServer(async (req, res) => { try {
+        const chunks = []; for await (const chunk of req) chunks.push(chunk);
+        const body = Buffer.concat(chunks); const method = req.method;
+        const request = new Request('https://acceptance.invalid' + req.url, {method, headers: req.headers, ...(body.length ? {body} : {})});
+        const result = await handler(request); res.writeHead(result.status, Object.fromEntries(result.headers)); res.end(Buffer.from(await result.arrayBuffer()));
+      } catch { res.writeHead(500); res.end(); } });
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const id = ++bridgeCount; bridges.set(id, server);
+      return {id, port: server.address().port};
+    },
+    async closeBridge({bridge}) {
+      const server = bridges.get(bridge); bridges.delete(bridge);
+      if (!server) return;
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+  for await (const line of createInterface({input: process.stdin})) {
+    const {id, op, args} = JSON.parse(line);
+    operations[op](args).then(
+      (result) => process.stdout.write(JSON.stringify({id, result: result ?? null}) + '\\n'),
+      () => process.stdout.write(JSON.stringify({id, failed: true}) + '\\n'));
+  }
+  for (const server of bridges.values()) { server.closeAllConnections(); server.close(); }`;
+
+/** The failures say what was being asked, never why: an issue's reply carries a token. */
+const helperFailures = {
+  administer: "Synthetic credential administration failed",
+  bridge: "Compiled MCP HTTP bridge failed",
+  closeBridge: "Compiled MCP HTTP bridge did not close",
+} as const;
+type HelperOperation = keyof typeof helperFailures;
+
+class Helper {
+  private readonly child = spawn(process.execPath, ["--input-type=module", "-e", helperSource], {
+    // Not a fixture directory: the fixture that started this process is closed, and deleted, before the file ends.
+    cwd: root,
+    env: environment(),
+    stdio: "pipe",
+  });
+  private readonly pending = new Map<number, { settle: (reply: HelperReply) => void }>();
+  private requests = 0;
+  private buffer = "";
+
+  constructor() {
+    this.child.stdout.on("data", (chunk: Buffer) => {
+      this.buffer += chunk.toString();
+      for (let end = this.buffer.indexOf("\n"); end >= 0; end = this.buffer.indexOf("\n")) {
+        const reply = JSON.parse(this.buffer.slice(0, end)) as HelperReply;
+        this.buffer = this.buffer.slice(end + 1);
+        this.pending.get(reply.id)?.settle(reply);
+      }
+    });
+    this.child.stderr.resume();
+    // A write to a helper that has exited fails here; `gone` is what settles the requests waiting on it.
+    this.child.stdin.on("error", () => undefined);
+    const gone = () => {
+      for (const { settle } of this.pending.values()) settle({ id: 0, exited: true });
+    };
+    this.child.once("exit", gone);
+    this.child.once("error", gone);
+  }
+
+  get running() {
+    return this.child.exitCode === null && this.child.signalCode === null;
+  }
+
+  request<T>(operation: HelperOperation, args: object): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const id = ++this.requests;
+      const timer = setTimeout(() => finish(new Error(`${helperFailures[operation]} (timed out)`)), 15_000);
+      const finish = (error?: Error, value?: unknown) => {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        if (error) reject(error);
+        else resolve(value as T);
+      };
+      this.pending.set(id, {
+        settle: (reply) =>
+          reply.exited
+            ? finish(new Error(`${helperFailures[operation]} (the helper process exited)`))
+            : reply.failed
+              ? finish(new Error(helperFailures[operation]))
+              : finish(undefined, reply.result),
+      });
+      this.child.stdin.write(`${JSON.stringify({ id, op: operation, args })}\n`, (error) => {
+        if (error) finish(new Error(helperFailures[operation]));
+      });
+    });
+  }
+
+  async shutdown() {
+    if (!this.running) return;
+    const exited = new Promise<void>((resolve) => this.child.once("exit", () => resolve()));
+    this.child.stdin.end();
+    const timer = setTimeout(() => this.child.kill("SIGKILL"), 3000);
+    try {
+      await exited;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+type HelperReply = { id: number; result?: unknown; failed?: true; exited?: true };
+
+/** Started by the first fixture that needs it and shut down when the test file ends; module state is per file. */
+let helper: Helper | undefined;
+const sharedHelper = () => (helper?.running ? helper : (helper = new Helper()));
+afterAll(async () => {
+  const done = helper;
+  helper = undefined;
+  await done?.shutdown();
+});
+
 export interface Peer {
   client: Client;
   target: OperatorTarget;
@@ -73,19 +206,35 @@ export interface Peer {
 
 const peerProgress = new WeakMap<Client, FixtureProgress>();
 
+/** What a test needs in place before the first daemon starts, so it never boots one only to stop it again. */
+export interface CreateOptions {
+  /** Edit the disposable assets (config, workflows, repositories) while no daemon is running. */
+  configure?(dir: string): Promise<void>;
+  /** Source for `--import` into the first daemon; derived from the directory the fixture just created. */
+  preload?(dir: string): string;
+  /** A new process for every credential change, for the one test that asserts each was a distinct process. */
+  freshAdmin?: boolean;
+  /** Start no daemon, for a test that launches its own. Issuing the owner credential needs none. */
+  boot?: boolean;
+}
+
 export class ProductionFixture {
   readonly progress = new FixtureProgress();
   private failurePublished = false;
+  /** Peers, sockets, proxies and bridges: nothing but connections to a daemon, so they close together and first. */
   readonly cleanup: (() => Promise<unknown>)[] = [];
+  /** Daemons, in the order they started: stopped one at a time, after every connection to them has closed. */
+  readonly daemons: (() => Promise<unknown>)[] = [];
   readonly processes: { child: ChildProcessWithoutNullStreams; output: () => string }[] = [];
   readonly tokenSecrets: string[] = [];
+  freshAdmin = false;
   dir = "";
   endpoint = "";
   socketUrl = "";
   token = "";
   daemon!: ChildProcessWithoutNullStreams;
 
-  static async create(onAcquired?: (fixture: ProductionFixture) => void) {
+  static async create(onAcquired?: (fixture: ProductionFixture) => void, options: CreateOptions = {}) {
     for (const file of [
       cli,
       join(root, "packages/integrations/dist/mcp/transport.js"),
@@ -98,11 +247,13 @@ export class ProductionFixture {
       }
     }
     const f = new ProductionFixture();
+    f.freshAdmin = options.freshAdmin ?? false;
     f.dir = await mkdtemp(join(tmpdir(), "orca-mcp-production-"));
     try {
       onAcquired?.(f);
       await f.prepare();
-      await f.boot();
+      await options.configure?.(f.dir);
+      if (options.boot !== false) await f.boot(options.preload?.(f.dir));
       // Persistent non-bootstrap identity survives another daemon's bootstrap rotation.
       f.token = (await f.issue({ principal: "acceptance-owner", preset: "owner" })).token;
       return f;
@@ -219,7 +370,7 @@ export class ProductionFixture {
       );
   }
 
-  private process(args: string[], env = environment()) {
+  private process(args: string[], env = environment(), owner = this.cleanup) {
     const child = spawn(process.execPath, args, { cwd: this.dir, env, stdio: "pipe" });
     let output = "";
     const capture = (chunk: Buffer) => {
@@ -228,7 +379,7 @@ export class ProductionFixture {
     child.stdout.on("data", capture);
     child.stderr.on("data", capture);
     this.processes.push({ child, output: () => output });
-    this.cleanup.push(() => this.stop(child));
+    owner.push(() => this.stop(child));
     return { child, output: () => output };
   }
 
@@ -251,15 +402,19 @@ export class ProductionFixture {
     return this.progress.measure("daemon.boot", () => this.bootDaemon(testPreload));
   }
   private async bootDaemon(testPreload?: string) {
-    const proc = this.process([
-      ...(testPreload ? ["--import", `data:text/javascript,${encodeURIComponent(testPreload)}`] : []),
-      cli,
-      "serve",
-      "--config",
-      join(this.dir, "orca.config.yaml"),
-      "--port",
-      "0",
-    ]);
+    const proc = this.process(
+      [
+        ...(testPreload ? ["--import", `data:text/javascript,${encodeURIComponent(testPreload)}`] : []),
+        cli,
+        "serve",
+        "--config",
+        join(this.dir, "orca.config.yaml"),
+        "--port",
+        "0",
+      ],
+      environment(),
+      this.daemons,
+    );
     await until(
       async () => {
         if (proc.child.exitCode !== null)
@@ -280,10 +435,13 @@ export class ProductionFixture {
   /** Admin operations affect only this fixture's synthetic auth directory, in another compiled process. */
   private admin(action: "issue" | "revoke", value: unknown): Promise<unknown> {
     return this.progress.measure(action === "issue" ? "credential.issue" : "credential.revoke", () =>
-      this.administer(action, value),
+      this.freshAdmin
+        ? this.administerFresh(action, value)
+        : sharedHelper().request("administer", { action, value, dir: join(this.dir, "auth") }),
     );
   }
-  private async administer(action: "issue" | "revoke", value: unknown): Promise<unknown> {
+  /** One new process for this one operation: what the shared helper replaces, kept for the test that counts them. */
+  private async administerFresh(action: "issue" | "revoke", value: unknown): Promise<unknown> {
     const code = `import { openAuthDirectory } from ${JSON.stringify(moduleUrl("packages/daemon/dist/auth/bootstrap.js"))};
       let text = ''; for await (const chunk of process.stdin) text += chunk;
       const {action, value, dir} = JSON.parse(text); const auth = openAuthDirectory(dir);
@@ -422,27 +580,14 @@ export class ProductionFixture {
       await client.connect(wire);
     } else {
       // An isolated loopback private bridge supplies the fixed HTTPS origin; no TLS bypass,
-      // fake fetch, fake backend or altered production handler is involved.
-      const code = `import { createServer } from 'node:http';
-        import { createOperatorHttpHandler } from ${JSON.stringify(moduleUrl("packages/integrations/dist/mcp/transport.js"))};
-        const handler = createOperatorHttpHandler({daemonEndpoint: process.env.ACCEPTANCE_DAEMON, origin: 'https://acceptance.invalid'});
-        const server = createServer(async (req, res) => { try {
-          const chunks = []; for await (const chunk of req) chunks.push(chunk);
-          const body = Buffer.concat(chunks); const method = req.method;
-          const request = new Request('https://acceptance.invalid' + req.url, {method, headers: req.headers, ...(body.length ? {body} : {})});
-          const result = await handler(request); res.writeHead(result.status, Object.fromEntries(result.headers)); res.end(Buffer.from(await result.arrayBuffer()));
-        } catch { res.writeHead(500); res.end(); } });
-        server.listen(0, '127.0.0.1', () => console.log('BRIDGE ' + server.address().port));`;
-      const proc = this.process(["--input-type=module", "-e", code], { ...environment(), ACCEPTANCE_DAEMON: endpoint });
-      const ready = await until(
-        async () => {
-          if (proc.child.exitCode !== null) throw new Error("Compiled MCP HTTP bridge exited");
-          return proc.output();
-        },
-        (text) => /BRIDGE \d+/.test(text),
-        "MCP private bridge",
+      // fake fetch, fake backend or altered production handler is involved. It is a server
+      // of its own, in the helper process, that closes with the peer.
+      const bridges = sharedHelper();
+      const bridge = await bridges.request<{ id: number; port: number }>("bridge", { daemonEndpoint: endpoint });
+      this.cleanup.push(() =>
+        bridges.running ? bridges.request("closeBridge", { bridge: bridge.id }) : Promise.resolve(),
       );
-      const url = new URL(`http://127.0.0.1:${/BRIDGE (\d+)/.exec(ready)![1]}/mcp`);
+      const url = new URL(`http://127.0.0.1:${bridge.port}/mcp`);
       await client.connect(
         new StreamableHTTPClientTransport(url, { requestInit: { headers: { authorization: `Bearer ${token}` } } }),
       );
@@ -813,11 +958,43 @@ export class ProductionFixture {
     };
   }
 
+  /**
+   * What a test opens on a daemon that outlives it. Closing the scope closes exactly those peers,
+   * sockets, proxies and bridges, and leaves the daemon and its store for the next test.
+   */
+  scope(): { close(): Promise<void> } {
+    const opened = this.cleanup.length;
+    // Failure evidence belongs to the test that failed, not to the first one on this daemon.
+    this.failurePublished = false;
+    return {
+      close: async () => {
+        const errors = await this.closeConnections(opened);
+        if (errors.length) throw new AggregateError(errors, "Fixture cleanup failed");
+      },
+    };
+  }
+
+  /** A daemon shared between tests has to be answering before the next one relies on it. */
+  async healthy() {
+    if (this.daemon.exitCode !== null || this.daemon.signalCode !== null)
+      throw new Error(`The shared production daemon exited (${this.daemon.exitCode ?? this.daemon.signalCode})`);
+    const response = await this.rpc("hello", { client: "orca-production-acceptance", protocol: PROTOCOL_VERSION });
+    if (!response.ok) throw new Error(`The shared production daemon refused hello: ${response.error.code}`);
+  }
+
+  /** Each peer, socket, proxy and bridge waits on its own process or socket, so closing them one
+   *  after another only adds those waits up. */
+  private async closeConnections(from: number) {
+    const settled = await Promise.allSettled(this.cleanup.splice(from).map(async (close) => close()));
+    return settled.flatMap((result) => (result.status === "rejected" ? [result.reason as unknown] : []));
+  }
+
   async close() {
-    const errors: unknown[] = [];
-    for (const close of this.cleanup.splice(0).reverse()) {
+    // The daemons they talk to stop after all of the connections have.
+    const errors = await this.closeConnections(0);
+    for (const stop of this.daemons.splice(0).reverse()) {
       try {
-        await close();
+        await stop();
       } catch (error) {
         errors.push(error);
       }
@@ -825,6 +1002,50 @@ export class ProductionFixture {
     if (this.dir) await rm(this.dir, { recursive: true, force: true });
     if (errors.length) throw new AggregateError(errors, "Fixture cleanup failed");
   }
+}
+
+/**
+ * One daemon for the tests of a file that neither restart it nor need a store nobody has written to.
+ * The first test to ask starts it and the file's afterAll stops it; each test in between gets a scope
+ * that closes what it opened. A group of tests opts in by calling `use` inside its own describe, and a
+ * group that needs a daemon of its own simply does not.
+ */
+export function sharedFixture(options?: CreateOptions) {
+  let setup: Promise<ProductionFixture> | undefined;
+  let owner: ProductionFixture | undefined;
+  afterAll(async () => {
+    // Setup owns cleanup on rejection. A hook timeout must retain that owner and its root
+    // until setup settles, rather than racing late acquired work.
+    await setup?.then(
+      (fixture) => fixture.close(),
+      () => undefined,
+    );
+  });
+  return {
+    use(assign: (fixture: ProductionFixture) => void) {
+      let scope: ReturnType<ProductionFixture["scope"]> | undefined;
+      beforeEach(async () => {
+        setup ??= ProductionFixture.create((acquired) => {
+          owner = acquired;
+        }, options);
+        const fixture = await setup;
+        await fixture.healthy();
+        scope = fixture.scope();
+        assign(fixture);
+      });
+      afterEach(async (ctx) => {
+        const closing = scope;
+        scope = undefined;
+        try {
+          if (ctx.task.result?.state === "fail") owner?.reportFailure();
+          // A daemon that a passing test left unable to answer is that test's failure, not the next one's.
+          else await (await setup)?.healthy();
+        } finally {
+          await closing?.close();
+        }
+      });
+    },
+  };
 }
 
 export function tool(client: Client, name: string, args: object): Promise<unknown> {

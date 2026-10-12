@@ -1,9 +1,9 @@
 /** Production revision sources cross real authenticated transports without exposing protected journal fields. */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { AgentRegistry } from "@orca/agents";
 import {
   OrcaError,
@@ -64,23 +64,7 @@ function resolved(response: ResponseMessage) {
   if (value.state !== "resolved") throw new Error("revision unresolved");
   return value;
 }
-async function fixture(mode: "enabled" | "missing" | "read-only" | "loopback" | "no-identity" = "enabled") {
-  const dir = await mkdtemp(join(tmpdir(), "orca-revision-transport-"));
-  cleanups.push(() => rm(dir, { recursive: true, force: true }));
-  const stores = fileStores(dir);
-  const credentialFile = join(dir, "credentials.json");
-  const credentials = new CredentialStore({ file: credentialFile });
-  const issue = (permissions: Permission[], principal = "alice") =>
-    credentials.issue({ principal, permissions, scope: { workflows: ["revise"], runs: "owned" } });
-  const alice = await issue(required);
-  const owner = await credentials.issue({ principal: "owner", preset: "owner" });
-  const reader = await issue(["runs.read"]);
-  const answerOnly = await issue(["runs.read", "inputs.answer"]);
-  const controlOnly = await issue(["runs.read", "runs.control"]);
-  const noRead = await issue(["inputs.answer", "runs.control"]);
-  const bob = await issue(required, "bob");
-  const ownership = new OwnershipStore(join(dir, "ownership.json"));
-  const definition = parseWorkflow(`
+const definition = parseWorkflow(`
 id: revise
 name: Revise
 version: '1'
@@ -102,6 +86,13 @@ edges:
   - {from: gate, to: end, when: "choice == 'done'"}
   - {from: agent, to: end}
 `);
+
+/** The stores and models a daemon is composed from, opened over `dir`. */
+function openState(dir: string, instanceId: string) {
+  const stores = fileStores(dir);
+  const credentialFile = join(dir, "credentials.json");
+  const credentials = new CredentialStore({ file: credentialFile });
+  const ownership = new OwnershipStore(join(dir, "ownership.json"));
   const orc = new Orchestrator({
     stores,
     agents: new AgentRegistry(),
@@ -109,14 +100,27 @@ edges:
     templates: new TemplateRegistry(),
     logger: silentLogger,
   });
-  const execution = daemonExecutionRuntime({
-    instanceId: "revision-transport",
-    orchestrator: orc,
-    credentials,
-    ownership,
-  });
-  cleanups.push(async () => execution.close());
+  const execution = daemonExecutionRuntime({ instanceId, orchestrator: orc, credentials, ownership });
   const adapter = createRevisionRuntime({ stores, authorizeExecution: (runId) => execution.authorizeExecution(runId) });
+  return { stores, credentialFile, credentials, ownership, orc, execution, adapter };
+}
+
+/**
+ * The file-backed state every test starts from: seven credentials, the ownership of two roots,
+ * and four runs parked at a revision gate. Building it takes four journal declarations, which
+ * dominate a test's cost, so it is built once and each test copies the directory.
+ *
+ * Nothing in it is bound to the directory it was built in: the protected records are sealed
+ * against the name of their own `private-execution` folder, the credentials file holds only
+ * secret digests, ownership is run to principal, and the leases are released. The one path in
+ * it is the runs' recorded `workspace.cwd`, which no test here reads and which names a
+ * directory that outlives the file's tests.
+ */
+async function seedState() {
+  const dir = await mkdtemp(join(tmpdir(), "orca-revision-transport-seed-"));
+  const { stores, credentials, ownership, execution, adapter } = openState(dir, "revision-transport");
+  const issue = (permissions: Permission[], principal = "alice") =>
+    credentials.issue({ principal, permissions, scope: { workflows: ["revise"], runs: "owned" } });
   const declare = async (runId: string, principalId?: string, parentRunId?: string) => {
     const def = parentRunId ? { ...definition, id: "private-child" } : definition;
     await stores.workflows.put(def);
@@ -177,10 +181,50 @@ edges:
     }
     return (await adapter.readBoundaries(runId))[0]!;
   };
-  const boundary = await declare("owned", "alice");
-  const other = await declare("unowned", "bob");
-  await declare("legacy");
-  const child = await declare("child", undefined, "owned");
+  try {
+    const issued = {
+      alice: await issue(required),
+      owner: await credentials.issue({ principal: "owner", preset: "owner" }),
+      reader: await issue(["runs.read"]),
+      answerOnly: await issue(["runs.read", "inputs.answer"]),
+      controlOnly: await issue(["runs.read", "runs.control"]),
+      noRead: await issue(["inputs.answer", "runs.control"]),
+      bob: await issue(required, "bob"),
+    };
+    const boundary = await declare("owned", "alice");
+    const other = await declare("unowned", "bob");
+    await declare("legacy");
+    const child = await declare("child", undefined, "owned");
+    return { dir, issued, boundary, other, child };
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  } finally {
+    execution.close();
+  }
+}
+let seeded: Awaited<ReturnType<typeof seedState>> | undefined;
+beforeAll(async () => {
+  seeded = await seedState();
+});
+afterAll(async () => {
+  if (seeded) await rm(seeded.dir, { recursive: true, force: true });
+});
+
+async function fixture(mode: "enabled" | "missing" | "read-only" | "loopback" | "no-identity" = "enabled") {
+  if (!seeded) throw new Error("the seeded state was not built");
+  const dir = await mkdtemp(join(tmpdir(), "orca-revision-transport-"));
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+  await cp(seeded.dir, dir, { recursive: true });
+  const { stores, credentialFile, credentials, ownership, orc, execution, adapter } = openState(
+    dir,
+    "revision-transport",
+  );
+  cleanups.push(async () => execution.close());
+  const { alice, owner, reader, answerOnly, controlOnly, noRead, bob } = seeded.issued;
+  const boundary = structuredClone(seeded.boundary);
+  const other = structuredClone(seeded.other);
+  const child = structuredClone(seeded.child);
   const claims = new FileRetryClaimStore({ storeDir: dir, execution: stores.execution, faults });
   const retries = new RegisteredRetryClaims(claims, faults);
   const services = createRevisionInputServices({

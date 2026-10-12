@@ -8,7 +8,8 @@ import { PROTOCOL_VERSION, ResponseMessageSchema } from "@orca/protocol";
 import { ProductionFixture, root } from "./mcp-operator-production-fixture.js";
 
 it("uses the identical emitted auth implementation in distinct completed credential-admin processes", async () => {
-  const f = await ProductionFixture.create();
+  // The regression is about process identity, so this is the one fixture that keeps a process per operation.
+  const f = await ProductionFixture.create(undefined, { freshAdmin: true });
   try {
     const url = (path: string) => JSON.stringify(pathToFileURL(join(root, path)).href);
     const identity = await promisify(execFile)(

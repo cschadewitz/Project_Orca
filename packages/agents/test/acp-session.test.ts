@@ -52,7 +52,7 @@ afterEach(async () => {
   for (const s of sessions.splice(0)) await s.close();
 });
 
-async function open(env: Record<string, string> = {}, cancelGraceMs = 200) {
+async function open(env: Record<string, string> = {}, cancelGraceMs = 200, exitGraceMs?: number) {
   const host = new LocalHost({ id: "local", type: "local" });
   let proc: AgentProcessHandle | undefined;
   const spawn = host.spawnAgent.bind(host);
@@ -64,7 +64,12 @@ async function open(env: Record<string, string> = {}, cancelGraceMs = 200) {
     env,
     cancelGraceMs,
   });
-  const session = await openAcpSession({ host, agent, cwd: process.cwd() });
+  const session = await openAcpSession({
+    host,
+    agent,
+    cwd: process.cwd(),
+    ...(exitGraceMs === undefined ? {} : { exitGraceMs }),
+  });
   sessions.push(session);
   return { session, proc: proc! };
 }
@@ -103,7 +108,9 @@ describe("acp session cancellation", () => {
   });
 
   it("escalates to SIGKILL when the wedged agent ignores SIGTERM too", async () => {
-    const { session, proc } = await open({ IGNORE_TERM: "1" });
+    // The handshake only completes after the agent has run its top level, so its SIGTERM handler
+    // is in place by the time the turn times out; the short grace then ends the SIGTERM wait.
+    const { session, proc } = await open({ IGNORE_TERM: "1" }, 200, 200);
     await expect(session.prompt("go", { timeoutMs: 20 })).rejects.toMatchObject({ code: "AGENT_TRANSPORT" });
     const exit = await settled(proc.exited, 5000);
     expect(exit).not.toBe(pending);

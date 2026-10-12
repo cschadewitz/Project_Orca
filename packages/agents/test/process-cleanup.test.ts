@@ -5,14 +5,14 @@ import { processCleanup } from "../src/process-cleanup.js";
 
 afterEach(() => vi.useRealTimers());
 
-function fixture() {
+function fixture(graceMs?: number) {
   vi.useFakeTimers();
   let exit!: (value: ProcessExit) => void;
   const exited = new Promise<ProcessExit>((resolve) => {
     exit = resolve;
   });
   const kill = vi.fn();
-  const cleanup = processCleanup({ exited, kill } as unknown as AgentProcessHandle);
+  const cleanup = processCleanup({ exited, kill } as unknown as AgentProcessHandle, graceMs);
   return { exit: () => exit({ code: 0, signal: null }), kill, cleanup };
 }
 
@@ -44,6 +44,27 @@ it("escalates once and waits for the actual exit", async () => {
   expect(done).not.toHaveBeenCalled();
   f.exit();
   await pending;
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each([
+  ["two seconds by default", undefined, 2000],
+  ["the grace it is given", 100, 100],
+])("waits %s after each signal", async (_, graceMs, expected) => {
+  const f = fixture(graceMs);
+  let outcome = "pending";
+  const rejected = f.cleanup().catch(() => {
+    outcome = "incomplete";
+  });
+  await vi.advanceTimersByTimeAsync(expected - 1);
+  expect(f.kill.mock.calls).toEqual([["SIGTERM"]]);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(f.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+  await vi.advanceTimersByTimeAsync(expected - 1);
+  expect(outcome).toBe("pending");
+  await vi.advanceTimersByTimeAsync(1);
+  await rejected;
+  expect(outcome).toBe("incomplete");
   expect(vi.getTimerCount()).toBe(0);
 });
 

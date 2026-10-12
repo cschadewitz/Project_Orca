@@ -38,8 +38,8 @@ CI workflows; the authorized normal publication push may start ordinary PR check
 
 ## Owned footprint and execution boundary
 
-Exactly six new files: `restoration-acceptance.test.ts`, `fixture.ts`, `harness.ts`,
-`matrix.ts`, `worker.ts`, and this README. No runtime, bootstrap, adapter, dependency,
+Exactly seven new files: `restoration-acceptance.test.ts`, `fixture.ts`, `harness.ts`,
+`launch.ts`, `matrix.ts`, `worker.ts`, and this README. No runtime, bootstrap, adapter, dependency,
 manifest, workflow, host or credential configuration is authored. Parent owns
 integration, independent review, CI and merges.
 
@@ -50,6 +50,14 @@ The harness records Node executable SHA-256/version, supplies a minimal environm
 bounds output and lifetime, and awaits child close before accepting evidence. Cleanup
 signals only owned subprocesses. The configured agent command never executes; scripted
 sessions return deterministic completed turns. Fixture fetch interceptors open no socket.
+
+Under Vitest each worker is a fresh `node` process running a bundle of `worker.ts` that
+`launch.ts` builds once per run; the JEV adapter is built into the same bundle, so a
+generated plugin and the worker share one `@orca/core`. With no run directory
+(`ORCA_TEST_BUNDLES=0`) the worker starts from its TypeScript sources through tsx instead.
+The parent hashes the Node executable once and sends its path, size and mtime with the
+hash; a worker whose own executable matches them by `stat` reports that hash, and any
+mismatch is hashed again inside the worker.
 
 Reports contain stable IDs, counters and leak flags. Raw child logs, credential resolver
 exceptions and plugin diagnostics never cross IPC. Canary checks inspect diagnostics

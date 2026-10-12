@@ -17,8 +17,14 @@ afterEach(async () => {
   await Promise.all(workers.splice(0).map((worker) => worker.kill()));
   await Promise.all(directories.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
-function spawn(dir: string, kind: AdmissionKind, boundary: Boundary | "none" = "none", mode = "normal") {
-  const worker = new Worker(dir, kind, boundary, mode);
+function spawn(
+  dir: string,
+  kind: AdmissionKind,
+  boundary: Boundary | "none" = "none",
+  mode = "normal",
+  contenderLockMs?: number,
+) {
+  const worker = new Worker(dir, kind, boundary, mode, contenderLockMs);
   workers.push(worker);
   return worker;
 }
@@ -93,7 +99,14 @@ describe.each(["request", "direct"] as const)("real %s admission across processe
     "races fresh callers with contender %s, converging on the same identifiers",
     async (contendedState) => {
       const f = await fixture();
-      const pair = [spawn(f.dir, kind, "bound", "race"), spawn(f.dir, kind, "bound", "race")];
+      // The in-progress case keeps the owner blocked until the contender's own bounded lock wait
+      // runs out, so that wait is nearly all of its cost: the contender gives up after 250 ms
+      // rather than the fixture's 5 s. The accepted case keeps 5 s, which the owner needs to finish.
+      const contenderLockMs = contendedState === "in-progress" ? 250 : undefined;
+      const pair = [
+        spawn(f.dir, kind, "bound", "race", contenderLockMs),
+        spawn(f.dir, kind, "bound", "race", contenderLockMs),
+      ];
       expect(new Set(pair.map((worker) => worker.child.pid)).size).toBe(2);
       expect(pair.map((worker) => worker.child.pid)).not.toContain(process.pid);
       const ready = await Promise.all(pair.map((worker) => worker.wait("ready")));

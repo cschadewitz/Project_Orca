@@ -20,6 +20,7 @@ import {
   authenticationRefused,
   refused,
   root,
+  sharedFixture,
   transports,
 } from "./mcp-operator-production-fixture.js";
 
@@ -52,12 +53,21 @@ async function counters(dir: string) {
   };
 }
 
+// Each of these tests compares trusted store counts before and after its own work, so they share one
+// daemon. The app test below keeps its own: it asserts that no Request exists at all.
+const shared = sharedFixture();
+
 describe.each(transports)("#331 supported MCP intent via %s", (transport) => {
+  let f: ProductionFixture;
+  shared.use((fixture) => {
+    f = fixture;
+  });
+
   it.each(["operator.submitRequest", "operator.admitRun"] as const)(
     "%s replays on a new client, allocates an explicit fresh key, and rechecks current authority",
     async (method) => {
-      const f = await ProductionFixture.create();
-      cleanups.push(() => f.close());
+      // Retry keys belong to the principal, which every test on this daemon shares by name.
+      const intent = (name: string) => `${name}-${method}-${transport}`;
       const issued = await f.issue({ principal: "synthetic-retry-client", preset: "owner" });
       const peer = await f.connect(transport, issued.token);
       const request = method === "operator.submitRequest";
@@ -66,7 +76,7 @@ describe.each(transports)("#331 supported MCP intent via %s", (transport) => {
         vars: {},
         ...(request ? { title: "Synthetic intent", body: "PRIVATE_INTENT_BODY" } : {}),
       };
-      const params = { target: peer.target, command, retry: { idempotencyKey: "M10_PRIVATE_ORIGINAL_KEY" } };
+      const params = { target: peer.target, command, retry: { idempotencyKey: intent("M10_PRIVATE_ORIGINAL_KEY") } };
       const first = accepted(await f.mutation(peer, method, params));
       await f.readyStatus(peer, first.result.runId, "waiting");
       const before = await counters(f.dir);
@@ -74,7 +84,10 @@ describe.each(transports)("#331 supported MCP intent via %s", (transport) => {
       expect(accepted(await f.mutation(reconnected, method, params))).toEqual({ ...first, replayed: true });
       expect(await counters(f.dir)).toEqual(before);
       const fresh = accepted(
-        await f.mutation(reconnected, method, { ...params, retry: { idempotencyKey: "M10_PRIVATE_FRESH_KEY" } }),
+        await f.mutation(reconnected, method, {
+          ...params,
+          retry: { idempotencyKey: intent("M10_PRIVATE_FRESH_KEY") },
+        }),
       );
       expect(fresh.replayed).toBe(false);
       expect(fresh.operationId).not.toBe(first.operationId);

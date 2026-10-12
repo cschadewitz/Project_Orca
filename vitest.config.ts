@@ -17,6 +17,7 @@ export default defineConfig({
       "@orca/store": pkg("store"),
       "@orca/agents": pkg("agents"),
       "@orca/engine": pkg("engine"),
+      "@orca/testing/child-bundle": src("testing", "child-bundle"),
       "@orca/testing": pkg("testing"),
       "@orca/integrations/mcp": src("integrations", "mcp/index"),
       "@orca/integrations": pkg("integrations"),
@@ -37,6 +38,9 @@ export default defineConfig({
       "packages/app/renderer/test/**/*.test.{ts,tsx}",
       "tools/test/**/*.test.js",
     ],
+    // One directory per run that test child processes are prebuilt into, instead of each
+    // launch transpiling its TypeScript through tsx (packages/testing/src/child-bundle.ts).
+    globalSetup: ["./vitest.global-setup.ts"],
     testTimeout: 30_000,
     hookTimeout: 30_000,
     // Vitest's default is one worker per core less one, so the suite's memory footprint is a
