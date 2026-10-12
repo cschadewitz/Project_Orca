@@ -43,6 +43,31 @@ postinstall (allow-listed in `pnpm-workspace.yaml`). CI sets
 lints and builds the renderer, none of which need the binary; do the same locally if you
 never launch it. The app reads `ORCA_DAEMON_URL` to attach to a daemon elsewhere.
 
+### Claude Code cloud sessions
+
+A cloud session (claude.ai/code, or `claude --cloud`) starts from an Ubuntu 24.04 image that
+ships Node 22, so two pieces get it to this toolchain:
+
+- **The repo's SessionStart hook** (`.claude/settings.json` →
+  `.claude/hooks/session-start.sh`) runs on every cloud start and resume, and does nothing
+  locally. It puts Node 24 and the `packageManager` pnpm on `PATH` for Claude's shells and runs
+  `pnpm install --frozen-lockfile` with `ELECTRON_SKIP_BINARY_DOWNLOAD=1`, as CI does. Its
+  last line, which Claude reads, says whether the session is ready.
+- **The environment's setup script**, configured once in the claude.ai environment dialog:
+  paste `.claude/cloud/setup.sh`. It provisions Node 24.21.0 and pnpm 12.4.2 under
+  `/opt/node24` before Claude starts, and is cached between sessions. Without it the hook
+  provisions them itself on every new session, which works but is slower.
+
+The rest of the environment: **Trusted** network access is enough (it allows nodejs.org,
+the npm registry and GitHub), and no variables are required. Set `ORCA_CLOUD_ELECTRON=1`
+only to keep the Electron download; launching the app also needs a display (`xvfb-run`) and
+Electron's system libraries, which the setup script does not install. A session with more than one repository does not run
+repository hooks; put the hook's work in that environment's setup script instead.
+
+The session's GitHub access goes through a proxy that blocks GraphQL, so `gh pr` and
+`gh issue` fail with 403 there; use `gh api` against the REST endpoints. Pushing branches
+works, deleting them and pushing tags do not.
+
 ## Runtime integration checks
 
 `orca serve` now defaults to token mode. The app and CLI use the bootstrap token-file

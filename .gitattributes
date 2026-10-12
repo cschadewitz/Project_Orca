@@ -20,3 +20,6 @@ tools/deploy/tests/native-mac/fixtures/** text eol=lf
 # fixture's template files and reference patch.
 examples/beta-first-job/template/** text eol=lf
 docs/preparation/beta-first-job/reference.patch text eol=lf
+
+# Claude Code cloud scripts run under bash on Linux; a CRLF checkout would break them.
+.claude/**/*.sh text eol=lf
