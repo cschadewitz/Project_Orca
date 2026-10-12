@@ -899,8 +899,33 @@ export interface ObjectHeaderProps {
     label?: string;
   };
   actions?: unknown;
+  /**
+   * Called for a crumb, and for a folded crumb chosen from `…`, which navigates exactly as
+   * the crumb would have. Never called for the current crumb, which is not a link.
+   */
   onOpen?(crumb: Crumb): void;
   onOpenCounterpart?(crumb: Crumb, counterpart: Counterpart): void;
+  /**
+   * **Chain elision.** A trail that does not fit folds its middle into a `…` control: the
+   * crumbs after the root fold first, nearest the root first, until the root, `…`, the parent
+   * and the current crumb are left; then the parent folds; then the current crumb's name is
+   * cut at its end (`.orca-objhead__crumb--current`). The root and the current crumb never
+   * fold; a trail of one or two never does. The type label, the id token and the version are
+   * never cut. `…` is a `Menu` of the folded crumbs (name, token, type as the hint) whose
+   * accessible name lists them in order ("2 hidden levels: work item …, run …").
+   *
+   * The decision is `elideTrail` in `ui/crumb-elision.ts`, a pure function over natural
+   * widths, re-measured on a `ResizeObserver`. This is how the header learns them: the
+   * trail (`.orca-objhead__trail`, which takes the header's room from zero, so its width is
+   * the room), every crumb's item in chain order — the folded ones from the unseen, `inert`
+   * `.orca-objhead__measure` row — and an unseen `…`. The default measures the document; a
+   * test injects widths, because happy-dom measures every box as zero, which folds nothing.
+   */
+  measure?: (
+    trail: Element,
+    crumbs: ReadonlyArray<Element>,
+    elision: Element,
+  ) => { available: number; crumbs: ReadonlyArray<number>; elision: number; gap: number };
 }
 
 /**
@@ -945,6 +970,14 @@ export interface MenuItem {
    * still leads and is what typeahead reads.
    */
   labelId?: string;
+  /** The kind of `labelId`, for an id whose prefix does not say (an unprefixed UUID). */
+  labelKind?: ObjectKind;
+  /**
+   * The object has no name: the `labelId` token is drawn in the label's place, not faint, and
+   * `label` is the token said as words (`idWords`), which typeahead reads. A request in the
+   * object header's `…`.
+   */
+  nameless?: boolean;
   /** Shown, named and skipped by the arrow keys rather than hidden. */
   disabled?: boolean;
   /**

@@ -52,7 +52,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { CHROME_GLYPHS } from "@orca/design";
+import { CHROME_GLYPHS, type ObjectKind } from "@orca/design";
 import { useOptionalKeyboard } from "../keyboard-context.js";
 import { useTransientLayer } from "../layers-context.js";
 import { scopeProps, type KeyboardMap, type Shortcut } from "../keyboard-map.js";
@@ -88,6 +88,17 @@ export interface MenuItem {
    * them apart. The label still leads and is what typeahead reads.
    */
   labelId?: string;
+  /**
+   * The kind of `labelId`, for an id whose prefix does not say — an unprefixed UUID — as
+   * `ObjectId`'s `kind`. The object header's `…` passes the kind its crumb's type names.
+   */
+  labelKind?: ObjectKind;
+  /**
+   * The object has no name: its `labelId` token is drawn in the label's place, whole rather
+   * than faint, as `ObjectId` draws an id with no name — a request, in the object header's
+   * `…`. `label` is then the token said as words (`idWords`), which is what typeahead reads.
+   */
+  nameless?: boolean;
   /** Listed, named and skipped by the arrow keys; a menu never hides what it cannot do. */
   disabled?: boolean;
   /**
@@ -476,8 +487,13 @@ export function Menu({
                   <span>{item.label}</span>
                 ) : (
                   /* The name is the part that gives way; the token keeps its width, because
-                     two runs with one name are told apart by nothing else. */
-                  <ObjectId id={item.labelId} name={item.label} />
+                     two runs with one name are told apart by nothing else. With no name, the
+                     token is the label. */
+                  <ObjectId
+                    id={item.labelId}
+                    {...(item.labelKind === undefined ? {} : { kind: item.labelKind })}
+                    {...(item.nameless === true ? {} : { name: item.label })}
+                  />
                 )}
                 {item.hintMachine !== undefined ? (
                   <MachineText text={item.hintMachine} className="orca-menu__machine" />

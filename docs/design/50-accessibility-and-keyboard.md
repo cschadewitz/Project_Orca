@@ -115,6 +115,13 @@ letters left stays discoverable. Nothing is reachable by keyboard alone or by mo
 - Gates and permission asks announce assertively when they open, because they are the one
   interruption the design intends.
 - The connection state is a polite live region; it announces on change, not on tick.
+- The object header's trail is an ordered list in a `nav` named "Object", and it stays the
+  whole chain when the middle folds into `…` (`10-information-architecture.md`). The `…` is
+  a button in the tab order, between the root and the crumbs after it, and its accessible
+  name lists the levels it holds, in order: "2 hidden levels: work item Database schema, run
+  Database schema". Its menu holds the same levels as items to choose. The folded crumbs are
+  measured in an unseen row that is `inert` and `aria-hidden`, so they are never a second,
+  invisible tab stop.
 
 ## Reduced motion and other preferences
 
