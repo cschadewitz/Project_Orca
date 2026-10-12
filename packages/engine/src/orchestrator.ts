@@ -128,6 +128,12 @@ export interface OrchestratorOptions {
   plan?: PlanService;
   clock?: Clock;
   logger?: Logger;
+  /**
+   * How often an `artifact-present` agent step checks the host for its deliverables, in ms.
+   * Default 1.5 s, which suits a remote host where every check is a process; a test whose
+   * host answers at once can shorten it.
+   */
+  artifactWatchPollMs?: number;
   /** Single-writer lease per run; see `runLease` for what the defaults mean. */
   lease?: RunLeaseOptions;
 }
@@ -282,6 +288,7 @@ export class Orchestrator {
   readonly leaseHolder: string;
   private readonly leaseTtlMs: number;
   private readonly leaseRenewMs: number | undefined;
+  private readonly artifactWatchPollMs: number | undefined;
 
   private readonly revisionRuntime: OrchestratorOptions["revisionRuntime"];
   private readonly live = new Map<string, RunContext>();
@@ -322,6 +329,7 @@ export class Orchestrator {
     this.leaseHolder = o.lease?.holder ?? newId("orc", this.clock.now());
     this.leaseTtlMs = o.lease?.ttlMs ?? DEFAULT_LEASE_TTL_MS;
     this.leaseRenewMs = o.lease?.renewMs;
+    this.artifactWatchPollMs = o.artifactWatchPollMs;
     this.plan =
       o.plan ??
       new PlanService({ stores: this.stores, clock: this.clock, logger: this.logger.child({ component: "plan" }) });
@@ -1625,6 +1633,7 @@ export class Orchestrator {
       signal: rc.abort.signal,
       logger: rc.logger.child({ step: step.nodeId }),
       clock: this.clock,
+      artifactWatchPollMs: this.artifactWatchPollMs,
       stores: this.stores,
       agents: (this.contextGenerations.get(rc)?.agents ?? this.agents).withOverrides(rc.state.run.overrides),
       templates: this.contextGenerations.get(rc)?.templates ?? this.templates,

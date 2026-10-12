@@ -57,6 +57,8 @@ export interface StepContext {
   readonly signal: AbortSignal;
   readonly logger: Logger;
   readonly clock: Clock;
+  /** How often an `artifact-present` step checks its deliverables, in ms; unset means 1.5 s. */
+  readonly artifactWatchPollMs?: number | undefined;
   readonly stores: Stores;
   readonly agents: AgentRegistry;
   readonly templates: TemplateRegistry;

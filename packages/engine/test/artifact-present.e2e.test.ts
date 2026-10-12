@@ -36,12 +36,18 @@ edges: [{ from: s, to: work }, { from: work, to: e }]
   return reg;
 }
 
+/** The watcher's poll interval in these tests; production polls every 1.5 s (artifact-watcher.test.ts). */
+const POLL_MS = 100;
+
 describe("artifact-present completion (e2e with scripted ACP agent)", () => {
   it("does not cancel the turn when no deliverable is required", async () => {
-    // The agent takes longer than one watcher tick (1.5 s) to write its only, optional, deliverable.
+    // The agent takes longer than a few watcher ticks to write its only, optional, deliverable.
     const h = await harness(
-      { kinds: { plan: [{ delayMs: 2500, body: "# Plan\n\nWritten after the first watcher tick." }] } },
-      { workflows: workflow("      - { kind: plan, path: .orca/plan.md, required: false }") },
+      { kinds: { plan: [{ delayMs: 3 * POLL_MS, body: "# Plan\n\nWritten after the first watcher tick." }] } },
+      {
+        workflows: workflow("      - { kind: plan, path: .orca/plan.md, required: false }"),
+        artifactWatchPollMs: POLL_MS,
+      },
     );
     dirs.push(h.dir);
     const state = await h.orchestrator.startAndRun({ workflowId: "present" });
@@ -70,6 +76,7 @@ describe("artifact-present completion (e2e with scripted ACP agent)", () => {
         workflows: workflow(
           "      - { kind: plan, path: .orca/plan.md }\n      - { kind: notes, path: .orca/notes.md, required: false }",
         ),
+        artifactWatchPollMs: POLL_MS,
       },
     );
     dirs.push(h.dir);

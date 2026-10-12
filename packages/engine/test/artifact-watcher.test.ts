@@ -59,6 +59,31 @@ describe("watchForArtifacts", () => {
     expect(fs.batches.every((n) => n === 2)).toBe(true);
   });
 
+  it("checks every 1.5 s unless a poll interval is given", async () => {
+    // The production cadence: the e2e tests shorten it, so this is where it stays pinned.
+    const fs = slowFs(0, () => [false]);
+    const stop = watchForArtifacts(fs, ["/w/a.md"], () => expect.unreachable("never present"));
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(fs.calls).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fs.calls).toBe(1);
+    stop();
+  });
+
+  it("uses a given poll interval for its first check and for backing off after an error", async () => {
+    const fs = slowFs(0, (call) => (call === 1 ? new Error("ssh: connection closed") : [false]));
+    const stop = watchForArtifacts(fs, ["/w/a.md"], () => expect.unreachable("never present"), 100);
+    await vi.advanceTimersByTimeAsync(99);
+    expect(fs.calls).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fs.calls).toBe(1); // fails at about 100 ms, and backs off to twice the interval
+    await vi.advanceTimersByTimeAsync(150);
+    expect(fs.calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(70);
+    expect(fs.calls).toBe(2);
+    stop();
+  });
+
   it("fires once when every path exists and stops polling afterwards", async () => {
     const fs = slowFs(0, (call) => (call >= 2 ? [true, true] : [true, false]));
     let fired = 0;
