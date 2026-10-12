@@ -70,7 +70,8 @@ const BOX = chars(range(0x2500, 0x257f));
 /**
  * The glyphs ORCA renders as glyphs: the eight run statuses, the connection states, agent
  * health, the breadcrumb separator, the command key, the surfaces and the object kinds.
- * Kept in sync with packages/design/semantics.json by the check below.
+ * Kept in sync with packages/design/semantics.json by the check below, and the other way —
+ * nothing here that semantics.json no longer renders — by packages/design/test/fonts.test.ts.
  *
  * Four glyphs carry a word in more than one domain, which is deliberate rather than an
  * oversight: a domain gives the glyph its word, and the same shape meaning "settled" or
@@ -102,7 +103,7 @@ const SYMBOLS = chars(
      are the run's and the work item's, reused from the rail on purpose; these are the rest,
      and the gate's ⊓ is in the Math face below. None of them is a status glyph. */
   0x275d, // ❝ object kind request
-  0x25ad, // ▭ object kind step
+  0x25eb, // ◫ object kind step — not ▭ U+25AD, which reads as a dash at mono-id size
   0x2726, // ✦ object kind event
 );
 

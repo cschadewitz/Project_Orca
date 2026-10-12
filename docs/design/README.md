@@ -200,12 +200,14 @@ that is not that status. When an icon set is eventually chosen, pick one with a 
 grid and replace the inline SVGs; nothing else in the system depends on it.
 
 **Object kinds have glyphs too** (`objectKind` in `semantics.json`): `☰` run, `⬡` work item,
-`❝` request, `▭` step, `⊓` gate, `✦` event. A kind glyph is only ever drawn in front of an id
+`❝` request, `◫` step, `⊓` gate, `✦` event. A kind glyph is only ever drawn in front of an id
 tail, in an `ObjectId` token, and it is never a status: the font tests hold that no kind
 glyph is any other domain's. Two are shared on purpose — `☰` and `⬡` are the Runs and Plan
 rail glyphs, the way Attention's `◆` is the waiting status's — because a run token points at
-what the Runs surface lists and a work item token at a node of the graph Plan draws. The glyph
-is decoration; the kind's word is the token's accessible name ("run 7X8PXX").
+what the Runs surface lists and a work item token at a node of the graph Plan draws. Each has
+to read as a shape at `mono-id` size, which is why the step's is a split square and not the
+plain rectangle `▭`: at 12px that is a dash. The glyph is decoration; the kind's word is the
+token's accessible name ("run 7X8PXX").
 
 ## Building on this
 

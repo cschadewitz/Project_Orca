@@ -16,8 +16,8 @@ declares each file with a relative `url()` that resolves over `file://`.
 | `IBMPlexSans-SemiBold.woff2`    | IBM Plex Sans       |    600 | as above                                              |
 | `IBMPlexMono-Regular.woff2`     | IBM Plex Mono       |    400 | as above, plus box drawing (U+2500–257F)              |
 | `IBMPlexMono-Medium.woff2`      | IBM Plex Mono       |    500 | as above, plus box drawing                            |
-| `NotoSansSymbols2-Regular.woff2`| Noto Sans Symbols 2 |    400 | ◐ ◆ ✓ ✕ ▣ ⏸ ◷ ● ◌ ▸ ⌘ ☰ ⬡ ◉ ❋                         |
-| `NotoSansMath-Regular.woff2`    | Noto Sans Math      |    400 | ⊘                                                     |
+| `NotoSansSymbols2-Regular.woff2`| Noto Sans Symbols 2 |    400 | ◐ ◆ ✓ ✕ ▣ ⏸ ◷ ● ◌ ▸ ⌘ ☰ ⬡ ⑂ ◉ ❋ ❝ ◫ ✦                 |
+| `NotoSansMath-Regular.woff2`    | Noto Sans Math      |    400 | ⊘ ⊓                                                   |
 
 ## Why there are symbol faces at all
 
@@ -31,8 +31,9 @@ not even a space, which is why `type.families` can put them in front of Plex wit
 metrics ever touching text. `build-fonts.js` fails the build if either one leaks a text
 codepoint, and fails if `semantics.json` grows a glyph no bundled face carries.
 
-Two families are needed because no single OFL face covers all sixteen: Noto Sans Symbols 2 has
-everything but ⊘ (Mathematical Operators is not in its coverage), and Noto Sans Math has ⊘.
+Two families are needed because no single OFL face covers all twenty-one: Noto Sans Symbols 2
+has everything but ⊘ and ⊓ (Mathematical Operators is not in its coverage), and Noto Sans Math
+has those two.
 
 **To see it for yourself:** `pnpm --filter @orca/app dev`, then `#type` in the app window.
 It renders every glyph the design system declares — large, then at chip size, in both the

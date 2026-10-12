@@ -11,4 +11,5 @@
   by its sequence number (`#148`); the row's menu copies its id. Link notices, correction
   summaries and launch receipts keep ids whole, with the tail picked out. Six object-kind
   glyphs are bundled: `☰` run and `⬡` work item (the Runs and Plan rail glyphs), `❝`
-  request, `▭` step, `⊓` gate and `✦` event.
+  request, `◫` step, `⊓` gate and `✦` event. The step's is a split square because at id size
+  a plain rectangle reads as a dash.
