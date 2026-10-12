@@ -361,6 +361,47 @@ describe("the policy editor", () => {
     expect(write.text).not.toContain('"default"');
   });
 
+  it("rests quiet: no danger tone anywhere in the panel before anything has been done", async () => {
+    renderPanel();
+    const aside = await panel();
+    const written = await grants();
+
+    // Status colour is the only saturation a resting screen carries (the brand book).
+    expect(aside.querySelector(".orca-btn--danger")).toBeNull();
+    for (const grant of written) {
+      const remove = within(grant).getByRole("button", { name: /^Remove grant / });
+      expect(remove.className).not.toContain("orca-btn--danger");
+      expect(grant.textContent).not.toContain("✕");
+    }
+  });
+
+  it("removes into the draft without asking: nothing is sent until Save, and Discard takes it back", async () => {
+    renderPanel();
+    const aside = await panel();
+    const configSets = (): number => fake.calls.filter((call) => call.method === "config.set").length;
+
+    fireEvent.click(within((await grants())[0]!).getByRole("button", { name: "Remove grant 2" }));
+
+    /* No second state to arm: one press takes exactly one grant out of the draft, and the
+       save bar is where the removal is committed. Nothing reached the daemon. */
+    const left = await grants();
+    expect(left).toHaveLength(1);
+    expect(left[0]!.textContent).toContain("granted for Run git status");
+    expect(within(aside).queryByRole("button", { name: /^(Keep|Confirm)/ })).toBeNull();
+    const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+    expect(bar.textContent).toContain("1 change");
+    expect(aside.textContent).toContain("They are written only by Save.");
+    expect(configSets()).toBe(0);
+
+    // Discard is the way back: both grants, provenance and all, and still nothing sent.
+    fireEvent.click(within(bar).getByRole("button", { name: "Discard" }));
+    const restored = await grants();
+    expect(restored).toHaveLength(2);
+    expect(restored[0]!.textContent).toContain("granted for Edit src/index.ts");
+    expect(screen.queryByRole("group", { name: "Unsaved configuration changes" })).toBeNull();
+    expect(configSets()).toBe(0);
+  });
+
   it("adds a grant by hand, stamped with the time and with what it was granted for", async () => {
     renderPanel();
     await panel();
