@@ -31,6 +31,13 @@ export interface StatusChipProps {
   label?: string;
   /** Glyph-only form for a dense tree row; the word moves to the accessible name. */
   glyphOnly?: boolean;
+  /**
+   * `orca-chip--aligned`: the longest status word's width, so a list's statuses form one
+   * column (the run tree, the claims list). A floor, not a clamp — `.orca-chip` is never
+   * narrower than its own glyph and word. There is no `className`: the chip's box is the
+   * component layer's, and a surface lays out around it rather than sizing it.
+   */
+  aligned?: boolean;
 }
 
 /**

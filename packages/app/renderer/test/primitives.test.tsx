@@ -60,6 +60,19 @@ describe("StatusChip", () => {
     expect(markup).toContain(STATUS_PRESENTATION.failed.glyph);
     expect(markup).toContain("failed ×3");
   });
+
+  it("is sized only by its own variants: content by default, the status column when aligned", () => {
+    /* The column is the component's variant, not a surface's class: the run tree and the
+       claims list each sized the chip themselves once, and only one of them was fixed. */
+    expect(html(<StatusChip status="succeeded" />)).not.toContain("orca-chip--aligned");
+    const aligned = html(<StatusChip status="succeeded" aligned />);
+    expect(aligned).toContain("orca-chip--aligned");
+    expect(aligned).toContain(`>${STATUS_PRESENTATION.succeeded.word}<`);
+    // A glyph-only chip is already one fixed square; a column width would undo that.
+    const square = html(<StatusChip status="succeeded" glyphOnly aligned />);
+    expect(square).toContain("orca-chip--glyph-only");
+    expect(square).not.toContain("orca-chip--aligned");
+  });
 });
 
 describe("StatusDot", () => {

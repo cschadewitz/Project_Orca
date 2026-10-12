@@ -290,7 +290,7 @@ function RunTreeRow({ row, live, onToggle }: RunTreeRowProps): JSX.Element {
       {row.status === undefined ? (
         <span className={`orca-tree-row__note ${textClass("label")} orca-runs__skipped`}>{SKIPPED_WORD}</span>
       ) : (
-        <StatusChip status={row.status} className="orca-runs__chip" />
+        <StatusChip status={row.status} aligned />
       )}
 
       <span className={`orca-tree-row__name ${textClass("mono-strong")} orca-runs__name`}>{row.name}</span>

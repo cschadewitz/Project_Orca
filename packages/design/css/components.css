@@ -156,6 +156,14 @@
 
 /* ---------- status chip ---------- */
 
+/* A chip is as wide as what it says and never narrower — glyph, gap, word, both paddings and
+   both borders — wherever it is put. `min-width: max-content` is that guarantee, and it lives
+   here rather than in any surface because a minimum beats a `width` and a `max-width` both:
+   the run tree and the claims list each handed their chip a `12ch` column width, "✓ succeeded"
+   is wider than that in Plex, and the word ran out past its own ground in both. `flex: none`
+   is the same promise to a flex line: a row that runs out of room truncates its elastic
+   column, never its chip, and never stretches one. Chips that must line up down a list take
+   the `--aligned` variant below; a surface does not size a chip. */
 /* type: caption, at medium */
 .orca-chip {
   display: inline-flex;
@@ -167,6 +175,8 @@
   border-radius: var(--radius-xs);
   font-weight: 500;
   white-space: nowrap;
+  flex: none;
+  min-width: max-content;
 }
 .orca-chip__glyph {
   font-size: var(--icon-sm);
@@ -219,6 +229,16 @@
   width: var(--badge-sm);
   padding: 0;
   justify-content: center;
+}
+/* A status column (`StatusChip`'s `aligned`): every chip down a list starts and ends at one
+   edge, so the glyphs line up and whatever follows the chip does not move row to row. A
+   floor, written as the width so that the base rule's `min-width: max-content` still wins
+   over it — a label longer than any word ("failed ×3") grows its chip rather than overflowing
+   it. The floor is the longest status word's room plus exactly the chip's other parts: `ch`
+   is a zero's advance, and "succeeded", the widest word, is about nine and a half of them in
+   Plex at caption weight, so ten hold every word. */
+.orca-chip--aligned {
+  width: calc(10ch + var(--icon-sm) + var(--space-0-5) + 2 * var(--space-1-5) + 2 * var(--stroke-hairline));
 }
 
 .orca-dot {

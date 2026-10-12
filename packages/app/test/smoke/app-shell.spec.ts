@@ -545,8 +545,9 @@ interface StatusMark {
  *
  * The word is the visible label when there is one and the chip's own `aria-label` when the
  * chip is `glyphOnly` — which is the contract `StatusChip` documents: the word leaves the
- * page but never the accessible name. `orca-chip--plain` and `orca-chip--glyph-only` are
- * not statuses and are dropped here, so a new modifier class cannot quietly become one.
+ * page but never the accessible name. `orca-chip--plain`, `orca-chip--glyph-only` and
+ * `orca-chip--aligned` are not statuses and are dropped here, so a new modifier class cannot
+ * quietly become one.
  */
 async function statusMarks(region: Locator): Promise<StatusMark[]> {
   return region.locator(".orca-chip").evaluateAll((nodes) =>
@@ -555,7 +556,7 @@ async function statusMarks(region: Locator): Promise<StatusMark[]> {
         const modifiers = [...node.classList]
           .filter((c) => c.startsWith("orca-chip--"))
           .map((c) => c.slice("orca-chip--".length))
-          .filter((c) => c !== "plain" && c !== "glyph-only");
+          .filter((c) => c !== "plain" && c !== "glyph-only" && c !== "aligned");
         return {
           status: modifiers[0] ?? "",
           glyph: node.querySelector(".orca-chip__glyph")?.textContent?.trim() ?? "",
