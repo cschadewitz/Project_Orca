@@ -303,11 +303,29 @@ export class LinuxFixtureNativeAdapter extends PosixFixtureNativeAdapter {
     this.verify = (root) => call(["verify", root]);
   }
   private readonly verify: (root: string) => Promise<string>;
+  /**
+   * The identity of each root the helper has verified. Every disk operation verifies its root, a
+   * recovery test makes some seventy of them, and each asks the helper to walk the same unchanged
+   * path from `/` in a new process. The walk in `super.verifyRoot` still runs on every call, so a
+   * parent that has become a symlink is refused at once; the helper is asked again only for a root
+   * that is no longer the same directory with the same owner and mode, and the first time for each
+   * instance. Only a successful verification is remembered. The helper also checks that no
+   * ancestor is writable by other accounts, which this does not repeat for a root it has seen.
+   */
+  private readonly verified = new Map<string, string>();
   override async verifyRoot(root: string): Promise<boolean> {
     if (process.platform !== "linux" || !(await super.verifyRoot(root))) return false;
     try {
-      return (await this.verify(root)) === "verified";
+      const stat = await lstat(root);
+      const identity = `${stat.dev}:${stat.ino}:${stat.mode}:${stat.uid}`;
+      if (this.verified.get(root) === identity) return true;
+      this.verified.delete(root);
+      if ((await this.verify(root)) !== "verified") return false;
+      // The identity read before the helper ran, so a root replaced meanwhile is verified again.
+      this.verified.set(root, identity);
+      return true;
     } catch {
+      this.verified.delete(root);
       return false;
     }
   }
