@@ -27,7 +27,7 @@
     "@orca/store": "workspace:*",
     "@orca/agents": "workspace:*",
     "@orca/engine": "workspace:*",
-    "@agentclientprotocol/sdk": "^1.7.0",
+    "@agentclientprotocol/sdk": "^1.8.0",
     "zod": "^4.6.5",
     "@orca/protocol": "workspace:*",
     "@modelcontextprotocol/server": "2.3.0"
