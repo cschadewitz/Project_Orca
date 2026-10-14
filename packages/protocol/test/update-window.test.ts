@@ -1,7 +1,7 @@
 /** Real kernel slots and durable closure; synthetic trees are separate from Mac acceptance. */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -13,6 +13,9 @@ import {
   updateExistingWorkAllowed,
   enrollUpdateWindowRoots,
   inspectUpdateWindowRoots,
+  reanchorUpdateWindow,
+  resetUpdateWindow,
+  updateWindowResettable,
   type UpdateWriterLease,
 } from "../src/update-window.js";
 
@@ -275,4 +278,164 @@ it("a real surviving child blocks same-boot recovery after supervisor loss", asy
   fresh.setPhase("restoring");
   fresh.setPhase("restored");
   expect(JSON.parse(await readFile(join(f.control, "window.json"), "utf8")).phase).toBe("restored");
+});
+
+const GUARD = ".orca-update-window.json";
+/** What Migration Assistant or a Time Machine restore leaves: same path and bytes, new inode. */
+async function recreate(path: string) {
+  const before = path + "-before";
+  await rename(path, before);
+  await cp(before, path, { recursive: true });
+  await rm(before, { recursive: true });
+}
+/** A home holding the control namespace, the app root and one enrolled workspace. */
+async function home() {
+  for (let attempt = 0; ; attempt++) {
+    const base = await mkdtemp(join(process.cwd(), "orca-update-home-"));
+    roots.push(base);
+    const at = (dir: string) => ({ control: join(dir, "control"), app: join(dir, "app"), ws: join(dir, "ws") });
+    const paths = at(join(base, "home"));
+    for (const path of [join(base, "home"), ...Object.values(paths)]) await mkdir(path, { mode: 0o700 });
+    try {
+      await provisionUpdateWindow(paths.control, [paths.app]);
+      await enrollUpdateWindowRoots(paths.control, [paths.ws]);
+    } catch (error) {
+      await rm(base, { recursive: true, force: true });
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt >= 4) throw error;
+      continue;
+    }
+    return { base, ...paths, moved: at(join(base, "moved")) };
+  }
+}
+const enrolledPaths = (control: string) => inspectUpdateWindowRoots(control).roots.map((root) => root.path);
+
+it("re-anchors an open, idle window whose directories were recreated with new inodes", async () => {
+  const f = await fixture(2),
+    id = f.window.snapshot.id;
+  for (const path of [f.control, ...f.data]) await recreate(path);
+  expect(() => inspectUpdateWindowRoots(f.control)).toThrow();
+  await expect(enterUpdateWriter(f.data[1]!)).rejects.toThrow();
+  const state = await reanchorUpdateWindow(f.control, [f.data[0]!]);
+  expect(state).toMatchObject({ id, phase: "open", attempt: null });
+  const inodes = await Promise.all(f.data.map(async (path) => String((await stat(path)).ino)));
+  expect(state.roots.map((root) => root.ino)).toEqual(inodes);
+  for (const root of f.data) expect((await writer(root)).check()).toBe(true);
+});
+
+it("follows a moved home: the app root is re-anchored and workspaces left behind are de-enrolled", async () => {
+  const f = await home();
+  await rename(join(f.base, "home"), join(f.base, "moved"));
+  await expect(reanchorUpdateWindow(f.moved.control, [f.moved.app])).resolves.toMatchObject({ phase: "open" });
+  expect(enrolledPaths(f.moved.control)).toEqual([f.moved.app]);
+  // The moved workspace keeps this namespace's guard, which refuses writers until enrolled again.
+  await expect(enterUpdateWriter(f.moved.ws)).rejects.toThrow();
+  await enrollUpdateWindowRoots(f.moved.control, [f.moved.ws]);
+  expect(enrolledPaths(f.moved.control)).toEqual([f.moved.app, f.moved.ws]);
+  expect((await writer(f.moved.ws)).check()).toBe(true);
+});
+
+it("de-enrolls a deleted workspace, and one whose guard was removed, rather than refusing", async () => {
+  const f = await fixture(3);
+  await rm(f.data[1]!, { recursive: true });
+  await rm(join(f.data[2]!, GUARD));
+  expect(() => inspectUpdateWindowRoots(f.control)).toThrow();
+  await reanchorUpdateWindow(f.control, [f.data[0]!]);
+  expect(enrolledPaths(f.control)).toEqual([f.data[0]]);
+  // Writers there went unfenced while the guard was missing: no guard is recreated for them.
+  await expect(readFile(join(f.data[2]!, GUARD))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("recovers a torn first provisioning that never committed its enrollment", async () => {
+  const f = await fixture(1),
+    data = f.data[0]!;
+  await f.window.detach();
+  await rm(join(f.control, "enrolled.json"));
+  await writeFile(join(data, GUARD), '{"version":1,', { mode: 0o600 });
+  await expect(provisionUpdateWindow(f.control, [data])).rejects.toThrow();
+  await reanchorUpdateWindow(f.control, [data]);
+  const lease = await writer(data);
+  expect(lease.check()).toBe(true);
+  await lease.close();
+  // A torn window.json behind no enrollment is discarded and provisioned again.
+  await rm(join(data, GUARD));
+  await rm(join(f.control, "enrolled.json"));
+  await writeFile(join(f.control, "window.json"), "", { mode: 0o600 });
+  await writeFile(join(f.control, "window.json.tmp"), "torn", { mode: 0o600 });
+  await provisionUpdateWindow(f.control, [data]);
+  expect(enrolledPaths(f.control)).toEqual([data]);
+  expect((await readdir(f.control)).sort()).toEqual(["enrolled.json", "window.json"]);
+});
+
+it("re-anchors enrollments torn before or after the window was published", async () => {
+  const f = await fixture(),
+    first = join(f.base, "first"),
+    second = join(f.base, "second");
+  for (const path of [first, second]) await mkdir(path, { mode: 0o700 });
+  const failing = (at: number) => {
+    let calls = 0;
+    return {
+      fileSync: () => {
+        if (++calls === at) throw new Error("Lost acknowledgement");
+      },
+    };
+  };
+  // Before publication: only window.json.tmp is left, and the addition never happened.
+  await expect(enrollUpdateWindowRoots(f.control, [first], failing(1))).rejects.toThrow();
+  await reanchorUpdateWindow(f.control, [f.data[0]!]);
+  expect(enrolledPaths(f.control)).toEqual([f.data[0]]);
+  // After window.json and the guard were published, before enrolled.json: the addition stands.
+  await expect(enrollUpdateWindowRoots(f.control, [second], failing(3))).rejects.toThrow();
+  expect(() => inspectUpdateWindowRoots(f.control)).toThrow();
+  await reanchorUpdateWindow(f.control, [f.data[0]!]);
+  expect(enrolledPaths(f.control)).toEqual([f.data[0], second].sort());
+  expect((await writer(second)).check()).toBe(true);
+});
+
+it("keeps refusing while an attempt is recorded, a writer holds a slot, or the original still exists", async () => {
+  const f = await fixture(2);
+  const lease = await writer(f.data[1]!);
+  await rm(join(f.data[1]!, GUARD));
+  await expect(reanchorUpdateWindow(f.control, [f.data[0]!])).rejects.toThrow();
+  await lease.close();
+  // A copy of the namespace never takes over the original's roots.
+  await cp(f.control, f.control + "-copy", { recursive: true });
+  await expect(reanchorUpdateWindow(f.control + "-copy", [f.data[0]!])).rejects.toThrow();
+  f.window.closeAdmission("a".repeat(64));
+  const published = await readFile(join(f.control, "window.json"));
+  await recreate(f.control);
+  await expect(reanchorUpdateWindow(f.control, [f.data[0]!])).rejects.toThrow();
+  expect(await readFile(join(f.control, "window.json"))).toEqual(published);
+  expect(updateWindowResettable(f.control, [f.data[0]!])).toBe(false);
+  await expect(resetUpdateWindow(f.control, [f.data[0]!])).rejects.toThrow();
+});
+
+it("a person may reset only a lost or unreadable window, and provisioning then starts again", async () => {
+  const f = await fixture(2),
+    data = f.data[0]!;
+  expect(updateWindowResettable(f.control, [data])).toBe(false);
+  await f.window.detach();
+  await rm(f.control, { recursive: true });
+  await mkdir(f.control, { mode: 0o700 });
+  await expect(provisionUpdateWindow(f.control, [data])).rejects.toThrow();
+  expect(updateWindowResettable(f.control, [data])).toBe(true);
+  await resetUpdateWindow(f.control, [data]);
+  await expect(readFile(join(data, GUARD))).rejects.toMatchObject({ code: "ENOENT" });
+  await provisionUpdateWindow(f.control, [data]);
+  // The other root's guard names this control path, so enrolling it again replaces it.
+  await enrollUpdateWindowRoots(f.control, [f.data[1]!]);
+  expect(enrolledPaths(f.control)).toEqual(f.data);
+  await writeFile(join(f.control, "window.json"), "{", { mode: 0o600, flag: "w" });
+  expect(updateWindowResettable(f.control, [data])).toBe(true);
+  // Even without an enrollment, a torn window beside a surviving guard is kept and refused.
+  await rm(join(f.control, "enrolled.json"));
+  await expect(provisionUpdateWindow(f.control, [data])).rejects.toThrow();
+  expect(await readFile(join(f.control, "window.json"), "utf8")).toBe("{");
+});
+
+it("refuses to replace a guard written by another namespace", async () => {
+  const f = await fixture(),
+    other = await fixture(),
+    target = other.data[0]!;
+  await expect(enrollUpdateWindowRoots(f.control, [target])).rejects.toThrow();
+  expect(enrolledPaths(other.control)).toEqual([target]);
 });

@@ -111,6 +111,9 @@ protected-state topology. Complete writer exclusion across app/CLI/ACP/migration
 independent all-write accounting, atomic full-state/matching-binary preservation/restore,
 continuity proof and durable replacement-child admission still require their producers.
 The app-only optional bootstrap input is not mounted production authority.
+*Superseded (2026-10-14): the bootstrap is now mounted for packaged Mac launches, and main
+provisions the namespace at the first launch; see
+[the Mac startup gate](mac-closed-window-fixed-path.md#the-mac-startup-gate).*
 
 #583 supplies source staging before Mac packaging, superseding #580's missing-stage entry.
 Version/channel/plist/OS mapping, approved signing/runtime/entitlement policy, authenticated

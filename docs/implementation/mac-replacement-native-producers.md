@@ -69,6 +69,13 @@ It does not fence independent CLI/ACP processes or supply the closed replacement
 child. An in-process gate check cannot replace all-writer ownership, write accounting
 or a persistent native supervisor fence.
 
+> **Superseded (2026-10-14).** The later closed-window composition settled the
+> provisioning authority: main provisions a sibling `<userData>-native-replacement`
+> namespace at the first packaged Mac launch, before any producer, and leaves the
+> former `userData/native-replacement` root closed. Decision 4 below is answered the
+> same way. Its failure modes, re-anchoring and the confirmed reset are in
+> [the Mac startup gate](mac-closed-window-fixed-path.md#the-mac-startup-gate).
+
 ## Decisions reported before capture/restore coding
 
 The requested remaining implementation requires an explicit topology/security contract:
