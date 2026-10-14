@@ -30,12 +30,15 @@ Closing it proposes the release.
    into a dated changelog section and deletes them.
 4. Review that pull request. Its body is the release body verbatim — to change the notes,
    edit `CHANGELOG.md` on the release branch.
-5. **Merge it.** `release-publish.yml` re-runs typecheck, lint, format, tests, build and
-   the compiled-CLI smoke test against the merge commit, runs the reusable desktop smoke
-   and three-platform type-proof checks against that same commit, builds the desktop and daemon
-   artifacts from that same commit (`desktop.yml`, below), then tags `vX.Y.Z` and publishes
-   the release with the changelog section as its body, the artifacts attached, and GitHub's
-   generated list of merged pull requests appended underneath.
+5. **Merge it.** `release-publish.yml` re-runs `ci.yml`'s full check path against the
+   merge commit — typecheck, design-token freshness, format, lint, build, the no-skip
+   CLI/ACP retry acceptance, the tests with production MCP acceptance required, and the
+   compiled-CLI smoke test, in that order and under the same worker bound — runs the
+   reusable desktop smoke and three-platform type-proof checks against that same commit,
+   builds the desktop and daemon artifacts from that same commit (`desktop.yml`, below),
+   then tags `vX.Y.Z` and publishes the release with the changelog section as its body,
+   the artifacts attached, and GitHub's generated list of merged pull requests appended
+   underneath.
 
 Closing a milestone stops at a pull request on purpose. A milestone can be closed by
 accident and reopened; a published tag cannot be unpublished cleanly. One merge click is
@@ -45,8 +48,11 @@ the whole cost of that safety.
 an event created with `GITHUB_TOKEN`, so the PR that `release-prepare.yml` opens never
 triggers `ci.yml`. That is why `release-publish.yml` re-runs the full check set against
 the merge commit before it tags: the verification happens, just after the merge rather
-than before it. If `release-publish.yml` fails, the version bump is on `main` with no tag
-against it — fix forward, then run **Release (publish)** from the Actions tab against
+than before it. Only `ci.yml`'s coverage thresholds are left out: they are `main`'s
+ratchets, and the push the merge makes still runs them in `ci.yml`, without gating the tag.
+`tools/test/release-workflow.test.js` fails if the release job's order, production flag,
+retry acceptance or worker bound drift from `ci.yml`'s. If `release-publish.yml` fails,
+the version bump is on `main` with no tag against it — fix forward, then run **Release (publish)** from the Actions tab against
 `main` (or the fixed commit). It publishes whatever version that commit's `package.json`
 holds, through the same checks, builds and tag step, and refuses if the tag already
 exists. Re-running the failed run is not the same thing: a re-run uses the workflow files
