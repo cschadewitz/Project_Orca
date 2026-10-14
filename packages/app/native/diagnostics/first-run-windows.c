@@ -71,6 +71,11 @@ static int filename(const wchar_t *name,int writing) {
     for(unsigned i=14;i<20;++i)if(name[i]<L'0'||name[i]>L'9')return 0;
     return 1;
   }
+  /* A compaction checkpoint is written aside, then renamed to checkpoint-NNNNNN.json. */
+  if(wcslen(name)==25 && !wcsncmp(name,L"checkpoint-",11) && !wcscmp(name+17,L".pending")) {
+    for(unsigned i=11;i<17;++i)if(name[i]<L'0'||name[i]>L'9')return 0;
+    return 1;
+  }
   return !writing; /* Runtime verification permits bounded regular files, never writes them. */
 }
 static int expected_parent(napi_env env,napi_value expected,HANDLE fd,const char *path) {

@@ -32,6 +32,7 @@ import {
   type ProjectIdentity,
   ownedDirectory,
   preparedProject,
+  projectRepository,
   sameDirectory,
   separateDirectories,
   emptyDirectory,
@@ -155,14 +156,10 @@ export class FirstRunSetup {
     }
   }
   private async verify(receipt: Receipt, allowChangedConfig = false): Promise<void> {
-    const project = await preparedProject(receipt.project.path, this.deps.home);
+    // The receipt's branch and base record what was reviewed at selection. Reopening checks the repository, not HEAD.
+    const project = await projectRepository(receipt.project.path, this.deps.home);
     const workspace = await ownedDirectory(receipt.workspace.path, this.deps.home);
-    if (
-      !sameDirectory(receipt.project, project) ||
-      !sameDirectory(receipt.workspace, workspace) ||
-      project.branch !== receipt.project.branch ||
-      project.baseCommit !== receipt.project.baseCommit
-    )
+    if (!sameDirectory(receipt.project, project) || !sameDirectory(receipt.workspace, workspace))
       throw selectionFailure();
     separateDirectories(project.path, workspace.path);
     await verifyRuntimeDirectories(workspace);

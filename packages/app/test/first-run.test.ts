@@ -297,6 +297,60 @@ describe.skipIf(typeof process.getuid !== "function")("dedicated first-run proje
       expect(f.dispose).toHaveBeenCalledTimes(1);
     },
   );
+  it("keeps the saved selection through commits, a branch switch and a detached HEAD in the project", async () => {
+    const f = await rig();
+    await f.prepare();
+    const commit = (message: string) =>
+      f.git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--allow-empty",
+        "--no-gpg-sign",
+        "-m",
+        message,
+      );
+    const receipt = await readFile(f.deps.receiptPath, "utf8");
+    commit("ordinary work after setup");
+    expect((await new FirstRunSetup(f.deps).status()).state).toBe("prepared");
+    f.git("checkout", "-b", "feature");
+    commit("work on another branch");
+    expect((await new FirstRunSetup(f.deps).status()).state).toBe("prepared");
+    await new FirstRunSetup(f.deps).connect(f.assertCurrent);
+    expect(f.activate).toHaveBeenCalledExactlyOnceWith(f.hello);
+    f.git("checkout", "--detach", "prepared");
+    expect((await new FirstRunSetup(f.deps).status()).state).toBe("prepared");
+    // The reviewed branch and base stay as recorded provenance; nothing rewrites the receipt.
+    expect(await readFile(f.deps.receiptPath, "utf8")).toBe(receipt);
+  });
+  it.each(["replaced", "not-a-repository"] as const)(
+    "refuses a %s project at the saved path without starting anything",
+    async (kind) => {
+      const f = await rig();
+      await f.prepare();
+      if (kind === "replaced") {
+        await rename(f.project, `${f.project}.old`);
+        await mkdir(f.project);
+        f.git("init", "-b", "prepared");
+        f.git(
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.invalid",
+          "commit",
+          "--allow-empty",
+          "--no-gpg-sign",
+          "-m",
+          "a different repository",
+        );
+      } else await rename(join(f.project, ".git"), join(f.root, "preserved-git"));
+      expect((await new FirstRunSetup(f.deps).status()).state).toBe("selection-required");
+      await expect(new FirstRunSetup(f.deps).connect(f.assertCurrent)).rejects.toThrow();
+      expect(f.prepareConnection).not.toHaveBeenCalled();
+    },
+  );
   it("refuses tampered assets after restart, preserves them, and ignores ambient Git routing", async () => {
     const f = await rig();
     vi.stubEnv("GIT_DIR", "/not-this-project");

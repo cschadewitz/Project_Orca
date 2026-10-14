@@ -1,6 +1,6 @@
 /** Synthetic lifetime attestation for existing in-memory child tests; never proves a real kernel fence. */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   fenceBoot,
@@ -8,10 +8,11 @@ import {
   fenceHash,
   fenceRead,
   fenceWrite,
+  firstRunAttempts,
   WriterSchema,
 } from "@orca/protocol/first-run-fence";
 export function syntheticFirstRunWriter(path: string, pid: number) {
-  const latest = readdirSync(join(path, ".orca-first-run-ownership")).sort().at(-1)!;
+  const latest = firstRunAttempts(join(path, ".orca-first-run-ownership"))!.at(-1)!;
   const attempt = join(path, ".orca-first-run-ownership", latest);
   const claimText = fenceRead(join(attempt, "claim.json"));
   const claim = JSON.parse(claimText) as { reservationId: string };

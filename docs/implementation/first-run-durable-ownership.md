@@ -39,8 +39,35 @@ symlinks, hardlinks, special files, wrong owner/device and unknown prior ownersh
 refuse. An absent journal with a retained anchor also refuses; an absent anchor with
 a retained journal refuses. A pre-ledger `.orca` or `auth` tree cannot be silently
 migrated or adopted. Each file read is limited to 4096 bytes and startup inspection
-to fewer than 256 prior attempts. Budget exhaustion requires a future explicit
-archival/reconciliation decision; there is no automatic deletion or rotation.
+to 512 journal entries.
+
+### Compaction of settled history
+
+Every launch, reconnect and failed start adds an attempt, so the journal is compacted
+rather than capped (the former 256-attempt limit stopped the workspace after about
+255 launches). Once more than 64 attempts follow the last checkpoint, the reservation
+that has just written its claim folds every settled attempt except the 16 newest into
+`checkpoint-NNNNNN.json`. The checkpoint binds the workspace and anchor digest, the last
+folded attempt number, that attempt's claim digest (the head of the `previous` chain),
+the effective config digest after its rebinds, whether any folded attempt was settled
+by explicit recovery, and the reservation that wrote it. The next retained claim must
+chain to that head and config, and the writing reservation's attempt must still follow
+it, so a rewritten or removed checkpoint, or a removed retained tail, refuses.
+
+Compaction runs only while that reservation holds the journal's append position: its
+exclusively created attempt directory, the same arbitration every claim uses. Strict
+inspection has just shown every earlier attempt settled, and its own unsettled attempt
+is never folded; a journal with any other unsettled attempt refuses before reaching
+compaction. The kernel lifetime fence is not taken: the daemon this reservation is about
+to start must acquire it, and no writer can re-enter a settled attempt. The checkpoint
+is written as `.pending`, fsynced and renamed into place whole. Folded attempts are then
+renamed to `discarded-NNNNNN` oldest first and removed, and superseded checkpoints are
+unlinked. Every intermediate state verifies: folded attempts still present are checked
+record by record and must end exactly on the checkpoint head, and the next reservation
+finishes an interrupted compaction. A compaction failure never blocks startup. The CLI
+continuation fence and the bootstrap/closed-inspection admissions read checkpoints too,
+so folding a reconciled attempt still keeps retained continuations parked. On Windows the
+native writer admits only the `checkpoint-NNNNNN.pending` name for this.
 
 Repeated Connect and parked-child reuse validate their retained reservation.
 Ordinary owned cleanup and spontaneous observed exit record terminal evidence.

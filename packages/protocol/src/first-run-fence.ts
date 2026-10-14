@@ -224,6 +224,23 @@ export async function observeFirstRunFence(workspace: z.infer<typeof FenceDirect
     });
   });
 }
+/** The journal's attempt directories, oldest first, or undefined when its layout is not one the app writes.
+ * The app folds settled history into a checkpoint, so numbering may start after 000001 once one exists; checkpoint and
+ * folded-attempt entries are compaction state, never an attempt. The app's inspection verifies the chain itself. */
+export function firstRunAttempts(journal: string): string[] | undefined {
+  const names = readdirSync(journal).sort();
+  const attempts = names.filter((name) => /^[0-9]{6}$/.test(name));
+  const start = Number(attempts[0]);
+  if (
+    !attempts.length ||
+    names.length >= 256 ||
+    names.some((name) => !/^(?:[0-9]{6}|checkpoint-[0-9]{6}\.(?:json|pending)|discarded-[0-9]{6})$/.test(name)) ||
+    (start !== 1 && !names.some((name) => /^checkpoint-[0-9]{6}\.json$/.test(name))) ||
+    attempts.some((name, i) => name !== String(start + i).padStart(6, "0"))
+  )
+    return undefined;
+  return attempts;
+}
 /** All CLI/bootstrap routes refuse first-run stores without the main-only launch capability. */
 export async function enterFirstRunWriter(
   configDir: string,
@@ -277,9 +294,8 @@ export async function enterFirstRunWriter(
       JSON.stringify(anchor.journal) !== JSON.stringify(fenceDirectory(journal))
     )
       throw new Error("First-run anchor changed");
-    const names = readdirSync(journal).sort();
-    if (!names.length || names.length >= 256 || names.some((name, i) => name !== String(i + 1).padStart(6, "0")))
-      throw new Error("First-run attempt unavailable");
+    const names = firstRunAttempts(journal);
+    if (!names) throw new Error("First-run attempt unavailable");
     const attempt = join(journal, names.at(-1)!);
     fenceDirectory(attempt);
     const claimText = fenceRead(join(attempt, "claim.json"));

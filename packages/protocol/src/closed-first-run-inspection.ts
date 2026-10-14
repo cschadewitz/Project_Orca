@@ -8,6 +8,7 @@ import {
   fenceDirectory,
   fenceHash,
   fenceRead,
+  firstRunAttempts,
   FenceBootSchema,
   FenceDirectorySchema,
   WriterSchema,
@@ -64,9 +65,8 @@ export async function enterClosedFirstRunInspection(
       .strictObject({ version: z.literal(1), workspace: FenceDirectorySchema, journal: FenceDirectorySchema })
       .parse(JSON.parse(fenceRead(anchorPath)));
     if (!same(anchor.workspace, workspace) || !same(anchor.journal, fenceDirectory(journal))) throw unavailable();
-    const names = readdirSync(journal).sort();
-    if (!names.length || names.length >= 256 || names.some((name, i) => name !== String(i + 1).padStart(6, "0")))
-      throw unavailable();
+    const names = firstRunAttempts(journal);
+    if (!names) throw unavailable();
     const attempt = join(journal, names.at(-1)!);
     fenceDirectory(attempt);
     if (readdirSync(attempt).sort().join(",") !== "claim.json,writer.json") throw unavailable();
