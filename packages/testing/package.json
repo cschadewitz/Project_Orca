@@ -23,7 +23,7 @@
     "@orca/agents": "workspace:*",
     "@agentclientprotocol/sdk": "^1.7.0",
     "yaml": "^2.9.1",
-    "zod": "^4.6.5"
+    "zod": "^4.6.6"
   },
   "bin": {
     "orca-scripted-agent": "./dist/scripted-agent/main.js"
