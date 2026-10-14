@@ -57,7 +57,13 @@ import { join, resolve } from "node:path";
 // The design system's own presentation maps, so the greyscale check compares the screen
 // against the source of truth rather than against a second list of glyphs written here
 // (RULES.md rule 3). This resolves to the built `dist`, which `pnpm run build` produces.
-import { CONNECTION_PRESENTATION, STATUS_PRESENTATION, type RunStatus } from "@orca/design";
+import {
+  CONNECTION_PRESENTATION,
+  STATUS_PRESENTATION,
+  SURFACE_IDS,
+  type RunStatus,
+  type SurfaceId,
+} from "@orca/design";
 import {
   ArtifactsListResultSchema,
   InputInvalidatedParamsSchema,
@@ -119,8 +125,9 @@ const THEMES = ["light", "dark"] as const;
 type Theme = (typeof THEMES)[number];
 
 /**
- * The surfaces axe is run over, with the digit `renderer/src/chrome/surfaces.ts` gives each
- * one and something to wait for that only exists once the surface has *data*.
+ * The surfaces axe is run over, each with something to wait for that only exists once the
+ * surface has *data*. Which digit reaches a surface is not written here: `gotoSurface` reads
+ * it off `SURFACE_IDS`, the same order `renderer/src/chrome/surfaces.ts` numbers.
  *
  * The wait is the point. Every one of these screens renders a `StateView` while it loads
  * and another if the daemon will not answer, and auditing either of those would be auditing
@@ -131,22 +138,27 @@ type Theme = (typeof THEMES)[number];
 const AUDITED = [
   {
     id: "attention",
-    shortcut: 1,
     /* The parked gate the fixture starts. Without it Attention is "nothing needs you" and
        the audit would never see a `GateCard` at all. */
     ready: ".orca-attn__cards .orca-attn__card",
   },
-  { id: "runs", shortcut: 2, ready: ".orca-runs__tree .orca-tree-row" },
-  { id: "agents", shortcut: 4, ready: ".orca-agents__host .orca-agent" },
-  /* Config (#175): a field of the form, which only exists once `config.get` has answered
-     with a schema — the demo daemon serves its own `orca.config.yaml`, so there is one. */
-  { id: "config", shortcut: 5, ready: ".orca-config__form .orca-field" },
+  { id: "runs", ready: ".orca-runs__tree .orca-tree-row" },
+  { id: "agents", ready: ".orca-agents__host .orca-agent" },
+  /* Config (#175, the studio since #607): the structured form's root group, which only
+     exists once the daemon has answered with the document and its shape — the demo daemon
+     serves its own `orca.config.yaml`, so there is one. The first-run and diagnostics
+     sections above it are the app's own rather than the daemon's, so neither will do. */
+  { id: "config", ready: '.orca-config__body [role="group"][aria-label="Configuration"]' },
   /* Plan (#170): a row of the schedule table, which only exists once `plans.list` and
      `items.list` have answered — the demo store's program run registers its work items in a
-     plan, so there is one. The last surface to leave the unbuilt list: as of v0.5.0 every
-     surface is audited, and a new one goes here on the day it grows content. */
-  { id: "plan", shortcut: 3, ready: '.orca-plan [role="grid"] [role="row"]' },
-] as const;
+     plan, so there is one. */
+  { id: "plan", ready: '.orca-plan [role="grid"] [role="row"]' },
+  /* Workflows (#181): a row of the list, which only exists once `workflows.list` has answered
+     with at least one workflow — the demo's three and the fixture's own are all configured.
+     Every surface in `SURFACE_IDS` is here, and "no surface is passed off as unbuilt" fails
+     on a new one until it is. */
+  { id: "workflows", ready: ".orca-wflist__table tbody tr" },
+] as const satisfies readonly { id: SurfaceId; ready: string }[];
 
 let daemon: Daemon;
 let app: ElectronApplication;
@@ -329,9 +341,13 @@ test("a pane boundary drags, and the width it is left at is remembered", async (
 
 /* ---------------------------------------------------------------- the surfaces */
 
-/** Put the window on a surface the way a person does — ⌘<n> — and wait for it to arrive. */
-async function gotoSurface(id: string, shortcut: number): Promise<Locator> {
-  await page.keyboard.press(`ControlOrMeta+Digit${shortcut}`);
+/**
+ * Put the window on a surface the way a person does — ⌘<n> — and wait for it to arrive. The
+ * digit is the surface's place in `SURFACE_IDS`, 1-indexed, as the app binds it, so a surface
+ * added or moved in `semantics.json` moves the key here too.
+ */
+async function gotoSurface(id: SurfaceId): Promise<Locator> {
+  await page.keyboard.press(`ControlOrMeta+Digit${SURFACE_IDS.indexOf(id) + 1}`);
   const pane = page.locator(`main.orca-main[data-surface="${id}"]`);
   await expect(pane).toBeVisible();
   return pane;
@@ -347,7 +363,7 @@ for (const surface of AUDITED) {
     test(`${surface.id} has no accessibility violations in ${theme}`, async () => {
       const testInfo = test.info();
       await setTheme(theme);
-      await gotoSurface(surface.id, surface.shortcut);
+      await gotoSurface(surface.id);
       // The surface with its data in it, not its loading state — see `AUDITED`.
       await expect(page.locator(surface.ready).first()).toBeVisible();
 
@@ -477,7 +493,7 @@ test.describe("a window too short for what is in it", () => {
 
   for (const surface of AUDITED) {
     test(`${surface.id} scrolls the box it says it scrolls, and its end is reachable`, async () => {
-      await gotoSurface(surface.id, surface.shortcut);
+      await gotoSurface(surface.id);
       await expect(page.locator(surface.ready).first()).toBeVisible();
 
       const proofs = await scrollProofs(`main.orca-main[data-surface="${surface.id}"]`);
@@ -500,7 +516,7 @@ test.describe("a window too short for what is in it", () => {
        and journal in a 420px-wide dock, in a window this short. The panel's own
        `overflow: hidden` is the clip that keeps the enter animation inside the column, so
        the region that has to take this is `.orca-panel__body` and nothing else. */
-    const plan = await gotoSurface("plan", 3);
+    const plan = await gotoSurface("plan");
     await expect(plan.locator('[role="grid"] [role="row"]').first()).toBeVisible();
     // Selecting a row is what opens the dock on this surface, the way a person opens it.
     await plan.locator('[role="grid"] [role="row"]').first().click();
@@ -519,10 +535,13 @@ test.describe("a window too short for what is in it", () => {
 test("no surface is passed off as unbuilt", async () => {
   /* Through v0.4.0 the surfaces that had no screen yet were asserted to be the empty
      `StateView` `App.tsx` gives them, so that the day one grew content the assertion failed
-     and its author moved it into `AUDITED`. As of v0.5.0 all five are audited; this keeps
-     the other half of that promise, that none of them still shows the placeholder. */
-  for (const surface of AUDITED) {
-    const pane = await gotoSurface(surface.id, surface.shortcut);
+     and its author moved it into `AUDITED`. Every surface is audited now, and this keeps
+     both halves of that promise: every surface `SURFACE_IDS` names is in `AUDITED`, so a
+     new one cannot join the rail unaudited the way Workflows did, and none of them still
+     shows the placeholder. */
+  expect(AUDITED.map((surface) => surface.id).sort()).toEqual([...SURFACE_IDS].sort());
+  for (const id of SURFACE_IDS) {
+    const pane = await gotoSurface(id);
     /* A count rather than `not.toContainText`: a surface that has been built has no
        `.orca-state--empty` at all, and a negated text assertion against an element that is
        not there fails on "element(s) not found" rather than passing. What is being claimed
@@ -606,7 +625,7 @@ for (const theme of THEMES) {
 
     try {
       // The attention list: the fixture's parked gate above, its failed run below.
-      const attention = await gotoSurface("attention", 1);
+      const attention = await gotoSurface("attention");
       await expect(attention.locator(".orca-attn__cards .orca-attn__card").first()).toBeVisible();
       await expect(attention.getByText(FIXTURE.gate.question)).toBeVisible();
       expectLegibleInGreyscale(
@@ -617,7 +636,7 @@ for (const theme of THEMES) {
 
       // The run tree: the demo's completed program beside the fixture's two runs, so there
       // is more than one status on screen and "distinguishable" means something.
-      const runs = await gotoSurface("runs", 2);
+      const runs = await gotoSurface("runs");
       const tree = runs.locator(".orca-runs__tree");
       await expect(tree.locator(".orca-tree-row").first()).toBeVisible();
       const marks = await statusMarks(tree);
@@ -651,7 +670,7 @@ for (const theme of THEMES) {
 
 test("a connected live permission expires without dispatching a stale answer", async () => {
   // Last: the visual audits retain their original durable-gate/failed-run fixture.
-  const attention = await gotoSurface("attention", 1);
+  const attention = await gotoSurface("attention");
   const before = await page.evaluate(() => {
     const target = window as unknown as SmokeWindow;
     const orca = target.orca!;
