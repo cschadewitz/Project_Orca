@@ -1973,7 +1973,13 @@ export class Orchestrator {
             // with, `name` is what the host shows. Keep them apart here too.
             // ACP remembered choices grant policy inside the agent. Live responses only
             // offer one-time choices; ORCA standing rules use the separately authorized writer.
-            options: offered.map((o) => ({ id: o.optionId, label: o.name || o.optionId })),
+            // ACP's `kind` declares which options reject: those are the destructive ones, which
+            // a card never selects first and an "always deny" has to answer with.
+            options: offered.map((o) => ({
+              id: o.optionId,
+              label: o.name || o.optionId,
+              ...(o.kind === "reject_once" || o.kind === "reject_always" ? { destructive: true } : {}),
+            })),
             // Whose turn is being held open (#248). It is recorded here because here is
             // where it is known: an attention card has to name the agent, and the push that
             // opens the card is a pure function of the event it comes from.

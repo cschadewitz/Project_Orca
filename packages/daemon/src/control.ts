@@ -554,6 +554,20 @@ export class ControlModel {
         requestId: params.requestId,
         kind: request.kind,
       });
+    // Which way the standing rule goes is the client's to state (#160), but the one-time
+    // answer has to go the same way: an "always deny" sent with an allow option would let this
+    // call through while forbidding the next ones. Where the ask marks its rejections
+    // (`destructive`, from ACP's option kinds), the two must agree. An ask recorded before
+    // options carried the mark cannot be checked and is taken as stated.
+    const chosen = request.options.find((option) => option.id === params.optionId);
+    const marked = request.options.some((option) => option.destructive === true);
+    const decision = params.always!.decision;
+    if (decision === "allow" ? chosen?.destructive === true : marked && chosen?.destructive !== true)
+      throw new OrcaError(
+        "NOT_SUPPORTED",
+        `an "always ${decision}" must answer with ${decision === "deny" ? "a deny" : "an allow"} option; '${params.optionId}' goes the other way`,
+        { requestId: params.requestId, optionId: params.optionId },
+      );
     const toolCall = request.context["toolCall"];
     if (!toolCall || typeof toolCall !== "object")
       throw new OrcaError(

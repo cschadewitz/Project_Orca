@@ -23,6 +23,8 @@
  * - **"Always" is stated, not inferred.** ORCA will not read an agent's option ids and guess
  *   that `allow_always` means allow, so the two always-buttons say which way the rule goes;
  *   what they wrote comes back in `permission` and is reported verbatim (`alwaysOutcome`).
+ *   The one-time answer they send goes the same way as the rule: an option `destructive`
+ *   marks for deny, any other for allow (`alwaysTarget`), and the daemon refuses a mismatch.
  */
 import { useUpdateDraft } from "../update-drafts.js";
 
@@ -173,6 +175,35 @@ export function AnswerCard({
     onAnswer({ optionId: answerValue, ...(note.trim() ? { note: note.trim() } : {}), ...over });
   };
 
+  /* An "always" answers this call the same way as the rule it writes: the selected option when
+     it goes that way, else the one option that does. `destructive` is what says an option
+     rejects (the engine reads it off ACP's option kinds). Where that is ambiguous or missing
+     the button says so, rather than sending an allow with a deny rule or the other way round. */
+  const alwaysTarget = (decision: "allow" | "deny"): { option: GateOption } | { reason: string } => {
+    const goes = (option: GateOption): boolean => (option.destructive === true) === (decision === "deny");
+    const current = options.find((option) => option.id === answerValue);
+    if (current && goes(current)) return { option: current };
+    const candidates = options.filter(goes);
+    if (candidates.length === 1) return { option: candidates[0]! };
+    return {
+      reason: candidates.length ? `choose which ${decision} option first` : `this ask names no ${decision} option`,
+    };
+  };
+  const always = { allow: alwaysTarget("allow"), deny: alwaysTarget("deny") };
+  const alwaysBlocked = (decision: "allow" | "deny"): string | undefined => {
+    const target = always[decision];
+    return blocked ?? ("reason" in target ? target.reason : undefined);
+  };
+  const sendAlways = (decision: "allow" | "deny"): void => {
+    const target = always[decision];
+    if (blocked !== undefined || !("option" in target)) return;
+    onAnswer({
+      optionId: target.option.id,
+      ...(note.trim() ? { note: note.trim() } : {}),
+      always: { decision },
+    });
+  };
+
   useCardKeys(bound, focused && !pending, {
     select: (value) => {
       edited.current = true;
@@ -267,18 +298,18 @@ export function AnswerCard({
                   guess. What they actually wrote comes back on the result. */}
               <Button
                 size="sm"
-                disabled={submitBlocked !== undefined}
-                {...(submitBlocked !== undefined ? { disabledReason: submitBlocked } : {})}
-                onClick={() => send({ always: { decision: "allow" } })}
+                disabled={alwaysBlocked("allow") !== undefined}
+                {...(alwaysBlocked("allow") !== undefined ? { disabledReason: alwaysBlocked("allow")! } : {})}
+                onClick={() => sendAlways("allow")}
               >
                 Always allow
               </Button>
               <Button
                 size="sm"
                 tone="danger"
-                disabled={submitBlocked !== undefined}
-                {...(submitBlocked !== undefined ? { disabledReason: submitBlocked } : {})}
-                onClick={() => send({ always: { decision: "deny" } })}
+                disabled={alwaysBlocked("deny") !== undefined}
+                {...(alwaysBlocked("deny") !== undefined ? { disabledReason: alwaysBlocked("deny")! } : {})}
+                onClick={() => sendAlways("deny")}
               >
                 Always deny
               </Button>

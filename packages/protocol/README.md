@@ -1065,6 +1065,12 @@ has to be able to check whether that is true, and `refused` is the case where it
 
 `always.decision` is stated by the client rather than inferred from the option id, because
 those ids are the *agent's* and a standing permission grant is the last place to guess.
+The one-time answer has to go the same way, though. Permission-ask options from an ACP
+`reject_once` / `reject_always` kind carry `destructive: true`. When an ask marks any option
+that way, the daemon refuses with `NOT_SUPPORTED` an `always: { decision: "deny" }` whose
+`optionId` is not destructive, and an `always: { decision: "allow" }` whose `optionId` is.
+The refusal comes before anything is answered or written. An ask recorded before options
+carried the mark is taken as stated.
 
 `note` is why this option and not which one. It does not reach the workflow, which branches on
 the option id alone, and it **does** reach the run's log as of #238: `human.answered` carries

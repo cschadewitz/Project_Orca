@@ -224,8 +224,9 @@ describe("Enter on a control inside a card is the control's", () => {
 
     await waitFor(() => expect(answers()).toHaveLength(1));
     // The button's request, with the standing rule it names — not `Enter` on the card, which
-    // is the selected Allow once and no rule at all.
-    expect(answers()[0]).toMatchObject({ always: { decision: "deny" } });
+    // is the selected Allow once and no rule at all. And it denies this call too: the selected
+    // option is Allow once, so it answers with the one option marked destructive.
+    expect(answers()[0]).toMatchObject({ optionId: "deny", always: { decision: "deny" } });
   });
 
   it("denies, with a deny rule, from the keyboard alone: Deny, then Always deny", async () => {
@@ -253,6 +254,52 @@ describe("Enter on a control inside a card is the control's", () => {
     // The first safe option, which is what the card opens with selected.
     expect(answers()[0]).toMatchObject({ optionId: "allow" });
     expect(answers()[0]!.always).toBeUndefined();
+  });
+});
+
+describe("an always-button answers this call the same way as its rule", () => {
+  it("Always deny with Allow once selected denies this call, never lets it through", async () => {
+    mount([PERMISSION_ASK]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    // Allow once is what the card opens with selected.
+    expect(
+      within(ask)
+        .getByRole("button", { name: /Allow once$/ })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(within(ask).getByRole("button", { name: "Always deny" }));
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    expect(answers()[0]).toMatchObject({ optionId: "deny", always: { decision: "deny" } });
+  });
+
+  it("Always allow with Deny selected allows this call", async () => {
+    mount([PERMISSION_ASK]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    fireEvent.click(within(ask).getByRole("button", { name: /Deny$/ }));
+    fireEvent.click(within(ask).getByRole("button", { name: "Always allow" }));
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    expect(answers()[0]).toMatchObject({ optionId: "allow", always: { decision: "allow" } });
+  });
+
+  it("says why Always deny cannot go when the ask marks no option as a rejection", async () => {
+    const unmarked: OpenInputView = {
+      ...PERMISSION_ASK,
+      options: [
+        { id: "allow", label: "Allow once" },
+        { id: "deny", label: "Deny" },
+      ],
+    };
+    mount([unmarked]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    const deny = within(ask).getByRole("button", { name: "Always deny" });
+    expect(deny.getAttribute("aria-disabled")).toBe("true");
+    expect(deny.getAttribute("title")).toBe("this ask names no deny option");
+    fireEvent.click(deny);
+    expect(answers()).toEqual([]);
+    // Allowing still has an unambiguous option to answer with.
+    fireEvent.click(within(ask).getByRole("button", { name: "Always allow" }));
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    expect(answers()[0]).toMatchObject({ optionId: "allow", always: { decision: "allow" } });
   });
 });
 

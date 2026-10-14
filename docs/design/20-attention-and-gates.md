@@ -67,6 +67,13 @@ held open, so the card names the agent and the host it runs on — "claude-local
 rather than only the run, because that is what makes "always" a grant a person can size. A
 workflow gate has no agent, and saying nothing is the honest answer there.
 
+**Always allow** and **Always deny** answer this call the same way as the rule they write.
+Each sends the selected option when it goes that way, and otherwise the one option that does.
+An option is a rejection when it is marked `destructive`, which the engine reads off ACP's
+`reject_once` / `reject_always` kinds. When no option, or more than one, goes that way and the
+selection doesn't, the button is disabled and says why. It never sends an allow with a deny
+rule. The daemon refuses that mismatch from any client too.
+
 ## Notifications
 
 OS notifications are opt-in per tier and default to permission asks only. Clicking one focuses

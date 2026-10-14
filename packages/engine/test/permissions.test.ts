@@ -165,10 +165,11 @@ describe("ask permissions as human input", () => {
     const [a, b] = humanInput.list();
     expect(a!.requestId).not.toBe(b!.requestId);
     expect(a!.kind).toBe("permission");
-    // ACP's `optionId` becomes the id (what the agent is answered with), its `name` the label.
+    // ACP's `optionId` becomes the id (what the agent is answered with), its `name` the label,
+    // and a `reject_*` kind marks the option destructive: what an "always deny" answers with.
     expect(a!.options).toEqual([
       { id: "allow", label: "Allow" },
-      { id: "deny", label: "Deny" },
+      { id: "deny", label: "Deny", destructive: true },
     ]);
     expect(a!.context).toMatchObject({ toolCall: { toolCallId: "tool-1" } });
 
