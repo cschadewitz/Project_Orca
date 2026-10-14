@@ -9,17 +9,29 @@ Everything below is exported from the package root. Current main uses **2.0**
 ([version source](src/version.ts)), store epoch `operator-journals-v4`.
 Protocol 2.0 requires coordinated client/daemon upgrade: old closed capability/event
 schemas cannot safely ignore the operator/admission/revision additions. Methods remain
-conditional on installed providers, read-only mode and current caller authority.
+conditional on installed providers, read-only mode and current caller authority; the
+[method inventory](#method-inventory) says which conditions and which grant, for every
+method a daemon can answer.
 See [operator integration](../../docs/runtime-operator-integration.md) for the current
 composition and dated acceptance checkpoints. Root version 0.6.0 alone does not identify
-a deployed build. Protocol 1.9 added authenticated clients, typed-input
-preflight and pinned launch guards; 1.10 added Request admission, generations/apply,
-workspace/boot identity and live callback fields. Protocol 1.7 introduced the
-v0.5.0 config/workflow/plan methods; 1.8 adds maintenance admission and optional
-`hello.processId`. It also advertises the additive v0.6.0 fields initially landed
-under 1.7: decision `resultIsPreview`, `runs.get.workflowPinned`, step `model`,
-workflow `pinned`, and `WORKFLOW_VERSION_NOT_FOUND`. Introduction versions below
-are history, not the current handshake version. See [release history](../../CHANGELOG.md).
+a deployed build. Introduction versions below are history, not the current handshake
+version. See [release history](../../CHANGELOG.md).
+
+| Protocol | What it added |
+| --- | --- |
+| 1.7 | the v0.5.0 config, workflow and plan methods |
+| 1.8 | maintenance admission and optional `hello.processId`; it is also the first to advertise the additive v0.6.0 fields that landed under 1.7: decision `resultIsPreview`, `runs.get.workflowPinned`, step `model`, workflow `pinned`, and `WORKFLOW_VERSION_NOT_FOUND` |
+| 1.9 | authenticated clients, typed-input preflight and pinned launch guards |
+| 1.10 | Request admission, configuration generations and `config.apply`, workspace/boot identity, and live callback fields |
+| 2.0 | the operator, admission and revision capabilities and the `revision.recorded` event. A 1.10 client validates capabilities and events with closed schemas and cannot ignore them, so this is a major |
+
+**The template and workflow-draft methods arrived inside 2.0.** The eight
+[`templates.*`](#template-authoring--templates) methods and the eight
+[`workflowDrafts.*`](#workflow-drafts--workflowdrafts) methods joined the method table after
+`PROTOCOL_VERSION` became 2.0, and the minor was not bumped for them, although
+`version.ts`'s own rule bumps the minor for added methods. So "2.0" does not say whether a
+daemon has them: a 2.0 daemon built before them answers `PROTOCOL_METHOD`. Ask
+`hello.methods`, which is the check that matters anyway.
 
 ## Transport
 
@@ -34,8 +46,13 @@ has not got — the daemon speaking first, in `notification` envelopes.
 { kind: "notification", method, params? }
 ```
 
-`code` is an `OrcaErrorCode` from `core`, one of `PROTOCOL_VERSION`, `PROTOCOL_METHOD`,
-`PROTOCOL_MESSAGE`, or one of the five the control methods add (`CONTROL_ERROR_CODES`):
+`code` is a plain string, so a newer daemon's codes still parse. It is either an
+`OrcaErrorCode` from `core` (`RUN_STATE`, `NOT_SUPPORTED`, `WORKFLOW_INPUT_INVALID`, …) or
+one of the protocol-only codes in [`errors.ts`](src/errors.ts), which exist only between
+processes: the three `PROTOCOL_ERROR_CODES` (`PROTOCOL_VERSION`, `PROTOCOL_METHOD`,
+`PROTOCOL_MESSAGE`), the three `AUTH_ERROR_CODES` (`AUTH_REQUIRED`, `AUTH_INVALID`,
+`AUTH_FORBIDDEN`, [below](#authentication-and-typed-preflight-19)), and the five the control
+methods add (`CONTROL_ERROR_CODES`):
 
 | code | means | `details` |
 | --- | --- | --- |
@@ -49,9 +66,21 @@ They exist because a screen has to tell them apart, and the engine says `RUN_STA
 the first four — the right shape for a CLI that prints a message, the wrong one for a client
 that branches. Invalid params are `PROTOCOL_MESSAGE` with the Zod issues in `details`.
 
-`PROTOCOL_VERSION` is `{ major, minor }`: `major` changes when a message changes shape or
-meaning, `minor` when messages or fields are added. Compatible when the majors match and the
-daemon's minor is at least the client's.
+**The `PROTOCOL_VERSION` code is a client's, not the daemon's.** No daemon path sends it.
+A daemon answers a `hello` it is not compatible with by `NOT_SUPPORTED`, with both versions
+in `details` (see [`hello`](#hello--every-connection-opens-with-it)). `PROTOCOL_VERSION` is
+the code a client raises locally when the `hello.protocol` it got back is not one it
+accepts: the app's daemon client, the MCP operator backend and `orca revisions` all do so.
+
+The `PROTOCOL_VERSION` constant is `{ major, minor }`: `major` changes when a message changes
+shape or meaning, `minor` when messages or fields are added. Compatible when the majors match
+and the daemon's minor is at least the client's (`isCompatible`).
+
+**A `/rpc` body is at most 1,000,000 bytes.** The daemon stops reading at that point and
+answers HTTP 413 with `{ kind: "response", id: 0, ok: false, error }`, where `error` is
+`INTERNAL` "body too large". The id is `0` because the envelope was never parsed. A
+credential refusal comes earlier, from the headers alone, and never reads the body (see
+[security](../../docs/daemon-security.md#http-rpc)).
 
 A client that only reads never opens a socket: `hello` and every read method work over
 `/rpc` with none. `DaemonHandle.socketUrl` is present only when the daemon was given an
@@ -74,8 +103,11 @@ rechecked for messages, notifications and idle connections; expiry/revocation cl
 
 `workflows.validateInputs` takes `{workflowId, version?, vars?}` and returns
 `{workflowId, version, revision, validation}` without echoing resolved values. Access
-requires launch authority and workflow scope before resolution/validation. Discover it
-through `hello.methods` and `workflows.validateInputs` capability. The result's version
+requires launch authority (`runs.start`) and workflow scope before resolution/validation.
+It is implemented and advertised, not reserved: the method table installs it whenever a
+workflow-input model is wired, `orca serve` always wires one, and `hello` then lists the
+method and the `workflows.validateInputs` capability to a caller holding `runs.start`.
+Discover it through `hello.methods`, like everything else. The result's version
 and revision are forwarded as `runs.start.workflowVersion` and
 `runs.start.expectedWorkflowRevision`. A stale revision is `WORKFLOW_INVALID`; input
 failures are `WORKFLOW_INPUT_INVALID` with `{errors, warnings}`. Read-only mode may offer
@@ -88,7 +120,8 @@ migration, protected execution state and standing-permission failure semantics.
 
 The standard daemon installs `maintenance` independently of `runs.control`, including
 in read-only mode; discover availability through `hello.methods`. `hello.processId` is
-optional supervisor identity, not caller authentication.
+optional supervisor identity, not caller authentication. Both maintenance methods need
+`daemon.maintenance`.
 
 ```ts
 params: { action: "prepare" | "resume"; token: string } // nonempty token
@@ -98,10 +131,7 @@ result: { ready: boolean; active: string[] } // active method names, not run IDs
 `prepare` closes admission only when no wrapped calls remain active; otherwise it returns
 `ready: false` and the active methods for the supervisor to drain/retry. Once held,
 another token is refused with `PROTOCOL_MESSAGE` ("Another updater owns admission").
-`resume` clears that in-memory token and returns `ready: false`. An external admission
-file can independently keep admission closed. While closed, wrapped reads and writes
-fail with `PROTOCOL_MESSAGE` ("Update admission is closed; retry later"); `hello`,
-`subscribe`, `unsubscribe` and `maintenance` remain available. Invalid parameters also
+`resume` clears that in-memory token and returns `ready: false`. Invalid parameters also
 use `PROTOCOL_MESSAGE`. This counts in-flight method calls, not all persisted run states.
 
 This method does not install software or accept paths/commands. The token coordinates
@@ -109,6 +139,77 @@ updaters; general HTTP/WS authentication and `daemon.maintenance` authorization 
 apply separately ([security](../../docs/daemon-security.md)). The supervisor must
 also check run/update readiness and daemon ownership as described in [Updating](../../docs/UPDATING.md).
 See [schema](src/maintenance.ts) and [admission implementation](../daemon/src/maintenance.ts).
+
+### `maintenance.runtime` — exact-target idle proof, drain and defer
+
+```ts
+target: { workspaceId; instanceId; processId } // hello.identity plus hello.processId
+
+params: { action: "prepare" | "resume"; token; target }
+result: { proof: "runtime-v1"; target; outcome: "held" | "blocked" | "released";
+          active: RuntimeActivityReason[] }
+
+params: { action: "drain" | "defer"; token; target }
+result: { proof: "runtime-drain-v1"; target; outcome: "draining" | "held" | "blocked" | "released";
+          active: RuntimeActivityReason[]; unfinished: { status; count }[]; truncated: boolean }
+```
+
+`RuntimeActivityReason` is `rpc`, `execution`, `callback`, `renewal`, `dispatch`,
+`continuation`, `recovery` or `unavailable`. The legacy method counts RPC calls; this one also
+proves the runtime behind them is idle. It is installed only when the daemon's live
+execution runtime is completely bound: token mode, a daemon identity, and the Request,
+admission and continuation services on that one runtime, which a writable token-mode
+`orca serve` provides. A `--read-only` daemon therefore has `maintenance` and not
+`maintenance.runtime`. A `target` other than this process's, or a token other than the one
+holding admission, is refused with `PROTOCOL_MESSAGE` ("Runtime target changed", "Another
+updater owns admission"). Once a runtime proof holds admission, the legacy `maintenance`
+is refused too ("Runtime admission requires its proof method").
+
+- **`prepare`** answers `held` only when nothing is active, neither an RPC call nor any
+  runtime activity; otherwise `blocked`, with the reasons in `active`. `held` closes every
+  wrapped method.
+- **`resume`** releases a held proof and answers `released`. A draining owner uses `defer`.
+- **`drain`** closes *new* admission at once, even while work is active, and leaves
+  existing work running. It answers `draining` with the live activity reasons, and once
+  there is none, with an aggregate `unfinished` count per status (`created`, `running`,
+  `waiting`, `paused`) of runs not yet finished. When nothing is left it seals every
+  wrapped method and answers `held`. The daemon does not poll: the owner calls `drain` again
+  to observe. An inventory that fails, takes longer than a second or covers more than 4,096
+  runs comes back `truncated: true` with `unavailable`, and cannot become `held`.
+- **`defer`** releases a still-draining fence. It cancels and settles nothing.
+
+Only a target-matching `released` proves release. Treat every other answer, `blocked`
+included, as leaving an earlier hold in place. The full contract is in
+[update drain](../../docs/implementation/mac-update-drain.md).
+
+### What closed admission refuses
+
+A wrapped method refused by admission fails with `PROTOCOL_MESSAGE` ("Update admission is
+closed; retry later"). `hello`, `subscribe`, `unsubscribe`, `maintenance` and
+`maintenance.runtime` are never wrapped. The new-admission methods are `runs.start`,
+`runs.admit`, `requests.submit`, `operator.admitRun` and `operator.submitRequest`; every
+other method in the table is existing work.
+
+| Admission is closed by | New admission | Existing work |
+| --- | --- | --- |
+| a `maintenance` `prepare` hold, `ORCA_MAINTENANCE_TOKEN`, or a `held` runtime proof | refused | refused |
+| a `maintenance.runtime` `drain` still `draining` | refused | admitted |
+| a file at `ORCA_ADMISSION_FILE` | refused | refused |
+| the durable new-admission gate | refused | admitted |
+| the durable existing-work gate | refused | refused |
+
+A drain keeps answers, resumes, continuations, receipt reconciliation and reads available,
+so that the existing work can finish. The two durable gates are callbacks `orca serve`
+derives from its update-window ownership
+([`update-bootstrap.ts`](../cli/src/update-bootstrap.ts)); each closes independently of any
+token, and a gate that throws counts as closed.
+
+`orca serve` reads two environment variables for an update supervisor:
+
+| Variable | Effect |
+| --- | --- |
+| `ORCA_MAINTENANCE_TOKEN` | The daemon starts with admission already closed and held by this token, as if `maintenance` `prepare` had succeeded with it. Every wrapped method, and the daemon's own continuation recovery, waits until the same token sends `maintenance` `resume`. `maintenance.runtime` cannot take the hold over (its `prepare` and `drain` answer `blocked`), and any other token is refused. |
+| `ORCA_ADMISSION_FILE` | A path. While anything exists at it, every wrapped method is refused, `maintenance.runtime` answers `blocked` with `unavailable`, and no token can reopen admission. Removing the file lifts this gate. The Debian release tool ([`orca-release.py`](../../tools/deploy/orca-release.py)) starts the daemon with this pointing at its pending-activation record, so a daemon restarted mid-activation stays closed ([Updating](../../docs/UPDATING.md)). |
 
 ## Conventions the read methods share
 
@@ -141,12 +242,120 @@ and tested in `packages/protocol/test/status.test.ts`.
 | `waiting` on `dependencies` / `plan` | `blocked` | nothing is wrong and nobody is being asked |
 | `waiting` on `agent-turn` / `child-run` | `running` | the run is working |
 | `created` | `blocked` | it exists and nothing has started |
-| `running`/`waiting` with a lapsed or absent run lease | `stale` | nothing is driving it |
+| `created`/`running`/`waiting` with `leaseLapsed` | `stale` | nothing is driving it |
 | step `scheduled` | `blocked` | |
 | step `skipped` | `cancelled` | a branch never taken is not a fault |
 
+`leaseLapsed` is the caller's to supply. The daemon's read model sets it for a `running` or
+`waiting` run whose lease is lapsed *or absent*, and never for a `created` run, so a daemon
+read shows a `created` run as `blocked`; the fold itself sends any of the three to `stale`.
+
 `held` is never produced from a run: it is the plan surface's word for an item restrained by
 risk appetite, and belongs to the plan methods.
+
+## Method inventory
+
+Every method the daemon's [method table](../daemon/src/methods.ts) can install, all 83, with
+the operation grant the [operation matrix](../daemon/src/auth/operations.ts) gives it and
+what has to be wired for the method to be in the table at all. On a token daemon, a method
+that is not installed answers `PROTOCOL_METHOD` to a caller holding its grant, and
+`AUTH_FORBIDDEN` to one who does not (see [`hello`](#hello--every-connection-opens-with-it)).
+`hello.methods` is this table cut down to what is installed and what the caller holds. The
+[security matrix](../../docs/daemon-security.md#permission-matrix) adds each method's
+resource check and audit class.
+
+The conditions use these words:
+
+- **store**: the daemon serves a store. Without one it answers `hello` alone.
+- **writable**: not `orca serve --read-only`. A read-only daemon has no control model and
+  omits every row that says so.
+- **token**: token authentication, the default `orca serve`. An explicit
+  `--unauthenticated-loopback` daemon installs none of the rows that say so.
+- **identity**: the daemon has a workspace identity (`hello.identity`).
+- **generations**: configuration generations are wired, which is also what `config.apply`
+  needs.
+- **operator**: token, identity and the operator projection sources, which `orca serve`
+  supplies.
+
+| Methods | Operation grant | Installed when |
+| --- | --- | --- |
+| `hello` | any authenticated principal | always |
+| `runs.list`, `runs.get`, `runs.events`, `inputs.list`, `claims.list` | `runs.read` | store |
+| `artifacts.list`, `artifacts.get` | `artifacts.read` | store |
+| `workflows.list`, `workflows.get` | `workflows.read` | store |
+| `workflows.validateInputs` | `runs.start` | a workflow-input model; `orca serve` always has one |
+| `config.get` | `config.read` | a configuration model |
+| `plans.list`, `plan.get`, `items.list`, `schedule.get`, `schedule.explain`, `dependencies.list`, `risks.list`, `decisions.list`, `journal.list` | `plan.read` | the read model has a plan |
+| `subscribe`, `unsubscribe` | any authenticated principal | an engine feed; answered on the socket only |
+| `agents.list` | `agents.read` | an agent registry |
+| `agents.ping` | `agents.ping` | an agent registry |
+| `maintenance` | `daemon.maintenance` | always |
+| `maintenance.runtime` | `daemon.maintenance` | writable, token, identity, a completely bound execution runtime |
+| `inputs.answer` | `inputs.answer`; `always` also needs `permissions.grant` | writable |
+| `runs.resume`, `runs.cancel` | `runs.control` | writable |
+| `runs.start` | `runs.start` | writable |
+| `claims.release` | `claims.release` | writable |
+| `dependencies.waive`, `decisions.decide`, `decisions.reopen`, `risks.update` | `plan.write` | writable, with a plan |
+| `config.set` | `config.write` and `config.read` | writable, a configuration model |
+| `config.apply` | `config.write` | writable, generations |
+| `requests.submit`, `requests.reconcile`, `requests.admission`, `requests.admissions` | `plan.write` and `runs.start` | writable, token, the Request submission service |
+| `runs.admit`, `admissions.get`, `admissions.reconcile` | `runs.start` | writable, token, the admission retry service |
+| `continuations.get` | `runs.read` | token, the continuation service |
+| `runs.continue`, `continuations.reconcile` | `runs.control`; a decision also needs `inputs.answer` | writable, token, the continuation service |
+| `inputs.revisionPending` | `runs.read` | writable, token, identity, the revision services |
+| `inputs.revise`, `inputs.replaceRevision` | `inputs.answer` and `runs.control` | writable, token, identity, the revision services |
+| `templates.get`, `templates.history`, `templates.validate`, `templates.preview` | `config.read` | generations, identity |
+| `templates.variant`, `templates.save`, `templates.assign`, `templates.publish` | `config.write` and `config.read` | writable, generations, identity |
+| `workflowDrafts.get` | `config.read` | generations, identity |
+| `workflowDrafts.open`, `workflowDrafts.apply`, `workflowDrafts.undo`, `workflowDrafts.redo`, `workflowDrafts.review`, `workflowDrafts.publish`, `workflowDrafts.discard` | `config.write` and `config.read` | writable, generations, identity |
+| `operator.discover` | any authenticated principal | operator, or a host-resource source alone |
+| `operator.page` | any authenticated principal; each collection checks its own grant | operator |
+| `operator.config` | `config.read` | operator, a configuration status source |
+| `operator.preflight` | `runs.start` | operator, generations |
+| `operator.artifact` | `artifacts.read` and `runs.read` | operator, an artifact source |
+| `operator.hostResources` | `host.telemetry.read` | token, identity, an injected host-resource source; `orca serve` injects none |
+| `operator.submitRequest` | `runs.start` and `plan.write` | operator, writable, the Request submission and admission retry services |
+| `operator.admitRun`, `operator.admission`, `operator.reconcileAdmission` | `runs.start` | operator, writable, the admission retry service |
+| `operator.cancel` | `runs.control` | operator, writable |
+| `operator.answer` | `inputs.answer` | operator, writable, store |
+| `operator.continuation` | `runs.read` | operator, the continuation service |
+| `operator.continueRun`, `operator.reconcileContinuation` | `runs.control` | operator, writable, the continuation service |
+| `operator.revise` | `inputs.answer` and `runs.control` | operator, writable, the revision services |
+
+`requests.*` and `inputs.revise` / `inputs.replaceRevision` list one grant in `OPERATIONS`
+and the guard adds the second (`runs.start`, `runs.control`) before anything else is
+checked. `operator.artifact` is listed under `artifacts.read`; discovery also requires
+`runs.read`, and without it the artifact answers `ARTIFACT_MISSING`.
+
+### Capabilities
+
+`hello.capabilities` is coarse: a capability names a family, not every operation in it.
+The enum (`DAEMON_CAPABILITIES`, [handshake](src/handshake.ts)) has 32 values. `hello`
+advertises each one under the condition in the middle column, and shows it only to a
+caller holding the grant in the last.
+
+| Capability | Advertised when | Shown to a caller holding |
+| --- | --- | --- |
+| `runs.read` | the embedder lists it; `orca serve` always does | `runs.read` |
+| `runs.subscribe` | the embedder lists it; `orca serve` always does | `runs.read` |
+| `runs.control` | writable | any of `runs.control`, `runs.start`, `inputs.answer`, `claims.release` |
+| `plan.read` | the read model has a plan | `plan.read` |
+| `plan.write` | writable, with a plan | `plan.write` |
+| `workflows.validateInputs` | its method is installed | `runs.start` |
+| `inputs.live` | the control model has live input (writable token `orca serve`) | `inputs.answer` |
+| `runs.admit`, `admissions.get`, `admissions.reconcile` | the three methods are installed | `runs.start` |
+| `runs.continue`, `continuations.reconcile` | their methods are installed | `runs.control` |
+| `continuations.get` | its method is installed | `runs.read` |
+| `inputs.revisionPending` | its method is installed | `runs.read` |
+| `inputs.revise`, `inputs.replaceRevision` | their methods are installed | `inputs.answer` and `runs.control` |
+| `operator.discover` | its method is installed | any of `host.telemetry.read`, `runs.read`, `artifacts.read`, `workflows.read`, `runs.start`, `config.read`, `plan.read` |
+| `operator.page` | its method is installed | any of `runs.read`, `artifacts.read`, `workflows.read`, `config.read`, `plan.read` |
+| `operator.config`, `operator.preflight`, `operator.artifact`, `operator.hostResources` | its method is installed | the method's grants, as the inventory gives them |
+| `operator.submitRequest`, `operator.admitRun`, `operator.admission`, `operator.reconcileAdmission`, `operator.cancel`, `operator.answer`, `operator.continueRun`, `operator.continuation`, `operator.reconcileContinuation`, `operator.revise` | its method is installed | the method's grants, as the inventory gives them |
+
+There is no capability for the read methods beyond `runs.read`, for `config.*`,
+`templates.*`, `workflowDrafts.*`, `requests.*`, the agent methods or `maintenance*`: ask
+`hello.methods`.
 
 ## Methods
 
@@ -161,18 +370,26 @@ result: { protocol, orcaVersion, storeDir?, processId?, identity?: { workspaceId
 `capabilities` is coarse; `methods` is the installed method set available to this
 authenticated principal. Protocol 2.0 includes conditional operator/admission/revision
 families beyond the original read/control/plan/agent groups. A schema/export alone
-does not install a service. Consult [handshake schemas](src/handshake.ts) and current
-[operation authorization](../daemon/src/auth/operations.ts); resource scope is still
-checked on every call. Major versions must match before normal client operation.
+does not install a service. The [method inventory](#method-inventory) and
+[capability table](#capabilities) list them; consult [handshake schemas](src/handshake.ts)
+and current [operation authorization](../daemon/src/auth/operations.ts) for the source.
+Resource scope is still checked on every call.
+
+**A version the daemon cannot serve is `NOT_SUPPORTED`.** The daemon accepts a `hello` when
+`isCompatible(client, daemon)` holds: the majors match and the daemon's minor is at least
+the client's. Otherwise [it refuses](../daemon/src/methods.ts#L366-L375) with
+`NOT_SUPPORTED`, a message such as `client speaks protocol 1.10, daemon speaks 2.0`, and
+`details: { client, daemon }`, both `{ major, minor }`. It never answers
+`PROTOCOL_VERSION`, which is a client-side code (see [Transport](#transport)).
 
 **`methods` is the check that matters, not `capabilities`.** `orca serve --read-only` leaves
 the control methods out of the dispatch table *and* out of `methods`, and drops
 `runs.control` from `capabilities`. For a caller holding the relevant operation grant,
 an omitted control method answers `PROTOCOL_METHOD`. A caller lacking the known
 operation's grant can receive `AUTH_FORBIDDEN` first: the
-[operation guard](../daemon/src/auth/guard.ts#L176-L187) runs before
-[method lookup](../daemon/src/server.ts#L187-L195). Discovery lets a client hide an
-unavailable action; it does not bypass authorization.
+[operation guard](../daemon/src/auth/guard.ts#L176-L187) runs before the
+[method lookup](../daemon/src/server.ts#L202-L203) in `dispatch`. Discovery lets a client
+hide an unavailable action; it does not bypass authorization.
 
 > **A lease and caller authority are separate.** Default `orca serve` authenticates
 > bearer credentials and enforces operation/resource authority. Explicit
@@ -188,10 +405,10 @@ params: { status?: DisplayStatus[]; requestId?; workItemId?; parentRunId?; roots
 result: { runs: RunSummaryView[]; total: number; asOf }
 ```
 
-Newest first. `RunSummaryView`: `id`, `name`, `workflowId`, `workflowVersion`, `status`,
-`outcome?`, `waitingOn?` / `waitingDetail?` / `waitingSince?`, `createdAt`, `startedAt?`,
-`finishedAt?`, `durationMs?`, `parentRunId?`, `parentStepRunId?`, `requestId?`, `workItem?`,
-`agentId?`, `error?`.
+Newest first. `RunSummaryView`: `id`, `name`, `workflowId`, `workflowVersion`,
+`workflowPinned?` (`runs.get` only), `status`, `outcome?`, `waitingOn?` / `waitingDetail?` /
+`waitingSince?`, `createdAt`, `startedAt?`, `finishedAt?`, `durationMs?`, `parentRunId?`,
+`parentStepRunId?`, `requestId?`, `workItem?`, `agentId?`, `error?`.
 
 `name` is the work item's title, else the request's title, else the workflow id — never an
 id alone when something better exists, and never invented.
@@ -201,8 +418,36 @@ id alone when something better exists, and never invented.
 ```ts
 params: { runId }
 result: { run: RunSummaryView; workspace; vars; steps: StepView[]; traversal?: RunTraversalView[];
-          artifacts: ArtifactView[]; lastSeq; asOf }
+          artifacts: ArtifactView[]; lastSeq; asOf;
+          admissionExecution?: { state: "pending" | "started" | "uncertain";
+                                 reason?: "legacy-evidence" | "evidence-unavailable" };
+          continuation?: { expectedBoundary };
+          provenance?: RunProvenance }
 ```
+
+`run.workflowPinned` is set here and never on `runs.list`: true when a version of the
+run's workflow is on disk and it is not the run's recorded `workflowVersion`, so the run
+runs, and resumes, on the stored definition it started with (#179). False when the
+workflow is not registered at all.
+
+Three optional fields carry what a token-mode daemon knows beyond the log. Each is absent
+when there is nothing to say, and none is authority for anything:
+
+- **`admissionExecution`** is evidence about a durably admitted run's first execution:
+  `pending` before it starts, `started` once it has, and `uncertain` with a `reason` when the
+  evidence is legacy or unreadable. It never promises that something is attached now. It is
+  absent for a run started any other way, and rechecks `runs.read` and the run before and
+  after it reads.
+- **`continuation.expectedBoundary`** is the opaque, server-issued guard
+  [`runs.continue`](#runscontinue--continuationsget--continuationsreconcile--durable-continuation)
+  takes. It is issued only for a durable boundary continuation supports, and only when
+  continuation is wired.
+- **`provenance`** is the safe launch explanation recorded when the run was created:
+  `configGeneration`, the workflow's `{ id, version, revision }`, the `inputs` by name and
+  source (`caller` or `workflow`) with every value `[REDACTED]`, the per-node `selections`
+  (agent, host, model and template, each with the source that chose it), and the
+  `templatePack` and `itemWorkflow` defaults. It holds no executable snapshot, secret value
+  or artifact reference.
 
 `steps` is every step run in scheduling order — one entry per *attempt*, so a retried node
 appears more than once with ascending `attempt`; a tree groups by `nodeId` (and `iteration`,
@@ -301,8 +546,9 @@ a screen filtered to one step still shows the same cursor as the run around it.
 ### `inputs.list` — the attention surface
 
 ```ts
-params: { runId?; kind?: ("decision" | "permission" | "question")[] }
-result: { inputs: OpenInputView[]; waiting: number; asOf }
+params: { runId?; kind?: ("decision" | "permission" | "question")[]; revisionRunIds?: string[] }
+result: { inputs: OpenInputView[]; waiting: number; pendingRevisions?: PendingRevisionsDiscovery;
+          asOf }
 ```
 
 Longest-waiting first. `runId` scopes to that run *and its descendants*. Each entry carries
@@ -331,6 +577,35 @@ decision one a person can size. A workflow `decision` or `question` has none, an
 is the answer rather than a field that failed to load — as is a missing `hostType`, which
 means the host is no longer configured. `input.opened` carries it too, for the same reason it
 carries the options.
+
+**`live` is a live permission callback's identity** — `{ target, state }`, with `state` one
+of `pending`, `accepting`, `expired` or `owner-unavailable`. It is absent on a durable
+workflow gate, and an expired ask cannot be answered; see
+[`inputs.answer`](#inputsanswer--settle-an-open-gate-or-permission-ask).
+
+**Revision fields (2.0).** A token-mode daemon adds three, each absent where it has nothing
+to say, and a legacy read model's rows never carry the first two (the method strips them
+before projecting its own):
+
+- **`revisionActionId`** on an input is a restriction only: that declared option cannot be
+  chosen with `inputs.answer`, whether or not a revision capability is offered.
+- **`revision`** on a durable `decision` input is the `RevisionBoundaryView`
+  (`target`, `capability`, `destinationDescription`) when exactly one waiting revision
+  boundary matches this input and its `capability.actionId` is one of the options. Its
+  `target` is what [`inputs.revise`](#inputsrevise--inputsrevisionpending--inputsreplacerevision--explicit-corrections)
+  takes. Only a caller holding `inputs.answer` and `runs.control` as well as `runs.read`
+  sees it, and only on a writable daemon with the revision services.
+- **`pendingRevisions`** lists the current correction at each revision destination of an
+  explicit batch of runs, apart from the open inputs and never counted in `waiting`. It is
+  present only with the revision services. The batch is `revisionRunIds`, 1–20 unique
+  exact run ids, defaulting to `[runId]` and never to descendants or the whole store.
+  Without either, the answer is empty with `incomplete: true, reason: "run-scope-required"`.
+  At most 50 items, metadata only (`target`, `expectedRevision`, `state`,
+  `unavailableReason?`); correction text needs `inputs.revisionPending`. `incomplete: true`
+  with `reason: "limit"` or `"boundary-unavailable"` says it is not the whole answer.
+
+A change in the caller's authority while these are read refuses the whole response rather
+than returning part of it.
 
 ### `claims.list` — who owns which work item
 
@@ -425,7 +700,9 @@ result: { document: ConfigDocumentView; written; validation?: { errors: { path; 
 ```
 
 A write, so it is in `CONTROL_METHODS` and absent from a `--read-only` daemon;
-current operation authority requires `config.write`. Exactly one of `text` and `patch` — they
+current operation authority requires `config.write` **and** `config.read`, because every
+save or validation receipt carries the unredacted document bytes, even for an empty patch.
+Discovery omits it from a caller without both. Exactly one of `text` and `patch` — they
 are different promises. `text` replaces the bytes; `patch` edits the parsed YAML *document*
 in place, so every comment and every piece of formatting survives. The daemon never
 re-serialises the parsed config, which would materialise every schema default into the file
@@ -676,8 +953,10 @@ no `runId` and no cursor: a client re-reads `workflows.get`.
 Successful configuration activation emits this invalidation for added/changed and
 removed workflow IDs (`removed: true` for removal), filtered by current workflow
 authority. Re-read the affected snapshot. No notification is emitted for failed apply
-or validate-only. There is no filesystem watcher; explicit `config.apply` is the asset
-refresh boundary, including template-only changes. A workflow editor is still separate work.
+or validate-only. There is no filesystem watcher; an explicit activation is the asset
+refresh boundary, including template-only changes. That is `config.apply`, or the
+activation that `templates.publish` and `workflowDrafts.publish` perform, and all three
+announce the same way.
 
 ### `config.changed` — the third push that is not about a run
 
@@ -738,11 +1017,19 @@ and resource scope for each call:
 | `runs.resume`, `runs.cancel` | `runs.control`, scoped to the run |
 | `inputs.answer` | `inputs.answer`, scoped to the input; `always` additionally requires `permissions.grant` |
 | `claims.release` | `claims.release`, scoped to the claim |
-| `config.set`, `config.apply` | `config.write` |
+| `config.set` | `config.write` and `config.read` |
+| `config.apply` | `config.write` |
 | `dependencies.waive`, `decisions.decide`, `decisions.reopen`, `risks.update` | `plan.write` |
+| `requests.submit`, `requests.reconcile`, `requests.admission`, `requests.admissions` | `plan.write` and `runs.start` |
+| `runs.admit` | `runs.start`, scoped to the workflow |
+| `admissions.get`, `admissions.reconcile` | `runs.start`; a Request receipt also needs `plan.write` |
+| `runs.continue`, `continuations.reconcile` | `runs.control`, scoped to the run; a decision also needs `inputs.answer` |
+| `inputs.revise`, `inputs.replaceRevision` | `inputs.answer` and `runs.control`, scoped to the run |
 
-Conditionally installed admission/continuation services add their own methods and
-guards; this section is not a fixed inventory of everything `hello.methods` may expose.
+The admission, continuation and revision methods are installed only where their services
+are (see the [method inventory](#method-inventory)); the template and workflow-draft writes
+have [their own sections](#template-authoring--templates), and the
+[operator aliases](#the-operator-methods) wrap these same services.
 
 ### `inputs.answer` — settle an open gate or permission ask
 
@@ -807,7 +1094,8 @@ for.
 ### `runs.start` — direct workflow launch with optional existing associations
 
 ```ts
-params: { workflowId; vars = {}; requestId?; workItemId? }
+params: { workflowId; vars = {}; workflowVersion?; expectedWorkflowRevision?;
+          expectedConfigGeneration?; idempotencyKey?; requestId?; workItemId? }
 result: { runId; run: RunSummaryView; asOf }
 ```
 
@@ -823,6 +1111,153 @@ and exposed on `run.changed`.
 The [resource guard](../daemon/src/auth/guard.ts) additionally requires `plan.read`
 when `requestId` is supplied, and both `plan.read` and `plan.write` for `workItemId`.
 Workflow launch authority alone does not make those workspace documents accessible.
+
+`workflowVersion` and `expectedWorkflowRevision` are the exact pair
+`workflows.validateInputs` returned; a stale revision is `WORKFLOW_INVALID`.
+`expectedConfigGeneration` names the active configuration generation the caller reviewed.
+If another one is active the launch is refused with `CONFIG_STALE` ("active configuration
+changed; refresh before launching"), and a daemon without configuration generations
+refuses the guard with `NOT_SUPPORTED`.
+
+**Under default `orca serve`, `runs.start` is a durable admission.** Where retry admission
+is wired, which a writable token-mode `orca serve` does, `runs.start` goes through the
+same admission as [`runs.admit`](#runsadmit--admissionsget--admissionsreconcile--durable-direct-admission),
+under the same `run.admit` operation kind, and then waits as it always has:
+
+- `idempotencyKey` identifies one launch intent and must be 1–128 UTF-8 bytes; anything
+  else is `WORKFLOW_INPUT_INVALID`. Sending the same key with the same command again returns
+  the original admission instead of starting a second run. The same key with a different
+  command is `RETRY_CONFLICT`. Without a key there is no deduplication.
+- An `accepted` admission is settled as before: the call drives the new run under this
+  daemon's lease and returns `{ runId, run, asOf }`.
+- **Anything short of `accepted` is a refusal, not a receipt.** It is `RUN_STATE` "Run
+  admission requires reconciliation", with the receipt in `details`: `state` (`prepared` or
+  `recoverable-failure`), `admissionId`, `operationId`, and `runId?` / `failure?`. Bounded
+  contention is `RUN_STATE` "Run admission is in progress", with
+  `details: { state: "in-progress", operationId, recovery: "inspect-or-retry" }`. Either
+  way, `details.operationId` is what `admissions.get` and `admissions.reconcile` take.
+
+Without retry admission (an `--unauthenticated-loopback` daemon, or an embedder that wires
+none) `runs.start` launches through the orchestrator directly, and an `idempotencyKey` is
+refused with `NOT_SUPPORTED` ("Retry admission is not configured").
+
+### `runs.admit` / `admissions.get` / `admissions.reconcile` — durable direct admission
+
+```ts
+params: { workflowId; vars?; workflowVersion?; expectedWorkflowRevision?; expectedConfigGeneration?;
+          requestId?; workItemId?; idempotencyKey?;
+          expectedScope?: { principalId; workspaceId } }
+result: { operationId; admissionId; state: "prepared" }
+      | { operationId; admissionId; state: "accepted"; runId }
+      | { operationId; admissionId; state: "recoverable-failure"; runId?;
+          failure: { code; message; recovery: "reconcile" } }
+
+params: { operationId } // "retry_" and a UUID; the same for both
+result: { state: "resolved"; operationId; replayed: boolean; result }
+      | { state: "in-progress"; operationId; recovery: "inspect-or-retry" }
+```
+
+`runs.admit` is `runs.start`'s durable admission without the wait. It returns the receipt
+once admission is recorded, and an `accepted` run's first execution is dispatched in the
+background. Only `accepted` promises admitted work, and it is neither completion nor
+attachment: `runs.get`'s `admissionExecution` says what is known about that first
+execution. Bounded contention is `RUN_STATE` "Run admission is in progress" with the
+`in-progress` envelope in `details`, never a fabricated receipt. Params are strict, and the
+params schema itself holds `idempotencyKey` to 1–128 UTF-8 bytes, so a bad key is
+`PROTOCOL_MESSAGE` here; a good one deduplicates exactly as it does for `runs.start`.
+`expectedScope`, when it is given, must name the caller's own verified principal and the
+daemon's workspace, or the call is `AUTH_FORBIDDEN` before anything is admitted. The
+resource guard applies `runs.start`'s `requestId` / `workItemId` grants.
+
+`admissions.get` inspects and `admissions.reconcile` recovers a retained operation by
+`operationId`. Only the caller's own operations in this workspace are found; anything else
+is `RUN_STATE` "Retry operation is unavailable". `result` is the retained receipt of the
+operation's own kind, a `requests.submit` receipt (with `requestId`, and needing
+`plan.write`) or a `runs.admit` / `runs.start` one. Reconciling an `accepted` direct
+admission whose run never attached dispatches it.
+
+**Only two operation kinds can be inspected or reconciled here: `request.submit` and
+`run.admit`.** The same retry facility also keeps `revision.submit`, `revision.replace` and
+`run.continue` operations, but an `operationId` of those kinds is refused with
+`NOT_SUPPORTED` ("This operation's receipt dispatcher is not installed"), even though the
+`in-progress` envelope their own methods return says `inspect-or-retry`. A continuation
+has `continuations.get` / `continuations.reconcile` by `continuationId`. A revision is
+recovered only by sending the same `idempotencyKey` and command to its method again; its
+current state is `inputs.revisionPending`, and `inputs.list`'s `pendingRevisions` finds the
+target. See [admission retry](../../docs/admission-retry.md) for comparison rules, limits and
+quotas (`RETRY_LIMIT`).
+
+### `runs.continue` / `continuations.get` / `continuations.reconcile` — durable continuation
+
+```ts
+params: { command: { runId; expectedBoundary; decision?: { requestId; optionId; note? } };
+          retry = { idempotencyKey? } }
+result: { state: "resolved"; operationId; replayed: boolean; result: ContinuationReceipt }
+      | { state: "in-progress"; operationId; recovery: "inspect-or-retry" }
+
+params: { continuationId } // "ct_" and a UUID; the same for both
+result: ContinuationReceipt
+
+ContinuationReceipt: { operationId; continuationId; runId; expectedBoundary;
+                       state: "prepared" | "accepted" | "blocked" | "settled";
+                       blockedReason?: "authority-unavailable" | "leased" | "unsafe-boundary"
+                                     | "generation-unavailable" }
+```
+
+The durable counterpart of `runs.resume`, and of `inputs.answer` plus resume when a
+`decision` is included (`optionId` and `note` at most 16,384 characters). `expectedBoundary`
+is copied from [`runs.get`](#runsget--one-runs-tree)'s `continuation.expectedBoundary`, an
+opaque guard the daemon issues only for a boundary it supports; a client never builds one.
+If the run has moved on, the call is `CONTINUATION_STALE` ("Continuation boundary has
+changed"). Admission writes one protected decision-plus-dispatch marker and returns;
+execution is attached in the background, and the receipt moves on to `settled`, or to
+`blocked` with a `blockedReason`. The retry key follows the shared 1–128-byte rule.
+
+`continuations.get` reads a receipt and needs `runs.read` on its run. `continuations.reconcile`
+needs the original principal and `runs.control` (and `inputs.answer` when the original
+included a decision), and may attach execution. An unknown, foreign or rewound continuation
+is `RUN_STATE` "Continuation is unavailable"; durability that cannot be verified is
+`RUN_STATE` with `details.uncertain: true`. A run past 100,000 events is refused with
+`NOT_SUPPORTED`. See
+[continuation composition](../../docs/runtime-operator-integration.md#current-continuation-composition)
+for the boundaries supported.
+
+### `inputs.revise` / `inputs.revisionPending` / `inputs.replaceRevision` — explicit corrections
+
+```ts
+params: { command: { target: RevisionTarget; actionId; payload; supersedesRevisionId? };
+          retry: { idempotencyKey? } }                                    // inputs.revise
+params: { target: PendingRevisionTarget }                                 // inputs.revisionPending
+params: { command: { target: PendingRevisionTarget; expectedRevision; payload };
+          retry: { idempotencyKey? } }                                    // inputs.replaceRevision
+
+RevisionTarget: { runId; stepRunId; requestId; destinationId; expectedRevision }
+PendingRevisionTarget: { runId; revisionId; destinationId; attemptId }
+payload: { kind: "text"; text } | { kind: "values"; values }
+
+result: { state: "resolved"; operationId; replayed: boolean; result: RevisionReceipt }
+      | { state: "in-progress"; operationId; recovery: "inspect-or-retry" } // revise, replace
+RevisionReceipt: { revisionId; target; state: "pending" | "delivered" | "rejected" | "superseded";
+                   attemptId; currentRevisionId; expectedRevision }
+result: { target; expectedRevision; state; payload?; boundary?; replacementAllowed;
+          unavailableReason?: "delivered" | "target-changed" | "cancelled"
+                            | "delivery-uncertain" }                      // revisionPending
+```
+
+A revision-enabled gate offers "Request changes" as an action of its own. `inputs.revise`
+records a correction for the workflow-declared destination together with the exact branch
+decision, as one commit, with no separate `inputs.answer`. Its `target` and `actionId` come
+from the input's [`revision`](#inputslist--the-attention-surface) field, and that option
+cannot be chosen through `inputs.answer`. `inputs.replaceRevision` swaps the payload of the
+one undelivered correction at a destination and attempt, by compare-and-swap on
+`expectedRevision`, and stays available after the gate has closed. A payload is at most
+64 KiB, the whole params at most 256 KiB, nesting at most 32 deep, and a retry key 1–128
+UTF-8 bytes. A target or version that no longer accepts the correction is `REVISION_STALE`.
+
+`inputs.revisionPending` needs `runs.read`; its `payload` and `boundary` come back only to a
+caller who also holds `inputs.answer` and `runs.control`. A lost `inputs.revise` or
+`inputs.replaceRevision` response is recovered by sending the same key and command again,
+not through `admissions.get`. See [revision input](../../docs/revision-input.md).
 
 ### Request admission — conditionally installed shared service
 
@@ -940,6 +1375,211 @@ result and not an error envelope: "down, and here is why" is what the caller ask
 `orca ping <agentId>` calls this when a daemon answers on the configured address, and
 otherwise falls back to an in-process handshake — saying, in those words, that it recorded
 nothing (#225).
+
+## The operator methods
+
+Sixteen `operator.*` methods, six reads and ten mutation aliases, are a bounded and
+allowlisted surface over the methods above for non-UI clients; the
+[MCP operator](../../docs/mcp-operator.md) is built on them. They exist only on a token-mode
+daemon with a workspace identity and the operator projection sources, which `orca serve`
+supplies; `operator.hostResources` needs an injected host-resource source instead. Every
+one but `operator.discover` takes `target: { workspaceId, instanceId }`,
+which must equal `hello.identity`; any other is `RUN_STATE` "Target changed; discover the
+deployment again" (the host read says "Resource target or observation changed; discover
+again"). Each call checks the caller's original credential again, rather than the
+authority it had when it connected. See [schemas](src/operator-reads.ts) and
+[contracts](src/operator-mutations.ts).
+
+### Reads
+
+```ts
+operator.discover    params: {}
+                     result: { target; protocol; orcaVersion; principalId; authentication: "credential";
+                               scope: { runs; workflows; permissions }; operations: string[];
+                               collections: string[]; asOf }
+operator.page        params: { target; collection; runId?; workflowId?; workflowVersion?; stepRunId?;
+                               requestId?; cursor?; limit = 50 }              // limit at most 100
+                     result: { target; items: OperatorRow[]; asOf; revision; nextCursor?;
+                               truncated: boolean; restartRequired: boolean }
+operator.config      params: { target }
+                     result: { target; activeGeneration; activeRevision; savedRevision;
+                               state: "active" | "pending" | "restart-required" | "invalid"; asOf }
+operator.preflight   params: { target; purpose: "request" | "workflow"; workflowId?; workflowVersion?;
+                               expectedWorkflowRevision?; expectedConfigGeneration?; vars = {};
+                               overrides?; request?: { title; body; source; labels } }
+                     result: { target; workflowId; workflowVersion; expectedWorkflowRevision;
+                               expectedConfigGeneration; validation; inputSchema?; selections?;
+                               itemWorkflow?; templatePack?; asOf }
+operator.artifact    params: { target; runId; artifactId; maxBytes = 16384 }  // at most 16 KiB
+                     result: { target; artifact: OperatorRow; text?;
+                               omitted?: "binary" | "tooLarge" | "sensitive"; asOf }
+operator.hostResources params: { target }
+                     result: the host-resource snapshot
+```
+
+`operator.discover` says who the caller is, what it may do (`operations`, from the same
+filter as `hello.methods`) and which `collections` it may page. `operator.preflight`
+resolves a launch against the active generation, with no side effects, and returns the guards
+(`workflowVersion`, `expectedWorkflowRevision`, `expectedConfigGeneration`) that
+`operator.admitRun` and `operator.submitRequest` require. `operator.hostResources` is the
+advisory host read in [host resources](../../docs/host-resources.md); `orca serve` does not
+mount it.
+
+`operator.page` reads one collection. Its grant is checked before its params are validated:
+
+| Collection | Grant | Needs `runId` |
+| --- | --- | --- |
+| `runs` | `runs.read` | no |
+| `steps`, `children`, `events`, `inputs`, `provenance` | `runs.read` | yes |
+| `artifacts` | `artifacts.read` and `runs.read` | yes |
+| `workflows`, `graph` | `workflows.read` | no, but a caller with a restricted workflow scope names `workflowId` or `runId` |
+| `requests`, `items` | `plan.read` | no |
+| `choices` | `config.read` | no |
+
+A page stops at `limit` rows, or earlier when its JSON would pass
+`(OPERATOR_MAX_RESULT_BYTES − 4096) / 3` bytes, `OPERATOR_MAX_RESULT_BYTES` being 256 KiB;
+that leaves room for escaping and for an MCP reply that carries the page twice. Either way
+it is `truncated: true` with a `nextCursor`. A row over 12 KiB
+arrives as `{ id, kind, runId?, omitted: ["oversized-item"] }`.
+
+**A stale cursor is a page, not an error.** A `nextCursor` is opaque, signed with a key this
+daemon process holds, and bound to the caller, their scope and grants, the filter and the
+collection's `revision`. When a cursor does not verify, was issued for a different binding
+or revision, or the collection changes while the page is being read, the answer is an
+ordinary result with `items: []`, `truncated: false` and `restartRequired: true`: page again
+from the start, without a cursor. A daemon restart makes every old cursor stale. There is no
+`OPERATOR_CURSOR_STALE` error code. See
+[bounds and freshness](../../docs/mcp-operator.md#bounds-freshness-and-non-secret-projections).
+
+### Mutations
+
+The ten aliases adapt the authenticated services above and own no durable state of their
+own. Each is installed only when the service it adapts is (see the
+[method inventory](#method-inventory)), and `hello` lists each as a capability of the same
+name.
+
+| Alias | Adapts | Grant |
+| --- | --- | --- |
+| `operator.submitRequest` | `requests.submit` | `runs.start` and `plan.write` |
+| `operator.admitRun` | `runs.admit` | `runs.start` |
+| `operator.admission` | `admissions.get` | `runs.start` |
+| `operator.reconcileAdmission` | `admissions.reconcile` | `runs.start` |
+| `operator.cancel` | `runs.cancel` | `runs.control` |
+| `operator.answer` | `inputs.answer` | `inputs.answer` |
+| `operator.continueRun` | `runs.continue` | `runs.control` |
+| `operator.continuation` | `continuations.get` | `runs.read` |
+| `operator.reconcileContinuation` | `continuations.reconcile` | `runs.control` |
+| `operator.revise` | `inputs.revise` | `inputs.answer` and `runs.control` |
+
+Where they differ from the methods they adapt:
+
+- **A retry key is required.** `operator.submitRequest`, `admitRun`, `continueRun` and
+  `revise` take `retry: { idempotencyKey }`, 1–128 UTF-8 bytes, and the key cannot be left
+  out.
+- **The launch guards are required.** The `command` of `operator.admitRun` and
+  `operator.submitRequest` must carry `workflowId`, `workflowVersion`,
+  `expectedWorkflowRevision` and `expectedConfigGeneration`, which is what
+  `operator.preflight` returns. `admitRun`'s command has no `idempotencyKey` of its own.
+- **Contention is a result.** `operator.admitRun`, `submitRequest`, `admission` and
+  `reconcileAdmission` return the `resolved` / `in-progress` envelope rather than throwing.
+  `operator.reconcileAdmission` also settles an accepted Request admission through
+  `requests.reconcile` and refuses with `RUN_STATE` if the two disagree.
+- **`operator.cancel`** takes `{ target, runId, reason? }`, with `reason` at most 2,000
+  characters, and returns `{ runId, asOf }`.
+- **`operator.answer`** takes a `decision` that is either
+  `{ lifetime: "durable"; runId; stepRunId; requestId; optionId; note?; resume: false }`,
+  which records the answer without resuming the run, or
+  `{ lifetime: "live"; live; optionId; note? }` for a live permission callback. It returns
+  `{ runId, requestId, asOf }`.
+- **`operator.admission`, `reconcileAdmission`, `continuation` and
+  `reconcileContinuation`** take `{ target, operationId }` or `{ target, continuationId }`.
+
+## Template authoring — `templates.*`
+
+Eight methods over the workspace's configured instruction templates. They are installed
+when the daemon has configuration generations and a workspace identity, and the four
+writes only when it is also writable; see the [inventory](#method-inventory) for grants.
+They were added within protocol 2.0, without a minor bump (see the top of this page).
+Every params object but `templates.get`'s names `target: { workspaceId, instanceId }`,
+which must be `hello.identity`; another is `CONFIG_STALE` ("Template target changed.").
+
+```ts
+templates.get       {}                                    → TemplateCatalog
+templates.history   { target; key }                       → { entries: { revision; at; generation? }[];
+                                                              scope: "acknowledged-local-revisions" }
+templates.validate  TemplateCandidate                     → { candidateRevision; errors; changes;
+                                                              compatibility: "compatible" | "incompatible" | "unavailable" }
+templates.preview   { target; expectedCatalogRevision; expectedConfigGeneration; id; pack?;
+                      fixtures: { values; artifacts }; candidate? }
+                                                          → { requestedId; resolvedId; fallback; partialIds; text }
+templates.variant   { target; key; expectedSourceRevision; expectedCatalogRevision;
+                      expectedConfigGeneration; pack }    → { key; text }
+templates.save      { candidate: TemplateCandidate; candidateRevision }
+                                                          → { status: "saved"; candidateRevision; snapshot: TemplateCatalog }
+templates.assign    { target; expectedCatalogRevision; expectedConfigGeneration; key;
+                      expectedSourceRevision; templateId; version; validateOnly?; candidateRevision? }
+                                                          → { written; candidateRevision; snapshot: TemplateCatalog }
+templates.publish   { target; expectedCatalogRevision; expectedConfigRevision;
+                      expectedConfigGeneration; validateOnly? }
+                                                          → ConfigApplyResult
+
+TemplateCandidate: { target; key; expectedSourceRevision; expectedCatalogRevision;
+                     expectedConfigGeneration; draftSequence; text }  // text at most 256 KiB
+TemplateCatalog: { target; catalogRevision; contextRevision; configRevision; generation;
+                   assets: { key; id; revision; version; requires; partials; usedBy; source }[];
+                   assignments: { key; workflowId; nodeId; revision; templateId? }[];
+                   workflows: { id; version }[]; errors: TemplateDiagnostic[] }
+```
+
+Saving and activating stay apart, as `config.set` and `config.apply` do. `templates.save`
+writes one exact reviewed source and activates nothing. `templates.publish` validates the
+saved catalog and applies it as a new configuration generation, returning `config.apply`'s
+result; generations already admitted keep their instructions. `templates.assign` points a
+workflow node at a template, which changes that workflow's version. Every write is fenced by
+the config, catalog, source and generation revisions it names, and a moved one is
+`CONFIG_STALE`. An asset's `source` is `{ state: "available", text }` or
+`{ state: "withheld" }`. Preview renders only the fixture values and artifact bodies it is
+given. `templates.history` lists digests of acknowledged saves and activations, never old
+bodies. See [template integration](../../docs/implementation/m21-config-template-integration.md#production-contracts).
+
+## Workflow drafts — `workflowDrafts.*`
+
+Eight methods, the daemon half of the visual workflow editor (#180). They are installed
+under the same conditions as the template methods, all but `workflowDrafts.get` only on a
+writable daemon, and were likewise added within protocol 2.0. See
+[schemas](src/workflow-drafts.ts).
+
+```ts
+workflowDrafts.get      { workflowId }                              → { draft: WorkflowDraftView | null;
+                                                                        layout; editable; reason? }
+workflowDrafts.open     { workflowId }                              → WorkflowDraftView
+workflowDrafts.apply    { workflowId; expectedRevision; ops }       → WorkflowDraftView  // 1–200 ops
+workflowDrafts.undo     { workflowId; expectedRevision }            → WorkflowDraftView
+workflowDrafts.redo     { workflowId; expectedRevision }            → WorkflowDraftView
+workflowDrafts.review   { workflowId; expectedRevision }            → { revision; baseVersion; nextVersion;
+                                                                        baseText; text; reviewToken }
+workflowDrafts.publish  { workflowId; expectedRevision; reviewToken } → { workflowId; version;
+                                                                          apply: ConfigApplyResult }
+workflowDrafts.discard  { workflowId; expectedRevision }            → { discarded: true }
+```
+
+**Editing never touches the live file.** A draft is the workflow's YAML, comments and all,
+plus an undo history, kept beside the workflow in `.drafts/`. There is one draft per
+workflow, owned by the principal who opened it: anyone else's `workflowDrafts.get` shows it
+read-only (`owner.you: false`), and their writes are `CONFIG_INVALID`. Every method after
+`open` names the draft `revision` it was made against, and a stale one, or a workflow file
+that changed since the draft was taken, is `CONFIG_STALE`.
+
+`apply` takes a batch of semantic operations (`addNode`, `insertNode`, `updateNode`,
+`renameNode`, `changeType`, `removeNode`, `moveNode`, `addEdge`, `updateEdge`, `removeEdge`,
+`setStart`, `setWorkflow`, and the layout-only `place`, `unpin` and `tidy`) that lands
+whole, as one revision and one undo step, or not at all. A dragged position is layout
+metadata, kept in `.layout/` once published and never in the workflow file. `review`
+returns exactly the bytes `publish` would write, with a `reviewToken`; `publish` requires
+that token, writes the file under the configuration writer lock, bumps its version and
+applies a configuration generation, restoring the previous file if activation is refused.
+Runs already started keep the version they began on. See
+[workflow editing](../../docs/design/70-workflow-editing.md#drafts).
 
 ## Remaining capability and acceptance work
 
