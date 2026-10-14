@@ -35,6 +35,13 @@ const BRANCH_EVENTS = new Set<string>(["child.spawned", "child.finished", "branc
 const FINISHED: ReadonlySet<RunStatus> = new Set<RunStatus>(["completed", "failed", "cancelled"]);
 
 /**
+ * Container steps whose children are fan-out branches, not a sequence (both run on `FanOut`).
+ * A branch that starts after another finished - a concurrency limit, `dependsOn`, a later
+ * plan wave - did not follow on from it, so it never sees that branch's artifacts.
+ */
+const FAN_OUT_STEPS: ReadonlySet<string> = new Set(["parallel", "custom:plan-dispatch"]);
+
+/**
  * What the projection tells the planning layer once it has written. `PlanService` implements
  * it; taking the hook as an interface keeps the engine's core free of a plan-layer import.
  */
@@ -200,11 +207,13 @@ export class RunContext {
    * Own artifacts + every ancestor's + every ancestor's *earlier siblings* (with their
    * descendants) + every descendant's, newest version per name.
    *
-   * "Earlier sibling" = another child of the same container step that was spawned before
-   * this run and had already finished when this run was created. That is what lets loop
-   * iteration N read what iteration N-1 produced (a review-then-fix `loop` node) while
-   * keeping concurrent `parallel` branches - which do not precede each other - from
-   * observing each other mid-flight.
+   * "Earlier sibling" = another child of the same sequential container step, bound to the
+   * same work item (or, like this run, to none), that was spawned before this run and had
+   * already finished when this run was created. That is what lets loop iteration N read what
+   * iteration N-1 produced (a review-then-fix `loop` node). Fan-out branches (`parallel`,
+   * `custom:plan-dispatch`) never see each other, even when one starts after another has
+   * finished: item B's first build must not take item A's review as feedback to act on.
+   * In a plan, context from another item travels explicitly, in `vars.upstream`.
    */
   async visibleArtifacts(): Promise<Map<string, Artifact>> {
     const all: Artifact[] = [];
@@ -237,13 +246,14 @@ export class RunContext {
    * The children of `run`'s container step that were spawned before it and had already
    * finished when it was created, oldest first. The spawn-order cut (`children` is in
    * `child.spawned` order) plus the `completedAt` cut keep this independent of when it is
-   * asked: a run's set of earlier siblings never changes while it executes.
+   * asked: a run's set of earlier siblings never changes while it executes. A fan-out step's
+   * children have none, and a sibling bound to a different work item than `run` is never one.
    */
   private async earlierSiblings(parent: RunState, run: Run): Promise<RunState[]> {
     const step =
       Object.values(parent.steps).find((s) => s.childRunIds.includes(run.id)) ??
       (run.parentStepRunId ? parent.steps[run.parentStepRunId] : undefined);
-    if (!step) return [];
+    if (!step || FAN_OUT_STEPS.has(step.nodeType)) return [];
     const out: RunState[] = [];
     for (const link of step.children) {
       if (link.runId === run.id) break; // everything from here on was spawned after us
@@ -252,7 +262,8 @@ export class RunContext {
         if (isOrcaError(error, "RUN_NOT_FOUND")) return undefined;
         throw error; // Missing/corrupt protected execution material is never an absent sibling.
       });
-      if (state?.run.completedAt && state.run.completedAt <= run.createdAt) out.push(state);
+      if (state?.run.completedAt && state.run.completedAt <= run.createdAt && state.run.workItemId === run.workItemId)
+        out.push(state);
     }
     return out;
   }

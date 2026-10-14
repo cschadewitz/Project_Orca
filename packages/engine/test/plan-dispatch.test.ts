@@ -2,7 +2,8 @@
  * The `custom:plan-dispatch` loop, on the fan-out `parallel` uses (issue #96):
  * `failFast` cancels the items still running rather than letting them run to completion,
  * and `onWaiting: wait` announces each distinct reason once, wakes on a plan change
- * without waiting for the poll, and gives up at `waitTimeoutMs`.
+ * without waiting for the poll, and gives up at `waitTimeoutMs`. An item dispatched after
+ * another has finished never sees that item's artifacts.
  */
 import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
@@ -431,4 +432,42 @@ describe("plan-dispatch: onWaiting wait", () => {
     expect(dispatched(state)).toEqual(["blocked:done"]);
     expect(await statuses(stores)).toEqual({ blocked: "done" });
   }, 10_000);
+});
+
+describe("plan-dispatch: items stay apart", () => {
+  it("never hands an item the artifacts of an item dispatched before it", async () => {
+    const resolved: Record<string, string | undefined> = {};
+    const { stores, run } = await setup(
+      // One slot, so the second item's run is created only after the first one has finished.
+      "concurrency: 1",
+      [
+        { slug: "first", title: "First" },
+        { slug: "second", title: "Second" },
+      ],
+      async (ctx) => {
+        // The SDLC build step's optional input: the item's own last report, or none on its first build.
+        const [report] = await ctx.resolveInputs([{ name: "testReport", required: false }]);
+        resolved[slugOf(ctx)] = report?.content;
+        await ctx.recordArtifact(
+          { kind: "test-report", name: "testReport", path: "test-report.md", required: true },
+          `failures in ${slugOf(ctx)}`,
+        );
+        return completed();
+      },
+    );
+    const state = await run();
+
+    expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
+    const links = state.steps[state.stepOrder[1]!]!.children;
+    const branch = (runId: string) => links.find((l) => l.runId === runId)?.branch;
+    const order = (await stores.events.read(state.run.id))
+      .filter((e) => e.type === "child.spawned" || e.type === "child.finished")
+      .map((e) => `${e.type}:${branch((e.payload as { childRunId: string }).childRunId)}`);
+    const [a, b] = links.map((l) => l.branch);
+    expect(order).toEqual([`child.spawned:${a}`, `child.finished:${a}`, `child.spawned:${b}`, `child.finished:${b}`]);
+    expect(resolved).toStrictEqual({ first: undefined, second: undefined });
+    // Each item's report is its first: versioning does not count the other item's either.
+    for (const link of links)
+      expect((await stores.artifacts.list({ runId: link.runId })).map((x) => x.version)).toEqual([1]);
+  });
 });

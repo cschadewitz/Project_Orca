@@ -96,8 +96,15 @@ Each iteration is its own child run, but an iteration can read what the previous
 produced: artifact visibility includes earlier siblings — children of the same `loop` step
 that finished before this one was spawned. A review‑then‑fix loop therefore works as a
 `loop` node, with the builder declaring `inputs: [{ kind: review, required: false }]` and
-picking up iteration N‑1's review (unresolved on the first iteration). `parallel` branches
-run concurrently and so never see each other.
+picking up iteration N‑1's review (unresolved on the first iteration). The same holds for
+the children a plugin's `custom:*` container runs one after another.
+
+Fan‑out branches never see each other: not `parallel` branches, and not the item runs of
+`custom:plan-dispatch`, even when a `concurrency` limit, `dependsOn` or a later wave starts
+one only after another has finished. Nor do siblings bound to different work items, under
+any container. So item B's first build never picks up item A's `review` or `testReport` as
+feedback; in a plan, what an item needs from the items it depends on arrives explicitly, in
+`vars.upstream`.
 
 ### Parallel fan-out
 

@@ -196,7 +196,8 @@ that never started get a fresh child run.
 
 1. Resolve **input artifacts** (`inputs:` refs by kind/name/producing node;
    visibility = own run + ancestors + descendants + earlier finished siblings of
-   each ancestor, newest version wins).
+   each ancestor for the same work item, never fan-out branches, newest version
+   wins; `docs/DATA-MODEL.md` has the rule).
 2. Render the **prompt**: template body (`templates/…md`) against the step
    context, then append the **deliverables block** — a human list *and* an
    HTML‑comment YAML block listing every artifact the step must produce with its
