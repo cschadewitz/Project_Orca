@@ -136,10 +136,11 @@ in the bottom-right corner, under a minimap. They add **no key**, and that is th
   **Show the minimap**, each named for what it will do — which is also the button's accessible
   name, rather than a fixed name with `aria-pressed`: the state is a direction, not an on and
   an off.
-- **The group sits outside the canvas's keyboard scope.** Inside it, `Enter` on a focused
-  button would be the canvas's `Enter` (and in the editor, `⌫` would delete the selected node),
-  because the map dispatches before the button's default. It is a named `group`, not a
-  `toolbar`: six ordinary tab stops after the canvas, with no roving arrows promised.
+- **The group sits outside the canvas's keyboard scope.** Inside it, a focused button would
+  still hear the canvas's other keys — in the editor, `⌫` would delete the selected node —
+  because the map dispatches before the button's default; only `Enter` on a focused control is
+  left to the control. It is a named `group`, not a `toolbar`: six ordinary tab stops after
+  the canvas, with no roving arrows promised.
 - **Every pointer gesture has a keyboard path.** ⌘/Ctrl with the wheel, or a trackpad pinch,
   zooms about the pointer, where `+` and `-` zoom about the middle of the canvas. A plain wheel,
   a drag of empty canvas and a click or a drag in the minimap all pan, which `⇧` with an arrow

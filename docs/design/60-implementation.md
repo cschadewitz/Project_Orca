@@ -295,7 +295,7 @@ rather than an admission that it is unreachable. **Cancel the run this is waitin
 **Resume the run this is waiting on** were the first two; as of #178 every write action in
 the app is one of these (see "Palette write actions" below).
 
-Three rules fall out of it:
+Four rules fall out of it:
 
 - **Scope comes from focus, not from a mode flag.** A component that owns a scope marks its
   subtree with `data-kbd-scope="run-tree"` (`scopeProps` writes the attribute), and a press
@@ -304,6 +304,14 @@ Three rules fall out of it:
   rather than picking a winner at dispatch.
 - **In a text entry only modified keys and `Esc` dispatch.** `J` in the palette's query
   field is a letter, not a selection move three layers below it.
+- **On a focused control, `Enter` is the control's.** A button, a link, a `summary` or a
+  checkbox activates itself on `Enter` and `⇧Enter`; the map does not dispatch the press or
+  `preventDefault` it (`activatesItself`). Without this a scope's `Enter` ran instead and
+  cancelled the button — on an Attention card, **Always deny** answered with the card's
+  selected **Allow once**. The scope's other keys still reach it from a control (a digit on an
+  option button chooses), and a list, tree or canvas is a single tab stop whose rows are
+  `aria-activedescendant`, so its `Enter` is unchanged. A `Menu` item is the one native button
+  the map still drives: its menu's `Enter` *is* that click. `Space` the map cannot bind at all.
 - **`Esc` is one shortcut over a stack, not a handler per component.** Layers push
   themselves onto `LayerStack` while they are open, and `Esc` closes the one that opened
   last. A layer holding text a person typed and has not sent reports `hasUnsentDraft` and
@@ -359,11 +367,21 @@ store with no plan in it, and hide a release row at a daemon that answers `claim
 without claiming the capability. A daemon too old to list its methods falls back to the
 capability, inside `methodPresent` and nowhere else.
 
+**A row acts on the object it names, or on nothing.** The palette reads its rows when it
+opens and runs one later, and a push can arrive in between: an Attention card answered from
+the CLI, a permission ask sorted in above the card the rows were drawn for. So a card's rows
+look their ask up again by id when they run, and when it has gone or now asks something else
+— another question, other options, another run — they send nothing, not an answer and not a
+cancel, and the surface's report line says so. They never fall through to whichever card is
+current by then.
+
 **A destructive row confirms inline, as a second state of the same row.** `Shortcut.confirm`
 and `tone: "danger"` say so, and the palette arms the row on the first `Enter`: the label
 becomes the confirmation ("Cancel Database schema ☰ JH7X8P — confirm"), the row takes the danger tone — the
 colour *and* the `✕` it leads with, since colour is never the only channel (rule 4) — and a
-second `Enter` commits. Typing or moving the selection disarms it; `Esc` closes the palette,
+second `Enter` commits. A second *press*: a held key's auto-repeat arrives as the same key
+again, and on an armed row it is ignored rather than committing a confirmation nobody has
+read. Typing or moving the selection disarms it; `Esc` closes the palette,
 which unarms with it, since the armed row does not outlive the list it is in. Nothing has
 been sent in the meantime. There is no dialog, deliberately — a modal over this modal would
 move focus out of the query field, put a second layer on the stack for `Esc` to unwind, and

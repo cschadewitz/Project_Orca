@@ -120,6 +120,27 @@ describe("cancel and resume", () => {
     expect(callsTo("runs.cancel")[0]).toMatchObject({ runId: "run-gate" });
   });
 
+  it("does not take a held Enter's auto-repeat for the second press", async () => {
+    mount();
+    await screen.findByRole("region", { name: /gate, Ship the rollout\?/ });
+    await open();
+
+    search("Cancel the run");
+    fireEvent.keyDown(query(), { key: "Enter" });
+    await within(palette()).findByRole("option", { name: /confirm/ });
+
+    /* The key is still down: past the platform's repeat delay the same press arrives again
+       with `repeat` set, and the confirmation it would commit has not been read. */
+    fireEvent.keyDown(query(), { key: "Enter", repeat: true });
+    fireEvent.keyDown(query(), { key: "Enter", repeat: true });
+    expect(callsTo("runs.cancel")).toHaveLength(0);
+    expect(within(palette()).getByRole("option", { name: /confirm/ })).toBeTruthy();
+
+    // Released and pressed again: that is a second press, and it commits.
+    fireEvent.keyDown(query(), { key: "Enter" });
+    await waitFor(() => expect(callsTo("runs.cancel")).toHaveLength(1));
+  });
+
   it("selects the row a click arms, so the next Enter confirms that row and not another", async () => {
     mount();
     await screen.findByRole("region", { name: /gate, Ship the rollout\?/ });

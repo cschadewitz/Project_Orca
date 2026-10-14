@@ -10,7 +10,7 @@
  * whole of what this file knows about the wiring.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { NotificationMessage, OpenInputView } from "@orca/protocol";
 import type { ConnectionState } from "@orca/design";
 import { type JSX } from "react";
@@ -176,6 +176,168 @@ describe("moving between cards", () => {
     expect(h.keyboard.list().some((s) => s.scope === "card" && s.key === "G")).toBe(true);
     fireEvent.keyDown(gate, { key: "g", code: "KeyG" });
     expect(opened).toEqual(["run-1"]);
+  });
+});
+
+/**
+ * `Enter` pressed the way a browser presses it: the keydown goes to the focused element, and
+ * when nothing prevented it a focused button is clicked. happy-dom does not activate a button
+ * from a key, so the test does what the platform would — which is exactly the step the
+ * keyboard map's `preventDefault` used to take away.
+ */
+function pressEnter(target: HTMLElement): void {
+  const notPrevented = fireEvent.keyDown(target, { key: "Enter", code: "Enter" });
+  if (notPrevented && target.tagName === "BUTTON") fireEvent.click(target);
+}
+
+const answers = (): Record<string, unknown>[] =>
+  fake.calls.filter((c) => c.method === "inputs.answer").map((c) => c.params as Record<string, unknown>);
+
+describe("Enter on a control inside a card is the control's", () => {
+  it("selects Deny when Deny has focus, sends nothing, and Answer then sends deny", async () => {
+    mount([PERMISSION_ASK]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    // "2 Deny": never on `1`, but it has a digit. Case matters — "Always deny" is the other one.
+    const deny = within(ask).getByRole("button", { name: /Deny$/ });
+
+    // Tabbed to: the press lands on the option, and the option is what it presses.
+    deny.focus();
+    pressEnter(deny);
+    expect(deny.getAttribute("aria-pressed")).toBe("true");
+    expect(answers()).toEqual([]);
+
+    const answer = within(ask).getByRole("button", { name: /^Answer/ });
+    answer.focus();
+    pressEnter(answer);
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    expect(answers()[0]).toMatchObject({ requestId: "ask-1", optionId: "deny" });
+    expect(answers()[0]!.always).toBeUndefined();
+  });
+
+  it("sends Always deny's own answer when Always deny has focus, never the card's plain one", async () => {
+    mount([PERMISSION_ASK]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    const always = within(ask).getByRole("button", { name: "Always deny" });
+
+    always.focus();
+    pressEnter(always);
+
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    // The button's request, with the standing rule it names — not `Enter` on the card, which
+    // is the selected Allow once and no rule at all.
+    expect(answers()[0]).toMatchObject({ always: { decision: "deny" } });
+  });
+
+  it("denies, with a deny rule, from the keyboard alone: Deny, then Always deny", async () => {
+    mount([PERMISSION_ASK]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+
+    const deny = within(ask).getByRole("button", { name: /Deny$/ });
+    deny.focus();
+    pressEnter(deny);
+    const always = within(ask).getByRole("button", { name: "Always deny" });
+    always.focus();
+    pressEnter(always);
+
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    expect(answers()[0]).toMatchObject({ optionId: "deny", always: { decision: "deny" } });
+  });
+
+  it("still answers with the selected option when Enter is pressed on the card itself", async () => {
+    mount([PERMISSION_ASK]);
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    ask.focus();
+    pressEnter(ask);
+
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    // The first safe option, which is what the card opens with selected.
+    expect(answers()[0]).toMatchObject({ optionId: "allow" });
+    expect(answers()[0]!.always).toBeUndefined();
+  });
+});
+
+describe("a push while a person is working in a card", () => {
+  let seq = 200;
+  const envelope = (method: string, params: Record<string, unknown>): NotificationMessage => ({
+    kind: "notification",
+    method,
+    params: { subscriptionId: "sub-1", seq: seq++, at: INPUTS_AS_OF, ...params },
+  });
+  const answeredElsewhere = (gate: OpenInputView): NotificationMessage =>
+    envelope("input.answered", { runId: gate.runId, stepRunId: gate.stepRunId, requestId: gate.id, answer: "approve" });
+  const label = (): string | null | undefined => document.activeElement?.getAttribute("aria-label");
+
+  it("leaves focus in a half-typed note when a permission ask arrives above the card", async () => {
+    const served: OpenInputView[] = [FIVE_GATES[0]!, FIVE_GATES[1]!, FIVE_GATES[2]!];
+    mount(served);
+    const third = await screen.findByRole("region", { name: cardName("gate", "Ship release 3?") });
+    // In `act`, so the card has registered its keys by the time the next key arrives — the
+    // separate keypress a person makes, with a frame between the two.
+    act(() => third.focus());
+    fireEvent.keyDown(third, { key: "Enter", code: "Enter", shiftKey: true });
+    const note = within(third).getByLabelText<HTMLInputElement>("Note");
+    fireEvent.change(note, { target: { value: "half a thou" } });
+    expect(document.activeElement).toBe(note);
+
+    // A permission ask sorts first, so every card below it moves down one place.
+    served.push(PERMISSION_ASK);
+    fake.notify(
+      envelope("input.opened", {
+        runId: PERMISSION_ASK.runId,
+        stepRunId: PERMISSION_ASK.stepRunId,
+        requestId: PERMISSION_ASK.id,
+        kind: "permission",
+        question: PERMISSION_ASK.question,
+        options: PERMISSION_ASK.options,
+      }),
+    );
+    await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+
+    // Still in the note, still holding what was typed: the next letter is a letter.
+    await waitFor(() => expect(document.activeElement).toBe(note));
+    expect(note.value).toBe("half a thou");
+    expect(answers()).toEqual([]);
+  });
+
+  it("keeps focus and the card's keys on the card a person is on when a gate above it is answered elsewhere", async () => {
+    mount([FIVE_GATES[0]!, FIVE_GATES[1]!, FIVE_GATES[2]!, FIVE_GATES[3]!]);
+    const third = await screen.findByRole("region", { name: cardName("gate", "Ship release 3?") });
+    act(() => third.focus());
+
+    fake.notify(answeredElsewhere(FIVE_GATES[0]!));
+    await waitFor(() => expect(screen.queryByRole("region", { name: cardName("gate", "Ship release 1?") })).toBeNull());
+
+    // Not the card that slid into index 2, which is release 4.
+    await waitFor(() => expect(label()).toBe(cardName("gate", "Ship release 3?")));
+    fireEvent.keyDown(document.activeElement!, { key: "2", code: "Digit2" });
+    fireEvent.keyDown(document.activeElement!, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    expect(answers()[0]).toMatchObject({ requestId: "gate-3", optionId: "hold" });
+  });
+
+  it("moves focus to the card that takes its place only when the focused card itself leaves", async () => {
+    mount([FIVE_GATES[0]!, FIVE_GATES[1]!, FIVE_GATES[2]!]);
+    const second = await screen.findByRole("region", { name: cardName("gate", "Ship release 2?") });
+    act(() => second.focus());
+
+    fake.notify(answeredElsewhere(FIVE_GATES[1]!));
+    await waitFor(() => expect(screen.queryByRole("region", { name: cardName("gate", "Ship release 2?") })).toBeNull());
+    // Focus went with the card, so it lands on the neighbour, never on the page body.
+    await waitFor(() => expect(label()).toBe(cardName("gate", "Ship release 3?")));
+  });
+
+  it("does not take focus back to the list when the focused card leaves after the person left it", async () => {
+    mount([FIVE_GATES[0]!, FIVE_GATES[1]!]);
+    const first = await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
+    first.focus();
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+
+    fake.notify(answeredElsewhere(FIVE_GATES[0]!));
+    await waitFor(() => expect(screen.queryByRole("region", { name: cardName("gate", "Ship release 1?") })).toBeNull());
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
   });
 });
 

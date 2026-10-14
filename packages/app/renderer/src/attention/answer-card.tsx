@@ -194,7 +194,10 @@ export function AnswerCard({
     >
       {/* The card owns the `card` scope, so a keypress anywhere inside it — including on an
           option button — resolves to this card's keys before the list's (#149). A single
-          tab stop on the card itself is what `J`/`K` move between. */}
+          tab stop on the card itself is what `J`/`K` move between. `Enter` and `Space` on a
+          button inside it are the button's: **Deny** selects itself and **Always deny** sends
+          its own answer, rather than the card answering with its selection
+          (`activatesItself`). */}
       <section
         {...scopeProps("card")}
         id={`attention-card-${id}`}

@@ -40,11 +40,15 @@ Gates and permission asks are answered **in place, from either surface**. The sa
 `GateCard` / `PermissionCard` component renders in the Attention list and inline in the run,
 with identical controls and identical keyboard handling. Answering from the list keeps the
 person in the list and advances focus to the next waiting item, so five gates can be cleared
-in five keystrokes without navigating.
+in five keystrokes without navigating. That is the only thing that moves focus: an ask that
+arrives, or one answered somewhere else, leaves the person on the card they were on — in the
+note they were typing — and focus follows only when that card itself goes.
 
 Keyboard, on a focused card: `1`–`9` select an option, `Enter` submits the selected option,
 `Shift+Enter` submits with a note, `G` jumps to the run the card came from, `J`/`K` move
 between cards. The destructive option is never bound to `1` and never focused by default.
+`Enter` on a button inside the card presses that button — **Deny** selects deny, **Always
+deny** sends its own answer — and never submits the card's selection in its place.
 
 A note is part of the record: it is written onto `human.answered` beside the answer, so the
 reason a person gave outlives the window they gave it in. The run does not branch on it — the

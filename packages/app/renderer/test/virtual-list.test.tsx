@@ -309,6 +309,27 @@ describe("a list nothing has measured", () => {
     expect(mounted(3)!.getAttribute("aria-selected")).toBe("true");
     expect(listbox().getAttribute("aria-activedescendant")).toBe("row-3");
   });
+
+  it("takes J, K and its surface's Enter on its one tab stop, which is not a control that presses itself", () => {
+    /* The keyboard map leaves `Enter` on a focused button to the button. A list is not one:
+       focus stays on the listbox and the row is its active descendant, so a surface's
+       "open the selected row" still reaches it — the run tree's, the schedule table's. */
+    const h = renderList({ count: 5 });
+    const opened: (string | null)[] = [];
+    teardown.push(
+      h.keyboard.register({
+        scope: "list",
+        key: "Enter",
+        label: "Open the selected row",
+        action: () => opened.push(listbox().getAttribute("aria-activedescendant")),
+      }),
+    );
+    listbox().focus();
+
+    for (const key of ["j", "j", "j", "k"]) press(key, `Key${key.toUpperCase()}`);
+    expect(fireEvent.keyDown(listbox(), { key: "Enter", code: "Enter" })).toBe(false);
+    expect(opened).toEqual(["row-1"]);
+  });
 });
 
 /**

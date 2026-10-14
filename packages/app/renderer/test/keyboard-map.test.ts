@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
 /**
  * The registry itself: the duplicate that has to fail loudly, the scope chain resolved
- * from focus, and the text-entry rule that keeps `J` a letter while someone is typing.
+ * from focus, the text-entry rule that keeps `J` a letter while someone is typing, and the
+ * control rule that leaves `Enter` on a focused button to the button.
  * The palette's end of it is in command-palette.test.tsx.
  */
 import { describe, expect, it } from "vitest";
 import {
   KeyboardMap,
+  activatesItself,
   isTextEntry,
   keyOfEvent,
   normalizeKey,
@@ -198,5 +200,102 @@ describe("typing", () => {
     const event = press(document.body, { key: "q", code: "KeyQ" });
     expect(event.defaultPrevented).toBe(false);
     unlisten();
+  });
+});
+
+describe("a control that presses itself", () => {
+  it("leaves Enter and Space on a control to the control, and does not preventDefault them", () => {
+    /* A card is a `card` scope with buttons in it, and binds `Enter` to "answer with the
+       selected option". On a focused button that press is the button's: dispatching it
+       would cancel the button's own activation and answer with something else. */
+    const map = new KeyboardMap("darwin");
+    const ran: string[] = [];
+    for (const key of ["Enter", "Shift+Enter", "1", "Escape"]) {
+      map.register({ scope: "card", key, label: key, action: () => ran.push(key) });
+    }
+    // `Space` cannot be registered at all — the notation trims it to no key — so nothing in
+    // the map can take it from a control; it is asserted below only as never prevented.
+    expect(() => map.register({ scope: "card", key: " ", label: "space", action: () => ran.push(" ") })).toThrow(
+      /names no key/,
+    );
+    const card = document.createElement("section");
+    card.setAttribute("data-kbd-scope", "card");
+    card.tabIndex = 0;
+    const button = document.createElement("button");
+    const link = document.createElement("a");
+    link.href = "#run";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    const summary = document.createElement("summary");
+    card.append(button, link, checkbox, summary);
+    document.body.append(card);
+    const unlisten = map.listen(window);
+
+    for (const control of [button, link, checkbox, summary]) {
+      expect(press(control, { key: "Enter", code: "Enter" }).defaultPrevented).toBe(false);
+      expect(press(control, { key: "Enter", code: "Enter", shiftKey: true }).defaultPrevented).toBe(false);
+      expect(press(control, { key: " ", code: "Space" }).defaultPrevented).toBe(false);
+    }
+    expect(ran).toEqual([]);
+
+    // The scope's other keys still reach it from a control: a digit on an option chooses.
+    expect(press(button, { key: "1", code: "Digit1" }).defaultPrevented).toBe(true);
+    press(button, { key: "Escape" });
+    // And on the element that owns the scope, `Enter` is the scope's.
+    expect(press(card, { key: "Enter", code: "Enter" }).defaultPrevented).toBe(true);
+    expect(ran).toEqual(["1", "Escape", "Enter"]);
+
+    unlisten();
+    card.remove();
+  });
+
+  it("still gives Enter to a list's single tab stop and to a menu item, whose keys are their scope's", () => {
+    const map = new KeyboardMap("darwin");
+    const ran: string[] = [];
+    map.register({ scope: "list", key: "Enter", label: "open", action: () => ran.push("list") });
+    map.register({ scope: "list", key: "J", label: "next", action: () => ran.push("J") });
+    map.register({ scope: "menu", key: "Enter", label: "choose", action: () => ran.push("menu") });
+
+    // `VirtualList`: one tab stop, rows named by `aria-activedescendant`, so the target is the list.
+    const list = document.createElement("div");
+    list.setAttribute("data-kbd-scope", "list");
+    list.setAttribute("role", "listbox");
+    list.tabIndex = 0;
+    // `Menu`: a `<button role="menuitem">` in a `menu` scope, which clicks it on `Enter`.
+    const menu = document.createElement("ul");
+    menu.setAttribute("data-kbd-scope", "menu");
+    const item = document.createElement("button");
+    item.setAttribute("role", "menuitem");
+    menu.append(item);
+    document.body.append(list, menu);
+    const unlisten = map.listen(window);
+
+    press(list, { key: "j", code: "KeyJ" });
+    expect(press(list, { key: "Enter", code: "Enter" }).defaultPrevented).toBe(true);
+    expect(press(item, { key: "Enter", code: "Enter" }).defaultPrevented).toBe(true);
+    expect(ran).toEqual(["J", "list", "menu"]);
+
+    unlisten();
+    list.remove();
+    menu.remove();
+  });
+
+  it("knows which elements press themselves", () => {
+    const element = (tag: string, attributes: Record<string, string> = {}): Element => {
+      const node = document.createElement(tag);
+      for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
+      return node;
+    };
+    expect(activatesItself(element("button"))).toBe(true);
+    expect(activatesItself(element("a", { href: "#x" }))).toBe(true);
+    expect(activatesItself(element("summary"))).toBe(true);
+    expect(activatesItself(element("input", { type: "checkbox" }))).toBe(true);
+    expect(activatesItself(element("input", { type: "submit" }))).toBe(true);
+    // A link with nowhere to go is not a control, and a text field types rather than presses.
+    expect(activatesItself(element("a"))).toBe(false);
+    expect(activatesItself(element("input"))).toBe(false);
+    expect(activatesItself(element("div", { role: "listbox", tabindex: "0" }))).toBe(false);
+    expect(activatesItself(element("button", { role: "menuitem" }))).toBe(false);
+    expect(activatesItself(null)).toBe(false);
   });
 });
