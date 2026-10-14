@@ -1,10 +1,10 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LaunchResponse, LaunchReview } from "../src/configuration-launch-contract.js";
-import { AdmissionIntents, type IntentEncryption } from "../src/main/admission-intents.js";
+import { AdmissionIntents, type IntentEncryption, type IntentRecord } from "../src/main/admission-intents.js";
 import { GuidedLaunchController, type GuidedIntentConnection } from "../src/main/guided-launch.js";
 
 const dirs: string[] = [];
@@ -214,5 +214,38 @@ describe("protected guided intent recovery", () => {
       },
     });
     await expect(f.controller.recover(record.id, "inspect")).rejects.toThrow();
+  });
+  it("launches past a journal full of abandoned records and refuses at the live cap without blaming the keychain", async () => {
+    const f = fixture();
+    const row = (i: number, state: IntentRecord["state"], guided: boolean): IntentRecord => ({
+      ...f.scope,
+      workflowId: guided ? f.review.workflowId : `workflow-${i}`,
+      id: randomUUID(),
+      idempotencyKey: randomUUID(),
+      state,
+      ...(guided ? { guided: { version: 1 as const, review: f.review, operationId: `operation-${i}` } } : {}),
+    });
+    const seed = (records: IntentRecord[]) =>
+      writeFileSync(f.path, f.encryption.encryptString(JSON.stringify(records)), { mode: 0o600 });
+    seed(Array.from({ length: 1000 }, (_, i) => row(i, "abandoned", true)));
+    const { intent } = await f.controller.submit(f.review);
+    const stored = JSON.parse(f.encryption.decryptString(readFileSync(f.path))) as IntentRecord[];
+    expect(stored.map((r) => [r.id, r.state])).toEqual([[intent.intentId, "retained"]]);
+    expect(readFileSync(f.path).toString()).not.toContain("needle");
+    const restored = new AdmissionIntents(f.path, f.encryption);
+    expect(restored.guided(f.scope, intent.intentId).guided!.review).toEqual(f.review);
+    expect(
+      await new GuidedLaunchController(restored, async () => f.connection).recover(intent.intentId, "inspect"),
+    ).toMatchObject({ kind: "retry" });
+
+    seed(Array.from({ length: 1000 }, (_, i) => row(i, "retained", false)));
+    f.send.mockClear();
+    const refused = await f.controller.submit(f.review).then(
+      () => "",
+      (error: Error) => error.message,
+    );
+    expect(refused).toMatch(/Too many retained run intents \(1000\)/);
+    expect(refused).not.toMatch(/keychain/i);
+    expect(f.send).not.toHaveBeenCalled();
   });
 });

@@ -179,9 +179,12 @@ type LaunchUiState =
 ```
 
 These are UI phases, not new run statuses or daemon error codes. The launch draft
-retains its local typed input values; the review DTO does not echo them. A
-reviewed command and local input display must refer to the same frozen draft
-sequence. Command editing, target change, workflow revision/config generation
+retains its local typed input values. As integrated, the review also carries the
+frozen submitted command, input vars included (`command` in
+`configuration-launch-contract.ts`), and main keeps it encrypted in the
+admission-intent journal until the intent is abandoned. A reviewed command and
+local input display must refer to the same frozen draft sequence. Command editing,
+target change, workflow revision/config generation
 movement or relevant capability change invalidates the review. Current auth is
 rechecked server-side at submission and recovery, never frozen inside this DTO.
 

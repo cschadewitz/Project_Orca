@@ -1,4 +1,9 @@
-/** Main-process-only durable palette intents. Never stores credentials or arbitrary vars. */
+/**
+ * Main-process-only durable run intents, encrypted with OS safeStorage. A palette record holds
+ * scope, workflow id and retry key; a guided record also holds its reviewed command, every input
+ * var (sensitive ones too) and Request text included. No daemon credential is stored. Abandoned
+ * records are dropped on write, so the journal holds only retained (unresolved) intents.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -30,6 +35,12 @@ function sameScope(a: IntentScope, b: IntentScope): boolean {
 }
 const refusal = () =>
   new Error("Secure run-intent storage is unavailable. No run was submitted; restore the OS keychain before retrying.");
+/** The most retained intents, and so the most rows any journal file holds: no write keeps an abandoned one. */
+const RETAINED_LIMIT = 1000;
+const full = () =>
+  new Error(
+    `Too many retained run intents (${RETAINED_LIMIT}). No run was submitted; recover or explicitly abandon earlier intents, on the connection that started each, before starting new work.`,
+  );
 export class AdmissionIntents {
   constructor(
     private readonly path: string,
@@ -50,7 +61,7 @@ export class AdmissionIntents {
     }
     try {
       const data: unknown = JSON.parse(this.encryption.decryptString(bytes));
-      if (!Array.isArray(data) || data.length > 1000) throw refusal();
+      if (!Array.isArray(data) || data.length > RETAINED_LIMIT) throw refusal();
       const ids = new Set<string>();
       for (const row of data) {
         if (
@@ -90,10 +101,13 @@ export class AdmissionIntents {
       );
     }
   }
+  /** Compacts: an abandoned record is settled and nothing reads it again, so it is not kept.
+   * Every retained record is kept, since retry, recovery and reconciliation need it. */
   private write(records: IntentRecord[]): void {
     this.check();
     try {
-      const bytes = this.encryption.encryptString(JSON.stringify(records));
+      const retained = records.filter((r) => r.state === "retained");
+      const bytes = this.encryption.encryptString(JSON.stringify(retained));
       mkdirSync(dirname(this.path), { recursive: true });
       const temporary = `${this.path}.${randomUUID()}.tmp`;
       const fd = openSync(temporary, "wx", 0o600);
@@ -135,7 +149,7 @@ export class AdmissionIntents {
       throw new Error(
         "This workflow has a retained intent on another target or principal. Return to that connection to recover or explicitly abandon it.",
       );
-    if (records.length >= 1000) throw new Error("Run-intent journal is full. No run was submitted.");
+    if (records.filter((r) => r.state === "retained").length >= RETAINED_LIMIT) throw full();
     const record: IntentRecord = {
       ...scope,
       workflowId,
@@ -168,7 +182,7 @@ export class AdmissionIntents {
         throw new Error("The retained command changed. Recover or explicitly abandon it before new work.");
       return structuredClone(held);
     }
-    if (records.length >= 1000) throw refusal();
+    if (records.filter((r) => r.state === "retained").length >= RETAINED_LIMIT) throw full();
     const record: IntentRecord = {
       ...scope,
       workflowId: review.workflowId,
