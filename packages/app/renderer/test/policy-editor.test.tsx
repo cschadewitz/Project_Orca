@@ -10,25 +10,32 @@
  *
  * The screen half then asserts the three things the editor promises: the configured rules
  * are shown and cannot be edited here, the written ones can, and a refused write keeps the
- * draft — and then where keyboard focus goes when a grant leaves the list holding it.
+ * draft — then that a save writes the edited agents onto the file as it is, so a grant the
+ * daemon wrote meanwhile survives it, and then where keyboard focus goes when a grant leaves
+ * the list holding it.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { PermissionPolicyFileSchema } from "@orca/protocol";
+import { PermissionPolicyFileSchema, type ConfigSetParams } from "@orca/protocol";
 import { ConfigProvider } from "../src/config/config-context.js";
 import { PolicyPanel } from "../src/config/policy-editor.js";
 import {
   EMPTY_SIDECAR,
   HAND_GRANT,
+  composeGrants,
   grantKeys,
+  grantsAfterWrite,
   handRule,
   parseSidecar,
+  rebaseGrants,
   ruleChanges,
   rulesOf,
   serializeSidecar,
+  withGrantEdit,
   withMatch,
   withRules,
   type SidecarDocument,
+  type SidecarRule,
 } from "../src/config/policy-model.js";
 import { CONFIG_GET, PERMISSIONS_REVISION, PERMISSIONS_TEXT } from "./fixtures-config.js";
 import { AS_OF, HELLO_READ_ONLY } from "./fixtures.js";
@@ -234,6 +241,70 @@ describe("the sidecar as a document", () => {
   });
 });
 
+/** A rule a run wrote in answer to "always", stamped the way `recordAlwaysDecision` stamps one. */
+const ALWAYS: SidecarRule = {
+  match: { kind: "execute", titlePattern: "^npm run build$" },
+  decision: "allow",
+  addedAt: "2026-09-22T09:00:00.000Z",
+  grantedFor: "Run npm run build",
+};
+
+describe("a draft of the sidecar is grant edits, never a copy of the file", () => {
+  /* The daemon writes this file too — every "allow always" is a write — so a draft holding the
+     whole document would carry a stale copy of every other agent's grants and put it back. */
+  const doc = (): SidecarDocument => parseSidecar(PERMISSIONS_TEXT)!;
+  const base = (): readonly SidecarRule[] => rulesOf(doc(), "claude");
+
+  it("keeps the base an agent's first edit began from, and lets go of an agent edited back to it", () => {
+    const first = withGrantEdit(undefined, "claude", base(), base().slice(1));
+    expect(first?.["claude"]).toEqual({ base: base(), rules: base().slice(1) });
+    // A second edit keeps the first one's base, whatever the file says by then.
+    const second = withGrantEdit(first, "claude", [], []);
+    expect(second?.["claude"]?.base).toEqual(base());
+    // Back where it began is no edit at all, and no draft.
+    expect(withGrantEdit(second, "claude", [], base())).toBeUndefined();
+  });
+
+  it("composes an edit onto the file as it is now, keeping what was written for another agent meanwhile", () => {
+    const drafts = withGrantEdit(undefined, "claude", base(), base().slice(1))!;
+    const moved = withRules(doc(), "codex", [ALWAYS]);
+
+    const { document, conflicts } = composeGrants(moved, drafts);
+    expect(conflicts).toEqual([]);
+    expect(rulesOf(document, "claude")).toEqual(base().slice(1));
+    expect(rulesOf(document, "codex")).toEqual([ALWAYS]);
+  });
+
+  it("names an agent whose own grants changed on disk since its edit began, until Reload rebases it", () => {
+    const drafts = withGrantEdit(undefined, "claude", base(), base().slice(1))!;
+    const moved = withRules(doc(), "claude", [...base(), ALWAYS]);
+    expect(composeGrants(moved, drafts).conflicts).toEqual(["claude"]);
+    // The same change made on both sides is not one: there is nothing to write over.
+    expect(composeGrants(withRules(doc(), "claude", base().slice(1)), drafts).conflicts).toEqual([]);
+
+    // A person who has been told takes the file as the edit's new base, and keeps the edit.
+    const rebased = rebaseGrants(drafts, moved)!;
+    expect(rebased["claude"]).toEqual({ base: rulesOf(moved, "claude"), rules: base().slice(1) });
+    expect(composeGrants(moved, rebased).conflicts).toEqual([]);
+  });
+
+  it("keeps only what was typed while a write was out", () => {
+    const sent = withGrantEdit(undefined, "claude", base(), base().slice(1))!;
+    // Untouched since it was sent: it is the file now, and nothing is left.
+    expect(grantsAfterWrite(sent, sent)).toBeUndefined();
+    // Edited again: the newer rules stay, over a base that is what was written.
+    expect(grantsAfterWrite(withGrantEdit(sent, "claude", [], []), sent)).toEqual({
+      claude: { base: base().slice(1), rules: [] },
+    });
+    // Edited back to where it began while the write was out: against the file, that is an edit.
+    expect(grantsAfterWrite(undefined, sent)).toEqual({ claude: { base: base().slice(1), rules: base() } });
+    // An agent first edited meanwhile was not written, and keeps the base it began from.
+    expect(grantsAfterWrite(withGrantEdit(sent, "codex", [], [ALWAYS]), sent)).toEqual({
+      codex: { base: [], rules: [ALWAYS] },
+    });
+  });
+});
+
 /* ------------------------------------------------------------------ screen -- */
 
 function renderPanel(agentId = "claude"): { close: () => void; reopen: () => void } {
@@ -279,6 +350,61 @@ function lastWrite(): { document: string; expectedRevision: string; text: string
   if (!call) throw new Error("no config.set was sent");
   return call.params as { document: string; expectedRevision: string; text: string };
 }
+
+const callsTo = (method: string): number => fake.calls.filter((call) => call.method === method).length;
+
+/** Every effect and answer a push or a write set going has landed. */
+const settled = (): Promise<void> => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+
+/**
+ * The sidecar as the daemon holds it, rather than the fixture's constant: a `config.set`
+ * against any revision but the current one is `CONFIG_STALE`, as `replacePermissionPolicyFile`
+ * answers under its lock, and a write that lands moves the revision. `write` is somebody
+ * else's write — a run answering "always" is one — with the `config.changed` it pushes, or
+ * without it when the push has not arrived yet.
+ */
+function sidecarOnDisk(): {
+  readonly text: string;
+  write: (edit: (doc: SidecarDocument) => SidecarDocument, options?: { push: boolean }) => void;
+} {
+  let revision = PERMISSIONS_REVISION;
+  let text = PERMISSIONS_TEXT;
+  let writes = 0;
+  const view = () => ({ ...CONFIG_GET.permissions, revision, text, parsed: JSON.parse(text) as unknown });
+  fake.script({
+    "config.get": () => ({ ok: true, result: { ...CONFIG_GET, permissions: view() } }),
+    "config.set": (params) => {
+      if (params.document !== "permissions") throw new Error("only the sidecar is written here");
+      if (params.expectedRevision !== revision) {
+        return { ok: false, error: { code: "CONFIG_STALE", message: `${view().path} has changed since you read it` } };
+      }
+      if (params.validateOnly !== true) {
+        text = params.text ?? text;
+        revision = `written-${(writes += 1)}`;
+      }
+      return { ok: true, result: { document: view(), written: params.validateOnly !== true, asOf: AS_OF } };
+    },
+  });
+  return {
+    get text() {
+      return text;
+    },
+    write(edit, options = { push: true }) {
+      text = serializeSidecar(edit(parseSidecar(text)!));
+      revision = `elsewhere-${(writes += 1)}`;
+      if (!options.push) return;
+      fake.notify({
+        kind: "notification",
+        method: "config.changed",
+        params: { subscriptionId: "sub-1", at: AS_OF, document: "permissions", revision, path: view().path },
+      });
+    },
+  };
+}
+
+/** The grants the file holds for one agent, as the daemon's own schema reads them. */
+const onDiskFor = (text: string, agentId: string) =>
+  PermissionPolicyFileSchema.parse(JSON.parse(text)).agents[agentId]?.rules ?? [];
 
 describe("the policy editor", () => {
   beforeEach(() => {
@@ -475,6 +601,107 @@ describe("the policy editor", () => {
     // The draft survived the refusal: one change, still held, still one grant short.
     expect(bar.textContent).toContain("1\u00a0change");
     expect(await grants()).toHaveLength(1);
+  });
+
+  it("keeps a grant the daemon wrote for another agent while the draft was open", async () => {
+    const disk = sidecarOnDisk();
+    renderPanel();
+    fireEvent.click(within((await grants())[0]!).getByRole("button", { name: "Remove grant 2" }));
+    const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+
+    // A run answered "allow always" for another agent: the daemon wrote the file and said so.
+    const reads = callsTo("config.get");
+    disk.write((doc) => withRules(doc, "codex", [ALWAYS]));
+    await waitFor(() => expect(callsTo("config.get")).toBeGreaterThan(reads));
+    await settled();
+    // Still the one change this person made: the other agent's grant is not one to undo.
+    expect(bar.textContent).toContain("1 change");
+
+    fireEvent.click(within(bar).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Unsaved configuration changes" })).toBeNull());
+    // Sent onto the file it was composed onto, and the grant written meanwhile is still there.
+    expect(lastWrite().expectedRevision).toBe("elsewhere-1");
+    expect(onDiskFor(disk.text, "codex")).toEqual([ALWAYS]);
+    expect(onDiskFor(disk.text, "claude").map((rule) => rule.grantedFor)).toEqual(["Run git status"]);
+  });
+
+  it("reads again and composes again when the file moved before its push arrived", async () => {
+    const disk = sidecarOnDisk();
+    renderPanel();
+    fireEvent.click(within((await grants())[0]!).getByRole("button", { name: "Remove grant 2" }));
+    // Written, and the `config.changed` saying so is still on its way.
+    disk.write((doc) => withRules(doc, "codex", [ALWAYS]), { push: false });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Unsaved configuration changes" })).toBeNull());
+    /* The first write was refused, because the file it was composed onto had moved; that is
+       not a conflict to put in front of the person, since nobody else touched this agent. */
+    const sent = fake.calls
+      .filter((call) => call.method === "config.set")
+      .map((call) => call.params as ConfigSetParams);
+    expect(sent.map((params) => params.expectedRevision)).toEqual([PERMISSIONS_REVISION, "elsewhere-1"]);
+    expect(onDiskFor(disk.text, "codex")).toEqual([ALWAYS]);
+    expect(onDiskFor(disk.text, "claude").map((rule) => rule.grantedFor)).toEqual(["Run git status"]);
+  });
+
+  it("says so rather than writing over it when the same agent's grants changed on disk", async () => {
+    const disk = sidecarOnDisk();
+    renderPanel();
+    fireEvent.click(within((await grants())[0]!).getByRole("button", { name: "Remove grant 2" }));
+    const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+
+    // This time "allow always" was answered for the agent being edited.
+    const reads = callsTo("config.get");
+    disk.write((doc) => withRules(doc, "claude", [...rulesOf(doc, "claude"), ALWAYS]));
+    await waitFor(() => expect(callsTo("config.get")).toBeGreaterThan(reads));
+    await settled();
+
+    fireEvent.click(within(bar).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(bar.textContent).toContain("the grants for claude changed while you were editing them"));
+    // Nothing was sent, the new grant is on disk, and the draft is the one the person left.
+    expect(callsTo("config.set")).toBe(0);
+    expect(onDiskFor(disk.text, "claude")).toContainEqual(ALWAYS);
+    expect(await grants()).toHaveLength(1);
+
+    /* Reload is the person having been told: the draft is kept, now made against the file as
+       it is, so the Save after it writes the list they left. */
+    fireEvent.click(within(bar).getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(bar.textContent).not.toContain("changed while you were editing them"));
+    fireEvent.click(within(bar).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(callsTo("config.set")).toBe(1));
+    expect(lastWrite().expectedRevision).toBe("elsewhere-1");
+    await waitFor(() =>
+      expect(onDiskFor(disk.text, "claude").map((rule) => rule.grantedFor)).toEqual(["Run git status"]),
+    );
+  });
+
+  it("keeps an edit typed while a save was out, and Discard waits for the write", async () => {
+    const disk = sidecarOnDisk();
+    renderPanel();
+    fireEvent.change(field((await grants())[0]!, "Path prefix"), { target: { value: "packages" } });
+    const release = fake.hold("config.set");
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => expect(callsTo("config.set")).toBe(1));
+
+    // The write is out. It cannot be called back, so Discard says it is waiting and does nothing.
+    const bar = screen.getByRole("group", { name: "Unsaved configuration changes" });
+    const discard = within(bar).getByRole("button", { name: "Discard" });
+    expect(discard.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(discard);
+    // And the person keeps typing in the same field.
+    fireEvent.change(field((await grants())[0]!, "Path prefix"), { target: { value: "packages/app" } });
+
+    release();
+    await waitFor(() => expect(onDiskFor(disk.text, "claude")[0]!.match.pathPrefix).toBe("packages"));
+    await settled();
+    // What was typed after Save is still the draft, one change over what was written.
+    expect(field((await grants())[0]!, "Path prefix").value).toBe("packages/app");
+    const after = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+    expect(after.textContent).toContain("1 change");
+
+    fireEvent.click(within(after).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onDiskFor(disk.text, "claude")[0]!.match.pathPrefix).toBe("packages/app"));
+    expect(lastWrite().expectedRevision).toBe("written-1");
   });
 
   it("re-reads when a config.changed frame says the sidecar moved", async () => {

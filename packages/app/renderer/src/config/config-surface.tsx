@@ -129,7 +129,7 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
         ? draft.text === data.config.text
           ? 0
           : 1
-        : patchFrom(draft.fields, data.config.parsed).length;
+        : patchFrom(edits, data.config.parsed).length;
 
   /* One document has fields with a **raw** button on this screen: the YAML. The sidecar is
      rendered as its rules and its bytes, and nothing here draws a `document="permissions"`

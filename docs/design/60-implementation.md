@@ -811,6 +811,18 @@ order, so a client compares **revisions, not bytes**. The panel never writes a `
 sidecar has no fallthrough, because answering one prompt must not change the answer to every
 other one, and a document carrying one is refused rather than stripped.
 
+**The draft is the edited agents' rules, not a copy of the sidecar.** The daemon writes this
+file on every "allow always", so a draft that held the whole document would put back a stale
+copy of every other agent's grants on Save. The draft holds each agent a person edited, with
+the rules the file had for it when the first edit was made (`policy-model.ts`). Save composes
+those agents onto the file as it is now and sends the revision of that document; a
+`CONFIG_STALE` there is answered by reading the file again and composing again, twice at most,
+before the bar says so. Only a change on disk to an agent the person also edited is a conflict:
+Save then sends nothing and the bar names the agent and offers **Reload**, which keeps the
+edits and takes the file as what they were made against, so the Save after it writes them.
+What is typed while a save is out stays in the draft, and **Discard** waits for the write,
+which cannot be called back.
+
 **The round trip is lossless or it is refused.** A key this app does not recognise — on a
 rule or inside a match — is written back after the ones it does, so an edit to one row
 cannot quietly delete a field a newer daemon put on another. A document whose `version` is
@@ -821,7 +833,9 @@ repair and writing it back is the one thing a file this security-relevant must n
 
 **Allow-always lands here without a second path.** When a run answers "always", the daemon
 writes the sidecar and pushes `config.changed`; the panel is on the same hook every Config
-screen is, so the rows re-read themselves. A card's "always" that the daemon *refused* to
+screen is, so the rows re-read themselves. A draft open at the time keeps the new grant: one
+for another agent is saved with the draft, and one for the agent being edited is the conflict
+above rather than something Save quietly removes. A card's "always" that the daemon *refused* to
 derive a rule from says so on the Attention surface rather than promising anything
 (`alwaysOutcome`, #221) — the panel then simply has nothing new to show, which is correct.
 
