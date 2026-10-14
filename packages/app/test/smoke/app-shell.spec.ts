@@ -227,16 +227,28 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     "connection",
     "daemonConnection",
     "deepLink",
+    // The seven keys below that no comment introduces — `diagnostics`, `firstRun`,
+    // `guidedLaunch`, `macUpdates`, `operator`, `templates` and `workflowDrafts` — were
+    // added to `src/bridge.ts` after v0.6.0 (local diagnostics; #542's operator preflight;
+    // #607's first-run setup, guided launch, mac updates and templates; #610's workflow
+    // drafts) without being written down here, and were recorded late, as they ship.
+    "diagnostics",
+    "firstRun",
+    "guidedLaunch",
     "hello",
     "inputs",
+    "macUpdates",
     "notifications",
+    "operator",
     "plan",
     "platform",
     "preferences",
     "runs",
+    "templates",
     // `updates` is v0.6.0's desktop updater (#306): read, act, subscribe and the unsaved-
     // draft challenge. No feed URL, credential or install command crosses it.
     "updates",
+    "workflowDrafts",
     "workflows",
     "workspace",
   ]);
