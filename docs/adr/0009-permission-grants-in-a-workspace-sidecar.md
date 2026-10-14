@@ -132,6 +132,44 @@ the sidecar schema allows deny/ask rules, and dropping them can expose a later d
 allow. Configured rules still precede the overlay. A conservative error policy is not
 established by rereading; see [R07 reconciliation](../../Current_State/addenda/2026-10-01-main-reconciliation.md).
 
+**2026‑10‑14 (C4‑01):** an agent could grant itself everything. With no `workspace:` the
+config directory *is* the run's workspace, so this file, `orca.config.yaml`, the `.orca`
+store and `auth/` (with the local owner token) were all "inside the workspace", where the
+default rules allow edits. An agent that wrote `{"match":{},"decision":"allow"}` here had
+every later `execute` approved, because the file is re‑read per ask. Three changes:
+
+- **ORCA's own files are outside every rule.** `decidePermission` denies a call that touches
+  one before any layer is consulted, so no configured rule, sidecar rule, default or
+  `default: allow` opens them. Read‑only to an agent: every config filename in the config
+  directory, the config file actually loaded, this sidecar and the store — except the store's
+  `work/` and `program/`, where the shipped workflows have agents write deliverables
+  (`.orca/work/…` from a workspace that holds the store). Unreadable as well:
+  `auth/` and the store's `private-execution` and `private-workflows` directories, which hold
+  its keys. The ACP client's `fs/read_text_file` and `fs/write_text_file` handlers, which
+  ask nobody, refuse the same list. Paths are compared as the file system resolves them —
+  symlinks followed, `..` taken physically — and segment by segment. The CLI's
+  `makeSessionFactory` binds the list beside the sidecar path (`orcaProtectedPaths`).
+- **A wildcard `allow` in this file is ignored**, with a warning. Everything ORCA writes here
+  is derived and scoped, and the Config surface narrows a kind by a path, a prefix, the
+  workspace or a title; an `allow` naming no kind, or a kind and nothing that narrows it
+  (`isWildcardPermissionRule` in `@orca/core`), is the shape of an agent's work, not a
+  person's. A wildcard belongs in `orca.config.yaml`, where it still works. `config.get`
+  leaves an ignored rule out of the effective policy too. A wildcard `deny` or `ask` stays.
+- **An unreadable sidecar no longer exposes a default allow.** This settles the 2026‑10‑01
+  clarification: every `allow` decided *after* a sidecar that could not be read — a later
+  sidecar's, a default rule's, the fallthrough's — is an `ask` until it is repaired. The
+  configured rules come first and decide as before. In an unattended run that refuses
+  in‑workspace edits until the file is fixed, which the warn log says.
+
+**What this does not cover.** An ACP agent's own tools — built‑in file editing, its shell —
+act with the user's operating‑system permissions and need not ask ORCA anything, so none of
+the above binds them; nor does it see a hard link made out of its view. In a hardened setup
+the config directory should not be an agent workspace: point `workspace.root` at a
+sub‑directory, or use the `git-worktree` provider with `isolateRoots: true`, so these files
+are outside every agent root and ORCA's own requests about them are asked. A hard boundary
+is the operating system's — a separate user or a sandbox — as `docs/daemon-security.md`
+says of `auth/`.
+
 ## Consequences
 + The hand‑written half of the config stays hand‑written. Nothing appends to the Nth element
   of a curated `agents:` array, so a machine write can never collide with a human edit.

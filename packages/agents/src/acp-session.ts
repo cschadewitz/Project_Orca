@@ -6,6 +6,7 @@
  * system (scoped to the session cwd) and answers `session/request_permission`
  * through the agent's PermissionPolicy — configured rules, then whatever the
  * permission sidecars say at that moment, then the defaults (ADR 0009, #271).
+ * ORCA's own files are refused to both, ahead of any rule (`protectedPaths`, C4-01).
  */
 import { isAbsolute, relative } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -24,7 +25,12 @@ import {
 import { processCleanup } from "./process-cleanup.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
-import { loadEffectivePermissionPolicy, resolvePermission } from "./permissions.js";
+import {
+  loadEffectivePermissionPolicy,
+  protectedPathFor,
+  resolvePermission,
+  type ProtectedPaths,
+} from "./permissions.js";
 import {
   summarizeUpdate,
   type AgentSession,
@@ -53,6 +59,13 @@ export interface OpenSessionOptions {
    * configured rules and the defaults alone, which is what this did before #271.
    */
   permissionFiles?: readonly string[];
+  /**
+   * ORCA's own files — config, sidecar, store, credentials — which this session refuses to
+   * the agent whatever its policy says: a permission ask that touches one is denied, and so
+   * is an `fs/*` request for one (C4-01). Bound with `permissionFiles` by the CLI's
+   * `makeSessionFactory`; omitted, nothing is protected beyond the policy.
+   */
+  protectedPaths?: ProtectedPaths;
   onPermission?: (info: { toolCallId?: string; title: string; decision: string }) => void;
   handshakeTimeoutMs?: number;
   /**
@@ -99,7 +112,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   let configOptions: SessionConfigOption[] = [];
   const id = newId("sess", clock.now());
   let activeTurn: ActiveTurn | undefined;
-  /** Sidecars already reported as unreadable; one warn per file per session, not per ask. */
+  /** Sidecar problems already reported — a file unreadable, a rule ignored — so each warns once per session, not per ask. */
   const warnedSidecars = new Set<string>();
 
   /**
@@ -113,19 +126,44 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
    * A sidecar that is missing contributes nothing. A sidecar that is there and corrupt is
    * logged once and skipped, not thrown: failing the ask would fail the tool call and take
    * the turn with it, and an agent blocked by a file it cannot see or fix is a worse answer
-   * than an agent that falls back to its configured rules. The fallback is the conservative
-   * direction anyway — an overlay only ever *adds* rules after the configured ones — so what
-   * is lost is a grant, never a restriction.
+   * than one that falls back to its configured rules. Skipping alone would not be
+   * conservative, though — the sidecar can hold `deny` and `ask` rules, and dropping them
+   * would let a default `allow` through — so the loader turns every `allow` decided after
+   * the unreadable file into `ask` (ADR 0009). A wildcard `allow` in a readable sidecar is
+   * ignored and logged the same way, once.
    */
   const policyForAsk = () =>
-    loadEffectivePermissionPolicy(opts.agent, opts.permissionFiles ?? [], (file, e) => {
-      if (warnedSidecars.has(file)) return;
-      warnedSidecars.add(file);
-      logger.warn("permission sidecar unreadable; evaluating configured rules alone", {
-        file,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    });
+    loadEffectivePermissionPolicy(
+      opts.agent,
+      opts.permissionFiles ?? [],
+      (file, e) => {
+        if (warnedSidecars.has(file)) return;
+        warnedSidecars.add(file);
+        logger.warn("permission sidecar unreadable; asking instead of allowing anything it could have refused", {
+          file,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      },
+      (file, rule) => {
+        const key = `${file}\0${JSON.stringify(rule)}`;
+        if (warnedSidecars.has(key)) return;
+        warnedSidecars.add(key);
+        logger.warn("permission sidecar rule ignored: a wildcard allow belongs in the config, not the sidecar", {
+          file,
+          rule,
+        });
+      },
+    );
+
+  /**
+   * Refuse an `fs/*` request for one of ORCA's own files. These handlers read and write with
+   * no permission ask at all, so this is the only check ORCA makes on them.
+   */
+  const refuseProtected = (path: string, access: "read" | "write"): void => {
+    if (protectedPathFor(path, access, opts.protectedPaths) === undefined) return;
+    logger.warn("agent file request refused: the path is ORCA's own", { path, access });
+    throw acp.RequestError.invalidParams({ path, reason: "protected: ORCA's own files are not open to agents" });
+  };
 
   const proc: AgentProcessHandle = await opts.host.spawnAgent(opts.agent, {
     cwd: opts.cwd,
@@ -186,7 +224,8 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
         // Rules ORCA writes are workspace-relative, so that a grant made in one git worktree
         // still fires in the next one; without the workspace to resolve them against, none
         // of them could ever match the absolute paths an agent reports (ADR 0009).
-        scope: { workspaceCwd: opts.cwd },
+        // ORCA's own files go ahead of every rule, so no policy can open them (C4-01).
+        scope: { workspaceCwd: opts.cwd, ...(opts.protectedPaths ? { protectedPaths: opts.protectedPaths } : {}) },
       });
       opts.onPermission?.({
         ...(ctx.params.toolCall.toolCallId ? { toolCallId: ctx.params.toolCall.toolCallId } : {}),
@@ -199,6 +238,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     .onRequest(acp.methods.client.fs.readTextFile, async (ctx) => {
       const { path, line, limit } = ctx.params;
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
+      refuseProtected(path, "read");
       let content = await opts.host.fs.readFile(path);
       if (line !== undefined && line !== null) {
         const lines = content
@@ -214,6 +254,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     .onRequest(acp.methods.client.fs.writeTextFile, async (ctx) => {
       const { path, content } = ctx.params;
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
+      refuseProtected(path, "write");
       await opts.host.fs.writeFile(path, content);
       return {};
     });

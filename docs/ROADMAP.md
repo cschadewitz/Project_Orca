@@ -90,9 +90,9 @@ Other standing limits include ACP terminal support and automatic `session/load`,
 remote workspace synchronization, calendar/capacity planning and autonomous Maintain.
 A realized risk records state; it does not create a follow-up Request. The historical
 review records the risk-assessor prompt's overpromise; executable prompts are outside
-this prose-only scope. Unreadable permission sidecars can drop deny/ask rules,
-external-writer push observation is incomplete, and multi-record recovery requires
-separate evidence. The [historical verification queue](../Current_State/roadmap/future-verification.md)
+this prose-only scope. An agent's own tools can still write ORCA's files when the
+config directory is its workspace (ADR 0009), external-writer push observation is
+incomplete, and multi-record recovery requires separate evidence. The [historical verification queue](../Current_State/roadmap/future-verification.md)
 retains the fault/scale/deployment questions rather than treating them as reproduced
 current failures or closed by a docs pass. JEV provider work, plugin restoration
 and contributor tooling retain their existing follow-up owners.

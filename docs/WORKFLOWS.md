@@ -288,6 +288,26 @@ unchanged: it moves them *ahead* of the sidecar, where a recorded `reject_always
 reach them. `config.get` labels every effective rule with the layer it came from (`config`,
 `permissions`, `default`), so the Config surface shows which is which.
 
+Two things about the sidecar are not yours to choose. An `allow` there that says nothing about
+what it allows — no `kind`, or a kind and nothing that narrows it, or an `execute` without a
+`titlePattern` — is ignored with a warning: ORCA only ever writes scoped grants, so a wildcard
+in that file is the shape of an agent's work. Write a wildcard in `orca.config.yaml`, where it
+still applies. And a sidecar that cannot be read makes every `allow` decided after it an `ask`
+until it is repaired, because the `deny` it may hold would otherwise be skipped.
+
+### ORCA's own files
+
+Ahead of all three layers, and beyond the reach of any of them, an agent may not edit, write,
+move or delete the config file, `orca.permissions.json` or the store (`.orca`, or your
+`storeDir`), and may not even read `auth/` or the store's key directories. `default: allow`
+does not change that. With no `workspace:` set, these files sit in the agent's workspace, and
+an agent that could edit the sidecar could otherwise allow itself anything. The same applies to
+ORCA's `fs/read_text_file` and `fs/write_text_file` handlers. The store's `work/` and
+`program/` stay the policy's, because that is where the deliverables above go when the
+workspace holds the store — so a deliverable you put under `.orca/` belongs in one of them. An
+agent's own built‑in tools do not ask ORCA at all, so in a hardened setup keep the config
+directory out of the workspace (ADR 0009).
+
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive
 the agent session that raised it, so `pause` cancels it, `auto` refuses it, and either way

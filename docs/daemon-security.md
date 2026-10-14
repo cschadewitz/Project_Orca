@@ -87,6 +87,24 @@ holds:
 | `audit.jsonl`        | The security audit trail (below).                       |
 | `local-client.token` | This start's local owner token. The only secret here.   |
 
+### Agents and the auth directory
+
+`orca serve` keeps the auth directory at `<configDir>/auth`, and with no `workspace:`
+configured the config directory is also every run's agent workspace. The same user boundary
+that protects the token from other users does not protect it from a coding agent, which
+runs as the same user. So every agent session refuses `auth/` outright (no read, no write),
+treats the config, the permission sidecar and the store as read-only with the store's key
+directories unreadable, and no permission rule can change that ([ADR 0009](adr/0009-permission-grants-in-a-workspace-sidecar.md),
+2026‑10‑14).
+
+That covers what an agent asks ORCA for: `session/request_permission` and the ACP
+`fs/read_text_file` and `fs/write_text_file` requests. It does not cover an agent's own
+tools, which read and write with the user's file permissions without asking ORCA. For a
+hardened setup, keep the config directory out of every agent root (`workspace.root` set to
+a sub-directory, or the `git-worktree` provider with `isolateRoots: true`), and for a hard
+boundary run agents as a different user or in a sandbox that cannot reach the config
+directory.
+
 ## Principals, permissions and scopes
 
 A credential holds a list of these permissions:

@@ -149,6 +149,43 @@ describe("config.get", () => {
   });
 
   /**
+   * C4-01: a wildcard `allow` in the sidecar is ignored when a session evaluates it, so the
+   * effective view leaves it out as well - and the rules after it keep their own provenance
+   * rather than the one a position earlier.
+   */
+  it("leaves out a wildcard allow the sidecar holds, as evaluation does", async () => {
+    const { dir, model } = await workspace();
+    await writeFile(
+      join(dir, "orca.permissions.json"),
+      JSON.stringify({
+        version: 1,
+        agents: {
+          codex: {
+            rules: [
+              { match: {}, decision: "allow", grantedFor: "planted" },
+              { match: { kind: "edit", path: "src/a.ts" }, decision: "deny", grantedFor: "Edit src/a.ts" },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const codex = (await model.get()).effective.agents["codex"];
+
+    expect(codex?.rules.map((r) => r.source)).toEqual([
+      "permissions",
+      ...DEFAULT_PERMISSION_POLICY.rules.map(() => "default"),
+    ]);
+    expect(codex?.rules[0]).toEqual({
+      match: { kind: "edit", path: "src/a.ts" },
+      decision: "deny",
+      source: "permissions",
+      grantedFor: "Edit src/a.ts",
+    });
+  });
+
+  /**
    * #140's first cut folded the default rules into the parsed config, so `config.get` counted
    * them as configured and the Config surface offered to edit rules that are not in any file.
    */

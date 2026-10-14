@@ -45,6 +45,7 @@ import { permissionOverlayFor, replacePermissionPolicyFile } from "@orca/agents"
 import {
   effectivePermissionPolicy,
   isOrcaError,
+  isWildcardPermissionRule,
   OrcaError,
   OrcaConfigSchema,
   PERMISSION_POLICY_FILENAME,
@@ -498,7 +499,9 @@ export class ConfigModel {
    * folded into the parsed config, so `configured` counted them and every one of them was
    * reported as something the operator had written into `orca.config.yaml`. An agent whose
    * config sets `default:` has no third layer at all, and `sidecarEnd` is then the end of the
-   * list - which is why this counts rather than assuming.
+   * list - which is why this counts rather than assuming. What it counts is the sidecar rules
+   * that are evaluated: a wildcard `allow` is ignored by `permissionOverlayFor` (C4-01), so
+   * it is left out here too, or every later rule would be paired with the wrong provenance.
    */
   private effective(config: ConfigDocumentView, permissions: ConfigDocumentView): ConfigEffectivePolicy {
     const parsed = OrcaConfigSchema.safeParse(config.parsed ?? {});
@@ -509,7 +512,7 @@ export class ConfigModel {
       : { version: 1, agents: {} };
     const agents: ConfigEffectivePolicy["agents"] = {};
     for (const agent of parsed.data.agents) {
-      const recorded = doc.agents[agent.id]?.rules ?? [];
+      const recorded = (doc.agents[agent.id]?.rules ?? []).filter((rule) => !isWildcardPermissionRule(rule));
       const layered = effectivePermissionPolicy(agent.permissions, permissionOverlayFor(doc, agent.id));
       const configured = agent.permissions.rules.length;
       const sidecarEnd = configured + recorded.length;

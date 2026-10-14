@@ -28,17 +28,25 @@
  * deep and an ask is already a round trip to an agent, so re-reading it costs nothing worth
  * caching against.
  *
+ * Ahead of every layer sit ORCA's own files (`ProtectedPaths`, C4-01). With no `workspace:`
+ * configured the run's workspace *is* the config directory, so the config, the sidecar, the
+ * store and `auth/` are all "inside the workspace" — and an agent allowed to edit the sidecar
+ * could allow itself everything. No rule reaches them: configured, written or default.
+ *
  * The schemas, the layering and the derivation are in `@orca/core`
- * (`model/agent.ts`), which is node-free; the reading, writing and locking are here.
+ * (`model/agent.ts`), which is node-free; the reading, writing, locking and the physical
+ * path checks are here.
  */
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { link, mkdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   derivePermissionRules,
   effectivePermissionPolicy,
+  isWildcardPermissionRule,
   OrcaError,
   PERMISSION_POLICY_FILENAME,
   PermissionPolicyFileSchema,
@@ -75,9 +83,20 @@ export interface PermissionContext {
 export interface PermissionEvalContext {
   /** Absolute path of the run's workspace (`Run.workspace.cwd`). */
   workspaceCwd?: string | undefined;
+  /** ORCA's own files: a call that would touch one is denied ahead of every rule (C4-01). */
+  protectedPaths?: ProtectedPaths | undefined;
 }
 
 export function decidePermission(
+  policy: PermissionPolicy,
+  request: acp.RequestPermissionRequest,
+  ctx?: PermissionEvalContext,
+): PermissionDecision {
+  return protectedLocation(request, ctx) === undefined ? decideByRules(policy, request, ctx) : "deny";
+}
+
+/** The policy's answer, first match wins, with nothing ahead of it. */
+function decideByRules(
   policy: PermissionPolicy,
   request: acp.RequestPermissionRequest,
   ctx?: PermissionEvalContext,
@@ -123,7 +142,9 @@ export async function resolvePermission(
   ctx: PermissionContext,
 ): Promise<{ response: acp.RequestPermissionResponse; decision: string }> {
   if (ctx.signal?.aborted) return { response: { outcome: { outcome: "cancelled" } }, decision: "ask:expired" };
-  const decision = decidePermission(policy, ctx.request, ctx.scope);
+  // `decidePermission`'s own check, kept apart here so the decision can say why it denied.
+  const guarded = protectedLocation(ctx.request, ctx.scope) !== undefined;
+  const decision = guarded ? "deny" : decideByRules(policy, ctx.request, ctx.scope);
   const options = ctx.request.options;
   const select = (o: acp.PermissionOption | undefined, label: string) =>
     o
@@ -133,7 +154,7 @@ export async function resolvePermission(
     case "allow":
       return select(pick(options, ["allow_once", "allow_always"]), "allow");
     case "deny":
-      return select(pick(options, ["reject_once", "reject_always"]), "deny");
+      return select(pick(options, ["reject_once", "reject_always"]), guarded ? "deny:protected" : "deny");
     case "ask": {
       // Nothing to ask through: the run has no human-input channel at all. Say so in the
       // decision rather than logging a bare "cancelled", because "the policy wanted a person
@@ -178,6 +199,124 @@ function permissionWhileLive(
 }
 
 /* -------------------------------------------------------------------------- *
+ * Protected paths
+ * -------------------------------------------------------------------------- */
+
+/**
+ * ORCA's own files, which no permission rule can open to an agent (C4-01).
+ *
+ * With no `workspace:` configured, a run's workspace is the config directory, and that holds
+ * what decides what an agent may do and who may answer it: the config, the permission
+ * sidecar, the store with its key, and `auth/` with an owner token. The default policy allows
+ * edits inside the workspace and the sidecar is re-read on every ask, so an agent that could
+ * write `{"match":{},"decision":"allow"}` into the sidecar would have every later `execute`
+ * approved without anybody being asked.
+ *
+ * So these are checked before the rules, and nothing overrides them — a configured rule, a
+ * sidecar rule, the defaults or `default: allow`. Changing them is a person's job, in the
+ * config or on the Config surface, never an agent's through a tool call. The ACP session
+ * checks its `fs/*` handlers against the same list. An agent's own native tools can still
+ * reach these files without asking ORCA at all; the answer to that is keeping the config
+ * directory out of every agent root (`workspace:`, `isolateRoots`), and for a hard boundary
+ * an operating-system one (ADR 0009).
+ */
+export interface ProtectedPaths {
+  /** An agent may read these, but never edit, write, move or delete them. */
+  readonly readOnly: readonly string[];
+  /** An agent may not touch these at all, reads included: credentials and key material. */
+  readonly noAccess: readonly string[];
+  /**
+   * Directories inside a read-only path that are the agent's after all, and so the policy's
+   * to decide — the store's `work/` and `program/`, where ORCA's own workflows have agents
+   * write their deliverables when the store sits in the workspace. Each is placed by its
+   * parent, so a link standing in its place does not carry the rest of the store with it.
+   */
+  readonly agentAreas?: readonly string[] | undefined;
+}
+
+/**
+ * The protected path `path` falls under for this kind of access, or undefined when it is free.
+ * `remove` — a delete or a move — also refuses a directory that holds one, since taking the
+ * directory away takes the protected path with it.
+ *
+ * Both sides are compared as the file system resolves them — symlinks followed, and `..` taken
+ * from where a link leads rather than from where it was written, the way the agent's own open
+ * would — and segment by segment. So a link to `auth/` is `auth/`,
+ * `sub/../orca.permissions.json` is the sidecar, and `.orca-notes` is not `.orca`. A relative
+ * path is taken against the workspace, as a rule's is; the ACP session always passes one.
+ */
+export function protectedPathFor(
+  path: string,
+  access: "read" | "write" | "remove",
+  protectedPaths: ProtectedPaths | undefined,
+  workspaceCwd?: string,
+): string | undefined {
+  if (!protectedPaths) return undefined;
+  if (!isAbsolute(path) && !workspaceCwd) return undefined;
+  // Joined as text, not with `join`: that would fold `sub/..` lexically before the links in it are followed.
+  const target = pathSegments(physicalPath(isAbsolute(path) ? path : `${workspaceCwd}${sep}${path}`));
+  const hit = (roots: readonly string[]) =>
+    roots.find((root) => {
+      const guard = pathSegments(physicalPath(root));
+      return within(target, guard) || (access === "remove" && within(guard, target));
+    });
+  const unreadable = hit(protectedPaths.noAccess);
+  if (unreadable !== undefined || access === "read") return unreadable;
+  const areas = (protectedPaths.agentAreas ?? []).map((area) =>
+    pathSegments(join(physicalPath(dirname(area)), basename(area))),
+  );
+  return areas.some((area) => within(target, area)) ? undefined : hit(protectedPaths.readOnly);
+}
+
+/** Whether `inner` is `outer` or below it, segment by segment. */
+function within(inner: readonly string[], outer: readonly string[]): boolean {
+  return outer.length <= inner.length && outer.every((segment, i) => segment === inner[i]);
+}
+
+/**
+ * The first location of a tool call that touches a protected path in a way its kind could.
+ * `read` and `search` only look; every other kind — `execute` and `other` included — may
+ * change what it touches, so it is held to the stricter list.
+ */
+function protectedLocation(
+  request: acp.RequestPermissionRequest,
+  ctx: PermissionEvalContext | undefined,
+): string | undefined {
+  if (!ctx?.protectedPaths) return undefined;
+  const kind = request.toolCall.kind ?? "other";
+  const access =
+    kind === "read" || kind === "search" ? "read" : kind === "delete" || kind === "move" ? "remove" : "write";
+  return (request.toolCall.locations ?? [])
+    .map((l) => l.path)
+    .find((p) => protectedPathFor(p, access, ctx.protectedPaths, ctx.workspaceCwd) !== undefined);
+}
+
+/**
+ * `path` as the file system resolves it. The part that does not exist yet — a file about to be
+ * created — is appended to the deepest ancestor that does, which is what an open of it reaches.
+ */
+function physicalPath(path: string): string {
+  const missing: string[] = [];
+  for (let head = path; ;) {
+    try {
+      return join(realpathSync.native(head), ...missing);
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return join(head, ...missing);
+      missing.unshift(basename(head));
+      head = parent;
+    }
+  }
+}
+
+/** Windows and macOS file systems ignore case by default, so a comparison has to as well. */
+const FOLD_CASE = process.platform === "win32" || process.platform === "darwin";
+
+function pathSegments(path: string): string[] {
+  return (FOLD_CASE ? path.toLowerCase() : path).split(sep === "\\" ? /[\\/]+/ : /\/+/).filter((s) => s !== "");
+}
+
+/* -------------------------------------------------------------------------- *
  * The sidecar
  * -------------------------------------------------------------------------- */
 
@@ -215,9 +354,25 @@ export async function readPermissionPolicyFile(file: string): Promise<Permission
   return parsed.data;
 }
 
-/** The rules a sidecar contributes for one agent, in file order, without their provenance. */
-export function permissionOverlayFor(doc: PermissionPolicyFile, agentId: string): PermissionRule[] {
-  return (doc.agents[agentId]?.rules ?? []).map((r) => ({ match: { ...r.match }, decision: r.decision }));
+/**
+ * The rules a sidecar contributes for one agent, in file order, without their provenance —
+ * less any wildcard `allow` (`isWildcardPermissionRule` in `@orca/core`), which is reported
+ * to `onIgnored` and never evaluated. ORCA only ever writes scoped grants, and a wildcard in
+ * this file is how an agent that reached it would allow itself everything (C4-01); a person
+ * who means one writes it in the config.
+ */
+export function permissionOverlayFor(
+  doc: PermissionPolicyFile,
+  agentId: string,
+  onIgnored?: (rule: PermissionRule) => void,
+): PermissionRule[] {
+  const rules: PermissionRule[] = [];
+  for (const r of doc.agents[agentId]?.rules ?? []) {
+    const rule: PermissionRule = { match: { ...r.match }, decision: r.decision };
+    if (isWildcardPermissionRule(rule)) onIgnored?.(rule);
+    else rules.push(rule);
+  }
+  return rules;
 }
 
 /**
@@ -239,27 +394,47 @@ export function permissionOverlayFor(doc: PermissionPolicyFile, agentId: string)
  * are both right in their place. Omit it and the `CONFIG_INVALID` propagates, which is what
  * a caller reading the file to show or edit it wants. Pass one — `openAcpSession` does — and
  * the file is skipped and reported instead: a live agent asking for permission must not be
- * taken down by a sidecar somebody hand-edited badly, and skipping is the *conservative*
- * direction here rather than the permissive one, because an overlay can only ever add rules
- * after the configured ones. Dropping it can turn an `allow` back into an `ask`; it can
- * never turn an `ask` into an `allow`. It is reported at warn either way, so the grant that
- * silently stopped applying is on the record.
+ * taken down by a sidecar somebody hand-edited badly.
+ *
+ * Skipping alone is not the conservative direction, though this comment used to say it was.
+ * A sidecar holds `deny` and `ask` rules too — `reject_always` writes one — and the layers
+ * after it were written on the assumption that it was read first: drop it and a recorded
+ * `deny` on an in-workspace edit falls through to the default `allow` (ADR 0009). So once a
+ * file cannot be read, every `allow` decided *after* it — a later sidecar's, a default rule's,
+ * the fallthrough's — becomes `ask`. The configured rules ahead of it decide exactly as
+ * before, and what the unreadable file might have said is put to a person rather than
+ * assumed, so what is lost is grants and never a restriction.
+ *
+ * `onIgnored` hears each wildcard `allow` that `permissionOverlayFor` dropped from a sidecar
+ * that could be read.
  */
 export async function loadEffectivePermissionPolicy(
   agent: { id: string; permissions: ConfiguredPermissionPolicy },
   files: readonly string[],
   onUnreadable?: (file: string, error: unknown) => void,
+  onIgnored?: (file: string, rule: PermissionRule) => void,
 ): Promise<PermissionPolicy> {
   const overlays: PermissionRule[][] = [];
+  /** How many rules come before the first sidecar that could not be read. */
+  let readable: number | undefined;
   for (const file of files) {
     try {
-      overlays.push(permissionOverlayFor(await readPermissionPolicyFile(file), agent.id));
+      const doc = await readPermissionPolicyFile(file);
+      overlays.push(permissionOverlayFor(doc, agent.id, onIgnored ? (rule) => onIgnored(file, rule) : undefined));
     } catch (e) {
       if (!onUnreadable) throw e;
       onUnreadable(file, e);
+      readable ??= overlays.reduce((n, overlay) => n + overlay.length, agent.permissions.rules.length);
     }
   }
-  return effectivePermissionPolicy(agent.permissions, ...overlays);
+  const policy = effectivePermissionPolicy(agent.permissions, ...overlays);
+  if (readable === undefined) return policy;
+  const capFrom = readable;
+  const cap = (decision: PermissionDecision): PermissionDecision => (decision === "allow" ? "ask" : decision);
+  return {
+    default: cap(policy.default),
+    rules: policy.rules.map((rule, i) => (i < capFrom ? rule : { ...rule, decision: cap(rule.decision) })),
+  };
 }
 
 export interface RecordAlwaysOptions {
