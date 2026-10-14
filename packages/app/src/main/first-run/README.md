@@ -163,3 +163,5 @@ The #570 successor adds main-only launch capabilities, kernel lifetime admission
 explicit same-boot reconciliation and quiescent saved-config binding. Shared entrypoint
 composition and legacy limits are documented in
 [the handoff](../../../../../docs/implementation/first-run-same-boot-recovery.md).
+An attempt left by an earlier boot is settled only when a person confirms **Mark previous
+session ended** (`recovery.ts` `endPreviousBootSession`), described in that handoff.

@@ -243,7 +243,13 @@ it("mounts closed template commands and gates same-boot setup throughout an upda
   shell.userData = directory;
   const { FirstRunSetup } = await import("../src/main/first-run/setup.js");
   const { DaemonClient } = await import("../src/client/daemon-client.js");
-  const operations = ["prepareRecovery", "reconcileRecovery", "reviewConfiguration", "bindConfiguration"] as const;
+  const operations = [
+    "prepareRecovery",
+    "reconcileRecovery",
+    "endPreviousSession",
+    "reviewConfiguration",
+    "bindConfiguration",
+  ] as const;
   const calls = operations.map((method) =>
     vi.spyOn(FirstRunSetup.prototype, method).mockResolvedValue({ state: "selection-required", reason: "fixture" }),
   );
@@ -255,7 +261,7 @@ it("mounts closed template commands and gates same-boot setup throughout an upda
   const epoch = workspace.connectionTarget.epoch;
   const reserved = vi.spyOn(workspace, "macUpdateReserved", "get").mockReturnValue(true);
   const review = "11111111-1111-4111-8111-111111111111";
-  const inputs = [undefined, review, undefined, review];
+  const inputs = [undefined, review, review, undefined, review];
   for (const [index, method] of operations.entries()) {
     expect(await shell.handlers.get(`orca:workspace.firstRun.${method}`)!(event, inputs[index], epoch)).toMatchObject({
       ok: false,

@@ -65,7 +65,7 @@ static int filename(const wchar_t *name,int writing) {
   if(!component(name))return 0;
   const wchar_t *names[]={L"orca.config.yaml",L"workflow.yaml",L"task.json",L"instruction.md",L"result.json",
     L"selection.json",L".orca-first-run-ownership.json",L"claim.json",L"writer.json",L"child.json",L"identity.json",
-    L"terminal.json",L"recovery-request.json",L"recovery.json",NULL};
+    L"terminal.json",L"recovery-request.json",L"recovery.json",L"ended-after-reboot.json",NULL};
   for(unsigned i=0;names[i];++i)if(!wcscmp(name,names[i]))return 1;
   if(wcslen(name)==25 && !wcsncmp(name,L"config-rebind-",14) && !wcscmp(name+20,L".json")) {
     for(unsigned i=14;i<20;++i)if(name[i]<L'0'||name[i]>L'9')return 0;

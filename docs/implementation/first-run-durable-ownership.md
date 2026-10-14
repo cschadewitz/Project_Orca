@@ -185,3 +185,9 @@ New fenced generations have an explicit same-boot route in
 [first-run-same-boot-recovery.md](first-run-same-boot-recovery.md). Legacy uncertain
 claims described above remain preserved/refused without independent lifetime authority.
 The reboot prerequisite in #577 was rejected and is not part of that successor.
+
+An attempt left unsettled by an earlier boot of the same host is the second authority
+choice above, made explicit. By the owner's 14 October 2026 decision, a person confirms
+that the previous session ended. A free kernel fence and the same store evidence must
+back the confirmation, and it is never automatic or a restart prerequisite. See
+[After a restart](first-run-same-boot-recovery.md#after-a-restart-person-confirmed-end).

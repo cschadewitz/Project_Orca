@@ -28,11 +28,11 @@ import { ConnectionRefusal } from "../connection-target.js";
 export const OWNERSHIP_DIRECTORY = ".orca-first-run-ownership";
 export const OWNERSHIP_ANCHOR = ".orca-first-run-ownership.json";
 export class FirstRunOwnershipRefusal extends ConnectionRefusal {
-  constructor(cause?: unknown) {
-    super(
-      "Local startup ownership requires reconciliation. Preserve the selected workspace and its .orca-first-run-ownership evidence. Review same-boot recovery, then reconcile the retained reservation while its writer is quiescent. Retrying or checking a PID cannot clear it. Missing or altered evidence requires operator review; preserve all files.",
-      { cause },
-    );
+  constructor(
+    cause?: unknown,
+    message = "Local startup ownership requires reconciliation. Preserve the selected workspace and its .orca-first-run-ownership evidence. Review same-boot recovery, then reconcile the retained reservation while its writer is quiescent. Retrying or checking a PID cannot clear it. Missing or altered evidence requires operator review; preserve all files.",
+  ) {
+    super(message, { cause });
   }
 }
 export const refuse = (): never => {
@@ -82,13 +82,34 @@ const checkpointSchema = z
     through: z.number().int().positive().max(999999),
     head: digest,
     configHash: digest,
-    // Whether any folded attempt was settled by explicit recovery: the CLI keeps such a store's continuations parked.
+    // Whether any folded attempt was settled by explicit recovery or a person-confirmed end: the CLI keeps such a
+    // store's continuations parked.
     recovered: z.boolean(),
     // The reservation that wrote it. Its attempt follows `through` and is retained until a later checkpoint.
     reservationId: z.string().uuid(),
   })
   .strict();
 type Checkpoint = z.infer<typeof checkpointSchema>;
+/** A person's confirmation that an attempt claimed on an earlier boot of this host ended. Never written automatically:
+ * a restart ends every process of that boot, but only the person knows the session is over and its work may wait. */
+export const REBOOT_SETTLEMENT = "ended-after-reboot.json";
+export const rebootSettlementSchema = z
+  .object({
+    version: z.literal(1),
+    reservationId: z.string().uuid(),
+    claimHash: digest,
+    anchorHash: digest,
+    // Every other record of the attempt as confirmed, so nothing can be added to it afterwards.
+    evidenceHash: digest,
+    configHash: digest,
+    store: directorySchema.nullable(),
+    // The boot it was confirmed on: the claim's host, a later boot.
+    boot: FenceBootSchema,
+    reason: z.literal("person-confirmed-after-reboot"),
+    observation: z.literal("fence-free-after-reboot"),
+    actor: z.object({ kind: z.literal("person"), surface: z.literal("desktop-app"), uid: z.string() }).strict(),
+  })
+  .strict();
 const ATTEMPT = /^[0-9]{6}$/;
 const CHECKPOINT = /^checkpoint-([0-9]{6})\.json$/;
 // Inert compaction state: a checkpoint not yet renamed into place, and folded attempts awaiting removal.
@@ -310,6 +331,7 @@ export function inspectFirstRunOwnership(path: string, allowUnsettled = false, a
         "terminal.json",
         "recovery-request.json",
         "recovery.json",
+        REBOOT_SETTLEMENT,
       ]);
       const bindings = entries.filter((entry) => /^config-rebind-[0-9]{6}\.json$/.test(entry));
       if (bindings.length > 32 || entries.some((entry) => !allowed.has(entry) && !bindings.includes(entry)))
@@ -394,10 +416,27 @@ export function inspectFirstRunOwnership(path: string, allowUnsettled = false, a
           settled = true;
         }
       } else if (texts["recovery.json"]) return refuse();
+      if (texts[REBOOT_SETTLEMENT]) {
+        const ended = rebootSettlementSchema.parse(JSON.parse(texts[REBOOT_SETTLEMENT]));
+        if (
+          settled ||
+          claim.version !== 2 ||
+          ended.reservationId !== claim.reservationId ||
+          ended.claimHash !== hash(texts["claim.json"]!) ||
+          ended.anchorHash !== hash(anchorText) ||
+          ended.evidenceHash !== rebootEvidenceHash(texts) ||
+          ended.configHash !== effectiveHash ||
+          ended.boot.hostHash !== claim.boot?.hostHash ||
+          ended.boot.bootId === claim.boot.bootId ||
+          ended.actor.uid !== workspace.uid
+        )
+          return refuse();
+        settled = true;
+      }
       if (!settled && (!allowUnsettled || index !== attempts.length - 1)) return refuse();
       latest = { attempt, reservationId: claim.reservationId, texts, settled };
       previous = hash(texts["claim.json"]!);
-      const recovered = !!texts["recovery.json"];
+      const recovered = !!texts["recovery.json"] || !!texts[REBOOT_SETTLEMENT];
       if (checkpoint && number <= through && recovered && !checkpoint.recovered) return refuse();
       if (checkpoint && number === through && (previous !== checkpoint.head || effectiveHash !== checkpoint.configHash))
         return refuse();
@@ -425,11 +464,21 @@ export function inspectFirstRunOwnership(path: string, allowUnsettled = false, a
     return refuse();
   }
 }
+export function rebootEvidenceHash(texts: Record<string, string>): string {
+  return hash(
+    JSON.stringify(
+      Object.entries(texts)
+        .filter(([name]) => name !== REBOOT_SETTLEMENT)
+        .sort(([a], [b]) => a.localeCompare(b)),
+    ),
+  );
+}
 export function recoveryEvidenceHash(texts: Record<string, string>): string {
   return hash(
     JSON.stringify(
       Object.entries(texts)
-        .filter(([name]) => name !== "recovery-request.json" && name !== "recovery.json")
+        // A request left pending at a restart is resolved by the later settlement, which therefore follows it.
+        .filter(([name]) => name !== "recovery-request.json" && name !== "recovery.json" && name !== REBOOT_SETTLEMENT)
         .sort(([a], [b]) => a.localeCompare(b)),
     ),
   );

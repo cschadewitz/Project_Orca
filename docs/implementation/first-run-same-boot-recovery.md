@@ -4,7 +4,9 @@ This replacement slice targets #570 on #572 `db9bdc6c5fe086b905a702dd44fe5dc0ff2
 That baseline preserves corrected #569 `1a2e003e04beaa2e13cd35115faa6c4234145264`
 and #567 `9ac19ead4347180e44be6162a41d2d5726b3f929`. Casey rejected the
 whole-computer restart prerequisite in #577 `3deeeed4b4a8f3a069263668d76065675425c307`.
-No reboot route is included here. No constituent ancestry is rewritten.
+No reboot route is included in this slice. No constituent ancestry is rewritten. The
+person-confirmed route for an attempt left by an earlier boot was added later, by the
+owner's 14 October decision; see [After a restart](#after-a-restart-person-confirmed-end).
 
 ## Lifetime fencing before writers enter
 
@@ -83,6 +85,59 @@ This is not a reset by recovery. Reusing that credential would change the auth p
 that choice was surfaced before making any exception, and no exception is implemented.
 First-run launch also waits for the exact child's completed token-file announcement
 before accepting hello, closing the old-token/startup-metadata race found in recreation.
+
+## After a restart: person-confirmed end
+
+Same-boot recovery cannot settle an attempt claimed on an earlier boot: its fence and
+writer belonged to that boot, and the claim and writer boot checks refuse it. Before
+14 October such an attempt blocked the workspace for good. This is the ordinary result
+of a power loss, a crash or a forced restart. It is also ordinary on Windows, where
+shutdown, restart and logout emit no quit events to settle the child's exit.
+
+**Owner decision (14 October 2026):** an attempt from an earlier boot is settled only by
+an explicit, person-confirmed resolution. It is never automatic, and it never requires a
+restart. This is distinct from #577's rejected route, which made a whole-computer restart
+the prerequisite and settled it as `same-host-new-boot-fenced` through its own reboot
+schemas and `recovery-host.ts`. None of that is composed here.
+
+The flow:
+
+1. **Startup.** `status()` reports `recovery` / `previous-boot` with the attempt's
+   reservation ID when the latest attempt is an unsettled version-2 claim whose recorded
+   host matches this host and whose boot ID differs from the current one. This check
+   runs before a pending same-boot request, which can no longer be reconciled. Startup
+   does not connect, and nothing is settled by reading the state or by Connect. A legacy
+   version-1 claim recorded no boot and is not offered. Another host's boot is not a
+   restart of this one and is not offered either.
+2. **Confirm.** Config shows that the last session ended uncleanly before this computer
+   restarted and offers **Mark previous session ended**. The action has no way back,
+   so it asks on its own row: **Keep** first and focused, then **✕ Confirm previous
+   session ended** in the danger tone, with the consequence beneath and `Esc` through
+   the layer stack (`docs/design/RULES.md` rule 17). Only the shown reservation ID
+   crosses IPC (`orca:workspace.firstRun.endPreviousSession`), under the same caller,
+   epoch and update-window guards as the other setup routes.
+3. **Settle.** `endPreviousBootSession` first rechecks that the reservation is still
+   the unsettled latest attempt from an earlier boot of this host. It applies the store
+   rules of same-boot recovery: the attested writer's store, or the claim's store with no
+   child. Then it acquires the same kernel lifetime fence. If anything live holds the
+   fence, it refuses and writes nothing. While holding the fence it rechecks the caller,
+   every retained byte, the boot and the store. Only then does it fsync
+   `ended-after-reboot.json`, release the fence and verify the journal strictly.
+4. **Continue.** Connect then reserves a fresh generation as usual. The settlement counts
+   as a resolution for the CLI continuation fence, so retained runs wait for explicit
+   inspection and continuation, as after same-boot reconciliation.
+
+The settlement binds the reservation, claim, anchor and config digests, the store
+identity and the confirming boot. It records `reason: "person-confirmed-after-reboot"`,
+`observation: "fence-free-after-reboot"` and the actor (`person`, `desktop-app`, the
+owning uid). It also carries a digest of every other record of the attempt. Inspection
+accepts it only on an attempt that was not otherwise settled, from the claim's host on a
+different boot, confirmed by the workspace owner, with nothing added afterwards. A pending
+same-boot request is resolved by it. The checkpoint's carried resolution bit includes it
+when compaction folds the attempt. Any failed check refuses with
+"The previous session was not marked ended…" and changes nothing. The Windows native
+writer admits the new file name, and the boot identity is the platform one already
+recorded (`boot_id`, `kern.bootsessionuuid`, the native Windows boot ID).
 
 ## Save-before-Bind interruption
 
