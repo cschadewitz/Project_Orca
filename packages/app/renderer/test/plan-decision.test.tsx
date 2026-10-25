@@ -11,9 +11,10 @@
  * nothing else.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { DecisionView } from "@orca/protocol";
 import { ANNOUNCER_ATTRIBUTE } from "../src/a11y/announcer.js";
+import { DecisionMode } from "../src/plan/decision-mode.js";
 import { decideParams, reopenQuestion } from "../src/plan/decision-model.js";
 import { AS_OF } from "./fixtures.js";
 import { DECISIONS, PLAN_ID } from "./fixtures-plan.js";
@@ -105,6 +106,32 @@ describe("the matrix", () => {
 });
 
 describe("deciding", () => {
+  it("retains the choice and rationale after refusal for an identical explicit retry", async () => {
+    const table = await openDecisions();
+    fake.fail("decisions.decide", { code: "PLAN_INVALID", message: "decision refused" });
+    fireEvent.click(within(table).getByRole("button", { name: "Decide Redis" }));
+    const form = screen.getByRole("form", { name: "Decide datastore" });
+    fireEvent.change(within(form).getByRole("textbox"), { target: { value: "ops said so" } });
+    fireEvent.submit(form);
+    await waitFor(() => expect(announced()).toBe("That did not go through: decision refused"));
+    const retained = screen.getByRole("form", { name: "Decide datastore" });
+    expect(within(retained).getByRole<HTMLTextAreaElement>("textbox").value).toBe("ops said so");
+    expect(within(retained).getByRole("button", { name: "Decide Redis" })).toBeTruthy();
+    expect(callsTo("decisions.decide")).toHaveLength(1);
+
+    fake.script({
+      "decisions.decide": () => ({ ok: true, result: { decision: DECIDED, choice: "redis", asOf: AS_OF } }),
+    });
+    fireEvent.submit(retained);
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Decide datastore" })).toBeNull());
+    expect(callsTo("decisions.decide")).toEqual([
+      { planId: PLAN_ID, key: "datastore", option: "redis", rationale: "ops said so" },
+      { planId: PLAN_ID, key: "datastore", option: "redis", rationale: "ops said so" },
+    ]);
+    fireEvent.click(within(table).getByRole("button", { name: "Decide Redis" }));
+    expect(screen.getByRole<HTMLTextAreaElement>("textbox").value).toBe("");
+  });
+
   it("sends the CLI's request from the table, with the rationale a person typed", async () => {
     const table = await openDecisions();
     fireEvent.click(within(table).getByRole("button", { name: "Decide Redis" }));
@@ -123,6 +150,162 @@ describe("deciding", () => {
       rationale: "ops said so",
     });
   });
+
+  it("keeps the draft through connection loss and guards direct form submission", async () => {
+    const table = await openDecisions();
+    fireEvent.click(within(table).getByRole("button", { name: "Decide Redis" }));
+    const form = screen.getByRole("form", { name: "Decide datastore" });
+    fireEvent.change(within(form).getByRole("textbox"), { target: { value: "keep these notes" } });
+    const live = fake.connection;
+    await act(async () => fake.connect({ ...live, state: "disconnected", since: AS_OF }));
+    const submit = within(form).getByRole<HTMLButtonElement>("button", { name: "Decide Redis" });
+    expect(submit.getAttribute("aria-disabled")).toBe("true");
+    expect(submit.title).toBe("no daemon is answering");
+    fireEvent.submit(form);
+    expect(callsTo("decisions.decide")).toHaveLength(0);
+    expect(within(form).getByRole<HTMLTextAreaElement>("textbox").value).toBe("keep these notes");
+    await act(async () => fake.connect(live));
+    expect(submit.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.submit(form);
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Decide datastore" })).toBeNull());
+    expect(callsTo("decisions.decide")).toEqual([
+      { planId: PLAN_ID, key: "datastore", option: "redis", rationale: "keep these notes" },
+    ]);
+  });
+
+  it("guards a form left open when the daemon withdraws the decision method", async () => {
+    const table = await openDecisions();
+    fireEvent.click(within(table).getByRole("button", { name: "Decide Redis" }));
+    const form = screen.getByRole("form", { name: "Decide datastore" });
+    await act(async () =>
+      fake.connect({
+        ...fake.connection,
+        methods: (fake.connection.methods ?? []).filter((method) => method !== "decisions.decide"),
+      }),
+    );
+    expect(within(form).getByRole("button", { name: "Decide Redis" }).getAttribute("aria-disabled")).toBe("true");
+    fireEvent.submit(form);
+    expect(callsTo("decisions.decide")).toHaveLength(0);
+  });
+
+  it("retains a refused in-flight draft after losing the connection without retrying", async () => {
+    const table = await openDecisions();
+    fake.fail("decisions.decide", { code: "DISCONNECTED", message: "connection lost" });
+    const release = fake.hold("decisions.decide");
+    fireEvent.click(within(table).getByRole("button", { name: "Decide Redis" }));
+    const form = screen.getByRole("form", { name: "Decide datastore" });
+    fireEvent.change(within(form).getByRole("textbox"), { target: { value: "keep these notes" } });
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    expect(callsTo("decisions.decide")).toHaveLength(1);
+    await act(async () => {
+      fake.connect({ ...fake.connection, state: "disconnected", since: AS_OF });
+      release();
+    });
+    await waitFor(() => expect(announced()).toBe("That did not go through: connection lost"));
+    expect(within(form).getByRole<HTMLTextAreaElement>("textbox").value).toBe("keep these notes");
+    expect(within(form).getByRole("button", { name: "Decide Redis" }).getAttribute("aria-disabled")).toBe("true");
+    expect(callsTo("decisions.decide")).toHaveLength(1);
+  });
+
+  it.each(["rationale", "choice", "cancel"] as const)(
+    "does not clear a newer draft after a late success following %s changes",
+    async (change) => {
+      const table = await openDecisions();
+      const release = fake.hold("decisions.decide");
+      fireEvent.click(within(table).getByRole("button", { name: "Decide Redis" }));
+      let form = screen.getByRole("form", { name: "Decide datastore" });
+      fireEvent.change(within(form).getByRole("textbox"), { target: { value: "first notes" } });
+      fireEvent.submit(form);
+      if (change === "cancel") {
+        fireEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+        expect(screen.queryByRole("form", { name: "Decide datastore" })).toBeNull();
+        fireEvent.click(within(table).getByRole("button", { name: "Decide Redis" }));
+        form = screen.getByRole("form", { name: "Decide datastore" });
+        expect(within(form).getByRole<HTMLTextAreaElement>("textbox").value).toBe("");
+      }
+      if (change === "choice") {
+        fireEvent.click(within(table).getByRole("button", { name: "Decide Signed cookie" }));
+      }
+      const notes = change === "cancel" ? "first notes" : "newer notes";
+      fireEvent.change(within(form).getByRole("textbox"), { target: { value: notes } });
+      await act(async () => release());
+      expect(within(form).getByRole<HTMLTextAreaElement>("textbox").value).toBe(notes);
+      const choice = change === "choice" ? "Signed cookie" : "Redis";
+      expect(
+        within(form)
+          .getByRole("button", { name: `Decide ${choice}` })
+          .getAttribute("aria-disabled"),
+      ).toBeNull();
+      expect(callsTo("decisions.decide")).toHaveLength(1);
+      expect(announced()).not.toContain("is decided");
+    },
+  );
+
+  it.each([true, false])("does not restore a cancelled draft after a late result (ok=%s)", async (ok) => {
+    const table = await openDecisions();
+    if (!ok) fake.fail("decisions.decide", { code: "PLAN_INVALID", message: "late refusal" });
+    const release = fake.hold("decisions.decide");
+    fireEvent.click(within(table).getByRole("button", { name: "Decide Redis" }));
+    const form = screen.getByRole("form", { name: "Decide datastore" });
+    fireEvent.change(within(form).getByRole("textbox"), { target: { value: "cancelled notes" } });
+    fireEvent.submit(form);
+    fireEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+    await act(async () => release());
+    expect(screen.queryByRole("form", { name: "Decide datastore" })).toBeNull();
+    fireEvent.click(within(table).getByRole("button", { name: "Decide Redis" }));
+    expect(screen.getByRole<HTMLTextAreaElement>("textbox").value).toBe("");
+  });
+
+  it.each(["plan", "key", "selection", "navigation", "status"] as const)(
+    "does not let an old response clear or restore notes after a %s change",
+    async (change) => {
+      fake = installBridge();
+      teardown.push(fake.install());
+      const h = harness();
+      teardown.push(h.dispose);
+      const release = fake.hold("decisions.decide");
+      const target = (planId: string, decision: DecisionView) => (
+        <h.Providers>
+          <DecisionMode
+            planId={planId}
+            state={{ phase: "ready", decisions: [decision] }}
+            decisions={[decision]}
+            selectedId={decision.id}
+            onSelect={() => {}}
+            live
+            onRetry={() => {}}
+          />
+        </h.Providers>
+      );
+      const view = render(target(PLAN_ID, DATASTORE));
+      fireEvent.click(screen.getByRole("button", { name: "Decide Redis" }));
+      let form = screen.getByRole("form", { name: "Decide datastore" });
+      fireEvent.change(within(form).getByRole("textbox"), { target: { value: "old target notes" } });
+      fireEvent.submit(form);
+      let planId = PLAN_ID;
+      let decision = DATASTORE;
+      if (change === "plan") planId = "another-plan";
+      if (change === "key") decision = { ...DATASTORE, key: "renamed" };
+      if (change === "selection") decision = { ...DATASTORE, id: "another-decision", key: "another" };
+      if (change === "navigation")
+        view.rerender(
+          <h.Providers>
+            <div>Another surface</div>
+          </h.Providers>,
+        );
+      if (change === "status") view.rerender(target(PLAN_ID, DECIDED));
+      view.rerender(target(planId, decision));
+      expect(screen.queryByRole("form")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Decide Redis" }));
+      form = screen.getByRole("form", { name: `Decide ${decision.key}` });
+      expect(within(form).getByRole<HTMLTextAreaElement>("textbox").value).toBe("");
+      fireEvent.change(within(form).getByRole("textbox"), { target: { value: "new target notes" } });
+      await act(async () => release());
+      expect(within(form).getByRole<HTMLTextAreaElement>("textbox").value).toBe("new target notes");
+      expect(callsTo("decisions.decide")).toHaveLength(1);
+    },
+  );
 
   it("leaves an empty rationale out rather than sending it blank", () => {
     expect(decideParams(PLAN_ID, "datastore", "cookie", "  ")).toEqual({

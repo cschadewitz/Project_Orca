@@ -17,7 +17,7 @@
  * - **It does not re-read after a write.** `decisions.decide` and `decisions.reopen` journal,
  *   the daemon pushes `plan.changed`, and the read above this re-runs on that.
  */
-import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import type { DecisionView } from "@orca/protocol";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { useMethodPresent, useWritability } from "../chrome/use-connection.js";
@@ -129,7 +129,13 @@ function DecisionSplit({
             Select a decision to see its matrix.
           </Text>
         ) : (
-          <DecisionDetail key={selected.id} planId={planId} decision={selected} live={live} onOpenKey={openKey} />
+          <DecisionDetail
+            key={JSON.stringify([planId, selected.id, selected.key])}
+            planId={planId}
+            decision={selected}
+            live={live}
+            onOpenKey={openKey}
+          />
         )}
       </div>
     </div>
@@ -207,9 +213,20 @@ function DecisionDetail({ planId, decision, live, onOpenKey }: DecisionDetailPro
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  // A response owns only the draft submitted from this mounted target/status. Edits and
+  // cancellation invalidate that draft even if the person later types identical text.
+  const draftVersion = useRef(0);
+  const submission = useRef<object | undefined>(undefined);
+
   useEffect(() => {
     setPending(undefined);
+    setRationale("");
     setAsking(false);
+    setBusy(false);
+    return () => {
+      draftVersion.current += 1;
+      submission.current = undefined;
+    };
   }, [decision.status]);
 
   const recommended = recommendedOf(decision);
@@ -217,12 +234,21 @@ function DecisionDetail({ planId, decision, live, onOpenKey }: DecisionDetailPro
   const decided = decision.status === "decided" && decision.chosen !== undefined;
 
   const decide = (): void => {
-    if (pending === undefined) return;
+    if (pending === undefined || !writability.can || !canDecide || decided || submission.current !== undefined) return;
+    const request = {};
+    const version = draftVersion.current;
+    submission.current = request;
     setBusy(true);
     void window.orca.plan.decide(decideParams(planId, decision.key, pending, rationale)).then((result) => {
+      if (submission.current !== request) return;
+      submission.current = undefined;
       setBusy(false);
-      setPending(undefined);
-      setRationale("");
+      if (draftVersion.current !== version) return;
+      if (result.ok) {
+        draftVersion.current += 1;
+        setPending(undefined);
+        setRationale("");
+      }
       announce(
         result.ok
           ? `${decision.key} is decided: ${optionName(decision, result.result.choice)}.`
@@ -299,7 +325,15 @@ function DecisionDetail({ planId, decision, live, onOpenKey }: DecisionDetailPro
           scale={decision.scale}
           result={decision.result}
           chosen={decision.chosen}
-          {...(!decided && canDecide ? { onChoose: setPending, disabledReason: reason } : {})}
+          {...(!decided && canDecide
+            ? {
+                onChoose: (choice: string) => {
+                  draftVersion.current += 1;
+                  setPending(choice);
+                },
+                disabledReason: reason,
+              }
+            : {})}
         />
       </div>
 
@@ -317,14 +351,31 @@ function DecisionDetail({ planId, decision, live, onOpenKey }: DecisionDetailPro
             <textarea
               className={`orca-input ${textClass("label")}`}
               value={rationale}
-              onChange={(event) => setRationale(event.target.value)}
+              onChange={(event) => {
+                draftVersion.current += 1;
+                setRationale(event.target.value);
+              }}
             />
           </label>
           <div className="orca-plan__actions">
-            <Button type="submit" tone="primary" size="sm" disabled={busy}>
+            <Button
+              type="submit"
+              tone="primary"
+              size="sm"
+              disabled={busy || reason !== undefined || !canDecide}
+              {...(reason === undefined ? {} : { disabledReason: reason })}
+            >
               {`Decide ${optionName(decision, pending)}`}
             </Button>
-            <Button size="sm" tone="ghost" onClick={() => setPending(undefined)}>
+            <Button
+              size="sm"
+              tone="ghost"
+              onClick={() => {
+                draftVersion.current += 1;
+                setPending(undefined);
+                setRationale("");
+              }}
+            >
               Cancel
             </Button>
           </div>
