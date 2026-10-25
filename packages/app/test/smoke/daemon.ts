@@ -416,7 +416,10 @@ export async function startDemoDaemon(): Promise<Daemon> {
       await until("the scripted agent's live permission", async () => {
         if (startFailure) throw startFailure;
         const snapshot = InputsListResultSchema.parse(await rpc(url, tokenFile, "inputs.list"));
-        input = snapshot.inputs.find((candidate) => candidate.agent?.id === FIXTURE.live.agentId);
+        // Repeated live smokes may leave an expired callback in the public list.
+        input = snapshot.inputs.find(
+          (candidate) => candidate.agent?.id === FIXTURE.live.agentId && candidate.live?.state === "pending",
+        );
         return input?.live?.state === "pending";
       });
       if (!input) throw new Error("the scripted agent's live permission disappeared");
