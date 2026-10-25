@@ -1,0 +1,858 @@
+{
+  "schema": 1,
+  "sourceCommit": "14666a315b43bc859ad0b73dda92ddf280b0de10",
+  "sourceTree": "38ef685a664f8407103dff71b8a68e5a3230d4a6",
+  "harnessHead": "17ebf70be9251d06452bb66e6f3f3bae27e5f4d1",
+  "manifestSha256": "96948f6bd6a6287f37a51c81b17ebb068ff7567e92a1ea75b97a21b364d60960",
+  "runnerSha256": "36c3e2e4ed5ea1c3e62b00735d303f490fb7f527d570e2bc799d2033f77bf31b",
+  "preloadSha256": "fb55a23eb3443e0ecbf9ba0ec06595dc0129f2ed73dae8b00b7e8b112d3fdae5",
+  "node": "v24.19.0",
+  "nodeExecutableSha256": "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12",
+  "platform": "linux",
+  "root": "/tmp/orca-c15-parity-tuFPJs",
+  "cliLimitMs": 50000,
+  "demosPerMode": 2,
+  "rows": [
+    {
+      "mode": "normal",
+      "index": 0,
+      "exitCode": 0,
+      "elapsedMs": 5925.251415,
+      "oracle": {
+        "artifactCount": 29,
+        "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+        "semanticByKind": [
+          {
+            "kind": "decision-matrix",
+            "name": "decisionMatrix",
+            "sha256": "788506a154dee82e5b00d167a41e2ed2b15817b1f84425fe5553db29288081d6"
+          },
+          {
+            "kind": "decomposition",
+            "name": "decomposition",
+            "sha256": "88299e6febb5e42d0908b8340fb79b9eed40c7d3e843e14e3db2a8ae7f15db63"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "600ddb38040239891a9d1cb7e38540be67e4117fe4598e56f7d52f0fe767bd23"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "2f51f54a704308e9f3f853e90a5af1d2e2e4899989a3d290e4821c29c27d5f7c"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "a2bb0762a4236a3fdf6a58027c7389bd7a036f227c9082b0e43bbbf82785bdaa"
+          },
+          {
+            "kind": "generic",
+            "name": "programSummary",
+            "sha256": "43d3e99ee5ed2f5de8aa52adfbab9d070d5ca21e1d9d61ea23500296a2b1aaef"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "991b5eb2a6320c619383371008c1e3bb97f4ea77b4dd82cd544d93bdcc2182b8"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "954971cc5f9f37e0afd544b04113af27c7ffbe1bebfcf9a5ebbf53ef99f45688"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "b694ec0a75c1318beaef7e65f20a228d736c6c9fb7a0636576dc3ef12e8b4e81"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "10941a49ffd22602fa6c0547c9c02426d7141a8a056e38f8dd02f89f8cd3d099"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6f042d063246e1c0291894a29ddd59462d2261572707270f823953a947f6ad2d"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6b609d237677cf6b73f6515c4601a070a3c76ef68e6fe02ff13c3b02edf0352c"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "0eefe76aebb09d46a44c0dd8a4a6326f35ac7884fcc5d1590c9df11c0e8fec07"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "risk-register",
+            "name": "riskRegister",
+            "sha256": "574503e6d64b9edaea05d2b4c5b776d88c4c199a093255314a0b68cb7a301031"
+          },
+          {
+            "kind": "schedule",
+            "name": "schedule",
+            "sha256": "73795c8f0f884a042f5d0855879a43d9d27360a3bbdf7bde6f5c2b93cb9a0332"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "0123d7127018317099bb9060225de811d062f4a9ec6264e6a7b1641129924e53"
+          }
+        ],
+        "workItems": [
+          {
+            "slug": "docs",
+            "status": "done"
+          },
+          {
+            "slug": "login-api",
+            "status": "done"
+          },
+          {
+            "slug": "schema",
+            "status": "done"
+          }
+        ],
+        "normalization": "Reused successful-pair oracle: generated identities/provenance/times removed, semantic front matter/prose/kind/name/multiplicity retained. Not complete execution graph equivalence."
+      },
+      "counts": {
+        "decision-matrix": 1,
+        "decomposition": 1,
+        "deploy-report": 3,
+        "generic": 1,
+        "implementation": 4,
+        "intent": 3,
+        "plan": 4,
+        "review": 3,
+        "risk-register": 1,
+        "spec": 3,
+        "test-report": 4
+      },
+      "playbookSha256": "5b659cb1b6e29129a332253106b7b92d58d73d7bb1ee5922598a11bfc3c4f32a",
+      "normalizedConfigSha256": "7a75899d71fa9839b453b919eb286131d7de0bd748ee7031121dc9b0cd4c43aa",
+      "outputBytes": 2644
+    },
+    {
+      "mode": "normal",
+      "index": 1,
+      "exitCode": 0,
+      "elapsedMs": 4987.917611999999,
+      "oracle": {
+        "artifactCount": 29,
+        "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+        "semanticByKind": [
+          {
+            "kind": "decision-matrix",
+            "name": "decisionMatrix",
+            "sha256": "788506a154dee82e5b00d167a41e2ed2b15817b1f84425fe5553db29288081d6"
+          },
+          {
+            "kind": "decomposition",
+            "name": "decomposition",
+            "sha256": "88299e6febb5e42d0908b8340fb79b9eed40c7d3e843e14e3db2a8ae7f15db63"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "600ddb38040239891a9d1cb7e38540be67e4117fe4598e56f7d52f0fe767bd23"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "2f51f54a704308e9f3f853e90a5af1d2e2e4899989a3d290e4821c29c27d5f7c"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "a2bb0762a4236a3fdf6a58027c7389bd7a036f227c9082b0e43bbbf82785bdaa"
+          },
+          {
+            "kind": "generic",
+            "name": "programSummary",
+            "sha256": "43d3e99ee5ed2f5de8aa52adfbab9d070d5ca21e1d9d61ea23500296a2b1aaef"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "991b5eb2a6320c619383371008c1e3bb97f4ea77b4dd82cd544d93bdcc2182b8"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "954971cc5f9f37e0afd544b04113af27c7ffbe1bebfcf9a5ebbf53ef99f45688"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "b694ec0a75c1318beaef7e65f20a228d736c6c9fb7a0636576dc3ef12e8b4e81"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "10941a49ffd22602fa6c0547c9c02426d7141a8a056e38f8dd02f89f8cd3d099"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6f042d063246e1c0291894a29ddd59462d2261572707270f823953a947f6ad2d"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6b609d237677cf6b73f6515c4601a070a3c76ef68e6fe02ff13c3b02edf0352c"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "0eefe76aebb09d46a44c0dd8a4a6326f35ac7884fcc5d1590c9df11c0e8fec07"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "risk-register",
+            "name": "riskRegister",
+            "sha256": "574503e6d64b9edaea05d2b4c5b776d88c4c199a093255314a0b68cb7a301031"
+          },
+          {
+            "kind": "schedule",
+            "name": "schedule",
+            "sha256": "73795c8f0f884a042f5d0855879a43d9d27360a3bbdf7bde6f5c2b93cb9a0332"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "0123d7127018317099bb9060225de811d062f4a9ec6264e6a7b1641129924e53"
+          }
+        ],
+        "workItems": [
+          {
+            "slug": "docs",
+            "status": "done"
+          },
+          {
+            "slug": "login-api",
+            "status": "done"
+          },
+          {
+            "slug": "schema",
+            "status": "done"
+          }
+        ],
+        "normalization": "Reused successful-pair oracle: generated identities/provenance/times removed, semantic front matter/prose/kind/name/multiplicity retained. Not complete execution graph equivalence."
+      },
+      "counts": {
+        "decision-matrix": 1,
+        "decomposition": 1,
+        "deploy-report": 3,
+        "generic": 1,
+        "implementation": 4,
+        "intent": 3,
+        "plan": 4,
+        "review": 3,
+        "risk-register": 1,
+        "spec": 3,
+        "test-report": 4
+      },
+      "playbookSha256": "5b659cb1b6e29129a332253106b7b92d58d73d7bb1ee5922598a11bfc3c4f32a",
+      "normalizedConfigSha256": "7a75899d71fa9839b453b919eb286131d7de0bd748ee7031121dc9b0cd4c43aa",
+      "outputBytes": 2644
+    },
+    {
+      "mode": "preload",
+      "index": 0,
+      "exitCode": 0,
+      "elapsedMs": 5315.472188000002,
+      "oracle": {
+        "artifactCount": 29,
+        "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+        "semanticByKind": [
+          {
+            "kind": "decision-matrix",
+            "name": "decisionMatrix",
+            "sha256": "788506a154dee82e5b00d167a41e2ed2b15817b1f84425fe5553db29288081d6"
+          },
+          {
+            "kind": "decomposition",
+            "name": "decomposition",
+            "sha256": "88299e6febb5e42d0908b8340fb79b9eed40c7d3e843e14e3db2a8ae7f15db63"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "600ddb38040239891a9d1cb7e38540be67e4117fe4598e56f7d52f0fe767bd23"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "2f51f54a704308e9f3f853e90a5af1d2e2e4899989a3d290e4821c29c27d5f7c"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "a2bb0762a4236a3fdf6a58027c7389bd7a036f227c9082b0e43bbbf82785bdaa"
+          },
+          {
+            "kind": "generic",
+            "name": "programSummary",
+            "sha256": "43d3e99ee5ed2f5de8aa52adfbab9d070d5ca21e1d9d61ea23500296a2b1aaef"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "991b5eb2a6320c619383371008c1e3bb97f4ea77b4dd82cd544d93bdcc2182b8"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "954971cc5f9f37e0afd544b04113af27c7ffbe1bebfcf9a5ebbf53ef99f45688"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "b694ec0a75c1318beaef7e65f20a228d736c6c9fb7a0636576dc3ef12e8b4e81"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "10941a49ffd22602fa6c0547c9c02426d7141a8a056e38f8dd02f89f8cd3d099"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6f042d063246e1c0291894a29ddd59462d2261572707270f823953a947f6ad2d"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6b609d237677cf6b73f6515c4601a070a3c76ef68e6fe02ff13c3b02edf0352c"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "0eefe76aebb09d46a44c0dd8a4a6326f35ac7884fcc5d1590c9df11c0e8fec07"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "risk-register",
+            "name": "riskRegister",
+            "sha256": "574503e6d64b9edaea05d2b4c5b776d88c4c199a093255314a0b68cb7a301031"
+          },
+          {
+            "kind": "schedule",
+            "name": "schedule",
+            "sha256": "73795c8f0f884a042f5d0855879a43d9d27360a3bbdf7bde6f5c2b93cb9a0332"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "0123d7127018317099bb9060225de811d062f4a9ec6264e6a7b1641129924e53"
+          }
+        ],
+        "workItems": [
+          {
+            "slug": "docs",
+            "status": "done"
+          },
+          {
+            "slug": "login-api",
+            "status": "done"
+          },
+          {
+            "slug": "schema",
+            "status": "done"
+          }
+        ],
+        "normalization": "Reused successful-pair oracle: generated identities/provenance/times removed, semantic front matter/prose/kind/name/multiplicity retained. Not complete execution graph equivalence."
+      },
+      "counts": {
+        "decision-matrix": 1,
+        "decomposition": 1,
+        "deploy-report": 3,
+        "generic": 1,
+        "implementation": 4,
+        "intent": 3,
+        "plan": 4,
+        "review": 3,
+        "risk-register": 1,
+        "spec": 3,
+        "test-report": 4
+      },
+      "playbookSha256": "5b659cb1b6e29129a332253106b7b92d58d73d7bb1ee5922598a11bfc3c4f32a",
+      "normalizedConfigSha256": "7a75899d71fa9839b453b919eb286131d7de0bd748ee7031121dc9b0cd4c43aa",
+      "outputBytes": 2654,
+      "lifecycle": {
+        "expected": {
+          "nonce": "f2cfdba7-2722-432b-947d-84b1fd89899b",
+          "entry": "/workspace/c15-readiness-source/packages/cli/dist/main.js",
+          "cwd": "/tmp/orca-c15-parity-tuFPJs/preload-0",
+          "preloadSha256": "fb55a23eb3443e0ecbf9ba0ec06595dc0129f2ed73dae8b00b7e8b112d3fdae5",
+          "pid": 2089,
+          "parentSpawnedNs": "450182655192",
+          "startReceipt": {
+            "schema": 2,
+            "kind": "start",
+            "nonce": "f2cfdba7-2722-432b-947d-84b1fd89899b",
+            "entry": "/workspace/c15-readiness-source/packages/cli/dist/main.js",
+            "cwd": "/tmp/orca-c15-parity-tuFPJs/preload-0",
+            "preloadSha256": "fb55a23eb3443e0ecbf9ba0ec06595dc0129f2ed73dae8b00b7e8b112d3fdae5",
+            "pid": 2089,
+            "startedNs": "450208032882"
+          },
+          "parentReadyDeliveredNs": "450208942934",
+          "parentExitDeliveredNs": "455497343793",
+          "exitCode": 0,
+          "lifecycleReceipt": {
+            "schema": 2,
+            "kind": "final",
+            "nonce": "f2cfdba7-2722-432b-947d-84b1fd89899b",
+            "entry": "/workspace/c15-readiness-source/packages/cli/dist/main.js",
+            "cwd": "/tmp/orca-c15-parity-tuFPJs/preload-0",
+            "preloadSha256": "fb55a23eb3443e0ecbf9ba0ec06595dc0129f2ed73dae8b00b7e8b112d3fdae5",
+            "pid": 2089,
+            "startedNs": "450208032882",
+            "endedNs": "455490274330",
+            "exitCode": 0
+          }
+        },
+        "rawBase64": "eyJzY2hlbWEiOjIsImtpbmQiOiJzdGFydCIsIm5vbmNlIjoiZjJjZmRiYTctMjcyMi00MzJiLTk0N2QtODRiMWZkODk4OTliIiwiZW50cnkiOiIvd29ya3NwYWNlL2MxNS1yZWFkaW5lc3Mtc291cmNlL3BhY2thZ2VzL2NsaS9kaXN0L21haW4uanMiLCJjd2QiOiIvdG1wL29yY2EtYzE1LXBhcml0eS10dUZQSnMvcHJlbG9hZC0wIiwicHJlbG9hZFNoYTI1NiI6ImZiNTVhMjNlYjM0NDNlMGVjYmY5YmEwZWMwNjU5NWRjMDEyOWYyZWQ3M2RhZThiMDBiN2U4YjExMmQzZmRhZTUiLCJwaWQiOjIwODksInN0YXJ0ZWROcyI6IjQ1MDIwODAzMjg4MiJ9Cnsic2NoZW1hIjoyLCJraW5kIjoiZmluYWwiLCJub25jZSI6ImYyY2ZkYmE3LTI3MjItNDMyYi05NDdkLTg0YjFmZDg5ODk5YiIsImVudHJ5IjoiL3dvcmtzcGFjZS9jMTUtcmVhZGluZXNzLXNvdXJjZS9wYWNrYWdlcy9jbGkvZGlzdC9tYWluLmpzIiwiY3dkIjoiL3RtcC9vcmNhLWMxNS1wYXJpdHktdHVGUEpzL3ByZWxvYWQtMCIsInByZWxvYWRTaGEyNTYiOiJmYjU1YTIzZWIzNDQzZTBlY2JmOWJhMGVjMDY1OTVkYzAxMjlmMmVkNzNkYWU4YjAwYjdlOGIxMTJkM2ZkYWU1IiwicGlkIjoyMDg5LCJzdGFydGVkTnMiOiI0NTAyMDgwMzI4ODIiLCJlbmRlZE5zIjoiNDU1NDkwMjc0MzMwIiwiZXhpdENvZGUiOjB9Cg==",
+        "rawSha256": "86bb79658725bd7c033b77f3732ca4bbf332789d6fc4c86a3617817192e7c163",
+        "eof": true,
+        "actualPid": 2089
+      }
+    },
+    {
+      "mode": "preload",
+      "index": 1,
+      "exitCode": 0,
+      "elapsedMs": 5041.219416,
+      "oracle": {
+        "artifactCount": 29,
+        "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+        "semanticByKind": [
+          {
+            "kind": "decision-matrix",
+            "name": "decisionMatrix",
+            "sha256": "788506a154dee82e5b00d167a41e2ed2b15817b1f84425fe5553db29288081d6"
+          },
+          {
+            "kind": "decomposition",
+            "name": "decomposition",
+            "sha256": "88299e6febb5e42d0908b8340fb79b9eed40c7d3e843e14e3db2a8ae7f15db63"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "600ddb38040239891a9d1cb7e38540be67e4117fe4598e56f7d52f0fe767bd23"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "2f51f54a704308e9f3f853e90a5af1d2e2e4899989a3d290e4821c29c27d5f7c"
+          },
+          {
+            "kind": "deploy-report",
+            "name": "deployReport",
+            "sha256": "a2bb0762a4236a3fdf6a58027c7389bd7a036f227c9082b0e43bbbf82785bdaa"
+          },
+          {
+            "kind": "generic",
+            "name": "programSummary",
+            "sha256": "43d3e99ee5ed2f5de8aa52adfbab9d070d5ca21e1d9d61ea23500296a2b1aaef"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "implementation",
+            "name": "implementation",
+            "sha256": "4199d01eb542e288e62dea59946eb988b46a14596c3fb597406611831b57e899"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "991b5eb2a6320c619383371008c1e3bb97f4ea77b4dd82cd544d93bdcc2182b8"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "954971cc5f9f37e0afd544b04113af27c7ffbe1bebfcf9a5ebbf53ef99f45688"
+          },
+          {
+            "kind": "intent",
+            "name": "intent",
+            "sha256": "b694ec0a75c1318beaef7e65f20a228d736c6c9fb7a0636576dc3ef12e8b4e81"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "10941a49ffd22602fa6c0547c9c02426d7141a8a056e38f8dd02f89f8cd3d099"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6f042d063246e1c0291894a29ddd59462d2261572707270f823953a947f6ad2d"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "6b609d237677cf6b73f6515c4601a070a3c76ef68e6fe02ff13c3b02edf0352c"
+          },
+          {
+            "kind": "plan",
+            "name": "plan",
+            "sha256": "0eefe76aebb09d46a44c0dd8a4a6326f35ac7884fcc5d1590c9df11c0e8fec07"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "review",
+            "name": "review",
+            "sha256": "3771ec0fd9a2dec539ddb0273392dfb7d62105212af01824a2b7f3405caa3446"
+          },
+          {
+            "kind": "risk-register",
+            "name": "riskRegister",
+            "sha256": "574503e6d64b9edaea05d2b4c5b776d88c4c199a093255314a0b68cb7a301031"
+          },
+          {
+            "kind": "schedule",
+            "name": "schedule",
+            "sha256": "73795c8f0f884a042f5d0855879a43d9d27360a3bbdf7bde6f5c2b93cb9a0332"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "spec",
+            "name": "spec",
+            "sha256": "f787e93a793ce3593b0a90779208fd6611620cb4e77d5603d13ea8d762d2d407"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "8cae09142edb0e1af0fa05a47894b9c76e8ce5b917989c662b39ed4cf90fe3d4"
+          },
+          {
+            "kind": "test-report",
+            "name": "testReport",
+            "sha256": "0123d7127018317099bb9060225de811d062f4a9ec6264e6a7b1641129924e53"
+          }
+        ],
+        "workItems": [
+          {
+            "slug": "docs",
+            "status": "done"
+          },
+          {
+            "slug": "login-api",
+            "status": "done"
+          },
+          {
+            "slug": "schema",
+            "status": "done"
+          }
+        ],
+        "normalization": "Reused successful-pair oracle: generated identities/provenance/times removed, semantic front matter/prose/kind/name/multiplicity retained. Not complete execution graph equivalence."
+      },
+      "counts": {
+        "decision-matrix": 1,
+        "decomposition": 1,
+        "deploy-report": 3,
+        "generic": 1,
+        "implementation": 4,
+        "intent": 3,
+        "plan": 4,
+        "review": 3,
+        "risk-register": 1,
+        "spec": 3,
+        "test-report": 4
+      },
+      "playbookSha256": "5b659cb1b6e29129a332253106b7b92d58d73d7bb1ee5922598a11bfc3c4f32a",
+      "normalizedConfigSha256": "7a75899d71fa9839b453b919eb286131d7de0bd748ee7031121dc9b0cd4c43aa",
+      "outputBytes": 2654,
+      "lifecycle": {
+        "expected": {
+          "nonce": "ec5393c7-7677-4128-b52b-fece0594c949",
+          "entry": "/workspace/c15-readiness-source/packages/cli/dist/main.js",
+          "cwd": "/tmp/orca-c15-parity-tuFPJs/preload-1",
+          "preloadSha256": "fb55a23eb3443e0ecbf9ba0ec06595dc0129f2ed73dae8b00b7e8b112d3fdae5",
+          "pid": 2368,
+          "parentSpawnedNs": "455521644929",
+          "startReceipt": {
+            "schema": 2,
+            "kind": "start",
+            "nonce": "ec5393c7-7677-4128-b52b-fece0594c949",
+            "entry": "/workspace/c15-readiness-source/packages/cli/dist/main.js",
+            "cwd": "/tmp/orca-c15-parity-tuFPJs/preload-1",
+            "preloadSha256": "fb55a23eb3443e0ecbf9ba0ec06595dc0129f2ed73dae8b00b7e8b112d3fdae5",
+            "pid": 2368,
+            "startedNs": "455545524942"
+          },
+          "parentReadyDeliveredNs": "455546063242",
+          "parentExitDeliveredNs": "460562669262",
+          "exitCode": 0,
+          "lifecycleReceipt": {
+            "schema": 2,
+            "kind": "final",
+            "nonce": "ec5393c7-7677-4128-b52b-fece0594c949",
+            "entry": "/workspace/c15-readiness-source/packages/cli/dist/main.js",
+            "cwd": "/tmp/orca-c15-parity-tuFPJs/preload-1",
+            "preloadSha256": "fb55a23eb3443e0ecbf9ba0ec06595dc0129f2ed73dae8b00b7e8b112d3fdae5",
+            "pid": 2368,
+            "startedNs": "455545524942",
+            "endedNs": "460554740884",
+            "exitCode": 0
+          }
+        },
+        "rawBase64": "eyJzY2hlbWEiOjIsImtpbmQiOiJzdGFydCIsIm5vbmNlIjoiZWM1MzkzYzctNzY3Ny00MTI4LWI1MmItZmVjZTA1OTRjOTQ5IiwiZW50cnkiOiIvd29ya3NwYWNlL2MxNS1yZWFkaW5lc3Mtc291cmNlL3BhY2thZ2VzL2NsaS9kaXN0L21haW4uanMiLCJjd2QiOiIvdG1wL29yY2EtYzE1LXBhcml0eS10dUZQSnMvcHJlbG9hZC0xIiwicHJlbG9hZFNoYTI1NiI6ImZiNTVhMjNlYjM0NDNlMGVjYmY5YmEwZWMwNjU5NWRjMDEyOWYyZWQ3M2RhZThiMDBiN2U4YjExMmQzZmRhZTUiLCJwaWQiOjIzNjgsInN0YXJ0ZWROcyI6IjQ1NTU0NTUyNDk0MiJ9Cnsic2NoZW1hIjoyLCJraW5kIjoiZmluYWwiLCJub25jZSI6ImVjNTM5M2M3LTc2NzctNDEyOC1iNTJiLWZlY2UwNTk0Yzk0OSIsImVudHJ5IjoiL3dvcmtzcGFjZS9jMTUtcmVhZGluZXNzLXNvdXJjZS9wYWNrYWdlcy9jbGkvZGlzdC9tYWluLmpzIiwiY3dkIjoiL3RtcC9vcmNhLWMxNS1wYXJpdHktdHVGUEpzL3ByZWxvYWQtMSIsInByZWxvYWRTaGEyNTYiOiJmYjU1YTIzZWIzNDQzZTBlY2JmOWJhMGVjMDY1OTVkYzAxMjlmMmVkNzNkYWU4YjAwYjdlOGIxMTJkM2ZkYWU1IiwicGlkIjoyMzY4LCJzdGFydGVkTnMiOiI0NTU1NDU1MjQ5NDIiLCJlbmRlZE5zIjoiNDYwNTU0NzQwODg0IiwiZXhpdENvZGUiOjB9Cg==",
+        "rawSha256": "4a85aa704b59a50e46f30f209bf08d9ee2f66ace3c22cdc183e3b0c294c024c0",
+        "eof": true,
+        "actualPid": 2368
+      }
+    }
+  ],
+  "scope": "Bounded normal/preload product parity only; no Windows, diagnostic, memory, timing or fault-overlap acceptance.",
+  "semanticEqual": true,
+  "workEqual": true,
+  "counterEqual": true,
+  "playbookEqual": true,
+  "configEqual": true,
+  "artifactsByMode": {
+    "normal": 58,
+    "preload": 58
+  },
+  "ok": true
+}

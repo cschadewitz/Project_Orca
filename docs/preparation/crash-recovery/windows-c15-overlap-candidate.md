@@ -320,3 +320,17 @@ gates, diagnostic 120-second watchdog and memory baseline/accounting/budgets rem
 No Windows workflow is dispatched. Parent review and exact-head CI are required
 before any later bounded Windows run; this Linux verification does not establish
 Windows pipe/clock behavior or new C15 campaign acceptance.
+
+A new [four-demo readiness parity receipt](windows-c15-readiness-parity.json) was
+captured on code commit `17ebf70be9251d06452bb66e6f3f3bae27e5f4d1`. Two normal and
+two schema-2 preload demos exited 0 with 29 artifacts each / 58 per mode, in
+5.93/4.99/5.32/5.04 seconds (observations only, each bounded at 50 seconds).
+All semantic signatures remain
+`ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba`;
+work items, final counters, playbook bytes and normalized configs match. Raw fd 3
+start/final frames, SHA-256, independent launch bindings, actual PID and EOF are
+retained and independently recomputed from the report. The owned temporary parity
+root was removed after verification. The following evidence commit changes only
+this report and documentation; all executable harness bytes and manifest hashes
+remain identical to the tested code commit. No diagnostic or Windows campaign
+ran, and this parity proof does not establish C15 fault, memory or clock acceptance.
