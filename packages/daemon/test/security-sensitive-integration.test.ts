@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentRegistry } from "@orca/agents";
-import { parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
+import { parseWorkflow, sha256, TemplateRegistry, WorkflowRegistry } from "@orca/core";
 import { builtinExecutors, completed, Orchestrator, PausingHumanInput } from "@orca/engine";
 import { fileStores } from "@orca/store";
 import {
@@ -117,7 +117,7 @@ edges: [{ from: probe, to: gate }, { from: gate, to: e }]
           version: 1,
           mediaType: "text/plain",
           size: SECRET.length,
-          contentHash: "fixture-hash",
+          contentHash: sha256(`${SECRET} ${NESTED}`),
           path: `/output/${SECRET}.txt`,
           producedBy: { runId: ctx.run.id, stepRunId: ctx.step.id },
           parents: [],
