@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { canonical, digest, git, hash, identities, parseChanges, snapshot, validPath } from "../ci-shadow/git.js";
-import { RETRY_FILES, RUNNER_SKIPS } from "../ci-shadow/evidence.js";
+import { normalizeVitest, RETRY_FILES, RUNNER_SKIPS } from "../ci-shadow/evidence.js";
 import { consumers, coveredInventory, graph, imports, MANIFEST_PATH, TOOL_PATHS } from "../ci-shadow/graph.js";
 import { createPlan, loadManifest, validateExecution, validatePlan } from "../ci-shadow/selector.js";
 import { executionPlan, runSelected, selectedResult } from "../ci-shadow/execute.js";
@@ -225,25 +225,71 @@ it("cannot reduce a head-only checkout or a candidate with swapped parents", () 
   expect(() => executionPlan(input, "pull_request", 24, manifest)).toThrow("checkout_candidate_mismatch");
 });
 
-it.each(["missing", "extra", "duplicate", "failed", "skipped", "todo", "empty", "wrong_path", "bad_totals"])(
-  "rejects selected execution report %s even if the process exits green",
-  (kind) => {
-    const paths = ["packages/app/renderer/test/format-time.test.tsx"];
-    const result = { identities: { candidate: "a".repeat(40) }, wouldRun: { vitestFiles: paths } };
-    const raw = selectedRaw(paths, "/selected");
-    if (kind === "missing") raw.testResults = [];
-    if (kind === "extra" || kind === "duplicate")
-      raw.testResults.push({
-        ...raw.testResults[0],
-        name: kind === "extra" ? "/selected/extra.test.ts" : raw.testResults[0].name,
-      });
-    if (["failed", "skipped", "todo"].includes(kind)) raw.testResults[0].assertionResults[0].status = kind;
-    if (kind === "empty") raw.testResults[0].assertionResults = [];
-    if (kind === "wrong_path") raw.testResults[0].name = "/selected/other.test.ts";
-    if (kind === "bad_totals") raw.numPassedTests++;
-    expect(() => selectedResult(result, raw, "/selected")).toThrow();
-  },
-);
+it("rejects PR655's 421-file, 6064-pass, 32-skip, one-TODO report without weakening selected evidence", () => {
+  const pending = "packages/engine/test/restoration-acceptance.test.ts";
+  const paths = [pending, ...RUNNER_SKIPS.map(({ path }) => path)];
+  while (paths.length < 421) paths.push(`packages/engine/test/synthetic-${paths.length}.test.ts`);
+  const raw = selectedRaw(paths, "/selected");
+  for (const policy of RUNNER_SKIPS) {
+    const file = raw.testResults.find((entry) => entry.name === join("/selected", policy.path));
+    // Two platform-only files report no passing assertions; other files mix passes/skips.
+    if ([1, 4].includes(RUNNER_SKIPS.indexOf(policy))) file.assertionResults = [];
+    file.assertionResults.push(...policy.names.map((fullName) => ({ status: "skipped", fullName })));
+  }
+  raw.testResults[0].assertionResults.push(
+    ...Array.from({ length: 6064 - 419 }, () => ({ status: "passed", fullName: "synthetic passing assertion" })),
+  );
+  raw.numTotalTests = 6096;
+  raw.numPassedTests = 6064;
+  raw.numPendingTests = 32;
+  const plan = { identities: { candidate: base }, wouldRun: { vitestFiles: paths } };
+  expect(selectedResult(plan, raw, "/selected").selectedFilesPassed).toBe(421);
+  raw.testResults[0].assertionResults.push({ status: "todo", fullName: "pending restoration acceptance" });
+  raw.numTotalTests++;
+  raw.numTodoTests++;
+  const report = normalizeVitest(raw, "/selected");
+  expect(report.files.filter((file) => file.passed > 0)).toHaveLength(419);
+  expect(report.files.reduce((n, file) => n + file.passed, 0)).toBe(6064);
+  expect(report.files.reduce((n, file) => n + file.skips.length, 0)).toBe(32);
+  expect(report.files.reduce((n, file) => n + file.todo, 0)).toBe(1);
+  expect(() => selectedResult(plan, raw, "/selected")).toThrow("selected_todo");
+});
+
+it.each([
+  "missing",
+  "extra",
+  "duplicate",
+  "failed",
+  "skipped",
+  "todo",
+  "unexpected",
+  "empty",
+  "wrong_path",
+  "bad_totals",
+])("rejects selected execution report %s even if the process exits green", (kind) => {
+  const paths = ["packages/app/renderer/test/format-time.test.tsx"];
+  const result = { identities: { candidate: "a".repeat(40) }, wouldRun: { vitestFiles: paths } };
+  const raw = selectedRaw(paths, "/selected");
+  if (kind === "missing") raw.testResults = [];
+  if (kind === "extra" || kind === "duplicate")
+    raw.testResults.push({
+      ...raw.testResults[0],
+      name: kind === "extra" ? "/selected/extra.test.ts" : raw.testResults[0].name,
+    });
+  if (["failed", "skipped", "todo"].includes(kind)) raw.testResults[0].assertionResults[0].status = kind;
+  if (kind === "unexpected") raw.testResults[0].assertionResults[0].status = "cancelled";
+  if (kind === "empty") raw.testResults[0].assertionResults = [];
+  if (kind === "wrong_path") raw.testResults[0].name = "/selected/other.test.ts";
+  // Keep all known-status totals consistent so the individual result guards are exercised.
+  const statuses = raw.testResults.flatMap((file) => file.assertionResults.map((test) => test.status));
+  raw.numTotalTests = statuses.length;
+  raw.numPassedTests = statuses.filter((status) => status === "passed").length;
+  raw.numFailedTests = statuses.filter((status) => status === "failed").length;
+  raw.numPendingTests = statuses.filter((status) => status === "skipped").length;
+  raw.numTodoTests = statuses.filter((status) => status === "todo").length;
+  if (kind === "bad_totals") raw.numPassedTests++;
+  expect(() => selectedResult(result, raw, "/selected")).toThrow();
+});
 
 it.each(goldens)("golden: $label", ({ path, status, tier, reason }) => {
   reset();
