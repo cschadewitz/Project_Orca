@@ -481,6 +481,18 @@ describe("a decided decision", () => {
     expect(table.textContent).toContain("Redis — chosen");
   });
 
+  it("hands a focused Reopen trigger to Keep and restores it on cancellation", async () => {
+    await openDecisions([DECIDED]);
+    const trigger = screen.getByRole("button", { name: "Reopen…" });
+    act(() => trigger.focus());
+    fireEvent.click(trigger);
+    const keep = screen.getByRole("button", { name: "Keep the decision" });
+    expect(document.activeElement).toBe(keep);
+    await act(async () => fireEvent.click(keep));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Reopen…" }));
+    expect(callsTo("decisions.reopen")).toHaveLength(0);
+  });
+
   it("asks once before reopening, names what it reopens, and never re-decides", async () => {
     await openDecisions([DECIDED]);
     fireEvent.click(screen.getByRole("button", { name: "Reopen…" }));
@@ -488,8 +500,8 @@ describe("a decided decision", () => {
     expect(question.textContent).toContain("auth-store");
     expect(question.textContent).toBe(
       reopenQuestion(DECIDED) +
-        within(question).getByRole("button", { name: "Reopen datastore" }).textContent +
-        "Keep the decision",
+        "Keep the decision" +
+        within(question).getByRole("button", { name: "Reopen datastore" }).textContent,
     );
 
     // Backing out sends nothing.

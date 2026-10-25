@@ -171,6 +171,21 @@ describe("the relationship inspector", () => {
     expect(blocks).toContain("auth-docs");
   });
 
+  it("hands a focused Waive trigger to Keep and restores it on cancellation", async () => {
+    await openGraph();
+    await waitFor(() => expect(document.getElementById(depNodeDomId("wi-ui"))).not.toBeNull());
+    fireEvent.click(document.getElementById(depNodeDomId("wi-ui"))!);
+    const inspector = await screen.findByLabelText("Relationships of auth-ui");
+    const trigger = within(inspector).getByRole("button", { name: "Waive auth-api…" });
+    act(() => trigger.focus());
+    fireEvent.click(trigger);
+    const keep = within(inspector).getByRole("button", { name: "Keep it" });
+    expect(document.activeElement).toBe(keep);
+    await act(async () => fireEvent.click(keep));
+    expect(document.activeElement).toBe(within(inspector).getByRole("button", { name: "Waive auth-api…" }));
+    expect(callsTo("dependencies.waive")).toHaveLength(0);
+  });
+
   it("waives with a confirmation naming what it unblocks, and updates without a refetch", async () => {
     await openGraph();
     await waitFor(() => expect(document.getElementById(depNodeDomId("wi-ui"))).not.toBeNull());
