@@ -11,6 +11,18 @@ host operation, credential changes or additional invitations. For a docs-only PR
 follow [scoped documentation validation](docs/DEVELOPMENT.md#documentation-only-review)
 and distinguish source, review, CI, deployed and native evidence.
 
+## Track work in GitHub
+
+Track public-safe work and unfinished follow-ups in GitHub issues and pull requests,
+reusing existing owners and linking implementation, evidence and remaining acceptance.
+Write for the repository's eventual public audience. Keep work that cannot eventually
+be public, private host/account details, credentials, private commands and owner
+personal notes out of repository content, issue/PR tracking and the site.
+
+Use GitHub as the source for the site's workboard. Derive board columns from issue
+tags under an agreed label mapping; settle that mapping before introducing labels.
+This workflow does not change repository visibility or authorize upstream publication.
+
 ## Inventory before creating
 
 1. Search open issues and pull requests for the outcome, affected area and likely
