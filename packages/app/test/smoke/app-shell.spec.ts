@@ -69,6 +69,7 @@ import {
   ArtifactsListResultSchema,
   InputInvalidatedParamsSchema,
   RunsEventsResultSchema,
+  RunsGetResultSchema,
   type AgentUpdateParams,
   type InputsAnswerParams,
   type NotificationMessage,
@@ -852,14 +853,22 @@ test("a connected live permission expires without dispatching a stale answer", a
   }
 });
 
-test("a mounted running step keeps tool disclosures and focus through live update bursts", async () => {
-  // Keep the real interpreter running at its existing permission checkpoint. Only this
+test("a mounted live step keeps tool disclosures and focus through live update bursts", async () => {
+  // Keep the real interpreter active at its existing permission checkpoint. Only this
   // test's public agent.update envelopes are synthetic: send them from Playwright's
   // Electron driver through the existing sandboxed preload, never a renderer/product hook.
   // This isolates the GUI regression; daemon ACP/coalescing remains the real smoke's job.
   const live = await daemon.startLivePermission();
   try {
     const { input } = live;
+    // Permission checkpoints project as waiting, while the agent callback and output
+    // stream remain active. Match the public read model rather than assuming running.
+    await expect
+      .poll(async () => {
+        const snapshot = RunsGetResultSchema.parse(await daemon.rpc("runs.get", { runId: input.runId }));
+        return snapshot.steps.find((step) => step.id === input.stepRunId);
+      })
+      .toMatchObject({ nodeId: "write", status: "waiting" });
     const runs = await gotoSurface("runs");
     const tree = runs.getByRole("tree", { name: "Run tree" });
     const root = tree.locator(`[id="tree-row-${input.runId}"]`);
@@ -869,7 +878,8 @@ test("a mounted running step keeps tool disclosures and focus through live updat
     await step.click();
     const detail = runs.locator(".orca-step");
     await expect(detail.locator(".orca-inspector__title")).toHaveText("write");
-    await expect(detail.locator(".orca-inspector__head .orca-chip--running")).toBeVisible();
+    await expect(detail.locator(".orca-inspector__head .orca-chip--waiting")).toBeVisible();
+    await expect(detail.locator(".orca-inspector__head .orca-chip__label")).toHaveText("waiting");
     // The first tool and output prove the initial read has committed before injection.
     await expect(detail.locator(".orca-tool")).toHaveCount(1);
     await expect(detail.getByRole("textbox", { name: "Search the output held in memory" })).toBeVisible();
