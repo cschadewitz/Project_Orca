@@ -51,6 +51,20 @@ and a revocation time.
 | Expire         | `expiresAt` / `ttlMs` at issue                         | Refused from that moment, just like a revoked credential.  |
 | Revoke         | `CredentialStore.revoke(id)`                           | Refused on the next request, and open sockets close (below). |
 
+From a shell, `orca auth` performs the same steps on the workspace's `auth/` directory.
+Only `issue` and `rotate` print a token, once; nothing else ever shows one.
+
+| Step      | Command                                                                                                                                  |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Provision | `orca auth issue <principal> [--preset client] [--workflow-scope <id>]... [--runs-scope owned\|all] [--expires-at <ISO>] [--label <text>]` |
+| Inspect   | `orca auth list`: id, principal, `active`/`expired`/`revoked`, scope and expiry                                                          |
+| Rotate    | `orca auth rotate <id> [--expires-at <ISO>]`: keeps the current expiry unless given. The bootstrap credential rotates only by restarting `orca serve`. |
+| Revoke    | `orca auth revoke <id>`                                                                                                                  |
+
+`--json` prints the same records as JSON. The CLI issues a preset's permissions and has no
+flag for an arbitrary list; `CredentialStore.issue({ permissions })` is the only way to issue
+one, and the restricted-scope rule below still applies to it.
+
 Credential mutations (`issue`, `rotate`, `revoke`, `bootstrapLocalOwner`) return promises;
 callers must await them. They use the store’s cross-process file lock across reload,
 mutation and atomic persistence. Rotation publishes revocation and replacement together.
@@ -459,14 +473,15 @@ actors are excluded. Admission/continuation lookup reads are not mutation-audite
 | CLI in client mode                        | Read `<authDir>/local-client.token`, or `ORCA_DAEMON_TOKEN`; send `Authorization: Bearer`.   |
 | Desktop app main process                  | Read the token file of the daemon it spawned; send it on `/rpc` and as `orca.bearer.*` on `/socket`; re-read it once on `AUTH_INVALID`; treat close code 4401 as "re-authenticate", not as a network blip. |
 | Update supervisor (`maintenance`)         | Same token file; `maintenance` needs `daemon.maintenance`, which only `owner` has.           |
+| MCP adapter (`orca mcp`)                  | Give it its own credential, never the local owner token. It reads the token from `ORCA_MCP_TOKEN` (or the variable `--token-env` names) and refuses to start without one; never put it in arguments, URLs or committed MCP JSON. |
 | Embedders calling `startDaemon`           | Pass `auth`. Use `{ mode: "loopback-unauthenticated" }` only to keep the old behavior on loopback. |
 | Custom method tables                      | Every method name must be in `OPERATIONS`. An un-inventoried method is `AUTH_FORBIDDEN`.     |
 
 ## Current integration and acceptance boundary
 
-On main `94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`, `orca serve`
+On main `0c75d01eb0cab389ad1cbff5d1fb9a60bfe64362`, `orca serve`
 bootstraps token authentication, the CLI exposes `auth issue|list|rotate|revoke`,
-and the desktop daemon client supplies its credential. The legacy
+the desktop daemon client supplies its credential and `orca mcp` requires an explicit credential. The legacy
 `--unauthenticated-loopback` mode is explicit and loopback-only. Authenticated
 operator methods are conditionally mounted with their production sources and
 audited through the same daemon boundary. The former #328 branch handoff and
@@ -484,17 +499,25 @@ roots. `config.read` is workspace-wide and includes raw unredacted `config.get`;
 the MCP `get_configuration_status` tool uses an allowlisted projection and does
 not grant raw config access.
 
-#328 remains open. Its existing HTTP/WebSocket credential, operation, resource,
-notification, gate and audit tests establish the implemented core. They do not
-establish the expanded workflow-editor draft ownership, secret-reference use,
-full #336 raw-config migration alignment, or a complete deployment and client
-migration proof. Current-main CI passed on Node 22/24 at
-[run 37163133592](https://github.com/cschadewitz/Project_Orca/actions/runs/37163133592);
-that does not prove an upgraded agent-01 runtime or actual-Cal behavior. Keep
-these remaining [#328 criteria](https://github.com/cschadewitz/Project_Orca/issues/328)
-open until their own evidence exists.
+The HTTP/WebSocket credential, operation, resource, notification, gate and audit
+tests establish this contract. On that commit, CI
+[run 38314046239](https://github.com/cschadewitz/Project_Orca/actions/runs/38314046239)
+passed typecheck, lint, build, the full suite with coverage, CLI/ACP retry
+acceptance and the compiled-build smoke test on Node 24. CI does not prove a
+deployed runtime or an actual client's behavior; the private agent-01 deployment
+and actual-Cal acceptance are recorded on
+[#392](https://github.com/cschadewitz/Project_Orca/issues/392) and
+[#393](https://github.com/cschadewitz/Project_Orca/issues/393), within the dedicated
+single-owner setup. Actual-connector restricted-reader isolation and live/in-flight
+revocation remain open and deferred in
+[#598](https://github.com/cschadewitz/Project_Orca/issues/598); source tests and successful
+broad-principal calls do not establish those acceptance boundaries.
 
-The [9 October bounded contract/evidence review](implementation/m10-security-contract-closure.md)
-maps the remaining configuration, editor and secret-reference criteria separately.
-It retains #180/#336 implementation acceptance and deployed/native checks as open;
-current source security checks do not establish those future surfaces.
+Workflow drafts (#180) are in the operation inventory above as configuration reads
+and writes. Per-principal draft ownership and its security acceptance belong to
+[#180](https://github.com/cschadewitz/Project_Orca/issues/180), and secret references
+and the raw-configuration migration to
+[#336](https://github.com/cschadewitz/Project_Orca/issues/336), under the scope
+transfer approved on 9 October; they are not #328 criteria. The
+[9 October bounded contract/evidence review](implementation/m10-security-contract-closure.md)
+maps that split.
