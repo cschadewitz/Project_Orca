@@ -136,8 +136,16 @@ async function collect(
       if (d.required) problems.push(`missing ${d.kind} at ${d.path}`);
       continue;
     }
-    const data = extractStructuredData(content, d.mediaType);
-    const reason = validateArtifact(d.spec, data, parseFrontMatter(content).body);
+    let parsed: { data: Record<string, unknown>; body: string } | undefined;
+    let reason: string | undefined;
+    // Only malformed content is repairable here. Reads, validation, event recording and
+    // artifact storage stay outside the catch so operational/ownership failures propagate.
+    try {
+      parsed = { data: extractStructuredData(content, d.mediaType), body: parseFrontMatter(content).body };
+    } catch (error) {
+      reason = `could not parse artifact structured data: ${describeError(error).message}`;
+    }
+    if (parsed) reason = validateArtifact(d.spec, parsed.data, parsed.body);
     if (reason) {
       await ctx.emit({
         type: "artifact.rejected",
