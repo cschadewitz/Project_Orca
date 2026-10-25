@@ -33,7 +33,7 @@ it("withholds current config source after read authority is withdrawn while reta
   await waitFor(() => expect(command().value).toBe("private-retained-command"));
   expect(f.writes).toHaveLength(0);
 });
-function setup({ metadata = true, writable = true, deferIdentity = false, width = 1280 } = {}) {
+function setup({ metadata = true, writable = true, deferIdentity = false, width = 1280, variant = false } = {}) {
   stubMatchMedia(width);
   const fake = fakeBridge();
   const bridge: OrcaBridge = fake.bridge;
@@ -84,6 +84,28 @@ function setup({ metadata = true, writable = true, deferIdentity = false, width 
       },
     },
   };
+  if (variant && schema.root.kind === "object") {
+    const agent = schema.root.fields.agents;
+    if (agent?.kind !== "array") throw new Error("Expected agent array fixture.");
+    const local = agent.item;
+    if (local.kind !== "object") throw new Error("Expected local agent fixture.");
+    agent.item = {
+      ...meta,
+      kind: "union",
+      discriminator: "type",
+      branches: {
+        local,
+        ssh: {
+          ...meta,
+          kind: "object",
+          fields: {
+            env: local.fields.env!,
+            hostname: { ...meta, kind: "scalar", field: { path: "agents[].hostname", type: "string", required: true } },
+          },
+        },
+      },
+    };
+  }
   let data: ConfigGetResult = {
     ...structuredClone(CONFIG_GET),
     ...(metadata ? { formSchema: schema } : {}),
@@ -96,7 +118,15 @@ function setup({ metadata = true, writable = true, deferIdentity = false, width 
     },
   };
   data.config.parsed = {
-    agents: [{ id: "claude", command: "claude-code", roles: ["developer"], env: { TOKEN: "private-form-secret" } }],
+    agents: [
+      {
+        ...(variant ? { type: "local", extension: { nested: [false, 0, ""] } } : {}),
+        id: "claude",
+        command: "claude-code",
+        roles: ["developer"],
+        env: { TOKEN: "private-form-secret" },
+      },
+    ],
   };
   const writes: ConfigSetParams[] = [];
   let applyCount = 0;
@@ -167,6 +197,14 @@ function setup({ metadata = true, writable = true, deferIdentity = false, width 
   return {
     fake,
     writes,
+    changeTarget: () => {
+      target = {
+        ...target,
+        epoch: target.epoch + 1,
+        identity: { workspaceId: "other-workspace", instanceId: "other-daemon" },
+      };
+      for (const listener of targets) listener(target);
+    },
     applies: () => applyCount,
     resolveIdentity: () => {
       target = { ...target, identity: { workspaceId: "workspace", instanceId: "daemon" } };
@@ -177,6 +215,31 @@ function setup({ metadata = true, writable = true, deferIdentity = false, width 
 const command = () => screen.getByLabelText<HTMLInputElement>(/^commandagents\[0\]\.command/);
 
 describe.each(THEMES)("wired configuration route in %s", (theme) => {
+  it("keeps a pending variant review across unrelated Studio rerenders", async () => {
+    const f = setup({ variant: true });
+    setTheme(theme);
+    await screen.findByRole("group", { name: "Configuration" });
+    fireEvent.change(command(), { target: { value: "draft-command" } });
+    fireEvent.click(screen.getByRole("button", { name: "agents entry variant" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "ssh" }));
+    expect(screen.getByRole("button", { name: "Confirm variant change" })).toBeTruthy();
+    expect(f.writes).toHaveLength(0);
+    // Same live connection: the provider rerenders and Studio.value recursively copies the draft.
+    act(() => f.fake.connect({ ...f.fake.connection }));
+    expect(screen.getByRole("button", { name: "Confirm variant change" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm variant change" }));
+    expect(screen.queryByLabelText(/^commandagents/)).toBeNull();
+    expect(screen.getByLabelText<HTMLInputElement>(/^hostnameagents/).value).toBe("");
+    expect(f.writes).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Validate and review" }));
+    await waitFor(() => expect(f.writes.length).toBeGreaterThan(0));
+    expect(f.writes[0]?.edits).toEqual([
+      { kind: "set", path: ["agents", 0, "command"], value: "draft-command" },
+      { kind: "remove", path: ["agents", 0, "command"] },
+      { kind: "set", path: ["agents", 0, "type"], value: "ssh" },
+    ]);
+    expect(f.writes.every((write) => write.validateOnly)).toBe(true);
+  });
   it("stacks narrow fields and wraps complete action labels", async () => {
     installDesignSystem();
     installSurfaceStyles();
@@ -280,3 +343,31 @@ it("rereads when the initial authoritative identity arrives, instead of mounting
   await screen.findByRole("group", { name: "Configuration" });
   await waitFor(() => expect(f.fake.calls.filter((c) => c.method === "config.get")).toHaveLength(2));
 });
+
+it.each(["navigation", "target", "read authority"])(
+  "does not carry a pending variant confirmation across %s changes",
+  async (change) => {
+    const f = setup({ variant: true });
+    await screen.findByRole("group", { name: "Configuration" });
+    fireEvent.change(command(), { target: { value: "retained-command" } });
+    fireEvent.click(screen.getByRole("button", { name: "agents entry variant" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "ssh" }));
+    const confirm = screen.getByRole("button", { name: "Confirm variant change" });
+    if (change === "navigation") {
+      fireEvent.click(screen.getByRole("button", { name: "Go to Runs" }));
+      fireEvent.click(screen.getByRole("button", { name: "Back to Config" }));
+      expect(command().value).toBe("retained-command");
+    } else if (change === "target") {
+      act(() => f.changeTarget());
+      await screen.findByText("Configuration source withheld");
+    } else {
+      act(() => f.fake.connect({ ...f.fake.connection, methods: [] }));
+      await screen.findByText("Configuration source withheld");
+      act(() => f.fake.connect({ ...f.fake.connection, methods: ["config.get", "config.set", "config.apply"] }));
+      await waitFor(() => expect(command().value).toBe("retained-command"));
+    }
+    expect(screen.queryByRole("button", { name: "Confirm variant change" })).toBeNull();
+    fireEvent.click(confirm);
+    expect(f.writes).toHaveLength(0);
+  },
+);
