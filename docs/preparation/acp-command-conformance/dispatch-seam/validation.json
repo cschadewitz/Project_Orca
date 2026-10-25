@@ -1,0 +1,42 @@
+{
+  "scope": "private offline source-correspondent prototype; no native process or command execution",
+  "testedOrcaBase": "4771d2bc1ff096a5c610d37e3e2aff6c551ae0e2",
+  "dependencyMergedAt": "30113b4e2c055cad8570bcf1e080364cbf342ce5",
+  "freshAncestry": { "mergeBase": "4771d2bc1ff096a5c610d37e3e2aff6c551ae0e2", "ahead": 7, "behind": 0 },
+  "node": "24.19.0",
+  "dispatch": { "passed": 29, "failed": 0, "skipped": 0, "runner": "node --test dispatch.test.ts" },
+  "regressions": {
+    "passed": 135,
+    "failed": 0,
+    "skipped": 0,
+    "runner": "Vitest 5.0.2",
+    "files": [
+      "packages/agents/test/command-evidence-v1-594.test.ts",
+      "tools/test/acp-command-evidence-source.test.js",
+      "packages/agents/test/acp-command-conformance-506.test.ts",
+      "packages/engine/test/live-input.test.ts"
+    ]
+  },
+  "statics": [
+    "standalone TypeScript",
+    "root TypeScript",
+    "renderer TypeScript",
+    "scoped repository ESLint rules",
+    "changed-code Prettier",
+    "Markdown UTF-8/LF/fences/local file links",
+    "Git blob and JSON-RPC artifact hashes",
+    "upstream patch applicability and executable-module parity",
+    "git diff --cached --check"
+  ],
+  "nativeDescriptor": "unimplemented; all exact-command queries return unsupported",
+  "maintainedPair": null,
+  "notRun": [
+    "full upstream typecheck/build/tests",
+    "ORCA full suite/coverage/build",
+    "native provider execution",
+    "installed or platform proof",
+    "actual-Cal acceptance",
+    "CI completion"
+  ],
+  "setup": "Only isolated JSON-RPC 9.0.1 fetched with scripts disabled. ORCA cached worktree dependency links restored; no root manifest/lock change."
+}

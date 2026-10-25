@@ -1,0 +1,11 @@
+{
+  "name": "orca-594-offline-dispatch-seam",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test dispatch.test.ts"
+  },
+  "dependencies": {
+    "vscode-jsonrpc": "9.0.1"
+  }
+}
