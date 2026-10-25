@@ -4,7 +4,8 @@ import { test } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { launchCli, validateLifecycle } from "../windows-c15/cli-lifecycle.mjs";
 import { createRequire } from "node:module";
 import {
   specification,
@@ -312,77 +313,194 @@ if (process.env.C15_SOURCE) {
   });
 }
 
-// Real subprocess clocks must inhabit the parent's same-host monotonic interval.
-// Hashing is bounded actual work; these probes do not run the Windows product.
-function clockWorkload() {
+// These fixtures exercise the production preload/pipe/validator with actual child
+// computations. Delays/blocking exist only in adversarial tests, never the campaign.
+function fixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "c15-lifecycle-"));
+  const entry = path.join(root, "main.mjs");
+  fs.writeFileSync(
+    entry,
+    `
+    import fs from "node:fs";
+    import {createHash} from "node:crypto";
+    const ticks = [];
+    let bytes = Buffer.alloc(262144, 7);
+    for (let i = 0; i < 10; i++) {
+      bytes = createHash("sha256").update(bytes).digest();
+      ticks.push(process.hrtime.bigint().toString());
+    }
+    fs.writeFileSync(process.argv[2], JSON.stringify(ticks));
+    process.on("exit", () => fs.writeFileSync(process.argv[2] + ".exiting", "done"));
+    process.exit(0);
+  `,
+  );
+  return { root, entry };
+}
+function tracked(f, index, entry = f.entry) {
+  const ticks = path.join(f.root, String(index));
+  const tracked = launchCli(spawn, process.execPath, [entry, ticks], { cwd: f.root, env: { ...process.env } });
+  return { ...tracked, ticks };
+}
+async function clockWorkload(f) {
   const executionMembers = [],
     cells = [];
   for (let index = 0; index < DEMO_COUNT; index++) {
-    const startedNs = process.hrtime.bigint().toString();
-    const ticks = JSON.parse(
-      execFileSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          `
-      import {createHash} from "node:crypto";
-      let bytes = Buffer.alloc(262144, 7);
-      const ticks = [];
-      for (let i = 0; i < 10; i++) {
-        bytes = createHash("sha256").update(bytes).digest();
-        ticks.push(process.hrtime.bigint().toString());
-      }
-      process.stdout.write(JSON.stringify(ticks));
-    `,
-        ],
-        { encoding: "utf8", timeout: 10000 },
-      ),
-    );
-    const endedNs = process.hrtime.bigint().toString();
-    executionMembers.push({ index, startedNs, endedNs, exitCode: 0 });
-    cells.push(...ticks.map((faultEnteredNs) => ({ target: targets[cells.length], faultEnteredNs })));
+    const work = tracked(f, index);
+    executionMembers.push({ index, ...(await work.completed) });
+    cells.push(...JSON.parse(fs.readFileSync(work.ticks)).map((faultEnteredNs) => ({ faultEnteredNs })));
   }
   cells.forEach((cell, index) => {
     cell.target = targets[index];
   });
   return { mode: "on", executionMembers, diagnostic: { cells } };
 }
-test("corrected overlap accepts every original fault during two fixed real subprocess executions", () => {
-  const row = clockWorkload();
-  assert.equal(row.diagnostic.cells.length, 20);
-  validateOverlap(row);
-  validateOverlap({ ...row, mode: "off", diagnostic: { cells: [] } });
+test("child-owned lifecycle accepts faults during two actual subprocess computations", async () => {
+  const f = fixture();
+  try {
+    const row = await clockWorkload(f);
+    validateOverlap(row);
+    validateOverlap({ ...row, mode: "off", diagnostic: { cells: [] } });
+    for (const member of row.executionMembers) validateLifecycle(member);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
 });
-test("short workload, inter-demo gap, missing timestamps and incomplete work reject overlap", () => {
-  const row = clockWorkload();
-  const mutate = (change) => {
-    const copy = structuredClone(row);
-    change(copy);
-    assert.throws(() => validateOverlap(copy));
-  };
-  mutate((copy) => {
-    copy.diagnostic.cells[19].faultEnteredNs = copy.executionMembers[1].endedNs;
-  });
-  mutate((copy) => {
-    copy.diagnostic.cells[19].faultEnteredNs = copy.executionMembers[0].endedNs;
-  });
-  mutate((copy) => {
-    delete copy.diagnostic.cells[0].faultEnteredNs;
-  });
-  mutate((copy) => {
-    copy.diagnostic.cells.pop();
-  });
-  mutate((copy) => {
-    copy.executionMembers.pop();
-  });
-  mutate((copy) => {
-    copy.executionMembers[1].exitCode = 2;
-  });
-  mutate((copy) => {
-    copy.executionMembers[1].startedNs = copy.executionMembers[0].startedNs;
-  });
-  mutate((copy) => {
-    copy.diagnostic.cells[0].faultEnteredNs = "-1";
-  });
+test("rejects missing, late, substituted, duplicate and failed child receipts", async () => {
+  const f = fixture();
+  try {
+    const row = await clockWorkload(f);
+    const mutate = (change) => {
+      const copy = structuredClone(row);
+      change(copy);
+      assert.throws(() => validateOverlap(copy));
+    };
+    for (const key of ["nonce", "pid", "entry", "cwd", "preloadSha256", "exitCode"])
+      mutate((copy) => {
+        copy.executionMembers[0].lifecycleReceipt[key] = "substituted";
+      });
+    mutate((copy) => {
+      delete copy.executionMembers[0].lifecycleReceipt;
+    });
+    mutate((copy) => {
+      copy.executionMembers[1].lifecycleReceipt = copy.executionMembers[0].lifecycleReceipt;
+    });
+    mutate((copy) => {
+      copy.executionMembers[1].lifecycleReceipt.endedNs = String(
+        BigInt(copy.executionMembers[1].parentExitDeliveredNs) + 1n,
+      );
+    });
+    mutate((copy) => {
+      copy.diagnostic.cells[19].faultEnteredNs = copy.executionMembers[1].lifecycleReceipt.endedNs;
+    });
+    mutate((copy) => {
+      copy.diagnostic.cells[0].faultEnteredNs = copy.executionMembers[0].parentSpawnedNs;
+    });
+    mutate((copy) => {
+      delete copy.diagnostic.cells[0].faultEnteredNs;
+    });
+    mutate((copy) => {
+      copy.diagnostic.cells.pop();
+    });
+    mutate((copy) => {
+      copy.executionMembers.pop();
+    });
+    mutate((copy) => {
+      copy.executionMembers[1].exitCode = 2;
+      copy.executionMembers[1].lifecycleReceipt.exitCode = 2;
+    });
+    mutate((copy) => {
+      copy.executionMembers[1].lifecycleReceipt.startedNs = copy.executionMembers[0].lifecycleReceipt.startedNs;
+    });
+    mutate((copy) => {
+      copy.diagnostic.cells[0].faultEnteredNs = "-1";
+    });
+    const bad = path.join(f.root, "bad.mjs");
+    for (const script of [
+      "process.exit(2);",
+      'process.kill(process.pid, "SIGKILL");',
+      'import fs from "node:fs"; fs.writeFileSync(3, "substituted\\n"); process.exit(0);',
+      'import fs from "node:fs"; fs.writeFileSync(3, "x".repeat(5000)); process.exit(0);',
+      'process.removeAllListeners("exit"); process.exit(0);',
+      'import fs from "node:fs"; process.removeAllListeners("exit"); fs.writeFileSync(3, "{"); process.exit(0);',
+    ]) {
+      fs.writeFileSync(bad, script);
+      await assert.rejects(tracked(f, "bad", bad).completed);
+    }
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+function independentEntries(f, afterFile) {
+  // execFileSync intentionally blocks the supervisor while a separate fault
+  // process observes the CLI beginning exit, then records all 20 entries.
+  return JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+    import fs from "node:fs";
+    const until = Date.now() + 5000;
+    while (!fs.existsSync(process.argv[1])) {
+      if (Date.now() > until) process.exit(3);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+    process.stdout.write(JSON.stringify(Array.from({length: 20}, () => process.hrtime.bigint().toString())));
+  `,
+        afterFile,
+      ],
+      { cwd: f.root, encoding: "utf8", timeout: 10000 },
+    ),
+  );
+}
+test("delayed parent exit delivery cannot accept 20 independent post-exit entries", async () => {
+  const f = fixture();
+  try {
+    const first = tracked(f, 0);
+    // Parent cannot deliver exit/pipe callbacks until this synchronous child
+    // returns. Its faults are strictly after the CLI's child-stamped end.
+    const entries = independentEntries(f, first.ticks + ".exiting");
+    const member = { index: 0, ...(await first.completed) };
+    for (const entry of entries) {
+      assert.ok(BigInt(entry) > BigInt(member.lifecycleReceipt.endedNs));
+      assert.ok(BigInt(entry) < BigInt(member.parentExitDeliveredNs));
+    }
+    const second = tracked(f, 1);
+    const row = {
+      mode: "on",
+      executionMembers: [member, { index: 1, ...(await second.completed) }],
+      diagnostic: { cells: entries.map((faultEnteredNs, i) => ({ target: targets[i], faultEnteredNs })) },
+    };
+    // The superseded parent bracket would accept every one of these entries.
+    assert.throws(() => validateOverlap(row), /fault-outside-cli-execution/);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+test("independent entries in the real inter-demo gap are rejected", async () => {
+  const f = fixture();
+  try {
+    const first = tracked(f, 0);
+    const member = { index: 0, ...(await first.completed) };
+    const entries = independentEntries(f, first.ticks + ".exiting");
+    const second = tracked(f, 1);
+    const next = { index: 1, ...(await second.completed) };
+    for (const entry of entries) {
+      assert.ok(BigInt(entry) > BigInt(member.lifecycleReceipt.endedNs));
+      assert.ok(BigInt(entry) < BigInt(next.lifecycleReceipt.startedNs));
+    }
+    assert.throws(
+      () =>
+        validateOverlap({
+          mode: "on",
+          executionMembers: [member, next],
+          diagnostic: { cells: entries.map((faultEnteredNs, i) => ({ target: targets[i], faultEnteredNs })) },
+        }),
+      /fault-outside-cli-execution/,
+    );
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
 });

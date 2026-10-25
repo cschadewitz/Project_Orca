@@ -4,7 +4,9 @@ This is a test-only draft for parent review before any Windows dispatch. It does
 not establish C15 acceptance. Product source remains
 `95ee280be309d50f29b46cb66a12d480fdfc8a7d`, tree
 `8bf5c38903ec0bc13c7c8a313068ba378bda3230`. The branch starts from freshly fetched
-main `41e4da4f8847b34f6a062ead842102d39f6f7898`.
+main `80e706269958868d5f6fc06e93c1ef3248d8f8c0`, independently confirmed
+by Git fetch and the Cal connector. It includes the supplied `ec015d3` checkpoint.
+The existing PR663 commits are retained by merge; this corrects that same draft.
 
 ## Diagnosis and evidence attribution
 
@@ -57,21 +59,51 @@ must fail overlap rather than manufacture a pass.
 The original `enteredMs < executionElapsedMs` assertion remains mandatory. It is
 supplemented by same-host `process.hrtime.bigint()` evidence: the diagnostic
 records a timestamp at the actual `arm.inject()` entry, before resolving the
-observed-entry promise. The supervisor records monotonic start/end intervals
-around each spawned CLI's lifetime. Every one of the 20 entries must belong to
-one of those intervals. Completion, startup, receipt waits and the inter-demo
-gap are never extended to satisfy a cell. Entries in the inter-demo gap or at/
-after the final exit are rejected. These intervals prove concurrent CLI process
-execution, not continuous CPU use or an exact engine-node transition; that is
-the same execution scope as the original paired proof.
+observed-entry promise. **Parent spawn/exit callback brackets are insufficient:**
+an independent review reproduced all 20 entries after the CLI exited while the
+parent was blocked, yet before the parent's exit callback. Those brackets are
+now audit metadata only and never the overlap interval.
+
+A fixed, digest-pinned `--import` preload executes inside the unmodified compiled
+CLI, preserving its original `main.js` entry/argv and direct-invocation guard.
+It captures start at preload module evaluation (after its built-in imports),
+and end at the beginning of its synchronous `exit` listener, before serialization
+or pipe writes. It adds no timer, work gate, candidate import, engine hook or exit
+interception. It does not fabricate workflow work. Each corresponding demo still
+must independently exit successfully and meet the original artifact/oracle gate.
+
+The child sends exactly one complete JSON receipt over spawn's dedicated anonymous
+fd 3 pipe. There is no receipt pathname to substitute, poll late or reuse. The
+parent requires EOF and successful exit within the unchanged 50-second bound;
+missing, malformed, extra, oversized and signaled receipts fail closed. Receipt
+schema, launch nonce, actual child PID, CLI entry, working directory, preload digest
+and exit code must match the launch. Child timestamps must fall within the parent
+launch audit envelope. A duplicated/substituted receipt from the other demo fails.
+The binding environment variable is deleted before CLI entry and `--import` is
+passed only on this CLI's argv, so scripted agents do not inherit instrumentation.
+This trusts the pinned CLI and harness; it is not authentication against a malicious
+process controlling its own code/pipe or a hostile runner.
+
+Every one of the 20 fault entries must fall in one child interval `[start, end)`.
+Entries at/after beginning exit, before preload evaluation and between demos are
+rejected even when the supervisor is descheduled. The precise claim is overlap
+with the **CLI's captured lifecycle segment from preload evaluation to beginning
+exit**, conditional on successful complete demo/oracle validation. This includes
+module loading, setup, event-loop waits and CLI cleanup before exit. It does not
+prove continuous CPU use, simultaneous engine work, a particular engine transition,
+or exact OS process termination. The small receipt I/O after the end stamp is
+excluded. Parent notification/pipe delivery delays cannot enlarge the interval.
 
 The monotonic check avoids comparing the unrelated origins of `performance.now()`
-in the supervisor and Electron child. The legacy elapsed assertion is retained
-as an additional legacy requirement; the nanosecond interval check is
-necessary to establish overlap. A portable test runs actual subprocess work and
-checks its clock values against parent-recorded intervals. Windows Node/Electron
-clock comparability and the full corrected campaign still require the reviewed
-Windows run; portable tests cannot establish them.
+in the supervisor and Electron child. The original elapsed assertion remains an
+additional requirement. Linux Node subprocess tests use the actual preload, pipe
+collector and validator. They deterministically block parent callback delivery
+while an independent child records all 20 entries 200 ms after the CLI begins
+exit; the old parent bracket accepts those entries and the new gate rejects them.
+A separate real inter-demo-gap case also rejects all 20 entries. Windows Node/
+Electron monotonic-clock comparability, extra-pipe behavior and the full corrected
+campaign still require parent review and a later reviewed Windows run. No portable
+result establishes corrected Windows acceptance.
 
 ## Preserved boundaries and verification
 
@@ -83,16 +115,39 @@ observes memory throughout both demos with the same baseline and budget. A
 larger workload can expose a memory failure; no such failure is hidden or waived.
 
 `candidate.json` pins the changed supervisor, child, portable tests and new
-`tools/windows-c15/overlap.mjs`; product commit/tree, compiled inventory, native
+`tools/windows-c15/overlap.mjs`, lifecycle collector and preload; product commit/tree, compiled inventory, native
 source and Electron archive pins remain unchanged. Staging seals the exact
 harness HEAD and manifest at runtime, so no circular precomputed harness commit
 pin is introduced.
 
 Portable coverage accepts a complete 20-entry overlap during two actual bounded
 subprocess computations and rejects a short workload, entries between demos,
-missing timestamps, incomplete cells/workloads, failed CLI members and overlapping
+missing timestamps/receipts, substituted bindings, duplicate/oversized/malformed
+pipe data, killed/failed children, incomplete cells/workloads and overlapping
 sequential intervals. The original receipt, adversarial bounds, inventory,
 workflow and historical cell-parity tests remain. Final verification results and
 any compiler/environment limitations are reported with the draft PR. No workflow
 is dispatched by this change. Hosted synthetic scope, physical/native failure
 limits, sampling limits, deferred timing and the Mac hold remain in force.
+
+## Review-correction verification
+
+Linux Node 24.19.0 built the pinned source with the existing TypeScript 7.0.2
+compiler. All **365 compiled executable files** match the unchanged manifest,
+and all **14 portable tests** pass, including source/compiled substitution,
+closed inventory, receipt seal, frozen campaign parity, delayed parent delivery
+and real inter-demo gaps. Focused ESLint, Prettier and whitespace checks pass.
+Only legitimate harness hashes and new preload/collector entries are refreshed;
+all source/tree/compiler/native/Electron/compiled pins are identical to PR663's
+prior `48e8145` manifest. No source or frozen history is edited.
+
+A supplemental real compiled CLI probe is **not an artifact-parity pass**. One
+preload launch exited 0 but produced 32 artifacts instead of the required 29.
+A subsequent sequential comparison on the same pinned build produced 29 for an
+unmodified launch and 32 for a preload launch, both exit 0 with schema/login-api/
+docs work items done. These observations do not establish the cause of the
+artifact difference or establish corrected workload parity. The strict 29-per-
+demo/58-per-mode gate remains unchanged and would reject the 32-artifact result;
+no counts are normalized away, extra demos appended or gate waived. This local
+verification limit must be resolved before acceptance. No Windows workflow was
+dispatched; parent review remains required first.

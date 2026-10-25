@@ -13,13 +13,15 @@
   "harness": {
     ".github/workflows/windows-c15-candidate.yml": "07eb50cdaa3eb31de5f2f97ea377025b06aba5efe830769ae12c6c7c92a0792b",
     "packages/app/test/recovery-preparation/windows-c15-candidate-child.cjs": "c8f5baefeb6433c0b3368183d5e04b3b426f9489eb176fdea010578c145b1942",
-    "packages/app/test/recovery-preparation/windows-c15-candidate.mjs": "b33c0b4c23970e4f03ad100dd00fa930c30524f2bbae02aa38be791b3121d721",
+    "packages/app/test/recovery-preparation/windows-c15-candidate.mjs": "7a0c39651759c0f5dde94aad5fb9b8effe450bb2d04206032ef73490c99c6c96",
     "packages/app/test/recovery-preparation/windows-c15-child.cjs": "a02888f23a46435fb488003eda1c9a95d79a710fadd183522292bd5fe3e818fc",
     "packages/app/test/recovery-preparation/windows-c15-paired.mjs": "60e3cc4efd0da3a9c9b18bd3f718957d9d8b7919699335ab75c0781ac061c2e5",
-    "tools/test/windows-c15-candidate.test.mjs": "0e2c6e592cd142872accefa4433e327251da4a5a0aa5ab9cfa07b372c7beba0c",
+    "tools/test/windows-c15-candidate.test.mjs": "a86b96ea7ac19302dfd8cdd6ebe3fbc7924619776e3c48dc10ee1c148df93d71",
     "tools/windows-c15/build.mjs": "1472e6fae9a8679c54279b266db86b75dca330c568f9dfba9be299621eeb6e7a",
+    "tools/windows-c15/cli-lifecycle-preload.mjs": "3081716b64e2ece587bf02486300fed401db826d1debabe4d6175fdc773a7cf4",
+    "tools/windows-c15/cli-lifecycle.mjs": "395002d96ec490bd1c47b27f98cacc7f3bd4c9ca7d3bda1d04d63c4b7beeb0be",
     "tools/windows-c15/manifest.mjs": "cc83952b16eea28fcc4296ba143b6f1d6b08b98e9a818173d8f69973a9f6d88c",
-    "tools/windows-c15/overlap.mjs": "a15041215fd16b7c09de434e7baeaf910acc77a28787dfa68b899c2751c07080",
+    "tools/windows-c15/overlap.mjs": "6ca5456583b0ed796b6c9f7e57cfb66d222b02fa60a938e08b5c57210b9d4242",
     "tools/windows-c15/root-probe.mjs": "b5b04d9b962bf2845046631300216a89e3ebf844666ec588d1a16bfcae5deae7",
     "tools/windows-c15/stage.mjs": "ab9c3073544f5ef701978843a5db4089bd937973514321df3dbe758d711fbd34"
   },

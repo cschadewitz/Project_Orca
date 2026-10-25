@@ -16,6 +16,7 @@ import {
   regular,
 } from "../../../../tools/windows-c15/manifest.mjs";
 import { DEMO_COUNT, validateOverlap } from "../../../../tools/windows-c15/overlap.mjs";
+import { launchCli } from "../../../../tools/windows-c15/cli-lifecycle.mjs";
 const [sourceDirectory, electronDirectory, outputDirectory, schedule, privateParent, sealFile, sealDigest] =
   process.argv.slice(2);
 assert.equal(process.platform, "win32");
@@ -63,6 +64,8 @@ const result = {
   timingDeferred: true,
   attempts: 1,
   runs: [],
+  overlapEvidence:
+    "Child-owned monotonic interval [CLI preload evaluation, beginning of CLI exit handler), conditional on complete successful demos and semantic oracles. Includes startup/waits/cleanup; not continuous CPU/engine work or exact OS exit. Parent callback brackets are audit-only.",
   method:
     "One failure or stall schedule compares sequential Off/On members, each executing two complete sequential CLI demos; 20 fixed fault cells inside On, no performance retry. Synthetic seams with real Windows x64 Electron/native disk, DPAPI and clock.",
 };
@@ -208,19 +211,17 @@ async function run(mode) {
   for (let index = 0; index < DEMO_COUNT; index++) {
     const directory = path.join(execution, String(index));
     fs.mkdirSync(directory);
-    const startedNs = process.hrtime.bigint().toString();
-    const cli = launch(
+    const { child: cli, completed } = launchCli(
+      launch,
       process.execPath,
       [path.join(repo, "packages/cli/dist/main.js"), "demo", "--dir", directory, "--keep", "--quiet"],
       { cwd: directory, env: { ...env, PATH: process.env.PATH } },
     );
-    const cliExit = once(cli, "exit");
     if (index === 0) fs.writeFileSync(path.join(base, "execution.running"), "running");
-    const done = await bounded(cliExit, 50000, "cli-deadline");
-    const endedNs = process.hrtime.bigint().toString();
-    row.executionMembers.push({ index, startedNs, endedNs, exitCode: done[0] });
+    const member = await bounded(completed, 50000, "cli-deadline");
+    row.executionMembers.push({ index, ...member });
     row.outputBytes += cli.outputBytes();
-    assert.equal(done[0], 0, "fixed CLI workload member failed");
+    assert.equal(member.exitCode, 0, "fixed CLI workload member failed");
     // Read stores only after all workflow processes have exited; do not insert
     // oracle work or an idle gate between the two actual CLI executions.
   }
