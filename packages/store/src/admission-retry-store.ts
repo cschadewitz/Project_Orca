@@ -266,7 +266,10 @@ export class FileRetryClaimStore implements RetryClaimStore {
       const ids: string[] = [];
       for (let i = begin + 1; i <= end; i++)
         ids.push(Pointer.pick({ operationId: true }).parse(await this.json(`entry-${i}.json`)).operationId);
-      await this.publish("cursor.json", end);
+      // Recovery revisits an empty catalog or one complete page every tick. A
+      // redundant fsync here can hold the shared catalog mutex past a foreground
+      // claim's acquisition deadline. Changed pages still publish durably.
+      if (end !== cursor) await this.publish("cursor.json", end);
       return ids;
     });
   }

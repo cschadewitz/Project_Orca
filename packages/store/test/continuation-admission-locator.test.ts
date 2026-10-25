@@ -175,6 +175,9 @@ it("uses one bounded persisted retry page and preserves the existing claim quota
   const restartedReads = vi.spyOn(restarted.retries, "read");
   expect(await restarted.locator.batch()).toEqual([]);
   expect(restartedReads).toHaveBeenCalledTimes(1);
+  expect(await readFile(join(dir, "admission-retries", "cursor.json"), "utf8")).toBe("101");
+  expect(await stores(dir).locator.batch()).toEqual([]);
+  expect(await readFile(join(dir, "admission-retries", "cursor.json"), "utf8")).toBe("100");
   const limited = new FileRetryClaimStore({ storeDir: dir, execution, faults, limits: { maxClaimsPerWorkspace: 101 } });
   await expect(
     limited.claim({ workspaceId: "workspace", principalId: "principal", kind: "run.continue" }, undefined, {}, "extra"),

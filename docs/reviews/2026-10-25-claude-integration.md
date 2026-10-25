@@ -98,3 +98,78 @@ was performed.
 
 The remaining original findings require separate triage; this integration is not an audit
 closure or permission to merge, release or activate native behavior.
+
+## App smoke follow-up
+
+The original integration head `5af9d2b0950bc46f5a1085da44cba228b1990779`
+passed [CI 40184244590](https://github.com/cschadewitz/Project_Orca/actions/runs/40184244590).
+The manually dispatched [App smoke 40185207858](https://github.com/cschadewitz/Project_Orca/actions/runs/40185207858)
+checked out that exact head. Linux functional Electron smoke passed. Windows type
+proof passed all six tests; native encrypted-intent acceptance passed both tests on
+Windows and macOS. macOS native revision acceptance passed. The two failures below
+are distinct and do not invalidate that passing evidence.
+
+### Reviewed Linux/macOS type fixtures
+
+All four screenshots on each platform compared an old 640 by 2921 fixture with a
+640 by 3493 actual image. Commit `1f0fb0a` added ObjectId examples and object-kind
+glyphs; Windows fixtures were updated by `066246f`, while Linux/macOS remained
+stale, as already recorded in the [10 October design review](2026-10-10-design-conformance.md).
+Commit `a0d00f4` describes the intended glyph additions and remaining platform work.
+
+A Sol Medium reviewer inspected all 24 expected/actual/diff images from the
+[Linux artifact](https://github.com/cschadewitz/Project_Orca/actions/runs/40185207858/artifacts/12596355958)
+and [macOS artifact](https://github.com/cschadewitz/Project_Orca/actions/runs/40185207858/artifacts/12595607517).
+Each actual image's first 2200 pixels is exactly equal to its expected image.
+Changes begin with the intended ObjectId section and expanded glyph catalog.
+Bundled glyphs are legible without tofu; missing glyphs in the faces-off control
+remain expected fallback behavior. The eight fixtures now use those reviewed
+actual PNG bytes, verified against the downloaded artifacts. Windows fixtures,
+type-proof source, screenshot threshold and assertion deadlines are unchanged.
+The transient macOS 3461-pixel capture settled to the saved 3493-pixel image; it
+does not explain the persistent content difference.
+
+### Windows revision refusal and cursor correction
+
+The [Windows revision artifact](https://github.com/cschadewitz/Project_Orca/actions/runs/40185207858/artifacts/12596326104)
+contains sanitized evidence: profile and ownership checks passed, one
+`inputs.revise` call was sent, no receipt returned, and its error was
+`STORE_LOCK_TIMEOUT`. The 15-second receipt assertion cannot recover a rejected
+request. An unchanged-head local Windows run passed once, demonstrating that a
+single pass is not evidence that the historical refusal was harmless.
+
+The retry catalog has a 100ms acquisition deadline. Continuation discovery runs
+at startup and every five seconds, and its batch read unconditionally published
+and synced `cursor.json`, even for an empty catalog or unchanged complete page.
+The existing [CI403 contention analysis](../runtime-operator-integration.md#ci403-catalog-contention-test-separation)
+already demonstrated that this unnecessary empty-cursor sync can block a fresh
+foreground admission. The failed runner did not record the exact lock holder,
+so attributing that particular refusal to the background cursor remains an
+inference, not captured ownership evidence.
+
+The correction skips publication only when the parsed cursor equals the next
+cursor. Catalog repair, the shared mutex, changed-page durability, quotas,
+authorization, accepted-replay checks and bounded refusal behavior remain intact.
+No mutation retry, timeout increase, assertion suppression or fixture-only
+quiescence was added. This removes a demonstrated contention source; it does not
+guarantee every concurrent fresh admission can acquire the catalog.
+
+Three new behavioral regressions failed against the old implementation: an empty
+batch created an unnecessary cursor, and existing empty/populated cursors were
+rewritten. With the correction, the focused fresh-validation, continuation-locator
+and catalog-contention suites passed **51 tests in three files** on Windows.
+The locator coverage also checks persisted advancement beyond 100 entries and
+wrap after another store instance reads the final page. Focused TypeScript build,
+ESLint, formatting and `git diff --check` passed. A separate Sol High review found
+no safety or correctness issue in this delta.
+
+After rebuilding the corrected store, the native Windows revision workflow passed
+its complete UI/save/restart/conflict/review/delivery test once (30.4 seconds).
+All existing assertions remained enabled. This is local focused acceptance, not a
+substitute for the final hosted platform rerun.
+
+Validation used a local frozen install with Node 24.19.0, pnpm 12.4.2 and the exact
+locked Electron 44.4.5. Dependency manifests and lockfile were not modified.
+Final-head CI and hosted Linux/macOS type-proof/native acceptance remain parent
+gates. This follow-up dispatched no workflow and performed no merge, deployment,
+release, security-setting change or activation.
