@@ -562,10 +562,36 @@ describe("following and holding", () => {
     fireEvent.keyDown(field, { key: "Enter", code: "Enter" });
     await waitFor(() => expect(stream().getAttribute("aria-activedescendant")).toBe("log-line-3"));
 
-    fireEvent.keyDown(stream(), { key: "n", code: "KeyN" });
+    expect(document.activeElement).toBe(stream());
+    fireEvent.keyDown(document.activeElement!, { key: "n", code: "KeyN" });
     await waitFor(() => expect(stream().getAttribute("aria-activedescendant")).toBe("log-line-30"));
-    fireEvent.keyDown(stream(), { key: "N", code: "KeyN", shiftKey: true });
+    fireEvent.keyDown(document.activeElement!, { key: "N", code: "KeyN", shiftKey: true });
     await waitFor(() => expect(stream().getAttribute("aria-activedescendant")).toBe("log-line-3"));
+    // Both directions wrap without editing the committed query.
+    fireEvent.keyDown(document.activeElement!, { key: "N", code: "KeyN", shiftKey: true });
+    expect(stream().getAttribute("aria-activedescendant")).toBe("log-line-39");
+    fireEvent.keyDown(document.activeElement!, { key: "n", code: "KeyN" });
+    expect(stream().getAttribute("aria-activedescendant")).toBe("log-line-3");
+    expect((field as HTMLInputElement).value).toBe("line 3");
+  });
+
+  it.each(["missing", "   "])("keeps an unsuccessful search %j in the field without moving output", async (query) => {
+    scriptLog(Array.from({ length: 80 }, (_, i) => text("s-fan", `line ${i}\n`)));
+    renderStep("s-fan");
+    await screen.findByRole("listbox", { name: /^Output of fanout/ });
+    await waitFor(() => expect(scroller().scrollTop).toBeGreaterThan(0));
+    fireEvent.keyDown(stream(), { key: "/", code: "Slash" });
+    const field = screen.getByRole("searchbox", { name: /Search the output/ });
+    const where = scroller().scrollTop;
+    const selected = stream().getAttribute("aria-activedescendant");
+    fireEvent.change(field, { target: { value: query } });
+    expect(document.activeElement).toBe(field);
+    fireEvent.keyDown(document.activeElement!, { key: "Enter", code: "Enter" });
+    expect(document.activeElement).toBe(field);
+    expect((field as HTMLInputElement).value).toBe(query);
+    expect(stream().getAttribute("aria-activedescendant")).toBe(selected);
+    expect(scroller().scrollTop).toBe(where);
+    expect(screen.queryByRole("button", { name: /new line/ })).toBeNull();
   });
 
   it.each(["Enter", "N", "Shift+N"])("holds a %s search landing across live appends", async (navigation) => {
@@ -575,8 +601,11 @@ describe("following and holding", () => {
     await waitFor(() => expect(scroller().scrollTop).toBeGreaterThan(0));
     const field = screen.getByRole("searchbox", { name: /Search the output/ });
     fireEvent.change(field, { target: { value: "line 2" } });
-    if (navigation === "Enter") fireEvent.keyDown(field, { key: "Enter", code: "Enter" });
-    else fireEvent.keyDown(stream(), { key: "n", code: "KeyN", shiftKey: navigation === "Shift+N" });
+    if (navigation === "Enter") {
+      act(() => field.focus());
+      fireEvent.keyDown(document.activeElement!, { key: "Enter", code: "Enter" });
+      expect(document.activeElement).toBe(stream());
+    } else fireEvent.keyDown(stream(), { key: "n", code: "KeyN", shiftKey: navigation === "Shift+N" });
     const heldAt = scroller().scrollTop;
     expect(heldAt).toBeLessThan(81 * ROW - VIEWPORT);
 
@@ -588,6 +617,16 @@ describe("following and holding", () => {
     vi.useRealTimers();
     expect(scroller().scrollTop).toBe(heldAt);
     expect(await screen.findByRole("button", { name: /1.new line/ })).toBeTruthy();
+
+    if (navigation === "Enter") {
+      expect(document.activeElement).toBe(stream());
+      expect((field as HTMLInputElement).value).toBe("line 2");
+      const selected = stream().getAttribute("aria-activedescendant");
+      fireEvent.keyDown(document.activeElement!, { key: "n", code: "KeyN" });
+      expect(stream().getAttribute("aria-activedescendant")).not.toBe(selected);
+      fireEvent.keyDown(document.activeElement!, { key: "N", code: "KeyN", shiftKey: true });
+      expect(stream().getAttribute("aria-activedescendant")).toBe(selected);
+    }
 
     // End explicitly resumes following; the next live append must reach the end.
     fireEvent.keyDown(stream(), { key: "End", code: "End" });

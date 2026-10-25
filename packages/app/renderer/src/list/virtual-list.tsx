@@ -72,7 +72,7 @@ export interface VirtualListTick {
 }
 
 /**
- * The two things a surface cannot ask for by re-rendering, so they are imperative.
+ * The things a surface cannot ask for by re-rendering, so they are imperative.
  *
  * `reveal` is "put this row on screen" — the same call the keys make. `shiftBy` is the one
  * a list that pages *backwards* needs: after `rows` items land in front of the list, every
@@ -80,6 +80,8 @@ export interface VirtualListTick {
  * exactly the page they just asked to see.
  */
 export interface VirtualListHandle {
+  /** Focus the single tab stop without changing selection or scrolling. */
+  focus: () => void;
   /** Explicit navigation: releases following when targeting an earlier row. */
   reveal: (index: number) => void;
   shiftBy: (rows: number) => void;
@@ -158,7 +160,7 @@ export interface VirtualListProps<T> {
    * this is how a value only the surface knows (how deep the row is) reaches that class.
    */
   rowStyle?: (item: T, index: number, selected: boolean) => Record<`--${string}`, string | number>;
-  /** The imperative half: `reveal` and `shiftBy`. */
+  /** The imperative half: `focus`, `reveal` and `shiftBy`. */
   ref?: Ref<VirtualListHandle>;
 }
 
@@ -189,6 +191,7 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
   } = props;
 
   const count = items.length;
+  const rows = useRef<HTMLDivElement>(null);
 
   /* Through a ref, so the viewport's scroll handler keeps one identity: it is on the
      scroller's `onScroll` and re-binding it on every frame of a stream would be a listener
@@ -214,7 +217,10 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
     [metricsRef, leaveBottom, revealAutomatically],
   );
 
-  useImperativeHandle(ref, () => ({ reveal, shiftBy }), [reveal, shiftBy]);
+  useImperativeHandle(ref, () => ({ focus: () => rows.current?.focus({ preventScroll: true }), reveal, shiftBy }), [
+    reveal,
+    shiftBy,
+  ]);
 
   /* Both read through refs by the key handler, which keeps one identity for the life of
      the list so the eight shortcuts are registered once (see `use-list-keys.ts`). */
@@ -291,6 +297,7 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
             elements, so every child of the container is a row. The two numbers are
             arithmetic over a measured row height, not values anybody chose. */}
         <div
+          ref={rows}
           className="orca-list__rows"
           role={role}
           aria-label={label}
