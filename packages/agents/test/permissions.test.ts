@@ -864,6 +864,31 @@ describe("protected paths", () => {
     expect(at(bareEffective, f, "execute", dir)).toBe("ask");
   });
 
+  it("keeps explicit authority paths protected inside the store's agent areas", async () => {
+    const dir = await workspace();
+    const area = join(dir, "work");
+    const configDir = join(area, "project");
+    await mkdir(configDir, { recursive: true });
+    const config = join(configDir, "orca.config.yaml");
+    const sidecar = permissionPolicyPath(configDir);
+    const protectedPaths: ProtectedPaths = {
+      // Store first as well: exempting it must continue checking the explicit files.
+      readOnly: [dir, config, sidecar],
+      noAccess: [],
+      agentAreas: [area],
+    };
+    for (const path of [config, sidecar]) {
+      expect(protectedPathFor(path, "write", protectedPaths)).toBe(path);
+      expect(protectedPathFor(path, "remove", protectedPaths)).toBe(path);
+    }
+    expect(protectedPathFor(configDir, "remove", protectedPaths)).toBe(config);
+    expect(protectedPathFor(join(configDir, "spec.md"), "write", protectedPaths)).toBeUndefined();
+    const alias = join(dir, "config-link");
+    await symlink(configDir, alias, "junction");
+    const linkedConfig = join(alias, "orca.config.yaml");
+    expect(protectedPathFor(config, "write", { ...protectedPaths, readOnly: [dir, linkedConfig] })).toBe(linkedConfig);
+  });
+
   it("leaves the store's agent areas to the policy, where the shipped workflows write deliverables", async () => {
     const f = await configDir();
     const { dir } = f;

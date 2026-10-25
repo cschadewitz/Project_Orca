@@ -409,6 +409,42 @@ it("keeps refusing while an attempt is recorded, a writer holds a slot, or the o
   await expect(resetUpdateWindow(f.control, [f.data[0]!])).rejects.toThrow();
 });
 
+it.each(["missing", "torn"])(
+  "refuses a copied namespace with %s enrollment while the original still exists",
+  async (enrollment) => {
+    const f = await fixture();
+    const copy = f.control + "-copy";
+    const copiedApp = f.data[0]! + "-copy";
+    await cp(f.control, copy, { recursive: true });
+    await cp(f.data[0]!, copiedApp, { recursive: true });
+    if (enrollment === "missing") await rm(join(copy, "enrolled.json"));
+    else await writeFile(join(copy, "enrolled.json"), "{", { mode: 0o600 });
+    // The copied open record must not reopen roots whose original closed after the copy.
+    f.window.closeAdmission("a".repeat(64));
+    const guards = await Promise.all(f.data.map((root) => readFile(join(root, GUARD))));
+    await expect(reanchorUpdateWindow(copy, [f.data[0]!])).rejects.toThrow();
+    await expect(reanchorUpdateWindow(copy, [copiedApp])).rejects.toThrow();
+    expect(await Promise.all(f.data.map((root) => readFile(join(root, GUARD))))).toEqual(guards);
+    for (const root of f.data) expect(updateAdmissionOpen(root)).toBe(false);
+  },
+);
+
+it("an interrupted reset removes enrollment before it can lose the last guard and window", async () => {
+  const f = await fixture(2),
+    data = f.data[0]!;
+  await writeFile(join(f.control, "window.json"), "{", { mode: 0o600 });
+  // Force an unlink failure after window.json has been removed, as an interrupted reset.
+  await mkdir(join(f.control, "window.json.tmp"));
+  const workspaceGuard = await readFile(join(f.data[1]!, GUARD));
+  await expect(resetUpdateWindow(f.control, [data])).rejects.toThrow();
+  await expect(readFile(join(f.control, "enrolled.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await readFile(join(f.data[1]!, GUARD))).toEqual(workspaceGuard);
+  await rm(join(f.control, "window.json.tmp"), { recursive: true });
+  await provisionUpdateWindow(f.control, [data]);
+  await enrollUpdateWindowRoots(f.control, [f.data[1]!]);
+  expect(enrolledPaths(f.control)).toEqual(f.data);
+});
+
 it("a person may reset only a lost or unreadable window, and provisioning then starts again", async () => {
   const f = await fixture(2),
     data = f.data[0]!;

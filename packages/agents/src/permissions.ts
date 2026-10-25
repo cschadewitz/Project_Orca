@@ -265,7 +265,13 @@ export function protectedPathFor(
   const areas = (protectedPaths.agentAreas ?? []).map((area) =>
     pathSegments(join(physicalPath(dirname(area)), basename(area))),
   );
-  return areas.some((area) => within(target, area)) ? undefined : hit(protectedPaths.readOnly);
+  return protectedPaths.readOnly.find((root) => {
+    const guard = pathSegments(physicalPath(root));
+    if (!within(target, guard) && !(access === "remove" && within(guard, target))) return false;
+    // An area exempts its enclosing store, never an explicit authority path inside it.
+    // Config/sidecar paths may themselves live (or resolve through a link) under work/.
+    return !areas.some((area) => guard.length < area.length && within(area, guard) && within(target, area));
+  });
 }
 
 /** Whether `inner` is `outer` or below it, segment by segment. */

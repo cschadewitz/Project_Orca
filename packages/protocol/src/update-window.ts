@@ -550,24 +550,31 @@ export async function reanchorUpdateWindow(
     (published.id !== recorded.id || (published.control.path !== control && exists(published.control.path)))
   )
     throw unavailable();
+  const refuseLiveOriginal = (guard: ReturnType<typeof anchored>) => {
+    if (typeof guard === "object" && guard.control.path !== control && exists(guard.control.path)) throw unavailable();
+  };
   const roots: FenceDirectory[] = [];
   for (const root of recorded.roots) {
     if (required.includes(root.path)) continue;
     let current: FenceDirectory;
+    let guard: ReturnType<typeof anchored>;
     try {
-      const guard = anchored(root.path);
+      guard = anchored(root.path);
       if (guard === "gone" || guard === "missing" || (guard !== "torn" && guard.id !== recorded.id)) continue;
       current = fenceDirectory(root.path);
     } catch {
       // De-enrolling is the safe direction: anchor() then refuses any writer left there.
       continue;
     }
+    // A surviving original is a refusal, not an unreadable/deleted root to de-enroll.
+    refuseLiveOriginal(guard);
     assertFenceVolume(root.path);
     roots.push(current);
   }
   for (const path of required) {
     const guard = rewritable(path);
     if (guard === "gone" || (typeof guard === "object" && guard.id !== recorded.id)) throw unavailable();
+    refuseLiveOriginal(guard);
     assertFenceVolume(path);
     roots.push(fenceDirectory(path));
   }
@@ -649,9 +656,11 @@ export async function resetUpdateWindow(control: string, required: readonly stri
     }
     await holdAll(identities, handles, taken);
     if (!updateWindowResettable(control, required)) throw unavailable();
+    // Remove enrollment durably first. An interruption must leave either a surviving
+    // guard offering reset again, or an unenrolled namespace that can provision afresh.
+    for (const name of ["enrolled.json", "enrolled.json.tmp"]) discard(join(control, name));
     for (const path of required) for (const name of [GUARD, GUARD + ".tmp"]) discard(join(path, name));
-    for (const name of ["window.json", "window.json.tmp", "enrolled.json", "enrolled.json.tmp"])
-      discard(join(control, name));
+    for (const name of ["window.json", "window.json.tmp"]) discard(join(control, name));
   } finally {
     for (const handle of handles) await close(handle);
   }
