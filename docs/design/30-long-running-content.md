@@ -83,6 +83,9 @@ version list refreshes for its run and artifact name. Reads are serialized, with
 refresh for events overlapping a read. Existing choices stay visible while refreshing; a
 late or invalidated response cannot replace the current query's metadata. New versions
 never change the selected historical version or comparison, or reread immutable bodies.
+Metadata read failures stay visible beside the version choices, with their code and message;
+they never replace a successfully loaded body or diff. A later matching event can retry the
+metadata read through the same bounded refresh path.
 
 ## Rules and guides are borders, not glyphs
 

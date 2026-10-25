@@ -173,6 +173,47 @@ describe("the artifact panel", () => {
     await waitFor(() => expect(versionButtons()[1]!.getAttribute("aria-pressed")).toBe("true"));
   });
 
+  it.each([false, true])(
+    "keeps the loaded historical body through a metadata refresh failure (diff: %s)",
+    async (diff) => {
+      renderPanel({ ...SPEC, version: 2, ...(diff ? { compareWith: 1 } : {}) });
+      await waitFor(() => expect(document.querySelector(".orca-artifact__body")).not.toBeNull());
+      const body = document.querySelector(".orca-artifact__body")!;
+      const before = body.textContent;
+      const lines = diffLines();
+      const bodies = fake.calls.filter((c) => c.method === "artifacts.get");
+      fake.fail("artifacts.list", { code: "AGENT_TRANSPORT", message: "metadata unavailable" });
+
+      await act(async () => fake.notify(artifactRecorded("run-art", RUN_ART.artifacts[2]!)));
+
+      expect(document.querySelector(".orca-artifact__body")).toBe(body);
+      expect(body.textContent).toBe(before);
+      expect(diffLines()).toEqual(lines);
+      expect(screen.getByText(/Could not read artifact versions/)).toBeTruthy();
+      expect(screen.getByText(/AGENT_TRANSPORT: metadata unavailable/)).toBeTruthy();
+      expect(screen.queryByText("Could not read this artifact")).toBeNull();
+      expect(versionButtons().map((b) => b.getAttribute("aria-pressed"))).toEqual(["false", "true", "false"]);
+      if (diff) expect(screen.getByRole("button", { name: /Comparing with v1/ })).toBeTruthy();
+      expect(fake.calls.filter((c) => c.method === "artifacts.get")).toEqual(bodies);
+      expect(fake.calls.filter((c) => c.method === "artifacts.list")).toHaveLength(2);
+
+      const artifacts = [
+        ...RUN_ART.artifacts.filter((a) => a.name === "spec"),
+        { ...RUN_ART.artifacts[2]!, id: "v4", version: 4 },
+      ];
+      fake.script({
+        "artifacts.list": () => ({ ok: true, result: { artifacts, total: artifacts.length, asOf: RUN_ART.asOf } }),
+      });
+      await act(async () => fake.notify(artifactRecorded("run-art", artifacts[3]!, 101)));
+      expect(screen.queryByText(/Could not read artifact versions/)).toBeNull();
+      expect(versionButtons()).toHaveLength(4);
+      expect(document.querySelector(".orca-artifact__body")).toBe(body);
+      expect(body.textContent).toBe(before);
+      expect(fake.calls.filter((c) => c.method === "artifacts.get")).toEqual(bodies);
+      expect(fake.calls.filter((c) => c.method === "artifacts.list")).toHaveLength(3);
+    },
+  );
+
   it("diffs v2 into v3 with gutters, never with colour alone", async () => {
     renderPanel(SPEC);
     await screen.findByText(/Rotate the refresh token/);
@@ -235,12 +276,18 @@ describe("the artifact panel", () => {
     fake.fail("artifacts.list", { code: "AGENT_TRANSPORT", message: "no daemon" });
     renderPanel(SPEC);
     expect(await screen.findByText("AGENT_TRANSPORT: no daemon")).toBeTruthy();
+    expect(screen.getByText(/Could not read artifact versions/)).toBeTruthy();
+    expect(await screen.findByText(/Rotate the refresh token/)).toBeTruthy();
   });
 
   it("says so when the body itself cannot be read", async () => {
+    fake.fail("artifacts.list", { code: "AGENT_TRANSPORT", message: "metadata unavailable" });
     fake.fail("artifacts.get", { code: "ARTIFACT_NOT_FOUND", message: "no such artifact" });
     renderPanel(SPEC);
     expect(await screen.findByText("ARTIFACT_NOT_FOUND: no such artifact")).toBeTruthy();
+    expect(screen.getByText("Could not read this artifact")).toBeTruthy();
+    expect(screen.getByText(/Could not read artifact versions/)).toBeTruthy();
+    expect(screen.getByText(/AGENT_TRANSPORT: metadata unavailable/)).toBeTruthy();
   });
 
   it("shows the reason where the body would be when the daemon omits one", async () => {
