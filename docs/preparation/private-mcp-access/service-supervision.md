@@ -59,3 +59,31 @@ Review a private `tunnel-profile.yaml` made from the template with exactly one `
 Stop/disable the owned tunnel unit first to stop new dispatch. Preserve the last known admission IDs and distinguish completed, pending and uncertain operations. Stop the owned daemon only when needed; a tunnel outage does not cancel an admitted ORCA run. Restore the prior verified binary and reviewed non-secret profiles only after checking compatibility, then perform the post-start boot-identity procedure before reconnecting. An old profile backup pins an old boot and cannot be restored unchanged, even when the same binary is restored. Revoke the dedicated tunnel key and ORCA credential, remove only this subject mapping and approved workspace association, and confirm fresh and existing sessions lose access. Preserve run stores, logs, audit records and work already admitted; never restore revoked credentials from backup or remove unrelated services/network rules. Record safe cleanup evidence and unresolved access separately.
 
 This preparation has synthetic tests only. It does not establish a working user bus, approved lingering, real key validity, current revocation after launch, Cal tool selection, reboot recovery, or #393's end-to-end operator acceptance.
+
+## Who authorizes and who revokes each layer
+
+For the dedicated single-owner setup recorded on 13 October 2026, Casey controls the
+administrative cutoffs below. The [#391 ledger](https://github.com/cschadewitz/Project_Orca/issues/391#issuecomment-6149960966)
+records the observed organization, tunnel, workspace and principal; the
+[#392 host record](https://github.com/cschadewitz/Project_Orca/issues/392#issuecomment-6138313527)
+records the installed build. These are administrative ways to withdraw access, not evidence
+that every cutoff immediately fences existing sessions or in-flight responses. The
+[#393 actual-Cal results](https://github.com/cschadewitz/Project_Orca/issues/393#issuecomment-6149584344)
+record successful single-owner operations and bounded daemon-unavailable/restart behavior;
+they do not establish live revocation. An access cutoff does not itself delete retained
+ORCA work or cancel an already admitted run.
+
+| Layer | What it grants | Who authorizes it | How to revoke or stop it |
+| --- | --- | --- | --- |
+| Platform organization role | Tunnels Read/Use/Manage | The organization Owner | Remove the role from the member or group in the Platform organization settings. |
+| Tunnel | The private route between ChatGPT and agent-01, for its associated organization and ChatGPT workspace | The organization Owner | Delete the tunnel in the Platform tunnel settings. |
+| Tunnel runtime key | Transport for this one tunnel; it expires, so check its date in the Platform API keys list | The organization Owner, as a restricted project key | Revoke it in the Platform API keys list; stop `orca-tunnel.service` on the host. |
+| ChatGPT connector | Which conversations can call the ORCA tools | The ChatGPT workspace owner | Disconnect or remove the connector in ChatGPT's app/connector settings. |
+| ORCA credential | The service principal's operations and resources on the daemon | The host owner, with `orca auth issue` | `orca auth revoke <id>`: daemon source tests cover refusal of revoked credentials and closure of authenticated WebSockets; actual-connector live/in-flight revocation remains unverified in #598. `orca auth rotate <id>` replaces the secret. `orca auth list` shows expiry. |
+| Daemon and host | The loopback service, its store and the private profile files | The host owner | Stop the tunnel first, then `systemctl --user stop orca-daemon.service`. |
+
+Actual-connector restricted-reader isolation and revocation across old/new connections and
+bounded in-flight reads/publication remain open and deferred in
+[#598](https://github.com/cschadewitz/Project_Orca/issues/598). A refused fresh request alone
+does not establish session or in-flight fencing. Adding any other person, group, service
+account or shared connector changes this table and requires that acceptance first.
