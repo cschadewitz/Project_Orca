@@ -219,6 +219,9 @@ export function attachSocket(server: Server, opts: SocketOptions): () => Promise
             ...(opts.ctx.liveInputs ? { liveInputs: opts.ctx.liveInputs } : {}),
             ...(opts.batchMs === undefined ? {} : { batchMs: opts.batchMs }),
           });
+          // Authorization may have outlived the connection or its credential. Keep this
+          // lifecycle check synchronous with registration and the start that attaches listeners.
+          if (ws.readyState !== ws.OPEN || !current()) return;
           subscriptions.set(id, subscription);
           try {
             const replayed = await subscription.start();
