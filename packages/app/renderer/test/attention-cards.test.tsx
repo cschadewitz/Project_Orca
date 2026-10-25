@@ -311,7 +311,12 @@ describe("a push while a person is working in a card", () => {
     params: { subscriptionId: "sub-1", seq: seq++, at: INPUTS_AS_OF, ...params },
   });
   const answeredElsewhere = (gate: OpenInputView): NotificationMessage =>
-    envelope("input.answered", { runId: gate.runId, stepRunId: gate.stepRunId, requestId: gate.id, answer: "approve" });
+    envelope("input.answered", {
+      runId: gate.runId,
+      stepRunId: gate.stepRunId,
+      requestId: gate.id,
+      answer: gate.kind === "permission" ? "allow" : "approve",
+    });
   const label = (): string | null | undefined => document.activeElement?.getAttribute("aria-label");
 
   it("leaves focus in a half-typed note when a permission ask arrives above the card", async () => {
@@ -371,6 +376,74 @@ describe("a push while a person is working in a card", () => {
     await waitFor(() => expect(screen.queryByRole("region", { name: cardName("gate", "Ship release 2?") })).toBeNull());
     // Focus went with the card, so it lands on the neighbour, never on the page body.
     await waitFor(() => expect(label()).toBe(cardName("gate", "Ship release 3?")));
+  });
+
+  it.each([FIVE_GATES[0]!, PERMISSION_ASK])(
+    "returns focus to the named Attention region when the final card ($kind) leaves holding a control's focus",
+    async (input) => {
+      mount([input]);
+      const last = await screen.findByRole("region", {
+        name: cardName(input.kind === "permission" ? "permission" : "gate", input.question),
+      });
+      act(() =>
+        within(last)
+          .getByRole("button", { name: /^Answer/ })
+          .focus(),
+      );
+
+      fake.notify(answeredElsewhere(input));
+      await waitFor(() => expect(last.isConnected).toBe(false));
+
+      expect(document.activeElement).toBe(screen.getByTestId("attention"));
+      const attention = screen.getByRole("region", { name: "Attention" });
+      expect(attention.tabIndex).toBe(-1);
+      expect(within(attention).getByText("Nothing needs you")).toBeTruthy();
+      expect(answers()).toEqual([]);
+    },
+  );
+
+  it("moves focus to the preceding card when the final card in a multi-card list leaves", async () => {
+    mount([FIVE_GATES[0]!, FIVE_GATES[1]!]);
+    const first = await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
+    const last = screen.getByRole("region", { name: cardName("gate", "Ship release 2?") });
+    act(() =>
+      within(last)
+        .getByRole("button", { name: /^Answer/ })
+        .focus(),
+    );
+
+    fake.notify(answeredElsewhere(FIVE_GATES[1]!));
+    await waitFor(() => expect(last.isConnected).toBe(false));
+    expect(document.activeElement).toBe(first);
+    expect(answers()).toEqual([]);
+  });
+
+  it("keeps explicit user focus outside Attention when the final card leaves during an answer", async () => {
+    mount([FIVE_GATES[0]!]);
+    const last = await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
+    fake.script({
+      "inputs.answer": (params) => ({
+        ok: true,
+        result: { requestId: params.requestId, runId: "run-1", answer: params.optionId, asOf: INPUTS_AS_OF },
+      }),
+    });
+    const release = fake.hold("inputs.answer");
+    act(() => last.focus());
+    fireEvent.keyDown(last, { key: "Enter", code: "Enter" });
+    await within(last).findByRole("button", { name: "Answering…" });
+
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    try {
+      act(() => elsewhere.focus());
+      release();
+      await waitFor(() => expect(last.isConnected).toBe(false));
+      expect(document.activeElement).toBe(elsewhere);
+      expect(answers()).toHaveLength(1);
+      expect(answers()[0]).toMatchObject({ requestId: "gate-1", optionId: "approve" });
+    } finally {
+      elsewhere.remove();
+    }
   });
 
   it("does not take focus back to the list when the focused card leaves after the person left it", async () => {
