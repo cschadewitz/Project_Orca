@@ -1,12 +1,32 @@
 # Windows C15: bounded real-work overlap correction
 
-This is a test-only draft for parent review before any Windows dispatch. It does
-not establish C15 acceptance. Product source remains
-`95ee280be309d50f29b46cb66a12d480fdfc8a7d`, tree
-`8bf5c38903ec0bc13c7c8a313068ba378bda3230`. The branch starts from freshly fetched
-main `80e706269958868d5f6fc06e93c1ef3248d8f8c0`, independently confirmed
-by Git fetch and the Cal connector. It includes the supplied `ec015d3` checkpoint.
-The existing PR663 commits are retained by merge; this corrects that same draft.
+This updates the existing test-only draft PR #663 after product prerequisite
+[#665](https://github.com/cschadewitz/Project_Orca/pull/665) passed independent review
+and CI run `40208887722` at `87e8e19d5fe793e96ee62f33fb8c4d54ad88d19b`, then
+merged as `14666a315b43bc859ad0b73dda92ddf280b0de10`. Fresh fetch confirmed that
+merge is current main; PR #663 was still `d3543733b05335b1629dc795404b031a53a7fc66`.
+Merge commit `a4b7bb4` incorporates main without rewriting the PR's history.
+No documentation conflicts occurred. Main also includes test-only #666.
+
+The deliberately selected **product source commit** is
+`14666a315b43bc859ad0b73dda92ddf280b0de10`, entire source tree
+`38ef685a664f8407103dff71b8a68e5a3230d4a6`. This is separate from the evolving
+harness commit sealed at staging. The source incorporates reviewed store-locked
+scripted-agent counter transactions and their existing consumption checkpoints.
+The workflow's source checkout and `candidate.json` agree on this exact commit.
+All 365 executable hashes are regenerated from its isolated frozen build; five
+executable files differ from the old candidate (daemon socket, agent-step executor,
+artifact/document stores and scripted agent; their exact old/new digests are
+retained in the selected-source provenance report). No old digest is reused for changed bytes.
+The Windows native digest was recomputed from the selected source and remains
+`555b8b174c43fa2b11aa3cd16466b04a0872819d3f73f6987262e11ec7a305b5` because
+those native bytes are unchanged. Compiler 7.0.2 and Electron archive pins remain.
+
+This is still **not C15 acceptance**. Historical preparation/run-1/run-2 identities,
+failures and transfer findings remain in their original records. References below
+to the old source or 29/32 result describe that history. Parent owns independent
+re-review, CI and any later single bounded Windows dispatch; this update dispatches
+nothing.
 
 ## Diagnosis and evidence attribution
 
@@ -84,15 +104,27 @@ passed only on this CLI's argv, so scripted agents do not inherit instrumentatio
 This trusts the pinned CLI and harness; it is not authentication against a malicious
 process controlling its own code/pipe or a hostile runner.
 
-Every one of the 20 fault entries must fall in one child interval `[start, end)`.
-Entries at/after beginning exit, before preload evaluation and between demos are
-rejected even when the supervisor is descheduled. The precise claim is overlap
+Every one of the 20 fault entries must be strictly inside one child interval:
+`start + 2000 ns < entry && entry + 2000 ns < end`. Exact boundaries and their
+2-microsecond exclusion zones, post-exit entries and inter-demo gaps are rejected
+even when the supervisor is descheduled. The precise claim is overlap
 with the **CLI's captured lifecycle segment from preload evaluation to beginning
 exit**, conditional on successful complete demo/oracle validation. This includes
 module loading, setup, event-loop waits and CLI cleanup before exit. It does not
 prove continuous CPU use, simultaneous engine work, a particular engine transition,
 or exact OS process termination. The small receipt I/O after the end stamp is
 excluded. Parent notification/pipe delivery delays cannot enlarge the interval.
+
+[Microsoft's QPC guidance](https://learn.microsoft.com/en-us/windows/win32/sysinfo/acquiring-high-resolution-time-stamps)
+states that cross-thread readings within one tick have ambiguous ordering;
+[the QPC API](https://learn.microsoft.com/en-us/windows/win32/api/profileapi/nf-profileapi-queryperformancecounter)
+documents resolution below one microsecond. The fixed **two microseconds at each
+boundary** conservatively exceeds that tick and nanosecond conversion rounding.
+It narrows the accepted interval; it never moves a boundary outward or admits a
+near-boundary fault. No runtime calibration, artificial wait or native/product
+change is added. This is captured-clock lifecycle overlap at that exclusion and
+resolution, never exact physical overlap or continuous CPU activity. Node/Electron
+same-host clock comparability remains a Windows verification requirement.
 
 The monotonic check avoids comparing the unrelated origins of `performance.now()`
 in the supervisor and Electron child. The original elapsed assertion remains an
@@ -115,8 +147,10 @@ observes memory throughout both demos with the same baseline and budget. A
 larger workload can expose a memory failure; no such failure is hidden or waived.
 
 `candidate.json` pins the changed supervisor, child, portable tests and new
-`tools/windows-c15/overlap.mjs`, lifecycle collector and preload; product commit/tree, compiled inventory, native
-source and Electron archive pins remain unchanged. Staging seals the exact
+`tools/windows-c15/overlap.mjs`, lifecycle collector, preload and bounded parity
+runner. Product commit/tree and compiled inventory are deliberately regenerated
+for the selected reviewed merged source. The native digest is recomputed; native
+bytes and Electron archive remain unchanged. Staging seals the exact
 harness HEAD and manifest at runtime, so no circular precomputed harness commit
 pin is introduced.
 
@@ -130,7 +164,7 @@ any compiler/environment limitations are reported with the draft PR. No workflow
 is dispatched by this change. Hosted synthetic scope, physical/native failure
 limits, sampling limits, deferred timing and the Mac hold remain in force.
 
-## Review-correction verification
+## Historical d3543733 verification (old candidate, retained)
 
 Linux Node 24.19.0 built the pinned source with the existing TypeScript 7.0.2
 compiler. All **365 compiled executable files** match the unchanged manifest,
@@ -148,6 +182,8 @@ unmodified launch and 32 for a preload launch, both exit 0 with schema/login-api
 docs work items done. These observations do not establish the cause of the
 artifact difference or establish corrected workload parity. The strict 29-per-
 demo/58-per-mode gate remains unchanged and would reject the 32-artifact result;
-no counts are normalized away, extra demos appended or gate waived. This local
-verification limit must be resolved before acceptance. No Windows workflow was
+no counts are normalized away, extra demos appended or gate waived. That local
+verification limit blocked the old candidate. The reviewed #665 counter correction
+and the new selected-source comparison below address parity separately; they do
+not explain the exact historical 32-artifact interleaving. No Windows workflow was
 dispatched; parent review remains required first.

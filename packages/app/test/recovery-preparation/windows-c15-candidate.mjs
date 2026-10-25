@@ -65,7 +65,7 @@ const result = {
   attempts: 1,
   runs: [],
   overlapEvidence:
-    "Child-owned monotonic interval [CLI preload evaluation, beginning of CLI exit handler), conditional on complete successful demos and semantic oracles. Includes startup/waits/cleanup; not continuous CPU/engine work or exact OS exit. Parent callback brackets are audit-only.",
+    "Child-owned captured-clock lifecycle segment (CLI preload evaluation + 2 us, beginning of CLI exit handler - 2 us), strict interior only, conditional on complete successful demos and semantic oracles. Conservative QPC one-tick exclusion; includes startup/waits/cleanup, not exact physical overlap or continuous CPU/engine work or exact OS exit. Parent callback brackets are audit-only.",
   method:
     "One failure or stall schedule compares sequential Off/On members, each executing two complete sequential CLI demos; 20 fixed fault cells inside On, no performance retry. Synthetic seams with real Windows x64 Electron/native disk, DPAPI and clock.",
 };

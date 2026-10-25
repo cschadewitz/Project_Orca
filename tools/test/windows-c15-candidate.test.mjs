@@ -20,7 +20,7 @@ import {
   git,
   regular,
 } from "../windows-c15/manifest.mjs";
-import { DEMO_COUNT, validateOverlap } from "../windows-c15/overlap.mjs";
+import { BOUNDARY_EXCLUSION_NS, DEMO_COUNT, validateOverlap } from "../windows-c15/overlap.mjs";
 const read = (name) => fs.readFileSync(path.join(harness, name), "utf8");
 function diagnostic(mode, schedule) {
   return {
@@ -152,6 +152,10 @@ test("candidate preserves the frozen cell campaign byte-for-byte apart from obse
   assert.match(supervisor, /validateOverlap\(row\)/);
   assert.match(child, /this.enteredNs = process.hrtime.bigint\(\).toString\(\);\s+entered\(\)/);
   assert.match(supervisor, /semanticEqual, true/);
+  assert.match(supervisor, /workEqual, true/);
+  assert.match(supervisor, /row.executionOracle.artifactCount, 29 \* DEMO_COUNT/);
+  assert.match(supervisor, /bounded\(completed, 50000/);
+  assert.match(child, /120000/);
   assert.match(supervisor, /!result.disposableStateRemoved/);
 });
 test("closed inventory rejects symlinks and records extra or substituted files", () => {
@@ -238,7 +242,22 @@ test("workflow is manual Windows x64 test-only, with closed checkouts and staged
 if (process.env.C15_SOURCE) {
   test("exact compiled source, native source and harness pins validate", () => {
     verifyBuild(path.resolve(process.env.C15_SOURCE));
-    assert.ok(Object.keys(specification.compiled).length > 300);
+    assert.equal(Object.keys(specification.compiled).length, 365);
+    // Recompute the Windows native source digest from the selected product bytes.
+    const digestInputs = [
+      "binding.gyp",
+      "clock.c",
+      "storage-windows.c",
+      "storage-windows-common.h",
+      "first-run-windows.c",
+      "keys-windows.c",
+      "windows-delay-load.c",
+    ];
+    const bytes = digestInputs.flatMap((name) => [
+      Buffer.from(name + "\0"),
+      regular(path.join(process.env.C15_SOURCE, "packages/app/native/diagnostics", name)),
+    ]);
+    assert.equal(sha(Buffer.concat(bytes)), specification.nativeSourceSha256);
   });
   test("compiled substitution and extra executable are refused", () => {
     const source = path.resolve(process.env.C15_SOURCE);
@@ -503,4 +522,45 @@ test("independent entries in the real inter-demo gap are rejected", async () => 
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
   }
+});
+
+test("conservative captured-clock gate rejects both boundaries and their exclusion zones", async () => {
+  assert.equal(BOUNDARY_EXCLUSION_NS, 2000n);
+  const f = fixture();
+  try {
+    const row = await clockWorkload(f);
+    const receipt = row.executionMembers[0].lifecycleReceipt;
+    const start = BigInt(receipt.startedNs),
+      end = BigInt(receipt.endedNs);
+    for (const entry of [
+      start - 1n,
+      start,
+      start + 1n,
+      start + BOUNDARY_EXCLUSION_NS,
+      end - BOUNDARY_EXCLUSION_NS,
+      end - 1n,
+      end,
+      end + 1n,
+    ]) {
+      const copy = structuredClone(row);
+      copy.diagnostic.cells[0].faultEnteredNs = String(entry);
+      assert.throws(() => validateOverlap(copy), /fault-outside-cli-execution/);
+    }
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("bounded parity probe reuses the exact candidate semantic/work oracle", () => {
+  const supervisor = read("packages/app/test/recovery-preparation/windows-c15-candidate.mjs");
+  const parity = read("tools/windows-c15/parity.mjs");
+  const oracle = (text) => text.slice(text.indexOf("function normalize(v) {"), text.indexOf("async function run(mode"));
+  assert.equal(oracle(parity), oracle(supervisor));
+  assert.match(parity, /for \(const mode of \["normal", "preload"\]\) for \(let index = 0; index < 2; index\+\+\)/);
+  assert.match(parity, /row.oracle.artifactCount, 29/);
+  assert.match(parity, /normal: 58, preload: 58/);
+  assert.match(parity, /50000/);
+  assert.match(parity, /rawBase64/);
+  assert.match(parity, /receiptEof, true/);
+  assert.doesNotMatch(parity, /globalThis.gc|global.gc|--expose-gc/);
 });
