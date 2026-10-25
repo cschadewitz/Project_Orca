@@ -165,3 +165,10 @@ composition and legacy limits are documented in
 [the handoff](../../../../../docs/implementation/first-run-same-boot-recovery.md).
 An attempt left by an earlier boot is settled only when a person confirms **Mark previous
 session ended** (`recovery.ts` `endPreviousBootSession`), described in that handoff.
+
+## Current #386 agent evidence
+
+[Local-agent preflight and recovery](../../../../../docs/implementation/386-agent-preflight.md)
+documents the current observation-only projection, explicit support/version/ACP/sign-in
+gaps, cancellation and separately authorized real-agent handoff. Config binding does not
+clear #594's unsupported exact-command hold or supply native/physical acceptance.

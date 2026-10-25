@@ -119,6 +119,7 @@ const bridge: OrcaBridge = {
     reconcileRecovery: (id) => call("orca:workspace.firstRun.reconcileRecovery", id),
     endPreviousSession: (id) => call("orca:workspace.firstRun.endPreviousSession", id),
     reviewConfiguration: () => call("orca:workspace.firstRun.reviewConfiguration"),
+    cancelConfigurationReview: () => call("orca:workspace.firstRun.cancelConfigurationReview"),
     bindConfiguration: (id) => call("orca:workspace.firstRun.bindConfiguration", id),
   },
   macUpdates: {

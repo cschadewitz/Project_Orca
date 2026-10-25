@@ -1,6 +1,20 @@
 /** Public first-run projections; directory authorization and persistence stay in main. */
 import type { BridgeResult } from "./bridge.js";
 
+/** Observations only. Neither a command name nor readable bytes attest installed provider compatibility. */
+export interface FirstRunAgentCheck {
+  readonly agentId: string;
+  readonly state: "missing" | "unavailable" | "architecture" | "handshake-required";
+  readonly evidence: {
+    readonly configuredRoute: "claude-code-acp-candidate" | "codex-acp-candidate" | "unverified";
+    readonly support: "unknown";
+    readonly version: "unknown";
+    readonly architecture: "unknown" | "mismatch";
+    readonly acp: "not-checked";
+    readonly signIn: "unknown";
+    readonly exactCommand: "unsupported";
+  };
+}
 export interface FirstRunReview {
   readonly id: string;
   readonly project: string;
@@ -24,7 +38,7 @@ export type FirstRunStatus =
         id: string;
         revision: string;
         agentCount: number;
-        checks: { agentId: string; state: "missing" | "unavailable" | "architecture" | "handshake-required" }[];
+        checks: FirstRunAgentCheck[];
       };
     }
   | { state: "selection-required"; reason: string }
@@ -38,6 +52,7 @@ export interface FirstRunBridge {
   reconcileRecovery?(id: string): Promise<BridgeResult<FirstRunStatus>>;
   endPreviousSession?(attemptId: string): Promise<BridgeResult<FirstRunStatus>>;
   reviewConfiguration?(): Promise<BridgeResult<FirstRunStatus>>;
+  cancelConfigurationReview?(): Promise<BridgeResult<FirstRunStatus>>;
   bindConfiguration?(id: string): Promise<BridgeResult<FirstRunStatus>>;
   connect(): Promise<BridgeResult<FirstRunStatus>>;
 }

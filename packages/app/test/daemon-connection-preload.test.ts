@@ -75,6 +75,8 @@ it("strips Electron events from onShow and preserves explicit epoch fencing", as
   expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.endPreviousSession", "opaque-previous-attempt", 1);
   await bridge.firstRun!.reviewConfiguration!();
   expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.reviewConfiguration", undefined, 1);
+  await bridge.firstRun!.cancelConfigurationReview!();
+  expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.cancelConfigurationReview", undefined, 1);
   await bridge.firstRun!.bindConfiguration!("opaque-config-review");
   expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.bindConfiguration", "opaque-config-review", 1);
   await bridge.templates!.call("templates.get", {});

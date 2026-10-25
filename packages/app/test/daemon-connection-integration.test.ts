@@ -248,6 +248,7 @@ it("mounts closed template commands and gates same-boot setup throughout an upda
     "reconcileRecovery",
     "endPreviousSession",
     "reviewConfiguration",
+    "cancelConfigurationReview",
     "bindConfiguration",
   ] as const;
   const calls = operations.map((method) =>
@@ -261,7 +262,7 @@ it("mounts closed template commands and gates same-boot setup throughout an upda
   const epoch = workspace.connectionTarget.epoch;
   const reserved = vi.spyOn(workspace, "macUpdateReserved", "get").mockReturnValue(true);
   const review = "11111111-1111-4111-8111-111111111111";
-  const inputs = [undefined, review, review, undefined, review];
+  const inputs = [undefined, review, review, undefined, undefined, review];
   for (const [index, method] of operations.entries()) {
     expect(await shell.handlers.get(`orca:workspace.firstRun.${method}`)!(event, inputs[index], epoch)).toMatchObject({
       ok: false,

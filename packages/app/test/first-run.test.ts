@@ -503,7 +503,19 @@ it("explicitly binds a private saved real-agent config, reopens it and preserves
   const before = await readFile(join(f.workspace, ".orca-first-run-ownership", "000001", "claim.json"), "utf8");
   const reviewed = await f.setup.reviewConfiguration(f.assertCurrent);
   if (reviewed.state !== "configuration-review") throw new Error("Expected config review");
-  expect(reviewed.review.checks).toEqual([{ agentId: "local-agent", state: "handshake-required" }]);
+  expect(reviewed.review.checks).toMatchObject([
+    {
+      agentId: "local-agent",
+      state: "handshake-required",
+      evidence: {
+        support: "unknown",
+        version: "unknown",
+        acp: "not-checked",
+        signIn: "unknown",
+        exactCommand: "unsupported",
+      },
+    },
+  ]);
   expect(JSON.stringify(reviewed)).not.toContain("synthetic private value");
   expect(f.call.mock.calls.map((call) => call[0])).toEqual(["config.get"]);
   const result = await f.setup.bindConfiguration(reviewed.review.id, f.assertCurrent);
@@ -590,7 +602,9 @@ it("reports a Finder PATH miss without starting an agent, auto-installing it, ch
   await f.save();
   const reviewed = await f.setup.reviewConfiguration(f.assertCurrent);
   if (reviewed.state !== "configuration-review") throw new Error("Expected config review");
-  expect(reviewed.review.checks).toEqual([{ agentId: "local-agent", state: "missing" }]);
+  expect(reviewed.review.checks).toMatchObject([
+    { agentId: "local-agent", state: "missing", evidence: { support: "unknown", signIn: "unknown" } },
+  ]);
   expect(f.rebind).not.toHaveBeenCalled();
   expect(JSON.stringify(reviewed)).not.toContain("synthetic private value");
 });
@@ -628,4 +642,37 @@ it("explicitly binds Save-before-Bind after app recreation, without a live daemo
   ).toHaveLength(1);
   expect(f.prepareConnection).not.toHaveBeenCalled();
   expect(await readFile(f.deps.receiptPath, "utf8")).not.toContain("offline synthetic private");
+});
+
+it("cancels configuration review without writing and retires the handle before retrying", async () => {
+  const f = await configurationRig();
+  const before = await readFile(f.deps.receiptPath, "utf8");
+  const selected = await readFile(f.path, "utf8");
+  const review = await f.setup.reviewConfiguration(f.assertCurrent);
+  if (review.state !== "configuration-review") throw new Error("Expected review");
+  await f.setup.cancelConfigurationReview(f.assertCurrent);
+  await expect(f.setup.bindConfiguration(review.review.id, f.assertCurrent)).rejects.toThrow();
+  expect(f.rebind).not.toHaveBeenCalled();
+  expect(await readFile(f.deps.receiptPath, "utf8")).toBe(before);
+  expect(await readFile(f.path, "utf8")).toBe(selected);
+  const retry = await f.setup.reviewConfiguration(f.assertCurrent);
+  if (retry.state !== "configuration-review") throw new Error("Expected retry review");
+  expect(retry.review.id).not.toBe(review.review.id);
+  await f.setup.bindConfiguration(retry.review.id, f.assertCurrent);
+  expect(f.rebind).toHaveBeenCalledOnce();
+  expect(f.prepareConnection).not.toHaveBeenCalled();
+});
+it("failed rereview retires the old handle and permits a fresh review after recovery", async () => {
+  const f = await configurationRig();
+  const before = await readFile(f.deps.receiptPath, "utf8");
+  const review = await f.setup.reviewConfiguration(f.assertCurrent);
+  if (review.state !== "configuration-review") throw new Error("Expected review");
+  f.call.mockRejectedValueOnce(new Error("private transport/error needle"));
+  await expect(f.setup.reviewConfiguration(f.assertCurrent)).rejects.toThrow();
+  expect(f.setup.isBusy).toBe(false);
+  await expect(f.setup.bindConfiguration(review.review.id, f.assertCurrent)).rejects.toThrow();
+  expect(await readFile(f.deps.receiptPath, "utf8")).toBe(before);
+  const retry = await f.setup.reviewConfiguration(f.assertCurrent);
+  expect(retry.state).toBe("configuration-review");
+  expect(f.rebind).not.toHaveBeenCalled();
 });
