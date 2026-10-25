@@ -173,3 +173,32 @@ locked Electron 44.4.5. Dependency manifests and lockfile were not modified.
 Final-head CI and hosted Linux/macOS type-proof/native acceptance remain parent
 gates. This follow-up dispatched no workflow and performed no merge, deployment,
 release, security-setting change or activation.
+
+## Final dependency and main composition
+
+After the smoke correction was published, parent coordination approved composing
+the exact [dependency PR636](https://github.com/cschadewitz/Project_Orca/pull/636)
+head `3b726d7456c77c3041b65d94ae526de254b15232` and docs-only main
+`fdb3500d56f6d22a53ea3d618b9232c968577353` into this integration branch.
+The dependency head passed [CI 40185294006](https://github.com/cschadewitz/Project_Orca/actions/runs/40185294006)
+and its independent [source, lock and advisory review](https://github.com/cschadewitz/Project_Orca/pull/636#pullrequestreview-5642789601).
+It includes Electron 44.9.1 and compatible transitive security patches.
+
+Both merges completed without conflicts. Every dependency manifest and the
+lockfile remain byte-identical to that reviewed dependency head; no resolution
+or lockfile regeneration was performed. The corrected M10 docs from main and all
+Claude fixes remain in the composition. The original Claude and dependency
+branches were preserved.
+
+A fresh frozen install of the combined tree used Node 24.19.0, pnpm 12.4.2,
+Vitest 5.0.5, Playwright 1.64.1 and Electron 44.9.1. The combined build passed.
+The earlier Electron 44.4.5 results above remain historical evidence; final
+interaction checks and hosted verification must use the composed head.
+
+On that combined tree, the three focused store/engine suites passed all **51
+tests**, and the complete native Windows revision workflow passed once with
+Electron 44.9.1 (**34.2 seconds**). Changed-file ESLint and formatting checks also
+passed. No full local suite was repeated. Final aggregate CI, independent parent
+delta review and the coordinated exact-head hosted App smoke run remain gates;
+the reviewed Linux/macOS snapshots still require that final Electron-version
+comparison. This follow-up did not merge into main or close any source PR.
