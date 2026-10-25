@@ -2,8 +2,9 @@
 
 Start here to understand ORCA without installing it or supplying credentials.
 Current source is described in the [capability ledger](ROADMAP.md); the
-[7 October 2026 reconciliation](reviews/2026-10-07-living-docs.md) pins its evidence
-and records coverage and separately owned follow-ups. Documentation and source
+[25 October 2026 integration checkpoint](reviews/2026-10-25-integration-checkpoint.md)
+pins current evidence and remaining acceptance; the [7 October audit](reviews/2026-10-07-living-docs.md)
+preserves the earlier inventory. Documentation and source
 access invite developer insight; they do not require code changes or host access.
 
 ## Orientation and contributing
@@ -18,7 +19,7 @@ access invite developer insight; they do not require code changes or host access
 | [Planning](PLANNING.md) | understand cross-request dependencies, risk/decision matrices, scheduling and the five Plan modes |
 | [Workflow authoring](WORKFLOWS.md) / [typed inputs](workflow-inputs.md) | define nodes, completion, templates and validated launch inputs |
 | [Extensibility](EXTENSIBILITY.md) / [builtin validation](builtin-node-validation.md) | implement plugin seams and understand bootstrap/restoration constraints |
-| [Design](design/README.md) / [binding UI rules](design/RULES.md) | inspect the current design system and surface conventions; editor proposals are identified as future work |
+| [Design](design/README.md) / [binding UI rules](design/RULES.md) / [workflow editor](design/70-workflow-editing.md) | inspect the design system and implemented editor; #180–#182 remain open acceptance owners and dry run remains future work |
 | [ADRs](adr/) | read settled architectural decisions with their historical context |
 
 ## Runtime, clients and safe operation
@@ -38,30 +39,31 @@ access invite developer insight; they do not require code changes or host access
 | [Private MCP preparation](preparation/private-mcp-access/handoff.md) | review deployment/bridge contracts; use dated owner evidence before treating old recipes as current instructions |
 | [Host resources](host-resources.md) / [access-policy proposal](host-resource-access-policy.md) | understand bounded advisory measurement and unmounted production telemetry/grant limits |
 | [Independent maintenance MCP](maintenance-mcp.md) | inspect the read-only refusal-only preparation; it does not activate host controls |
-| [Updating](UPDATING.md) / [releasing](RELEASING.md) | inspect Windows/Debian mechanisms, candidate compatibility and Mac signing/upgrade gaps; these contain operator recipes, not an invitation to run them |
+| [Updating](UPDATING.md) / [releasing](RELEASING.md) / [held Mac composition](implementation/mac-native-provider-composition.md) | inspect Windows/Debian mechanisms, implemented but inactive Mac update/recovery and remaining signed/installed acceptance; operator recipes need their own scope |
 | [CI shadow selection](ci-shadow-selection.md) | understand advisory selection, full-check authority and uncompleted rollout/release parity |
 | [Performance evidence](performance/persistence-baseline/README.md), [credential admin](performance/mcp-credential-admin/README.md), [retry worker](performance/admission-retry-worker/README.md) | inspect exact synthetic workload pins and measurement limits |
 
 ## Preparation and research
 
-These are contracts, fixtures or research; a completed preparation issue is not
-installed/native/product acceptance. Current preparation packets and active implementation PRs are linked in the
+These include implemented source handoffs, contracts, fixtures and research; a completed
+preparation issue is not installed/native/product acceptance. Current evidence is linked in the
 [roadmap](ROADMAP.md#current-priorities-and-acceptance); their merge does not establish
 product or platform acceptance.
 
 | Document | Purpose and boundary |
 | --- | --- |
 | [Native Mac delivery](preparation/native-mac-delivery/current-state.md) / [native testing](preparation/native-mac-testing/implementation-handoff.md) | dated source audits, signing prerequisites and candidate/physical acceptance handoffs |
+| [Mac readiness ledger](preparation/native-mac-beta-readiness/readiness.md) / [acceptance runbook](preparation/native-mac-beta-readiness/acceptance-runbook.md) | current owner handoffs for implemented setup, delivery, recovery and disabled diagnostics versus signed/physical #602–#604/#390 gates |
 | [First-job sample](../examples/beta-first-job/README.md) / [offline acceptance](preparation/beta-first-job/acceptance.md) | harmless scripted fixture and refusal checks; no paid provider or physical beta proof |
-| [Cal first-job experience](preparation/cal-first-job-experience/README.md) | accepted experience specification, not a completed guided app launch |
-| [Configuration/launch implementation packet](preparation/configuration-launch-implementation/README.md) | merged reconciled preparation; accepted interface/runtime freeze and guided UI remain separate |
+| [Cal first-job experience](preparation/cal-first-job-experience/README.md) / [mounted guided launch](../packages/app/renderer/src/guided-launch/README.md) | experience specification and implemented Request/direct route; supported #333/#334 acceptance is closed, physical Mac proof remains separate |
+| [Configuration/launch packet](preparation/configuration-launch-implementation/README.md) / [Windows acceptance](implementation/m21-windows-acceptance.md) | earlier contract plus integrated Config/launch/template evidence through #607; source-built Windows results do not establish signed Mac acceptance |
 | [Beta feedback](preparation/beta-feedback/README.md) | tester/report/triage preparation; physical walkthrough remains separate |
 | [Manual diagnostics contract](preparation/manual-diagnostics-contract/README.md) | original typed privacy/export fixtures; later #469 decisions and disabled #470 work are mapped in the roadmap |
-| [Diagnostics decisions](preparation/manual-diagnostics-implementation/README.md) | merged decision reconciliation; actual consent, native/privacy/producers and production acceptance remain open |
-| [Beta update/recovery](preparation/beta-update-support/README.md) | merged approved-update contract, not a Mac updater engine or native N-to-N+1 proof |
+| [Diagnostics decisions](preparation/manual-diagnostics-implementation/README.md) / [C15 run 5](preparation/crash-recovery/windows-c15-readiness-run5.md) | implemented Save/export and producers stay production-disabled; narrow hosted Windows synthetic memory pass, with native/physical/renderer acceptance separate |
+| [Beta update/recovery](preparation/beta-update-support/README.md) / [integrated held app](implementation/app-held-nonmac-verification.md) | approved-update contract and implemented drain/recovery composition; activation held, signed N-to-N+1 proof unpassed |
 | [Owner service evidence](preparation/private-mcp-access/agent01-owner-staging/README.md) | historical cutover/worker/post-SSH observations; command recipes are preserved audit records |
 | [Trusted prepared roots](preparation/trusted-prepared-roots/README.md) | offline copier/asset contract and fixtures, not an activated controller |
-| [ACP command conformance](preparation/acp-command-conformance/README.md) | synthetic approval contracts and remaining real-adapter/client tests |
+| [ACP command conformance](preparation/acp-command-conformance/README.md) / [versioned proposal](implementation/594-command-evidence-v1.md) / [dispatch prototype](preparation/acp-command-conformance/dispatch-seam/README.md) | merged offline #676/#678 preparation; exact-command support remains unavailable pending maintained upstream pair, installed correspondence and actual-Cal proof |
 | [Tool-call safety](research/tool-call-safety/README.md) | proposed implicit policy/approval layer and assurance limits |
 | [Apple Watch research](preparation/apple-watch-approvals/README.md) / [iOS research](preparation/ios-companion/README.md) | proposed mobile scope/security/framework tradeoffs |
 | [SwiftUI read-only pilot](preparation/swiftui-readonly-pilot/README.md) | portable synthetic contracts and device/spike prerequisites |

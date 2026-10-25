@@ -20,9 +20,9 @@ integration works yet — it is groundwork (see `docs/INTEGRATIONS.md`).
 
 For an observing developer, start with the [documentation index](docs/README.md),
 [architecture](docs/ARCHITECTURE.md) and [capability ledger](docs/ROADMAP.md).
-The [7 October reconciliation](docs/reviews/2026-10-07-living-docs.md) records the
-source pin, evidence classes and remaining acceptance. Reading these needs no
-provider credential or running environment. Repository access is for insight;
+The [25 October integration checkpoint](docs/reviews/2026-10-25-integration-checkpoint.md)
+records the current source pin, evidence classes and remaining acceptance. Reading
+these needs no provider credential or running environment. Repository access is for insight;
 it does not require a collaborator to install ORCA or make code changes.
 
 ```
@@ -87,15 +87,16 @@ in‑workspace reads included. See "Permissions" in `docs/WORKFLOWS.md`.
 
 The **desktop app** is `pnpm run orca serve` with `pnpm --filter @orca/app dev`
 beside it (or `ORCA_DAEMON_URL` at a daemon elsewhere; `File ▸ Open a store…`
-re‑points it at a workspace with a read‑only daemon behind it). All five
+re‑points it at a workspace with a read‑only daemon behind it). All six
 surfaces have content: **Attention** (answer a gate or a permission ask),
 **Runs** (run tree, event timeline, step detail, artifacts), **Plan** (the
 schedule with the scheduler's own explanations, a requests sidebar and the
 journal, dependency graph, risk matrix and decision matrix), **Agents** (health cards, and each agent's permission policy edited
 where the grants live) and **Config** (`orca.config.yaml` as a form over the
 schema the daemon describes, beside the raw file, with the permission sidecar as
-its second document). Every write the daemon serves is in the command palette —
-answer, cancel, resume, start a run, waive, decide, reopen, update a risk,
+its second document). **Workflows** is the sixth surface, with the viewer, owned drafts,
+visual editor, validation and reviewed publication. The command palette exposes
+operator actions — answer, cancel, resume, start a run, waive, decide, reopen, update a risk,
 release a claim. Saving and activating are separate: [config apply](docs/configuration-generations.md)
 uses exact revision/generation guards; reloadable roles, program defaults and assets
 affect new launches, while agent/host/provider changes require restart. Permission
@@ -166,19 +167,26 @@ a deployed binary contains current main. Upgrade protocol clients and daemon tog
 edits configuration and pushes notifications over `WS /socket`; `--read-only` omits run/config/plan write methods from the handshake so
 a client can hide unavailable controls (ADR 0008). Supervisor maintenance admission is
 separate and remains available in read-only mode. The Electron
-app is the configuration and monitoring surface over it — five surfaces, all with content,
-and the write actions in the command palette. Document writes reread each collection
+app provides six surfaces, including Workflows' visual editor, alongside configuration,
+launch and monitoring. Document writes reread each collection
 under a file lock (#196); this is not a
 transaction across plan documents and their journal, nor cross-process push observation.
 
 See the [current capability ledger and roadmap](docs/ROADMAP.md) for implemented behavior,
 limitations and issue owners. Authenticated HTTP/WS, typed inputs, generation-bound
 admission, durable retries, live permission continuity, protected human revisions and
-production MCP composition are implemented on main. Their remaining actual-client,
-deployment and native acceptance is recorded separately. Structured collection editing,
-guided app launch, workflow editing, T3 Code transport and capacity-aware scheduling remain
-follow-ups. Windows NSIS and managed Debian update mechanisms exist; main has no Mac
-update driver. Signed Apple Silicon delivery, native N-to-N+1 recovery and physical
-beta journeys remain gates, and can progress alongside MCP acceptance.
+production MCP composition are implemented on main. Structured collection editing,
+guided Request/direct app launch, template/pack authoring and visual workflow editing
+are also implemented. Core #333/#334/#355 and generic actual-Cal #393 are closed;
+workflow acceptance issues #180–#182 remain open despite their shipped source.
+Dry run, T3 Code transport and capacity-aware scheduling remain follow-ups.
+Windows NSIS and managed Debian updating exist; Mac update/recovery composition and
+delivery adapters are implemented with production activation held. Diagnostics have
+composed producers and local Save/export, with production capture disabled. Signed
+Apple Silicon delivery, installed N-to-N+1 recovery and unassisted physical journeys
+remain unpassed. Exact-command approval #594 is still unsupported and mandatory before
+Mac beta; merged offline contracts/prototypes do not supply installed-provider or
+actual-Cal proof. See the [checkpoint](docs/reviews/2026-10-25-integration-checkpoint.md)
+for verified PRs, CI and owner decisions still pending.
 The [historical architecture review](Current_State/README.md) preserves an earlier snapshot;
 its [dated reconciliation](Current_State/addenda/2026-10-01-main-reconciliation.md) maps the findings to current code.
