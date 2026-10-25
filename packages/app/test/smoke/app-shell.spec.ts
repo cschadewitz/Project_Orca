@@ -882,7 +882,7 @@ test("a mounted live step keeps tool disclosures and focus through live update b
     await expect(detail.locator(".orca-inspector__head .orca-chip__label")).toHaveText("waiting");
     // The first tool and output prove the initial read has committed before injection.
     await expect(detail.locator(".orca-tool")).toHaveCount(1);
-    await expect(detail.getByRole("textbox", { name: "Search the output held in memory" })).toBeVisible();
+    await expect(detail.getByRole("searchbox", { name: "Search the output held in memory" })).toBeVisible();
     const mounted = await detail.elementHandle();
     const events = RunsEventsResultSchema.parse(
       await daemon.rpc("runs.events", { runId: input.runId, stepRunId: input.stepRunId, limit: 500 }),
