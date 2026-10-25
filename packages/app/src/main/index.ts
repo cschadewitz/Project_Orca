@@ -723,11 +723,13 @@ const workspace = new Workspace({
   defaultPath: () => process.env.ORCA_WORKSPACE || undefined,
   setupBusy: () => firstRun.isBusy,
   recoverFirstRun: async (path, check, prepareConnection) => {
+    const attempt = ++firstRunConnectionAttempt;
     await appWriters.run(() =>
       firstRun.connect(
         () => {
           assertOrdinaryStartup();
           check();
+          if (attempt !== firstRunConnectionAttempt) throw new Error("Connection cancelled");
         },
         { workspace: path, prepareConnection },
       ),
