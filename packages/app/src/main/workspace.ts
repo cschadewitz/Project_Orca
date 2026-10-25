@@ -10,6 +10,7 @@
  * return. Credentials and lifecycle dependencies stay in main; the renderer sees only the
  * nonsecret target snapshot. Electron-free so the transitions can be tested directly.
  */
+import { UpdatePreflightRefusal } from "./updates.js";
 import { daemonEndpoint, type DaemonTargetSnapshot } from "../daemon-connection.js";
 import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
 import {
@@ -965,29 +966,32 @@ export class Workspace {
   }
 
   async prepareUpdate(token: string): Promise<void> {
-    if (
-      this.closed ||
-      this.updating ||
-      this.pending ||
-      this.candidates.size ||
-      this.macUpdateHold ||
-      this.firstRunHold ||
-      this.deps.setupBusy?.() ||
-      this.connectionPreparations.size
-    )
-      throw new Error("Workspace is busy");
-    if (this.parkedDefault) throw new Error("Return to the bundled daemon before updating the app");
-    await this.ready();
-    if (
-      this.closed ||
-      this.updating ||
-      this.pending ||
-      this.candidates.size ||
-      this.macUpdateHold ||
-      this.firstRunHold ||
-      this.connectionPreparations.size
-    )
-      throw new Error("Workspace is busy");
+    const refuseUnclaimed = (message: string): never => {
+      // A duplicate exact-token caller cannot declare its existing reservation absent.
+      if (this.windowsUpdate?.token === token) throw new Error("Update token already has a reservation");
+      throw new UpdatePreflightRefusal(token, message);
+    };
+    const checkPreflight = () => {
+      if (
+        this.closed ||
+        this.updating ||
+        this.pending ||
+        this.candidates.size ||
+        this.macUpdateHold ||
+        this.firstRunHold ||
+        this.deps.setupBusy?.() ||
+        this.connectionPreparations.size
+      )
+        refuseUnclaimed("Workspace is busy");
+      if (this.parkedDefault) refuseUnclaimed("Return to the bundled daemon before updating the app");
+    };
+    checkPreflight();
+    try {
+      await this.ready();
+    } catch {
+      refuseUnclaimed("Workspace update preflight could not complete");
+    }
+    checkPreflight();
     const daemon = this.daemon;
     const attempt: WindowsUpdateAttempt = {
       token,

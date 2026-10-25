@@ -7,6 +7,17 @@ export interface UpdateDriver {
   /** Only a positive pre-launch observation may return not-launched. Rejections are unknown. */
   install(this: void): Promise<"not-launched" | "launched">;
 }
+/** Main-only proof that this token was refused before a workspace update reservation.
+ * Never emitted after a claim or installer invocation; it grants no authority over another token.
+ */
+export class UpdatePreflightRefusal extends Error {
+  constructor(
+    readonly token: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 export interface UpdateGuards {
   prepareDrafts(this: void): Promise<void>;
   prepareDaemon(this: void, token: string): Promise<void>;
@@ -39,6 +50,7 @@ export class Updates {
     this.busy = true;
     const token = randomUUID();
     let daemonAttempted = false;
+    let daemonPrepared = false;
     let installerUnknown = false;
     try {
       if (action === "check") {
@@ -62,6 +74,7 @@ export class Updates {
         await this.guards.prepareDrafts();
         daemonAttempted = true;
         await this.guards.prepareDaemon(token);
+        daemonPrepared = true;
         await this.guards.stopDaemon(token);
         // Enter unknown BEFORE calling the driver, including synchronous throws.
         installerUnknown = true;
@@ -73,7 +86,7 @@ export class Updates {
         if (outcome !== "launched") throw new Error("Unknown installer result");
         this.set({ message: "Installer launched. Waiting for this app to exit; admission remains closed." });
       }
-    } catch {
+    } catch (error) {
       if (action === "restart") {
         if (installerUnknown) {
           this.set({
@@ -84,7 +97,9 @@ export class Updates {
           return this.state;
         }
         try {
-          if (daemonAttempted) await this.guards.resume(token);
+          const unclaimed =
+            daemonAttempted && !daemonPrepared && error instanceof UpdatePreflightRefusal && error.token === token;
+          if (daemonAttempted && !unclaimed) await this.guards.resume(token);
           this.guards.releaseDrafts();
           this.restartHeld = false;
         } catch {

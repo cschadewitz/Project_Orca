@@ -52,6 +52,12 @@ The Windows driver has no positive native launch acknowledgement: returning from
 `quitAndInstall` is not treated as launch proof. Its timeout, synchronous throw and error
 event all report unknown. A successful installation normally exits the process.
 
+A token-bound preflight refusal before the workspace creates that token's update
+reservation releases only that restart's draft hold and permits retry. It sends no
+maintenance resume, stop or installer call and preserves parked-child, setup and connection
+candidate guards. A prepare failure after reservation still requires exact-token recovery;
+a wrong-token refusal or a refusal during stop/install cannot serve as no-claim proof.
+
 Update stop retains the exact old child and first-run reservation. Even a late exit
 callback or ordinary app close cannot settle that reservation while installer outcome is
 unknown. On a proven non-launch abort, settlement appends exact-child terminal evidence;

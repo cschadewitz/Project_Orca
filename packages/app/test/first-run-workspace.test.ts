@@ -14,7 +14,7 @@ import { startBundledDaemon } from "../src/main/daemon-process.js";
 import { Workspace, type WorkspaceDeps } from "../src/main/workspace.js";
 import { FirstRunSetup } from "../src/main/first-run/setup.js";
 import { startFirstRunWorkspace } from "../src/main/first-run/ipc.js";
-import { Updates } from "../src/main/updates.js";
+import { Updates, UpdatePreflightRefusal } from "../src/main/updates.js";
 import { compiledSourceFixture } from "./compiled-source-fixture.js";
 
 const selectedPath = resolve("/selected");
@@ -409,3 +409,181 @@ it("refuses saved-config capture without the durable rebind interface and after 
   expect(() => boundary.rebind("old", "new")).toThrow("reconciliation");
   expect(rebindConfig).not.toHaveBeenCalled();
 });
+
+it("preflight refusal with a parked child releases only this restart's guards and permits retry", async () => {
+  const f = rig();
+  (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
+  const localMaintenance = vi.spyOn(f.workspace.client, "maintenance");
+  const remote = await f.workspace.prepareConnection("http://remote:6722");
+  remote.activate(hello());
+  const remoteMaintenance = vi.spyOn(f.workspace.client, "maintenance");
+  const prepareDrafts = vi.fn(async () => {});
+  const releaseDrafts = vi.fn();
+  const resume = vi.fn((token: string) => f.workspace.cancelUpdate(token));
+  const install = vi.fn(async () => "not-launched" as const);
+  const updater = new Updates(
+    { check: async () => "fixture-next", download: async () => {}, install },
+    "fixture",
+    {
+      prepareDrafts,
+      prepareDaemon: (token) => f.workspace.prepareUpdate(token),
+      stopDaemon: (token) => f.workspace.stopForUpdate(token),
+      resume,
+      releaseDrafts,
+    },
+    () => {},
+  );
+  await updater.act("check");
+  await updater.act("download");
+  expect((await updater.act("restart")).phase).toBe("ready");
+  expect(releaseDrafts).toHaveBeenCalledOnce();
+  expect(resume).not.toHaveBeenCalled();
+  expect(localMaintenance).not.toHaveBeenCalled();
+  expect(remoteMaintenance).not.toHaveBeenCalled();
+  expect(f.stop).not.toHaveBeenCalled();
+  expect(install).not.toHaveBeenCalled();
+  await f.workspace.ready();
+  expect((await updater.act("restart")).phase).toBe("ready");
+  expect(prepareDrafts).toHaveBeenCalledTimes(2);
+  expect(releaseDrafts).toHaveBeenCalledTimes(2);
+  (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
+  expect(f.workspace.currentFirstRun(selectedPath)).toBe(true);
+  expect(f.start).toHaveBeenCalledOnce();
+  await f.workspace.close();
+});
+
+it.each(["candidate", "connection", "setup"] as const)(
+  "real %s preflight refusal makes no update claim and leaves its original guard intact",
+  async (kind) => {
+    let setupBusy = false;
+    const f = rig({ setupBusy: () => setupBusy });
+    const candidate =
+      kind === "candidate"
+        ? await f.workspace.prepareFirstRunConnection(selectedPath)
+        : kind === "connection"
+          ? await f.workspace.prepareConnection("http://remote:6722")
+          : undefined;
+    setupBusy = kind === "setup";
+    const prepareDrafts = vi.fn(async () => {});
+    const releaseDrafts = vi.fn();
+    const resume = vi.fn((token: string) => f.workspace.cancelUpdate(token));
+    const install = vi.fn(async () => "not-launched" as const);
+    const updater = new Updates(
+      { check: async () => "fixture-next", download: async () => {}, install },
+      "fixture",
+      {
+        prepareDrafts,
+        prepareDaemon: (token) => f.workspace.prepareUpdate(token),
+        stopDaemon: (token) => f.workspace.stopForUpdate(token),
+        resume,
+        releaseDrafts,
+      },
+      () => {},
+    );
+    await updater.act("check");
+    await updater.act("download");
+    expect((await updater.act("restart")).phase).toBe("ready");
+    expect(resume).not.toHaveBeenCalled();
+    expect(releaseDrafts).toHaveBeenCalledOnce();
+    expect(install).not.toHaveBeenCalled();
+    expect(f.stop).not.toHaveBeenCalled();
+    if (kind === "candidate") await expect(f.workspace.prepareFirstRunConnection(selectedPath)).rejects.toThrow("busy");
+    if (kind === "connection") await expect(f.workspace.prepareUpdate("other")).rejects.toThrow("busy");
+    if (kind === "setup") await expect(f.workspace.prepareUpdate("other")).rejects.toThrow("busy");
+    await candidate?.dispose();
+    setupBusy = false;
+    await f.workspace.ready();
+    expect((await updater.act("restart")).phase).toBe("ready");
+    expect(prepareDrafts).toHaveBeenCalledTimes(2);
+    expect(releaseDrafts).toHaveBeenCalledTimes(2);
+    await f.workspace.close();
+  },
+);
+it("uncertain preparation after a real claim retains both the claim and draft hold", async () => {
+  const f = rig();
+  (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
+  const maintenance = vi.spyOn(f.workspace.client, "maintenance").mockRejectedValue(new Error("uncertain RPC"));
+  const prepareDrafts = vi.fn(async () => {});
+  const releaseDrafts = vi.fn();
+  const install = vi.fn(async () => "not-launched" as const);
+  const updater = new Updates(
+    { check: async () => "fixture-next", download: async () => {}, install },
+    "fixture",
+    {
+      prepareDrafts,
+      prepareDaemon: (token) => f.workspace.prepareUpdate(token),
+      stopDaemon: (token) => f.workspace.stopForUpdate(token),
+      resume: (token) => f.workspace.cancelUpdate(token),
+      releaseDrafts,
+    },
+    () => {},
+  );
+  await updater.act("check");
+  await updater.act("download");
+  expect((await updater.act("restart")).phase).toBe("error");
+  expect(maintenance.mock.calls.map(([params]) => params.action)).toEqual(["prepare", "resume"]);
+  expect(maintenance.mock.calls[0]![0].token).toBe(maintenance.mock.calls[1]![0].token);
+  expect(releaseDrafts).not.toHaveBeenCalled();
+  expect(f.stop).not.toHaveBeenCalled();
+  expect(install).not.toHaveBeenCalled();
+  await expect(f.workspace.ready()).rejects.toThrow("admission is closed");
+  await updater.act("restart");
+  expect(prepareDrafts).toHaveBeenCalledOnce();
+  await f.workspace.close();
+});
+it("preflight evidence for another token cannot revoke an existing exact claim", async () => {
+  const f = rig();
+  (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
+  const maintenance = vi
+    .spyOn(f.workspace.client, "maintenance")
+    .mockResolvedValueOnce({ ready: true, active: [] })
+    .mockResolvedValueOnce({ ready: false, active: [] });
+  await f.workspace.prepareUpdate("owner");
+  await expect(f.workspace.prepareUpdate("other")).rejects.toMatchObject({ token: "other" });
+  await expect(f.workspace.prepareUpdate("owner")).rejects.not.toBeInstanceOf(UpdatePreflightRefusal);
+  await expect(f.workspace.cancelUpdate("other")).rejects.toThrow("stale");
+  await expect(f.workspace.ready()).rejects.toThrow("admission is closed");
+  expect(maintenance).toHaveBeenCalledOnce();
+  await f.workspace.cancelUpdate("owner");
+  await f.workspace.ready();
+  expect(maintenance.mock.calls[1]![0]).toEqual({ action: "resume", token: "owner" });
+  await f.workspace.close();
+});
+
+it("refusal after the preflight await keeps an intervening connection candidate's guard", async () => {
+  const f = rig();
+  let connection: Awaited<ReturnType<Workspace["prepareConnection"]>> | undefined;
+  vi.spyOn(f.workspace, "ready").mockImplementationOnce(async () => {
+    connection = await f.workspace.prepareConnection("http://remote:6722");
+  });
+  await expect(f.workspace.prepareUpdate("unclaimed")).rejects.toMatchObject({ token: "unclaimed" });
+  await expect(f.workspace.prepareFirstRunConnection(selectedPath)).rejects.toThrow("busy");
+  expect(f.start).not.toHaveBeenCalled();
+  expect(f.stop).not.toHaveBeenCalled();
+  connection!.check?.();
+  await connection!.dispose();
+  await f.workspace.prepareUpdate("owner");
+  await f.workspace.cancelUpdate("owner");
+  await f.workspace.ready();
+  await f.workspace.close();
+});
+
+it.each(["parked", "setup"] as const)(
+  "rechecks the %s guard after preflight awaits, before reserving",
+  async (kind) => {
+    let busy = false;
+    const f = rig({ setupBusy: () => busy });
+    (await f.workspace.prepareFirstRunConnection(selectedPath)).activate(hello());
+    const maintenance = vi.spyOn(f.workspace.client, "maintenance").mockResolvedValue({ ready: true, active: [] });
+    vi.spyOn(f.workspace, "ready").mockImplementationOnce(async () => {
+      if (kind === "setup") busy = true;
+      else (await f.workspace.prepareConnection("http://remote:6722")).activate(hello());
+    });
+    await expect(f.workspace.prepareUpdate("unclaimed")).rejects.toMatchObject({ token: "unclaimed" });
+    expect(maintenance).not.toHaveBeenCalled();
+    expect(f.stop).not.toHaveBeenCalled();
+    expect(f.start).toHaveBeenCalledOnce();
+    await expect(f.workspace.stopForUpdate("unclaimed")).rejects.toThrow("not prepared");
+    await f.workspace.close();
+  },
+);

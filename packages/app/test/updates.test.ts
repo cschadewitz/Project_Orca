@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { Updates, type UpdateGuards, type UpdateDriver } from "../src/main/updates.js";
+import { Updates, UpdatePreflightRefusal, type UpdateGuards, type UpdateDriver } from "../src/main/updates.js";
 import { isUpdateAction, prepareDrafts } from "../src/main/update-ipc.js";
 function rig() {
   const order: string[] = [];
@@ -143,6 +143,35 @@ describe("manual updates", () => {
     expect(r.guards.resume).toHaveBeenCalledExactlyOnceWith(token);
     expect(r.guards.releaseDrafts).toHaveBeenCalledOnce();
   });
+  it.each(["wrong-token", "stop", "installer"] as const)(
+    "does not accept %s refusal as proof that preparation made no claim",
+    async (stage) => {
+      const r = rig();
+      let token = "";
+      r.guards.prepareDaemon = vi.fn(async (captured) => {
+        token = captured;
+        if (stage === "wrong-token") throw new UpdatePreflightRefusal("foreign-token", "refused");
+      });
+      if (stage === "stop")
+        r.guards.stopDaemon = vi.fn(async () => {
+          throw new UpdatePreflightRefusal(token, "refused");
+        });
+      if (stage === "installer")
+        r.driver.install = vi.fn(async () => {
+          throw new UpdatePreflightRefusal(token, "refused");
+        });
+      r.guards.resume = vi.fn(async () => {
+        throw new Error("claim recovery uncertain");
+      });
+      await r.updates.act("check");
+      await r.updates.act("download");
+      expect((await r.updates.act("restart")).phase).toBe("error");
+      expect(r.guards.releaseDrafts).not.toHaveBeenCalled();
+      expect(r.guards.resume).toHaveBeenCalledTimes(stage === "installer" ? 0 : 1);
+      await r.updates.act("restart");
+      expect(r.guards.prepareDaemon).toHaveBeenCalledOnce();
+    },
+  );
 });
 describe("update IPC", () => {
   it("accepts only the three literal actions", () => {
