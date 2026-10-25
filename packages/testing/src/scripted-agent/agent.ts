@@ -19,6 +19,7 @@ import {
   serializeFrontMatter,
   type SessionConfigOption,
 } from "@orca/core";
+import { withFileLock } from "@orca/store";
 import type { Playbook, PlaybookEntry } from "./playbook.js";
 
 export interface ScriptedAgentOptions {
@@ -161,90 +162,99 @@ export class ScriptedAgent {
       await say("No deliverables block found; nothing to do.\n");
       return { stopReason: "end_turn" };
     }
-    const state = await this.loadState();
-    let stopReason: acp.StopReason = "end_turn";
+    const deliver = async (): Promise<acp.PromptResponse> => {
+      const state = await this.loadState();
+      let stopReason: acp.StopReason = "end_turn";
 
-    for (const d of deliverables) {
-      const n = (state.counts[d.kind] ?? 0) + 1;
-      const entry = this.pick(d.kind, n);
-      if (entry.hang) {
-        // A deadlocked agent: no response, no reaction to session/cancel. Only a kill ends this.
-        await say(`Hanging on ${d.kind} (playbook says hang).\n`);
-        await new Promise<never>(() => {});
-      }
-      if (entry.setConfig) {
-        const option = session.configOptions.find((o) => o.id === entry.setConfig!.configId);
-        const value = entry.setConfig.value;
-        if (option) {
-          if (option.type === "boolean" && typeof value === "boolean") option.currentValue = value;
-          if (option.type === "select" && typeof value === "string") option.currentValue = value;
-          await ctx.client.notify(acp.methods.client.session.update, {
-            sessionId,
-            update: { sessionUpdate: "config_option_update", configOptions: toWire(session.configOptions) },
-          });
+      for (const d of deliverables) {
+        const n = (state.counts[d.kind] ?? 0) + 1;
+        const entry = this.pick(d.kind, n);
+        if (entry.hang) {
+          // A deadlocked agent: no response, no reaction to session/cancel. Only a kill ends this.
+          await say(`Hanging on ${d.kind} (playbook says hang).\n`);
+          await new Promise<never>(() => {});
         }
-      }
-      await sleep(entry.delayMs ?? delay, session);
-      if (session.cancelled) {
-        // Leave the counter alone: the entry was never consumed, so a follow-up turn replays it.
-        await say(`Turn cancelled by the client before writing ${d.kind}.\n`);
-        stopReason = "cancelled";
-        break;
-      }
-      state.counts[d.kind] = n;
-      if (entry.say) await say(entry.say + "\n");
-      if (entry.skip) {
-        await say(`Skipping ${d.kind} (playbook says skip).\n`);
-        continue;
-      }
-      const toolCallId = `write-${d.kind}-${n}`;
-      await ctx.client.notify(acp.methods.client.session.update, {
-        sessionId,
-        update: {
-          sessionUpdate: "tool_call",
-          toolCallId,
-          title: `Write ${d.kind} to ${d.path}`,
-          kind: "edit",
-          status: "in_progress",
-          locations: [{ path: d.path }],
-        },
-      });
-      if (entry.askPermission) {
-        const permissionPath = entry.permissionPath ?? d.path;
-        const res = await ctx.client.request(acp.methods.client.session.requestPermission, {
-          sessionId,
-          toolCall: {
-            toolCallId,
-            title: `Write ${permissionPath}`,
-            kind: "edit",
-            locations: [{ path: permissionPath }],
-          },
-          options: [
-            { optionId: "allow", name: "Allow", kind: "allow_once" },
-            { optionId: "deny", name: "Deny", kind: "reject_once" },
-          ],
-        });
-        if (res.outcome.outcome !== "selected" || res.outcome.optionId !== "allow") {
-          await ctx.client.notify(acp.methods.client.session.update, {
-            sessionId,
-            update: { sessionUpdate: "tool_call_update", toolCallId, status: "failed" },
-          });
-          await say(`Permission denied for ${d.path}.\n`);
+        if (entry.setConfig) {
+          const option = session.configOptions.find((o) => o.id === entry.setConfig!.configId);
+          const value = entry.setConfig.value;
+          if (option) {
+            if (option.type === "boolean" && typeof value === "boolean") option.currentValue = value;
+            if (option.type === "select" && typeof value === "string") option.currentValue = value;
+            await ctx.client.notify(acp.methods.client.session.update, {
+              sessionId,
+              update: { sessionUpdate: "config_option_update", configOptions: toWire(session.configOptions) },
+            });
+          }
+        }
+        await sleep(entry.delayMs ?? delay, session);
+        if (session.cancelled) {
+          // Leave the counter alone: the entry was never consumed, so a follow-up turn replays it.
+          await say(`Turn cancelled by the client before writing ${d.kind}.\n`);
+          stopReason = "cancelled";
+          break;
+        }
+        state.counts[d.kind] = n;
+        if (entry.say) await say(entry.say + "\n");
+        if (entry.skip) {
+          await say(`Skipping ${d.kind} (playbook says skip).\n`);
           continue;
         }
+        const toolCallId = `write-${d.kind}-${n}`;
+        await ctx.client.notify(acp.methods.client.session.update, {
+          sessionId,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId,
+            title: `Write ${d.kind} to ${d.path}`,
+            kind: "edit",
+            status: "in_progress",
+            locations: [{ path: d.path }],
+          },
+        });
+        if (entry.askPermission) {
+          const permissionPath = entry.permissionPath ?? d.path;
+          const res = await ctx.client.request(acp.methods.client.session.requestPermission, {
+            sessionId,
+            toolCall: {
+              toolCallId,
+              title: `Write ${permissionPath}`,
+              kind: "edit",
+              locations: [{ path: permissionPath }],
+            },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "deny", name: "Deny", kind: "reject_once" },
+            ],
+          });
+          if (res.outcome.outcome !== "selected" || res.outcome.optionId !== "allow") {
+            await ctx.client.notify(acp.methods.client.session.update, {
+              sessionId,
+              update: { sessionUpdate: "tool_call_update", toolCallId, status: "failed" },
+            });
+            await say(`Permission denied for ${d.path}.\n`);
+            continue;
+          }
+        }
+        const content = renderEntry(entry, { kind: d.kind, path: d.path, n, prompt: text });
+        await mkdir(dirname(d.path), { recursive: true });
+        await writeFile(d.path, content, "utf8");
+        await ctx.client.notify(acp.methods.client.session.update, {
+          sessionId,
+          update: { sessionUpdate: "tool_call_update", toolCallId, status: "completed" },
+        });
+        await say(`Wrote ${d.kind} (${content.length} chars) to ${d.path}\n`);
+        if (entry.stopReason) stopReason = entry.stopReason;
       }
-      const content = renderEntry(entry, { kind: d.kind, path: d.path, n, prompt: text });
-      await mkdir(dirname(d.path), { recursive: true });
-      await writeFile(d.path, content, "utf8");
-      await ctx.client.notify(acp.methods.client.session.update, {
-        sessionId,
-        update: { sessionUpdate: "tool_call_update", toolCallId, status: "completed" },
-      });
-      await say(`Wrote ${d.kind} (${content.length} chars) to ${d.path}\n`);
-      if (entry.stopReason) stopReason = entry.stopReason;
-    }
-    await this.saveState(state);
-    return { stopReason };
+      await this.saveState(state);
+      return { stopReason };
+    };
+    if (!this.opts.stateFile) return deliver();
+    // Keep read, selection, awaited deliverable work and commit in one transaction.
+    // Reserving counts before the work would consume entries on errors/cancellation.
+    // The store mutex awaits the callback and releases on return or throw; its owner
+    // checks never evict a live/unknown process merely because a turn takes time.
+    await mkdir(dirname(this.opts.stateFile), { recursive: true });
+    return withFileLock(`${this.opts.stateFile}.lock`, deliver);
   }
 }
 

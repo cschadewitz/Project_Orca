@@ -1,0 +1,243 @@
+{
+  "base": "f5680cfc996efc15bd0da019b9a32d06912a16ce",
+  "sourceAgentSha256": "ea603a94e3bb813be285e22f789fae88323a4295a6b9df8799b7d6cf9726ab55",
+  "node": "v24.19.0",
+  "platform": "linux",
+  "preloadSourceCommit": "d3543733b05335b1629dc795404b031a53a7fc66",
+  "preloadSha256": "3081716b64e2ece587bf02486300fed401db826d1debabe4d6175fdc773a7cf4",
+  "semanticEqual": true,
+  "workEqual": true,
+  "counterEqual": true,
+  "playbookEqual": true,
+  "configEqual": true,
+  "artifactsByMode": {
+    "normal": 58,
+    "preload": 58
+  },
+  "oracleSourceCommit": "d3543733b05335b1629dc795404b031a53a7fc66",
+  "oracleSourcePath": "packages/app/test/recovery-preparation/windows-c15-candidate.mjs",
+  "expectedArtifactsPerDemo": 29,
+  "expectedArtifactsPerMode": 58,
+  "sharedSemanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+  "sharedWorkItems": [
+    {
+      "slug": "docs",
+      "status": "done"
+    },
+    {
+      "slug": "login-api",
+      "status": "done"
+    },
+    {
+      "slug": "schema",
+      "status": "done"
+    }
+  ],
+  "sharedFinalCounts": {
+    "decision-matrix": 1,
+    "decomposition": 1,
+    "deploy-report": 3,
+    "generic": 1,
+    "implementation": 4,
+    "intent": 3,
+    "plan": 4,
+    "review": 3,
+    "risk-register": 1,
+    "spec": 3,
+    "test-report": 4
+  },
+  "rows": [
+    {
+      "mode": "normal",
+      "index": 0,
+      "exitCode": 0,
+      "elapsedMs": 13133.49,
+      "artifactCount": 29,
+      "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+      "playbookSha256": "5b659cb1b6e29129a332253106b7b92d58d73d7bb1ee5922598a11bfc3c4f32a",
+      "normalizedConfigSha256": "50141504bee467b0ea9be651ab9c83a4642e3efe72b09e82113f4d801c8d6443",
+      "lifecycleReceiptValidated": false,
+      "workItems": [
+        {
+          "slug": "docs",
+          "status": "done"
+        },
+        {
+          "slug": "login-api",
+          "status": "done"
+        },
+        {
+          "slug": "schema",
+          "status": "done"
+        }
+      ],
+      "counts": {
+        "decision-matrix": 1,
+        "decomposition": 1,
+        "deploy-report": 3,
+        "generic": 1,
+        "implementation": 4,
+        "intent": 3,
+        "plan": 4,
+        "review": 3,
+        "risk-register": 1,
+        "spec": 3,
+        "test-report": 4
+      }
+    },
+    {
+      "mode": "normal",
+      "index": 1,
+      "exitCode": 0,
+      "elapsedMs": 13637.339,
+      "artifactCount": 29,
+      "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+      "playbookSha256": "5b659cb1b6e29129a332253106b7b92d58d73d7bb1ee5922598a11bfc3c4f32a",
+      "normalizedConfigSha256": "50141504bee467b0ea9be651ab9c83a4642e3efe72b09e82113f4d801c8d6443",
+      "lifecycleReceiptValidated": false,
+      "workItems": [
+        {
+          "slug": "docs",
+          "status": "done"
+        },
+        {
+          "slug": "login-api",
+          "status": "done"
+        },
+        {
+          "slug": "schema",
+          "status": "done"
+        }
+      ],
+      "counts": {
+        "decision-matrix": 1,
+        "decomposition": 1,
+        "deploy-report": 3,
+        "generic": 1,
+        "implementation": 4,
+        "intent": 3,
+        "plan": 4,
+        "review": 3,
+        "risk-register": 1,
+        "spec": 3,
+        "test-report": 4
+      }
+    },
+    {
+      "mode": "preload",
+      "index": 0,
+      "exitCode": 0,
+      "elapsedMs": 13094.257,
+      "artifactCount": 29,
+      "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+      "playbookSha256": "5b659cb1b6e29129a332253106b7b92d58d73d7bb1ee5922598a11bfc3c4f32a",
+      "normalizedConfigSha256": "50141504bee467b0ea9be651ab9c83a4642e3efe72b09e82113f4d801c8d6443",
+      "lifecycleReceiptValidated": true,
+      "workItems": [
+        {
+          "slug": "docs",
+          "status": "done"
+        },
+        {
+          "slug": "login-api",
+          "status": "done"
+        },
+        {
+          "slug": "schema",
+          "status": "done"
+        }
+      ],
+      "counts": {
+        "decision-matrix": 1,
+        "decomposition": 1,
+        "deploy-report": 3,
+        "generic": 1,
+        "implementation": 4,
+        "intent": 3,
+        "plan": 4,
+        "review": 3,
+        "risk-register": 1,
+        "spec": 3,
+        "test-report": 4
+      },
+      "lifecycleReceipt": {
+        "schema": 1,
+        "nonce": "cf931578-0818-4b34-b5b8-b8b85e4a3b20",
+        "entry": "/tmp/orca-counter-verify/packages/cli/dist/main.js",
+        "cwd": "/tmp/orca-counter-demo-parity-0QHMYC/preload-0",
+        "preloadSha256": "3081716b64e2ece587bf02486300fed401db826d1debabe4d6175fdc773a7cf4",
+        "pid": 3151,
+        "startedNs": "682327613187",
+        "endedNs": "695350750453",
+        "exitCode": 0
+      }
+    },
+    {
+      "mode": "preload",
+      "index": 1,
+      "exitCode": 0,
+      "elapsedMs": 15445.128,
+      "artifactCount": 29,
+      "semanticSignature": "ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba",
+      "playbookSha256": "5b659cb1b6e29129a332253106b7b92d58d73d7bb1ee5922598a11bfc3c4f32a",
+      "normalizedConfigSha256": "50141504bee467b0ea9be651ab9c83a4642e3efe72b09e82113f4d801c8d6443",
+      "lifecycleReceiptValidated": true,
+      "workItems": [
+        {
+          "slug": "docs",
+          "status": "done"
+        },
+        {
+          "slug": "login-api",
+          "status": "done"
+        },
+        {
+          "slug": "schema",
+          "status": "done"
+        }
+      ],
+      "counts": {
+        "decision-matrix": 1,
+        "decomposition": 1,
+        "deploy-report": 3,
+        "generic": 1,
+        "implementation": 4,
+        "intent": 3,
+        "plan": 4,
+        "review": 3,
+        "risk-register": 1,
+        "spec": 3,
+        "test-report": 4
+      },
+      "lifecycleReceipt": {
+        "schema": 1,
+        "nonce": "aabfaeaf-bc98-4499-8aeb-0cb399576204",
+        "entry": "/tmp/orca-counter-verify/packages/cli/dist/main.js",
+        "cwd": "/tmp/orca-counter-demo-parity-0QHMYC/preload-1",
+        "preloadSha256": "3081716b64e2ece587bf02486300fed401db826d1debabe4d6175fdc773a7cf4",
+        "pid": 3430,
+        "startedNs": "695487529358",
+        "endedNs": "710837304403",
+        "exitCode": 0
+      }
+    }
+  ],
+  "limits": "Linux corrected-source counter/parity evidence only; no Windows, memory, timing-overhead, diagnostic/fault/overlap acceptance or historical 32-artifact schedule proof.",
+  "retainedEvidence": {
+    "directory": "evidence/2026-10-25-scripted-agent-counters",
+    "rawReportArchive": "original-parity-report.json.gz",
+    "rawReportSha256": "4830041d6c8b0cb5574338c22c1289ecaeee23cc7ce403bf41d0cf5f56c9f707",
+    "archiveSha256": "b75c163ce3d0d42b0b95489827e4adeba45add0f7e7fbf084196c3d530674034",
+    "runner": "parity-runner.mjs.txt",
+    "runnerSha256": "be45dc539b32bab9c176924e13b5c1541c533c7e07d4394aebcc410d033b3b93",
+    "preload": "cli-lifecycle-preload.mjs.txt",
+    "originalExecutionRoot": "/tmp/orca-counter-demo-parity-0QHMYC",
+    "originalRunnerCommand": "node /tmp/orca-counter-parity.mjs > /tmp/orca-counter-demo-parity.log 2>&1",
+    "originalCommandCwd": "/workspace/Project_Orca",
+    "buildWorktree": "/tmp/orca-counter-verify",
+    "buildCommand": "/workspace/.orca-tools/node_modules/.bin/pnpm run build > /tmp/orca-counter-preliminary-build.log 2>&1",
+    "executionBuildCommit": "b908be30e38029b9fb7eb8f54b18680ab21944f0",
+    "implementationValidatedCommit": "cc67cf19a3c9e29f1a61e4c68405c78d4096ee66",
+    "notRetained": "Raw fd3 byte stream and independent expected launch nonce/PID were not separately persisted. Their live comparisons are visible in the exact retained runner; the parsed receipts alone cannot independently re-attest those two bindings. Full artifact bodies, compiled inventory and process stdout/stderr are not included in this compact archive."
+  }
+}

@@ -162,6 +162,30 @@ it.each(["missing", "failed", "stale", "cancelled"])(
   },
 );
 
+it.each([
+  "Build",
+  "Retry admission acceptance (CLI and ACP)",
+  "Test with coverage",
+  "Smoke test the compiled build",
+  "Typecheck",
+  "Design tokens are current",
+  "Format",
+  "Lint",
+])("full fallback still requires successful %s evidence", (name) => {
+  const p = plan();
+  p.wouldRun.tier = "full";
+  const j = job();
+  j.steps.push({ name: "Test selected files", conclusion: "skipped" });
+  expect(compare(evidence(), j, p).lanes[0].status).toBe("compared");
+  for (const conclusion of ["failure", "skipped", "cancelled"]) {
+    j.steps.find((step) => step.name === name).conclusion = conclusion;
+    expect(compare(evidence(), j, p).lanes[0].status).toBe("unknown");
+    expect(compare(evidence(), j, p).lanes[0].reasons).toContain("missing_or_unsuccessful_required_step");
+  }
+  j.steps = j.steps.filter((step) => step.name !== name);
+  expect(compare(evidence(), j, p).lanes[0].status).toBe("unknown");
+});
+
 it("rejects retired Node 22 evidence and does not consume it as a CI lane", () => {
   const wrongRuntime = selectedEvidence(22);
   expect(() => validateEvidence(wrongRuntime, wrongRuntime.identity)).toThrow("invalid_evidence_identity");
@@ -665,6 +689,12 @@ it("keeps existing full checks and limits while isolating workflow_run from cand
     expect(ci).toContain(invariant);
   expect(ci.match(/--reporter=default --reporter=json/g)).toHaveLength(2);
   expect(ci).toContain("run: pnpm run test:coverage --reporter=default --reporter=json");
+  const coverageStep = ci.split("- name: Test with coverage\n")[1].split("\n      # Both still run")[0];
+  expect(coverageStep).toContain(
+    "if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'",
+  );
+  expect(coverageStep).not.toContain("continue-on-error");
+  expect(coverageStep).toContain('ORCA_MCP_REQUIRE_PRODUCTION: "1"');
   expect(ci).not.toContain("matrix.node != 24");
   expect(ci).not.toContain("name: Test\n");
   for (const name of ["Typecheck", "Design tokens are current", "Format", "Lint", "Build", "Test with coverage"])

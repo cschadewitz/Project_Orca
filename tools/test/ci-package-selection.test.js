@@ -15,13 +15,13 @@ const command = (...args) => fixture.command(...args);
 const write = (path, content) => fixture.write(path, content);
 const save = () => fixture.save();
 const reset = () => fixture.reset(base);
-const candidate = () => {
+const candidate = (baseRef = base) => {
   const head = save();
-  const merge = git(repo, ["commit-tree", `${head}^{tree}`, "-p", base, "-p", head], "candidate\n")
+  const merge = git(repo, ["commit-tree", `${head}^{tree}`, "-p", baseRef, "-p", head], "candidate\n")
     .toString()
     .trim();
   command("checkout", "--detach", merge);
-  return { repo, base, head, candidate: merge };
+  return { repo, base: baseRef, head, candidate: merge };
 };
 beforeAll(() => {
   fixture = createGitFixture({ prefix: "orca-ci-packages-", message: "package fixture" });
@@ -113,6 +113,37 @@ it("includes new tests and deletes removed tests inside affected package domains
   expect(removed.wouldRun.tier).toBe("targeted");
   expect(removed.wouldRun.vitestFiles).not.toContain("packages/engine/test/domain.test.ts");
   expect(removed.wouldRun.vitestFiles).toContain("packages/cli/test/domain.test.ts");
+});
+it.each(["engine", "cli"])("retains full coverage for an unchanged TODO in the selected %s domain", (owner) => {
+  reset();
+  const path = `packages/${owner}/test/restoration-acceptance.test.ts`;
+  write(path, 'import { it } from "vitest";\nfor (const assertion of ["pending acceptance"]) it.todo(assertion);\n');
+  const withTodo = save();
+  write("packages/engine/src/index.ts", "/** Changed feature behavior. */\nexport const value = 2;\n");
+  const input = candidate(withTodo);
+  expect(command("rev-parse", `${input.base}:${path}`)).toBe(command("rev-parse", `${input.candidate}:${path}`));
+  const result = executionPlan(input, "pull_request", 24, manifest);
+  expect(result.plan.graphs.every((entry) => entry.complete)).toBe(true);
+  expect(result.mode).toBe("full");
+  expect(result.plan.wouldRun.reasonCodes).toContain("selected_todo_requires_full");
+  expect(result.plan.wouldRun.vitestFiles).toEqual(result.plan.graphs[1].discoveredVitestFiles);
+  expect(result.plan.wouldRun.expectedChecks).toEqual(manifest.fullChecks);
+  expect(result.plan.wouldRun.vitestFiles).toContain("packages/app/test/domain.test.ts");
+  validatePlan(result.plan, input, manifest);
+  let calls = 0;
+  expect(() => runSelected(input, "unused-plan.json", "unused-report.json", 1, () => calls++, manifest)).toThrow(
+    "selection_no_longer_eligible",
+  );
+  expect(calls).toBe(0);
+});
+it("keeps unrelated TODO domains outside a targeted closure", () => {
+  reset();
+  write("packages/app/test/pending.test.ts", 'import { it } from "vitest";\nit.todo("app acceptance");\n');
+  const withTodo = save();
+  write("packages/engine/src/index.ts", "/** Changed feature behavior. */\nexport const value = 2;\n");
+  const result = executionPlan(candidate(withTodo), "pull_request", 24, manifest);
+  expect(result.mode).toBe("targeted");
+  expect(result.plan.wouldRun.reasonCodes).not.toContain("selected_todo_requires_full");
 });
 it.each([
   ["packages/core/src/index.ts", "export const value = 2;"],
