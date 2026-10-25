@@ -357,6 +357,20 @@ extend one log with one gap‑free `seq` instead of each counting from its own c
 process that dies mid‑append leaves a torn last line; reads skip it with a warning and the
 next append truncates it before writing, so a crash never disables a run or a plan.
 
+Artifact blobs are immutable files named by the SHA-256 of their bytes. A file-backed
+`put` verifies the input hash, writes and fsyncs a scratch file, then publishes it with
+an exclusive hard link. An existing winner is verified and fsynced, never overwritten;
+corruption fails with `ARTIFACT_INVALID` and is left for explicit recovery. Reads verify
+the hash too, and a missing indexed blob fails with `ARTIFACT_MISSING`. Legacy character
+counts in `size` do not affect verification. POSIX publication syncs the blob directory
+and its ancestors before appending metadata; Windows syncs files but has no portable
+directory-entry power-loss guarantee here. Filesystems without hard-link support fail
+publication rather than fall back to replacement. The index retains its existing
+locked JSONL append and committed-newline read behavior (#102). Blob publication and
+index append are separate operations: an index failure can leave a complete unreferenced
+blob, reusable on retry. This is not a metadata transaction or the broader store contract
+and conformance work tracked in #338.
+
 A well‑numbered log is still not a single‑authored one. Two interpreters over one run id
 would each reduce the same log, each pick the next node, and each append their own steps,
 so **driving a run takes a lease** (`packages/store/src/lease-store.ts`): `run()` acquires

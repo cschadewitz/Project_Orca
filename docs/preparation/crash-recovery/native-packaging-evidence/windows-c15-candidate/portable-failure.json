@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "schedule": "failure",
+  "cells": 20,
+  "pressureRefusals": 0,
+  "zeroAfterEveryCell": true,
+  "productionEnabled": false,
+  "node": "v24.19.0",
+  "platform": "linux",
+  "arch": "x64",
+  "method": "Single Node process, 2ms samples plus allocator/operation boundaries; heapUsed+external; no double-counted arrayBuffers, forced GC, renderer, CLI pair or native acceptance",
+  "managedIncrementBytes": 28381580,
+  "managedLimitBytes": 33554432,
+  "managedPass": true,
+  "heapIncrementBytes": 6238376,
+  "externalIncrementBytes": 22966260,
+  "rssIncrementBytes": 44023808,
+  "backingAllocated": 41943040,
+  "largestBacking": 1048576,
+  "controlledPeak": 1310720,
+  "controlledLimitBytes": 8388608,
+  "phases": {
+    "metadata": 26691904,
+    "record": 27784336,
+    "checkpoint": 28381580,
+    "settlement": 27669436,
+    "finalizer": 8646920
+  }
+}

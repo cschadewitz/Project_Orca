@@ -15,6 +15,7 @@ import {
   TemplateRegistry,
   WorkflowRegistry,
   parseWorkflow,
+  sha256,
   silentLogger,
   type Artifact,
   type OrcaEventInput,
@@ -190,7 +191,7 @@ export async function putArtifact(stores: Stores, id: string, runId: string, bod
     name: "spec",
     path: `/tmp/${id}.md`,
     mediaType: "text/markdown",
-    contentHash: `sha256:${id}`,
+    contentHash: sha256(body),
     size: Buffer.byteLength(body),
     version: 1,
     producedBy: { runId, stepRunId: `${runId}-step`, agentId: "claude" },
@@ -230,21 +231,23 @@ export function raw(
 
 /** Real JSON-object artifact, including the parsed data carried by artifact.recorded. */
 export async function recordJsonArtifact(h: Harness, id: string): Promise<number> {
+  const data = { secret: "private-json-value" };
+  const body = JSON.stringify(data);
   const artifact: Artifact = {
     id,
     kind: "report",
     name: "report",
     path: `/tmp/${id}.json`,
     mediaType: "application/json",
-    contentHash: `sha256:${id}`,
+    contentHash: sha256(body),
     size: 30,
     version: 1,
     producedBy: { runId: h.runs.alice, stepRunId: "artifact-step" },
     parents: [],
-    data: { secret: "private-json-value" },
+    data,
     createdAt: h.clock.isoNow(),
   };
-  await h.stores.artifacts.put(artifact, JSON.stringify(artifact.data));
+  await h.stores.artifacts.put(artifact, body);
   return h.append({
     type: "artifact.recorded",
     runId: h.runs.alice,

@@ -101,6 +101,7 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
   const [focusedId, setFocusedId] = useState<string | undefined>(undefined);
   const [failureIndex, setFailureIndex] = useState<number | undefined>(undefined);
   const cards = useRef(new Map<string, HTMLElement>());
+  const region = useRef<HTMLElement>(null);
 
   /* The cards the surface holds, by id: memoised on the ids rather than on `waits`, whose
      identity changes on every push whether or not the list changed shape. `waits` is read
@@ -135,8 +136,9 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
      around a card that is still here changes nothing — the person keeps their place, their
      focus and their half-typed note. Only the card the person was on leaving moves anything:
      the current card becomes the one that slides into its place (the one before it when it
-     was the last), and focus goes there too if it went with the card. An answer from this
-     window is that case, which is how five gates clear in five keystrokes. */
+     was the last), or the Attention region when none survive. Focus goes there only if
+     it went with the card. An answer from this window is that case, which is how five
+     gates clear in five keystrokes. */
   useLayoutEffect(() => {
     const before = drawn.current;
     drawn.current = keys;
@@ -151,7 +153,7 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
     // Something in this same commit has already put focus somewhere: it is not lost.
     if (document.activeElement !== null && document.activeElement !== document.body) return;
     const next = neighbour(gone);
-    if (next !== undefined) cards.current.get(next)?.focus();
+    (next === undefined ? region.current : cards.current.get(next))?.focus();
   }, [keys]);
 
   useSurfaceKeys(keys, focusIndex, focusCard);
@@ -186,7 +188,9 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
   }
 
   return (
-    <div className="orca-attn-surface" data-testid="attention">
+    /* The region survives the final card and is focusable from script without adding a
+       Tab stop, just like the Agents claims section. */
+    <section ref={region} className="orca-attn-surface" aria-label="Attention" tabIndex={-1} data-testid="attention">
       {!live && (
         <div className={`orca-banner ${textClass("caption")} orca-banner--stale`} role="status">
           <Text style="caption">Not connected — this is the last the daemon said about these.</Text>
@@ -296,7 +300,7 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
           />
         </section>
       )}
-    </div>
+    </section>
   );
 }
 

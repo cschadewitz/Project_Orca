@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { consoleLogger, FakeClock, type Artifact } from "@orca/core";
+import { consoleLogger, FakeClock, sha256, type Artifact } from "@orca/core";
 import {
   FileArtifactStore,
   InMemoryDocumentStore,
@@ -178,7 +178,7 @@ describe("file artifact store", () => {
       kind: "spec",
       name: "spec",
       mediaType: "text/markdown",
-      contentHash: "abc",
+      contentHash: sha256("hello"),
       size: 5,
       version: 1,
       producedBy: { runId: "run_1" },

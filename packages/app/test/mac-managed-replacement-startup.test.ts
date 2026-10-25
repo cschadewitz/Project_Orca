@@ -1,10 +1,12 @@
 /** The managed Mac startup gate over a synthetic backend and journal: real kernel slots and
  * window files on Linux. Darwin addon loading, F_FULLFSYNC and the Keychain are not exercised. */
 import { fsyncSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { cp, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { inspectUpdateWindowRoots } from "@orca/protocol/update-window";
+import { fenceBoot, fenceDirectory, fenceHash } from "@orca/protocol/first-run-fence";
+import { enterUpdateWriter, inspectUpdateWindowRoots } from "@orca/protocol/update-window";
 import { createManagedMacReplacementStartup } from "../src/main/mac-managed-replacement-startup.js";
 import {
   createNativeClosedUpdateWindow,
@@ -47,7 +49,7 @@ function layout(base: string, home = join(base, "home")): Layout {
 }
 /** userData, its sibling control namespace and one workspace; provisioned and enrolled as main
  * does on a first launch unless `fresh`. A port collision retries with a fresh directory. */
-async function installed(fresh = false): Promise<Layout> {
+async function installed(fresh = false, prepare?: (f: Layout) => Promise<void>): Promise<Layout> {
   for (let attempt = 0; ; attempt++) {
     const f = layout(await mkdtemp(join(process.cwd(), "orca-mac-startup-")));
     bases.push(f.base);
@@ -56,11 +58,47 @@ async function installed(fresh = false): Promise<Layout> {
     try {
       await provisionMacUpdateNamespace(f.control, [f.appRoot], backend());
       await enrollMacUpdateRoots(f.control, [f.workspace], backend());
+      await prepare?.(f);
       return f;
     } catch (error) {
       await rm(f.base, { recursive: true, force: true });
       if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt >= 4) throw error;
     }
+  }
+}
+/** Select an unowned fixture before moving anything. Mirror update-window's kernel-port
+ * mapping only here: the moved app writer must not share slots with later enrollment.
+ * Require disjoint, available old/new ranges, including those re-anchoring will capture.
+ * These probes close before the scenario; no startup/enrollment error is retried. */
+async function prepareHomeMove(f: Layout): Promise<void> {
+  const moved = layout(f.base, join(f.base, "renamed"));
+  const identities = [
+    fenceDirectory(f.appRoot),
+    fenceDirectory(f.workspace),
+    ...(["appRoot", "workspace", "control"] as const).map((key) => ({ ...fenceDirectory(f[key]), path: moved[key] })),
+  ];
+  const held: Server[] = [];
+  try {
+    for (const identity of identities) {
+      const start =
+        20000 +
+        (Number.parseInt(
+          fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, identity])).slice(0, 8),
+          16,
+        ) %
+          5000) *
+          8;
+      for (let slot = 0; slot < 8; slot++) {
+        const server = createServer();
+        await new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen({ host: "127.0.0.1", port: start + slot, exclusive: true, reusePort: false }, resolve);
+        });
+        held.push(server);
+      }
+    }
+  } finally {
+    for (const server of held) await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
 async function launch(f: Pick<Layout, "appRoot" | "control">) {
@@ -107,14 +145,20 @@ it("resumes ordinary startup after Migration Assistant or Time Machine recreates
 });
 
 it("resumes ordinary startup after the home folder moves, and enrolls the moved workspace again", async () => {
-  const f = await installed();
+  const f = await installed(false, prepareHomeMove);
   const moved = layout(f.base, join(f.base, "renamed"));
   await rename(f.home, moved.home);
   const { startup, outcome } = await launch(moved);
   expect(outcome).toBe("ordinary");
+  expect(startup.bootstrap.ordinaryAllowed).toBe(true);
+  expect(startup.resettable).toBe(false);
   expect(enrolledPaths(moved.control)).toEqual([moved.appRoot]);
   await startup.enrollProtectedRoots([moved.workspace]);
   expect(enrolledPaths(moved.control)).toEqual([moved.appRoot, moved.workspace]);
+  expect(startup.bootstrap.ordinaryAllowed).toBe(true);
+  const writer = await enterUpdateWriter(moved.workspace);
+  if (writer) closers.push(() => writer.close());
+  expect(writer?.check()).toBe(true);
 });
 
 it("resumes ordinary startup after an enrolled workspace is deleted", async () => {

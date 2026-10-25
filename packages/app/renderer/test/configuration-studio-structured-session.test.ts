@@ -1,9 +1,19 @@
 /** Guarded #333 fixtures exercise stale/late/refused writes without importing daemon or pretending lowering is implemented. */
 import { describe, expect, it, vi } from "vitest";
-import type { ConfigApplyResult, ConfigGenerationStatus, ConfigSetResult } from "@orca/protocol";
+import {
+  ConfigSetParamsSchema,
+  type ConfigApplyResult,
+  type ConfigGenerationStatus,
+  type ConfigSetResult,
+} from "@orca/protocol";
 import type { BridgeResult } from "../../src/bridge.js";
 import { StructuredEditorSession } from "../src/config/structured-form/editor-session.js";
-import type { ConfigCandidate, EditorTarget, StructuredEditorPorts } from "../src/config/structured-form/contracts.js";
+import type {
+  ConfigCandidate,
+  EditIntent,
+  EditorTarget,
+  StructuredEditorPorts,
+} from "../src/config/structured-form/contracts.js";
 import { CONFIG_GET, CONFIG_REVISION } from "./fixtures-config.js";
 
 const target: EditorTarget = { workspaceId: "w1", instanceId: "i1", epoch: 1 };
@@ -65,6 +75,106 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+describe("adjacent same-path sets", () => {
+  it("validates over 1,000 same-field edits with the exact final value under the unchanged protocol limit", async () => {
+    const f = fixture();
+    f.lower.mockImplementation(async (candidate) => {
+      ConfigSetParamsSchema.parse({
+        document: candidate.document,
+        expectedRevision: candidate.expectedRevision,
+        edits: candidate.edits,
+        validateOnly: true,
+      });
+      return { status: "ready", text };
+    });
+    const finalValue = "x".repeat(1001);
+    for (let length = 1; length <= finalValue.length; length++) {
+      expect(f.session.edit([{ kind: "set", path: ["hosts", 0, "id"], value: finalValue.slice(0, length) }])).toBe(
+        true,
+      );
+    }
+    await f.session.validate();
+    expect(f.session.snapshot()).toMatchObject({ phase: "reviewed", sequence: 1002 });
+    expect(f.session.candidate().edits).toEqual([
+      { kind: "insert", path: ["hosts"], index: 0, value: { id: "a" } },
+      { kind: "move", path: ["hosts"], from: 1, to: 0 },
+      { kind: "set", path: ["hosts", 0, "id"], value: finalValue },
+    ]);
+    expect(f.set).toHaveBeenCalledTimes(1);
+    expect(
+      ConfigSetParamsSchema.safeParse({
+        document: "config",
+        expectedRevision: CONFIG_REVISION,
+        edits: Array.from({ length: 1001 }, () => ({ kind: "set", path: ["version"], value: 1 })),
+      }).success,
+    ).toBe(false);
+  });
+  it("keeps different typed paths, path lengths and dotted keys distinct", () => {
+    const f = fixture();
+    const paths = [["items", 0], ["items", "0"], ["items"], ["a.b"], ["a", "b"], ["items", 0]] as const;
+    const edits = paths.map((path, value) => ({ kind: "set" as const, path, value }));
+    f.session.edit(edits);
+    expect(f.session.candidate().edits.slice(2)).toEqual(edits);
+  });
+  it.each<EditIntent>([
+    { kind: "insert", path: ["hosts"], index: 0, value: { id: "new" } },
+    { kind: "remove", path: ["hosts", 0] },
+    { kind: "move", path: ["hosts"], from: 0, to: 1 },
+  ])("preserves a $kind barrier and coalesces within and across edit batches", (barrier) => {
+    const f = fixture();
+    const set = (value: string): EditIntent => ({ kind: "set", path: ["hosts", 0, "id"], value });
+    f.session.edit([set("a"), set("b"), barrier, set("c"), set("d")]);
+    f.session.edit([set("e")]);
+    expect(f.session.candidate().edits.slice(2)).toEqual([set("b"), barrier, set("e")]);
+    expect(f.session.snapshot().changes.slice(2)).toEqual([
+      { kind: "set", path: ["hosts", 0, "id"] },
+      { kind: barrier.kind, path: barrier.path },
+      { kind: "set", path: ["hosts", 0, "id"] },
+    ]);
+  });
+  it("rejects late validation when a newer set replaces the candidate's last operation", async () => {
+    const f = fixture();
+    f.session.edit([{ kind: "set", path: ["version"], value: 1 }]);
+    const hold = deferred<BridgeResult<ConfigSetResult>>();
+    f.set.mockReturnValueOnce(hold.promise);
+    const validating = f.session.validate();
+    await vi.waitFor(() => expect(f.set).toHaveBeenCalledTimes(1));
+    f.session.edit([{ kind: "set", path: ["version"], value: 2 }]);
+    hold.resolve(acknowledgement(false));
+    await validating;
+    expect(f.lower.mock.calls[0]?.[0].edits.at(-1)).toEqual({ kind: "set", path: ["version"], value: 1 });
+    expect(f.session.candidate().edits.at(-1)).toEqual({ kind: "set", path: ["version"], value: 2 });
+    expect(f.session.snapshot()).toMatchObject({ phase: "editing", sequence: 3 });
+    expect(f.session.candidate().edits).toHaveLength(3);
+    await f.session.save();
+    expect(f.set).toHaveBeenCalledTimes(1);
+    await f.session.validate();
+    expect(f.session.snapshot().phase).toBe("reviewed");
+  });
+  it("invalidates review and policy confirmation even when coalescing an equal value", async () => {
+    const f = fixture();
+    f.policyChange.mockReturnValue(true);
+    const edit = { kind: "set" as const, path: ["policy"], value: { mode: "deny" } };
+    f.session.edit([edit]);
+    await f.session.validate();
+    expect(f.session.confirmPolicy(2)).toBe(true);
+    f.session.edit([edit]);
+    edit.path[0] = "mutated";
+    edit.value.mode = "mutated";
+    expect(f.session.snapshot()).toMatchObject({ phase: "editing", sequence: 3 });
+    expect(f.session.candidate().edits.slice(2)).toEqual([{ kind: "set", path: ["policy"], value: { mode: "deny" } }]);
+    expect(f.session.confirmPolicy(2)).toBe(false);
+    await f.session.save();
+    expect(f.set).toHaveBeenCalledTimes(1);
+    await f.session.validate();
+    await f.session.save();
+    expect(f.set).toHaveBeenCalledTimes(2);
+    expect(f.session.confirmPolicy(3)).toBe(true);
+    await f.session.save();
+    expect(f.set).toHaveBeenCalledTimes(3);
+  });
+});
 
 describe("exact candidate validation, review, save and activation", () => {
   it("passes ordered intents and original target/revision to lowering and saves identical reviewed bytes", async () => {
