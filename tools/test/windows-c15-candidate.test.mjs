@@ -164,6 +164,36 @@ test("closed inventory rejects symlinks and records extra or substituted files",
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+test("native header extraction keeps colon-bearing scratch paths out of tar's archive argument", () => {
+  const source = process.env.C15_SOURCE || harness;
+  const { parse } = createRequire(path.join(source, "packages/cli/package.json"))("yaml");
+  const workflow = parse(read(".github/workflows/windows-c15-candidate.yml"));
+  const build = workflow.jobs.proof.steps.find(
+    (step) => step.name === "Build native x64 package with verified local Node inputs",
+  );
+  const extraction = build.run.split("\n").filter((line) => line.includes("tar -xzf"));
+  assert.equal(extraction.length, 1);
+  // On POSIX use a drive-like relative path: GNU tar's remote separator must precede any slash.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "c15-archive-"));
+  const scratch = path.join(root, process.platform === "win32" ? "headers with spaces" : "D: headers with spaces");
+  const headersScratch = process.platform === "win32" ? scratch : path.relative(root, scratch);
+  const archive = "node-v24.21.0-headers.tar.gz";
+  try {
+    fs.mkdirSync(scratch);
+    assert.ok(headersScratch.includes(":"), "fixture must exercise a colon-bearing local path");
+    fs.writeFileSync(path.join(scratch, "header.h"), "verified local header\n");
+    execFileSync("tar", ["-czf", archive, "header.h"], { cwd: scratch, timeout: 10_000 });
+    fs.unlinkSync(path.join(scratch, "header.h"));
+    execFileSync("bash", ["-euc", extraction[0]], {
+      cwd: root,
+      env: { ...process.env, headers_scratch: headersScratch, archive, TAR_OPTIONS: "--rsh-command=false" },
+      timeout: 10_000,
+    });
+    assert.equal(fs.readFileSync(path.join(scratch, "header.h"), "utf8"), "verified local header\n");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 test("workflow is manual Windows x64 test-only, with closed checkouts and staged pins", () => {
   const source = process.env.C15_SOURCE || harness;
   const { parse } = createRequire(path.join(source, "packages/cli/package.json"))("yaml");
