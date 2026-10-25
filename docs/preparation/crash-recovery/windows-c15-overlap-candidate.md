@@ -38,9 +38,10 @@ using `github_download_workflow_artifact` followed by supported Sediment
 `download_file(file_id='file_00000000bb2081f5a56145254fdf876c')` and verified
 61,820 bytes, ZIP SHA-256
 `ffb14af27e9ebee0bed3aeb39edcb4afc75f3964e3d69e3d0ca78ef34295a911`.
-This execution environment has no exposed `download_file` tool. Its Cal artifact
-fetch succeeded with a new reusable file reference, but these receipt findings
-are parent-verified evidence, not a new local hash/parse. No expired URL or denied
+The prior correction environment had no exposed `download_file` tool. Its Cal
+artifact fetch succeeded with a new reusable file reference, but these receipt
+findings remain parent-verified evidence, not a new local hash/parse. This update
+did not download or re-hash that historical ZIP. No expired URL or denied
 network workaround was used. PR661 preserves the earlier transfer failure as
 history and records the later evidence separately.
 
@@ -187,3 +188,58 @@ verification limit blocked the old candidate. The reviewed #665 counter correcti
 and the new selected-source comparison below address parity separately; they do
 not explain the exact historical 32-artifact interleaving. No Windows workflow was
 dispatched; parent review remains required first.
+
+## Selected-source Linux verification
+
+The [source/build provenance report](windows-c15-selected-source-provenance.json)
+records the selected source/tree, regenerated 365-file inventory digest, all five
+old/new executable hashes, recomputed native digest, every harness hash, install/
+build recipes and log digests. A fresh isolated pnpm **12.4.2** install used
+`--frozen-lockfile --ignore-scripts`; the unchanged selected lockfile and TypeScript
+**7.0.2** solution build passed on Linux Node **24.19.0**. The build helper verifies
+every tracked source blob before emitting and normalizes executable text to LF.
+No dependency policy, lifecycle allowlist or lockfile was changed to build it.
+
+The [new four-demo report](windows-c15-selected-source-parity.json) records one
+bounded run of `tools/windows-c15/parity.mjs`, using harness code commit
+`ded92e0343b7c1d6a7b3743ca623970e8a1668a3` and the exact selected product source.
+The subsequent evidence commit changes only documentation/JSON evidence; the
+manifest, runner, preload and all hashed harness bytes stay identical. Two normal
+demos then two preload demos ran sequentially, each with the unchanged 50-second
+limit and fresh workspace. All four exit 0 with **29 artifacts each / 58 per mode**.
+All semantic signatures equal
+`ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba`;
+corresponding work items, every final counter, playbook bytes and root-normalized
+config hashes match. Elapsed times are 11.36/11.72 seconds normal and 11.92/21.42
+seconds preload. These times are observations, not a performance acceptance claim.
+
+The runner reuses the exact existing candidate semantic/work oracle (checked by a
+portable test). For each preload run it retains raw fd 3 bytes as base64 and SHA-256,
+EOF, actual child PID, independent launch nonce/entry/cwd/hash/exit bindings and the
+parsed receipt validated live by the production collector. This new evidence has
+its own bindings; it does **not** re-attest missing historical raw fd 3 evidence
+from #665. No diagnostic process ran, so this is product normal/preload parity,
+not an Off/On C15 memory/fault/timing/overlap result. Windows behavior and same-host
+Node/Electron clock comparability remain unverified here.
+
+Reproduce after checking out the harness and selected source into separate fresh
+directories (with Node 24 and pnpm 12.4.2 available):
+
+```sh
+# In the selected source checkout, with HEAD exactly 14666a315b43bc859ad0b73dda92ddf280b0de10:
+pnpm install --frozen-lockfile --ignore-scripts
+# In the harness checkout; use absolute paths for SOURCE and a fresh REPORT:
+node tools/windows-c15/build.mjs "$SOURCE"
+C15_SOURCE="$SOURCE" node --test tools/test/windows-c15-candidate.test.mjs
+node tools/windows-c15/parity.mjs "$SOURCE" "$REPORT"
+```
+
+All **16 portable tests** pass, including exact source/build/native/harness pins,
+compiled/source/receipt substitution rejection, the frozen original 20-cell
+campaign, independent delayed-parent post-exit and inter-demo gap negatives,
+actual child-owned receipts and both conservative boundary exclusion zones.
+Focused ESLint, Prettier and whitespace checks are required on the final commit.
+Self-review confirms the 29/58, two-demo sequence, 50/120-second limits, memory
+baseline/budgets, no-GC/no-idle rules and frozen failure evidence are preserved.
+Parent independent review and CI remain separate. No Windows dispatch, activation,
+signing, release, credentials or security-setting changes were performed.
