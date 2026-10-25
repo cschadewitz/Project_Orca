@@ -332,8 +332,9 @@ export function EditorCanvas(props: EditorCanvasProps): JSX.Element {
 
   const onPortPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLSpanElement>, id: string) => {
-      if (event.button !== 0 || readOnly || activeWire.current) return;
+      if (event.button !== 0 || readOnly) return;
       event.stopPropagation();
+      if (activeWire.current) return;
       event.currentTarget.setPointerCapture?.(event.pointerId);
       activeWire.current = { from: id, pointer: event.pointerId, path };
       setWire({ from: id, ...toLayout(event.clientX, event.clientY) });

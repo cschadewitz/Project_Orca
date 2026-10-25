@@ -651,6 +651,7 @@ describe("wire ownership under StrictMode", () => {
     const h = harness();
     teardown.push(h.dispose);
     const onConnect = vi.fn();
+    const onPlace = vi.fn();
     const noop = () => {};
     let props: EditorCanvasProps = {
       graph: editorGraph(NESTED, NESTED, [])!,
@@ -661,7 +662,7 @@ describe("wire ownership under StrictMode", () => {
       onSelect: noop,
       readOnly: false,
       label: "Wire test",
-      onPlace: noop,
+      onPlace,
       onConnect,
       onAdd: noop,
       onInsert: noop,
@@ -694,6 +695,7 @@ describe("wire ownership under StrictMode", () => {
     );
     return {
       onConnect,
+      onPlace,
       canvas,
       port,
       update: (patch: Partial<EditorCanvasProps>) => {
@@ -708,16 +710,21 @@ describe("wire ownership under StrictMode", () => {
   }
 
   it("consumes completion once and ignores another pointer's completion", () => {
-    const { port, onConnect } = mount();
+    const { port, onConnect, onPlace, canvas } = mount();
+    const originalPosition = box(canvas(), "start").getAttribute("style");
     fireEvent.pointerDown(port(), { button: 0, pointerId: 2 });
     fireEvent.pointerMove(port(), { pointerId: 2, clientX: 300, clientY: 40 });
-    fireEvent.pointerDown(port(), { button: 0, pointerId: 3 });
-    fireEvent.pointerUp(port(), { pointerId: 3 });
+    fireEvent.pointerDown(port(), { button: 0, pointerId: 3, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(port(), { pointerId: 3, clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(port(), { pointerId: 3, clientX: 300, clientY: 200 });
+    expect(onPlace).not.toHaveBeenCalled();
+    expect(box(canvas(), "start").getAttribute("style")).toBe(originalPosition);
     expect(onConnect).not.toHaveBeenCalled();
     expect(port().className).toContain("orca-port--armed");
     fireEvent.pointerUp(port(), { pointerId: 2 });
     fireEvent.pointerUp(port(), { pointerId: 2 });
     expect(onConnect).toHaveBeenCalledExactlyOnceWith("start", "done");
+    expect(onPlace).not.toHaveBeenCalled();
   });
 
   it.each(["pointerCancel", "lostPointerCapture"] as const)("cancels on %s without connecting", (event) => {
