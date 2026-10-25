@@ -15,6 +15,8 @@ import { useMethodPresent, useWritability } from "../chrome/use-connection.js";
 import { Button, Text, textClass } from "../ui/index.js";
 import { edgeState, fromName, isUnmet, targetName, waiveQuestion, type DepNode } from "./graph-model.js";
 
+import { InlineConfirmation, InlineConfirmationTrigger, useInlineConfirmation } from "./inline-confirmation.js";
+
 export interface RelationshipInspectorProps {
   planId: string;
   node: DepNode;
@@ -31,7 +33,12 @@ export function RelationshipInspector({
   onWaived,
 }: RelationshipInspectorProps): JSX.Element {
   return (
-    <div className="orca-plan__inspector" aria-label={`Relationships of ${node.name}`}>
+    <div
+      key={JSON.stringify([planId, node.id])}
+      className="orca-plan__inspector"
+      aria-label={`Relationships of ${node.name}`}
+      tabIndex={-1}
+    >
       <div className="orca-plan__section">
         <Text style="label-strong" as="h2">
           {node.title ?? node.name}
@@ -73,6 +80,7 @@ function Relations({
   planId: string;
   onWaived: (dependency: DependencyView) => void;
 }): JSX.Element {
+  const canWaive = useMethodPresent("dependencies.waive");
   return (
     <section className="orca-plan__section" aria-label={label}>
       <Text style="eyebrow" as="h3">
@@ -87,7 +95,9 @@ function Relations({
               <span className={textClass("mono-id")}>{name(d)}</span>
               {/* Kind, then state in words (never colour alone), then the scheduler's line. */}
               <Text style="caption">{` — ${d.type}, ${edgeState(d)}: ${d.evaluation.detail}`}</Text>
-              {isUnmet(d) && <Waive planId={planId} dependency={d} onWaived={onWaived} />}
+              {canWaive && isUnmet(d) && (
+                <Waive key={JSON.stringify([planId, d.id])} planId={planId} dependency={d} onWaived={onWaived} />
+              )}
             </li>
           ))}
         </ul>
@@ -104,20 +114,21 @@ function Waive({
   planId: string;
   dependency: DependencyView;
   onWaived: (dependency: DependencyView) => void;
-}): JSX.Element | null {
+}): JSX.Element {
   const announce = useAnnounce();
-  const present = useMethodPresent("dependencies.waive");
   const writability = useWritability();
-  const [armed, setArmed] = useState(false);
+  const confirmation = useInlineConfirmation();
   const [busy, setBusy] = useState(false);
-  if (!present) return null;
   const reason = writability.can ? undefined : writability.reason;
 
   const waive = (): void => {
+    const owner = confirmation.question;
+    if (!owner || busy) return;
     setBusy(true);
     void window.orca.plan.waive({ planId, dependencyId: dependency.id }).then((result) => {
+      if (!confirmation.isMounted()) return;
       setBusy(false);
-      setArmed(false);
+      confirmation.close(owner, !result.ok);
       if (result.ok) {
         onWaived(result.result.dependency);
         announce(`${fromName(dependency)} no longer waits for ${targetName(dependency)}.`);
@@ -127,10 +138,13 @@ function Waive({
     });
   };
 
-  return armed ? (
-    <div className="orca-plan__confirm" role="group" aria-label={`Waive ${dependency.id}`}>
+  return confirmation.question ? (
+    <InlineConfirmation confirmation={confirmation} label={`Waive ${dependency.id}`}>
       <Text style="caption">{waiveQuestion(dependency)}</Text>
       <div className="orca-plan__actions">
+        <Button data-plan-confirm-keep="" tone="ghost" size="sm" onClick={confirmation.cancel}>
+          Keep it
+        </Button>
         <Button
           tone="danger"
           size="sm"
@@ -140,14 +154,11 @@ function Waive({
         >
           {`Waive, unblocking ${fromName(dependency)}`}
         </Button>
-        <Button tone="ghost" size="sm" onClick={() => setArmed(false)}>
-          Keep it
-        </Button>
       </div>
-    </div>
+    </InlineConfirmation>
   ) : (
-    <Button size="sm" tone="ghost" onClick={() => setArmed(true)}>
+    <InlineConfirmationTrigger confirmation={confirmation} size="sm" tone="ghost">
       {`Waive ${targetName(dependency)}…`}
-    </Button>
+    </InlineConfirmationTrigger>
   );
 }

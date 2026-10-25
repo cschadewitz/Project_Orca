@@ -27,6 +27,7 @@ import { Button, Chip, DecisionMatrix, StateView, Text, Time, countedOf, textCla
 import { confidenceWord, decideParams, optionName, recommendedOf, reopenQuestion } from "./decision-model.js";
 import type { DecisionsState } from "./use-decisions.js";
 import { useDecisionWrites } from "./use-decision-writes.js";
+import { InlineConfirmation, InlineConfirmationTrigger, useInlineConfirmation } from "./inline-confirmation.js";
 
 export interface DecisionModeProps {
   planId: string;
@@ -209,8 +210,6 @@ function DecisionDetail({ planId, decision, live, onOpenKey }: DecisionDetailPro
   /** The option a person pressed, awaiting their rationale and a second press. */
   const [pending, setPending] = useState<string | undefined>(undefined);
   const [rationale, setRationale] = useState("");
-  /** Whether the reopen question is on screen. It is asked once, here, and not again. */
-  const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // A response owns only the draft submitted from this mounted target/status. Edits and
@@ -221,7 +220,6 @@ function DecisionDetail({ planId, decision, live, onOpenKey }: DecisionDetailPro
   useEffect(() => {
     setPending(undefined);
     setRationale("");
-    setAsking(false);
     setBusy(false);
     return () => {
       draftVersion.current += 1;
@@ -257,24 +255,8 @@ function DecisionDetail({ planId, decision, live, onOpenKey }: DecisionDetailPro
     });
   };
 
-  const reopen = (): void => {
-    setBusy(true);
-    void window.orca.plan.reopen({ planId, key: decision.key }).then((result) => {
-      setBusy(false);
-      setAsking(false);
-      if (!result.ok) {
-        announce(`That did not go through: ${result.error.message}`);
-        return;
-      }
-      const n = result.result.reopenedDependencyIds.length;
-      announce(
-        `${decision.key} is open again; ${n === 0 ? "nothing" : n === 1 ? "1 dependency" : `${n} dependencies`} reopened with it.`,
-      );
-    });
-  };
-
   return (
-    <section className="orca-plan__inspector" aria-label={`Decision ${decision.key}`}>
+    <section className="orca-plan__inspector" aria-label={`Decision ${decision.key}`} tabIndex={-1}>
       <div className="orca-plan__section">
         <Text style="label-strong" as="h2">
           {decision.title}
@@ -398,34 +380,68 @@ function DecisionDetail({ planId, decision, live, onOpenKey }: DecisionDetailPro
           </Text>
           <Text style="caption">{decision.rationale ?? "No rationale was recorded."}</Text>
 
-          {canReopen &&
-            (asking ? (
-              <div className="orca-plan__confirm" role="group" aria-label={`Reopen ${decision.key}`}>
-                <Text style="caption">{reopenQuestion(decision)}</Text>
-                <div className="orca-plan__actions">
-                  <Button
-                    tone="danger"
-                    size="sm"
-                    disabled={busy || reason !== undefined}
-                    {...(reason === undefined ? {} : { disabledReason: reason })}
-                    onClick={reopen}
-                  >
-                    {`Reopen ${decision.key}`}
-                  </Button>
-                  <Button size="sm" tone="ghost" onClick={() => setAsking(false)}>
-                    Keep the decision
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="orca-plan__actions">
-                <Button size="sm" onClick={() => setAsking(true)}>
-                  Reopen…
-                </Button>
-              </div>
-            ))}
+          {canReopen && <Reopen key={decision.status} planId={planId} decision={decision} reason={reason} />}
         </section>
       )}
     </section>
+  );
+}
+
+/** A status/target owns its question independently of the decision draft (#669). */
+function Reopen({
+  planId,
+  decision,
+  reason,
+}: {
+  planId: string;
+  decision: DecisionView;
+  reason: string | undefined;
+}): JSX.Element {
+  const announce = useAnnounce();
+  const confirmation = useInlineConfirmation();
+  const [busy, setBusy] = useState(false);
+  const reopen = (): void => {
+    const owner = confirmation.question;
+    if (!owner || busy) return;
+    setBusy(true);
+    void window.orca.plan.reopen({ planId, key: decision.key }).then((result) => {
+      if (!confirmation.isMounted()) return;
+      setBusy(false);
+      confirmation.close(owner, !result.ok);
+      if (!result.ok) {
+        announce(`That did not go through: ${result.error.message}`);
+        return;
+      }
+      const n = result.result.reopenedDependencyIds.length;
+      announce(
+        `${decision.key} is open again; ${n === 0 ? "nothing" : n === 1 ? "1 dependency" : `${n} dependencies`} reopened with it.`,
+      );
+    });
+  };
+
+  return confirmation.question ? (
+    <InlineConfirmation confirmation={confirmation} label={`Reopen ${decision.key}`}>
+      <Text style="caption">{reopenQuestion(decision)}</Text>
+      <div className="orca-plan__actions">
+        <Button data-plan-confirm-keep="" size="sm" tone="ghost" onClick={confirmation.cancel}>
+          Keep the decision
+        </Button>
+        <Button
+          tone="danger"
+          size="sm"
+          disabled={busy || reason !== undefined}
+          {...(reason === undefined ? {} : { disabledReason: reason })}
+          onClick={reopen}
+        >
+          {`Reopen ${decision.key}`}
+        </Button>
+      </div>
+    </InlineConfirmation>
+  ) : (
+    <div className="orca-plan__actions">
+      <InlineConfirmationTrigger confirmation={confirmation} size="sm">
+        Reopen…
+      </InlineConfirmationTrigger>
+    </div>
   );
 }
