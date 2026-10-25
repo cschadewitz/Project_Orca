@@ -13,6 +13,10 @@ are new files in this directory. Production and existing test files are reserved
 
 ## Packet
 
+- [#594 native dispatch seam](dispatch-seam/README.md): private offline patch and
+  29 actual JSON-RPC/NDJSON dispatch tests, extending merged PR676. Native
+  completeness and maintained release-pair support remain unavailable.
+
 - [#594 provider contract proposal](../../implementation/594-provider-evidence-contract.md):
   25 October release/source refresh, smallest binding proposal and remaining
   installed-provider/actual-Cal blockers. The positive handoff stays disabled.

@@ -1,0 +1,101 @@
+{
+  "bridge": {
+    "version": "2.2.2",
+    "commit": "202e66e63343ec4f5a5e35ab590251d813d129ca",
+    "nativeDependency": "^0.160.1"
+  },
+  "native": {
+    "version": "0.160.1",
+    "commit": "d27764b82f7118f674371e6d6e76271d9d606edb",
+    "execution": "not run; no completeness descriptor"
+  },
+  "rpc": {
+    "version": "9.0.1",
+    "commit": "20969f3e75cb3cd35c2bb794b1d15cc2dfbe4abb",
+    "tarballSha256": "7f1d17fc0663c5fa78f1e743f8cd0e188b7d569d35e07aa725338af6455489c2",
+    "tarballIntegrity": "sha512-rfuA6T75H6m5EkbhtEPzre9pT0HPcDI2MMy4+nPFIBks5J8JBAUHD4tRYSgaBOijIEC7SRkC1kKyXTLqbmh9jw==",
+    "connectionJsSha256": "0a3a46fad254b78fc2ee371d8438037c860b9bc73124fddb038bf3bb5a3c94f4"
+  },
+  "bridgeFiles": [
+    {
+      "path": "src/app-server/v2/CommandExecutionRequestApprovalParams.ts",
+      "blob": "0ad35b402303ddd719aba33e5d220856e63ab351",
+      "local": "upstream/app-server/v2/CommandExecutionRequestApprovalParams.ts.txt"
+    },
+    {
+      "path": "src/app-server/LegacyAppPathString.ts",
+      "blob": "5c0a1b1e446796eb4ec51474ce9bcc4c9777c9ed",
+      "local": "upstream/app-server/LegacyAppPathString.ts.txt"
+    },
+    {
+      "path": "src/app-server/v2/CommandAction.ts",
+      "blob": "91c92c9cbf8b2a42a6a5a3da756655a43c93ad82",
+      "local": "upstream/app-server/v2/CommandAction.ts.txt"
+    },
+    {
+      "path": "src/app-server/v2/CommandExecutionApprovalKind.ts",
+      "blob": "f94eac8da4d920b2bf551b97c16d438fac2aade1",
+      "local": "upstream/app-server/v2/CommandExecutionApprovalKind.ts.txt"
+    },
+    {
+      "path": "src/app-server/v2/ExecPolicyAmendment.ts",
+      "blob": "e893dd4477e1ce96af45f0debcad8de0b55ceb50",
+      "local": "upstream/app-server/v2/ExecPolicyAmendment.ts.txt"
+    },
+    {
+      "path": "src/app-server/v2/NetworkApprovalContext.ts",
+      "blob": "b4b78e473ccaea68fa670b3687b1659b6a77cc1f",
+      "local": "upstream/app-server/v2/NetworkApprovalContext.ts.txt"
+    },
+    {
+      "path": "src/app-server/v2/NetworkApprovalProtocol.ts",
+      "blob": "9dd4066fd13e1a9a1e133fb9abe1232dcd81414f",
+      "local": "upstream/app-server/v2/NetworkApprovalProtocol.ts.txt"
+    },
+    {
+      "path": "src/app-server/v2/NetworkPolicyAmendment.ts",
+      "blob": "4e5092e4d0ca72345d785aab8b30e4a482800c4e",
+      "local": "upstream/app-server/v2/NetworkPolicyAmendment.ts.txt"
+    },
+    {
+      "path": "src/app-server/v2/NetworkPolicyRuleAction.ts",
+      "blob": "55ec70032a6bb146d701d053ab186c6d3b74d50c",
+      "local": "upstream/app-server/v2/NetworkPolicyRuleAction.ts.txt"
+    },
+    {
+      "path": "src/app-server/v2/CommandExecutionRequestApprovalResponse.ts",
+      "blob": "33df225621eaa95df57f4c8ec9b5799c7260e615",
+      "local": "upstream/app-server/v2/CommandExecutionRequestApprovalResponse.ts.txt"
+    },
+    {
+      "path": "src/app-server/v2/CommandExecutionApprovalDecision.ts",
+      "blob": "c022030a1e2ba6dda977910eb3b96588110c4a18",
+      "local": "upstream/app-server/v2/CommandExecutionApprovalDecision.ts.txt"
+    },
+    {
+      "path": "src/app-server/RequestId.ts",
+      "blob": "8a771bd0213287dd6f2d0795c805a0c69386f632",
+      "local": "upstream/app-server/RequestId.ts.txt"
+    },
+    {
+      "path": "src/CodexAppServerClient.ts",
+      "blob": "9a1f95c8d772ab514ac584c6e85a84276073bf43",
+      "local": "upstream/CodexAppServerClient.ts.txt"
+    },
+    {
+      "path": "src/CodexJsonRpcConnection.ts",
+      "blob": "94fb23bb0598107d06efa90bd45b9d91b1a57cf0",
+      "local": "upstream/CodexJsonRpcConnection.ts.txt"
+    },
+    {
+      "path": "src/app-server/ServerRequest.ts",
+      "blob": "89a544005648918444561e165b3fb545244921fe",
+      "local": "upstream/app-server/ServerRequest.ts.txt"
+    },
+    {
+      "path": "src/StdUtils.ts",
+      "blob": "9ab75ee556f9be8c984de4bcb9a4ccfd9681b9d6",
+      "local": "upstream/StdUtils.ts.txt"
+    }
+  ]
+}
