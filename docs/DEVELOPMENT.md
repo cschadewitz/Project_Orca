@@ -857,3 +857,27 @@ an engine test asserts a selected model actually reached the agent (#185). A pla
 may also carry `setConfig: { configId, value }`: during that turn the agent switches its own
 option and sends `config_option_update`, which is how the pooled‑session drift test makes an
 agent wander off the run's model (#187).
+
+When scripted agents share `--state`, each prompt with deliverables holds the existing
+`@orca/store` cross-process mutex at `<state-file>.lock` from the state read through
+entry selection, awaited notifications/permission requests/file writes and the final
+counter save. The parent directory is created before locking; an absent state file is
+initialized under the lock. A prompt without deliverables does not create state. Without
+`--state`, counters still reset each prompt.
+
+Counters retain the original commit boundary: an exception before the final save commits
+none of that prompt's increments, even if earlier files were written. Cancellation before
+an entry's write leaves that entry unconsumed and commits earlier completed entries;
+skipped or permission-denied entries consume counters. Cancellation during an already
+pending permission request retains that entry's prior consumption behavior. This is counter
+serialization, not a filesystem transaction or crash-atomic artifact/counter commit.
+
+The mutex awaits the whole callback and releases on return or throw. A waiting cancelled
+turn keeps its cancellation flag until it can enter and reach the existing cancellation
+check; acquisition retains the store's 60-second bound and the ACP client's existing
+cancellation grace/termination behavior. A deliberately hung playbook can therefore block
+other state users until termination or lock timeout. Dead same-host owners are recovered
+using the store's owner-token/PID rules; live, unknown, malformed or empty lock owners are
+never removed just because they are old. No cross-host or PID-namespace recovery guarantee
+is added. The real-process contract tests are in
+`packages/testing/test/scripted-agent-state.test.ts`.

@@ -20,6 +20,7 @@
   ],
   "dependencies": {
     "@orca/core": "workspace:*",
+    "@orca/store": "workspace:*",
     "@orca/agents": "workspace:*",
     "@agentclientprotocol/sdk": "^1.8.0",
     "yaml": "^2.9.1",
