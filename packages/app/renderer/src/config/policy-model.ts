@@ -173,6 +173,12 @@ function asRule(value: unknown): SidecarRule | undefined {
   const row = value as Record<string, unknown>;
   const match = row["match"];
   if (typeof match !== "object" || match === null || Array.isArray(match)) return undefined;
+  // Known match fields are optional strings. Refuse malformed hand edits before the
+  // warning or form reads them; leave unknown keys intact for lossless round trips.
+  const fields = match as Record<string, unknown>;
+  for (const key of MATCH_KEYS) {
+    if (fields[key] !== undefined && typeof fields[key] !== "string") return undefined;
+  }
   const decision = row["decision"];
   if (typeof decision !== "string" || !(PERMISSION_DECISIONS as readonly string[]).includes(decision)) {
     return undefined;

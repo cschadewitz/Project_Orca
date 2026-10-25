@@ -47,6 +47,15 @@ let fake: FakeBridge;
 let h: Harness;
 const teardown: (() => void)[] = [];
 
+// Hand-edited JSON bypasses the wire types; exercise both tool paths and every decision.
+const malformedPathRules = ["path", "pathPrefix"].flatMap((key) =>
+  [null, 42].flatMap((value) =>
+    ["read", "execute"].flatMap((kind) =>
+      ["allow", "deny", "ask"].map((decision) => ({ match: { kind, [key]: value }, decision })),
+    ),
+  ),
+);
+
 describe("the sidecar as a document", () => {
   const doc = (): SidecarDocument => {
     const parsed = parseSidecar(PERMISSIONS_TEXT);
@@ -123,6 +132,18 @@ describe("the sidecar as a document", () => {
     ).toBeUndefined();
     // And the one that is fine: an empty match is "matches anything", not a broken row.
     expect(parseSidecar('{"version":1,"agents":{"claude":{"rules":[{"match":{},"decision":"allow"}]}}}')).toBeDefined();
+  });
+
+  it.each(malformedPathRules)("refuses malformed path rules before rendering: %j", (rule) => {
+    const text = JSON.stringify({ version: 1, agents: { claude: { rules: [rule] } } });
+    expect(parseSidecar(text)).toBeUndefined();
+  });
+
+  it.each(
+    ["kind", "titlePattern", "scope"].flatMap((key) => [null, 42, false, [], {}].map((value) => ({ [key]: value }))),
+  )("refuses other known match fields with non-string values: %j", (match) => {
+    const text = JSON.stringify({ agents: { claude: { rules: [{ match, decision: "allow" }] } } });
+    expect(parseSidecar(text)).toBeUndefined();
   });
 
   it("refuses a version it has not been taught, rather than rewriting it as a 1", () => {
@@ -452,6 +473,28 @@ describe("the policy editor", () => {
   afterEach(() => {
     cleanup();
     while (teardown.length) teardown.pop()?.();
+  });
+
+  it.each(malformedPathRules)("shows the cannot-edit state for malformed paths: %j", async (rule) => {
+    const text = JSON.stringify({ version: 1, agents: { claude: { rules: [rule] } } });
+    fake.script({
+      "config.get": () => ({
+        ok: true,
+        result: {
+          ...CONFIG_GET,
+          permissions: { ...CONFIG_GET.permissions, text, parsed: JSON.parse(text) as unknown },
+        },
+      }),
+    });
+    const view = renderPanel();
+    await screen.findByText(/cannot be edited here/);
+    expect(await panel()).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add a grant" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    view.close();
+    view.reopen();
+    await screen.findByText(/cannot be edited here/);
+    expect(callsTo("config.set")).toBe(0);
   });
 
   it("labels saved wildcard allows as ignored and preserves them when another rule is saved", async () => {
