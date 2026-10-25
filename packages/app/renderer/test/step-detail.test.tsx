@@ -19,7 +19,7 @@ import { STATUS_PRESENTATION } from "@orca/design";
 import type { NotificationMessage, RunsEventsParams, RunsEventsResult } from "@orca/protocol";
 import { ArtifactPanelProvider, useArtifactPanel, type ArtifactTarget } from "../src/artifacts/panel-context.js";
 import { StepDetail } from "../src/step/step-detail.js";
-import type { LogEvent } from "../src/step/line-buffer.js";
+import type { AgentUpdate, LogEvent } from "../src/step/line-buffer.js";
 import { RUN_DETAILS } from "./fixtures.js";
 import { harness, installBridge, type Harness } from "./harness.js";
 import type { FakeBridge } from "./fake-bridge.js";
@@ -254,6 +254,65 @@ describe("the step detail pane", () => {
     expect(within(call).getByText("bash")).toBeTruthy();
     expect(within(call).getByText("failed")).toBeTruthy();
     expect(within(call).getByText("deny")).toBeTruthy();
+  });
+
+  it("updates tool rows from the live batch without reselecting the mounted step", async () => {
+    scriptLog([]);
+    renderStep("s-fan");
+    await screen.findByRole("listbox", { name: /^Output of fanout/ });
+    const reads = fake.calls.filter((c) => c.method === "runs.events").length;
+    const push = async (seq: number, updates: AgentUpdate[]): Promise<void> => {
+      act(() => {
+        fake.notify({
+          kind: "notification",
+          method: "agent.update",
+          params: {
+            subscriptionId: "sub-1",
+            runId: "run-parent",
+            stepRunId: "s-fan",
+            sessionId: "sess-2",
+            fromSeq: seq,
+            seq: seq + updates.length - 1,
+            at: "2026-03-01T09:01:00.000Z",
+            updates,
+          },
+        });
+      });
+      // This also proves the real output buffer committed the notification, even when
+      // the old hook never puts that same update into the rendered tool-call fold.
+      await waitFor(() => expect(logLines().some((line) => line.includes(`frame ${seq}`))).toBe(true));
+    };
+    await push(100, [
+      { kind: "tool_call", toolCallId: "live-tool", title: "Read source", status: "pending" },
+      { kind: "agent_message_chunk", text: "frame 100\n" },
+    ]);
+    const call = document.querySelector<HTMLElement>(".orca-tool");
+    expect(call).not.toBeNull();
+    expect(within(call!).getByText("running")).toBeTruthy();
+    await push(102, [
+      { kind: "tool_call_update", toolCallId: "live-tool", status: "in_progress", title: "Reading source" },
+      { kind: "agent_message_chunk", text: "frame 102\n" },
+    ]);
+    expect(within(call!).getByText("Reading source")).toBeTruthy();
+    await push(104, [
+      {
+        kind: "tool_call_update",
+        toolCallId: "live-tool",
+        status: "completed",
+        result: { text: "public result", length: 13 },
+      },
+      { kind: "agent_message_chunk", text: "frame 104\n" },
+    ]);
+    expect(within(call!).getByText("done")).toBeTruthy();
+    expect(within(call!).getByText("public result")).toBeTruthy();
+    await push(106, [
+      { kind: "tool_call", toolCallId: "failed-tool", title: "Check source", status: "failed" },
+      { kind: "agent_message_chunk", text: "frame 106\n" },
+    ]);
+    expect(document.querySelectorAll(".orca-tool")).toHaveLength(2);
+    expect(screen.getByText("failed")).toBeTruthy();
+    expect(document.querySelector(".orca-tool")).toBe(call);
+    expect(fake.calls.filter((c) => c.method === "runs.events")).toHaveLength(reads);
   });
 
   it("shows what the call is waiting to be allowed to do while it is still open", async () => {

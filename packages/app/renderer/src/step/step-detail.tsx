@@ -31,7 +31,6 @@ import { useArtifactsList } from "../artifacts/use-artifacts.js";
 import { Duration, KeyValueList, StateView, StatusChip, Text, textClass } from "../ui/index.js";
 import { OutputPane, outputLabel, type OutputPaneHandle } from "./output-pane.js";
 import { sessionOf } from "./step-facts.js";
-import { foldToolCalls } from "./tool-calls.js";
 import { ToolCallRow } from "./tool-call-row.js";
 import { useStepLog } from "./use-step-log.js";
 import "./step.css";
@@ -76,7 +75,7 @@ function Step({
   });
 
   const session = useMemo(() => sessionOf(log.events), [log.events]);
-  const calls = useMemo(() => foldToolCalls(log.events), [log.events]);
+  const calls = log.toolCalls;
   const status: RunStatus = step.status;
 
   return (
