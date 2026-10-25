@@ -1,5 +1,11 @@
 # Hosted Windows C15 allocator candidate — review before dispatch
 
+**25 October overlap proposal:** The [bounded real-work correction](windows-c15-overlap-candidate.md)
+records the parent-verified run-2 overlap diagnosis and changes the current
+harness to two fixed demos per mode with explicit entry intervals. This page
+retains the original preparation design. Parent review precedes any dispatch;
+there is no new Windows acceptance.
+
 This separate test-only candidate selects allocator PR [#643](https://github.com/cschadewitz/Project_Orca/pull/643)
 head `95ee280be309d50f29b46cb66a12d480fdfc8a7d`, tree
 `8bf5c38903ec0bc13c7c8a313068ba378bda3230`. PR643 is the reviewed portable

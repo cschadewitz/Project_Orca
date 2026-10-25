@@ -1,4 +1,4 @@
-/** Candidate copy of the frozen 20-cell fixture; only aggregate memory attribution added. */
+/** Candidate copy of the frozen 20-cell fixture; aggregate attribution and monotonic entry evidence added. */
 /* global require */
 /* eslint-disable @typescript-eslint/no-require-imports -- Electron's isolated CommonJS fixture entry. */
 const fs = require("node:fs");
@@ -21,7 +21,8 @@ const nativeTimes = {},
   callbacks = {},
   gaps = {},
   starts = new Map();
-const deadline = setTimeout(() => app.exit(9), 90000);
+// Two fixed CLI demos retain the original 50s bound each, plus 20s receipt/exit margin.
+const deadline = setTimeout(() => app.exit(9), 120000);
 for (const name of ["profile", "logs", "crashes"]) fs.mkdirSync(path.join(request.base, name));
 app.setName("ORCA owned C15 fixture");
 app.setPath("userData", path.join(request.base, "profile"));
@@ -80,6 +81,7 @@ function arm(target, schedule) {
       this.hits++;
       this.outstanding++;
       this.peak = Math.max(this.peak, this.outstanding);
+      this.enteredNs = process.hrtime.bigint().toString();
       entered();
       try {
         if (schedule === "stall") await gate;
@@ -405,6 +407,7 @@ app.whenReady().then(async () => {
       await bounded(fault.seen, 3000, "fault-not-reached");
       cell.faultObserved = true;
       cell.enteredMs = performance.now() - started;
+      cell.faultEnteredNs = fault.enteredNs;
       const before = { diskCalls, dispatches, allocations: payload.stats().allocations };
       if (request.schedule === "stall") {
         // All 128 attempts settle without enqueueing another disk mutation or allocating another report.
@@ -505,7 +508,7 @@ app.whenReady().then(async () => {
     }
     phase = "execution-wait";
     r.faultCampaignElapsedMs = performance.now() - started;
-    await until(() => fs.existsSync(path.join(request.base, "execution.done")), 50000);
+    await until(() => fs.existsSync(path.join(request.base, "execution.done")), 100000);
     sampleFinalMemory();
     assert.equal(legacyCalls, 0);
     assert.equal(r.unhandledRejections, 0);
