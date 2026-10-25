@@ -200,7 +200,7 @@ describe("persistent diagnostics choice", () => {
     expect(f.bridge.prepareExport).not.toHaveBeenCalled();
     expect(f.bridge.chooseDestination).not.toHaveBeenCalled();
     expect(f.bridge.save).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Diagnostic lookback" }).textContent).toBe("5\u00a0minutes");
+    expect(screen.getByRole("button", { name: /Diagnostic lookback: 5\sminutes/ }).textContent).toBe("5\u00a0minutes");
     expect(screen.getByText(/Production capture is unavailable/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Export current diagnostics" }).getAttribute("aria-disabled")).toBe(
       "true",
@@ -223,10 +223,28 @@ describe("persistent diagnostics choice", () => {
     const f = fakeBridge();
     mount(f.bridge);
     await screen.findByText("Local diagnostics: Off");
-    fireEvent.click(screen.getByRole("button", { name: "Diagnostic lookback" }));
+    fireEvent.click(screen.getByRole("button", { name: /Diagnostic lookback: 5\sminutes/ }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "15 minutes" }));
     await waitFor(() => expect(f.bridge.setMinutes).toHaveBeenCalledWith(15));
+    expect(screen.getByRole("button", { name: /Diagnostic lookback: 15\sminutes/ }).textContent).toBe(
+      "15\u00a0minutes",
+    );
     expect(f.bridge.setEnabled).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [1, "1 minute"],
+    [5, "5 minutes"],
+    [15, "15 minutes"],
+  ])("includes the visible duration and field context in the lookback name at %i minutes", async (minutes, label) => {
+    const f = fakeBridge({ minutes });
+    mount(f.bridge);
+    await screen.findByText("Local diagnostics: Off");
+    const trigger = screen.getByRole("button", { name: `Diagnostic lookback: ${label.replace(" ", "\u00a0")}` });
+    expect(trigger.textContent?.replace(/\s/g, " ")).toBe(label);
+    const help = document.getElementById(trigger.getAttribute("aria-describedby") ?? "");
+    expect(help?.textContent).toBe("One to fifteen minutes; five minutes by default. Limits may retain less history.");
+    expect(f.bridge.setMinutes).not.toHaveBeenCalled();
   });
 
   it("leaves ordinary UI usable when the bridge is absent or rejects without rendering a raw exception", async () => {
