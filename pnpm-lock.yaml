@@ -423,6 +423,9 @@ importers:
       '@orca/core':
         specifier: workspace:*
         version: link:../core
+      '@orca/store':
+        specifier: workspace:*
+        version: link:../store
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
