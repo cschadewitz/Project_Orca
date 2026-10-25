@@ -13,6 +13,10 @@ are new files in this directory. Production and existing test files are reserved
 
 ## Packet
 
+- [#594 provider contract proposal](../../implementation/594-provider-evidence-contract.md):
+  25 October release/source refresh, smallest binding proposal and remaining
+  installed-provider/actual-Cal blockers. The positive handoff stays disabled.
+
 - [Source and capability map](source-map.md): release pins, payload losses and
   support limits.
 - [Test matrix](test-matrix.md): assertions, seams and unproved boundaries.
