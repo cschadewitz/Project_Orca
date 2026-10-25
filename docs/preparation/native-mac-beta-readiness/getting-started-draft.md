@@ -2,10 +2,12 @@
 
 **Guide draft awaiting a tested candidate.** This is versioned source for #389's
 existing Project Orca Hub. It is not a download page, invitation or tested UI walkthrough.
-The coordinator must bind it to the tested candidate before publishing. Labels below
-were audited on 2026-10-09 at #567 `9ac19ead4347180e44be6162a41d2d5726b3f929`,
-with #569 `1a2e003e04beaa2e13cd35115faa6c4234145264` ownership restrictions.
-These separate draft heads are source observations, not a packaged UI or hardware pass.
+The coordinator must bind it to the tested candidate before publishing. Current
+source audit: main `0f45181c52dfc4bf1edd0e4469ff688dedef9189`, including merged
+[#607](https://github.com/cschadewitz/Project_Orca/pull/607). The original 9 October
+#567/#569 control observations are retained in the runbook's dated evidence; mounted
+setup/launch, saved-config binding and ownership recovery are now integrated. Core
+#333/#334 are closed, while candidate-specific native acceptance remains unpassed.
 No contributor commands are part of the intended tester journey.
 
 For the later guided session, use the short [operator checklist](operator-checklist.md).
@@ -114,12 +116,16 @@ or its outcome is unknown, report the stage and separately identified safe code.
 copy the surrounding raw error, token or private path. Locked or unavailable protected
 state requires escalation; deleting journals or resetting Keychain can destroy recovery.
 
-If the app was lost during local-daemon startup or cleanup, #569 can refuse the same
-workspace until ownership is reconciled. Its source has no supported orphan-recovery
-command; #570's integration owner must supply one before this journey is accepted.
-**Recover original launch** repairs a retained intent, not daemon ownership. Preserve
-the old workspace and report the stage. Another empty workspace starts independent
-new work; it does not recover the old run. Repeated Connect or restarts are not a fix.
+If the app was lost during local-daemon startup or cleanup, use the candidate's
+**Review same-boot recovery** and **Reconcile same-boot ownership** only as its tested
+instructions describe. Supported exited-writer reconciliation is implemented;
+surviving/foreign writers and legacy uncertain ownership remain blocked. For an
+unclean session from an earlier boot, **Mark previous session ended** is a separate
+explicit confirmation under the implemented recovery contract, not an automatic fix.
+Preserve retained work and inspect it before any explicit continuation. **Recover
+original launch** repairs a retained intent, not daemon ownership. Repeated Connect,
+abandoning an intent or choosing another workspace does not recover the old run.
+If the route is unavailable or refused, preserve the workspace and contact support.
 
 Updates should follow the tested #387 flow: approve the specific update, then let the
 app install it automatically when its accepted safe-state conditions hold. Actual control
@@ -128,8 +134,9 @@ manually replace software or attempt restore while work or a draft is active on 
 of this draft. Use only the approved candidate-specific recovery instructions.
 
 Diagnostics, once validated in this candidate, are optional and separate from ordinary
-use. Rolling capture starts off and requires explicit opt-in. Preview the exact allowlisted
-report, omissions and local destination before choosing local export; cancel if unsure.
+use. Rolling capture starts off and requires explicit opt-in. Prepare the current or
+recovered allowlisted report, read its status/omissions, choose a local destination,
+then separately choose **Save**; cancel if unsure. There is no in-app report viewer.
 Export does not upload or share. Sharing is a separate choice of recipient and destination,
 and recipient copies cannot be recalled. If diagnostics are unavailable, a short text
 report is enough; do not substitute raw logs, screenshots, prompts, code or agent output.
@@ -137,8 +144,8 @@ report is enough; do not substitute raw logs, screenshots, prompts, code or agen
 Current source calls this section **Local diagnostics**, with **Keep off** and
 **Enable local diagnostics**. It currently states that production capture is unavailable;
 enabling the setting does not prove diagnostics were collected. The completed guide must
-match the native-validated preview/destination/**Save**/**Cancel** controls. Do not enable
-capture or export merely to complete an instruction that the candidate cannot support.
+match the native-validated report preparation/destination/**Save**/**Cancel** controls.
+Do not enable capture or export merely to complete an instruction that the candidate cannot support.
 
 Send optional feedback to Casey through the private contact supplied for your session.
 Use the [short tester guide](../beta-feedback/tester-guide.md) and
@@ -151,7 +158,7 @@ or decline feedback without granting anyone machine access or workplace-sharing 
 Before putting this prose into the existing Hub, bind it to the exact signed candidate,
 private download route, tested OS/chip and supported sample/agent, actual first-run and
 launch control names, local data locations, updater owner's tested procedure and #416's
-validated consent/preview/export/cancel behavior. Keep Hub access unchanged and check
+validated consent/local Save/export/cancel behavior. Keep Hub access unchanged and check
 download links as an invited user without implicit source access.
 
 Have a target-like participant follow the published candidate-matched guide without
@@ -161,7 +168,8 @@ protected-key recovery and manual diagnostic privacy remain hard acceptance gate
 Publishing a guide alone completes none of #385/#386/#388/#390/#416.
 
 The app integration owner supplies the final coherent candidate head, native paths,
-real-agent configuration persistence/rebind and #570 recovery through root. The pinned
+candidate-validated real-agent configuration persistence/rebind and implemented
+ownership-recovery instructions through the coordinator. The pinned
 local launch sample cannot substitute for `beta-first-job-v1`, gate/artifact/cancel
 fixtures or a real-agent pass. Exact controls/source pins and remaining publication
 fields are listed in the [acceptance runbook](acceptance-runbook.md).
