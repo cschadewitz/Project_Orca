@@ -218,7 +218,10 @@ export function OutputPane(props: OutputPaneProps): JSX.Element {
     if (event.key !== "Enter") return;
     event.preventDefault();
     const first = matches[0];
-    if (first !== undefined) goTo(first);
+    if (first !== undefined) {
+      goTo(first);
+      list.current?.focus();
+    }
   };
 
   const last = items.length - 1;

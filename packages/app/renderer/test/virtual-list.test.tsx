@@ -530,6 +530,32 @@ describe("follow, for a stream", () => {
     );
   }
 
+  it("focuses its tab stop without selecting, scrolling or releasing follow", () => {
+    const h = harness();
+    teardown.push(h.dispose);
+    const { Providers } = h;
+    const onHold = vi.fn();
+    const handle: RefObject<VirtualListHandle | null> = { current: null };
+    const view = (count: number) => (
+      <Providers>
+        <Stream count={count} onHold={onHold} handle={handle} />
+      </Providers>
+    );
+    const { rerender } = render(view(100));
+    const where = scroller().scrollTop;
+    const focus = vi.spyOn(listbox(), "focus");
+    act(() => handle.current!.focus());
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(document.activeElement).toBe(listbox());
+    expect(listbox().hasAttribute("aria-activedescendant")).toBe(false);
+    expect(scroller().scrollTop).toBe(where);
+    expect(onHold).not.toHaveBeenCalled();
+    rerender(view(140));
+    expect(scroller().scrollTop).toBe(140 * ROW - VIEWPORT);
+    expect(document.activeElement).toBe(listbox());
+    expect(onHold).not.toHaveBeenCalled();
+  });
+
   it.each(["K", "ArrowUp", "Home", "PageUp", "minimap", "reveal"])(
     "holds after %s navigation, including after further appends",
     (navigation) => {
