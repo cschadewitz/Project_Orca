@@ -5,6 +5,7 @@
  * answer and resumes it), CLI prompt, or an upstream ACP client when ORCA runs
  * as an agent inside Kepler/Zed.
  */
+import type { PermissionOption } from "@agentclientprotocol/sdk";
 import {
   isOrcaError,
   newId,
@@ -29,6 +30,12 @@ export interface HumanInputQuery {
    * compares against - and show the `label`.
    */
   options: GateOption[];
+  /**
+   * Trusted original ACP ID/kind pairs, in offered order. Runtime-only: supplied by
+   * the agent permission callback, never reconstructed from gate presentation or
+   * persisted/client context. Missing metadata cannot authorize ACP forwarding.
+   */
+  permissionOptions?: readonly Pick<PermissionOption, "optionId" | "kind">[];
   context: Record<string, unknown>;
   /**
    * Fires when the run is cancelled while the question is still open. Ports
@@ -152,6 +159,8 @@ export async function askHumanInput(opts: {
   question: string;
   /** Bare strings are accepted and normalised here; a workflow may still declare gate options as words. */
   options: GateOptionInput[];
+  /** Original permission semantics for in-process ports only; excluded from emitted payloads. */
+  permissionOptions?: HumanInputQuery["permissionOptions"];
   /**
    * The agent whose turn this ask is holding open, recorded on `human.requested` so an
    * attention card can name it (#248). Only the permission path has one - a workflow gate
@@ -172,6 +181,7 @@ export async function askHumanInput(opts: {
     question: opts.question,
     // Normalised before the event is emitted, so nothing written from here on is a bare string.
     options: opts.options.map(toGateOption),
+    ...(opts.permissionOptions ? { permissionOptions: opts.permissionOptions } : {}),
     context: opts.context ?? {},
     ...(opts.live ? { live: opts.live } : {}),
   };
