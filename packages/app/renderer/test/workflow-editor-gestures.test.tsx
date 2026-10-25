@@ -9,12 +9,14 @@
  * graph and refusal tests need a document and answers that one does not have, so they swap
  * in `scripted`, which records every call and answers from a fixed document.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
+import { App } from "../src/App.js";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { DraftIssue, DraftOperation, WorkflowDraftView } from "@orca/protocol";
 import { ZOOM_MAX, ZOOM_MIN } from "../src/ui/canvas-view.js";
-import { NODE_TYPE_MIME } from "../src/workflow/editor/editor-canvas.js";
-import { newNode } from "../src/workflow/editor/draft-model.js";
+import { EditorCanvas, type EditorCanvasProps, NODE_TYPE_MIME } from "../src/workflow/editor/editor-canvas.js";
+import { editorGraph, newNode } from "../src/workflow/editor/draft-model.js";
 import type { WorkflowDraftBridge } from "../../src/workflow-draft-bridge.js";
 import type { FakeBridge } from "./fake-bridge.js";
 import { harness, installBridge, renderChrome, stubMatchMedia, type Harness } from "./harness.js";
@@ -113,6 +115,7 @@ function scripted(
 async function openEditor<T>(
   setup: (fake: FakeBridge) => T,
   beforeEdit?: (fake: FakeBridge) => void,
+  strict = false,
 ): Promise<{ drafts: T; h: Harness; said: string[] }> {
   const fake = installBridge({ deepLink: "orca://workflow/ai-sdlc" });
   teardown.push(fake.install());
@@ -121,7 +124,15 @@ async function openEditor<T>(
   teardown.push(h.dispose);
   const said: string[] = [];
   teardown.push(h.announcements.subscribe((sentence) => said.push(sentence)));
-  renderChrome(h);
+  if (strict)
+    render(
+      <StrictMode>
+        <h.Providers>
+          <App />
+        </h.Providers>
+      </StrictMode>,
+    );
+  else renderChrome(h);
   const edit = await screen.findByRole("button", { name: "Edit" });
   beforeEdit?.(fake);
   fireEvent.click(edit);
@@ -129,8 +140,8 @@ async function openEditor<T>(
   return { drafts, h, said };
 }
 
-async function onCanvas<T>(setup: (fake: FakeBridge) => T) {
-  const opened = await openEditor(setup);
+async function onCanvas<T>(setup: (fake: FakeBridge) => T, strict = false) {
+  const opened = await openEditor(setup, undefined, strict);
   const canvas = await screen.findByRole("listbox", { name: "ai-sdlc draft graph" });
   act(() => canvas.focus());
   return { ...opened, canvas };
@@ -276,8 +287,8 @@ describe("the canvas's keys", () => {
 });
 
 describe("the canvas's pointer gestures", () => {
-  it("connects two nodes by dragging from one node's port onto another", async () => {
-    const { canvas, drafts } = await onCanvas((fake) => draftBridge(fake));
+  it.each([false, true])("connects two nodes once by pointer (StrictMode: %s)", async (strict) => {
+    const { canvas, drafts } = await onCanvas((fake) => draftBridge(fake), strict);
     const had = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
     let under: Element | null = box(canvas, "done");
     Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => under });
@@ -631,5 +642,113 @@ describe("nested graphs", () => {
     fireEvent.click(screen.getByRole("button", { name: /Subworkflow/ }));
     await waitFor(() => expect(drafts.ops()).toHaveLength(3));
     expect(drafts.ops()[2]).toMatchObject({ op: "addNode", id: "subworkflow-1", node: { type: "subworkflow" } });
+  });
+});
+
+// Mount the real canvas: these assert callback count as well as the bridge ops above.
+describe("wire ownership under StrictMode", () => {
+  function mount() {
+    const h = harness();
+    teardown.push(h.dispose);
+    const onConnect = vi.fn();
+    const onPlace = vi.fn();
+    const noop = () => {};
+    let props: EditorCanvasProps = {
+      graph: editorGraph(NESTED, NESTED, [])!,
+      layout: { graphs: {} },
+      path: [],
+      issues: { byNode: new Map(), byEdge: new Map() },
+      selection: undefined,
+      onSelect: noop,
+      readOnly: false,
+      label: "Wire test",
+      onPlace,
+      onConnect,
+      onAdd: noop,
+      onInsert: noop,
+      onDelete: noop,
+      onOpenNested: noop,
+      onRename: noop,
+      onConnectMenu: noop,
+      onAddMenu: noop,
+      onReorder: noop,
+      onUndo: noop,
+      onRedo: noop,
+    };
+    let epoch = 1;
+    const tree = () => (
+      <StrictMode>
+        <h.Providers>
+          <EditorCanvas key={epoch} {...props} />
+        </h.Providers>
+      </StrictMode>
+    );
+    const view = render(tree());
+    const canvas = () => screen.getByRole("listbox", { name: "Wire test" });
+    const port = () => box(canvas(), "start").querySelector<HTMLElement>(".orca-wfedit__port")!;
+    const had = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => box(canvas(), "done") });
+    teardown.push(() =>
+      had
+        ? Object.defineProperty(document, "elementFromPoint", had)
+        : delete (document as Partial<Document>).elementFromPoint,
+    );
+    return {
+      onConnect,
+      onPlace,
+      canvas,
+      port,
+      update: (patch: Partial<EditorCanvasProps>) => {
+        props = { ...props, ...patch };
+        view.rerender(tree());
+      },
+      replaceTarget: () => {
+        epoch += 1;
+        view.rerender(tree());
+      },
+    };
+  }
+
+  it("consumes completion once and ignores another pointer's completion", () => {
+    const { port, onConnect, onPlace, canvas } = mount();
+    const originalPosition = box(canvas(), "start").getAttribute("style");
+    fireEvent.pointerDown(port(), { button: 0, pointerId: 2 });
+    fireEvent.pointerMove(port(), { pointerId: 2, clientX: 300, clientY: 40 });
+    fireEvent.pointerDown(port(), { button: 0, pointerId: 3, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(port(), { pointerId: 3, clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(port(), { pointerId: 3, clientX: 300, clientY: 200 });
+    expect(onPlace).not.toHaveBeenCalled();
+    expect(box(canvas(), "start").getAttribute("style")).toBe(originalPosition);
+    expect(onConnect).not.toHaveBeenCalled();
+    expect(port().className).toContain("orca-port--armed");
+    fireEvent.pointerUp(port(), { pointerId: 2 });
+    fireEvent.pointerUp(port(), { pointerId: 2 });
+    expect(onConnect).toHaveBeenCalledExactlyOnceWith("start", "done");
+    expect(onPlace).not.toHaveBeenCalled();
+  });
+
+  it.each(["pointerCancel", "lostPointerCapture"] as const)("cancels on %s without connecting", (event) => {
+    const { port, onConnect, canvas } = mount();
+    fireEvent.pointerDown(port(), { button: 0, pointerId: 2 });
+    fireEvent[event](port(), { pointerId: 2 });
+    fireEvent.pointerUp(port(), { pointerId: 2 });
+    expect(onConnect).not.toHaveBeenCalled();
+    expect(canvas().querySelector(".orca-port--armed")).toBeNull();
+  });
+
+  it.each(["readOnly", "path", "target"] as const)("drops an active wire on %s change", (change) => {
+    const { port, onConnect, update, replaceTarget } = mount();
+    fireEvent.pointerDown(port(), { button: 0, pointerId: 2 });
+    if (change === "readOnly") {
+      update({ readOnly: true });
+      update({ readOnly: false });
+    } else if (change === "path") update({ path: [{ node: "again" }] });
+    else replaceTarget();
+    fireEvent.pointerUp(port(), { pointerId: 2 });
+    expect(onConnect).not.toHaveBeenCalled();
+    // The new owner can start a fresh gesture.
+    fireEvent.pointerDown(port(), { button: 0, pointerId: 3 });
+    fireEvent.pointerUp(port(), { pointerId: 3 });
+    expect(onConnect).toHaveBeenCalledExactlyOnceWith("start", "done");
   });
 });

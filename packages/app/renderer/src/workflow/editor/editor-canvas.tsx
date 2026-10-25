@@ -117,6 +117,8 @@ export function EditorCanvas(props: EditorCanvasProps): JSX.Element {
   const { direction } = graphView;
   const [override, setOverride] = useState<{ id: string; x: number; y: number } | undefined>(undefined);
   const [wire, setWire] = useState<{ from: string; x: number; y: number } | undefined>(undefined);
+  // Gesture ownership is consumed synchronously; React may replay state updaters.
+  const activeWire = useRef<{ from: string; pointer: number; path: DraftGraphPath } | undefined>(undefined);
   const [dropTarget, setDropTarget] = useState<number | "canvas" | undefined>(undefined);
   const scene = useRef<HTMLDivElement>(null);
 
@@ -332,29 +334,39 @@ export function EditorCanvas(props: EditorCanvasProps): JSX.Element {
     (event: ReactPointerEvent<HTMLSpanElement>, id: string) => {
       if (event.button !== 0 || readOnly) return;
       event.stopPropagation();
+      if (activeWire.current) return;
       event.currentTarget.setPointerCapture?.(event.pointerId);
+      activeWire.current = { from: id, pointer: event.pointerId, path };
       setWire({ from: id, ...toLayout(event.clientX, event.clientY) });
     },
-    [readOnly, toLayout],
+    [readOnly, toLayout, path],
   );
   const onPortPointerMove = useCallback(
     (event: ReactPointerEvent<HTMLSpanElement>) => {
-      setWire((current) => (current ? { ...current, ...toLayout(event.clientX, event.clientY) } : current));
+      if (activeWire.current?.pointer !== event.pointerId) return;
+      const point = toLayout(event.clientX, event.clientY);
+      setWire((current) => (current ? { ...current, ...point } : current));
     },
     [toLayout],
   );
-  const onPortPointerUp = useCallback((event: ReactPointerEvent<HTMLSpanElement>) => {
+  const finishWire = useCallback((event: ReactPointerEvent<HTMLSpanElement>) => {
+    const current = activeWire.current;
+    if (!current || current.pointer !== event.pointerId) return;
+    activeWire.current = undefined;
+    setWire(undefined);
     if (event.currentTarget.hasPointerCapture?.(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);
-    setWire((current) => {
-      if (current) {
-        const target = document.elementFromPoint?.(event.clientX, event.clientY)?.closest<HTMLElement>("[data-node-id]")
-          ?.dataset.nodeId;
-        if (target !== undefined && target !== current.from) latest.current.props.onConnect(current.from, target);
-      }
-      return undefined;
-    });
+    const latestProps = latest.current.props;
+    if (event.type !== "pointerup" || latestProps.readOnly || current.path !== latestProps.path) return;
+    const target = document.elementFromPoint?.(event.clientX, event.clientY)?.closest<HTMLElement>("[data-node-id]")
+      ?.dataset.nodeId;
+    if (target !== undefined && target !== current.from) latestProps.onConnect(current.from, target);
   }, []);
+
+  useEffect(() => {
+    activeWire.current = undefined;
+    setWire(undefined);
+  }, [readOnly, path]);
 
   /* ---------- dropping from the palette ---------- */
 
@@ -543,8 +555,9 @@ export function EditorCanvas(props: EditorCanvasProps): JSX.Element {
                         title="Drag to another node to connect"
                         onPointerDown={(event) => onPortPointerDown(event, node.node.id)}
                         onPointerMove={onPortPointerMove}
-                        onPointerUp={onPortPointerUp}
-                        onPointerCancel={onPortPointerUp}
+                        onPointerUp={finishWire}
+                        onPointerCancel={finishWire}
+                        onLostPointerCapture={finishWire}
                       />
                     )}
                   </div>
