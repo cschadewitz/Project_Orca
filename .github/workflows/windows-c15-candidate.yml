@@ -27,7 +27,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          ref: 95ee280be309d50f29b46cb66a12d480fdfc8a7d
+          ref: 14666a315b43bc859ad0b73dda92ddf280b0de10
           path: source
           persist-credentials: false
       - uses: pnpm/action-setup@v6

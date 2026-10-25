@@ -15,6 +15,8 @@ import {
   sha as hash,
   regular,
 } from "../../../../tools/windows-c15/manifest.mjs";
+import { DEMO_COUNT, validateOverlap } from "../../../../tools/windows-c15/overlap.mjs";
+import { launchCli } from "../../../../tools/windows-c15/cli-lifecycle.mjs";
 const [sourceDirectory, electronDirectory, outputDirectory, schedule, privateParent, sealFile, sealDigest] =
   process.argv.slice(2);
 assert.equal(process.platform, "win32");
@@ -62,8 +64,10 @@ const result = {
   timingDeferred: true,
   attempts: 1,
   runs: [],
+  overlapEvidence:
+    "Child-owned captured-clock lifecycle segment (CLI preload evaluation + 2 us, beginning of CLI exit handler - 2 us), strict interior only, conditional on complete successful demos and semantic oracles. Conservative QPC one-tick exclusion; includes startup/waits/cleanup, not exact physical overlap or continuous CPU/engine work or exact OS exit. Parent callback brackets are audit-only.",
   method:
-    "One failure or stall schedule compares sequential Off/On CLI demos; 20 fixed fault cells inside On, no performance retry. Synthetic seams with real Windows x64 Electron/native disk, DPAPI and clock.",
+    "One failure or stall schedule compares sequential Off/On members, each executing two complete sequential CLI demos; 20 fixed fault cells inside On, no performance retry. Synthetic seams with real Windows x64 Electron/native disk, DPAPI and clock.",
 };
 function launch(command, args, options) {
   const child = spawn(command, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"], ...options });
@@ -201,23 +205,50 @@ async function run(mode) {
   const execution = path.join(base, "execution");
   fs.mkdirSync(execution);
   const start = performance.now();
-  const cli = launch(
-    process.execPath,
-    [path.join(repo, "packages/cli/dist/main.js"), "demo", "--dir", execution, "--keep", "--quiet"],
-    { cwd: execution, env: { ...env, PATH: process.env.PATH } },
-  );
-  const cliExit = once(cli, "exit");
-  fs.writeFileSync(path.join(base, "execution.running"), "running");
-  const done = await bounded(cliExit, 50000, "cli-deadline");
+  row.executionMembers = [];
+  const oracles = [];
+  row.outputBytes = 0;
+  for (let index = 0; index < DEMO_COUNT; index++) {
+    const directory = path.join(execution, String(index));
+    fs.mkdirSync(directory);
+    const {
+      child: cli,
+      ready,
+      completed,
+    } = launchCli(
+      launch,
+      process.execPath,
+      [path.join(repo, "packages/cli/dist/main.js"), "demo", "--dir", directory, "--keep", "--quiet"],
+      { cwd: directory, env: { ...env, PATH: process.env.PATH } },
+    );
+    // Symmetric Off/On authorization comes only from the actual preload.
+    await ready;
+    if (index === 0) fs.writeFileSync(path.join(base, "execution.running"), "running");
+    const member = await bounded(completed, 50000, "cli-deadline");
+    row.executionMembers.push({ index, ...member });
+    row.outputBytes += cli.outputBytes();
+    assert.equal(member.exitCode, 0, "fixed CLI workload member failed");
+    // Read stores only after all workflow processes have exited; do not insert
+    // oracle work or an idle gate between the two actual CLI executions.
+  }
   row.executionElapsedMs = performance.now() - start;
-  row.executionExitCode = done[0];
-  row.outputBytes = cli.outputBytes();
+  row.executionExitCode = 0;
   fs.writeFileSync(path.join(base, "execution.done"), "done");
   await file(path.join(base, "result.json"), diagnostic, 40000);
   row.diagnosticExitCode = (await bounded(diagnosticExit, 5000, "diagnostic-exit-deadline"))[0];
   row.diagnostic = JSON.parse(fs.readFileSync(path.join(base, "result.json"), "utf8"));
   validateDiagnostic(row.diagnostic, mode, schedule);
-  row.executionOracle = await semanticOracle(execution);
+  for (let index = 0; index < DEMO_COUNT; index++) {
+    const oracle = await semanticOracle(path.join(execution, String(index)));
+    assert.equal(oracle.artifactCount, 29);
+    oracles.push(oracle);
+  }
+  row.executionOracle = {
+    demos: oracles,
+    artifactCount: oracles.reduce((sum, oracle) => sum + oracle.artifactCount, 0),
+    semanticSignature: sha(JSON.stringify(oracles.map((oracle) => oracle.semanticSignature))),
+    workItems: oracles.map((oracle) => oracle.workItems),
+  };
   row.sentinelUnchanged = fs.readFileSync(path.join(base, "sentinel"), "utf8") === "synthetic unrelated file";
   row.completed = true;
   fs.writeFileSync(path.join(output, schedule + "-" + mode + ".json"), JSON.stringify(row, null, 2) + "\n");
@@ -225,12 +256,15 @@ async function run(mode) {
   assert.equal(row.diagnosticExitCode, 0);
   assert.equal(row.diagnostic.ok, true);
   assert.equal(row.sentinelUnchanged, true);
-  assert.equal(row.executionOracle.artifactCount, 29);
+  assert.equal(row.executionOracle.artifactCount, 29 * DEMO_COUNT);
   assert.ok(row.diagnostic.cells.every((x) => mode === "off" || x.faultObserved));
   // Each seam must have been reached while execution was alive; campaign may finish after the CLI.
   row.allFaultsEnteredDuringExecution =
     mode === "off" || row.diagnostic.cells.every((x) => x.enteredMs < row.executionElapsedMs);
-  assert.equal(row.allFaultsEnteredDuringExecution, true);
+  assert.equal(row.allFaultsEnteredDuringExecution, true, "fault-campaign-outlived-workload");
+  row.monotonicOverlapPass = false;
+  validateOverlap(row);
+  row.monotonicOverlapPass = true;
 }
 try {
   const rootStorage = createHandleRelativeStorage(root, backend);
