@@ -62,6 +62,47 @@ export interface SidecarRule {
   grantedFor?: string;
 }
 
+/**
+ * Presentation only: mirrors `isWildcardPermissionRule` in core/src/model/agent.ts.
+ * The renderer cannot import core (ADR 0008). Keep this projection aligned with that
+ * predicate; the loader remains the authority. Do not reject or rewrite saved rows:
+ * ignored allows may already exist, and deny/ask rules must never be labelled ignored.
+ */
+export function sidecarRuleWarning(rule: SidecarRule): string | undefined {
+  if (rule.decision !== "allow") return undefined;
+  const match = rule.match;
+  let byTitle = false;
+  if (match.titlePattern !== undefined) {
+    try {
+      const pattern = new RegExp(match.titlePattern);
+      byTitle = !(pattern.test("") && pattern.test("\u0000"));
+    } catch {
+      // Core treats an invalid pattern as non-wildcard. Schema validation is separate.
+      byTitle = true;
+    }
+  }
+  const byPath = [match.path, match.pathPrefix].some((path) => path !== undefined && hasSidecarPath(path));
+  const ignored =
+    match.kind === undefined ||
+    (match.kind === "execute" ? !byTitle : !byTitle && !byPath && match.scope !== "workspace");
+  return ignored
+    ? "This sidecar allow is ignored by ORCA because it is a wildcard. It must name a tool kind and narrow it by a path, path prefix, workspace scope or title pattern. Execute rules require a narrowing title pattern; paths and scope do not narrow commands. Saving keeps the rule but does not make it effective."
+    : undefined;
+}
+
+/** Whether core's portable path normalization would leave a nonempty path. */
+function hasSidecarPath(path: string): boolean {
+  // Absolute, drive and UNC roots stay nonempty in normalizePermissionPath.
+  if (path.startsWith("/") || path.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(path)) return true;
+  const parts: string[] = [];
+  for (const part of path.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === ".." && parts.length > 0 && parts.at(-1) !== "..") parts.pop();
+    else parts.push(part);
+  }
+  return parts.length > 0;
+}
+
 /** The sidecar document. No `default`, at any level — see the file header. */
 export interface SidecarDocument {
   version: number;
