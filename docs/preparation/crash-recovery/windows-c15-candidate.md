@@ -1,5 +1,12 @@
 # Hosted Windows C15 allocator candidate — review before dispatch
 
+**25 October status update:** The following is the original pre-dispatch preparation
+record. [Candidate run 2](windows-c15-candidate-run2.md) later reports failure-schedule
+correctness/memory passing. A later supported file-ID transfer verified the raw
+artifact and identified the stall failure as the overlap gate; both stall memory
+budgets pass. The earlier materialization failure is preserved as history. C15
+remains held; parent review is required before any further Windows dispatch.
+
 This separate test-only candidate selects allocator PR [#643](https://github.com/cschadewitz/Project_Orca/pull/643)
 head `95ee280be309d50f29b46cb66a12d480fdfc8a7d`, tree
 `8bf5c38903ec0bc13c7c8a313068ba378bda3230`. PR643 is the reviewed portable

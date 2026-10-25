@@ -13,7 +13,7 @@ worker continues to own fixture optimization.
 ## Current PR execution
 
 The preparation branch starts from main `65606fbce827cba914a67b999b1a47c0aab2797a`.
-Selector **1.3.0** uses the versioned `packagePolicy` in `ownership.v1.json`:
+Selector **1.3.1** uses the versioned `packagePolicy` in `ownership.v1.json`:
 
 - Supported package source/test files and renderer CSS select **whole package test
   domains plus downstream consumers**, using the union of base/candidate static
@@ -54,6 +54,12 @@ Selector **1.3.0** uses the versioned `packagePolicy` in `ownership.v1.json`:
 - Every code lane keeps build-before-tests, production-required environment, bounded
   workers, mandatory CLI/ACP retry acceptance with every assertion passing, compiled
   CLI smoke and Node 24 whole-repository typecheck/lint/format/design checks.
+- A TODO declaration in any proposed selected test file, including an unchanged
+  downstream consumer, retains full execution before tests start. Selected evidence
+  still rejects TODOs, failed/skipped/unexpected/missing results and process failures.
+  Full execution retains its existing TODO policy, complete discovery and coverage
+  thresholds. This costs a full coverage run for affected closures with TODOs; no
+  selected run is spent discovering this known incompatibility first.
 - Eligible PRs run the exact selected files on Node 24 **without global coverage**.
   Full/fallback PRs and every main push keep the complete suite and unchanged global/app
   coverage ratchets. This accepts a pre-beta tradeoff: an omitted-test failure or global

@@ -8,7 +8,7 @@ import { CI_NODES, INTENTIONAL_SKIPS, RUNNER_SKIPS, runnerSkipsReviewed } from "
 
 export const ARTIFACT = "orca-ci-shadow-plan";
 export const SCHEMA_VERSION = 1;
-export const SELECTOR_VERSION = "1.3.0";
+export const SELECTOR_VERSION = "1.3.1";
 export const loadManifest = () =>
   validateManifest(JSON.parse(readFileSync(new URL("./ownership.v1.json", import.meta.url), "utf8")));
 export const selectorIdentity = (manifest) => ({
@@ -252,6 +252,19 @@ export function createPlan({ repo, base, head, candidate, forceFull = false }, m
   const missing = vitestFiles.filter((path) => !graphs[1].tests.includes(path));
   if (missing.length || (tier === "targeted" && !vitestFiles.length)) {
     reasons.push("selected_file_missing_from_candidate_discovery");
+    tier = "full";
+    vitestFiles = graphs[1].tests;
+  }
+  // The selected-result contract rejects TODOs, including ones in unchanged consumers.
+  // Check the whole proposed closure before admitting reduced execution. Full CI keeps
+  // its existing TODO policy and coverage ratchets; never treat a TODO as a selected pass.
+  if (
+    tier === "targeted" &&
+    vitestFiles.some((path) =>
+      snaps.some((snap) => /\b(?:it|test|describe)\s*\.\s*todo\b/.test(snap.files.get(path)?.text ?? "")),
+    )
+  ) {
+    reasons.push("selected_todo_requires_full");
     tier = "full";
     vitestFiles = graphs[1].tests;
   }
