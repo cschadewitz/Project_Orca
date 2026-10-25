@@ -366,29 +366,51 @@ it("recovers a torn first provisioning that never committed its enrollment", asy
   expect((await readdir(f.control)).sort()).toEqual(["enrolled.json", "window.json"]);
 });
 
-it("re-anchors enrollments torn before or after the window was published", async () => {
-  const f = await fixture(),
-    first = join(f.base, "first"),
-    second = join(f.base, "second");
-  for (const path of [first, second]) await mkdir(path, { mode: 0o700 });
-  const failing = (at: number) => {
+it.each([
+  { at: 1, boundary: "before window publication", retained: false },
+  { at: 3, boundary: "after window and guard publication", retained: true },
+])("re-anchors enrollment torn $boundary", async ({ at, retained }) => {
+  for (let attempt = 0; ; attempt++) {
+    const f = await fixture(),
+      next = join(f.base, "next");
+    await mkdir(next, { mode: 0o700 });
+    const original = await readFile(join(f.control, "enrolled.json"));
+    const lostAcknowledgement = new Error("Lost acknowledgement");
     let calls = 0;
-    return {
+    const error: unknown = await enrollUpdateWindowRoots(f.control, [next], {
       fileSync: () => {
-        if (++calls === at) throw new Error("Lost acknowledgement");
+        if (++calls === at) throw lostAcknowledgement;
       },
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    // The control mutex or a new root's real kernel slots can collide before any
+    // publication. That is not the injected tear: use a fresh fixture, bounded as
+    // provisioning is above. Never retry once a durability boundary was reached.
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "EADDRINUSE" && calls === 0 && attempt < 4) continue;
+    expect(error).toBe(lostAcknowledgement);
+    expect(calls).toBe(at);
+    expect(await readFile(join(f.control, "enrolled.json"))).toEqual(original);
+    const published = JSON.parse(await readFile(join(f.control, "window.json"), "utf8")) as {
+      roots: { path: string }[];
     };
-  };
-  // Before publication: only window.json.tmp is left, and the addition never happened.
-  await expect(enrollUpdateWindowRoots(f.control, [first], failing(1))).rejects.toThrow();
-  await reanchorUpdateWindow(f.control, [f.data[0]!]);
-  expect(enrolledPaths(f.control)).toEqual([f.data[0]]);
-  // After window.json and the guard were published, before enrolled.json: the addition stands.
-  await expect(enrollUpdateWindowRoots(f.control, [second], failing(3))).rejects.toThrow();
-  expect(() => inspectUpdateWindowRoots(f.control)).toThrow();
-  await reanchorUpdateWindow(f.control, [f.data[0]!]);
-  expect(enrolledPaths(f.control)).toEqual([f.data[0], second].sort());
-  expect((await writer(second)).check()).toBe(true);
+    expect(published.roots.map((root) => root.path).sort()).toEqual(retained ? [f.data[0], next].sort() : [f.data[0]]);
+    if (retained) {
+      expect(JSON.parse(await readFile(join(next, GUARD), "utf8"))).toMatchObject({ root: { path: next } });
+      expect(await readFile(join(f.control, "enrolled.json.tmp"), "utf8")).toContain(next);
+    } else {
+      await expect(readFile(join(next, GUARD))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(join(f.control, "window.json.tmp"), "utf8")).toContain(next);
+    }
+    expect(() => inspectUpdateWindowRoots(f.control)).toThrow();
+    expect(updateAdmissionOpen(f.data[0]!)).toBe(false);
+    await expect(enterUpdateWriter(f.data[0]!)).rejects.toThrow();
+    await reanchorUpdateWindow(f.control, [f.data[0]!]);
+    expect(enrolledPaths(f.control)).toEqual(retained ? [f.data[0], next].sort() : [f.data[0]]);
+    expect((await writer(retained ? next : f.data[0]!)).check()).toBe(true);
+    return;
+  }
 });
 
 it("keeps refusing while an attempt is recorded, a writer holds a slot, or the original still exists", async () => {
