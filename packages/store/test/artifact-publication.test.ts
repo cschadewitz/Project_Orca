@@ -278,8 +278,8 @@ it("reports a missing indexed blob explicitly without substituting empty content
   const { file, store } = await fixture();
   await store.put(artifact("first"), body);
   await rm(file);
-  for (const reading of [store.bytes("first"), store.content("first")])
-    await expect(reading).rejects.toMatchObject({
+  for (const read of [() => store.bytes("first"), () => store.content("first")])
+    await expect(read()).rejects.toMatchObject({
       code: "ARTIFACT_MISSING",
       details: { id: "first", contentHash: sha256(body) },
     });

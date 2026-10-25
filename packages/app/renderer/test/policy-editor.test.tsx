@@ -31,6 +31,7 @@ import {
   ruleChanges,
   rulesOf,
   serializeSidecar,
+  sidecarRuleWarning,
   withGrantEdit,
   withMatch,
   withRules,
@@ -46,12 +47,58 @@ let fake: FakeBridge;
 let h: Harness;
 const teardown: (() => void)[] = [];
 
+// Hand-edited JSON bypasses the wire types; exercise both tool paths and every decision.
+const malformedPathRules = ["path", "pathPrefix"].flatMap((key) =>
+  [null, 42].flatMap((value) =>
+    ["read", "execute"].flatMap((kind) =>
+      ["allow", "deny", "ask"].map((decision) => ({ match: { kind, [key]: value }, decision })),
+    ),
+  ),
+);
+
 describe("the sidecar as a document", () => {
   const doc = (): SidecarDocument => {
     const parsed = parseSidecar(PERMISSIONS_TEXT);
     if (!parsed) throw new Error("the fixture sidecar does not parse");
     return parsed;
   };
+
+  it.each([
+    {},
+    { path: "src/index.ts" },
+    { kind: "read" },
+    { kind: "read", scope: "outside-workspace" },
+    { kind: "read", path: "src/.." },
+    { kind: "read", pathPrefix: "." },
+    { kind: "read", titlePattern: ".*" },
+    { kind: "read", titlePattern: "^" },
+    { kind: "read", titlePattern: "$" },
+    { kind: "read", titlePattern: "" },
+    { kind: "read", path: "./src/../" },
+    { kind: "execute", scope: "workspace", path: "src/index.ts" },
+    { kind: "execute", titlePattern: "^.*$" },
+  ] satisfies SidecarRule["match"][])("explains an ignored wildcard allow: %j", (match) => {
+    expect(sidecarRuleWarning({ match, decision: "allow" })).toContain("ignored");
+    // Restrictions must remain effective, however broad their match is.
+    expect(sidecarRuleWarning({ match, decision: "deny" })).toBeUndefined();
+    expect(sidecarRuleWarning({ match, decision: "ask" })).toBeUndefined();
+  });
+
+  it.each([
+    { kind: "read", path: "src/index.ts" },
+    { kind: "edit", pathPrefix: "src" },
+    { kind: "read", scope: "workspace" },
+    { kind: "read", path: "/" },
+    { kind: "read", path: "C:\\src\\.." },
+    { kind: "read", pathPrefix: "../src/.." },
+    { kind: "read", path: "\\\\server\\share" },
+    { kind: "read", path: "src/..", titlePattern: "^Read file$" },
+    { kind: "execute", scope: "outside-workspace", titlePattern: "^git status$" },
+    { kind: "execute", titlePattern: "^git status$" },
+    { kind: "read", titlePattern: "[" }, // Invalid regex is not a wildcard; schema validation is separate.
+  ] satisfies SidecarRule["match"][])("does not label a non-wildcard rule ignored: %j", (match) => {
+    expect(sidecarRuleWarning({ match, decision: "allow" })).toBeUndefined();
+  });
 
   it("reads the fixture's two grants, in the order the file holds them", () => {
     const rules = rulesOf(doc(), "claude");
@@ -85,6 +132,18 @@ describe("the sidecar as a document", () => {
     ).toBeUndefined();
     // And the one that is fine: an empty match is "matches anything", not a broken row.
     expect(parseSidecar('{"version":1,"agents":{"claude":{"rules":[{"match":{},"decision":"allow"}]}}}')).toBeDefined();
+  });
+
+  it.each(malformedPathRules)("refuses malformed path rules before rendering: %j", (rule) => {
+    const text = JSON.stringify({ version: 1, agents: { claude: { rules: [rule] } } });
+    expect(parseSidecar(text)).toBeUndefined();
+  });
+
+  it.each(
+    ["kind", "titlePattern", "scope"].flatMap((key) => [null, 42, false, [], {}].map((value) => ({ [key]: value }))),
+  )("refuses other known match fields with non-string values: %j", (match) => {
+    const text = JSON.stringify({ agents: { claude: { rules: [{ match, decision: "allow" }] } } });
+    expect(parseSidecar(text)).toBeUndefined();
   });
 
   it("refuses a version it has not been taught, rather than rewriting it as a 1", () => {
@@ -416,6 +475,61 @@ describe("the policy editor", () => {
     while (teardown.length) teardown.pop()?.();
   });
 
+  it.each(malformedPathRules)("shows the cannot-edit state for malformed paths: %j", async (rule) => {
+    const text = JSON.stringify({ version: 1, agents: { claude: { rules: [rule] } } });
+    fake.script({
+      "config.get": () => ({
+        ok: true,
+        result: {
+          ...CONFIG_GET,
+          permissions: { ...CONFIG_GET.permissions, text, parsed: JSON.parse(text) as unknown },
+        },
+      }),
+    });
+    const view = renderPanel();
+    await screen.findByText(/cannot be edited here/);
+    expect(await panel()).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add a grant" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    view.close();
+    view.reopen();
+    await screen.findByText(/cannot be edited here/);
+    expect(callsTo("config.set")).toBe(0);
+  });
+
+  it("labels saved wildcard allows as ignored and preserves them when another rule is saved", async () => {
+    const disk = sidecarOnDisk();
+    const ignored: SidecarRule = { match: { kind: "execute", scope: "workspace" }, decision: "allow" };
+    disk.write((doc) => withRules(doc, "claude", [...rulesOf(doc, "claude"), ignored]), { push: false });
+    renderPanel();
+    const rows = await grants();
+    expect(rows[2]!.textContent).toContain("Ignored by ORCA: allow execute");
+    expect(rows[2]!.textContent).toContain("This sidecar allow is ignored");
+    const description = document.getElementById(rows[2]!.getAttribute("aria-describedby")!);
+    expect(description?.textContent).toContain("Saving keeps the rule but does not make it effective");
+    expect(rows[0]!.textContent).not.toContain("Ignored by ORCA");
+    fireEvent.change(field(rows[0]!, "Path prefix"), { target: { value: "packages" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await settled();
+    expect(onDiskFor(disk.text, "claude")[2]).toEqual(ignored);
+  });
+
+  it("updates ignored-rule feedback while typing and keeps the draft across closing", async () => {
+    sidecarOnDisk();
+    const view = renderPanel();
+    const row = (await grants())[0]!;
+    fireEvent.change(field(row, "Path prefix"), { target: { value: "" } });
+    expect(row.textContent).toContain("Ignored by ORCA");
+    expect(callsTo("config.set")).toBe(0);
+    view.close();
+    view.reopen();
+    const held = (await grants())[0]!;
+    expect(held.textContent).toContain("Ignored by ORCA");
+    expect(field(held, "Path prefix").value).toBe("");
+    fireEvent.change(field(held, "Path prefix"), { target: { value: "src/index.ts" } });
+    expect(held.textContent).not.toContain("Ignored by ORCA");
+  });
+
   it("shows the configured rules read-only and the written ones editable, in evaluation order", async () => {
     renderPanel();
     await panel();
@@ -688,19 +802,21 @@ describe("the policy editor", () => {
     const discard = within(bar).getByRole("button", { name: "Discard" });
     expect(discard.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(discard);
-    // And the person keeps typing in the same field.
-    fireEvent.change(field((await grants())[0]!, "Path prefix"), { target: { value: "packages/app" } });
+    // The newer draft becomes a wildcard while the earlier, narrowed save is in flight.
+    fireEvent.change(field((await grants())[0]!, "Path prefix"), { target: { value: "" } });
+    expect((await grants())[0]!.textContent).toContain("Ignored by ORCA");
 
     release();
     await waitFor(() => expect(onDiskFor(disk.text, "claude")[0]!.match.pathPrefix).toBe("packages"));
     await settled();
     // What was typed after Save is still the draft, one change over what was written.
-    expect(field((await grants())[0]!, "Path prefix").value).toBe("packages/app");
+    expect(field((await grants())[0]!, "Path prefix").value).toBe("");
+    expect((await grants())[0]!.textContent).toContain("Ignored by ORCA");
     const after = await screen.findByRole("group", { name: "Unsaved configuration changes" });
     expect(after.textContent).toContain("1 change");
 
     fireEvent.click(within(after).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(onDiskFor(disk.text, "claude")[0]!.match.pathPrefix).toBe("packages/app"));
+    await waitFor(() => expect(onDiskFor(disk.text, "claude")[0]!.match.pathPrefix).toBeUndefined());
     expect(lastWrite().expectedRevision).toBe("written-1");
   });
 

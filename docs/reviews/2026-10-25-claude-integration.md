@@ -93,8 +93,11 @@ was performed.
   boundary; this is not complete operating-system isolation.
 - Removing the last focused Attention card still leaves focus on the page body when no
   neighbor survives. The inherited rule-10 gap needs an Attention-region fallback.
-- The policy editor can save/display wildcard allows that the new sidecar evaluator ignores.
-  Validation or an explicit ignored-rule explanation remains useful follow-up work.
+- The policy editor follow-up explicitly labels wildcard sidecar allows as ignored, including
+  saved rows and edits in progress. Saved configuration remains compatible and is not silently
+  rewritten; deny/ask rules retain their existing presentation. This is an editor explanation
+  only: loader/evaluator restrictions and authorization behavior are unchanged. A title pattern
+  is a match condition, not trustworthy exact-command evidence; #594 remains unresolved.
 
 The remaining original findings require separate triage; this integration is not an audit
 closure or permission to merge, release or activate native behavior.

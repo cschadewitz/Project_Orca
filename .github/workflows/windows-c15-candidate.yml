@@ -1,0 +1,107 @@
+# Test-only synthetic Windows/Electron/DPAPI evidence. Review this draft before dispatch.
+name: Windows C15 allocator candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: "false"
+
+jobs:
+  proof:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: 95ee280be309d50f29b46cb66a12d480fdfc8a7d
+          path: source
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12.4.2
+          run_install: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.21.0"
+      - name: Install locked source dependencies without lifecycle scripts
+        working-directory: source
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Compile pinned source and verify portable manifest
+        run: |
+          set -euo pipefail
+          node harness/tools/windows-c15/build.mjs "$GITHUB_WORKSPACE/source"
+          node --input-type=module -e 'import {verifyBuild} from "./harness/tools/windows-c15/manifest.mjs"; verifyBuild(process.argv[1]);' "$GITHUB_WORKSPACE/source"
+      - name: Validate portable protocol, manifest and workflow
+        env:
+          C15_SOURCE: ${{ github.workspace }}/source
+        run: node --test harness/tools/test/windows-c15-candidate.test.mjs
+      # Same verified Node inputs and installed MSVC/SDK pattern as desktop.yml, x64 only.
+      - name: Build native x64 package with verified local Node inputs
+        working-directory: source
+        run: |
+          set -euo pipefail
+          node_version=$(node -p 'process.versions.node')
+          case "$node_version" in *[!0-9.]*|'') exit 1 ;; esac
+          headers_scratch=$(mktemp -d "$RUNNER_TEMP/orca-c15-headers.XXXXXX")
+          trap 'rm -rf -- "$headers_scratch"' EXIT
+          archive="node-v${node_version}-headers.tar.gz"
+          base="https://nodejs.org/download/release/v${node_version}"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 30 --max-filesize 65536 \
+            "$base/SHASUMS256.txt" --output "$headers_scratch/SHASUMS256.txt"
+          for name in "$archive" win-x64/node.lib; do
+            mkdir -p "$headers_scratch/$(dirname "$name")"
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 60 --max-filesize 16777216 \
+              "$base/$name" --output "$headers_scratch/$name"
+            CHECKSUM_ROOT="$headers_scratch" CHECKSUM_NAME="$name" python - <<'PY'
+          import hashlib, os, pathlib, re
+          root, name = pathlib.Path(os.environ["CHECKSUM_ROOT"]), os.environ["CHECKSUM_NAME"]
+          entries = [line[:64] for line in (root / "SHASUMS256.txt").read_text().splitlines()
+                     if re.fullmatch(r"[0-9a-f]{64}  " + re.escape(name), line)]
+          if len(entries) != 1 or hashlib.sha256((root / name).read_bytes()).hexdigest() != entries[0]:
+              raise SystemExit("Exact Node input checksum unavailable or mismatched")
+          PY
+          done
+          # GNU tar treats a Windows drive colon in -f as a remote host separator.
+          (cd "$headers_scratch" && tar -xzf "./$archive")
+          mkdir -p "$headers_scratch/node-v${node_version}/x64"
+          cp "$headers_scratch/win-x64/node.lib" "$headers_scratch/node-v${node_version}/x64/node.lib"
+          mkdir -p "$GITHUB_WORKSPACE/evidence"
+          cp "$headers_scratch/SHASUMS256.txt" "$GITHUB_WORKSPACE/evidence/node-SHASUMS256.txt"
+          node packages/app/scripts/diagnostics-native-package.js --arch x64 --headers "$headers_scratch/node-v${node_version}" > "$GITHUB_WORKSPACE/evidence/native-build.json"
+      - name: Stage checksum-pinned owned Electron runtime and seal all build inputs
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/electron-v44.9.1-win32-x64.zip"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 120 --max-filesize 268435456 \
+            'https://github.com/electron/electron/releases/download/v44.9.1/electron-v44.9.1-win32-x64.zip' --location --output "$archive"
+          node harness/tools/windows-c15/stage.mjs "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/c15-runtime" "$archive" "$GITHUB_WORKSPACE/evidence/build.json"
+      - name: Probe existing Documents ancestry with native NTFS owner and ACL checks
+        run: node harness/tools/windows-c15/root-probe.mjs "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/c15-runtime" "$GITHUB_WORKSPACE/evidence/build.json" "$GITHUB_WORKSPACE/evidence" "$C15_SEAL_SHA256"
+      - name: One original 20-cell failure Off/On comparison
+        run: node harness/packages/app/test/recovery-preparation/windows-c15-candidate.mjs "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/c15-runtime" "$GITHUB_WORKSPACE/evidence" failure "$C15_PARENT" "$GITHUB_WORKSPACE/evidence/build.json" "$C15_SEAL_SHA256"
+      # Retain the first failure; run the independent stall schedule once if setup succeeded.
+      - name: One original 20-cell stall Off/On comparison
+        if: ${{ !cancelled() && env.C15_PARENT != '' }}
+        run: node harness/packages/app/test/recovery-preparation/windows-c15-candidate.mjs "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/c15-runtime" "$GITHUB_WORKSPACE/evidence" stall "$C15_PARENT" "$GITHUB_WORKSPACE/evidence/build.json" "$C15_SEAL_SHA256"
+      - name: Retain sanitized receipts on success or refusal
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-c15-candidate-${{ github.sha }}
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 7

@@ -35,7 +35,7 @@
  * is kept anywhere, on the wire or off it — so the "auto-approval count explained" the issue
  * asks for cannot be rendered. Rule 12: it is absent rather than approximated.
  */
-import { useCallback, useLayoutEffect, useMemo, useRef, type JSX } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useId, type JSX } from "react";
 import { CONFIG_SET_METHOD, PERMISSION_DECISIONS, TOOL_KINDS, type ConfigDocument } from "@orca/protocol";
 import { useMethodPresent, useWritability } from "../chrome/use-connection.js";
 import { Button, Chip, ConfigField, Menu, Text, Time, focusAfterLeaving, textClass } from "../ui/index.js";
@@ -49,6 +49,7 @@ import {
   parseSidecar,
   ruleChanges,
   rulesOf,
+  sidecarRuleWarning,
   withMatch,
   type RuleMatch,
   type SidecarRule,
@@ -231,8 +232,9 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
         <>
           <Text style="caption">
             In the order ORCA evaluates it: the rules in the config first, then the ones written to the sidecar, then
-            ORCA&apos;s own defaults. The first rule that matches decides, and anything no rule matches takes the
-            fallthrough below.
+            ORCA&apos;s own defaults. Sidecar allows marked ignored do not participate. Among the remaining rules, the
+            first rule that matches decides, and anything no rule matches takes the fallthrough below. Written rules
+            below include unsaved edits; only Save writes them.
           </Text>
 
           {/* The configured half. Hand-written, and edited where it was written. */}
@@ -440,7 +442,10 @@ function Grant({
   /* The path into the sidecar this row writes, which is what `ConfigField` says it is for:
      a form over a file a person also hand-edits has to name the key each row changes. */
   const base = `agents.${agentId}.rules[${index}]`;
-  const text = describeRule({ ...rule, source: "permissions" });
+  const warning = sidecarRuleWarning(rule);
+  const warningId = useId();
+  const summary = describeRule({ ...rule, source: "permissions" });
+  const text = warning === undefined ? summary : `Ignored by ORCA: ${summary}`;
   const row = useRef<HTMLLIElement>(null);
 
   /* The last moment the row can tell whether it holds focus, as `ClaimRow` does it. A layout
@@ -456,7 +461,7 @@ function Grant({
   }, [rowKey, onLeaveHoldingFocus]);
 
   return (
-    <li ref={row} className="orca-policy__grant">
+    <li ref={row} className="orca-policy__grant" aria-describedby={warning === undefined ? undefined : warningId}>
       <div className="orca-policy__grant-head">
         <span className={`orca-config__order ${textClass("mono-id")}`}>{order}</span>
         {/* The same sentence the Config surface's read-only list draws, tagged with the
@@ -481,6 +486,12 @@ function Grant({
           </Button>
         )}
       </div>
+
+      {warning !== undefined && (
+        <Text style="caption" id={warningId}>
+          {warning}
+        </Text>
+      )}
 
       <div className="orca-policy__provenance">
         {rule.addedAt !== undefined && <Time at={new Date(rule.addedAt)} show={live ? "both" : "absolute"} />}
@@ -539,7 +550,7 @@ function Grant({
         path={`${base}.match.titlePattern`}
         value={rule.match.titlePattern}
         editable={editable}
-        help="A regular expression tested against the tool call's title, used exactly as written. The rules a run writes are anchored with ^ and $; one typed here is not anchored for you, so it matches anywhere in the title unless you anchor it."
+        help="A regular expression tested against the tool call's title, used exactly as written. The rules a run writes are anchored with ^ and $; one typed here is not anchored for you, so it matches anywhere in the title unless you anchor it. A title match does not establish trustworthy exact-command approval evidence; that support remains unavailable."
         onChange={(value) => onMatch("titlePattern", value)}
       />
     </li>
