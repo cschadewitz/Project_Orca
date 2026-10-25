@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "schedule": "metadata",
+  "cells": 20,
+  "pressureRefusals": 0,
+  "zeroAfterEveryCell": true,
+  "productionEnabled": false,
+  "node": "v24.19.0",
+  "platform": "linux",
+  "arch": "x64",
+  "method": "Single Node process, 2ms samples plus allocator/operation boundaries; heapUsed+external; no double-counted arrayBuffers, forced GC, renderer, CLI pair or native acceptance",
+  "managedIncrementBytes": 2480196,
+  "managedLimitBytes": 33554432,
+  "managedPass": true,
+  "heapIncrementBytes": 1340808,
+  "externalIncrementBytes": 1139388,
+  "rssIncrementBytes": 7995392,
+  "backingAllocated": 2621440,
+  "largestBacking": 131072,
+  "controlledPeak": 131072,
+  "controlledLimitBytes": 8388608,
+  "phases": { "metadata": 2480196, "finalizer": 2385792 }
+}
