@@ -30,8 +30,49 @@ missing/unresponsive window blocks restart. Next the main process asks its **own
 to close admission atomically. Any in-flight request (including a running agent operation)
 blocks the attempt; no work is killed. Durable parked gates have returned their leases and
 survive restart. Once admission is closed, new calls cannot race with shutdown. The owned
-daemon is stopped before the installer launches. Failed installer startup unlocks the app
-and reconnects its daemon. An external daemon is neither stopped nor installed by this path.
+daemon is stopped before the installer launches. An external daemon is neither stopped nor
+installed by this path.
+
+### Windows failed-update recovery contract (#660, C5a-02)
+
+The user approved this implementation direction on 25 October 2026: treat an installer
+timeout or ambiguous error as unknown, keep admission paused, and reconnect automatically
+only when installation is positively known not to have started and the old child has
+terminated. That approval does not authorize deployment, new access or private-command
+disclosure.
+
+| Installer observation | Recovery behavior |
+| --- | --- |
+| Positively not launched | A failure before invoking the installer, or the driver's explicit pre-invocation non-launch result, permits exact-token abort. A stopped first-run child must have positively observed termination and its captured ownership must settle before saved-receipt recovery. |
+| Positively launched | Keep admission and draft guards closed while waiting for app exit. Launch alone does not prove successful replacement. |
+| Timeout after `quitAndInstall` | Unknown. Keep admission closed and the captured attempt and ownership evidence; do not abort or reconnect. |
+| Unclassified error/throw after invocation | Unknown, with the same fences as timeout. An updater error event is not proof of non-launch. |
+
+The Windows driver has no positive native launch acknowledgement: returning from
+`quitAndInstall` is not treated as launch proof. Its timeout, synchronous throw and error
+event all report unknown. A successful installation normally exits the process.
+
+A token-bound preflight refusal before the workspace creates that token's update
+reservation releases only that restart's draft hold and permits retry. It sends no
+maintenance resume, stop or installer call and preserves parked-child, setup and connection
+candidate guards. A prepare failure after reservation still requires exact-token recovery;
+a wrong-token refusal or a refusal during stop/install cannot serve as no-claim proof.
+
+Update stop retains the exact old child and first-run reservation. Even a late exit
+callback or ordinary app close cannot settle that reservation while installer outcome is
+unknown. On a proven non-launch abort, settlement appends exact-child terminal evidence;
+it does not delete the journal or authorize generic connection. Recovery verifies the
+saved selection, configuration/assets, authentication, writable capabilities, PID, store,
+workspace identity and operator discovery through `FirstRunSetup`. Only the captured
+workspace may request a new candidate, and old tokens, changed targets and late/duplicate
+recovery calls cannot start another writer.
+
+A missing/changed receipt, uncertain child or replacement cleanup, altered ownership
+evidence, failed resume, or unavailable saved-receipt recovery leaves the update blocked
+and reports failure. A stopped legacy/file-mode child without this receipt path does not
+fall back to generic reconnect. Preserve the workspace and journal for operator review;
+retry is not evidence that installation never began. Source/fixture tests do not establish
+packaged Windows/NSIS update success. No installer activation is part of this change.
 
 ### Private feed and authentication
 

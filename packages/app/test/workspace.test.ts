@@ -268,29 +268,29 @@ describe("update restart lifecycle", () => {
   it("refuses to stop before preparation and preserves active bundled work", async () => {
     const { workspace, steps } = rig({ busy: true });
     await workspace.connect();
-    await expect(workspace.stopForUpdate()).rejects.toThrow("not prepared");
+    await expect(workspace.stopForUpdate("token")).rejects.toThrow("not prepared");
     await expect(workspace.prepareUpdate("token")).rejects.toThrow("runs.start");
     expect(steps.filter((step) => step.startsWith("stop"))).toEqual([]);
     await workspace.cancelUpdate("token");
     expect(steps).toContain("maintenance resume");
   });
-  it("holds workspace selection during restart and restores the same store after installer failure", async () => {
+  it("holds workspace selection and refuses generic recovery without a saved receipt", async () => {
     const { workspace, steps } = rig();
     await workspace.open("/chosen");
     await workspace.prepareUpdate("token");
     await expect(workspace.open("/other")).rejects.toThrow("in progress");
     await expect(workspace.connectLive()).rejects.toThrow("in progress");
-    await workspace.stopForUpdate();
+    await expect(workspace.stopForUpdate("token")).rejects.toThrow("termination is uncertain");
     expect(steps).toContain("stop http://127.0.0.1:6001");
-    await workspace.cancelUpdate("token");
+    await expect(workspace.cancelUpdate("token")).rejects.toThrow("termination is uncertain");
     expect(workspace.snapshot).toMatchObject({ path: "/chosen", readOnly: true });
-    expect(steps.filter((step) => step === "start /chosen --read-only")).toHaveLength(2);
+    expect(steps.filter((step) => step === "start /chosen --read-only")).toHaveLength(1);
   });
   it("never quiesces or stops an attached external daemon", async () => {
     const { workspace, steps } = rig({ explicitUrl: "http://external:6722" });
     await workspace.connect();
     await workspace.prepareUpdate("token");
-    await workspace.stopForUpdate();
+    await workspace.stopForUpdate("token");
     await workspace.cancelUpdate("token");
     expect(steps.filter((step) => /^(maintenance|stop)/.test(step))).toEqual([]);
   });

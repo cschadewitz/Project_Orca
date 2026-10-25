@@ -143,7 +143,8 @@ it.skipIf(process.platform === "win32")(
     await expect(f.workspace.connectLive()).rejects.toThrow("progress");
     await expect(f.workspace.prepareConnection(null)).rejects.toThrow("busy");
     await expect(f.workspace.prepareFirstRunConnection(f.workspace.snapshot.path)).rejects.toThrow("busy");
-    await expect(f.workspace.cancelUpdate("unrelated")).rejects.toThrow("busy");
+    // This unrelated Windows token has no reservation and cannot release the Mac lifecycle hold.
+    await expect(f.workspace.cancelUpdate("unrelated")).rejects.toThrow(/^Update token is stale$/);
     expect(f.start).toHaveBeenCalledOnce();
     expect(f.frozen()).toBe(true);
     await f.workspace.close();

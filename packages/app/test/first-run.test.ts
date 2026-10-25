@@ -111,6 +111,48 @@ async function rig() {
 }
 
 describe.skipIf(typeof process.getuid !== "function")("dedicated first-run project selection", () => {
+  it("binds update recovery to the exact saved workspace before consulting current or creating a candidate", async () => {
+    const f = await rig();
+    await f.prepare();
+    const prepareConnection = vi.fn((path: string) => f.deps.prepareConnection(path));
+    const current = vi.spyOn(f.deps, "current");
+    await expect(
+      f.setup.connect(f.assertCurrent, {
+        workspace: join(f.workspace, "other"),
+        prepareConnection,
+      }),
+    ).rejects.toThrow();
+    expect(current).not.toHaveBeenCalled();
+    expect(prepareConnection).not.toHaveBeenCalled();
+    expect(f.prepareConnection).not.toHaveBeenCalled();
+    await f.setup.connect(f.assertCurrent, { workspace: f.workspace, prepareConnection });
+    expect(prepareConnection).toHaveBeenCalledExactlyOnceWith(f.workspace);
+    expect(f.activate).toHaveBeenCalledOnce();
+  });
+  it("rechecks recovery cancellation after authentication and disposes without activation", async () => {
+    const f = await rig();
+    await f.prepare();
+    const before = await readFile(f.deps.receiptPath, "utf8");
+    let finish!: (hello: HelloResult) => void;
+    f.handshake.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const pending = f.setup.connect(f.assertCurrent, {
+      workspace: f.workspace,
+      prepareConnection: (path) => f.deps.prepareConnection(path),
+    });
+    const refused = expect(pending).rejects.toThrow();
+    await vi.waitFor(() => expect(f.handshake).toHaveBeenCalledOnce());
+    f.changeEpoch();
+    finish(f.hello);
+    await refused;
+    expect(f.activate).not.toHaveBeenCalled();
+    expect(f.dispose).toHaveBeenCalledOnce();
+    expect(await readFile(f.deps.receiptPath, "utf8")).toBe(before);
+  });
   it("enrolls the reviewed workspace before configuration writes and refuses failed enrollment", async () => {
     const f = await rig();
     const enroll = vi.fn(async (path: string) => {

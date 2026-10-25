@@ -4,12 +4,24 @@ import type { UpdateAction, UpdateSnapshot } from "../update-contract.js";
 export interface UpdateDriver {
   check(this: void): Promise<string | undefined>;
   download(this: void, progress: (percent: number) => void): Promise<void>;
-  install(this: void): Promise<void>;
+  /** Only a positive pre-launch observation may return not-launched. Rejections are unknown. */
+  install(this: void): Promise<"not-launched" | "launched">;
+}
+/** Main-only proof that this token was refused before a workspace update reservation.
+ * Never emitted after a claim or installer invocation; it grants no authority over another token.
+ */
+export class UpdatePreflightRefusal extends Error {
+  constructor(
+    readonly token: string,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 export interface UpdateGuards {
   prepareDrafts(this: void): Promise<void>;
   prepareDaemon(this: void, token: string): Promise<void>;
-  stopDaemon(this: void): Promise<void>;
+  stopDaemon(this: void, token: string): Promise<void>;
   resume(this: void, token: string): Promise<void>;
   releaseDrafts(this: void): void;
 }
@@ -17,6 +29,7 @@ export class Updates {
   state: UpdateSnapshot;
   private busy = false;
   private downloaded = false;
+  private restartHeld = false;
   constructor(
     private driver: UpdateDriver | undefined,
     current: string,
@@ -30,12 +43,15 @@ export class Updates {
     this.changed(this.state);
   }
   async act(action: UpdateAction): Promise<UpdateSnapshot> {
-    if (this.busy || !this.driver) return this.state;
+    if (this.busy || this.restartHeld || !this.driver) return this.state;
     if (action === "check" && this.downloaded) return this.state;
     if (action === "download" && (!this.state.version || this.downloaded)) return this.state;
     if (action === "restart" && !this.downloaded) return this.state;
     this.busy = true;
     const token = randomUUID();
+    let daemonAttempted = false;
+    let daemonPrepared = false;
+    let installerUnknown = false;
     try {
       if (action === "check") {
         this.set({ phase: "checking", message: "Checking for updates" });
@@ -54,21 +70,52 @@ export class Updates {
         this.set({ phase: "ready", message: "Update downloaded" });
       } else {
         this.set({ phase: "restarting", message: "Checking drafts and bundled daemon activity" });
+        this.restartHeld = true;
         await this.guards.prepareDrafts();
+        daemonAttempted = true;
         await this.guards.prepareDaemon(token);
-        await this.guards.stopDaemon();
-        await this.driver.install();
+        daemonPrepared = true;
+        await this.guards.stopDaemon(token);
+        // Enter unknown BEFORE calling the driver, including synchronous throws.
+        installerUnknown = true;
+        const outcome = await this.driver.install();
+        if (outcome === "not-launched") {
+          installerUnknown = false;
+          throw new Error("Installer did not launch");
+        }
+        if (outcome !== "launched") throw new Error("Unknown installer result");
+        this.set({ message: "Installer launched. Waiting for this app to exit; admission remains closed." });
       }
-    } catch {
+    } catch (error) {
       if (action === "restart") {
-        await this.guards.resume(token).catch(() => undefined);
-        this.guards.releaseDrafts();
+        if (installerUnknown) {
+          this.set({
+            phase: "error",
+            message:
+              "Installer outcome is unknown. Admission remains closed. Preserve the workspace and update evidence for operator review.",
+          });
+          return this.state;
+        }
+        try {
+          const unclaimed =
+            daemonAttempted && !daemonPrepared && error instanceof UpdatePreflightRefusal && error.token === token;
+          if (daemonAttempted && !unclaimed) await this.guards.resume(token);
+          this.guards.releaseDrafts();
+          this.restartHeld = false;
+        } catch {
+          this.set({
+            phase: "error",
+            message:
+              "Recovery failed or is uncertain. Admission remains closed. Preserve the workspace and ownership evidence for operator review.",
+          });
+          return this.state;
+        }
       }
       this.set({
         phase: this.downloaded ? "ready" : "error",
         message:
           action === "restart"
-            ? "Restart blocked. Save or discard drafts, finish bundled daemon work, then retry. If disconnected, restore the connection first."
+            ? "Restart blocked before installer launch. Save or discard drafts and finish bundled daemon work, then retry."
             : "Update failed. Check the network and private feed credentials, then retry.",
       });
     } finally {

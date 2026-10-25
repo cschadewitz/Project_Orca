@@ -10,6 +10,7 @@
  * return. Credentials and lifecycle dependencies stay in main; the renderer sees only the
  * nonsecret target snapshot. Electron-free so the transitions can be tested directly.
  */
+import { UpdatePreflightRefusal } from "./updates.js";
 import { daemonEndpoint, type DaemonTargetSnapshot } from "../daemon-connection.js";
 import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
 import {
@@ -45,6 +46,26 @@ export interface WorkspaceTarget {
   path: string;
   readOnly: boolean;
   source: WorkspaceSource;
+}
+
+type FirstRunCandidate = ConnectionCandidate & {
+  expectedProcessId: number;
+  validateActivation(hello: HelloResult): void;
+};
+interface WindowsUpdateAttempt {
+  token: string;
+  daemon: BundledDaemon | undefined;
+  ownership: FirstRunOwnership | undefined;
+  firstRun: { path: string; identity: NonNullable<HelloResult["identity"]> } | undefined;
+  client: DaemonClient;
+  epoch: number;
+  identity: HelloResult["identity"];
+  processId: number | undefined;
+  storeDir: string | undefined;
+  target: WorkspaceTarget;
+  stopAttempted: boolean;
+  recovering: boolean;
+  busy: boolean;
 }
 
 export interface WorkspaceDeps {
@@ -95,6 +116,12 @@ export interface WorkspaceDeps {
   /** Explicit environment workspace only. No home-directory bootstrap. */
   defaultPath: () => string | undefined;
   setupBusy?: () => boolean;
+  /** Saved-receipt verification must bind this exact path before requesting its candidate. */
+  recoverFirstRun?: (
+    path: string,
+    check: () => void,
+    prepare: (path: string) => Promise<FirstRunCandidate>,
+  ) => Promise<void>;
   /** Test seam; production uses the store-local durable reservation. */
   reserveFirstRunOwnership?: (path: string) => FirstRunOwnership;
 }
@@ -131,6 +158,7 @@ export class Workspace {
   private pending: Promise<void> | undefined;
   private closed = false;
   private updating = false;
+  private windowsUpdate: WindowsUpdateAttempt | undefined;
   private epoch = 0;
   private identity: HelloResult["identity"];
   private verifiedHello: HelloResult | undefined;
@@ -504,7 +532,7 @@ export class Workspace {
   }
 
   assertEpoch(epoch: number): void {
-    if (this.macUpdateStopping || this.macUpdateFrozen || !this.existingDispatchAllowed())
+    if (this.updating || this.macUpdateStopping || this.macUpdateFrozen || !this.existingDispatchAllowed())
       throw new Error("Update restart admission is closed");
     if (epoch !== this.epoch) throw new Error("The daemon changed. This operation belongs to the previous connection.");
   }
@@ -546,6 +574,7 @@ export class Workspace {
     return Boolean(
       !this.closed &&
       !this.macUpdateStopping &&
+      this.daemon?.exited !== true &&
       owner &&
       this.identity &&
       this.verifiedHello &&
@@ -565,17 +594,23 @@ export class Workspace {
   }
 
   /** Stage only a bundled owned child for this exact reviewed workspace; never seek a default port. */
-  async prepareFirstRunConnection(path: string): Promise<
-    ConnectionCandidate & {
-      expectedProcessId: number;
-      validateActivation(hello: HelloResult): void;
-    }
-  > {
+  async prepareFirstRunConnection(path: string): Promise<FirstRunCandidate> {
+    return this.firstRunConnection(path);
+  }
+
+  private async firstRunConnection(path: string, recovery?: WindowsUpdateAttempt): Promise<FirstRunCandidate> {
+    const checkRecovery = () => {
+      if (!recovery) return;
+      this.checkWindowsUpdate(recovery);
+      if (!recovery.busy || !recovery.recovering || path !== recovery.firstRun?.path)
+        throw new FirstRunOwnershipRefusal();
+    };
+    checkRecovery();
     if (this.deps.updateBootstrap?.ordinaryAllowed === false) throw new Error("Update replacement bootstrap is closed");
     if (this.deps.explicitUrl) throw new ConnectionRefusal("ORCA_DAEMON_URL controls this launch.");
     if (
       this.closed ||
-      this.updating ||
+      (this.updating && !recovery) ||
       this.macUpdateHold ||
       this.firstRunHold ||
       this.pending ||
@@ -649,13 +684,14 @@ export class Workspace {
       const client = this.deps.client(owned.url, { workspace: path, bundled: true, tokenFile: owned.tokenFile });
       const check = () => {
         ownership?.check();
-        this.assertEpoch(epoch);
+        if (recovery) checkRecovery();
+        else this.assertEpoch(epoch);
         if (
           settled ||
           exited ||
           owned.exited === true ||
           this.closed ||
-          this.updating ||
+          (this.updating && !recovery) ||
           this.macUpdateHold ||
           this.pending ||
           this.firstRunHold !== hold
@@ -668,6 +704,8 @@ export class Workspace {
         check();
         if (!hello.identity || hello.processId !== processId || hello.storeDir !== join(path, ".orca"))
           throw new ConnectionRefusal("Owned first-run identity changed.");
+        if (recovery && hello.identity.workspaceId !== recovery.firstRun?.identity.workspaceId)
+          throw new FirstRunOwnershipRefusal();
         ownership?.verify(hello);
         const previousOwner = this.firstRunOwners.get(owned);
         if (
@@ -742,6 +780,8 @@ export class Workspace {
   }
 
   private recordFirstRunExit(daemon: BundledDaemon): void {
+    // Installer uncertainty must not turn a late exit callback into startup permission.
+    if (this.windowsUpdate?.daemon === daemon) return;
     try {
       this.durableFirstRunOwners.get(daemon)?.complete();
     } catch (error) {
@@ -876,45 +916,164 @@ export class Workspace {
     };
   }
 
-  private updateStopped = false;
+  private checkWindowsUpdate(attempt: WindowsUpdateAttempt): void {
+    if (
+      this.closed ||
+      !this.updating ||
+      this.windowsUpdate !== attempt ||
+      this.epoch !== attempt.epoch ||
+      this.clientNow !== attempt.client ||
+      attempt.daemon?.pid !== attempt.processId ||
+      (attempt.firstRun !== undefined &&
+        (!this.verifiedHello ||
+          this.verifiedHello.processId !== attempt.processId ||
+          this.verifiedHello?.storeDir !== attempt.storeDir ||
+          !isCompatible(PROTOCOL_VERSION, this.verifiedHello.protocol) ||
+          !(["runs.read", "runs.control", "runs.subscribe"] as const).every((capability) =>
+            this.verifiedHello?.capabilities.includes(capability),
+          ))) ||
+      this.identity?.workspaceId !== attempt.identity?.workspaceId ||
+      this.identity?.instanceId !== attempt.identity?.instanceId ||
+      this.target.path !== attempt.target.path ||
+      this.target.readOnly !== attempt.target.readOnly ||
+      (this.daemon !== attempt.daemon && !(attempt.stopAttempted && !this.daemon && attempt.daemon?.exited === true))
+    )
+      throw new Error("Update attempt or target changed; admission remains closed");
+  }
 
-  async stopForUpdate(): Promise<void> {
-    if (!this.updating) throw new Error("Update was not prepared");
-    if (this.daemon) {
-      await this.daemon.stop();
-      this.daemon = undefined;
-      this.updateStopped = true;
+  async stopForUpdate(token: string): Promise<void> {
+    const attempt = this.windowsUpdate;
+    if (!attempt || attempt.token !== token) throw new Error("Update was not prepared for this token");
+    this.checkWindowsUpdate(attempt);
+    if (attempt.busy || attempt.stopAttempted) throw new Error("Update stop already attempted");
+    attempt.busy = true;
+    attempt.stopAttempted = true;
+    try {
+      // Retain the handle and durable reservation, even on a throw/timeout or observed exit.
+      // Settlement is allowed only when the caller positively knows installation never began.
+      attempt.ownership?.check();
+      if (attempt.daemon) {
+        await attempt.daemon.stop();
+        this.checkWindowsUpdate(attempt);
+        if (attempt.daemon.exited !== true) throw new Error("Exact child termination is uncertain");
+        this.stream?.close();
+        this.stream = undefined;
+        this.deps.onDaemonGone("Bundled daemon stopped for update; admission remains closed");
+      }
+    } finally {
+      attempt.busy = false;
     }
   }
 
   async prepareUpdate(token: string): Promise<void> {
-    if (this.macUpdateHold || this.firstRunHold || this.deps.setupBusy?.() || this.connectionPreparations.size)
-      throw new Error("Workspace is busy");
-    if (this.parkedDefault) throw new Error("Return to the bundled daemon before updating the app");
-    this.updating = true;
+    const refuseUnclaimed = (message: string): never => {
+      // A duplicate exact-token caller cannot declare its existing reservation absent.
+      if (this.windowsUpdate?.token === token) throw new Error("Update token already has a reservation");
+      throw new UpdatePreflightRefusal(token, message);
+    };
+    const checkPreflight = () => {
+      if (
+        this.closed ||
+        this.updating ||
+        this.pending ||
+        this.candidates.size ||
+        this.macUpdateHold ||
+        this.firstRunHold ||
+        this.deps.setupBusy?.() ||
+        this.connectionPreparations.size
+      )
+        refuseUnclaimed("Workspace is busy");
+      if (this.parkedDefault) refuseUnclaimed("Return to the bundled daemon before updating the app");
+    };
+    checkPreflight();
     try {
       await this.ready();
-      if (this.daemon) {
-        const result = await this.client.maintenance({ action: "prepare", token });
+    } catch {
+      refuseUnclaimed("Workspace update preflight could not complete");
+    }
+    checkPreflight();
+    const daemon = this.daemon;
+    const attempt: WindowsUpdateAttempt = {
+      token,
+      daemon,
+      ownership: daemon && this.durableFirstRunOwners.get(daemon),
+      firstRun: daemon && this.firstRunOwners.get(daemon),
+      client: this.clientNow,
+      epoch: this.epoch,
+      identity: this.identity ? { ...this.identity } : undefined,
+      processId: daemon?.pid,
+      storeDir: this.verifiedHello?.storeDir,
+      target: { ...this.target },
+      stopAttempted: false,
+      recovering: false,
+      busy: true,
+    };
+    this.windowsUpdate = attempt;
+    this.updating = true;
+    try {
+      attempt.ownership?.check();
+      if (attempt.firstRun && (!attempt.ownership || !this.currentFirstRun(attempt.firstRun.path)))
+        throw new FirstRunOwnershipRefusal();
+      if (daemon) {
+        const result = await attempt.client.maintenance({ action: "prepare", token });
+        this.checkWindowsUpdate(attempt);
         if (!result.ready) throw new Error(`Bundled daemon busy: ${result.active.join(", ")}`);
       }
-    } catch (error) {
-      this.updating = false;
-      throw error;
+    } finally {
+      // A failed or ambiguous prepare still belongs to this token until resume succeeds.
+      attempt.busy = false;
     }
   }
 
+  /** Called only with positive installer non-launch evidence (including pre-install failure). */
   async cancelUpdate(token: string): Promise<void> {
-    if (this.macUpdateHold) throw new Error("Workspace is busy");
+    const attempt = this.windowsUpdate;
+    if (!attempt || attempt.token !== token) throw new Error("Update token is stale");
+    this.checkWindowsUpdate(attempt);
+    if (attempt.busy || attempt.recovering) throw new Error("Update recovery already attempted");
+    attempt.busy = true;
+    attempt.recovering = true;
     try {
-      if (this.daemon) await this.client.maintenance({ action: "resume", token });
-    } finally {
-      this.updating = false;
-      if (this.updateStopped) {
-        this.updateStopped = false;
-        await this.connect();
+      if (!attempt.stopAttempted) {
+        if (attempt.daemon) {
+          const result = await attempt.client.maintenance({ action: "resume", token });
+          this.checkWindowsUpdate(attempt);
+          if (result.ready) throw new Error("Bundled daemon admission is still held");
+        }
+      } else if (attempt.daemon) {
+        if (attempt.daemon.exited !== true) throw new Error("Exact child termination is uncertain");
+        attempt.ownership?.check();
+        if (attempt.ownership && !attempt.ownership.complete()) throw new FirstRunOwnershipRefusal();
+        // The old captured child is now settled. Generic reconnect cannot authorize a new writer.
+        if (!attempt.firstRun || !this.deps.recoverFirstRun) throw new Error("Saved-receipt recovery is unavailable");
+        this.daemon = undefined;
+        const check = () => {
+          this.checkWindowsUpdate(attempt);
+          if (!attempt.busy || !attempt.recovering) throw new Error("Update recovery is no longer open");
+        };
+        await this.deps.recoverFirstRun(attempt.firstRun.path, check, (path) => this.firstRunConnection(path, attempt));
+        this.assertWindowsReplacement(attempt);
       }
+      this.windowsUpdate = undefined;
+      this.updating = false;
+    } finally {
+      attempt.busy = false;
     }
+  }
+
+  private assertWindowsReplacement(attempt: WindowsUpdateAttempt): void {
+    // Activation advances the epoch; require a verified replacement of the same workspace.
+    if (
+      this.closed ||
+      this.windowsUpdate !== attempt ||
+      !this.daemon ||
+      this.daemon === attempt.daemon ||
+      this.daemon.exited === true ||
+      !attempt.firstRun ||
+      this.identity?.workspaceId !== attempt.firstRun.identity.workspaceId ||
+      !this.currentFirstRun(attempt.firstRun.path)
+    )
+      throw new FirstRunOwnershipRefusal();
   }
 
   constructor(deps: WorkspaceDeps) {
@@ -949,7 +1108,7 @@ export class Workspace {
    * when it stops waiting, not the one that was there when it started.
    */
   async ready(): Promise<void> {
-    if (this.macUpdateStopping || this.macUpdateFrozen || !this.existingDispatchAllowed())
+    if (this.updating || this.macUpdateStopping || this.macUpdateFrozen || !this.existingDispatchAllowed())
       throw new Error("Update restart admission is closed");
     while (this.pending) await this.pending;
   }
@@ -965,7 +1124,7 @@ export class Workspace {
   connect(): Promise<void> {
     if (this.deps.updateBootstrap?.ordinaryAllowed === false)
       return Promise.reject(new Error("Update replacement bootstrap is closed"));
-    if (this.closed || this.macUpdateHold || this.firstRunHold || this.connectionPreparations.size)
+    if (this.closed || this.updating || this.macUpdateHold || this.firstRunHold || this.connectionPreparations.size)
       return Promise.reject(new Error("Workspace is busy"));
     if (!this.deps.explicitUrl && !this.savedUrl && !this.target.path) {
       this.deps.onDaemonGone("Choose a project and empty app workspace in Config.");
@@ -1013,7 +1172,8 @@ export class Workspace {
     this.stream = undefined;
     const daemon = this.daemon;
     this.daemon = undefined;
-    if (!this.macUpdateStopping && !this.macUpdateHold && daemon) await this.stopFirstRunOwned(daemon);
+    if (!this.windowsUpdate && !this.macUpdateStopping && !this.macUpdateHold && daemon)
+      await this.stopFirstRunOwned(daemon);
     const parked = this.parkedDefault;
     this.parkedDefault = undefined;
     if (parked && parked !== daemon) await this.stopFirstRunOwned(parked);
@@ -1145,6 +1305,10 @@ export class Workspace {
    * on a process that is already gone.
    */
   private daemonExited(): void {
+    if (this.windowsUpdate?.daemon === this.daemon) {
+      this.deps.onDaemonGone("Bundled daemon exited during update; admission remains closed");
+      return;
+    }
     this.daemon = undefined;
     this.deps.onDaemonGone("The bundled daemon exited");
   }

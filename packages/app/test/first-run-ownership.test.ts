@@ -69,14 +69,14 @@ async function selected() {
   await writeFile(join(path, "orca.config.yaml"), "synthetic config\n");
   return path;
 }
-function child(path: string) {
+function child(path: string, pid = 123) {
   let exited = false;
   const stop = vi.fn(async () => {
     exited = true;
   });
   const daemon: BundledDaemon = {
     url: "http://127.0.0.1:7654",
-    pid: 123,
+    pid,
     tokenFile: join(path, "auth", "local-client.token"),
     get exited() {
       return exited;
@@ -424,4 +424,201 @@ it("no selection, no bundle and explicit remote precedence start no child and cr
   await expect(explicit.workspace.prepareFirstRunConnection(path)).rejects.toThrow("ORCA_DAEMON_URL");
   for (const f of [noSelection, noBundle, explicit]) expect(f.start).not.toHaveBeenCalled();
   expect(await readdir(path)).toEqual(["orca.config.yaml"]);
+});
+
+it("update stop retains the captured attempt until safe abort, then settles exact-child evidence", async () => {
+  const path = await selected();
+  const f = app(path);
+  (await f.workspace.prepareFirstRunConnection(path)).activate(hello(path));
+  vi.spyOn(f.workspace.client, "maintenance").mockResolvedValue({ ready: true, active: [] });
+  await f.workspace.prepareUpdate("exact-update");
+  await f.workspace.stopForUpdate("exact-update");
+  const before = await evidence(path);
+  expect(before["000001/terminal.json"]).toBeUndefined();
+  // Even observed old-child exit does not allow a competing app during installer uncertainty.
+  const rival = app(path);
+  await expect(rival.workspace.prepareFirstRunConnection(path)).rejects.toThrow("reconciliation");
+  expect(rival.start).not.toHaveBeenCalled();
+  await expect(f.workspace.cancelUpdate("wrong-token")).rejects.toThrow();
+  expect(await evidence(path)).toEqual(before);
+  // No receipt recovery port: preserve the honest failure, but exact termination is recorded.
+  await expect(f.workspace.cancelUpdate("exact-update")).rejects.toThrow();
+  expect((await evidence(path))["000001/terminal.json"]).toContain("direct-child-terminal");
+  await expect(f.workspace.prepareFirstRunConnection(path)).rejects.toThrow();
+  expect(f.start).toHaveBeenCalledOnce();
+});
+
+it.each(["returned", "thrown"] as const)(
+  "retains exact journal and handle after %s uncertain stop, including late exit and close",
+  async (kind) => {
+    const path = await selected();
+    const f = app(path);
+    (await f.workspace.prepareFirstRunConnection(path)).activate(hello(path));
+    vi.spyOn(f.workspace.client, "maintenance").mockResolvedValue({ ready: true, active: [] });
+    f.stop.mockImplementation(async () => {
+      if (kind === "thrown") throw new Error("stop uncertain");
+    });
+    await f.workspace.prepareUpdate("captured");
+    await expect(f.workspace.stopForUpdate("stale")).rejects.toThrow();
+    expect(f.stop).not.toHaveBeenCalled();
+    await expect(f.workspace.stopForUpdate("captured")).rejects.toThrow();
+    const before = await evidence(path);
+    await expect(f.workspace.cancelUpdate("captured")).rejects.toThrow("termination is uncertain");
+    await expect(f.workspace.prepareUpdate("new-token")).rejects.toThrow("busy");
+    await expect(f.workspace.connect()).rejects.toThrow("busy");
+    await expect(f.workspace.ready()).rejects.toThrow("admission is closed");
+    expect(() => f.workspace.assertEpoch(f.workspace.connectionTarget.epoch)).toThrow("admission is closed");
+    f.exit();
+    f.start.mock.calls[0]![0].onExit({ code: 0, signal: null, output: "" });
+    await expect(f.workspace.stopForUpdate("captured")).rejects.toThrow("already attempted");
+    await f.workspace.close();
+    expect(await evidence(path)).toEqual(before);
+    const rival = app(path);
+    await expect(rival.workspace.prepareFirstRunConnection(path)).rejects.toThrow("reconciliation");
+    expect(rival.start).not.toHaveBeenCalled();
+  },
+);
+it("rejects changed identity after maintenance and preserves the original attempt", async () => {
+  const path = await selected();
+  const f = app(path);
+  (await f.workspace.prepareFirstRunConnection(path)).activate(hello(path));
+  let done!: (result: { ready: boolean; active: [] }) => void;
+  vi.spyOn(f.workspace.client, "maintenance").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        done = resolve;
+      }),
+  );
+  const pending = f.workspace.prepareUpdate("captured");
+  await vi.waitFor(() => expect(done).toBeDefined());
+  f.workspace.observeHello(f.workspace.client, {
+    ...hello(path),
+    identity: { ...hello(path).identity!, instanceId: "33333333-3333-4333-8333-333333333333" },
+  });
+  done({ ready: true, active: [] });
+  await expect(pending).rejects.toThrow("target changed");
+  const before = await evidence(path);
+  await expect(f.workspace.stopForUpdate("captured")).rejects.toThrow("target changed");
+  await expect(f.workspace.cancelUpdate("captured")).rejects.toThrow("target changed");
+  expect(f.stop).not.toHaveBeenCalled();
+  await f.workspace.close();
+  expect(await evidence(path)).toEqual(before);
+});
+it.each(["throw", "wrong-path", "wrong-identity", "uncertain-replacement"] as const)(
+  "fails closed on %s recovery and never uses generic reconnect",
+  async (kind) => {
+    const path = await selected();
+    let latePrepare!: (path: string) => Promise<unknown>;
+    const f = app(path, {
+      recoverFirstRun: async (captured, check, prepare) => {
+        expect(captured).toBe(path);
+        latePrepare = prepare;
+        check();
+        if (kind === "throw") throw new Error("receipt refused");
+        const candidate = await prepare(kind === "wrong-path" ? join(path, "other") : path);
+        if (kind === "uncertain-replacement") {
+          await expect(f.workspace.prepareFirstRunConnection(path)).rejects.toThrow("busy");
+          await candidate.dispose();
+        } else {
+          try {
+            candidate.activate({
+              ...hello(path),
+              processId: 124,
+              identity: { ...hello(path).identity!, workspaceId: "44444444-4444-4444-8444-444444444444" },
+            });
+          } finally {
+            await candidate.dispose();
+          }
+        }
+      },
+    });
+    (await f.workspace.prepareFirstRunConnection(path)).activate(hello(path));
+    vi.spyOn(f.workspace.client, "maintenance").mockResolvedValue({ ready: true, active: [] });
+    await f.workspace.prepareUpdate("captured");
+    await f.workspace.stopForUpdate("captured");
+    if (kind === "uncertain-replacement" || kind === "wrong-identity") {
+      // Distinct replacement handle, never the exited old child.
+      const replacement = child(path, 124);
+      if (kind === "uncertain-replacement") replacement.stop.mockImplementation(async () => {});
+      f.start.mockImplementationOnce(async () => {
+        syntheticFirstRunWriter(path, 124);
+        return replacement.daemon;
+      });
+    }
+    const generic = vi.spyOn(f.workspace, "connect");
+    await expect(f.workspace.cancelUpdate("captured")).rejects.toThrow();
+    expect(generic).not.toHaveBeenCalled();
+    expect((await evidence(path))["000001/terminal.json"]).toContain("direct-child-terminal");
+    await expect(latePrepare(path)).rejects.toThrow();
+    await expect(f.workspace.cancelUpdate("captured")).rejects.toThrow();
+    await expect(f.workspace.connectLive()).rejects.toThrow("in progress");
+    if (kind === "uncertain-replacement") {
+      expect((await evidence(path))["000002/terminal.json"]).toBeUndefined();
+      const rival = app(path);
+      await expect(rival.workspace.prepareFirstRunConnection(path)).rejects.toThrow("reconciliation");
+      expect(rival.start).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it.each(["process", "store", "capabilities"] as const)(
+  "rejects changed %s facts even when workspace/instance IDs are unchanged",
+  async (kind) => {
+    const path = await selected();
+    const f = app(path);
+    (await f.workspace.prepareFirstRunConnection(path)).activate(hello(path));
+    vi.spyOn(f.workspace.client, "maintenance").mockResolvedValue({ ready: true, active: [] });
+    await f.workspace.prepareUpdate("captured");
+    const changed = hello(path);
+    if (kind === "process") changed.processId = 999;
+    if (kind === "store") changed.storeDir = join(path, "foreign");
+    if (kind === "capabilities") changed.capabilities = ["runs.read"];
+    f.workspace.observeHello(f.workspace.client, changed);
+    const before = await evidence(path);
+    await expect(f.workspace.stopForUpdate("captured")).rejects.toThrow("target changed");
+    await expect(f.workspace.cancelUpdate("captured")).rejects.toThrow("target changed");
+    expect(f.stop).not.toHaveBeenCalled();
+    expect(await evidence(path)).toEqual(before);
+  },
+);
+it("a still-held resume response is a failure and duplicate abort cannot issue another maintenance call", async () => {
+  const path = await selected();
+  const f = app(path);
+  (await f.workspace.prepareFirstRunConnection(path)).activate(hello(path));
+  const maintenance = vi.spyOn(f.workspace.client, "maintenance").mockResolvedValue({ ready: true, active: [] });
+  await f.workspace.prepareUpdate("captured");
+  await expect(f.workspace.cancelUpdate("captured")).rejects.toThrow("admission is still held");
+  await expect(f.workspace.cancelUpdate("captured")).rejects.toThrow("already attempted");
+  expect(maintenance).toHaveBeenCalledTimes(2);
+  expect(f.stop).not.toHaveBeenCalled();
+  await expect(f.workspace.ready()).rejects.toThrow("admission is closed");
+});
+
+it("serializes the exact captured stop and refuses duplicate or late abort while it is pending", async () => {
+  const path = await selected();
+  const f = app(path);
+  (await f.workspace.prepareFirstRunConnection(path)).activate(hello(path));
+  vi.spyOn(f.workspace.client, "maintenance").mockResolvedValue({ ready: true, active: [] });
+  let finish!: () => void;
+  f.stop.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = () => {
+          f.exit();
+          resolve();
+        };
+      }),
+  );
+  await f.workspace.prepareUpdate("captured");
+  const stopping = f.workspace.stopForUpdate("captured");
+  await expect(f.workspace.stopForUpdate("captured")).rejects.toThrow("already attempted");
+  await expect(f.workspace.cancelUpdate("captured")).rejects.toThrow("already attempted");
+  await expect(f.workspace.cancelUpdate("stale")).rejects.toThrow("stale");
+  expect(f.stop).toHaveBeenCalledOnce();
+  finish();
+  await stopping;
+  expect((await evidence(path))["000001/terminal.json"]).toBeUndefined();
+  // No automatic settlement just because the delayed stop finally supplied exit proof.
+  f.start.mock.calls[0]![0].onExit({ code: 0, signal: null, output: "" });
+  expect((await evidence(path))["000001/terminal.json"]).toBeUndefined();
 });
