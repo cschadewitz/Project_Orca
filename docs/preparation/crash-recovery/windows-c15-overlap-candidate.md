@@ -22,6 +22,10 @@ The Windows native digest was recomputed from the selected source and remains
 `555b8b174c43fa2b11aa3cd16466b04a0872819d3f73f6987262e11ec7a305b5` because
 those native bytes are unchanged. Compiler 7.0.2 and Electron archive pins remain.
 
+Latest evidence: [readiness run 5](windows-c15-readiness-run5.md) passes the narrow
+hosted synthetic Windows x64 failure/stall protocol at `dbedc9db`; its wire-evidence
+limits and broader holds are recorded separately.
+
 This is still **not C15 acceptance**. Historical preparation/run-1/run-2 identities,
 failures and transfer findings remain in their original records. References below
 to the old source or 29/32 result describe that history. Parent owns independent
