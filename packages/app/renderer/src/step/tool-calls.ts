@@ -116,57 +116,145 @@ const bodyOf = (body: AgentUpdate["args"]): ToolCallBody | undefined =>
  * step costs one call and not two.
  */
 export function foldToolCalls(events: readonly LogEvent[]): ToolCall[] {
-  const order: string[] = [];
-  const calls = new Map<string, ToolCall>();
+  const fold = new ToolCallFold();
+  fold.add(events);
+  return [...fold.snapshot()];
+}
 
-  const upsert = (id: string): ToolCall => {
-    const existing = calls.get(id);
-    if (existing) return existing;
-    const created: ToolCall = { id, tool: id, argSummary: "", state: "pending", locations: [] };
-    calls.set(id, created);
-    order.push(id);
-    return created;
-  };
+type Version<T> = { seq: number; value: T };
+type Detail = "title" | "toolKind" | "locations" | "args" | "result";
+interface CallEntry {
+  first: number;
+  details: Map<Detail, Version<AgentUpdate>>;
+  firstKind?: Version<AgentUpdate>;
+  ask?: Version<string>;
+  decision?: Version<string>;
+  settled?: Version<string>;
+  pending?: Version<string>;
+}
 
-  for (const event of events) {
-    switch (event.type) {
-      case "agent.update": {
-        const update = event.payload.update;
-        if (update.toolCallId === undefined) break;
-        if (update.kind !== "tool_call" && update.kind !== "tool_call_update") break;
-        const call = upsert(update.toolCallId);
-        apply(call, update);
-        break;
+/**
+ * A compact, sequence-aware tool projection. Keep the latest value of each field and
+ * state transition, never streamed text or a history of updates. Permission events can
+ * precede an older coalesced agent batch on the wire; field clocks let that batch fill
+ * missing details without undoing the newer decision. Earlier pages work the same way.
+ * Storage grows with distinct calls, not with chunks or updates to a call.
+ */
+export class ToolCallFold {
+  private entries = new Map<string, CallEntry>();
+  private cached: readonly ToolCall[] = [];
+  private dirty = false;
+
+  private entry(id: string, seq: number): CallEntry {
+    let entry = this.entries.get(id);
+    if (!entry) {
+      entry = { first: seq, details: new Map() };
+      this.entries.set(id, entry);
+      this.dirty = true;
+    }
+    if (seq < entry.first) {
+      entry.first = seq;
+      this.dirty = true;
+    }
+    return entry;
+  }
+
+  /** Accept only the already public/projected wire summary. `text` is never retained. */
+  update(seq: number, update: AgentUpdate): void {
+    const id = update.toolCallId;
+    if (id === undefined || (update.kind !== "tool_call" && update.kind !== "tool_call_update")) return;
+    const entry = this.entry(id, seq);
+    for (const key of ["title", "toolKind", "locations", "args", "result"] as const) {
+      if (update[key] === undefined) continue;
+      const previous = entry.details.get(key);
+      if (previous !== undefined && previous.seq >= seq) continue;
+      // Project the field rather than retaining the whole update (which may have text).
+      entry.details.set(key, { seq, value: { kind: update.kind, [key]: update[key] } });
+      this.dirty = true;
+    }
+    if (update.toolKind !== undefined && (entry.firstKind === undefined || seq < entry.firstKind.seq)) {
+      entry.firstKind = { seq, value: { kind: update.kind, toolKind: update.toolKind } };
+      this.dirty = true;
+    }
+    if (update.status !== undefined) {
+      const key = SETTLED[update.status] === undefined ? "pending" : "settled";
+      if (entry[key] === undefined || seq > entry[key].seq) {
+        entry[key] = { seq, value: update.status };
+        this.dirty = true;
       }
-      case "human.requested": {
-        if (event.payload.kind !== "permission") break;
-        const toolCallId = toolCallOf(event.payload.context);
-        if (toolCallId === undefined) break;
-        const call = upsert(toolCallId);
-        call.state = "awaiting-permission";
-        call.question = event.payload.question;
-        break;
-      }
-      case "agent.permission": {
-        // The settling transition: before this event the call was waiting on a person,
-        // after it the call is going ahead or it is not.
-        const toolCallId = event.payload.toolCallId;
-        if (toolCallId === undefined) break;
-        const call = upsert(toolCallId);
-        call.decision = event.payload.decision;
-        delete call.question;
-        call.state = refuses(event.payload.decision) ? "failed" : "pending";
-        break;
-      }
-      default:
-        break;
     }
   }
 
-  return order.flatMap((id) => {
-    const call = calls.get(id);
-    return call ? [{ ...call, argSummary: summarizeArgs(call.args, call.locations) }] : [];
-  });
+  add(events: readonly LogEvent[]): void {
+    for (const event of events) {
+      if (event.type === "agent.update") {
+        this.update(event.seq, event.payload.update);
+      } else if (event.type === "human.requested" && event.payload.kind === "permission") {
+        const id = toolCallOf(event.payload.context);
+        if (id === undefined) continue;
+        const entry = this.entry(id, event.seq);
+        if (entry.ask === undefined || event.seq > entry.ask.seq) {
+          entry.ask = { seq: event.seq, value: event.payload.question };
+          this.dirty = true;
+        }
+      } else if (event.type === "agent.permission") {
+        const id = event.payload.toolCallId;
+        if (id === undefined) continue;
+        const entry = this.entry(id, event.seq);
+        if (entry.decision === undefined || event.seq > entry.decision.seq) {
+          entry.decision = { seq: event.seq, value: event.payload.decision };
+          this.dirty = true;
+        }
+      }
+    }
+  }
+
+  /** Stable by identity until a relevant, nonduplicate update changes the projection. */
+  snapshot(): readonly ToolCall[] {
+    if (!this.dirty) return this.cached;
+    this.cached = [...this.entries]
+      .sort((a, b) => a[1].first - b[1].first)
+      .map(([id, entry]) => {
+        const call: ToolCall = { id, tool: id, argSummary: "", state: "pending", locations: [] };
+        const details = [...entry.details.values()];
+        if (entry.firstKind !== undefined) details.push(entry.firstKind);
+        // Fields from the same event are one update: title takes precedence over kind.
+        const bySeq = new Map<number, AgentUpdate>();
+        for (const detail of details) bySeq.set(detail.seq, { ...bySeq.get(detail.seq), ...detail.value });
+        for (const [, update] of [...bySeq].sort((a, b) => a[0] - b[0])) apply(call, update);
+        const transitions: { seq: number; apply: () => void }[] = [];
+        const { ask, decision, settled, pending } = entry;
+        if (ask !== undefined)
+          transitions.push({
+            seq: ask.seq,
+            apply: () => {
+              call.state = "awaiting-permission";
+              call.question = ask.value;
+            },
+          });
+        if (decision !== undefined)
+          transitions.push({
+            seq: decision.seq,
+            apply: () => {
+              call.decision = decision.value;
+              delete call.question;
+              call.state = refuses(decision.value) ? "failed" : "pending";
+            },
+          });
+        for (const status of [settled, pending]) {
+          if (status !== undefined)
+            transitions.push({
+              seq: status.seq,
+              apply: () => apply(call, { kind: "tool_call_update", status: status.value }),
+            });
+        }
+        for (const transition of transitions.sort((a, b) => a.seq - b.seq)) transition.apply();
+        call.argSummary = summarizeArgs(call.args, call.locations);
+        return call;
+      });
+    this.dirty = false;
+    return this.cached;
+  }
 }
 
 /** Fold one update into the call it is about. Absent fields leave what is already there. */

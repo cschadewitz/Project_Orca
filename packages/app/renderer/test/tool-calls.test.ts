@@ -3,7 +3,7 @@
  * records that nothing else can tell you — `awaiting-permission` settling.
  */
 import { describe, expect, it } from "vitest";
-import { foldToolCalls, refuses, summarizeArgs, type ToolCall } from "../src/step/tool-calls.js";
+import { foldToolCalls, ToolCallFold, refuses, summarizeArgs, type ToolCall } from "../src/step/tool-calls.js";
 import type { LogEvent } from "../src/step/line-buffer.js";
 
 let seq = 0;
@@ -16,6 +16,56 @@ const update = (u: Record<string, unknown>): LogEvent =>
 const byId = (calls: readonly ToolCall[], id: string): ToolCall | undefined => calls.find((c) => c.id === id);
 
 describe("folding the log", () => {
+  it("keeps the latest partial fields when replayed or delivered out of order", () => {
+    const fold = new ToolCallFold();
+    fold.update(30, {
+      kind: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+      result: { text: "public", length: 100 },
+    });
+    fold.update(20, { kind: "tool_call_update", toolCallId: "t1", title: "Read latest", locations: ["latest.ts"] });
+    fold.update(10, {
+      kind: "tool_call",
+      toolCallId: "t1",
+      title: "Read old",
+      toolKind: "read",
+      args: { text: "old args", length: 8 },
+      text: "streamed text",
+    });
+    const snapshot = fold.snapshot();
+    expect(snapshot).toEqual([
+      {
+        id: "t1",
+        tool: "Read latest",
+        toolKind: "read",
+        argSummary: "old args",
+        state: "ok",
+        locations: ["latest.ts"],
+        args: { text: "old args", length: 8 },
+        result: { text: "public", length: 100 },
+      },
+    ]);
+    fold.update(30, {
+      kind: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+      result: { text: "public", length: 100 },
+    });
+    fold.update(40, { kind: "agent_message_chunk", text: "more streamed text" });
+    expect(fold.snapshot()).toBe(snapshot);
+  });
+
+  it("keeps both the latest terminal and running state around permission transitions", () => {
+    const fold = new ToolCallFold();
+    const ask = event("human.requested", { kind: "permission", question: "Read?", context: { toolCallId: "t1" } });
+    fold.add([ask]);
+    fold.update(ask.seq + 1, { kind: "tool_call_update", toolCallId: "t1", status: "completed" });
+    fold.update(ask.seq + 2, { kind: "tool_call_update", toolCallId: "t1", status: "in_progress" });
+    expect(fold.snapshot()[0]?.state).toBe("pending");
+    // Retaining only the newest status would have left the old permission ask waiting.
+  });
+
   it("opens a call, grows it and settles it, keeping the order it opened in", () => {
     const calls = foldToolCalls([
       update({ kind: "tool_call", toolCallId: "t1", title: "read", toolKind: "read", status: "pending" }),

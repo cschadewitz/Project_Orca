@@ -65,9 +65,12 @@ import {
   type SurfaceId,
 } from "@orca/design";
 import {
+  AgentUpdateParamsSchema,
   ArtifactsListResultSchema,
   InputInvalidatedParamsSchema,
   RunsEventsResultSchema,
+  RunsGetResultSchema,
+  type AgentUpdateParams,
   type InputsAnswerParams,
   type NotificationMessage,
 } from "@orca/protocol";
@@ -80,6 +83,7 @@ import { FIXTURE, startDemoDaemon, type Daemon } from "./daemon.js";
 interface SmokeWindow {
   orca?: {
     platform: string;
+    daemonConnection: { read: () => { epoch: number } };
     hello: () => Promise<{ ok: true; result: { capabilities: string[] } } | { ok: false; error: unknown }>;
     /** Only the part the pane-boundary test reads back: the sizes a drag left behind (#276). */
     preferences: { read: () => { panes: Record<string, number> } };
@@ -846,5 +850,134 @@ test("a connected live permission expires without dispatching a stale answer", a
       target.liveInputProbe?.stop();
       delete target.liveInputProbe;
     });
+  }
+});
+
+test("a mounted live step keeps tool disclosures and focus through live update bursts", async () => {
+  // Keep the real interpreter active at its existing permission checkpoint. Only this
+  // test's public agent.update envelopes are synthetic: send them from Playwright's
+  // Electron driver through the existing sandboxed preload, never a renderer/product hook.
+  // This isolates the GUI regression; daemon ACP/coalescing remains the real smoke's job.
+  const live = await daemon.startLivePermission();
+  try {
+    const { input } = live;
+    // Permission checkpoints project as waiting, while the agent callback and output
+    // stream remain active. Match the public read model rather than assuming running.
+    await expect
+      .poll(async () => {
+        const snapshot = RunsGetResultSchema.parse(await daemon.rpc("runs.get", { runId: input.runId }));
+        return snapshot.steps.find((step) => step.id === input.stepRunId);
+      })
+      .toMatchObject({ nodeId: "write", status: "waiting" });
+    const runs = await gotoSurface("runs");
+    const tree = runs.getByRole("tree", { name: "Run tree" });
+    const root = tree.locator(`[id="tree-row-${input.runId}"]`);
+    await expect(root).toHaveCount(1);
+    await root.locator(".orca-tree-row__twisty").click();
+    const step = tree.locator(`[id="tree-row-${input.runId}/${input.stepRunId}"]`);
+    await step.click();
+    const detail = runs.locator(".orca-step");
+    await expect(detail.locator(".orca-inspector__title")).toHaveText("write");
+    await expect(detail.locator(".orca-inspector__head .orca-chip--waiting")).toBeVisible();
+    await expect(detail.locator(".orca-inspector__head .orca-chip__label")).toHaveText("waiting");
+    // The first tool and output prove the initial read has committed before injection.
+    await expect(detail.locator(".orca-tool")).toHaveCount(1);
+    await expect(detail.getByRole("searchbox", { name: "Search the output held in memory" })).toBeVisible();
+    const mounted = await detail.elementHandle();
+    const events = RunsEventsResultSchema.parse(
+      await daemon.rpc("runs.events", { runId: input.runId, stepRunId: input.stepRunId, limit: 500 }),
+    ).events;
+    const session = events.find((event) => event.type === "agent.session.opened");
+    expect(session?.payload.sessionId).toEqual(expect.any(String));
+    const epoch = await page.evaluate(() => (window as unknown as SmokeWindow).orca!.daemonConnection.read().epoch);
+    const win = await app.browserWindow(page);
+    let seq = Math.max(...events.map((event) => event.seq));
+    const push = async (updates: AgentUpdateParams["updates"]) => {
+      const fromSeq = seq + 1;
+      seq += updates.length;
+      const params = AgentUpdateParamsSchema.parse({
+        subscriptionId: "smoke-mounted-tools",
+        runId: input.runId,
+        stepRunId: input.stepRunId,
+        sessionId: session!.payload.sessionId,
+        fromSeq,
+        seq,
+        at: new Date().toISOString(),
+        updates,
+      });
+      await win.evaluate(
+        (window, payload) => {
+          window.webContents.send("orca:notification", payload.notification, payload.epoch);
+        },
+        { notification: { kind: "notification", method: "agent.update", params }, epoch },
+      );
+    };
+    const tool = (name: string) =>
+      detail.locator(".orca-tool").filter({
+        has: page.locator(".orca-tool__name", { hasText: name }),
+      });
+    await push([
+      {
+        kind: "tool_call",
+        toolCallId: "smoke-read",
+        title: "Read smoke source",
+        toolKind: "read",
+        status: "in_progress",
+        args: { text: "synthetic source", length: 16 },
+      },
+    ]);
+    const read = tool("Read smoke source");
+    await expect(read.locator(".orca-tool__meta")).toHaveText("running");
+    await read.locator("summary").click();
+    await expect(read).toHaveAttribute("open", "");
+    await expect(read.locator("summary")).toBeFocused();
+    const originalRow = await read.elementHandle();
+    await push([
+      {
+        kind: "tool_call_update",
+        toolCallId: "smoke-read",
+        title: "Read updated smoke source",
+        status: "in_progress",
+      },
+    ]);
+    const updated = tool("Read updated smoke source");
+    await expect(updated.locator(".orca-tool__meta")).toHaveText("running");
+    // One coalesced burst changes two calls and output, without touching selection.
+    await push([
+      {
+        kind: "tool_call_update",
+        toolCallId: "smoke-read",
+        status: "completed",
+        result: { text: "read complete", length: 13 },
+      },
+      {
+        kind: "tool_call",
+        toolCallId: "smoke-exec",
+        title: "Execute smoke check",
+        toolKind: "execute",
+        status: "in_progress",
+      },
+      { kind: "agent_message_chunk", text: "Synthetic mounted-step burst\n" },
+      {
+        kind: "tool_call_update",
+        toolCallId: "smoke-exec",
+        status: "failed",
+        result: { text: "check failed", length: 12 },
+      },
+    ]);
+    await expect(updated.locator(".orca-tool__meta")).toHaveText("done");
+    await expect(updated).toContainText("read complete");
+    await expect(tool("Execute smoke check").locator(".orca-tool__meta")).toHaveText("failed");
+    await expect(detail.locator(".orca-tool")).toHaveCount(3);
+    await expect(updated).toHaveAttribute("open", "");
+    await expect(updated.locator("summary")).toBeFocused();
+    expect(await originalRow.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await mounted.evaluate((node) => node.isConnected)).toBe(true);
+    await expect(step).toHaveAttribute("aria-selected", "true");
+    await test
+      .info()
+      .attach("mounted-live-tool-burst.png", { body: await page.screenshot(), contentType: "image/png" });
+  } finally {
+    await live.cancel();
   }
 });

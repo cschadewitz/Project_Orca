@@ -35,6 +35,7 @@ import {
   type LogEvent,
   type OutputRow,
 } from "./line-buffer.js";
+import { ToolCallFold, type ToolCall } from "./tool-calls.js";
 
 /** One page of the run's log. 500 is the protocol's cap; a step's log is worth one call. */
 export const PAGE_SIZE = 500;
@@ -45,10 +46,12 @@ export interface StepLog {
   phase: LogPhase;
   error?: ProtocolError;
   /**
-   * The page as it was read, `agent.update` and all — the tool-call fold and the session
-   * fold both walk it, and neither wants the lines.
+   * Pages as read plus non-output notifications, for session facts. Live text belongs
+   * only to the output buffer; tool calls have their own compact projection below.
    */
   events: readonly LogEvent[];
+  /** Current tool state, compacted independently of streamed text and ordered by seq. */
+  toolCalls: readonly ToolCall[];
   /** The rows the output pane renders: lines, and the seams where the stream stopped. */
   rows: readonly OutputRow[];
   /** Set when there is output in front of what is held; the marker row's cursor. */
@@ -86,6 +89,7 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
   const [phase, setPhase] = useState<LogPhase>("loading");
   const [error, setError] = useState<ProtocolError | undefined>(undefined);
   const [events, setEvents] = useState<readonly LogEvent[]>([]);
+  const [toolCalls, setToolCalls] = useState<readonly ToolCall[]>([]);
   const [rows, setRows] = useState<readonly OutputRow[]>([]);
   const [earlierBefore, setEarlierBefore] = useState<number | undefined>(undefined);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -99,6 +103,8 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
      blank pane) on every render. */
   const settings = useRef(bufferOptions);
   const buffer = useMemo(() => new OutputBuffer(settings.current ?? {}), [runId, stepRunId, generation]);
+  // The same lifetime and commit clock as output, without a second stream or text log.
+  const tools = useMemo(() => new ToolCallFold(), [runId, stepRunId, generation]);
   const prepend = useRef(onPrepend);
   prepend.current = onPrepend;
   /* Whether to open held is a property of the step at the moment it is opened. Read through
@@ -108,6 +114,7 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
 
   useEffect(() => {
     const off = buffer.subscribe((next) => {
+      setToolCalls(tools.snapshot());
       setRows(next);
       setAppended(buffer.linesAppended);
       // A trim of the buffer's own front is the same fact as an unread page on disk, and
@@ -118,7 +125,7 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
       off();
       buffer.dispose();
     };
-  }, [buffer]);
+  }, [buffer, tools]);
 
   /* The first page. `live` guards the two awaits against a step the person has left. */
   useEffect(() => {
@@ -132,6 +139,7 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
     setPhase("loading");
     setError(undefined);
     setEvents([]);
+    setToolCalls([]);
     setEarlierBefore(undefined);
     setFollowing(!openAtTop);
     setHeldAt(openAtTop ? 0 : undefined);
@@ -165,6 +173,7 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
       reading.current = false;
       const merged = new Map(page.events.map((event) => [event.seq, event]));
       for (const event of pendingEvents.current) merged.set(event.seq, event);
+      tools.add([...merged.values()]);
       setEvents([...merged.values()].sort((a, b) => a.seq - b.seq));
       buffer.load([...updatesOf(page.events), ...pendingUpdates.current].sort((a, b) => a.seq - b.seq));
       pendingEvents.current = [];
@@ -177,7 +186,7 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
       live = false;
       readEpoch.current += 1;
     };
-  }, [runId, stepRunId, buffer]);
+  }, [runId, stepRunId, buffer, tools]);
 
   /* Forwards, from the push channel. `agent.update` is coalesced by the daemon — one frame
      per step per 100ms with many updates inside — so this is a batch, not a line. */
@@ -187,6 +196,7 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
       (params) => {
         if (params.stepRunId !== stepRunId) return;
         const updates = updatesOfNotification(params);
+        for (const { seq, update } of updates) tools.update(seq, update);
         if (reading.current) pendingUpdates.current.push(...updates);
         else buffer.push(updates);
       },
@@ -202,7 +212,11 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
         const payload: Record<string, unknown> = event.payload;
         if (payload["stepRunId"] !== stepRunId) return;
         if (reading.current) pendingEvents.current.push(event);
-        else setEvents((current) => [...current, event]);
+        else {
+          tools.add([event]);
+          setToolCalls(tools.snapshot());
+          setEvents((current) => [...current, event]);
+        }
       },
       { runId },
     );
@@ -210,7 +224,7 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
       offUpdates();
       offEvents();
     };
-  }, [stream, runId, stepRunId, buffer]);
+  }, [stream, runId, stepRunId, buffer, tools]);
 
   /* The reconnect seam, inline where it happened. Not a banner and not a live region
      (rule 11): where the gap falls in the output is the whole of what it says. */
@@ -245,6 +259,7 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
         return;
       }
       const page = answer.result;
+      tools.add(page.events);
       setEvents((current) => [...page.events, ...current]);
       const added = buffer.prepend(updatesOf(page.events), page.hasMore ? page.prevCursor : undefined);
       setEarlierBefore(page.hasMore ? page.prevCursor : undefined);
@@ -252,7 +267,7 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
       // thrown back by exactly the page they asked to see.
       if (added > 0) prepend.current?.(added);
     });
-  }, [runId, stepRunId, earlierBefore, loadingEarlier, buffer]);
+  }, [runId, stepRunId, earlierBefore, loadingEarlier, buffer, tools]);
 
   const pending = heldAt === undefined ? 0 : Math.max(0, appended - heldAt);
 
@@ -260,6 +275,7 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
     phase,
     ...(error === undefined ? {} : { error }),
     events,
+    toolCalls,
     rows,
     earlierBefore,
     loadingEarlier,
