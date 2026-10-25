@@ -4,7 +4,7 @@
  * of the six surfaces (`chrome/surfaces.ts`, from `semantics.json`'s `surface` map) is
  * active, and what a deep link or the palette asked each one to show.
  */
-import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import { Announcer } from "./a11y/announcer.js";
 import { SURFACES, type SurfaceId } from "./chrome/surfaces.js";
 import { Sidebar } from "./chrome/sidebar.js";
@@ -66,6 +66,21 @@ export function App(): JSX.Element {
      `open-url`, a second launch's, and the palette's jump row — and this is the one place
      the answer is held, so all four select the same object (#165). */
   const [route, setRoute] = useState<Route | undefined>(undefined);
+  // A route object represents one explicit navigation, including repeated identical URLs.
+  // Chrome renders must not create another request and reclaim the reader's selection.
+  const openRunRoute = useMemo(
+    () =>
+      route?.kind === "run"
+        ? {
+            runId: route.runId,
+            ...(route.step ? { nodeId: route.step.nodeId } : {}),
+            ...(route.step?.attempt ? { attempt: route.step.attempt } : {}),
+          }
+        : route?.kind === "artifact" && route.runId
+          ? { runId: route.runId }
+          : undefined,
+    [route],
+  );
   /* What a link could not do, said out loud rather than dropped — see `LinkNotice`. Held
      apart from `route`: dismissing the sentence is not leaving the place it was about, and
      on Workflows the route is what puts the viewer on screen rather than the list. */
@@ -315,21 +330,7 @@ export function App(): JSX.Element {
           ) : activeSurface.id === "runs" ? (
             /* A `run` route selects the row; an `artifact` route names the run that
                produced it, which is the run to land on while the panel opens over it. */
-            <RunsSurface
-              connection={connection.state}
-              onCrumbs={setCrumbs}
-              open={
-                route?.kind === "run"
-                  ? {
-                      runId: route.runId,
-                      ...(route.step ? { nodeId: route.step.nodeId } : {}),
-                      ...(route.step?.attempt ? { attempt: route.step.attempt } : {}),
-                    }
-                  : route?.kind === "artifact" && route.runId
-                    ? { runId: route.runId }
-                    : undefined
-              }
-            />
+            <RunsSurface connection={connection.state} onCrumbs={setCrumbs} open={openRunRoute} />
           ) : activeSurface.id === "plan" ? (
             /* `orca://item/<slug-or-id>` lands here with the item selected and its
                explanation open, which is the information architecture's promise for that

@@ -495,14 +495,24 @@ describe("shiftBy, for a list that pages backwards", () => {
 describe("follow, for a stream", () => {
   measuredLayout();
 
-  function Stream({ count, onHold }: { count: number; onHold: () => void }): JSX.Element {
+  function Stream({
+    count,
+    onHold,
+    handle,
+  }: {
+    count: number;
+    onHold: () => void;
+    handle?: RefObject<VirtualListHandle | null>;
+  }): JSX.Element {
     const [following, setFollowing] = useState(true);
+    const [selected, setSelected] = useState<number | undefined>(undefined);
     const items = useMemo(() => Array.from({ length: count }, (_, i) => `row-${i}`), [count]);
     const held = useRef(onHold);
     held.current = onHold;
     return (
       <div className="orca-surface" data-surface="proof">
         <VirtualList
+          ref={handle ?? null}
           label="Rows"
           items={items}
           follow={following}
@@ -512,12 +522,71 @@ describe("follow, for a stream", () => {
           }}
           rowId={(item) => item}
           renderRow={(item) => <span>{item}</span>}
-          selectedIndex={undefined}
-          onSelect={() => undefined}
+          selectedIndex={selected}
+          onSelect={setSelected}
+          ticks={[{ index: 20, kind: "failed", label: "Earlier failure" }]}
         />
       </div>
     );
   }
+
+  it.each(["K", "ArrowUp", "Home", "PageUp", "minimap", "reveal"])(
+    "holds after %s navigation, including after further appends",
+    (navigation) => {
+      const h = harness();
+      teardown.push(h.dispose);
+      const { Providers } = h;
+      const onHold = vi.fn();
+      const handle: RefObject<VirtualListHandle | null> = { current: null };
+      const view = (count: number) => (
+        <Providers>
+          <Stream count={count} onHold={onHold} handle={handle} />
+        </Providers>
+      );
+      const { rerender } = render(view(100));
+      press("End");
+      expect(onHold).not.toHaveBeenCalled();
+      if (navigation === "minimap") fireEvent.click(screen.getByRole("button", { name: "Earlier failure" }));
+      else if (navigation === "reveal") act(() => handle.current!.reveal(20));
+      else press(navigation, navigation === "K" ? "KeyK" : navigation);
+      const heldAt = scroller().scrollTop;
+      expect(heldAt).toBeLessThanOrEqual(100 * ROW - VIEWPORT);
+      expect(onHold).toHaveBeenCalledTimes(1);
+      fireEvent.scroll(scroller());
+      rerender(view(140));
+      rerender(view(180));
+      expect(scroller().scrollTop).toBe(heldAt);
+      expect(onHold).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("keeps automatic selection synchronization and growth from releasing follow", () => {
+    const h = harness();
+    teardown.push(h.dispose);
+    const { Providers } = h;
+    const onHold = vi.fn();
+    const view = (count: number, selectedIndex: number) => (
+      <Providers>
+        <VirtualList
+          label="Rows"
+          items={Array.from({ length: count }, (_, i) => `row-${i}`)}
+          rowId={(item) => item}
+          renderRow={(item) => <span>{item}</span>}
+          selectedIndex={selectedIndex}
+          onSelect={() => undefined}
+          follow
+          onHold={onHold}
+        />
+      </Providers>
+    );
+    const { rerender } = render(view(100, 20));
+    expect(scroller().scrollTop).toBe(100 * ROW - VIEWPORT);
+    rerender(view(100, 10));
+    expect(onHold).not.toHaveBeenCalled();
+    rerender(view(140, 10));
+    expect(scroller().scrollTop).toBe(140 * ROW - VIEWPORT);
+    expect(onHold).not.toHaveBeenCalled();
+  });
 
   it("stays at the end as the list grows, and lets go once when a scroll leaves it", () => {
     const h = harness();
