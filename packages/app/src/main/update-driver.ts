@@ -45,20 +45,31 @@ export function updateDriver(packaged: boolean, platform: string, arch: string):
         instance.off("download-progress", listener);
       }
     },
-    install() {
-      return new Promise<void>((_resolve, reject) => {
-        const instance = get();
+    async install() {
+      let instance: InstanceType<typeof electronUpdater.NsisUpdater>;
+      try {
+        instance = get();
+      } catch {
+        // Positive proof: quitAndInstall was never invoked.
+        return "not-launched";
+      }
+      return new Promise<"launched">((_resolve, reject) => {
+        let settled = false;
         const failed = () => {
+          if (settled) return;
+          settled = true;
           clearTimeout(timer);
-          reject(new Error("Installer could not start"));
-        };
-        // On success this process exits. A refused/failed installer must unlock the app.
-        const timer = setTimeout(() => {
           instance.off("error", failed);
-          failed();
-        }, 10000);
+          reject(new Error("Installer outcome is unknown"));
+        };
+        // Electron-updater errors and timeout do not prove the installer never launched.
+        const timer = setTimeout(failed, 10000);
         instance.once("error", failed);
-        instance.quitAndInstall(false, true);
+        try {
+          instance.quitAndInstall(false, true);
+        } catch {
+          failed();
+        }
       });
     },
   };

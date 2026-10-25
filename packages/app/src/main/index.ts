@@ -722,6 +722,17 @@ const workspace = new Workspace({
   defaultUrl: DEFAULT_DAEMON_URL,
   defaultPath: () => process.env.ORCA_WORKSPACE || undefined,
   setupBusy: () => firstRun.isBusy,
+  recoverFirstRun: async (path, check, prepareConnection) => {
+    await appWriters.run(() =>
+      firstRun.connect(
+        () => {
+          assertOrdinaryStartup();
+          check();
+        },
+        { workspace: path, prepareConnection },
+      ),
+    );
+  },
 });
 
 const firstRun = new FirstRunSetup({
@@ -1014,7 +1025,7 @@ const updates = new Updates(
       });
     },
     prepareDaemon: (token) => workspace.prepareUpdate(token),
-    stopDaemon: () => workspace.stopForUpdate(),
+    stopDaemon: (token) => workspace.stopForUpdate(token),
     resume: (token) => workspace.cancelUpdate(token),
     releaseDrafts: () => {
       windowsDraftRelease?.();

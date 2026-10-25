@@ -11,7 +11,7 @@ function rig() {
     }),
     install: vi.fn(() => {
       order.push("install");
-      return Promise.resolve();
+      return Promise.resolve("launched" as const);
     }),
   };
   const guards: UpdateGuards = {
@@ -74,7 +74,7 @@ describe("manual updates", () => {
       expect((await r.updates.act("restart")).phase).toBe("ready");
       expect(r.driver.install).not.toHaveBeenCalled();
       expect(r.guards.releaseDrafts).toHaveBeenCalledOnce();
-      expect(r.guards.resume).toHaveBeenCalledOnce();
+      expect(r.guards.resume).toHaveBeenCalledTimes(guard === "prepareDrafts" ? 0 : 1);
     },
   );
   it("recovers download and installer failures", async () => {
@@ -85,9 +85,63 @@ describe("manual updates", () => {
     r.driver.download = () => Promise.resolve();
     await r.updates.act("check");
     await r.updates.act("download");
-    r.driver.install = () => Promise.reject(new Error("installer refused"));
+    r.driver.install = () => Promise.resolve("not-launched");
     expect((await r.updates.act("restart")).phase).toBe("ready");
     expect(r.guards.releaseDrafts).toHaveBeenCalled();
+  });
+  it("retains admission and draft guards after an unclassified installer outcome and refuses duplicate/late actions", async () => {
+    const r = rig();
+    await r.updates.act("check");
+    await r.updates.act("download");
+    r.driver.install = vi.fn(() => Promise.reject(new Error("private installer uncertainty")));
+    const result = await r.updates.act("restart");
+    expect(result.phase).toBe("error");
+    expect(result.message).toContain("unknown");
+    expect(JSON.stringify(result)).not.toContain("private");
+    expect(r.guards.resume).not.toHaveBeenCalled();
+    expect(r.guards.releaseDrafts).not.toHaveBeenCalled();
+    await r.updates.act("restart");
+    await r.updates.act("check");
+    await r.updates.act("download");
+    expect(r.driver.install).toHaveBeenCalledOnce();
+    expect(r.driver.check).toHaveBeenCalledOnce();
+  });
+  it("surfaces a recovery refusal and keeps guards closed instead of presenting ready", async () => {
+    const r = rig();
+    await r.updates.act("check");
+    await r.updates.act("download");
+    r.guards.stopDaemon = vi.fn(() => Promise.reject(new Error("stop uncertain")));
+    r.guards.resume = vi.fn(() => Promise.reject(new Error("sensitive recovery error")));
+    const result = await r.updates.act("restart");
+    expect(result.phase).toBe("error");
+    expect(result.message).toContain("Recovery");
+    expect(JSON.stringify(result)).not.toContain("sensitive");
+    expect(r.guards.releaseDrafts).not.toHaveBeenCalled();
+    await r.updates.act("restart");
+    expect(r.guards.stopDaemon).toHaveBeenCalledOnce();
+  });
+  it("a positively launched installer keeps all fences and never claims replacement completion", async () => {
+    const r = rig();
+    await r.updates.act("check");
+    await r.updates.act("download");
+    const result = await r.updates.act("restart");
+    expect(result.phase).toBe("restarting");
+    expect(result.message).toContain("Waiting");
+    expect(r.guards.resume).not.toHaveBeenCalled();
+    expect(r.guards.releaseDrafts).not.toHaveBeenCalled();
+    await r.updates.act("restart");
+    expect(r.driver.install).toHaveBeenCalledOnce();
+  });
+  it("passes one exact token through prepare, stop and proven non-launch recovery", async () => {
+    const r = rig();
+    r.driver.install = vi.fn(() => Promise.resolve("not-launched" as const));
+    await r.updates.act("check");
+    await r.updates.act("download");
+    expect((await r.updates.act("restart")).phase).toBe("ready");
+    const token = vi.mocked(r.guards.prepareDaemon).mock.calls[0]![0];
+    expect(r.guards.stopDaemon).toHaveBeenCalledExactlyOnceWith(token);
+    expect(r.guards.resume).toHaveBeenCalledExactlyOnceWith(token);
+    expect(r.guards.releaseDrafts).toHaveBeenCalledOnce();
   });
 });
 describe("update IPC", () => {

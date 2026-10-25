@@ -1,6 +1,6 @@
 /** Exact candidate ownership and cold-start policy, plus a real compiled CLI child over disposable directories. */
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ import { startBundledDaemon } from "../src/main/daemon-process.js";
 import { Workspace, type WorkspaceDeps } from "../src/main/workspace.js";
 import { FirstRunSetup } from "../src/main/first-run/setup.js";
 import { startFirstRunWorkspace } from "../src/main/first-run/ipc.js";
+import { Updates } from "../src/main/updates.js";
 import { compiledSourceFixture } from "./compiled-source-fixture.js";
 
 const selectedPath = resolve("/selected");
@@ -314,12 +315,48 @@ it.skipIf(typeof process.getuid !== "function")(
     await expect(rival.prepareFirstRunConnection(selected)).rejects.toThrow("reconciliation");
     expect(start).toHaveBeenCalledOnce();
     await rival.close();
+    // Installer non-launch recovery uses the real saved receipt and a fresh exact owned child.
+    workspaceDeps.recoverFirstRun = async (path, check, prepareConnection) => {
+      await new FirstRunSetup(deps).connect(check, { workspace: path, prepareConnection });
+    };
+    const receiptBefore = await readFile(deps.receiptPath, "utf8");
+    const releaseDrafts = vi.fn();
+    const updater = new Updates(
+      {
+        check: async () => "synthetic-next",
+        download: async () => {},
+        install: async () => "not-launched",
+      },
+      "fixture",
+      {
+        prepareDrafts: async () => {},
+        prepareDaemon: (token) => owner.prepareUpdate(token),
+        stopDaemon: (token) => owner.stopForUpdate(token),
+        resume: (token) => owner.cancelUpdate(token),
+        releaseDrafts,
+      },
+      () => {},
+    );
+    await updater.act("check");
+    await updater.act("download");
+    expect((await updater.act("restart")).phase).toBe("ready");
+    expect(releaseDrafts).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(owner.currentFirstRun(selected)).toBe(true);
+    expect(await readFile(deps.receiptPath, "utf8")).toBe(receiptBefore);
+    expect(await readFile(join(selected, ".orca-first-run-ownership", "000001", "terminal.json"), "utf8")).toContain(
+      "direct-child-terminal",
+    );
+    expect(await readdir(join(selected, ".orca-first-run-ownership", "000002"))).not.toContain("terminal.json");
+    await expect(owner.cancelUpdate("stale")).rejects.toThrow("stale");
+    await expect(owner.connect()).rejects.toThrow("reconciliation");
+    expect(start).toHaveBeenCalledTimes(2);
     // Ordinary, positively observed direct-child termination records a terminal marker.
     await owner.close();
     owner = new Workspace(workspaceDeps);
     ownerState.workspace = owner;
     await new FirstRunSetup(deps).connect(() => owner.assertEpoch(0));
-    expect(start).toHaveBeenCalledTimes(2);
+    expect(start).toHaveBeenCalledTimes(3);
     expect(owner.currentFirstRun(selected)).toBe(true);
     expect((await owner.client.hello("first-run-recreated", false)).processId).not.toBe(
       (await start.mock.results[0]!.value).pid,

@@ -76,3 +76,42 @@ it("refuses unsupported installs and non-HTTPS or credential-bearing URLs", asyn
   }
   expect(fake.options).not.toHaveBeenCalled();
 });
+
+it("reports positive non-launch only before quitAndInstall is invoked", async () => {
+  vi.stubEnv("ORCA_UPDATE_URL", "http://invalid.example/");
+  expect(await updateDriver(true, "win32", "x64")!.install()).toBe("not-launched");
+  expect(fake.instance.quitAndInstall).not.toHaveBeenCalled();
+});
+it.each(["timeout", "error", "throw"] as const)(
+  "treats post-invocation %s as unknown and removes the exact listener",
+  async (kind) => {
+    vi.useFakeTimers();
+    const dir = mkdtempSync(join(tmpdir(), "orca-installer-fixture-"));
+    try {
+      writeFileSync(join(dir, "token"), "synthetic");
+      vi.stubEnv("ORCA_UPDATE_URL", "https://feed.example/");
+      vi.stubEnv("ORCA_UPDATE_TOKEN_FILE", join(dir, "token"));
+      let failed!: () => void;
+      fake.instance.once.mockImplementationOnce((_event, callback) => {
+        failed = callback;
+        return fake.instance;
+      });
+      if (kind === "throw")
+        fake.instance.quitAndInstall.mockImplementationOnce(() => {
+          throw new Error("raw secret");
+        });
+      const pending = updateDriver(true, "win32", "x64")!.install();
+      const assertion = expect(pending).rejects.toThrow("Installer outcome is unknown");
+      if (kind === "timeout") await vi.advanceTimersByTimeAsync(10000);
+      if (kind === "error") failed();
+      await assertion;
+      failed(); // Duplicate/late callbacks cannot change the already classified outcome.
+      expect(fake.instance.quitAndInstall).toHaveBeenCalledExactlyOnceWith(false, true);
+      expect(fake.instance.off).toHaveBeenCalledExactlyOnceWith("error", failed);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
+  },
+);

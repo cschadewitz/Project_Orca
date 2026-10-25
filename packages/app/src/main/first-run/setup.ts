@@ -480,7 +480,10 @@ export class FirstRunSetup {
       return this.prepared(receipt);
     });
   }
-  async connect(assertCurrent: () => void): Promise<FirstRunStatus> {
+  async connect(
+    assertCurrent: () => void,
+    recovery?: { workspace: string; prepareConnection: FirstRunDeps["prepareConnection"] },
+  ): Promise<FirstRunStatus> {
     return this.exclusive(async () => {
       const receipt = await this.readReceipt();
       if (!receipt)
@@ -488,8 +491,9 @@ export class FirstRunSetup {
           "Saved project identity or sample assets could not be verified. Choose a fresh empty app workspace; existing files were preserved.",
         );
       assertCurrent();
+      if (recovery && receipt.workspace.path !== recovery.workspace) throw selectionFailure();
       if (this.deps.current(receipt.workspace.path)) return this.prepared(receipt);
-      const candidate = await this.deps.prepareConnection(receipt.workspace.path);
+      const candidate = await (recovery?.prepareConnection ?? this.deps.prepareConnection)(receipt.workspace.path);
       let activated = false;
       try {
         candidate.check?.();
