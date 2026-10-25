@@ -1,4 +1,65 @@
-# Windows C15 candidate run 2: receipt diagnosis blocked
+# Windows C15 candidate run 2: verified overlap proof gap
+
+The parent subsequently materialized and verified the unchanged raw artifact for
+[run 40199888746](https://github.com/cschadewitz/Project_Orca/actions/runs/40199888746).
+The only failed required stall gate is
+`runs[1].allFaultsEnteredDuringExecution=false`. Memory is not failing. This is an
+overlap proof gap, not evidence of a product correctness defect. C15 remains held;
+there is no new acceptance claim or Windows dispatch.
+
+## Later supported transfer and receipt diagnosis
+
+After the original blocked-materialization event retained below, the parent used
+`github_download_workflow_artifact` and supported Sediment
+`download_file(file_id='file_00000000bb2081f5a56145254fdf876c')` to materialize the
+ZIP for artifact 12601937371. The parent verified **61,820 bytes** and SHA-256
+`ffb14af27e9ebee0bed3aeb39edcb4afc75f3964e3d69e3d0ca78ef34295a911`.
+The supported file-ID transfer resolved the earlier proxy/URL failure without a
+sandbox, proxy, credential or security-policy change.
+
+The following are exact raw-receipt findings supplied by the parent with the
+continuation task. This later execution environment does not expose Sediment
+`download_file`. Its Cal GitHub artifact fetch succeeded with a reusable file
+reference, but it did not re-hash or independently parse ZIP bytes. This is
+explicit parent-verified evidence attribution, not a second local verification.
+No expired URL or denied network workaround was attempted.
+
+| Stall On observation | Verified receipt value |
+| --- | --- |
+| Required failing gate | `runs[1].allFaultsEnteredDuringExecution=false` |
+| CLI and diagnostic exit | Both `0` |
+| Member completion / diagnostic | `completed=true`, `diagnostic.ok=true` |
+| Original cells | All 20 observed; all individual checks true |
+| Unhandled rejections | `0` |
+| Payload release | `zeroAfterEveryCell=true` |
+| Owned exits / disposable cleanup | Both true |
+| Managed increment / unchanged limit | `15,787,247 / 33,554,432` bytes |
+| Controlled binary peak / unchanged limit | `2,490,368 / 8,388,608` bytes |
+| CLI execution elapsed | `29,151.6431` ms |
+| Fault campaign elapsed | `49,566.4969` ms |
+| Last `nativeWrite` entry | `29,493.7383` ms |
+| Last public operation elapsed | `10,014.2102` ms |
+
+Failure On managed increment is **18,001,619 bytes**; its overlap, correctness
+and memory gates pass. The stall supervisor stops at overlap before assigning
+aggregate `memoryPass`, explaining the missing log-summary property. The raw
+child memory values pass both existing budgets. The supplied last-entry value
+places that fault after the CLI's reported completion; the cell's later public
+settlement is separately bounded and does not establish overlap.
+
+The failed receipts, frozen scripts and run-2 candidate identity remain intact.
+A separate focused draft proposes a fixed real-work overlap correction with
+short-workload rejection tests, while retaining the original 20 faults and memory
+limits. Product source remains `95ee280be309d50f29b46cb66a12d480fdfc8a7d`.
+Parent review is still required before any dispatch. This PR remains evidence-only.
+
+## Original pre-transfer record (retained as history)
+
+The following records what was known before the parent completed the supported
+file-ID transfer. Its blocked status and uncertainty statements describe that
+earlier event; the later verified diagnosis above supersedes them.
+
+### Windows C15 candidate run 2: receipt diagnosis blocked
 
 On 25 October 2026, [run 40199888746](https://github.com/cschadewitz/Project_Orca/actions/runs/40199888746)
 completed with a failed stall comparison. The failure comparison reports both
@@ -11,7 +72,7 @@ activation or security-policy change. The original and corrected October 9 faile
 receipts remain unchanged. The [candidate preparation record](windows-c15-candidate.md)
 describes the pre-dispatch design; this follow-up records the later run.
 
-## Identity and observed job results
+### Identity and observed job results
 
 The run API reports workflow run number 2, attempt 1, `workflow_dispatch`, on
 `main` at harness/workflow commit `2ad2ce53d8425392c2eeedc40158199bd95a160b`.
@@ -39,7 +100,7 @@ semantic equality and work-item equality succeed. An earlier assertion skips tha
 assignment; the missing property does not mean a memory failure. The generic
 assertion text does not identify a target cell or source line.
 
-## Artifact transfer blocker
+### Artifact transfer blocker
 
 The upload log identifies [artifact 12601937371](https://github.com/cschadewitz/Project_Orca/actions/runs/40199888746/artifacts/12601937371),
 61,820 bytes, with reported ZIP SHA-256
@@ -63,7 +124,7 @@ action failed before any bytes were available; it is neither pending nor of
 uncertain outcome. Artifact access through GitHub succeeded; local receipt
 inspection remains blocked.
 
-## Source comparison completed independently
+### Source comparison completed independently
 
 The current candidate supervisor, child, manifest and workflow are byte-identical
 to their versions at the run's harness commit. Their SHA-256 values are:
@@ -90,7 +151,7 @@ the generic boolean failure, alongside receipt correctness and semantic checks.
 No observation here selects that explanation. CLI speed, overall job duration and
 the historical memory failures cannot identify the current failing assertion.
 
-## Required next step
+### Required next step
 
 Restore supported file materialization, or provide the unchanged ZIP through an
 authorized workspace transfer. Verify the expected size/hash first and preserve
@@ -112,7 +173,7 @@ This update adds no Windows acceptance. Hosted synthetic scope, physical/native
 failure limits, sampling limits, deferred timing and the Mac hold remain as stated
 in the preparation and historical records.
 
-## Verification of this evidence update
+### Verification of this evidence update
 
 Linux Node 24.19.0 passed four selected portable cases in
 `tools/test/windows-c15-candidate.test.mjs`: receipt acceptance, adversarial receipt
