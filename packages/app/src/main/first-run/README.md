@@ -27,8 +27,14 @@ credentials or inputs. This app-owned receipt is atomically replaced only after 
 explicit new reviewed selection. Selected files always use exclusive creation.
 Incomplete preparation preserves its files and requires a fresh empty workspace.
 
-Reopening checks both root identities, branch/base and exact prepared files before
-connection. Modifying the prepared config/assets invalidates this setup receipt;
+Reopening checks both root identities, that the project is still its repository's
+top level, and exact prepared files before connection. The receipt's branch/base record
+what was reviewed at selection; commits, pulls and branch switches in the project are
+ordinary work and do not invalidate the workspace or strand its store. Guided launch
+captures fresh checkout evidence for each launch. A different repository at the saved
+path is a different directory identity and refuses. An in-place re-initialized `.git` in
+the same directory is not detected; that is the same-principal boundary below.
+Modifying the prepared config/assets invalidates this setup receipt;
 there is no silent repair or adoption. This narrow bootstrap deliberately does not
 certify persistence of later real-agent configuration changes; a reviewed migration
 or explicit rebind remains integration work. Windows ownership is unavailable here:
@@ -157,3 +163,5 @@ The #570 successor adds main-only launch capabilities, kernel lifetime admission
 explicit same-boot reconciliation and quiescent saved-config binding. Shared entrypoint
 composition and legacy limits are documented in
 [the handoff](../../../../../docs/implementation/first-run-same-boot-recovery.md).
+An attempt left by an earlier boot is settled only when a person confirms **Mark previous
+session ended** (`recovery.ts` `endPreviousBootSession`), described in that handoff.

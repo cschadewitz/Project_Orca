@@ -514,3 +514,86 @@ describe("the keyboard map and the palette", () => {
     expect(fake.calls.find((c) => c.method === "runs.cancel")?.params).toMatchObject({ runId: "run-1" });
   });
 });
+
+describe("a palette row whose card moved while the palette was open", () => {
+  let seq = 300;
+  const envelope = (method: string, params: Record<string, unknown>): NotificationMessage => ({
+    kind: "notification",
+    method,
+    params: { subscriptionId: "sub-1", seq: seq++, at: INPUTS_AS_OF, ...params },
+  });
+  const calls = (method: string): unknown[] => fake.calls.filter((c) => c.method === method).map((c) => c.params);
+
+  async function openPaletteOn(question: string): Promise<HTMLElement> {
+    (await screen.findByRole("region", { name: endingIn(question) })).focus();
+    fireEvent.keyDown(window, { key: "k", code: "KeyK", metaKey: true });
+    return screen.findByRole("dialog", { name: "Command palette" });
+  }
+
+  it("answers nothing, and says so, when the card it names was answered elsewhere", async () => {
+    mount([FIVE_GATES[0]!, FIVE_GATES[1]!]);
+    const palette = await openPaletteOn("Ship release 1?");
+    const approve = within(palette).getByRole("option", { name: /^Answer Ship release 1\?: Approve/ });
+
+    // Answered from the CLI while the palette was up: release 2 is now the first card.
+    fake.notify(
+      envelope("input.answered", { runId: "run-1", stepRunId: "s-gate-1", requestId: "gate-1", answer: "hold" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("region", { name: cardName("gate", "Ship release 1?") })).toBeNull());
+
+    fireEvent.mouseDown(approve);
+    expect(await screen.findByText(/Nothing was sent: "Ship release 1\?"/)).toBeTruthy();
+    // Release 2 shares the option id, so a row that fell through to the current card would
+    // have approved it.
+    expect(calls("inputs.answer")).toEqual([]);
+  });
+
+  it("cancels the run it names, not the run of a permission ask that arrived above it", async () => {
+    const served: OpenInputView[] = [FIVE_GATES[0]!];
+    mount(served);
+    const palette = await openPaletteOn("Ship release 1?");
+    fireEvent.mouseDown(within(palette).getByRole("option", { name: /Cancel the run this is waiting on/ }));
+    const armed = await within(palette).findByRole("option", { name: /Cancel release 1 run run-1 — confirm/ });
+
+    // A permission ask on another run sorts first while the row is armed.
+    const ask: OpenInputView = {
+      ...PERMISSION_ASK,
+      id: "ask-9",
+      runId: "run-9",
+      runName: "release 9",
+      live: { ...PERMISSION_ASK.live!, target: { ...PERMISSION_ASK.live!.target, runId: "run-9", requestId: "ask-9" } },
+    };
+    served.push(ask);
+    fake.notify(
+      envelope("input.opened", {
+        runId: "run-9",
+        stepRunId: ask.stepRunId,
+        requestId: "ask-9",
+        kind: "permission",
+        question: ask.question,
+        options: ask.options,
+      }),
+    );
+    await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+
+    fireEvent.mouseDown(armed);
+    await waitFor(() => expect(calls("runs.cancel")).toHaveLength(1));
+    expect(calls("runs.cancel")[0]).toMatchObject({ runId: "run-1" });
+  });
+
+  it("cancels nothing when the card it names has gone", async () => {
+    mount([FIVE_GATES[0]!, FIVE_GATES[1]!]);
+    const palette = await openPaletteOn("Ship release 1?");
+    fireEvent.mouseDown(within(palette).getByRole("option", { name: /Cancel the run this is waiting on/ }));
+    const armed = await within(palette).findByRole("option", { name: /Cancel release 1 run run-1 — confirm/ });
+
+    fake.notify(
+      envelope("input.answered", { runId: "run-1", stepRunId: "s-gate-1", requestId: "gate-1", answer: "hold" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("region", { name: cardName("gate", "Ship release 1?") })).toBeNull());
+
+    fireEvent.mouseDown(armed);
+    expect(await screen.findByText(/Nothing was sent/)).toBeTruthy();
+    expect(calls("runs.cancel")).toEqual([]);
+  });
+});

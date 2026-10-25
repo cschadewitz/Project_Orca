@@ -32,6 +32,30 @@ async function fixture() {
 }
 
 describe("fresh retry claim validation", () => {
+  it.each([undefined, "0\n"])("empty recovery batches do not publish an unchanged cursor (%s)", async (stored) => {
+    const { dir, store } = await fixture();
+    const journal = join(dir, "admission-retries");
+    await mkdir(journal, { mode: 0o700 });
+    if (stored !== undefined) await writeFile(join(journal, "cursor.json"), stored, { mode: 0o600 });
+    for (let i = 0; i < 2; i++) {
+      expect(await store.batch()).toEqual([]);
+      expect(await readdir(journal)).toEqual(stored === undefined ? [] : ["cursor.json"]);
+      if (stored !== undefined) expect(await readFile(join(journal, "cursor.json"), "utf8")).toBe(stored);
+    }
+  });
+  it("repeated full-page recovery preserves the settled cursor without rewriting it", async () => {
+    const { dir, store, options } = await fixture();
+    const { record } = await store.claim(scope, "same-key", {}, "same");
+    const cursor = join(dir, "admission-retries", "cursor.json");
+    expect(await store.batch()).toEqual([record.operationId]);
+    expect(await readFile(cursor, "utf8")).toBe("1");
+    // Equivalent noncanonical JSON makes any redundant publication observable without timing assumptions.
+    await writeFile(cursor, "1\n", { mode: 0o600 });
+    for (const reader of [store, new FileRetryClaimStore(options)]) {
+      expect(await reader.batch()).toEqual([record.operationId]);
+      expect(await readFile(cursor, "utf8")).toBe("1\n");
+    }
+  });
   it("closed observation neither creates a journal nor advances an empty existing cursor", async () => {
     const { dir, store } = await fixture();
     expect(await store.closedWorkState()).toBe("empty");

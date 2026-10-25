@@ -537,15 +537,18 @@ test uses all three.
 that launches the real thing: Playwright's Electron driver against the *built* app and a
 daemon on an `orca demo` store. It asserts the window comes up with a bridge in it — which
 is exactly what an ESM preload broke (#198) — that `hello` reached the daemon, that both
-themes render and resolve different tokens, that axe finds no violations on **any of the five
+themes render and resolve different tokens, that axe finds no violations on **any of the six
 surfaces** in either theme, and that every status on the attention list, the run tree and the
 status bar still carries its glyph and its word with the colour taken away (#167). Each
 audited surface names a node that only its *real content* produces, so the audit is never run
 over a loading spinner; the demo store plus `test/smoke/daemon.ts` is what guarantees there
 is content to find. Through v0.4.0 a surface with no screen yet was asserted to be the empty
 `StateView` instead, so that the day it grew content the assertion failed and its author
-moved it into `AUDITED` — the trip Config made in #175 and Plan in #170. As of v0.5.0 the
-list is full; a new surface starts in that unbuilt assertion again.
+moved it into `AUDITED` — the trip Config made in #175 and Plan in #170. The list is full,
+and the spec fails unless `AUDITED` names every surface in `@orca/design`'s `SURFACE_IDS`,
+so a new surface cannot join the rail unaudited the way Workflows (#181) first did. It
+reaches each surface by the `⌘<n>` digit its place in that order gives it, as the app binds
+it, rather than by a digit written in the spec.
 
 It is also the only place **scrolling can be measured** (#277). The renderer's
 `scroll-sweep.test.tsx` runs under happy-dom, which has no layout engine, so it can assert

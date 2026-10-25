@@ -309,6 +309,49 @@ export function samePermissionRule(a: PermissionRule, b: PermissionRule): boolea
   );
 }
 
+/**
+ * Whether a sidecar rule is a wildcard: an `allow` that does not say what it allows (C4-01).
+ *
+ * Every rule ORCA writes into the sidecar is derived from one answered request and scoped to
+ * it — a kind, and that file or that exact command (`derivePermissionRules`). A person editing
+ * the sidecar on the Config surface narrows a kind by a path, a prefix, the workspace or a
+ * title. Neither writes an `allow` that names no kind (`{}`), or names one and nothing that
+ * narrows it: `{kind: execute}`, `{kind: read, scope: outside-workspace}`, a title pattern that
+ * matches any title, a path or prefix that normalises to nothing — the workspace root, which
+ * `derivePermissionRules` refuses for the same reason. And an `execute` is a command, not a
+ * place, so only its title narrows it — a path or a scope on one is the directory it ran in,
+ * and grants every command run there.
+ *
+ * In the sidecar such a rule is far likelier to be something an agent wrote than something a
+ * person meant, and it is the shape that turns one written file into "approve everything". So
+ * the loader ignores it (`permissionOverlayFor` in `@orca/agents`), and a wildcard belongs in
+ * `orca.config.yaml`, where a person wrote it on purpose. A `deny` or an `ask` is never a
+ * wildcard here: ignoring one could only widen what an agent may do.
+ */
+export function isWildcardPermissionRule(rule: PermissionRule): boolean {
+  if (rule.decision !== "allow") return false;
+  const m = rule.match;
+  if (m.kind === undefined) return true;
+  const byTitle = m.titlePattern !== undefined && !matchesEveryTitle(m.titlePattern);
+  if (m.kind === "execute") return !byTitle;
+  const byPath = [m.path, m.pathPrefix].some((p) => p !== undefined && normalizePermissionPath(p) !== "");
+  return !byTitle && !byPath && m.scope !== "workspace";
+}
+
+/**
+ * A pattern that matches an empty title and a title of one meaningless character matches by
+ * position rather than by content (`""`, `.*`, `^`, `$`), so it matches every title. An
+ * invalid pattern is not a wildcard; whether it should load at all is a separate question.
+ */
+function matchesEveryTitle(pattern: string): boolean {
+  try {
+    const re = new RegExp(pattern);
+    return re.test("") && re.test("\u0000");
+  } catch {
+    return false;
+  }
+}
+
 /* ----------------------------- path handling ------------------------------ */
 
 /**

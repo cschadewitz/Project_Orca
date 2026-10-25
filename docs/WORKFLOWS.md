@@ -96,8 +96,15 @@ Each iteration is its own child run, but an iteration can read what the previous
 produced: artifact visibility includes earlier siblings — children of the same `loop` step
 that finished before this one was spawned. A review‑then‑fix loop therefore works as a
 `loop` node, with the builder declaring `inputs: [{ kind: review, required: false }]` and
-picking up iteration N‑1's review (unresolved on the first iteration). `parallel` branches
-run concurrently and so never see each other.
+picking up iteration N‑1's review (unresolved on the first iteration). The same holds for
+the children a plugin's `custom:*` container runs one after another.
+
+Fan‑out branches never see each other: not `parallel` branches, and not the item runs of
+`custom:plan-dispatch`, even when a `concurrency` limit, `dependsOn` or a later wave starts
+one only after another has finished. Nor do siblings bound to different work items, under
+any container. So item B's first build never picks up item A's `review` or `testReport` as
+feedback; in a plan, what an item needs from the items it depends on arrives explicitly, in
+`vars.upstream`.
 
 ### Parallel fan-out
 
@@ -280,6 +287,26 @@ Spelling the default rules out in your own `rules:` is therefore not a way to ge
 unchanged: it moves them *ahead* of the sidecar, where a recorded `reject_always` can no longer
 reach them. `config.get` labels every effective rule with the layer it came from (`config`,
 `permissions`, `default`), so the Config surface shows which is which.
+
+Two things about the sidecar are not yours to choose. An `allow` there that says nothing about
+what it allows — no `kind`, or a kind and nothing that narrows it, or an `execute` without a
+`titlePattern` — is ignored with a warning: ORCA only ever writes scoped grants, so a wildcard
+in that file is the shape of an agent's work. Write a wildcard in `orca.config.yaml`, where it
+still applies. And a sidecar that cannot be read makes every `allow` decided after it an `ask`
+until it is repaired, because the `deny` it may hold would otherwise be skipped.
+
+### ORCA's own files
+
+Ahead of all three layers, and beyond the reach of any of them, an agent may not edit, write,
+move or delete the config file, `orca.permissions.json` or the store (`.orca`, or your
+`storeDir`), and may not even read `auth/` or the store's key directories. `default: allow`
+does not change that. With no `workspace:` set, these files sit in the agent's workspace, and
+an agent that could edit the sidecar could otherwise allow itself anything. The same applies to
+ORCA's `fs/read_text_file` and `fs/write_text_file` handlers. The store's `work/` and
+`program/` stay the policy's, because that is where the deliverables above go when the
+workspace holds the store — so a deliverable you put under `.orca/` belongs in one of them. An
+agent's own built‑in tools do not ask ORCA at all, so in a hardened setup keep the config
+directory out of the workspace (ADR 0009).
 
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive

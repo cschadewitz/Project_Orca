@@ -72,15 +72,87 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      # From here to the compiled smoke this is ci.yml's full path, in its order and with its
+      # environment: the release PR never ran CI, so this is the only verification the tagged
+      # tree gets, and a check that is weaker here than there is a check releases skip.
+      # Coverage thresholds stay on main's CI run, the one place they are ratcheted.
+      - name: Bound test workers
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { availableParallelism } from 'node:os';
+
+          const workers = Math.min(2, Math.max(1, availableParallelism() - 1));
+          appendFileSync(process.env.GITHUB_ENV, `VITEST_MAX_WORKERS=${workers}\n`);
+          console.log(`Vitest worker limit: ${workers} (available parallelism: ${availableParallelism()})`);
+          NODE
+
       - run: pnpm install --frozen-lockfile
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
-      - run: pnpm run typecheck
-      - run: pnpm run lint
-      - run: pnpm run format:check
-      - run: pnpm test
-      - run: pnpm run build
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Design tokens are current
+        run: pnpm run design:check
+
+      - name: Format
+        run: pnpm run format:check
+
+      - name: Lint
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm run lint
+
+      # Before the tests: production MCP acceptance launches the emitted daemon and MCP entry
+      # points, and refuses to run without them.
+      - name: Build
+        run: pnpm run build
+
+      # The two opt-in cases the ordinary suite skips, run explicitly, and a green result with
+      # a skip in it rejected. Kept identical to ci.yml's step of the same name.
+      - name: Retry admission acceptance (CLI and ACP)
+        timeout-minutes: 3
+        env:
+          ORCA_RETRY_INTEGRATION: "1"
+        run: |
+          pnpm exec vitest run \
+            packages/cli/test/admission-retry-wiring.test.ts \
+            packages/integrations/test/admission-retry-acp.test.ts \
+            --maxWorkers="$VITEST_MAX_WORKERS" \
+            --reporter=default --reporter=json \
+            --outputFile.json="$RUNNER_TEMP/retry-acceptance.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { join, relative } from 'node:path';
+
+          const report = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'retry-acceptance.json'), 'utf8'));
+          const expected = new Set([
+            'packages/cli/test/admission-retry-wiring.test.ts',
+            'packages/integrations/test/admission-retry-acp.test.ts',
+          ]);
+          const files = report.testResults ?? [];
+          const ran = new Set(files.map((file) => relative(process.cwd(), file.name)));
+          if (
+            report.success !== true ||
+            files.length !== expected.size ||
+            [...expected].some((file) => !ran.has(file)) ||
+            files.some((file) =>
+              !file.assertionResults?.length || file.assertionResults.some((test) => test.status !== 'passed')) ||
+            report.numTotalTests !== report.numPassedTests ||
+            report.numPassedTests < expected.size
+          ) {
+            throw new Error('Retry acceptance requires both named test files to run with every test passing');
+          }
+          console.log(`Retry acceptance: ${report.numPassedTests} tests passed in both named files; none skipped`);
+          NODE
+
+      # Required, so a missing production MCP mount fails the release instead of skipping.
+      - name: Test
+        run: pnpm test
+        env:
+          ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       - name: Smoke test the compiled build
         run: node packages/cli/dist/main.js demo

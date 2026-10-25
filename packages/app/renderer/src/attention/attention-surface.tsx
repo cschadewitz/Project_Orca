@@ -25,13 +25,17 @@
  *   version mismatch all say why rather than failing at the moment of pressing.
  * - **Answering keeps the person here.** The card is dropped the moment the daemon takes the
  *   answer and focus moves to the card that slides into its place, so five gates clear in
- *   five keystrokes and the count goes five to zero without navigating.
+ *   five keystrokes and the count goes five to zero without navigating. That is the *only*
+ *   time focus moves: the card a person is on is known by its id, so a push that puts a
+ *   permission ask above it or takes a gate from above it leaves focus where it was — in a
+ *   half-typed note, on a button — and focus follows a card only when that card itself left
+ *   holding it (`focusAfterLeaving`, the claims list's rule).
  * - **`J`/`K` are the surface's; everything else on a card is the card's.** Moving between
  *   cards is the only thing a single card cannot know how to do. The rest — `1`–`9`,
  *   `Enter`, `⇧Enter`, `G` — is registered by whichever card has focus, which is what lets
  *   the same card be mounted inline in a run and bring its keys with it.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 import type { ConnectionState } from "@orca/design";
 import type { OpenInputView, RunSummaryView } from "@orca/protocol";
 import { useWritability } from "../chrome/use-connection.js";
@@ -39,7 +43,18 @@ import { useKeyboard } from "../keyboard-context.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
 import { bindOptions, isFreeText } from "./card-model.js";
 import { VirtualList } from "../list/index.js";
-import { Button, Duration, StateView, StatusChip, Text, Time, idText, textClass, unit } from "../ui/index.js";
+import {
+  Button,
+  Duration,
+  StateView,
+  StatusChip,
+  Text,
+  Time,
+  focusAfterLeaving,
+  idText,
+  textClass,
+  unit,
+} from "../ui/index.js";
 import type { AnswerRequest } from "./answer-card.js";
 import { PendingCorrection } from "./revision-card.js";
 import { revisionSlotKey, type RevisionsFeed } from "./use-revisions.js";
@@ -47,7 +62,7 @@ import { GateCard } from "./gate-card.js";
 import { PermissionCard } from "./permission-card.js";
 import { tierOf } from "./items.js";
 import type { AttentionFeed } from "./use-attention.js";
-import { useControls } from "./use-controls.js";
+import { useControls, type Controls } from "./use-controls.js";
 import "./attention.css";
 
 export interface AttentionSurfaceProps {
@@ -79,43 +94,70 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
   const failures = state.phase === "ready" ? state.failures : EMPTY_RUNS;
   const running = state.phase === "ready" ? state.running : EMPTY_RUNS;
 
-  const [focusIndex, setFocusIndex] = useState(0);
+  /* The card the person is on, by id and never by index. A push can put a permission ask
+     above it (they sort first, `items.ts`) or take a gate from above it, and an index would
+     then name a different card — and the keys, the palette's rows and focus would go with
+     it. Undefined until a card has had focus; until then the first card is the current one. */
+  const [focusedId, setFocusedId] = useState<string | undefined>(undefined);
   const [failureIndex, setFailureIndex] = useState<number | undefined>(undefined);
-  const cards = useRef<(HTMLElement | null)[]>([]);
-  /* Whether the person is in the list. Answering advances focus, and a screen that grabbed
-     focus because a *notification* removed a card would take the keyboard off whatever the
-     person had actually gone to do. */
-  const inList = useRef(false);
+  const cards = useRef(new Map<string, HTMLElement>());
 
-  const focusCard = useCallback((index: number) => {
-    setFocusIndex(index);
-    cards.current[index]?.focus();
+  /* The cards the surface holds, by id: memoised on the ids rather than on `waits`, whose
+     identity changes on every push whether or not the list changed shape. `waits` is read
+     through this render's closure, which is the array `ids` was computed from. */
+  const ids = waits.map((input) => input.id).join("|");
+  const keys = useMemo(() => waits.map((input) => input.id), [ids]);
+  const focusedAt = focusedId === undefined ? -1 : keys.indexOf(focusedId);
+  const focusIndex = focusedAt === -1 ? 0 : focusedAt;
+
+  const focusCard = useCallback((id: string) => {
+    setFocusedId(id);
+    cards.current.get(id)?.focus();
   }, []);
 
   /* One stable callback for every card's ref, rather than a closure per row: a new ref
      function each render means React detaches and re-attaches on every push. */
-  const registerCard = useCallback((index: number, element: HTMLElement | null) => {
-    cards.current[index] = element;
+  const registerCard = useCallback((id: string, element: HTMLElement | null) => {
+    if (element) cards.current.set(id, element);
+    else cards.current.delete(id);
   }, []);
 
-  /* The cards the surface holds, by id: the effect below has to know whether the list
-     changed shape, and an array identity changes on every push. */
-  const ids = waits.map((input) => input.id).join("|");
-  useEffect(() => {
-    const index = Math.min(focusIndex, waits.length - 1);
-    if (index < 0 || !inList.current) return;
-    // The next card has slid into the index the answered one had, which is what "advances
-    // to the next waiting item" means when the list is ordered by how long things waited.
-    cards.current[index]?.focus();
-    setFocusIndex(index);
-    /* `ids` and nothing else: `focusIndex` is read but must not re-run this, or focus would
-       be pulled back to the list every time a person clicked a card's option. */
-  }, [ids, waits.length]);
+  /* The cards as the last commit drew them, and the one that left holding focus — written
+     by the card's own unmount (`Wait`), in the same commit the effect below reads it in. */
+  const drawn = useRef<readonly string[]>(keys);
+  const leftHoldingFocus = useRef<string | undefined>(undefined);
+  const onLeaveHoldingFocus = useCallback((id: string) => {
+    leftHoldingFocus.current = id;
+  }, []);
 
-  useSurfaceKeys(waits.length, focusIndex, focusCard);
+  /* Layout, not passive: the card has just gone and focus is on the body, and moving it in
+     the same frame means there is never a keystroke with it there. A list that changed shape
+     around a card that is still here changes nothing — the person keeps their place, their
+     focus and their half-typed note. Only the card the person was on leaving moves anything:
+     the current card becomes the one that slides into its place (the one before it when it
+     was the last), and focus goes there too if it went with the card. An answer from this
+     window is that case, which is how five gates clear in five keystrokes. */
+  useLayoutEffect(() => {
+    const before = drawn.current;
+    drawn.current = keys;
+    const gone = leftHoldingFocus.current;
+    leftHoldingFocus.current = undefined;
+    const neighbour = (id: string): string | undefined => {
+      const at = focusAfterLeaving(before, keys, id);
+      return at === undefined ? undefined : keys[at];
+    };
+    setFocusedId((id) => (id === undefined || keys.includes(id) ? id : neighbour(id)));
+    if (gone === undefined || keys.includes(gone)) return;
+    // Something in this same commit has already put focus somewhere: it is not lost.
+    if (document.activeElement !== null && document.activeElement !== document.body) return;
+    const next = neighbour(gone);
+    if (next !== undefined) cards.current.get(next)?.focus();
+  }, [keys]);
+
+  useSurfaceKeys(keys, focusIndex, focusCard);
   /* The palette's rows are about the card the person is on, which is what "actions on the
      current object" means when the object is one of five cards (#178). */
-  useCardWrites(waits[focusIndex], controls);
+  useCardWrites(waits[focusIndex], waits, controls);
 
   const cannotWrite = writability.can ? undefined : writability.reason;
   const report = controls.report;
@@ -190,13 +232,7 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
           />
         )
       ) : (
-        <section
-          className="orca-attn__section"
-          aria-label="Waiting"
-          onBlur={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget)) inList.current = false;
-          }}
-        >
+        <section className="orca-attn__section" aria-label="Waiting">
           <div className="orca-attn__cards">
             {waits.map((input, index) => (
               <Wait
@@ -208,12 +244,9 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
                 cannotWrite={cannotWrite}
                 outcome={report?.subject === input.id && report.failed ? report.message : undefined}
                 onAnswer={(request) => controls.answer(input, request)}
-                index={index}
                 registerCard={registerCard}
-                onFocus={() => {
-                  inList.current = true;
-                  setFocusIndex(index);
-                }}
+                onLeaveHoldingFocus={onLeaveHoldingFocus}
+                onFocus={() => setFocusedId(input.id)}
                 {...(onOpenRun ? { goToRun: () => onOpenRun(input.runId) } : {})}
               />
             ))}
@@ -366,8 +399,9 @@ function RunningRow({ run, live }: { run: RunSummaryView; live: boolean }): JSX.
 interface WaitProps {
   input: OpenInputView;
   revisions?: RevisionsFeed | undefined;
-  index: number;
-  registerCard: (index: number, element: HTMLElement | null) => void;
+  registerCard: (id: string, element: HTMLElement | null) => void;
+  /** Called on the way out when focus was inside the card, so the list can say where it goes. */
+  onLeaveHoldingFocus: (id: string) => void;
   focused: boolean;
   pending: boolean;
   cannotWrite: string | undefined;
@@ -377,8 +411,26 @@ interface WaitProps {
   goToRun?: () => void;
 }
 
-function Wait({ input, index, registerCard, revisions, ...rest }: WaitProps): JSX.Element {
-  const cardRef = useCallback((element: HTMLElement | null) => registerCard(index, element), [registerCard, index]);
+function Wait({ input, registerCard, onLeaveHoldingFocus, revisions, ...rest }: WaitProps): JSX.Element {
+  const id = input.id;
+  const card = useRef<HTMLElement | null>(null);
+  const cardRef = useCallback(
+    (element: HTMLElement | null) => {
+      card.current = element;
+      registerCard(id, element);
+    },
+    [registerCard, id],
+  );
+  /* The last moment the card can tell whether it holds focus: a layout effect's cleanup runs
+     before React takes it out of the document, and a moment later focus is on the body. The
+     claims list's rows do the same (`ClaimRow`). Nothing here changes while the card is
+     mounted — it is keyed by `id` — so this runs once, on the way out. */
+  useLayoutEffect(() => {
+    const element = card.current;
+    return () => {
+      if (element?.contains(document.activeElement)) onLeaveHoldingFocus(id);
+    };
+  }, [id, onLeaveHoldingFocus]);
   return tierOf(input) === "permission" ? (
     <PermissionCard input={input} placement="inbox" cardRef={cardRef} {...rest} />
   ) : (
@@ -405,19 +457,19 @@ function FailedRow({ run, live }: { run: RunSummaryView; live: boolean }): JSX.E
  * else. The writes moved to `useCardWrites` below when #178 gave every write in the app the
  * same two gates.
  */
-function useSurfaceKeys(count: number, focusIndex: number, focusCard: (index: number) => void): void {
+function useSurfaceKeys(keys: readonly string[], focusIndex: number, focusCard: (id: string) => void): void {
   const keyboard = useKeyboard();
-  const current = useRef({ count, focusIndex, focusCard });
-  current.current = { count, focusIndex, focusCard };
+  const current = useRef({ keys, focusIndex, focusCard });
+  current.current = { keys, focusIndex, focusCard };
   // Registered while there is something to move between.
-  const anything = count > 0;
+  const anything = keys.length > 0;
 
   useEffect(() => {
     if (!anything) return;
     const move = (delta: number): void => {
-      const { count: n, focusIndex: at, focusCard: go } = current.current;
-      if (n === 0) return;
-      go(Math.min(Math.max(at + delta, 0), n - 1));
+      const { keys: ids, focusIndex: at, focusCard: go } = current.current;
+      const id = ids[Math.min(Math.max(at + delta, 0), ids.length - 1)];
+      if (id !== undefined) go(id);
     };
     const off = [
       keyboard.register({ scope: "card", key: "J", label: "Next card", action: () => move(1) }),
@@ -447,37 +499,42 @@ function useSurfaceKeys(count: number, focusIndex: number, focusCard: (index: nu
  * **A free-text ask gets no rows at all.** `options` empty is the protocol's way of saying
  * "type an answer", and there is nothing to type into in a list of commands. The card is
  * where that one is answered, and it says so by being the only place it can be.
+ *
+ * **A row acts on the ask it names, or on nothing.** The palette lists its rows when it
+ * opens and runs one later, and in between a push can answer the ask from another window or
+ * put a new one first in the list. So a row looks its ask up again by id when it runs, and if
+ * the ask has gone or now asks something else — another question, other options, another
+ * run — nothing is sent, not even the cancel, and the surface says so. It never falls through
+ * to whichever card happens to be current by then.
  */
-function useCardWrites(
-  input: OpenInputView | undefined,
-  actions: {
-    answer: (input: OpenInputView, request: AnswerRequest) => void;
-    cancel: (runId: string) => void;
-    resume: (runId: string) => void;
-  },
-): void {
+function useCardWrites(input: OpenInputView | undefined, waits: readonly OpenInputView[], actions: CardWrites): void {
   /* Through a ref: `useControls` rebuilds its callbacks whenever a call goes in flight, and
-     the rows must not be unregistered and re-registered underneath a keypress. The input is
+     the rows must not be unregistered and re-registered underneath a keypress. The asks are
      held the same way and for the same reason — a push rebuilds the whole list. */
-  const current = useRef({ input, actions });
-  current.current = { input, actions };
+  const current = useRef({ input, waits, actions });
+  current.current = { input, waits, actions };
 
   /* What the rows are *about*, as one string. The options are part of it because a gate
      re-asked with different options is a different set of rows. */
-  const signature =
-    input === undefined
-      ? ""
-      : [
-          input.id,
-          input.runId,
-          input.question,
-          input.revision?.capability.actionId ?? "",
-          ...input.options.map((o) => o.id),
-        ].join("|");
+  const signature = input === undefined ? "" : writeSignature(input);
 
   const rows = useMemo((): readonly PaletteWrite[] => {
     const held = current.current.input;
     if (held === undefined || signature === "") return [];
+    /* The ask as it is now, if it is still the one these rows were drawn for — the fresh
+       copy rather than `held`, because a re-read can carry a newer `live` target. */
+    const onHeld = (write: (now: OpenInputView, act: CardWrites) => void) => (): void => {
+      const { waits: open, actions: act } = current.current;
+      const now = open.find((candidate) => candidate.id === held.id);
+      if (now === undefined || writeSignature(now) !== signature) {
+        act.refuse(
+          held.id,
+          `Nothing was sent: "${held.question}" changed or was answered after the palette listed it.`,
+        );
+        return;
+      }
+      write(now, act);
+    };
     const answers = isFreeText(held.options)
       ? []
       : bindOptions(held.options.filter((option) => option.id !== held.revision?.capability.actionId)).map(
@@ -487,10 +544,7 @@ function useCardWrites(
             label: `Answer ${held.question}: ${option.label}`,
             detail: option.consequence ?? `Answers ${held.runName} the way the card's option does`,
             ...(option.destructive ? { tone: "danger" as const } : {}),
-            action: () => {
-              const { input: now, actions: act } = current.current;
-              if (now) act.answer(now, { optionId: option.id });
-            },
+            action: onHeld((now, act) => act.answer(now, { optionId: option.id })),
           }),
         );
     return [
@@ -506,23 +560,31 @@ function useCardWrites(
         detail: "Stops the run; the answer is not given",
         tone: "danger",
         confirm: `Cancel ${held.runName} ${idText(held.runId, { kind: "run" })} — confirm`,
-        action: () => {
-          const { input: now, actions: act } = current.current;
-          if (now) act.cancel(now.runId);
-        },
+        action: onHeld((now, act) => act.cancel(now.runId)),
       },
       {
         scope: "card",
         method: "runs.resume",
         label: "Resume the run this is waiting on",
         detail: "Re-drives the run without answering; it returns when the run parks again",
-        action: () => {
-          const { input: now, actions: act } = current.current;
-          if (now) act.resume(now.runId);
-        },
+        action: onHeld((now, act) => act.resume(now.runId)),
       },
     ];
   }, [signature]);
 
   usePaletteWrites(rows);
+}
+
+/** The writes a card's palette rows make: `useControls`, and nothing else. */
+type CardWrites = Pick<Controls, "answer" | "cancel" | "resume" | "refuse">;
+
+/** Which ask a set of rows is about and what it asks; equal only while the rows still fit it. */
+function writeSignature(input: OpenInputView): string {
+  return [
+    input.id,
+    input.runId,
+    input.question,
+    input.revision?.capability.actionId ?? "",
+    ...input.options.map((o) => o.id),
+  ].join("|");
 }

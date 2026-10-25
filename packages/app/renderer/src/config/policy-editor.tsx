@@ -22,9 +22,11 @@
  *   nothing machine-written may rewrite the hand-curated `agents:` array (ADR 0009). The way
  *   to edit one is the Config form, which is one link away.
  * - **the sidecar's rules, editable.** Remove a grant, narrow or widen one, add one by hand.
- *   Every edit is a draft on the `permissions` document and Save writes the file whole,
- *   because the sidecar is JSON and `config.set`'s `patch` edits a YAML document in place —
- *   `text` is the write this document takes.
+ *   Every edit is a draft on the `permissions` document, held as this agent's rules and the
+ *   rules it began from (`policy-model.ts`), never as a copy of the file: the daemon writes
+ *   the sidecar on every "allow always", and a copy would put back what it wrote meanwhile.
+ *   Save composes the edited agents onto the file as it is and sends that as `text`, because
+ *   the sidecar is JSON and `config.set`'s `patch` edits a YAML document in place.
  * - **the fallthrough**, which is configuration's alone. The sidecar cannot carry one, and a
  *   list of rules without it is half a policy.
  *
@@ -41,14 +43,13 @@ import { configUrl } from "../route-table.js";
 import { POLICY_LAYERS, agentPolicies, describeRule, rowsFrom } from "./config-model.js";
 import { DraftBar } from "./draft-bar.js";
 import {
+  composeGrants,
   grantKeys,
   handRule,
   parseSidecar,
   ruleChanges,
   rulesOf,
-  serializeSidecar,
   withMatch,
-  withRules,
   type RuleMatch,
   type SidecarRule,
 } from "./policy-model.js";
@@ -111,11 +112,16 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
   const draft = feed.draftOf(DOCUMENT);
   const save = feed.saveStateOf(DOCUMENT);
 
-  /* The file as it is, and the document as the draft has it. Both parsed rather than
-     compared as text: the daemon canonicalises key order, so bytes are not the question and
-     the revision is (`policy-model.ts`). */
+  /* The file as it is, and the document the draft would make of it: the edited agents'
+     rules written onto the file as it is now, which is what Save sends, so a grant the daemon
+     wrote meanwhile is drawn and kept. Both parsed rather than compared as text: the daemon
+     canonicalises key order, so bytes are not the question and the revision is
+     (`policy-model.ts`). */
   const onDisk = useMemo(() => (data ? parseSidecar(data.permissions.text) : undefined), [data]);
-  const held = useMemo(() => (draft?.kind === "raw" ? parseSidecar(draft.text) : onDisk), [draft, onDisk]);
+  const held = useMemo(
+    () => (onDisk && draft?.kind === "grants" ? composeGrants(onDisk, draft.agents).document : onDisk),
+    [draft, onDisk],
+  );
 
   const policy = useMemo(
     () => (data ? agentPolicies(data.effective).find((entry) => entry.agentId === agentId) : undefined),
@@ -125,13 +131,13 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
   const rules = useMemo<readonly SidecarRule[]>(() => (held ? rulesOf(held, agentId) : []), [held, agentId]);
   const changes = onDisk && held ? ruleChanges(onDisk, held) : 0;
 
-  /** Replace this agent's rules, as a draft on the whole document. */
+  /** Replace this agent's rules in the draft. The file's rules for it are its base at the first edit. */
   const write = useCallback(
     (next: readonly SidecarRule[]) => {
-      if (!held) return;
-      feed.setText(DOCUMENT, serializeSidecar(withRules(held, agentId, next)));
+      if (!onDisk) return;
+      feed.setGrants(agentId, rulesOf(onDisk, agentId), next);
     },
-    [agentId, feed, held],
+    [agentId, feed, onDisk],
   );
 
   const editRule = useCallback(
@@ -376,7 +382,7 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
           {...(save.conflict === undefined ? {} : { conflict: save.conflict })}
           {...(save.message === undefined ? {} : { message: save.message })}
           {...(writability.can ? {} : { disabledReason: writability.reason })}
-          note="Saving replaces the whole sidecar. Rules you did not touch keep when they were added and what for."
+          note="Saving rewrites only the agents you edited. Rules you did not touch keep when they were added and what for."
           /* Save or Discard emptied the draft, and the bar went with the button pressed: focus goes
              to the Written grants, the list the draft was editing, as the Config surface's goes
              to its document. */
@@ -384,7 +390,7 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
           onValidate={() => feed.validate(DOCUMENT)}
           onSave={() => feed.save(DOCUMENT)}
           onDiscard={() => feed.discard(DOCUMENT)}
-          onReload={feed.reload}
+          onReload={() => feed.reloadDraft(DOCUMENT)}
         />
       )}
     </aside>

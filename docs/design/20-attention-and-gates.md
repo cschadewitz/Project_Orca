@@ -40,11 +40,15 @@ Gates and permission asks are answered **in place, from either surface**. The sa
 `GateCard` / `PermissionCard` component renders in the Attention list and inline in the run,
 with identical controls and identical keyboard handling. Answering from the list keeps the
 person in the list and advances focus to the next waiting item, so five gates can be cleared
-in five keystrokes without navigating.
+in five keystrokes without navigating. That is the only thing that moves focus: an ask that
+arrives, or one answered somewhere else, leaves the person on the card they were on — in the
+note they were typing — and focus follows only when that card itself goes.
 
 Keyboard, on a focused card: `1`–`9` select an option, `Enter` submits the selected option,
 `Shift+Enter` submits with a note, `G` jumps to the run the card came from, `J`/`K` move
 between cards. The destructive option is never bound to `1` and never focused by default.
+`Enter` on a button inside the card presses that button — **Deny** selects deny, **Always
+deny** sends its own answer — and never submits the card's selection in its place.
 
 A note is part of the record: it is written onto `human.answered` beside the answer, so the
 reason a person gave outlives the window they gave it in. The run does not branch on it — the
@@ -62,6 +66,13 @@ A permission card carries one thing more: **who is asking.** An agent's turn is 
 held open, so the card names the agent and the host it runs on — "claude-local on build-01" —
 rather than only the run, because that is what makes "always" a grant a person can size. A
 workflow gate has no agent, and saying nothing is the honest answer there.
+
+**Always allow** and **Always deny** answer this call the same way as the rule they write.
+Each sends the selected option when it goes that way, and otherwise the one option that does.
+An option is a rejection when it is marked `destructive`, which the engine reads off ACP's
+`reject_once` / `reject_always` kinds. When no option, or more than one, goes that way and the
+selection doesn't, the button is disabled and says why. It never sends an allow with a deny
+rule. The daemon refuses that mismatch from any client too.
 
 ## Notifications
 

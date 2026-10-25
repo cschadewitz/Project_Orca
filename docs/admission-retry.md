@@ -167,13 +167,16 @@ server also checks `expectedScope` before effects. Endpoint, stable principal an
 workspace scope survive credential rotation, renderer loss and daemon restarts;
 bundled targets use their stable local workspace identity rather than a temporary port.
 
-Only workflow ID, local intent ID, random retry key, stable scope and retained/abandoned
-state are saved. No credential, arbitrary workflow vars, or secret command payload is
-saved. Electron safeStorage encrypts the journal; unavailable keychains, Linux
-`basic_text`, corruption and decryption errors refuse admission, with no plaintext or
-in-memory fallback. No key is auto-expired or silently replaced. The 1,000-record
-local bound refuses further allocation; abandoned tombstones remain for conservative
-recovery. Full app-data plus matching OS keychain recovery is required if lost.
+A palette record saves only workflow ID, local intent ID, random retry key, stable scope
+and retained state; no credential, arbitrary workflow vars, or secret command payload.
+A guided-launch record in the same journal also saves its reviewed submitted command,
+input vars and Request text included. Electron safeStorage encrypts the journal;
+unavailable keychains, Linux `basic_text`, corruption and decryption errors refuse
+admission, with no plaintext or in-memory fallback. No key is auto-expired or silently
+replaced. An explicitly abandoned intent is dropped at the next write, since nothing
+reads it again; at 1,000 retained intents the journal refuses further allocation, and
+says so, until one is recovered or abandoned. Full app-data plus matching OS keychain
+recovery is required if lost.
 
 “Start or recover a run” always reuses a retained intent, including after an accepted
 response, so crashing before the renderer opens the run does not create new work.

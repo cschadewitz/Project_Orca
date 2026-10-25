@@ -12,6 +12,9 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -25,11 +28,11 @@ import { ConnectionRefusal } from "../connection-target.js";
 export const OWNERSHIP_DIRECTORY = ".orca-first-run-ownership";
 export const OWNERSHIP_ANCHOR = ".orca-first-run-ownership.json";
 export class FirstRunOwnershipRefusal extends ConnectionRefusal {
-  constructor(cause?: unknown) {
-    super(
-      "Local startup ownership requires reconciliation. Preserve the selected workspace and its .orca-first-run-ownership evidence. Review same-boot recovery, then reconcile the retained reservation while its writer is quiescent. Retrying or checking a PID cannot clear it. Missing or altered evidence requires operator review; preserve all files.",
-      { cause },
-    );
+  constructor(
+    cause?: unknown,
+    message = "Local startup ownership requires reconciliation. Preserve the selected workspace and its .orca-first-run-ownership evidence. Review same-boot recovery, then reconcile the retained reservation while its writer is quiescent. Retrying or checking a PID cannot clear it. Missing or altered evidence requires operator review; preserve all files.",
+  ) {
+    super(message, { cause });
   }
 }
 export const refuse = (): never => {
@@ -69,6 +72,54 @@ const terminalSchema = z
     configHash: digest.optional(),
   })
   .strict();
+/** Settled history folded out of the journal: the claim chain head and effective config it ended on. */
+const checkpointSchema = z
+  .object({
+    version: z.literal(1),
+    authority: z.literal("settled-history-compaction"),
+    workspace: directorySchema,
+    anchorHash: digest,
+    through: z.number().int().positive().max(999999),
+    head: digest,
+    configHash: digest,
+    // Whether any folded attempt was settled by explicit recovery or a person-confirmed end: the CLI keeps such a
+    // store's continuations parked.
+    recovered: z.boolean(),
+    // The reservation that wrote it. Its attempt follows `through` and is retained until a later checkpoint.
+    reservationId: z.string().uuid(),
+  })
+  .strict();
+type Checkpoint = z.infer<typeof checkpointSchema>;
+/** A person's confirmation that an attempt claimed on an earlier boot of this host ended. Never written automatically:
+ * a restart ends every process of that boot, but only the person knows the session is over and its work may wait. */
+export const REBOOT_SETTLEMENT = "ended-after-reboot.json";
+export const rebootSettlementSchema = z
+  .object({
+    version: z.literal(1),
+    reservationId: z.string().uuid(),
+    claimHash: digest,
+    anchorHash: digest,
+    // Every other record of the attempt as confirmed, so nothing can be added to it afterwards.
+    evidenceHash: digest,
+    configHash: digest,
+    store: directorySchema.nullable(),
+    // The boot it was confirmed on: the claim's host, a later boot.
+    boot: FenceBootSchema,
+    reason: z.literal("person-confirmed-after-reboot"),
+    observation: z.literal("fence-free-after-reboot"),
+    actor: z.object({ kind: z.literal("person"), surface: z.literal("desktop-app"), uid: z.string() }).strict(),
+  })
+  .strict();
+const ATTEMPT = /^[0-9]{6}$/;
+const CHECKPOINT = /^checkpoint-([0-9]{6})\.json$/;
+// Inert compaction state: a checkpoint not yet renamed into place, and folded attempts awaiting removal.
+const PENDING = /^checkpoint-[0-9]{6}\.pending$/;
+const DISCARDED = /^discarded-([0-9]{6})$/;
+const pad = (number: number) => String(number).padStart(6, "0");
+/** A reservation folds settled history once more attempts than this follow the last checkpoint… */
+const COMPACT_AT = 64;
+/** …keeping this many of the newest settled attempts besides its own. */
+const RETAINED = 16;
 export type Directory = z.infer<typeof directorySchema>;
 export function absent(path: string): boolean {
   try {
@@ -212,7 +263,9 @@ export const recoveryResolutionSchema = z
   })
   .strict();
 
-/** Read-only bounded inspection. Only the final intact attempt may be unsettled. */
+/** Read-only bounded inspection. Only the final intact attempt may be unsettled.
+ * Settled history before the newest checkpoint may be folded away; the retained chain must continue from its head and
+ * effective config. Folded attempts an interrupted compaction left behind must still verify and end on that head. */
 export function inspectFirstRunOwnership(path: string, allowUnsettled = false, allowChangedConfig = false) {
   try {
     if (resolve(path) !== path) return refuse();
@@ -223,13 +276,51 @@ export function inspectFirstRunOwnership(path: string, allowUnsettled = false, a
     if (!sameDirectory(anchor.workspace, workspace) || !sameDirectory(anchor.journal, root)) return refuse();
     const configHash = hash(read(join(path, "orca.config.yaml"), workspace, 1024 * 1024));
     const names = readdirSync(root.path).sort();
-    if (names.length >= 256) return refuse();
-    let previous: string | null = null;
-    let effectiveHash: string | undefined;
+    // Bounds this read. Compaction keeps a journal far below it; one that reached the former limit of 256 attempts
+    // still reads, so its next reservation can fold it.
+    if (names.length > 512) return refuse();
+    const attempts = names.filter((name) => ATTEMPT.test(name));
+    const checkpoints = names.filter((name) => CHECKPOINT.test(name));
+    if (
+      names.some(
+        (name) => !ATTEMPT.test(name) && !CHECKPOINT.test(name) && !PENDING.test(name) && !DISCARDED.test(name),
+      )
+    )
+      return refuse();
+    let checkpoint: Checkpoint | undefined;
+    for (const name of checkpoints) {
+      const parsed = checkpointSchema.parse(JSON.parse(read(join(root.path, name), root)));
+      if (
+        name !== `checkpoint-${pad(parsed.through)}.json` ||
+        parsed.anchorHash !== hash(anchorText) ||
+        !sameDirectory(parsed.workspace, workspace)
+      )
+        return refuse();
+      checkpoint = parsed; // Sorted by number: the newest checkpoint is the last.
+    }
+    const through = checkpoint?.through ?? 0;
+    if (names.some((name) => Number(DISCARDED.exec(name)?.[1] ?? 0) > through)) return refuse();
+    const first = attempts.length ? Number(attempts[0]) : through + 1;
+    // History starts at 000001 or right after the checkpoint; anything it folded may remain only up to its head.
+    if (first < 1 || first > through + 1 || (first <= through && Number(attempts.at(-1)) < through)) return refuse();
+    let previous: string | null = first === through + 1 && checkpoint ? checkpoint.head : null;
+    let effectiveHash: string | undefined = first === through + 1 ? checkpoint?.configHash : undefined;
+    let compactor = !checkpoint;
     let latest:
       { attempt: Directory; reservationId: string; texts: Record<string, string>; settled: boolean } | undefined;
-    for (const [index, name] of names.entries()) {
-      if (name !== String(index + 1).padStart(6, "0")) return refuse();
+    const history: {
+      name: string;
+      number: number;
+      reservationId: string;
+      claimHash: string;
+      effectiveHash: string;
+      recovered: boolean;
+    }[] = [];
+    for (const [index, name] of attempts.entries()) {
+      const number = first + index;
+      if (name !== pad(number)) return refuse();
+      // Left by an interrupted compaction: its predecessor is already folded, so its link is checked at the head.
+      const unanchored = index === 0 && number > 1 && number <= through;
       const attempt = directory(join(root.path, name), root);
       const entries = readdirSync(attempt.path).sort();
       const allowed = new Set([
@@ -240,6 +331,7 @@ export function inspectFirstRunOwnership(path: string, allowUnsettled = false, a
         "terminal.json",
         "recovery-request.json",
         "recovery.json",
+        REBOOT_SETTLEMENT,
       ]);
       const bindings = entries.filter((entry) => /^config-rebind-[0-9]{6}\.json$/.test(entry));
       if (bindings.length > 32 || entries.some((entry) => !allowed.has(entry) && !bindings.includes(entry)))
@@ -248,8 +340,8 @@ export function inspectFirstRunOwnership(path: string, allowUnsettled = false, a
       const claim = claimSchema.parse(JSON.parse(texts["claim.json"]!));
       if (
         !sameDirectory(claim.workspace, workspace) ||
-        claim.previous !== previous ||
-        (effectiveHash !== undefined && claim.configHash !== effectiveHash)
+        (!unanchored &&
+          (claim.previous !== previous || (effectiveHash !== undefined && claim.configHash !== effectiveHash)))
       )
         return refuse();
       if (claim.version === 2 && (!claim.launchHash || !claim.fence || !claim.boot || claim.store === undefined))
@@ -324,24 +416,115 @@ export function inspectFirstRunOwnership(path: string, allowUnsettled = false, a
           settled = true;
         }
       } else if (texts["recovery.json"]) return refuse();
-      if (!settled && (!allowUnsettled || index !== names.length - 1)) return refuse();
+      if (texts[REBOOT_SETTLEMENT]) {
+        const ended = rebootSettlementSchema.parse(JSON.parse(texts[REBOOT_SETTLEMENT]));
+        if (
+          settled ||
+          claim.version !== 2 ||
+          ended.reservationId !== claim.reservationId ||
+          ended.claimHash !== hash(texts["claim.json"]!) ||
+          ended.anchorHash !== hash(anchorText) ||
+          ended.evidenceHash !== rebootEvidenceHash(texts) ||
+          ended.configHash !== effectiveHash ||
+          ended.boot.hostHash !== claim.boot?.hostHash ||
+          ended.boot.bootId === claim.boot.bootId ||
+          ended.actor.uid !== workspace.uid
+        )
+          return refuse();
+        settled = true;
+      }
+      if (!settled && (!allowUnsettled || index !== attempts.length - 1)) return refuse();
       latest = { attempt, reservationId: claim.reservationId, texts, settled };
       previous = hash(texts["claim.json"]!);
+      const recovered = !!texts["recovery.json"] || !!texts[REBOOT_SETTLEMENT];
+      if (checkpoint && number <= through && recovered && !checkpoint.recovered) return refuse();
+      if (checkpoint && number === through && (previous !== checkpoint.head || effectiveHash !== checkpoint.configHash))
+        return refuse();
+      if (checkpoint && number > through && claim.reservationId === checkpoint.reservationId) compactor = true;
+      history.push({ name, number, reservationId: claim.reservationId, claimHash: previous, effectiveHash, recovered });
     }
+    // Deleting the retained tail after a checkpoint would otherwise go unnoticed.
+    if (!compactor) return refuse();
     if (!allowChangedConfig && effectiveHash !== undefined && effectiveHash !== configHash) return refuse();
-    return { workspace, root, anchorText, names, previous, latest, configHash, effectiveHash };
+    const next = first + attempts.length;
+    return {
+      workspace,
+      root,
+      anchorText,
+      names,
+      previous,
+      latest,
+      configHash,
+      effectiveHash,
+      checkpoint,
+      history,
+      next,
+    };
   } catch {
     return refuse();
   }
+}
+export function rebootEvidenceHash(texts: Record<string, string>): string {
+  return hash(
+    JSON.stringify(
+      Object.entries(texts)
+        .filter(([name]) => name !== REBOOT_SETTLEMENT)
+        .sort(([a], [b]) => a.localeCompare(b)),
+    ),
+  );
 }
 export function recoveryEvidenceHash(texts: Record<string, string>): string {
   return hash(
     JSON.stringify(
       Object.entries(texts)
-        .filter(([name]) => name !== "recovery-request.json" && name !== "recovery.json")
+        // A request left pending at a restart is resolved by the later settlement, which therefore follows it.
+        .filter(([name]) => name !== "recovery-request.json" && name !== "recovery.json" && name !== REBOOT_SETTLEMENT)
         .sort(([a], [b]) => a.localeCompare(b)),
     ),
   );
+}
+
+/** Fold settled history into one checkpoint and remove what it folds, so the journal stays bounded.
+ * Only a reservation that has just written its claim calls this. Its exclusive attempt directory is the journal's
+ * append position, so no other reservation or compaction runs until it settles, and every earlier attempt is
+ * settled (strict inspection preceded it). Its own unsettled attempt is never folded. Each step leaves a journal
+ * that verifies: the checkpoint is renamed into place whole, then folded attempts leave oldest first. */
+function compactSettledHistory(path: string, reservationId: string): void {
+  const { root, workspace, anchorText, checkpoint, history, latest } = inspectFirstRunOwnership(path, true);
+  if (latest?.reservationId !== reservationId || latest.settled) return refuse();
+  let through = checkpoint?.through ?? 0;
+  const following = history.filter((attempt) => attempt.number > through);
+  if (following.length > COMPACT_AT) {
+    const head = following[following.length - RETAINED - 2]!;
+    through = head.number;
+    const pending = join(root.path, `checkpoint-${pad(through)}.pending`);
+    const target = join(root.path, `checkpoint-${pad(through)}.json`);
+    const value: Checkpoint = {
+      version: 1,
+      authority: "settled-history-compaction",
+      workspace,
+      anchorHash: hash(anchorText),
+      through,
+      head: head.claimHash,
+      configHash: head.effectiveHash,
+      recovered: !!checkpoint?.recovered || history.some((attempt) => attempt.number <= through && attempt.recovered),
+      reservationId,
+    };
+    if (!absent(pending) || !absent(target)) return refuse();
+    write(pending, JSON.stringify(checkpointSchema.parse(value)) + "\n", root);
+    renameSync(pending, target);
+    syncDirectory(root.path);
+  }
+  for (const attempt of history)
+    if (attempt.number <= through)
+      renameSync(join(root.path, attempt.name), join(root.path, `discarded-${attempt.name}`));
+  syncDirectory(root.path);
+  for (const name of readdirSync(root.path)) {
+    if (DISCARDED.test(name)) rmSync(join(root.path, name), { recursive: true });
+    else if (PENDING.test(name) || (CHECKPOINT.test(name) && name !== `checkpoint-${pad(through)}.json`))
+      unlinkSync(join(root.path, name));
+  }
+  syncDirectory(root.path);
 }
 
 export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
@@ -367,9 +550,9 @@ export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
     const anchorText = read(anchorPath, workspace);
     const anchor = anchorSchema.parse(JSON.parse(anchorText));
     if (!sameDirectory(anchor.workspace, workspace) || !sameDirectory(anchor.journal, root)) return refuse();
-    const inspected = inspectFirstRunOwnership(path);
-    const { names, previous } = inspected;
-    const attemptPath = join(rootPath, String(names.length + 1).padStart(6, "0"));
+    const { previous, next } = inspectFirstRunOwnership(path);
+    const attemptName = pad(next);
+    const attemptPath = join(rootPath, attemptName);
     // Exclusive mkdir is arbitration, not a PID-based lock with stale-owner removal.
     if (process.platform === "win32") windowsPrivateChild(attemptPath);
     else mkdirSync(attemptPath, { mode: 0o700 });
@@ -398,6 +581,14 @@ export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
       boot: fenceBoot(),
       store: absent(join(path, ".orca")) ? null : directory(join(path, ".orca"), workspace),
     });
+    try {
+      compactSettledHistory(path, reservationId);
+    } catch {
+      // An interrupted compaction still verifies, and the next reservation finishes it. Never block startup on it.
+    }
+    const journal = inspectFirstRunOwnership(path, true);
+    if (journal.latest?.reservationId !== reservationId) return refuse();
+    const names = journal.names.filter((name) => name !== attemptName);
     let child: BundledDaemon | undefined;
     let completed = false;
     const check = (checkConfig = true) => {
@@ -423,7 +614,7 @@ export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
           !sameDirectory(root, directory(rootPath, workspace)) ||
           !sameDirectory(attempt, directory(attemptPath, root)) ||
           read(anchorPath, workspace) !== anchorText ||
-          readdirSync(rootPath).sort().join(",") !== [...names, String(names.length + 1).padStart(6, "0")].join(",") ||
+          readdirSync(rootPath).sort().join(",") !== [...names, attemptName].sort().join(",") ||
           readdirSync(attemptPath).sort().join(",") !== [...texts.keys()].sort().join(",") ||
           (checkConfig && hash(read(join(path, "orca.config.yaml"), workspace, 1024 * 1024)) !== configHash)
         )

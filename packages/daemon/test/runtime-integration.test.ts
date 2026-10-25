@@ -451,6 +451,34 @@ describe("standing permission acceptance", () => {
       { payload: { answer: winner, actor: { principalId: "owner" } } },
     ]);
   });
+  it("refuses an always whose one-time answer goes the other way, before answering anything", async () => {
+    const h = await fixture();
+    const live = await permissionGate(h);
+    const gate = live.params;
+    // The agent's Deny is `reject_once`, so the ask marks it destructive.
+    for (const [optionId, decision] of [
+      ["allow", "deny"],
+      ["deny", "allow"],
+    ] as const) {
+      const reply = await h.rpc(h.owner, "inputs.answer", { ...gate, optionId, always: { decision }, resume: true });
+      expect(reply.ok).toBe(false);
+      expect(reply.error?.code).toBe("NOT_SUPPORTED");
+    }
+    expect(await sidecar(h.permissionsFile)).toBeUndefined();
+    expect(live.answers).toEqual([]);
+    expect(h.livePort.inspect(gate.live)).toBe("pending");
+    // Agreeing ones go through: this call is denied and so are the next ones.
+    const reply = await h.rpc(h.owner, "inputs.answer", {
+      ...gate,
+      optionId: "deny",
+      always: { decision: "deny" },
+      resume: true,
+    });
+    expect(reply.ok).toBe(true);
+    expect(JSON.stringify(JSON.parse((await sidecar(h.permissionsFile))!))).toContain(`"decision":"deny"`);
+    await live.done;
+    expect(live.answers).toEqual(["deny"]);
+  });
   it("does not grant if the accepted-answer log write fails", async () => {
     const h = await fixture();
     const live = await permissionGate(h);

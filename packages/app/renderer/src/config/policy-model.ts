@@ -7,7 +7,7 @@
  * rule is which after a removal, whether an untouched row kept its provenance, and whether
  * the bytes that go back are a document the daemon will take.
  *
- * Four decisions worth knowing before changing anything here:
+ * Six decisions worth knowing before changing anything here:
  *
  * - **A `default` is never written.** ADR 0009's central rule is that answering one prompt
  *   must not change the answer to every other one, so the sidecar has no fallthrough; the
@@ -34,6 +34,12 @@
  *   rules a run wrote in answer to a prompt and which a person typed. It starts narrow — one
  *   kind, inside the workspace — rather than matching everything, since a row that begins as
  *   "allow anything" is one Save away from being exactly that.
+ * - **A draft is the edited agents' rules, never a copy of the file.** The daemon writes this
+ *   file too — every "allow always" is a write — so a draft that held the whole document would
+ *   carry a stale copy of every other agent's grants and put it back on Save. A draft holds
+ *   the agents a person edited, each with the rules it began from (`GrantDraft`), and is
+ *   written onto the file as it is when it is sent (`composeGrants`). Only a change on disk
+ *   to an agent the person also edited is a conflict.
  */
 import { PERMISSION_DECISIONS, type EffectivePermissionRule } from "@orca/protocol";
 
@@ -275,6 +281,103 @@ export function ruleChanges(before: SidecarDocument, after: SidecarDocument): nu
     changes += Math.max(held.length, arrived);
   }
   return changes;
+}
+
+/** Whether two lists are the same rules in the same order: order is evaluation order. */
+function sameRules(a: readonly SidecarRule[], b: readonly SidecarRule[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((rule, at) => JSON.stringify(canonicalRule(rule)) === JSON.stringify(canonicalRule(b[at]!)))
+  );
+}
+
+/**
+ * One agent's grants as a draft holds them: what a person has made of the list, and the list
+ * the file had for that agent when they began. `base` is what a conflict is measured from.
+ */
+export interface GrantDraft {
+  readonly base: readonly SidecarRule[];
+  readonly rules: readonly SidecarRule[];
+}
+
+/** The sidecar's draft: an entry for each agent with an edit, and nothing for the rest. */
+export type GrantDrafts = Readonly<Record<string, GrantDraft>>;
+
+const drafted = (agents: Record<string, GrantDraft>): GrantDrafts | undefined =>
+  Object.keys(agents).length === 0 ? undefined : agents;
+
+/**
+ * The drafts with one agent's rules replaced. The agent's `base` is the file's rules for it at
+ * its first edit and is kept after that; an agent whose rules are back to their base is not an
+ * edit any more and leaves the draft, so a later edit begins again from the file.
+ */
+export function withGrantEdit(
+  drafts: GrantDrafts | undefined,
+  agentId: string,
+  onDisk: readonly SidecarRule[],
+  rules: readonly SidecarRule[],
+): GrantDrafts | undefined {
+  const agents: Record<string, GrantDraft> = { ...drafts };
+  const base = agents[agentId]?.base ?? onDisk;
+  if (sameRules(rules, base)) delete agents[agentId];
+  else agents[agentId] = { base, rules };
+  return drafted(agents);
+}
+
+/**
+ * The drafts written onto the file as it is now: each edited agent's rules replaced, every
+ * other agent's exactly as the file has them. This is the document Save sends and the one the
+ * panel draws, so a grant the daemon wrote for another agent meanwhile is in both.
+ *
+ * `conflicts` names each edited agent whose rules on disk are neither the ones its edit began
+ * from nor the ones it now holds: somebody else changed the same list, and writing over that
+ * without saying so is the thing this function exists to prevent.
+ */
+export function composeGrants(
+  onDisk: SidecarDocument,
+  drafts: GrantDrafts,
+): { document: SidecarDocument; conflicts: string[] } {
+  let document = onDisk;
+  const conflicts: string[] = [];
+  for (const [agentId, { base, rules }] of Object.entries(drafts)) {
+    const now = rulesOf(onDisk, agentId);
+    if (!sameRules(now, base) && !sameRules(now, rules)) conflicts.push(agentId);
+    document = withRules(document, agentId, rules);
+  }
+  return { document, conflicts };
+}
+
+/**
+ * The drafts once a person has seen a conflict and pressed Reload: every edit kept, and each
+ * agent's base moved to what the file now holds for it, so the Save after it writes them.
+ */
+export function rebaseGrants(drafts: GrantDrafts, onDisk: SidecarDocument): GrantDrafts | undefined {
+  const agents: Record<string, GrantDraft> = {};
+  for (const [agentId, { rules }] of Object.entries(drafts)) {
+    const base = rulesOf(onDisk, agentId);
+    if (!sameRules(rules, base)) agents[agentId] = { base, rules };
+  }
+  return drafted(agents);
+}
+
+/**
+ * What is left of the drafts once `sent` has been written: only what was typed while the write
+ * was out. An agent untouched since is in the file now and leaves the draft; one edited again
+ * keeps its newer rules over a base that is what was written for it.
+ */
+export function grantsAfterWrite(current: GrantDrafts | undefined, sent: GrantDrafts): GrantDrafts | undefined {
+  const agents: Record<string, GrantDraft> = {};
+  for (const agentId of new Set([...Object.keys(sent), ...Object.keys(current ?? {})])) {
+    const was = sent[agentId];
+    const now = current?.[agentId];
+    if (now !== undefined && now === was) continue;
+    // The file holds what was sent for the agent, or what it had if the agent was not sent.
+    const base = was?.rules ?? now!.base;
+    // An agent edited back to its base while the write was out wants that base back.
+    const rules = now?.rules ?? was!.base;
+    if (!sameRules(rules, base)) agents[agentId] = { base, rules };
+  }
+  return drafted(agents);
 }
 
 /** A match with one key set, or removed when the value is empty. Never writes `""`. */

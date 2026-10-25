@@ -19,7 +19,13 @@ import { readFile, stat, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { AgentRegistry, openAcpSession, permissionPolicyPath, type OpenSessionOptions } from "@orca/agents";
+import {
+  AgentRegistry,
+  openAcpSession,
+  permissionPolicyPath,
+  type OpenSessionOptions,
+  type ProtectedPaths,
+} from "@orca/agents";
 import {
   consoleLogger,
   loadTemplates,
@@ -233,12 +239,54 @@ export function makeWorkspaceProvider(
  * the ACP facade all get their sessions through the orchestrator this returns, including the
  * daemon's `agents.ping`, which goes through `Orchestrator.sessionFactory` too.
  *
+ * It binds ORCA's own files beside the sidecar, for the same reason and in the same place:
+ * the config directory is the default workspace, so every session has to know what in it is
+ * not the agent's to touch (`orcaProtectedPaths`, C4-01).
+ *
  * `open` exists so a test can read the options this builds without spawning an agent; it is
  * `openAcpSession` everywhere else.
  */
-export function makeSessionFactory(configDir: string, open: SessionFactory = openAcpSession): SessionFactory {
-  const permissionFiles = [permissionPolicyPath(configDir)];
-  return (options: OpenSessionOptions) => open({ ...options, permissionFiles });
+export function makeSessionFactory(layout: OrcaFileLayout, open: SessionFactory = openAcpSession): SessionFactory {
+  const permissionFiles = [permissionPolicyPath(layout.configDir)];
+  const protectedPaths = orcaProtectedPaths(layout);
+  return (options: OpenSessionOptions) => open({ ...options, permissionFiles, protectedPaths });
+}
+
+/** Where one config directory keeps ORCA's own files. */
+export interface OrcaFileLayout {
+  configDir: string;
+  /** The store; relative to `configDir` when it is not absolute, as `storeDir` in the config is. */
+  storeDir: string;
+  /** The config file that was loaded, which `--config` can put outside `configDir`. */
+  configFile?: string | undefined;
+}
+
+/**
+ * ORCA's own files in a config directory, as every session refuses them to its agent (C4-01).
+ *
+ * Read-only to an agent: every config filename ORCA would load from `configDir` — not just the
+ * one there now, since an agent that could create `orca.config.yaml` beside a project with
+ * none would choose the next start's policy — the file actually loaded, the permission
+ * sidecar, and the store — all of it but `work/` and `program/`, where the shipped `ai-sdlc`
+ * and `program` workflows have agents write their deliverables (`.orca/work/…`,
+ * `.orca/program/…` from the workspace, which is the store when the workspace is the config
+ * directory). Not even readable: `auth/`, where `orca serve` keeps the local owner token, and
+ * the store's two private directories, which hold its encryption keys and the payloads they
+ * protect (`private-execution` and `private-workflows` in `@orca/store`).
+ */
+export function orcaProtectedPaths(layout: OrcaFileLayout): ProtectedPaths {
+  const configDir = resolve(layout.configDir);
+  const storeDir = resolve(configDir, layout.storeDir);
+  return {
+    readOnly: [
+      ...CONFIG_FILENAMES.map((name) => join(configDir, name)),
+      ...(layout.configFile ? [resolve(layout.configFile)] : []),
+      permissionPolicyPath(configDir),
+      storeDir,
+    ],
+    noAccess: [join(configDir, "auth"), join(storeDir, "private-execution"), join(storeDir, "private-workflows")],
+    agentAreas: [join(storeDir, "work"), join(storeDir, "program")],
+  };
 }
 
 export function makeHumanInput(config: OrcaConfig): HumanInputPort {
@@ -403,6 +451,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       { problems },
     );
 
+  const openSession = makeSessionFactory({ configDir, storeDir: config.storeDir, configFile });
   const orchestrator = new Orchestrator({
     stores,
     ...(opts.revisionRuntime ? { revisionRuntime: opts.revisionRuntime(stores) } : {}),
@@ -422,7 +471,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       : {
           sessionFactory: (options: OpenSessionOptions) => {
             const current = agents.resolve(options.agent.id).agent;
-            return makeSessionFactory(configDir)({
+            return openSession({
               ...options,
               agent: { ...options.agent, permissions: current.permissions },
             });

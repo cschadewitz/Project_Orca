@@ -55,6 +55,9 @@ No remaining integration-specific source finding was observed in this bounded re
 `new MacUpdateApplication()` still has no session. `DIAGNOSTICS_PRODUCTION_ENABLED` stays
 false. Preparation-only candidate sessions still refuse installation. The bootstrap input
 is a tested consumption seam, **not a mounted production journal gate**.
+*Superseded (2026-10-14), here and in the residual table below: packaged Mac launches now
+mount the journal gate, and main provisions its namespace at the first launch; see
+[the Mac startup gate](mac-closed-window-fixed-path.md#the-mac-startup-gate).*
 
 ## Focused evidence and reuse
 

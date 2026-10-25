@@ -196,7 +196,8 @@ that never started get a fresh child run.
 
 1. Resolve **input artifacts** (`inputs:` refs by kind/name/producing node;
    visibility = own run + ancestors + descendants + earlier finished siblings of
-   each ancestor, newest version wins).
+   each ancestor for the same work item, never fan-out branches, newest version
+   wins; `docs/DATA-MODEL.md` has the rule).
 2. Render the **prompt**: template body (`templates/…md`) against the step
    context, then append the **deliverables block** — a human list *and* an
    HTML‑comment YAML block listing every artifact the step must produce with its
@@ -220,7 +221,9 @@ that never started get a fresh child run.
    unknown agent or an unfilled role is refused at `startRun` with
    `AGENT_NOT_FOUND` rather than on the first step that needs it.
    ORCA is the ACP *client*: it serves `fs/read_text_file`,
-   `fs/write_text_file` from the host file system (scoped to the workspace) and
+   `fs/write_text_file` from the host file system (scoped to the workspace; it
+   never writes ORCA's own config, sidecar or store nor reads `auth/`, and no
+   permission rule can open them to an agent either) and
    answers `session/request_permission` through the agent's permission policy —
    the rules configured on the agent first, then any the workspace sidecar has
    recorded (ADR 0009), then — unless the config set `default:` itself — ORCA's

@@ -109,18 +109,32 @@ export async function verifyRuntimeDirectories(workspace: DirectoryIdentity): Pr
     }
   }
 }
-export async function preparedProject(path: string, home: string): Promise<ProjectIdentity> {
-  const identity = await ownedDirectory(path, home, true);
+function projectGit(path: string) {
   const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
-  const git = async (...args: string[]) =>
+  return async (...args: string[]) =>
     (
-      await execute("git", ["-c", "core.fsmonitor=false", "-C", identity.path, ...args], {
+      await execute("git", ["-c", "core.fsmonitor=false", "-C", path, ...args], {
         env: { ...environment, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
         timeout: 5000,
         maxBuffer: 1024 * 1024,
         windowsHide: true,
       })
     ).stdout.trim();
+}
+/** A saved project is the same owned directory, still its repository's top level. HEAD and branch are not part of it:
+ * commits, pulls and branch switches are ordinary work in the project, not a different selection. */
+export async function projectRepository(path: string, home: string): Promise<DirectoryIdentity> {
+  const identity = await ownedDirectory(path, home, true);
+  const top = await realpath(await projectGit(identity.path)("rev-parse", "--show-toplevel"));
+  if (top !== identity.path) throw selectionFailure();
+  const after = await ownedDirectory(identity.path, home, true);
+  if (!sameDirectory(identity, after)) throw selectionFailure();
+  return identity;
+}
+/** Selection also needs an attached branch and a base commit, which the person reviews before Prepare. */
+export async function preparedProject(path: string, home: string): Promise<ProjectIdentity> {
+  const identity = await ownedDirectory(path, home, true);
+  const git = projectGit(identity.path);
   const top = await realpath(await git("rev-parse", "--show-toplevel"));
   const branch = await git("symbolic-ref", "--short", "HEAD");
   const baseCommit = await git("rev-parse", "--verify", "HEAD");

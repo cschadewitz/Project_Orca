@@ -397,7 +397,8 @@ default branch. Pre-merge CI can validate producer reports for a bounded read-on
 local replay; it cannot prove the new default-branch workflow executed. Live
 consumer validation is a post-merge follow-up; merge is unauthorized in this slice.
 Setup/timeout failure remains a failed advisory job, not accepted evidence.
-Nightly, release parity, freshness, platform adapters and pilot are later #509 work.
+Nightly, a shared release verification workflow, freshness, platform adapters and
+pilot are later #509 work.
 
 ## Existing authority and remaining integration gates
 
@@ -419,9 +420,11 @@ Later owned workflow work must:
 2. Review required-check settings before any stable `CI required` aggregate migration;
    implement `always()`/`needs` failure/cancellation/missing/skip checks and merge-group
    candidate handling without weakening existing required names.
-3. Extract/reuse the complete full-verification contract and close release parity:
-   current release checks use Node 24 only, tests before build, no explicit retry
-   acceptance, required-production flag or coverage. All existing desktop packaging
+3. Extract/reuse the complete full-verification contract. Release checks now follow
+   the full path on Node 24 — build before tests, design freshness, no-skip retry
+   acceptance, the required-production flag and the same worker bound — as a copy
+   that `tools/test/release-workflow.test.js` holds to `ci.yml`, not a shared
+   workflow; coverage ratchets stay on main's push. All existing desktop packaging
    and app/native platform gates remain mandatory on the exact release candidate.
 4. Preserve full main pushes. Add full nightly-main/platform verification, separate
    non-cancelled full-run groups, off-hour capacity-reviewed scheduling, failure ownership

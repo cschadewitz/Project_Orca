@@ -3,9 +3,10 @@
  * the config makes, plugin loading, and the two failures a user meets first -
  * an unparseable config and a workflow that does not validate.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { AgentSpecSchema, parseOrcaConfig, silentLogger, toGateOption, type OrcaConfig } from "@orca/core";
 import { GitWorktreeProvider, LocalWorkspaceProvider, PausingHumanInput } from "@orca/engine";
@@ -26,6 +27,7 @@ import {
   makeHumanInput,
   makeSessionFactory,
   makeWorkspaceProvider,
+  orcaProtectedPaths,
 } from "../src/bootstrap.js";
 
 const dirs: string[] = [];
@@ -48,6 +50,55 @@ nodes:
 edges:
   - { from: s, to: done }
 `;
+
+/**
+ * C4-01: with no `workspace:` the config directory is the run's workspace, so the files that
+ * decide what an agent may do — and the owner token that can answer for a person — sit
+ * inside it. These are the paths every session refuses to its agent whatever its policy says.
+ */
+describe("orcaProtectedPaths", () => {
+  it("keeps the config, the sidecar and the store read-only, and auth and the store's keys unreadable", () => {
+    const dir = resolve("/srv/project");
+    const paths = orcaProtectedPaths({ configDir: dir, storeDir: ".orca" });
+    expect(paths.readOnly).toEqual([
+      ...CONFIG_FILENAMES.map((name) => join(dir, name)),
+      join(dir, "orca.permissions.json"),
+      join(dir, ".orca"),
+    ]);
+    expect(paths.noAccess).toEqual([
+      join(dir, "auth"),
+      join(dir, ".orca", "private-execution"),
+      join(dir, ".orca", "private-workflows"),
+    ]);
+    // Where the shipped workflows have agents write deliverables, which the store holds when
+    // the workspace is the config directory: `.orca/work/…` (ai-sdlc), `.orca/program/…` (program).
+    expect(paths.agentAreas).toEqual([join(dir, ".orca", "work"), join(dir, ".orca", "program")]);
+  });
+
+  it("leaves every store path the shipped workflows give an agent in an agent area", async () => {
+    const dir = resolve("/srv/project");
+    const areas = (orcaProtectedPaths({ configDir: dir, storeDir: ".orca" }).agentAreas ?? []).map((area) =>
+      area.slice(join(dir, ".orca").length + 1),
+    );
+    const root = fileURLToPath(new URL("../../../workflows/", import.meta.url));
+    const used = new Set<string>();
+    for (const file of await readdir(root))
+      for (const [, area] of (await readFile(join(root, file), "utf8")).matchAll(/["' ]\.orca\/([^/"']+)\//g))
+        used.add(area!);
+    expect(used.size).toBeGreaterThan(0);
+    expect([...used].filter((area) => !areas.includes(area))).toEqual([]);
+  });
+
+  it("follows a configured storeDir, and a config file loaded from somewhere else", () => {
+    const dir = resolve("/srv/project");
+    const elsewhere = resolve("/etc/orca/team.yaml");
+    const paths = orcaProtectedPaths({ configDir: dir, storeDir: "../state", configFile: elsewhere });
+    expect(paths.readOnly).toContain(elsewhere);
+    expect(paths.readOnly).toContain(resolve(dir, "../state"));
+    expect(paths.readOnly).not.toContain(join(dir, ".orca"));
+    expect(paths.noAccess).toContain(join(resolve(dir, "../state"), "private-execution"));
+  });
+});
 
 describe("findConfig", () => {
   it("walks up from cwd to the nearest config file", async () => {
@@ -240,7 +291,7 @@ describe("bootstrap", () => {
   it("binds the permission sidecar the daemon writes to every session it opens", async () => {
     const dir = await temp();
     let opened: OpenSessionOptions | undefined;
-    const factory = makeSessionFactory(dir, async (options) => {
+    const factory = makeSessionFactory({ configDir: dir, storeDir: ".orca" }, async (options) => {
       opened = options;
       return undefined as unknown as AgentSession;
     });
@@ -252,6 +303,8 @@ describe("bootstrap", () => {
     // The workspace sidecar, first and alone: a user-scoped file layers under it later (ADR 0009).
     expect(opened?.permissionFiles).toEqual([permissionPolicyPath(dir)]);
     expect(permissionPolicyPath(dir)).toBe(join(dir, "orca.permissions.json"));
+    // And ORCA's own files beside it, so no agent policy can open them (C4-01).
+    expect(opened?.protectedPaths).toEqual(orcaProtectedPaths({ configDir: dir, storeDir: ".orca" }));
 
     // And an app over a real config directory gets that factory rather than the bare
     // `openAcpSession` an Orchestrator falls back to.

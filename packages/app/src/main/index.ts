@@ -77,10 +77,13 @@ import { storeRoot, Workspace } from "./workspace.js";
 
 // Mount synchronously before producers. Selected workspace/configuration roots are
 // enrolled before their first producer; replacement activation remains held below.
+// The updater only ever replaces a packaged app, and only a packaged app carries the
+// native storage addon this gate needs, so unpackaged Electron (development, the app
+// smoke tests) never mounts it and starts like Linux and Windows do.
 const appWriterRoot = app.getPath("userData");
 const appWriters = new MacAppWriterBarrier();
 const macReplacement =
-  process.platform === "darwin"
+  process.platform === "darwin" && app.isPackaged
     ? createManagedMacReplacementStartup({
         control: join(dirname(appWriterRoot), basename(appWriterRoot) + "-native-replacement"),
         appRoot: appWriterRoot,
@@ -146,6 +149,33 @@ export async function pauseMacUpdateAppWriters(signal: AbortSignal): Promise<boo
     () => macReplacement.releasePausedAppWriter(),
   );
   return paused && !signal.aborted;
+}
+
+/** The recovery shell's one action, offered only when the update-protection records are lost
+ * or unreadable and record no attempt; docs/implementation/mac-closed-window-fixed-path.md. */
+async function offerUpdateProtectionReset(startup: NonNullable<typeof macReplacement>): Promise<void> {
+  const { response } = await dialog.showMessageBox({
+    type: "warning",
+    title: "Update protection needs a reset",
+    message: "ORCA's update-protection records are missing or damaged",
+    detail:
+      "This happens when ORCA's data folder is restored or moved without the recovery folder kept " +
+      "beside it, or when that folder is removed. No update is recorded as in progress. Resetting " +
+      "replaces the records and restarts ORCA; workspaces, settings and keychain items are kept.",
+    buttons: ["Keep", "Reset and restart"],
+    defaultId: 0,
+    cancelId: 0,
+  });
+  if (response !== 1) return;
+  if (await startup.reset()) {
+    app.relaunch();
+    app.quit();
+    return;
+  }
+  dialog.showErrorBox(
+    "Update protection could not be reset",
+    "Protected startup remains closed. Quit any other ORCA process, then open ORCA again.",
+  );
 }
 
 const preferences = new PreferencesFile(join(app.getPath("userData"), "preferences.json"));
@@ -1230,10 +1260,12 @@ if (!primary) {
     if (macReplacement) await macReplacement.initialize([appWriterRoot]);
     if (!ordinaryStartupAllowed()) {
       createWindow();
-      dialog.showErrorBox(
-        "Native replacement recovery is required",
-        "Protected startup remains closed. Keep the app, stores and OS keychain intact for explicit recovery.",
-      );
+      if (macReplacement?.resettable) void offerUpdateProtectionReset(macReplacement);
+      else
+        dialog.showErrorBox(
+          "Native replacement recovery is required",
+          "Protected startup remains closed. Keep the app, stores and OS keychain intact for explicit recovery.",
+        );
       return;
     }
     void appWriters.run(async () => {

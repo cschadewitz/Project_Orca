@@ -96,7 +96,7 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
           >
             {(control) => (
               <Menu
-                label="Diagnostic lookback"
+                label={`Diagnostic lookback: ${counted(status.minutes, "minute")}`}
                 triggerClassName="orca-input"
                 triggerProps={control}
                 items={Array.from({ length: 15 }, (_, i) => ({

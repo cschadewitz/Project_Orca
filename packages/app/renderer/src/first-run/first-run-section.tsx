@@ -1,8 +1,19 @@
 /** First-run review UI over native main-owned selection; opening it starts no work. */
-import { useEffect, useRef, useState, type JSX } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FocusEvent as ReactFocusEvent,
+  type JSX,
+} from "react";
+import { CHROME_GLYPHS } from "@orca/design";
 import type { OrcaBridge } from "../../../src/bridge.js";
 import type { FirstRunBridge, FirstRunStatus } from "../../../src/first-run-contract.js";
 import { useAnnounce } from "../a11y/announce-context.js";
+import { useTransientLayer } from "../layers-context.js";
 import { Button, Card, Text, Well } from "../ui/index.js";
 
 /** Optional for clients whose native build does not provide setup. */
@@ -17,6 +28,19 @@ export function FirstRunSection(): JSX.Element | null {
   const [message, setMessage] = useState("");
   const revision = useRef(0);
   const alive = useRef(true);
+  const section = useRef<HTMLElement>(null);
+  /* Set as the previous-session row leaves holding focus, read once the state that replaced it has rendered:
+     focus goes to this region rather than the page body (rule 10). */
+  const leftHoldingFocus = useRef(false);
+  const onLeaveHoldingFocus = useCallback(() => {
+    leftHoldingFocus.current = true;
+  }, []);
+  useLayoutEffect(() => {
+    if (!leftHoldingFocus.current) return;
+    leftHoldingFocus.current = false;
+    if (document.activeElement !== null && document.activeElement !== document.body) return;
+    section.current?.focus();
+  }, [state]);
   useEffect(() => {
     alive.current = true;
     if (!bridge) return;
@@ -43,7 +67,10 @@ export function FirstRunSection(): JSX.Element | null {
     };
   }, [bridge]);
   if (!bridge) return null;
-  const perform = async (action: () => ReturnType<FirstRunBridge["status"]>, success: string) => {
+  const recovery = state?.state === "recovery" ? state.recovery : undefined;
+  const previousBoot = recovery?.state === "previous-boot" ? recovery : undefined;
+  const request = recovery?.state === "previous-boot" ? undefined : recovery;
+  const perform = async (action: () => ReturnType<FirstRunBridge["status"]>, success: string, refused?: string) => {
     if (busy) return;
     const token = ++revision.current;
     setBusy(true);
@@ -59,9 +86,10 @@ export function FirstRunSection(): JSX.Element | null {
         announce(text);
       } else {
         setMessage(
-          result.error.message.startsWith("Local startup ownership requires reconciliation.")
-            ? "Local startup ownership requires reconciliation. Review same-boot recovery, then reconcile when the owned writer has exited. Preserve all ownership evidence, work and credentials."
-            : "Setup was refused. Check directory ownership, writable access and Git; retry or choose a fresh empty workspace. Existing files were preserved.",
+          refused ??
+            (result.error.message.startsWith("Local startup ownership requires reconciliation.")
+              ? "Local startup ownership requires reconciliation. Review same-boot recovery, then reconcile when the owned writer has exited. Preserve all ownership evidence, work and credentials."
+              : "Setup was refused. Check directory ownership, writable access and Git; retry or choose a fresh empty workspace. Existing files were preserved."),
         );
         announce("Project setup was refused. Existing files were preserved.");
       }
@@ -75,7 +103,8 @@ export function FirstRunSection(): JSX.Element | null {
     }
   };
   return (
-    <section aria-label="First-run project setup">
+    /* Focusable from script and never a Tab stop: where focus goes when the control holding it leaves. */
+    <section ref={section} aria-label="First-run project setup" tabIndex={-1}>
       <Card>
         <Text style="label-strong">Dedicated project setup</Text>
         <Text style="body">
@@ -136,12 +165,33 @@ export function FirstRunSection(): JSX.Element | null {
             </Button>
           </>
         )}
-        {state?.state === "recovery" && bridge.reconcileRecovery && (
+        {previousBoot && bridge.endPreviousSession && (
+          <>
+            <Text style="caption">The last session ended without closing cleanly, before this computer restarted.</Text>
+            <Text style="body">
+              A restart ends every process from that session, but the app never settles it on its own. Mark it ended so
+              this workspace can be connected again. Its work, journal and credentials stay as they are; nothing is
+              resumed, and unfinished runs wait for you to inspect and continue them.
+            </Text>
+            <PreviousSessionAsk
+              busy={busy}
+              onLeaveHoldingFocus={onLeaveHoldingFocus}
+              onConfirm={() =>
+                void perform(
+                  () => bridge.endPreviousSession!(previousBoot.attemptId),
+                  "Previous session marked ended. Connect the selected workspace, then inspect retained work before continuing it.",
+                  "The previous session was not marked ended. Another process may still hold this workspace, or its evidence changed. Nothing was changed. Close other app windows for this workspace, read setup again, then retry.",
+                )
+              }
+            />
+          </>
+        )}
+        {request && bridge.reconcileRecovery && (
           <>
             <Text style="caption">
-              {state.recovery.state === "surviving-owned-daemon"
+              {request.state === "surviving-owned-daemon"
                 ? "The exact owned daemon is still running. No process was adopted or stopped."
-                : state.recovery.state === "unknown-writer"
+                : request.state === "unknown-writer"
                   ? "Writer ownership is unknown. Preserve the workspace for operator review."
                   : "Recovery is ready for verification."}
             </Text>
@@ -154,7 +204,7 @@ export function FirstRunSection(): JSX.Element | null {
               disabled={busy}
               onClick={() =>
                 void perform(
-                  () => bridge.reconcileRecovery!(state.recovery.requestId),
+                  () => bridge.reconcileRecovery!(request.requestId),
                   "Ownership reconciled. Connect explicitly, then inspect retained work before continuing it.",
                 )
               }
@@ -241,5 +291,95 @@ export function FirstRunSection(): JSX.Element | null {
         </Text>
       </Card>
     </section>
+  );
+}
+
+/**
+ * **Mark previous session ended**, the one setup action with no way back, so it asks on its own row (RULES.md
+ * rule 17) the way a claim's Release does. At rest it is a quiet default-tone button. Pressed, the row becomes
+ * **Keep**, which takes focus so a second `Enter` keeps things as they are, then **✕ Confirm previous session ended**
+ * in the danger tone, with the consequence as the row's second line. Keep, `Esc` (the row is on the transient layer
+ * stack while it asks) and Confirm hand focus back to the button; focus leaving the row withdraws the question and
+ * stays where the person put it. Nothing is sent until Confirm.
+ */
+function PreviousSessionAsk({
+  busy,
+  onConfirm,
+  onLeaveHoldingFocus,
+}: {
+  busy: boolean;
+  onConfirm: () => void;
+  /** Said once, as the row unmounts, if focus was inside it: the section decides where it goes. */
+  onLeaveHoldingFocus: () => void;
+}): JSX.Element {
+  const [armed, setArmed] = useState(false);
+  const asking = armed && !busy;
+  const row = useRef<HTMLDivElement>(null);
+  const consequence = useId();
+  /* Whether focus has reached Keep yet: until then a focusout is the button leaving the document. */
+  const settled = useRef(false);
+  /* Set by the disarms that start inside the row, which return focus to the button. */
+  const restore = useRef(false);
+  const disarm = (refocus: boolean): void => {
+    restore.current = refocus;
+    setArmed(false);
+  };
+  useTransientLayer(asking, { name: "previous-session-confirm", close: () => disarm(true) });
+  useLayoutEffect(() => {
+    if (asking) {
+      row.current?.querySelector<HTMLElement>("[data-previous-session-keep]")?.focus();
+      settled.current = true;
+      return;
+    }
+    settled.current = false;
+    if (restore.current) {
+      restore.current = false;
+      row.current?.querySelector<HTMLElement>("[data-previous-session-trigger]")?.focus();
+    }
+  }, [asking]);
+  useLayoutEffect(() => {
+    const element = row.current;
+    return () => {
+      if (element?.contains(document.activeElement)) onLeaveHoldingFocus();
+    };
+  }, [onLeaveHoldingFocus]);
+  const onBlur = (event: ReactFocusEvent<HTMLDivElement>): void => {
+    if (!asking || !settled.current) return;
+    const next = event.relatedTarget;
+    if (next !== null && event.currentTarget.contains(next)) return;
+    if (next === null && !document.hasFocus()) return;
+    disarm(false);
+  };
+  return (
+    <div ref={row} onBlur={onBlur}>
+      {asking ? (
+        <span role="group" aria-label="Mark the previous session ended?" aria-describedby={consequence}>
+          <Button size="sm" data-previous-session-keep="" onClick={() => disarm(true)}>
+            Keep
+          </Button>
+          <Button
+            size="sm"
+            tone="danger"
+            aria-describedby={consequence}
+            onClick={() => {
+              disarm(true);
+              onConfirm();
+            }}
+          >
+            <span aria-hidden="true">{CHROME_GLYPHS.danger}</span> Confirm previous session ended
+          </Button>
+        </span>
+      ) : (
+        <Button data-previous-session-trigger="" disabled={busy} onClick={() => setArmed(true)}>
+          Mark previous session ended
+        </Button>
+      )}
+      {asking && (
+        <Text id={consequence} style="caption">
+          This cannot be undone. It records that the session before the restart is over, so this workspace can start
+          again; run history and credentials are kept.
+        </Text>
+      )}
+    </div>
   );
 }

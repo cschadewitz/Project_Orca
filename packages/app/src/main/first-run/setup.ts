@@ -12,7 +12,12 @@ import { randomUUID, createHash } from "node:crypto";
 import { lstat, mkdir, open, readFile, rename } from "node:fs/promises";
 import { FirstRunOwnershipRefusal, inspectFirstRunOwnership, absent } from "./ownership.js";
 import { parse as parseYaml } from "yaml";
-import { FirstRunRecovery, bindQuiescentConfiguration } from "./recovery.js";
+import {
+  FirstRunRecovery,
+  bindQuiescentConfiguration,
+  endPreviousBootSession,
+  previousBootAttempt,
+} from "./recovery.js";
 import { inspectLocalTool } from "./agent-preflight.js";
 import type { DaemonClient } from "../../client/daemon-client.js";
 import { dirname, join, isAbsolute } from "node:path";
@@ -32,6 +37,7 @@ import {
   type ProjectIdentity,
   ownedDirectory,
   preparedProject,
+  projectRepository,
   sameDirectory,
   separateDirectories,
   emptyDirectory,
@@ -101,6 +107,10 @@ export class FirstRunSetup {
     const receipt = await this.readReceipt();
     if (receipt && !absent(join(receipt.workspace.path, ".orca-first-run-ownership"))) {
       try {
+        // Before a pending same-boot request: after a restart that request can no longer be reconciled.
+        const previous = previousBootAttempt(receipt.workspace.path);
+        if (previous)
+          return { state: "recovery", recovery: { state: "previous-boot", attemptId: previous.latest.reservationId } };
         const latest = inspectFirstRunOwnership(receipt.workspace.path, true).latest;
         if (latest?.texts["recovery-request.json"] && !latest.settled) {
           const request: unknown = JSON.parse(latest.texts["recovery-request.json"]);
@@ -155,14 +165,10 @@ export class FirstRunSetup {
     }
   }
   private async verify(receipt: Receipt, allowChangedConfig = false): Promise<void> {
-    const project = await preparedProject(receipt.project.path, this.deps.home);
+    // The receipt's branch and base record what was reviewed at selection. Reopening checks the repository, not HEAD.
+    const project = await projectRepository(receipt.project.path, this.deps.home);
     const workspace = await ownedDirectory(receipt.workspace.path, this.deps.home);
-    if (
-      !sameDirectory(receipt.project, project) ||
-      !sameDirectory(receipt.workspace, workspace) ||
-      project.branch !== receipt.project.branch ||
-      project.baseCommit !== receipt.project.baseCommit
-    )
+    if (!sameDirectory(receipt.project, project) || !sameDirectory(receipt.workspace, workspace))
       throw selectionFailure();
     separateDirectories(project.path, workspace.path);
     await verifyRuntimeDirectories(workspace);
@@ -348,6 +354,16 @@ export class FirstRunSetup {
       assertCurrent();
       const recovery = await new FirstRunRecovery(receipt.workspace.path).reconcile(id, assertCurrent);
       return recovery.state === "reconciled" ? this.prepared(receipt) : { state: "recovery", recovery };
+    });
+  }
+  /** Only on the person's explicit confirmation of the attempt status() showed them; startup never calls this. */
+  async endPreviousSession(id: string, assertCurrent: () => void): Promise<FirstRunStatus> {
+    return this.exclusive(async () => {
+      const receipt = await this.readReceipt();
+      if (!receipt) throw selectionFailure();
+      assertCurrent();
+      await endPreviousBootSession(receipt.workspace.path, id, assertCurrent);
+      return this.prepared(receipt);
     });
   }
   async reviewConfiguration(assertCurrent: () => void): Promise<FirstRunStatus> {

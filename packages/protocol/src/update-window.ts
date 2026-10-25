@@ -9,6 +9,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -47,6 +48,13 @@ export const UpdateWindowStateSchema = z.strictObject({
   launchHash: digest.nullable(),
 });
 export type UpdateWindowState = z.infer<typeof UpdateWindowStateSchema>;
+type FenceDirectory = z.infer<typeof FenceDirectorySchema>;
+const EnrollmentSchema = z.strictObject({
+  version: z.literal(1),
+  id: uuid,
+  roots: z.array(FenceDirectorySchema).min(1).max(32),
+  control: FenceDirectorySchema,
+});
 /** Darwin must supply the packaged native F_FULLFSYNC descriptor adapter. */
 export interface UpdateWindowDurability {
   fileSync(fd: number): void;
@@ -90,7 +98,9 @@ function syncDirectory(path: string) {
     closeSync(fd);
   }
 }
-/** Intent temp survives lost acknowledgement. It is never automatically removed/retried. */
+/** Intent temp survives lost acknowledgement. It is never retried, and is removed only where
+ * the published record proves nothing used it: a provisioning nothing committed, or the
+ * re-anchoring of an open window no attempt holds. */
 function write(path: string, value: unknown, replace = false, durability?: UpdateWindowDurability) {
   if (process.platform === "darwin" && !durability) throw unavailable();
   const bytes = Buffer.from(JSON.stringify(value) + "\n");
@@ -123,6 +133,56 @@ function exists(path: string): boolean {
     throw error;
   }
 }
+/** A complete record, or undefined when its bytes are torn. Unsafe metadata still throws. */
+function record<T>(path: string, schema: z.ZodType<T>): T | undefined {
+  let value: unknown;
+  try {
+    value = read(path);
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+  const result = schema.safeParse(value);
+  return result.success ? result.data : undefined;
+}
+/** Remove one of this namespace's own unpublished or abandoned records. */
+function discard(path: string) {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  syncDirectory(dirname(path));
+}
+/** What anchors a root path now: no directory there, no guard, a torn guard, or an anchor. */
+function anchored(root: string): "gone" | "missing" | "torn" | z.infer<typeof AnchorSchema> {
+  try {
+    if (!lstatSync(root).isDirectory()) return "gone";
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return "gone";
+    throw error;
+  }
+  if (!exists(join(root, GUARD))) return "missing";
+  return record(join(root, GUARD), AnchorSchema) ?? "torn";
+}
+/** As anchored(), for a root whose guard this owner rewrites anyway: unsafe metadata counts as torn. */
+function rewritable(root: string): ReturnType<typeof anchored> {
+  try {
+    return anchored(root);
+  } catch {
+    return "torn";
+  }
+}
+/** Roots may not hold, or sit inside, the control namespace or one another. */
+const overlaps = (control: string, roots: readonly FenceDirectory[]) =>
+  roots.some(
+    (root) =>
+      root.path === control ||
+      root.path.startsWith(control + "/") ||
+      control.startsWith(root.path + "/") ||
+      roots.some((other) => other !== root && root.path.startsWith(other.path + "/")),
+  );
 function state(control: string, requireEnrollment = true): UpdateWindowState {
   if (exists(join(control, "window.json.tmp"))) throw unavailable();
   const result = UpdateWindowStateSchema.parse(read(join(control, "window.json")));
@@ -180,7 +240,8 @@ function port(root: z.infer<typeof FenceDirectorySchema>, slot: number) {
     slot
   );
 }
-async function hold(root: z.infer<typeof FenceDirectorySchema>, slot: number): Promise<Server> {
+const hold = (root: z.infer<typeof FenceDirectorySchema>, slot: number) => listen(port(root, slot));
+async function listen(port: number): Promise<Server> {
   const server = createServer((socket) => {
     socket.on("error", () => {});
     socket.end();
@@ -188,7 +249,7 @@ async function hold(root: z.infer<typeof FenceDirectorySchema>, slot: number): P
   server.maxConnections = 1;
   await new Promise<void>((done, reject) => {
     server.once("error", reject);
-    server.listen({ host: "127.0.0.1", port: port(root, slot), exclusive: true, reusePort: false }, () => {
+    server.listen({ host: "127.0.0.1", port, exclusive: true, reusePort: false }, () => {
       server.removeListener("error", reject);
       done();
     });
@@ -198,6 +259,16 @@ async function hold(root: z.infer<typeof FenceDirectorySchema>, slot: number): P
   return server;
 }
 const close = (server: Server) => new Promise<void>((done) => server.close(() => done()));
+/** Every slot of every identity, each port once: two identities may hash to one slot range. */
+async function holdAll(identities: readonly FenceDirectory[], held: Server[], taken = new Set<number>()) {
+  for (const identity of identities)
+    for (let slot = 0; slot < SLOTS; slot++) {
+      const value = port(identity, slot);
+      if (taken.has(value)) continue;
+      taken.add(value);
+      held.push(await listen(value));
+    }
+}
 export interface UpdateWriterLease {
   readonly root: string;
   check(): boolean;
@@ -298,7 +369,9 @@ export function configuredUpdateWriterRoots(paths: readonly string[]): string[] 
 
 /** Provision only under explicit pre-producer, participating-launch-set ownership.
  * window.json is durable BEFORE anchors. Interrupted enrollment can only be completed for
- * the exact recorded set; a lost control namespace behind any surviving anchor refuses. */
+ * the exact recorded set; a lost control namespace behind any surviving anchor refuses.
+ * Every owner requires enrolled.json, so until it exists nothing has used the window: a
+ * torn window.json or temporary record from an interrupted first provisioning is discarded. */
 export async function provisionUpdateWindow(
   control: string,
   roots: readonly string[],
@@ -319,19 +392,19 @@ export async function provisionUpdateWindow(
       return fenceDirectory(root);
     })
     .sort((a, b) => a.path.localeCompare(b.path));
-  if (
-    bindings.some(
-      (r) =>
-        r.path === control ||
-        control.startsWith(r.path + "/") ||
-        r.path.startsWith(control + "/") ||
-        bindings.some((other) => other !== r && r.path.startsWith(other.path + "/")),
-    )
-  )
-    throw unavailable();
+  if (overlaps(control, bindings)) throw unavailable();
   const handles: Server[] = [];
   try {
     for (const root of bindings) for (let slot = 0; slot < SLOTS; slot++) handles.push(await hold(root, slot));
+    if (!exists(join(control, "enrolled.json"))) {
+      const temps = [join(control, "window.json.tmp"), join(control, "enrolled.json.tmp")];
+      for (const path of [...temps, ...bindings.map((root) => join(root.path, GUARD + ".tmp"))]) discard(path);
+      // Anchors follow a complete window.json, so one beside a torn window is not this
+      // provisioning's: keep the evidence and refuse below.
+      const window = join(control, "window.json");
+      const anchoredRoot = bindings.some((root) => exists(join(root.path, GUARD)));
+      if (exists(window) && !anchoredRoot && !record(window, UpdateWindowStateSchema)) discard(window);
+    }
     let current: UpdateWindowState;
     if (exists(join(control, "window.json"))) {
       current = state(control, exists(join(control, "enrolled.json")));
@@ -347,19 +420,19 @@ export async function provisionUpdateWindow(
         candidate: null,
         launchHash: null,
       };
-      write(join(control, "window.json"), current, false, durability);
+      write(join(control, "window.json"), current, true, durability);
     }
     for (const root of bindings) {
       const value = { version: 1, id: current.id, root, control: identity };
       if (exists(join(control, "enrolled.json")) && !exists(join(root.path, GUARD))) throw unavailable();
       if (exists(join(root.path, GUARD))) {
         if (!same(read(join(root.path, GUARD)), value)) throw unavailable();
-      } else write(join(root.path, GUARD), value, false, durability);
+      } else write(join(root.path, GUARD), value, true, durability);
     }
     const enrollment = { version: 1, id: current.id, roots: bindings, control: identity };
     if (exists(join(control, "enrolled.json"))) {
       if (!same(read(join(control, "enrolled.json")), enrollment)) throw unavailable();
-    } else write(join(control, "enrolled.json"), enrollment, false, durability);
+    } else write(join(control, "enrolled.json"), enrollment, true, durability);
   } finally {
     for (const handle of handles) await close(handle);
   }
@@ -367,7 +440,8 @@ export async function provisionUpdateWindow(
 
 /** Extend an OPEN managed namespace before starting a producer for its new roots.
  * Existing root identities/anchors never change. Enrollment owns every new root slot
- * and a control mutex. A torn publication closes admission rather than repairing it.
+ * and a control mutex. A torn publication closes admission rather than repairing it;
+ * only the owner's next startup re-anchors it (reanchorUpdateWindow).
  * This excludes participating producers, not arbitrary filesystem writers. */
 export async function enrollUpdateWindowRoots(
   control: string,
@@ -399,22 +473,19 @@ export async function enrollUpdateWindowRoots(
         return fenceDirectory(path);
       });
     const roots = [...current.roots, ...additions].sort((a, b) => a.path.localeCompare(b.path));
-    if (
-      roots.length > 32 ||
-      roots.some(
-        (root) =>
-          root.path === control ||
-          root.path.startsWith(control + "/") ||
-          control.startsWith(root.path + "/") ||
-          roots.some((other) => other !== root && root.path.startsWith(other.path + "/")),
-      )
-    )
-      throw unavailable();
+    if (roots.length > 32 || overlaps(control, roots)) throw unavailable();
     if (!additions.length) return current;
+    // A guard this namespace left on a root it no longer enrolls (one moved away and
+    // de-enrolled, or a copy) admits nobody: anchor() refuses it. It is replaced, after
+    // also fencing the identity it recorded, unless that identity is still enrolled.
+    const former: FenceDirectory[] = [];
     for (const root of additions) {
-      if (exists(join(root.path, GUARD))) throw unavailable();
-      for (let slot = 0; slot < SLOTS; slot++) held.push(await hold(root, slot));
+      if (!exists(join(root.path, GUARD))) continue;
+      const stale = AnchorSchema.parse(read(join(root.path, GUARD)));
+      if (stale.id !== current.id && stale.control.path !== control) throw unavailable();
+      if (!current.roots.some((enrolled) => same(enrolled, stale.root))) former.push(stale.root);
     }
+    await holdAll([...additions, ...former], held, new Set([port(identity, 0)]));
     if (
       !same(state(control), current) ||
       !same(fenceDirectory(control), identity) ||
@@ -424,13 +495,174 @@ export async function enrollUpdateWindowRoots(
     const next = UpdateWindowStateSchema.parse({ ...current, roots });
     // Until the final enrollment publication, ordinary readers refuse the mismatch.
     write(join(control, "window.json"), next, true, durability);
-    for (const root of additions)
-      write(join(root.path, GUARD), { version: 1, id: current.id, root, control: identity }, false, durability);
+    for (const root of additions) {
+      discard(join(root.path, GUARD + ".tmp"));
+      write(join(root.path, GUARD), { version: 1, id: current.id, root, control: identity }, true, durability);
+    }
     write(join(control, "enrolled.json"), { version: 1, id: current.id, roots, control: identity }, true, durability);
     return inspectUpdateWindowRoots(control);
   } finally {
     for (const slot of held) await close(slot);
     await close(mutex);
+  }
+}
+
+/** Re-anchor an OPEN window no attempt holds, rather than refusing it forever, after its
+ * directories were migrated, restored or moved, or a crash tore its provisioning or an
+ * enrollment. The published window.json is the only authority on an attempt:
+ * ClosedUpdateWindow never acts on a state it failed to publish, so an unpublished
+ * temporary record is discarded, and any other phase or a recorded attempt refuses.
+ * `required` roots are written only by the caller, which starts no producer before this
+ * returns, so a missing guard there is recreated. Any other root whose directory or guard
+ * is gone is de-enrolled: writers there went unfenced, so it cannot be re-anchored. A root
+ * another namespace anchors is left to it. All slots of every old and new identity are held
+ * throughout, so no participating writer anchored to an old identity survives the change.
+ * A copy of the namespace never takes over the roots of an original that still exists. */
+export async function reanchorUpdateWindow(
+  control: string,
+  required: readonly string[],
+  durability?: UpdateWindowDurability,
+): Promise<UpdateWindowState> {
+  if (
+    !isAbsolute(control) ||
+    resolve(control) !== control ||
+    !required.length ||
+    required.length > 32 ||
+    new Set(required).size !== required.length ||
+    required.some((path) => !isAbsolute(path) || resolve(path) !== path)
+  )
+    throw unavailable();
+  const identity = fenceDirectory(control);
+  const recorded = UpdateWindowStateSchema.parse(read(join(control, "window.json")));
+  if (
+    recorded.phase !== "open" ||
+    recorded.attempt !== null ||
+    recorded.candidate !== null ||
+    recorded.launchHash !== null
+  )
+    throw unavailable();
+  // A missing or torn enrollment never completed; a complete one must name this window.
+  const published = exists(join(control, "enrolled.json"))
+    ? record(join(control, "enrolled.json"), EnrollmentSchema)
+    : undefined;
+  if (
+    published &&
+    (published.id !== recorded.id || (published.control.path !== control && exists(published.control.path)))
+  )
+    throw unavailable();
+  const refuseLiveOriginal = (guard: ReturnType<typeof anchored>) => {
+    if (typeof guard === "object" && guard.control.path !== control && exists(guard.control.path)) throw unavailable();
+  };
+  const roots: FenceDirectory[] = [];
+  for (const root of recorded.roots) {
+    if (required.includes(root.path)) continue;
+    let current: FenceDirectory;
+    let guard: ReturnType<typeof anchored>;
+    try {
+      guard = anchored(root.path);
+      if (guard === "gone" || guard === "missing" || (guard !== "torn" && guard.id !== recorded.id)) continue;
+      current = fenceDirectory(root.path);
+    } catch {
+      // De-enrolling is the safe direction: anchor() then refuses any writer left there.
+      continue;
+    }
+    // A surviving original is a refusal, not an unreadable/deleted root to de-enroll.
+    refuseLiveOriginal(guard);
+    assertFenceVolume(root.path);
+    roots.push(current);
+  }
+  for (const path of required) {
+    const guard = rewritable(path);
+    if (guard === "gone" || (typeof guard === "object" && guard.id !== recorded.id)) throw unavailable();
+    refuseLiveOriginal(guard);
+    assertFenceVolume(path);
+    roots.push(fenceDirectory(path));
+  }
+  roots.sort((a, b) => a.path.localeCompare(b.path));
+  if (roots.length > 32 || overlaps(control, roots)) throw unavailable();
+  const handles: Server[] = [];
+  try {
+    const mutex = port(identity, 0);
+    handles.push(await listen(mutex));
+    await holdAll([...recorded.roots, ...(published?.roots ?? []), ...roots], handles, new Set([mutex]));
+    if (
+      !same(UpdateWindowStateSchema.parse(read(join(control, "window.json"))), recorded) ||
+      !same(fenceDirectory(control), identity) ||
+      roots.some((root) => !same(fenceDirectory(root.path), root))
+    )
+      throw unavailable();
+    const temps = [join(control, "window.json.tmp"), join(control, "enrolled.json.tmp")];
+    for (const path of [...temps, ...roots.map((root) => join(root.path, GUARD + ".tmp"))]) discard(path);
+    const next = UpdateWindowStateSchema.parse({ ...recorded, roots });
+    // Until enrolled.json is republished last, ordinary readers refuse the mismatch.
+    if (!same(next, recorded)) write(join(control, "window.json"), next, true, durability);
+    for (const root of roots) {
+      const value = { version: 1, id: recorded.id, root, control: identity };
+      const guard = rewritable(root.path);
+      if (typeof guard !== "object" || !same(guard, value)) write(join(root.path, GUARD), value, true, durability);
+    }
+    write(join(control, "enrolled.json"), { version: 1, id: recorded.id, roots, control: identity }, true, durability);
+    return inspectUpdateWindowRoots(control);
+  } finally {
+    for (const handle of handles) await close(handle);
+  }
+}
+
+/** Whether a person may confirm a reset: re-anchoring has nothing to stand on because the
+ * published window is unreadable, or is gone behind a surviving guard on a `required` root.
+ * A readable window never qualifies, so a reset can never discard a recorded attempt. */
+export function updateWindowResettable(control: string, required: readonly string[]): boolean {
+  try {
+    const window = join(control, "window.json");
+    if (exists(window)) return !record(window, UpdateWindowStateSchema);
+    return required.some((root) => exists(join(root, GUARD)));
+  } catch {
+    return false;
+  }
+}
+
+/** The person-confirmed reset. Removes the `required` roots' guards and the control
+ * records, under every slot of the identities they name, so the owner's next start
+ * provisions afresh. The journal, pairs and other roots' guards are kept: a guard this
+ * control path wrote is replaced when its root is enrolled again. */
+export async function resetUpdateWindow(control: string, required: readonly string[]): Promise<void> {
+  if (
+    !isAbsolute(control) ||
+    resolve(control) !== control ||
+    !required.length ||
+    required.some((path) => !isAbsolute(path) || resolve(path) !== path) ||
+    !updateWindowResettable(control, required)
+  )
+    throw unavailable();
+  const identities: FenceDirectory[] = [];
+  for (const path of required) {
+    identities.push(fenceDirectory(path));
+    const guard = rewritable(path);
+    if (typeof guard === "object") identities.push(guard.root);
+  }
+  try {
+    const published = join(control, "enrolled.json");
+    if (exists(published)) identities.push(...(record(published, EnrollmentSchema)?.roots ?? []));
+  } catch {
+    // Unreadable enrollment names no identity to fence; its guards already refuse writers.
+  }
+  const handles: Server[] = [];
+  try {
+    const taken = new Set<number>();
+    if (exists(control)) {
+      const mutex = port(fenceDirectory(control), 0);
+      taken.add(mutex);
+      handles.push(await listen(mutex));
+    }
+    await holdAll(identities, handles, taken);
+    if (!updateWindowResettable(control, required)) throw unavailable();
+    // Remove enrollment durably first. An interruption must leave either a surviving
+    // guard offering reset again, or an unenrolled namespace that can provision afresh.
+    for (const name of ["enrolled.json", "enrolled.json.tmp"]) discard(join(control, name));
+    for (const path of required) for (const name of [GUARD, GUARD + ".tmp"]) discard(join(path, name));
+    for (const name of ["window.json", "window.json.tmp"]) discard(join(control, name));
+  } finally {
+    for (const handle of handles) await close(handle);
   }
 }
 

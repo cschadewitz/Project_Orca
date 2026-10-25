@@ -9,7 +9,7 @@
  * block below, with concrete cases, because both are the deliverable.
  */
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -17,6 +17,7 @@ import {
   AgentSpecSchema,
   DEFAULT_PERMISSION_POLICY,
   derivePermissionRules,
+  isWildcardPermissionRule,
   layerPermissionPolicies,
   PERMISSION_POLICY_FILENAME,
   PermissionPolicySchema,
@@ -28,10 +29,12 @@ import {
   loadEffectivePermissionPolicy,
   permissionOverlayFor,
   permissionPolicyPath,
+  protectedPathFor,
   readPermissionPolicyFile,
   recordAlwaysDecision,
   replacePermissionPolicyFile,
   resolvePermission,
+  type ProtectedPaths,
 } from "@orca/agents";
 
 const WS = "/w/orca";
@@ -763,5 +766,361 @@ describe("replacing the sidecar", () => {
     const after = await readPermissionPolicyFile(file);
     expect(Object.keys(after.agents).length).toBeGreaterThanOrEqual(2);
     expect(after.agents["claude-local"]?.rules).toHaveLength(1);
+  });
+});
+
+/**
+ * C4-01. With no `workspace:` the config directory is the run's workspace, and the default
+ * policy allows edits inside it: an agent could edit the sidecar, write a catch-all `allow`,
+ * and have every later `execute` approved without anyone being asked. So ORCA's own files go
+ * ahead of every rule, and nothing a rule says reaches them.
+ */
+describe("protected paths", () => {
+  interface Fixture {
+    dir: string;
+    protectedPaths: ProtectedPaths;
+  }
+
+  /** A config directory laid out the way `orca serve` leaves one, with a project beside it. */
+  async function configDir(): Promise<Fixture> {
+    const dir = await workspace();
+    await mkdir(join(dir, "auth"));
+    await mkdir(join(dir, ".orca", "private-execution"), { recursive: true });
+    await mkdir(join(dir, ".orca", "runs"));
+    await mkdir(join(dir, "src"));
+    await mkdir(join(dir, "sub"));
+    await writeFile(join(dir, "auth", "local-client.token"), "orca1.owner.secret", "utf8");
+    await writeFile(join(dir, ".orca", "private-execution", ".execution-key"), "key", "utf8");
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\n", "utf8");
+    await writeFile(permissionPolicyPath(dir), `{"version":1,"agents":{}}`, "utf8");
+    await writeFile(join(dir, "src", "a.ts"), "", "utf8");
+    return {
+      dir,
+      protectedPaths: {
+        readOnly: [join(dir, "orca.config.yaml"), permissionPolicyPath(dir), join(dir, ".orca")],
+        noAccess: [join(dir, "auth"), join(dir, ".orca", "private-execution")],
+        agentAreas: [join(dir, ".orca", "work")],
+      },
+    };
+  }
+
+  const at = (policy: PermissionPolicy, f: Fixture, kind: string, ...paths: string[]) =>
+    decidePermission(policy, req(kind, `${kind} ${paths.join(" ")}`, ...paths), {
+      workspaceCwd: f.dir,
+      protectedPaths: f.protectedPaths,
+    });
+
+  it("denies changing the sidecar, the config, auth and the store, though they are inside the workspace", async () => {
+    const f = await configDir();
+    const { dir } = f;
+    for (const path of [
+      permissionPolicyPath(dir),
+      join(dir, "orca.config.yaml"),
+      join(dir, "auth", "local-client.token"),
+      join(dir, ".orca", "runs", "r.jsonl"),
+      join(dir, ".orca"),
+    ])
+      for (const kind of ["edit", "delete", "move", "execute", "other"])
+        expect(at(bareEffective, f, kind, path), `${kind} ${path}`).toBe("deny");
+    // A file about to be created is as protected as one that exists.
+    expect(at(bareEffective, f, "edit", join(dir, "auth", "new.token"))).toBe("deny");
+    expect(at(bareEffective, f, "edit", join(dir, ".orca", "private-execution", "new"))).toBe("deny");
+    // A relative location is workspace-relative, as a rule's is.
+    expect(at(bareEffective, f, "edit", "orca.permissions.json")).toBe("deny");
+    // A move is denied for either end.
+    expect(at(bareEffective, f, "move", join(dir, "src", "a.ts"), permissionPolicyPath(dir))).toBe("deny");
+    // Deleting or moving a directory that holds them takes them with it.
+    expect(at(bareEffective, f, "delete", dir)).toBe("deny");
+    expect(at(bareEffective, f, "move", dir, `${dir}-old`)).toBe("deny");
+    expect(at(bareEffective, f, "delete", join(dir, "src"))).toBe("allow");
+    // The same policy without the protection allows every one of these - which was the bug.
+    expect(decidePermission(bareEffective, req("edit", "Edit", permissionPolicyPath(dir)), { workspaceCwd: dir })).toBe(
+      "allow",
+    );
+  });
+
+  it("denies reading auth and the store's keys, and leaves the other reads to the policy", async () => {
+    const f = await configDir();
+    const { dir } = f;
+    expect(at(bareEffective, f, "read", join(dir, "auth", "local-client.token"))).toBe("deny");
+    expect(at(bareEffective, f, "search", join(dir, "auth"))).toBe("deny");
+    expect(at(bareEffective, f, "read", join(dir, ".orca", "private-execution", ".execution-key"))).toBe("deny");
+    // Read-only is not unreadable: the config, the sidecar and the run history are the policy's.
+    expect(at(bareEffective, f, "read", permissionPolicyPath(dir))).toBe("allow");
+    expect(at(bareEffective, f, "read", join(dir, "orca.config.yaml"))).toBe("allow");
+    expect(at(bareEffective, f, "read", join(dir, ".orca", "runs", "r.jsonl"))).toBe("allow");
+  });
+
+  it("still lets an agent change the project's own files beside them", async () => {
+    const f = await configDir();
+    const { dir } = f;
+    expect(at(bareEffective, f, "edit", join(dir, "src", "a.ts"))).toBe("allow");
+    expect(at(bareEffective, f, "delete", join(dir, "src", "a.ts"))).toBe("allow");
+    // Compared segment by segment, not as a string prefix.
+    expect(at(bareEffective, f, "edit", join(dir, ".orca-notes", "plan.md"))).toBe("allow");
+    expect(at(bareEffective, f, "edit", join(dir, "authors.md"))).toBe("allow");
+    expect(at(bareEffective, f, "edit", `${permissionPolicyPath(dir)}.bak`)).toBe("allow");
+    // And what the policy asks about, it still asks about.
+    expect(at(bareEffective, f, "execute", dir)).toBe("ask");
+  });
+
+  it("keeps explicit authority paths protected inside the store's agent areas", async () => {
+    const dir = await workspace();
+    const area = join(dir, "work");
+    const configDir = join(area, "project");
+    await mkdir(configDir, { recursive: true });
+    const config = join(configDir, "orca.config.yaml");
+    const sidecar = permissionPolicyPath(configDir);
+    const protectedPaths: ProtectedPaths = {
+      // Store first as well: exempting it must continue checking the explicit files.
+      readOnly: [dir, config, sidecar],
+      noAccess: [],
+      agentAreas: [area],
+    };
+    for (const path of [config, sidecar]) {
+      expect(protectedPathFor(path, "write", protectedPaths)).toBe(path);
+      expect(protectedPathFor(path, "remove", protectedPaths)).toBe(path);
+    }
+    expect(protectedPathFor(configDir, "remove", protectedPaths)).toBe(config);
+    expect(protectedPathFor(join(configDir, "spec.md"), "write", protectedPaths)).toBeUndefined();
+    const alias = join(dir, "config-link");
+    await symlink(configDir, alias, "junction");
+    const linkedConfig = join(alias, "orca.config.yaml");
+    expect(protectedPathFor(config, "write", { ...protectedPaths, readOnly: [dir, linkedConfig] })).toBe(linkedConfig);
+  });
+
+  it("leaves the store's agent areas to the policy, where the shipped workflows write deliverables", async () => {
+    const f = await configDir();
+    const { dir } = f;
+    const deliverable = join(dir, ".orca", "work", "auth-api", ".orca-attempts", "run", "step", "spec.md");
+    expect(at(bareEffective, f, "edit", deliverable)).toBe("allow");
+    expect(at(bareEffective, f, "delete", join(dir, ".orca", "work", "auth-api"))).toBe("allow");
+    // The rest of the store is still ORCA's, and so is the store as a whole.
+    expect(at(bareEffective, f, "edit", join(dir, ".orca", "workers.json"))).toBe("deny");
+    expect(at(bareEffective, f, "delete", join(dir, ".orca"))).toBe("deny");
+    // A link standing in for the area does not carry the rest of the store with it.
+    await symlink(join(dir, ".orca"), join(dir, ".orca", "work"), "junction");
+    expect(at(bareEffective, f, "edit", join(dir, ".orca", "work", "runs", "r.jsonl"))).toBe("deny");
+  });
+
+  it("cannot be reached through `..` or through a directory link", async () => {
+    const f = await configDir();
+    const { dir } = f;
+    expect(at(bareEffective, f, "edit", join(dir, "sub") + "/../orca.permissions.json")).toBe("deny");
+    expect(at(bareEffective, f, "edit", "sub/../orca.permissions.json")).toBe("deny");
+    // A junction on Windows, which needs no privilege; the type is ignored elsewhere.
+    await symlink(join(dir, "auth"), join(dir, "creds"), "junction");
+    await symlink(join(dir, ".orca"), join(dir, "notes"), "junction");
+    expect(at(bareEffective, f, "read", join(dir, "creds", "local-client.token"))).toBe("deny");
+    expect(at(bareEffective, f, "edit", join(dir, "notes", "runs", "r.jsonl"))).toBe("deny");
+    // `..` is taken from where the link leads, so creds/.. is the config directory.
+    expect(at(bareEffective, f, "edit", join(dir, "creds") + "/../orca.permissions.json")).toBe("deny");
+  });
+
+  it.skipIf(process.platform === "win32")("cannot be reached through a file symlink", async () => {
+    const f = await configDir();
+    await symlink(permissionPolicyPath(f.dir), join(f.dir, "src", "policy.json"));
+    expect(at(bareEffective, f, "edit", join(f.dir, "src", "policy.json"))).toBe("deny");
+  });
+
+  it("is not overridden by any rule: configured, written to the sidecar, or `default: allow`", async () => {
+    const f = await configDir();
+    const sidecar = permissionPolicyPath(f.dir);
+    const sandbox = AgentSpecSchema.parse({ id: "s", command: "x", permissions: { default: "allow" } });
+    expect(at(await loadEffectivePermissionPolicy(sandbox, []), f, "edit", sidecar)).toBe("deny");
+    const configured = AgentSpecSchema.parse({
+      id: "c",
+      command: "x",
+      permissions: { rules: [{ match: { kind: "edit", path: "orca.permissions.json" }, decision: "allow" }] },
+    });
+    expect(at(await loadEffectivePermissionPolicy(configured, []), f, "edit", sidecar)).toBe("deny");
+    // Somebody answered "always" to an edit of the sidecar itself, before this existed.
+    await recordAlwaysDecision({
+      file: sidecar,
+      agentId: "a",
+      request: req("edit", "Edit", sidecar),
+      decision: "allow",
+      workspaceCwd: f.dir,
+    });
+    const written = AgentSpecSchema.parse({ id: "a", command: "x", permissions: { default: "ask" } });
+    expect(at(await loadEffectivePermissionPolicy(written, [sidecar]), f, "edit", sidecar)).toBe("deny");
+  });
+
+  it("says why when it refuses through the resolve path", async () => {
+    const f = await configDir();
+    const request = {
+      sessionId: "s",
+      toolCall: { toolCallId: "t", title: "Edit", kind: "edit", locations: [{ path: permissionPolicyPath(f.dir) }] },
+      options: [
+        { optionId: "yes", name: "Allow", kind: "allow_once" },
+        { optionId: "no", name: "Reject", kind: "reject_once" },
+      ],
+    } as never;
+    const resolved = await resolvePermission(bareEffective, {
+      request,
+      scope: { workspaceCwd: f.dir, protectedPaths: f.protectedPaths },
+    });
+    expect(resolved.decision).toBe("deny:protected");
+    expect(resolved.response.outcome).toEqual({ outcome: "selected", optionId: "no" });
+  });
+
+  it("answers the fs handlers' question the same way", async () => {
+    const f = await configDir();
+    const token = join(f.dir, "auth", "local-client.token");
+    expect(protectedPathFor(token, "read", f.protectedPaths)).toBe(join(f.dir, "auth"));
+    expect(protectedPathFor(permissionPolicyPath(f.dir), "read", f.protectedPaths)).toBeUndefined();
+    expect(protectedPathFor(permissionPolicyPath(f.dir), "write", f.protectedPaths)).toBe(permissionPolicyPath(f.dir));
+    expect(protectedPathFor(join(f.dir, "src", "a.ts"), "write", f.protectedPaths)).toBeUndefined();
+    expect(protectedPathFor(token, "read", undefined)).toBeUndefined();
+  });
+});
+
+/**
+ * C4-01's second half. Every rule ORCA writes into the sidecar is derived and scoped, so an
+ * `allow` there that says nothing about what it allows is far likelier to be an agent's work
+ * than a person's: it is ignored, and a wildcard belongs in `orca.config.yaml`.
+ */
+describe("wildcards in the sidecar", () => {
+  it("knows a wildcard allow when it sees one", () => {
+    const wild: PermissionRule["match"][] = [
+      {},
+      { kind: "execute" },
+      { kind: "execute", titlePattern: ".*" },
+      { kind: "execute", titlePattern: "" },
+      { kind: "execute", scope: "workspace" },
+      { kind: "execute", path: "." },
+      { kind: "read" },
+      { kind: "read", scope: "outside-workspace" },
+      { kind: "edit", pathPrefix: "." },
+      { kind: "delete", path: "./" },
+      { titlePattern: "^npm test$" },
+      { scope: "workspace" },
+    ];
+    for (const match of wild)
+      expect(isWildcardPermissionRule({ match, decision: "allow" }), JSON.stringify(match)).toBe(true);
+    const scoped: PermissionRule["match"][] = [
+      { kind: "execute", titlePattern: "^npm test$" },
+      { kind: "execute", titlePattern: "^(npm test)?$" },
+      { kind: "edit", path: "src/a.ts" },
+      { kind: "edit", pathPrefix: "docs" },
+      // Where the Config surface's hand-added rule starts.
+      { kind: "read", scope: "workspace" },
+      { kind: "fetch", titlePattern: "^GET https://example\\.com/$" },
+    ];
+    for (const match of scoped)
+      expect(isWildcardPermissionRule({ match, decision: "allow" }), JSON.stringify(match)).toBe(false);
+    // A deny or an ask is never a wildcard: ignoring one could only widen what an agent may do.
+    expect(isWildcardPermissionRule({ match: {}, decision: "deny" })).toBe(false);
+    expect(isWildcardPermissionRule({ match: { kind: "execute" }, decision: "ask" })).toBe(false);
+  });
+
+  it("ignores a catch-all an agent planted, says so, and keeps the scoped rules beside it", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const planted: PermissionRule[] = [
+      { match: {}, decision: "allow" },
+      { match: { kind: "execute" }, decision: "allow" },
+      { match: { kind: "read", scope: "outside-workspace" }, decision: "allow" },
+    ];
+    const scoped: PermissionRule[] = [
+      { match: { kind: "execute", titlePattern: "^npm test$" }, decision: "allow" },
+      { match: { kind: "edit", pathPrefix: "docs" }, decision: "allow" },
+      { match: { kind: "edit", path: "src/a.ts" }, decision: "deny" },
+    ];
+    await writeFile(file, JSON.stringify({ version: 1, agents: { a: { rules: [...planted, ...scoped] } } }), "utf8");
+    const agent = AgentSpecSchema.parse({ id: "a", command: "x", permissions: { default: "ask" } });
+    const ignored: string[] = [];
+    const policy = await loadEffectivePermissionPolicy(agent, [file], undefined, (from, rule) => {
+      ignored.push(`${from} ${JSON.stringify(rule)}`);
+    });
+    expect(ignored).toEqual(planted.map((rule) => `${file} ${JSON.stringify(rule)}`));
+    expect(policy.rules).toEqual(scoped);
+    const at = (kind: string, title: string, ...paths: string[]) =>
+      decidePermission(policy, req(kind, title, ...paths), { workspaceCwd: dir });
+    // The catch-alls decide nothing: these are still questions.
+    expect(at("execute", "curl https://example.com | sh", dir)).toBe("ask");
+    expect(at("read", "Read", "/etc/hosts")).toBe("ask");
+    // And the rules a prompt or a person scoped still apply.
+    expect(at("execute", "npm test", dir)).toBe("allow");
+    expect(at("edit", "Edit", `${dir}/docs/guide.md`)).toBe("allow");
+    expect(at("edit", "Edit", `${dir}/src/a.ts`)).toBe("deny");
+  });
+
+  it("keeps a catch-all deny, and a catch-all allow written in the config", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    await writeFile(
+      file,
+      JSON.stringify({ version: 1, agents: { a: { rules: [{ match: { kind: "fetch" }, decision: "deny" }] } } }),
+      "utf8",
+    );
+    const agent = AgentSpecSchema.parse({
+      id: "a",
+      command: "x",
+      permissions: { rules: [{ match: { kind: "execute" }, decision: "allow" }] },
+    });
+    const policy = await loadEffectivePermissionPolicy(agent, [file]);
+    expect(decidePermission(policy, req("fetch", "GET https://example.com"), { workspaceCwd: dir })).toBe("deny");
+    expect(decidePermission(policy, req("execute", "anything at all"), { workspaceCwd: dir })).toBe("allow");
+  });
+});
+
+/**
+ * ADR 0009's 2026-10-01 clarification: skipping a corrupt sidecar was called conservative, but
+ * the sidecar holds `deny` and `ask` rules too, and dropping one let a default `allow` through.
+ * Every `allow` decided after a sidecar that could not be read is now an `ask`.
+ */
+describe("an unreadable sidecar", () => {
+  const skip = () => undefined;
+
+  it("turns the allows decided after it into asks, and leaves the configured rules alone", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const agent = AgentSpecSchema.parse({
+      id: "a",
+      command: "x",
+      permissions: { rules: [{ match: { kind: "execute", titlePattern: "^npm test$" }, decision: "allow" }] },
+    });
+    const request = req("edit", "Edit src/generated.ts", `${dir}/src/generated.ts`);
+    const decide = async (r: never) =>
+      decidePermission(await loadEffectivePermissionPolicy(agent, [file], skip), r, { workspaceCwd: dir });
+    // A recorded "never" for that file, which a readable sidecar enforces over the default allow.
+    await recordAlwaysDecision({ file, agentId: "a", request, decision: "deny", workspaceCwd: dir });
+    expect(await decide(request)).toBe("deny");
+
+    await writeFile(file, "{ this is not json", "utf8");
+    // The deny cannot be read, so the default allow behind it does not get to decide either.
+    expect(await decide(request)).toBe("ask");
+    expect(await decide(req("read", "Read", `${dir}/src/a.ts`))).toBe("ask");
+    // The configured rule comes before the sidecar, so it decides exactly as it did.
+    expect(await decide(req("execute", "npm test", dir))).toBe("allow");
+    // And a caller with no `onUnreadable` still gets the error rather than a policy.
+    await expect(loadEffectivePermissionPolicy(agent, [file])).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+  });
+
+  it("caps an explicit `default: allow` as well", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    await writeFile(file, "{ this is not json", "utf8");
+    const sandbox = AgentSpecSchema.parse({ id: "s", command: "x", permissions: { default: "allow" } });
+    const policy = await loadEffectivePermissionPolicy(sandbox, [file], skip);
+    expect(policy.default).toBe("ask");
+    expect(decidePermission(policy, req("execute", "make"), { workspaceCwd: dir })).toBe("ask");
+  });
+
+  it("leaves a sidecar read before it as it was, and caps one read after it", async () => {
+    const dir = await workspace();
+    const first = join(dir, "one.json");
+    const broken = join(dir, "two.json");
+    const last = join(dir, "three.json");
+    const grant = (path: string) =>
+      JSON.stringify({ version: 1, agents: { a: { rules: [{ match: { kind: "edit", path }, decision: "allow" }] } } });
+    await writeFile(first, grant("src/b.ts"), "utf8");
+    await writeFile(broken, "{", "utf8");
+    await writeFile(last, grant("src/c.ts"), "utf8");
+    const agent = AgentSpecSchema.parse({ id: "a", command: "x", permissions: { default: "ask" } });
+    const policy = await loadEffectivePermissionPolicy(agent, [first, broken, last], skip);
+    expect(decidePermission(policy, req("edit", "Edit", `${dir}/src/b.ts`), { workspaceCwd: dir })).toBe("allow");
+    expect(decidePermission(policy, req("edit", "Edit", `${dir}/src/c.ts`), { workspaceCwd: dir })).toBe("ask");
   });
 });

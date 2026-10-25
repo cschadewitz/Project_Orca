@@ -187,10 +187,15 @@ Built by `RunContext.evalContext()` (`packages/engine/src/run-context.ts`):
 
 Visibility of artifacts is own run + all ancestors + all descendants + each
 ancestor's *earlier siblings* (children of the same container step that were
-spawned before it and had already finished when it was created), newest
-`version` per name — so a sub‑workflow sees its caller's spec, a caller sees what
-its loop body produced, and loop iteration N sees what iteration N‑1 produced.
-Concurrent `parallel` branches do not precede one another, so they stay isolated.
+spawned before it, had already finished when it was created, and are bound to the
+same work item as it, or like it to none), newest `version` per name — so a
+sub‑workflow sees its caller's spec, a caller sees what its loop body produced,
+and loop iteration N sees what iteration N‑1 produced. The children of a fan‑out
+step (`parallel`, `custom:plan-dispatch`) have no earlier siblings: a branch that
+started only after another finished (a `concurrency` limit, `dependsOn`, a later
+wave) still never sees that branch's artifacts, and neither counts the other's
+when versioning. In a plan, context from the items a work item depends on is
+`vars.upstream`.
 
 ## Config (`config.ts`)
 

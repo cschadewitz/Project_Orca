@@ -58,6 +58,7 @@ export function installFirstRunIPC(
   register("prepare", z.string().uuid(), (value, check) => setup.prepare(value as string, check));
   register("prepareRecovery", z.undefined(), (_value, check) => setup.prepareRecovery(check));
   register("reconcileRecovery", z.string().uuid(), (value, check) => setup.reconcileRecovery(value as string, check));
+  register("endPreviousSession", z.string().uuid(), (value, check) => setup.endPreviousSession(value as string, check));
   register("reviewConfiguration", z.undefined(), (_value, check) => setup.reviewConfiguration(check));
   register("bindConfiguration", z.string().uuid(), (value, check) => setup.bindConfiguration(value as string, check));
   register("connect", z.undefined(), (_value, check) => boundary.connect(check));

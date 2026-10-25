@@ -39,6 +39,11 @@ export interface Controls {
   answer: (input: OpenInputView, request: AnswerRequest) => void;
   cancel: (runId: string) => void;
   resume: (runId: string) => void;
+  /**
+   * Say why a write was not sent, against the object it was about, and send nothing — a
+   * palette row whose ask changed or went before it ran. Said where every other report is.
+   */
+  refuse: (subject: string, message: string) => void;
 }
 
 export interface ControlsOptions {
@@ -156,5 +161,7 @@ export function useControls({ onAnswered, withAnswer }: ControlsOptions): Contro
     [pending, run],
   );
 
-  return { pending, report, answer, cancel, resume };
+  const refuse = useCallback((subject: string, message: string) => setReport({ subject, failed: true, message }), []);
+
+  return { pending, report, answer, cancel, resume, refuse };
 }

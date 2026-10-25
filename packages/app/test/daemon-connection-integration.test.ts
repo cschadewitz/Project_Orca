@@ -33,6 +33,11 @@ const shell = vi.hoisted(() => ({
   replacementReleased: vi.fn(async () => {}),
   replacementClosed: vi.fn(async () => {}),
   quit: vi.fn(),
+  relaunch: vi.fn(),
+  packaged: false,
+  replacementResettable: false,
+  replacementReset: vi.fn(async () => true),
+  resetChoice: vi.fn(async () => ({ response: 0 })),
   recoveryMessage: vi.fn(),
   hasWindow: true,
   nativeEnabled: true,
@@ -111,7 +116,10 @@ vi.mock("electron", async () => {
       requestSingleInstanceLock: () => true,
       getVersion: () => "0.6.0",
       getName: () => "ORCA",
-      isPackaged: false,
+      get isPackaged() {
+        return shell.packaged;
+      },
+      relaunch: shell.relaunch,
       setAsDefaultProtocolClient: vi.fn(),
       setBadgeCount: shell.badge,
       // Test bootstrap explicitly; creating a real BrowserWindow is outside this IPC regression.
@@ -141,7 +149,11 @@ vi.mock("electron", async () => {
       },
     }),
     nativeTheme: { on: vi.fn() },
-    dialog: { showOpenDialog: shell.openDialog, showErrorBox: shell.recoveryMessage },
+    dialog: {
+      showOpenDialog: shell.openDialog,
+      showErrorBox: shell.recoveryMessage,
+      showMessageBox: shell.resetChoice,
+    },
     Menu: { buildFromTemplate: (template: unknown) => template, setApplicationMenu: vi.fn() },
     powerMonitor: powerEvents,
     Notification: class {
@@ -161,6 +173,10 @@ vi.mock("../src/main/mac-managed-replacement-startup.js", () => ({
     return {
       bootstrap: shell.replacementBootstrap,
       initialize: () => shell.replacementBootstrap!.inspect(),
+      get resettable() {
+        return shell.replacementResettable;
+      },
+      reset: shell.replacementReset,
       releasePausedAppWriter: shell.replacementReleased,
       close: shell.replacementClosed,
     };
@@ -203,6 +219,12 @@ beforeEach(() => {
   shell.replacementReleased.mockClear();
   shell.replacementClosed.mockClear();
   shell.quit.mockClear();
+  shell.relaunch.mockClear();
+  shell.packaged = false;
+  shell.replacementResettable = false;
+  shell.replacementReset.mockClear();
+  shell.resetChoice.mockReset();
+  shell.resetChoice.mockResolvedValue({ response: 0 });
   shell.recoveryMessage.mockClear();
   shell.hasWindow = true;
   shell.nativeEnabled = true;
@@ -221,7 +243,13 @@ it("mounts closed template commands and gates same-boot setup throughout an upda
   shell.userData = directory;
   const { FirstRunSetup } = await import("../src/main/first-run/setup.js");
   const { DaemonClient } = await import("../src/client/daemon-client.js");
-  const operations = ["prepareRecovery", "reconcileRecovery", "reviewConfiguration", "bindConfiguration"] as const;
+  const operations = [
+    "prepareRecovery",
+    "reconcileRecovery",
+    "endPreviousSession",
+    "reviewConfiguration",
+    "bindConfiguration",
+  ] as const;
   const calls = operations.map((method) =>
     vi.spyOn(FirstRunSetup.prototype, method).mockResolvedValue({ state: "selection-required", reason: "fixture" }),
   );
@@ -233,7 +261,7 @@ it("mounts closed template commands and gates same-boot setup throughout an upda
   const epoch = workspace.connectionTarget.epoch;
   const reserved = vi.spyOn(workspace, "macUpdateReserved", "get").mockReturnValue(true);
   const review = "11111111-1111-4111-8111-111111111111";
-  const inputs = [undefined, review, undefined, review];
+  const inputs = [undefined, review, review, undefined, review];
   for (const [index, method] of operations.entries()) {
     expect(await shell.handlers.get(`orca:workspace.firstRun.${method}`)!(event, inputs[index], epoch)).toMatchObject({
       ok: false,
@@ -797,6 +825,7 @@ it("native replacement bootstrap blocks protected main IPC before its journal in
   shell.userData = directory;
   shell.replacementBootstrap = { ordinaryAllowed: false, inspect: vi.fn(async () => ({ outcome: "unknown" })) };
   vi.stubGlobal("process", { ...process, platform: "darwin" });
+  shell.packaged = true;
   await import("../src/main/index.js");
   expect(shell.replacementMounted).toHaveBeenCalledOnce();
   expect(shell.replacementMounted).toHaveBeenCalledWith(
@@ -828,6 +857,7 @@ it("native replacement unknown startup paints recovery without normal diagnostic
   const inspect = vi.fn(async () => ({ outcome: "unknown" }));
   shell.replacementBootstrap = { ordinaryAllowed: false, inspect };
   vi.stubGlobal("process", { ...process, platform: "darwin" });
+  shell.packaged = true;
   const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
   const initialize = vi.spyOn(RecoveryController.prototype, "initialize");
   await import("../src/main/index.js");
@@ -840,11 +870,60 @@ it("native replacement unknown startup paints recovery without normal diagnostic
   expect(await readdir(directory)).toEqual([]);
 });
 
+it("unpackaged macOS Electron never constructs or waits on the native replacement bootstrap", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-unpackaged-mac-startup-"));
+  shell.userData = directory;
+  shell.startReady = true;
+  vi.stubGlobal("process", { ...process, platform: "darwin" });
+  const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
+  const { FirstRunSetup } = await import("../src/main/first-run/setup.js");
+  const { Workspace } = await import("../src/main/workspace.js");
+  vi.spyOn(FirstRunSetup.prototype, "status").mockResolvedValue({ state: "selection-required", reason: "fixture" });
+  vi.spyOn(Workspace.prototype, "connect").mockResolvedValue();
+  const record = vi.spyOn(RecoveryController.prototype, "record");
+  await import("../src/main/index.js");
+  await vi.waitFor(() => expect(record).toHaveBeenCalledWith("lifecycle", "app_started"));
+  expect(shell.replacementMounted).not.toHaveBeenCalled();
+  expect(shell.recoveryMessage).not.toHaveBeenCalled();
+  const sender = shell.webContents!;
+  const event = { sender, senderFrame: sender.mainFrame };
+  expect(await shell.handlers.get("orca:preferences.write")!(event, { theme: "dark" })).toMatchObject({ ok: true });
+});
+
+it.each([
+  ["keeps startup closed", 0],
+  ["resets and relaunches", 1],
+] as const)("a resettable recovery shell %s on the person's choice", async (_, response) => {
+  directory = await mkdtemp(join(tmpdir(), "orca-native-bootstrap-reset-"));
+  shell.userData = directory;
+  shell.startReady = true;
+  shell.replacementBootstrap = { ordinaryAllowed: false, inspect: vi.fn(async () => ({ outcome: "unknown" })) };
+  shell.replacementResettable = true;
+  shell.resetChoice.mockResolvedValue({ response });
+  vi.stubGlobal("process", { ...process, platform: "darwin" });
+  shell.packaged = true;
+  await import("../src/main/index.js");
+  await vi.waitFor(() => expect(shell.resetChoice).toHaveBeenCalledOnce());
+  expect(shell.resetChoice).toHaveBeenCalledWith(expect.objectContaining({ defaultId: 0, cancelId: 0 }));
+  if (response === 1) {
+    await vi.waitFor(() => expect(shell.quit).toHaveBeenCalledOnce());
+    expect(shell.replacementReset).toHaveBeenCalledOnce();
+    expect(shell.relaunch).toHaveBeenCalledOnce();
+  } else {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(shell.replacementReset).not.toHaveBeenCalled();
+    expect(shell.relaunch).not.toHaveBeenCalled();
+  }
+  expect(shell.recoveryMessage).not.toHaveBeenCalled();
+  expect(shell.stop).not.toHaveBeenCalled();
+});
+
 it("main pause refuses new writes and retains its app writer until a dispatched RPC settles", async () => {
   directory = await mkdtemp(join(tmpdir(), "orca-native-pause-ipc-"));
   shell.userData = directory;
   shell.replacementBootstrap = { ordinaryAllowed: true, inspect: vi.fn(async () => "ordinary") };
   vi.stubGlobal("process", { ...process, platform: "darwin" });
+  shell.packaged = true;
   const { DaemonClient } = await import("../src/client/daemon-client.js");
   const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
   vi.spyOn(RecoveryController.prototype, "cleanExit").mockResolvedValue();
@@ -877,6 +956,7 @@ it("durable admission closure retains completion only for the reserved live drai
     inspect: vi.fn(async () => "ordinary"),
   };
   vi.stubGlobal("process", { ...process, platform: "darwin" });
+  shell.packaged = true;
   const { DaemonClient } = await import("../src/client/daemon-client.js");
   const rpc = vi.spyOn(DaemonClient.prototype, "call").mockResolvedValue({});
   await import("../src/main/index.js");
@@ -902,6 +982,7 @@ it("quit retains app ownership until dispatch and background storage both settle
   shell.userData = directory;
   shell.replacementBootstrap = { ordinaryAllowed: true, inspect: vi.fn(async () => "ordinary") };
   vi.stubGlobal("process", { ...process, platform: "darwin" });
+  shell.packaged = true;
   const { DaemonClient } = await import("../src/client/daemon-client.js");
   const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
   let finish!: (value: unknown) => void, settled!: () => void;
@@ -933,6 +1014,7 @@ it("main pause tracks first-run receipt work before releasing its app writer", a
   shell.userData = directory;
   shell.replacementBootstrap = { ordinaryAllowed: true, inspect: vi.fn(async () => "ordinary") };
   vi.stubGlobal("process", { ...process, platform: "darwin" });
+  shell.packaged = true;
   const { FirstRunSetup } = await import("../src/main/first-run/setup.js");
   const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
   vi.spyOn(RecoveryController.prototype, "cleanExit").mockResolvedValue();
@@ -1020,6 +1102,7 @@ it.each(["quit", "updater pause"] as const)(
     shell.userData = directory;
     shell.startReady = true;
     vi.stubGlobal("process", { ...process, platform: stop === "quit" ? "win32" : "darwin" });
+    shell.packaged = true;
     if (stop === "updater pause")
       shell.replacementBootstrap = {
         ordinaryAllowed: true,

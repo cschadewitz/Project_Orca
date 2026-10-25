@@ -136,10 +136,11 @@ in the bottom-right corner, under a minimap. They add **no key**, and that is th
   **Show the minimap**, each named for what it will do — which is also the button's accessible
   name, rather than a fixed name with `aria-pressed`: the state is a direction, not an on and
   an off.
-- **The group sits outside the canvas's keyboard scope.** Inside it, `Enter` on a focused
-  button would be the canvas's `Enter` (and in the editor, `⌫` would delete the selected node),
-  because the map dispatches before the button's default. It is a named `group`, not a
-  `toolbar`: six ordinary tab stops after the canvas, with no roving arrows promised.
+- **The group sits outside the canvas's keyboard scope.** Inside it, a focused button would
+  still hear the canvas's other keys — in the editor, `⌫` would delete the selected node —
+  because the map dispatches before the button's default; only `Enter` on a focused control is
+  left to the control. It is a named `group`, not a `toolbar`: six ordinary tab stops after
+  the canvas, with no roving arrows promised.
 - **Every pointer gesture has a keyboard path.** ⌘/Ctrl with the wheel, or a trackpad pinch,
   zooms about the pointer, where `+` and `-` zoom about the middle of the canvas. A plain wheel,
   a drag of empty canvas and a click or a drag in the minimap all pan, which `⇧` with an arrow
@@ -238,7 +239,7 @@ changes, the check named beside it is the thing that has to change with it.
 | Resizing a pane | `renderer/test/pane-splitter.test.tsx` — the separator's role, range and arrow keys, the restore, and which boundaries the app offers at which width; `renderer/test/panes.test.ts` for the clamp. The real drag and the real cursor are `test/smoke/app-shell.spec.ts`, in an Electron window |
 | Screen readers and live regions | `a11y-sweep.test.tsx` — exactly one polite announcer across all surfaces, assertive cards, the output pane's `role="log"` with `aria-live="off"`; `renderer/test/announcements.test.ts` covers what the announcer says and, as much, what it stays silent about |
 | Reduced motion and preferences | The `prefers-reduced-motion` and `prefers-contrast: more` blocks in `components.css`. No automated check — see the gap below |
-| Everything, per surface | `AxeBuilder` over Attention, Runs and Agents in both themes in the smoke job, with the failing rule ids in the message |
+| Everything, per surface | `AxeBuilder` over every surface in `SURFACE_IDS` — Attention, Runs, Plan, Workflows, Agents and Config — in both themes in the smoke job, with the failing rule ids in the message |
 | The bundled faces | `test/smoke/type-proof.spec.ts` on Linux, macOS and Windows, against committed baselines |
 
 **What none of these prove.** The renderer tests run in happy-dom, which has no cascade, no

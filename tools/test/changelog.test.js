@@ -4,6 +4,7 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { deleteFragments, readFragments, renderEntries } from "../changelog.js";
 
@@ -49,6 +50,12 @@ describe("readFragments", () => {
     write("12-empty.added.md", "\n\n");
 
     expect(() => readFragments(dir)).toThrow(/empty fragment/);
+  });
+
+  it("reads every fragment committed to changelog.d", () => {
+    // The real directory, not a temporary one: `release.js notes` and `prepare` stop at the
+    // first misnamed fragment, and the milestone close that runs them is too late to find it.
+    expect(() => readFragments(fileURLToPath(new URL("../../changelog.d", import.meta.url)))).not.toThrow();
   });
 });
 

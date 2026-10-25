@@ -6,8 +6,8 @@ preparation. **It is not activated or accepted maintenance access.** No host ide
 service, tunnel, credential or permission is created. #483 remains open for reviewed
 service identities, real-host sources, activation and actual-client acceptance.
 
-The package depends only on the repository's already selected MCP server SDK **2.3.0**
-and Zod **4.6.5**, pinned exactly. It imports no ORCA daemon, store, engine, credentials,
+The package depends only on the repository's already selected MCP server SDK **2.3.1**
+and Zod **4.6.7**, pinned exactly. It imports no ORCA daemon, store, engine, credentials,
 configuration or work-route launcher. Its separate build is
 `pnpm --filter @orca/maintenance-mcp build`.
 There is no executable bin, start script, populated configuration or key example.

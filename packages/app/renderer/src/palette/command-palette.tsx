@@ -12,11 +12,12 @@
  * Two things a write action needs that a navigation row does not (#178):
  *
  * - **An inline confirmation.** A destructive row is *armed* by the first `Enter` and run by
- *   the second: the label becomes the command's `confirm` sentence and the row goes to the
- *   danger tone. Typing or moving the selection disarms it; `Esc` closes the palette, which
- *   unarms with it, because the armed row does not outlive the list it is in. There is
- *   no dialog, because a modal over this modal would move focus out of the query field and
- *   ask the question somewhere other than where the person is looking.
+ *   the second — a second press, never the first one's auto-repeat: the label becomes the
+ *   command's `confirm` sentence and the row goes to the danger tone. Typing or moving the
+ *   selection disarms it; `Esc` closes the palette, which unarms with it, because the armed
+ *   row does not outlive the list it is in. There is no dialog, because a modal over this
+ *   modal would move focus out of the query field and ask the question somewhere other than
+ *   where the person is looking.
  * - **A picker.** A command that needs an argument — which workflow, which option, which
  *   status — replaces the list with a `Menu` of the choices. It is the app's one popover
  *   primitive rather than a second list here, so the roving keys, the placement, `Esc` and
@@ -61,7 +62,8 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
 
   const commands = useMemo(
     // `open` is a dependency on purpose: the map is mutable, and opening is the moment to
-    // read it. Nothing registers or unregisters while the palette has focus.
+    // read it. A push can still re-register rows while the palette is open, so a row that
+    // acts on an object looks it up again when it runs (`useCardWrites` in Attention).
     () => (open ? commandEntries(keyboard.list(), keyboard.platform, scopes) : []),
     [keyboard, scopes, open],
   );
@@ -166,6 +168,11 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
       setActive(Math.max(walkable.length - 1, 0));
     } else if (event.key === "Enter") {
       event.preventDefault();
+      /* A held key's auto-repeat is not a second press. The first press armed the row so
+         that its confirmation would be read, and a key held past the repeat delay would
+         otherwise confirm it unread — and the row `Enter` lands on can be a danger row
+         (`filterEntries`). */
+      if (event.repeat && selected !== undefined && armed === selected.id) return;
       run(selected);
     }
   };

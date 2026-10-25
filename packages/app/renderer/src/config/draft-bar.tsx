@@ -128,7 +128,9 @@ export function DraftBar({
           Reload
         </Button>
       )}
-      <Button size="sm" tone="ghost" onClick={onDiscard}>
+      {/* Waits with the others while a write is out: the write cannot be called back, and a
+          Discard that hid the bar while it landed would be the bar saying something untrue. */}
+      <Button size="sm" tone="ghost" onClick={onDiscard} disabled={busy}>
         Discard
       </Button>
       <Button

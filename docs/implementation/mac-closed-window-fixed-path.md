@@ -47,9 +47,13 @@ secrets or production enablement have been added to manufacture that authority.
   alternate lock, PID adoption or stale-lock deletion exists. A fresh same-boot owner
   must capture every slot. A surviving child independently keeps recovery blocked.
 - Initial namespace provisioning is explicit and descriptor verified, separate from
-  opening a journal. `window.json` is flushed before root anchors; enrollment is
-  completed last. Lost control behind a surviving anchor, missing established journal,
-  missing completed anchors, changed roots and torn temporary records refuse.
+  opening a journal. Every record is written to a temporary name, flushed and renamed;
+  `window.json` is published before root anchors and enrollment is published last.
+  Until enrollment is published nothing can have used the window, so an interrupted
+  first provisioning is repeated. Lost control behind a surviving anchor, a missing
+  established journal, an unreadable published window and every phase but `open` refuse.
+  Changed identities and torn records of an open window that no attempt holds are
+  re-anchored at startup instead ([the Mac startup gate](#the-mac-startup-gate)).
   Darwin durable control writes require the packaged native `F_FULLFSYNC` adapter.
 - `MacUpdateApplication` optionally binds exact approval to that durable close. Defer
   can reopen only the original in-process untouched approval after preparation settles.
@@ -92,11 +96,70 @@ secrets or production enablement have been added to manufacture that authority.
   Copy/restore/reopen are unavailable while the child lives. Accepted verification plus
   an observed clean child exit and recapture of all slots can mark validated-closed.
 
+### The Mac startup gate
+
 `createManagedMacReplacementStartup` begins closed before producers. It combines the
 native journal with the enrolled app writer and checks durable admission for every new
 main dispatch. An established closed attempt produces a recovery shell. The former
 `userData/native-replacement` namespace is retained and refused: its encrypted AAD binds
 the original path, so silently moving or ignoring it would lose recovery authority.
+
+**Packaged apps only.** Main mounts the gate only when `app.isPackaged` on macOS. The
+updater only ever replaces a packaged app, and the `diagnostics_storage` addon with
+replacement storage that the gate needs is staged only into a packaged app's resources
+(`mac.extraResources`). Unpackaged Electron — `pnpm --filter @orca/app dev` and the macOS
+legs of `app-smoke.yml` — starts the way Linux and Windows do: no namespace, no gate, and
+no managed enrollment for the daemon it starts. Developers and CI need no staged addon.
+
+**Main provisions at the first launch.** On the first packaged launch, before any
+producer, the gate provisions `<userData>-native-replacement` (`journal/`, `window.json`,
+`enrolled.json`) and the `.orca-update-window.json` guard in userData, inspects the
+journal and takes the app's writer slot. Workspace, config and store roots are enrolled
+before their first producer (first-run setup, the managed daemon). Any of these opens
+the recovery shell for that launch, and the next launch tries again:
+
+- the packaged addon is missing, stale or lacks replacement storage;
+- userData is not on an internal APFS volume, or `diskutil`/`ioreg` exceed their 2 s bound;
+- another process holds one of the root's loopback writer slots (a running `orca` command
+  or daemon), or an unrelated listener holds one of their ports;
+- the updater journal cannot be read: the Keychain is unavailable or slower than 5 s.
+
+**Re-anchoring.** A directory's recorded identity is its path, device, inode and owner.
+Migration Assistant, a Time Machine restore, a renamed home folder or a moved or deleted
+workspace changes it, and a crash can tear provisioning or an enrollment. When the
+published `window.json` is `open` with no attempt and the journal holds no record,
+startup re-anchors instead of refusing (`reanchorUpdateWindow`):
+
+- It holds the control mutex and every slot of every old and new root identity, so no
+  participating writer anchored to an old identity survives the change.
+- userData's guard is rewritten, or recreated, for its current identity. A workspace root
+  whose directory is gone, whose guard was removed (writers there went unfenced) or which
+  another namespace now anchors is de-enrolled. One whose guard is this window's, or torn,
+  is re-anchored.
+- Temporary records are discarded: `ClosedUpdateWindow` never acts on a state it failed
+  to publish, so the published `window.json` is the only authority on an attempt.
+- `window.json`, the guards and finally `enrolled.json` are republished with the current
+  control identity. The window id is kept.
+
+A workspace moved elsewhere keeps its guard and refuses participating writers, the
+`orca` CLI included, until it is enrolled again. Opening it in the app does that: the
+managed daemon's enrollment replaces a guard that names this window or this control path.
+
+Re-anchoring refuses, and the recovery shell stays, for any phase but `open` or a
+recorded attempt; a journal record (its AAD binds the original journal path, and it may
+be an attempt); the former `userData/native-replacement` namespace; userData anchored by
+another namespace; a copy of the namespace whose original control path still exists; and
+a busy slot.
+
+**A confirmed reset.** When the published window is unreadable, or gone behind a
+surviving userData guard (the control folder was deleted, or userData was restored
+without it), and the journal holds no record, nothing can be re-anchored and nothing
+proves an attempt is not in flight. The recovery shell then offers **Reset and restart**,
+with **Keep** as the default. A confirmed reset holds the slots, removes userData's guard
+and the control's window and enrollment records, keeps the journal, pairs and workspace
+guards, and relaunches; that launch provisions as on a first launch. A previously
+enrolled workspace keeps a guard naming this control path, which is replaced when it is
+enrolled again. A readable window, and so any recorded attempt, is never offered a reset.
 
 ## Integration-owner handoff
 

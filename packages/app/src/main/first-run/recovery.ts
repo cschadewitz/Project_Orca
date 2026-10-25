@@ -12,9 +12,13 @@ import {
 import {
   absent,
   directory,
+  FirstRunOwnershipRefusal,
   hash,
   inspectFirstRunOwnership,
   read,
+  REBOOT_SETTLEMENT,
+  rebootEvidenceHash,
+  rebootSettlementSchema,
   recoveryEvidenceHash,
   recoveryRequestSchema,
   sameDirectory,
@@ -123,6 +127,105 @@ export class FirstRunRecovery {
     } finally {
       await new Promise<void>((resolve) => fence.close(() => resolve()));
     }
+  }
+}
+
+const PREVIOUS_SESSION_REFUSAL =
+  "The previous session was not marked ended. A live process may still hold this workspace's startup fence, or its ownership evidence changed after it was shown. Nothing was changed. Close other app windows and daemons for this workspace, read setup again, then retry.";
+
+/** The latest attempt when it is unsettled and was claimed on an earlier boot of this host. Same-boot recovery
+ * cannot settle it, because its fence and writer belonged to that boot. Reading this never settles anything. */
+export function previousBootAttempt(path: string) {
+  const snapshot = inspectFirstRunOwnership(path, true);
+  const latest = snapshot.latest;
+  if (!latest || latest.settled) return undefined;
+  const claim = JSON.parse(latest.texts["claim.json"]!) as { version: number; boot?: unknown; store?: unknown };
+  // A legacy claim recorded no boot, so nothing shows it predates this one.
+  if (claim.version !== 2) return undefined;
+  const recorded = FenceBootSchema.parse(claim.boot);
+  const boot = fenceBoot();
+  if (recorded.hostHash !== boot.hostHash || recorded.bootId === boot.bootId) return undefined;
+  return { snapshot, latest, claim: { store: claim.store }, boot };
+}
+
+/** A person's explicit confirmation, after a restart, that the previous session ended (owner decision 2026-10-14).
+ * Never automatic and never a restart prerequisite. Under the same kernel fence as same-boot recovery it rechecks
+ * that the attempt is still unsettled and from an earlier boot, that nothing holds the fence, and the same store
+ * evidence, then appends the settlement. Any failed check refuses and writes nothing. */
+export async function endPreviousBootSession(path: string, reservationId: string, assertCurrent: () => void) {
+  const refused = (cause?: unknown): never => {
+    throw new FirstRunOwnershipRefusal(cause, PREVIOUS_SESSION_REFUSAL);
+  };
+  let found;
+  try {
+    found = previousBootAttempt(path);
+  } catch (error) {
+    return refused(error);
+  }
+  if (!found || found.latest.reservationId !== reservationId) return refused();
+  const { snapshot, latest, claim, boot } = found;
+  const writer = latest.texts["writer.json"] ? WriterSchema.parse(JSON.parse(latest.texts["writer.json"])) : undefined;
+  // The store rules of same-boot recovery: the attested writer's store, or the claim's store with no child.
+  const store = () => {
+    const current = absent(join(path, ".orca")) ? null : directory(join(path, ".orca"), snapshot.workspace);
+    if (
+      writer
+        ? !current || !sameDirectory(writer.store, current)
+        : JSON.stringify(current) !== JSON.stringify(claim.store) || !!latest.texts["child.json"]
+    )
+      return refused();
+    return current;
+  };
+  try {
+    assertFenceVolume(path);
+    store();
+  } catch (error) {
+    return refused(error);
+  }
+  let fence;
+  try {
+    fence = await acquireFirstRunFence(snapshot.workspace, () => undefined);
+  } catch (error) {
+    // Something live on this boot holds it. Never adopt, probe or signal it.
+    return refused(error);
+  }
+  try {
+    assertCurrent();
+    let current;
+    try {
+      current = store();
+      if (
+        JSON.stringify(inspectFirstRunOwnership(path, true)) !== JSON.stringify(snapshot) ||
+        JSON.stringify(fenceBoot()) !== JSON.stringify(boot)
+      )
+        return refused();
+    } catch (error) {
+      return refused(error);
+    }
+    assertCurrent();
+    write(
+      join(latest.attempt.path, REBOOT_SETTLEMENT),
+      JSON.stringify(
+        rebootSettlementSchema.parse({
+          version: 1,
+          reservationId: latest.reservationId,
+          claimHash: hash(latest.texts["claim.json"]!),
+          anchorHash: hash(snapshot.anchorText),
+          evidenceHash: rebootEvidenceHash(latest.texts),
+          configHash: snapshot.effectiveHash,
+          store: current,
+          boot,
+          reason: "person-confirmed-after-reboot",
+          observation: "fence-free-after-reboot",
+          actor: { kind: "person", surface: "desktop-app", uid: snapshot.workspace.uid },
+        }),
+      ) + "\n",
+      latest.attempt,
+    );
+    inspectFirstRunOwnership(path);
+    return { state: "ended" as const, reservationId };
+  } finally {
+    await new Promise<void>((resolve) => fence.close(() => resolve()));
   }
 }
 

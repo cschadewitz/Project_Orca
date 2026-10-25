@@ -1,13 +1,19 @@
 // @vitest-environment happy-dom
 /** Directory review controls and safe refusal handling, with no automatic setup, provider or launch. */
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FirstRunBridge, FirstRunStatus } from "../../src/first-run-contract.js";
 import { FIRST_RUN_SAMPLE } from "../../src/first-run-sample.js";
 import { FirstRunSection } from "../src/first-run/first-run-section.js";
+import { useEscapeClosesTopLayer } from "../src/layers-context.js";
 import { fakeBridge } from "./fake-bridge.js";
 import { harness } from "./harness.js";
 const teardown: (() => void)[] = [];
+/** The one global `Esc`, which the chrome registers in the app and a section test must add. */
+function Escape(): null {
+  useEscapeClosesTopLayer();
+  return null;
+}
 afterEach(() => {
   cleanup();
   while (teardown.length) teardown.pop()?.();
@@ -44,6 +50,7 @@ function setup(overrides: Partial<FirstRunBridge> = {}) {
   teardown.push(h.dispose);
   render(
     <h.Providers>
+      <Escape />
       <FirstRunSection />
     </h.Providers>,
   );
@@ -177,4 +184,78 @@ it("shows fixed recovery instructions while withholding arbitrary native error t
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
   expect(screen.getByText(/Review same-boot recovery, then reconcile when the owned writer has exited/)).toBeTruthy();
   expect(screen.queryByText(/private secret needle/)).toBeNull();
+});
+
+describe("marking the previous session ended after a restart", () => {
+  const attemptId = "33333333-3333-4333-8333-333333333333";
+  const prepared: FirstRunStatus = {
+    state: "prepared",
+    project: "/Sample α",
+    workspace: "/App β",
+    sample: FIRST_RUN_SAMPLE,
+  };
+  const previousBoot = (endPreviousSession: NonNullable<FirstRunBridge["endPreviousSession"]>) =>
+    setup({
+      status: async () => ({
+        ok: true,
+        result: { state: "recovery", recovery: { state: "previous-boot", attemptId } },
+      }),
+      endPreviousSession,
+    });
+  const key = (name: string) => fireEvent.keyDown(document.activeElement ?? window, { key: name, code: name });
+  const trigger = () => screen.getByRole("button", { name: "Mark previous session ended" });
+  const arm = async () => {
+    act(() => trigger().focus());
+    await act(async () => fireEvent.click(trigger()));
+    return within(screen.getByRole("group", { name: "Mark the previous session ended?" }));
+  };
+
+  it("asks on its own row, Keep first and focused, and sends nothing until Confirm", async () => {
+    const endPreviousSession = vi.fn(async () => ({ ok: true as const, result: prepared }));
+    const f = previousBoot(endPreviousSession);
+    await screen.findByText("The last session ended without closing cleanly, before this computer restarted.");
+    // The same-boot actions do not apply to it.
+    expect(screen.queryByRole("button", { name: "Reconcile same-boot ownership" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review same-boot recovery" })).toBeNull();
+    const group = await arm();
+    const [keep, confirm] = group.getAllByRole("button");
+    expect(keep!.textContent).toBe("Keep");
+    expect(document.activeElement).toBe(keep);
+    expect(confirm!.textContent).toBe("✕ Confirm previous session ended");
+    expect(confirm!.className).toContain("orca-btn--danger");
+    expect(screen.getByText(/This cannot be undone/)).toBeTruthy();
+    expect(f.h.layers.top()?.name).toBe("previous-session-confirm");
+    key("Escape");
+    expect(f.h.layers.depth).toBe(0);
+    expect(document.activeElement).toBe(trigger());
+    await act(async () => fireEvent.click((await arm()).getByRole("button", { name: "Keep" })));
+    expect(document.activeElement).toBe(trigger());
+    expect(screen.queryByRole("group", { name: "Mark the previous session ended?" })).toBeNull();
+    expect(endPreviousSession).not.toHaveBeenCalled();
+    await act(async () =>
+      fireEvent.click((await arm()).getByRole("button", { name: "Confirm previous session ended" })),
+    );
+    expect(endPreviousSession).toHaveBeenCalledExactlyOnceWith(attemptId);
+    expect(screen.getByText(/Previous session marked ended/)).toBeTruthy();
+    // The row left with focus in it: focus goes to the setup region, never the page body.
+    expect(document.activeElement).toBe(screen.getByRole("region", { name: "First-run project setup" }));
+    expect(screen.getByRole("button", { name: "Connect selected local workspace" })).toBeTruthy();
+    expect(f.firstRun.connect).not.toHaveBeenCalled();
+  });
+
+  it("keeps the question after a refusal and shows fixed text, never the native message", async () => {
+    const endPreviousSession = vi.fn(async () => ({
+      ok: false as const,
+      error: { code: "AGENT_TRANSPORT" as const, message: "private path/secret needle" },
+    }));
+    previousBoot(endPreviousSession);
+    await screen.findByRole("button", { name: "Mark previous session ended" });
+    await act(async () =>
+      fireEvent.click((await arm()).getByRole("button", { name: "Confirm previous session ended" })),
+    );
+    expect(endPreviousSession).toHaveBeenCalledOnce();
+    expect(screen.getByText(/The previous session was not marked ended/)).toBeTruthy();
+    expect(screen.queryByText(/secret needle/)).toBeNull();
+    expect(document.activeElement).toBe(trigger());
+  });
 });

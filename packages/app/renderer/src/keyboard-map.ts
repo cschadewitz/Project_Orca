@@ -234,6 +234,40 @@ export function isTextEntry(element: Element | null): boolean {
 const dispatchesInTextEntry = (key: string): boolean =>
   key.includes("Mod+") || key.includes("Alt+") || key === "Escape";
 
+/** The input types a key presses, as a button is pressed, rather than types into. */
+const PRESSED_INPUTS = ["button", "checkbox", "radio", "reset", "submit", "image", "color", "file"];
+
+/**
+ * Whether `element` is a native control a key activates itself: a button, a link, a
+ * disclosure's summary, a checkbox. On one of those `Enter` is the control's and the map
+ * stays out of the way — scope resolution would otherwise hand the press to whatever the
+ * surrounding scope binds `Enter` to, `preventDefault` it, and the control a person had
+ * tabbed to would never activate. On an Attention card that turned **Deny** and **Always
+ * deny** into the card's own `Enter` — answer with the selected option, which is **Allow
+ * once**.
+ *
+ * A list, a tree or a canvas is not one of these: it is a single tab stop whose rows are
+ * named by `aria-activedescendant`, so `Enter` there is the scope's and still dispatches. Nor
+ * is a `menuitem`, though `Menu` draws each as a `<button>`: its keys are its menu's, and the
+ * `menu` scope's own `Enter` is that same click, through the one path every menu key takes.
+ */
+export function activatesItself(element: Element | null): boolean {
+  if (!element || element.getAttribute("role")?.startsWith("menuitem")) return false;
+  const tag = element.tagName;
+  if (tag === "BUTTON" || tag === "SUMMARY") return true;
+  if (tag === "A") return element.hasAttribute("href");
+  if (tag !== "INPUT") return false;
+  return PRESSED_INPUTS.includes((element.getAttribute("type") ?? "text").toLowerCase());
+}
+
+/**
+ * `Enter`, and `⇧Enter`, which a platform still presses a button on — on a card it would
+ * otherwise be "answer with a note", with the selected option. `Space` needs no entry: the
+ * notation cannot register it (`normalizeKey` trims it to no key), so it always reaches the
+ * control.
+ */
+const activates = (key: string): boolean => key === "Enter" || key === "Shift+Enter";
+
 const MODIFIERS = ["Mod", "Shift", "Alt"] as const;
 
 /** `mod+shift+l` → `Mod+Shift+L`; the same shortcut always produces the same string. */
@@ -336,6 +370,8 @@ export class KeyboardMap {
     if (!key) return false;
     const target = asElement(event.target);
     if (isTextEntry(target) && !dispatchesInTextEntry(key)) return false;
+    // Not handled, and so not prevented: the platform presses the control (`activatesItself`).
+    if (activates(key) && activatesItself(target)) return false;
     for (const scope of scopes ?? scopesFrom(target)) {
       const shortcut = this.shortcuts.get(`${scope}:${key}`);
       if (shortcut) {

@@ -13,7 +13,10 @@ export interface FirstRunReview {
 export type FirstRunStatus =
   | {
       state: "recovery";
-      recovery: { state: "ready" | "surviving-owned-daemon" | "unknown-writer" | "reconciled"; requestId: string };
+      recovery:
+        | { state: "ready" | "surviving-owned-daemon" | "unknown-writer" | "reconciled"; requestId: string }
+        /** The last session ended uncleanly before this computer restarted; only the person can mark it ended. */
+        | { state: "previous-boot"; attemptId: string };
     }
   | {
       state: "configuration-review";
@@ -33,6 +36,7 @@ export interface FirstRunBridge {
   prepare(id: string): Promise<BridgeResult<FirstRunStatus>>;
   prepareRecovery?(): Promise<BridgeResult<FirstRunStatus>>;
   reconcileRecovery?(id: string): Promise<BridgeResult<FirstRunStatus>>;
+  endPreviousSession?(attemptId: string): Promise<BridgeResult<FirstRunStatus>>;
   reviewConfiguration?(): Promise<BridgeResult<FirstRunStatus>>;
   bindConfiguration?(id: string): Promise<BridgeResult<FirstRunStatus>>;
   connect(): Promise<BridgeResult<FirstRunStatus>>;

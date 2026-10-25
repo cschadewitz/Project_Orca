@@ -117,6 +117,7 @@ const bridge: OrcaBridge = {
     connect: () => call("orca:workspace.firstRun.connect"),
     prepareRecovery: () => call("orca:workspace.firstRun.prepareRecovery"),
     reconcileRecovery: (id) => call("orca:workspace.firstRun.reconcileRecovery", id),
+    endPreviousSession: (id) => call("orca:workspace.firstRun.endPreviousSession", id),
     reviewConfiguration: () => call("orca:workspace.firstRun.reviewConfiguration"),
     bindConfiguration: (id) => call("orca:workspace.firstRun.bindConfiguration", id),
   },
