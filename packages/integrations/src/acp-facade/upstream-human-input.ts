@@ -4,6 +4,7 @@
  * any other ACP host. ACP only has `session/request_permission`, so decision
  * options are mapped onto permission options: the first option is presented
  * as "allow", the rest as "reject" variants, all carrying their real labels.
+ * Permission asks instead require the exact original ACP kinds supplied in-process.
  *
  * Targets are bound per run, not globally: every ACP prompt binds the run it
  * started to its own session, and a question is routed by the `runId` it
@@ -68,18 +69,23 @@ export class UpstreamHumanInput implements HumanInputPort {
     // Live decisions use the authenticated owner-local answer path. An upstream
     // ACP option alone supplies neither current principal nor invocation identity.
     if (q.live) return this.fallback?.ask(q);
+    // Permission semantics come only from the original callback, never from position,
+    // labels, destructive hints or context. Refuse malformed metadata without making
+    // up choices or falling through to an answerer that could choose one.
+    const permissionOptions = q.kind === "permission" ? originalPermissionOptions(q) : undefined;
+    if (q.kind === "permission" && (!permissionOptions || q.signal?.aborted)) return undefined;
     const t = await this.targetFor(q.runId);
     if (!t) return this.fallback?.ask(q);
     // `optionId` carries our option's id, so `res.outcome.optionId` comes straight back
     // as the recorded answer; the consequence clause, when there is one, rides along in
     // the name because ACP has nowhere else to put it.
-    const options: acp.PermissionOption[] = (q.options.length ? q.options : [{ id: "ok", label: "ok" }]).map(
-      (o, i) => ({
+    const options: acp.PermissionOption[] =
+      permissionOptions ??
+      (q.options.length ? q.options : [{ id: "ok", label: "ok" }]).map((o, i) => ({
         optionId: o.id,
         name: o.consequence ? `${o.label} - ${o.consequence}` : o.label,
         kind: i === 0 ? "allow_once" : "reject_once",
-      }),
-    );
+      }));
     const toolCall: acp.ToolCallUpdate = {
       toolCallId: q.requestId,
       title: `[orca ${q.kind}] ${q.question}`,
@@ -99,7 +105,9 @@ export class UpstreamHumanInput implements HumanInputPort {
     }
     if (q.signal?.aborted || (await this.targetFor(q.runId)) !== t) return this.disconnected(q);
     const outcome = res.outcome;
-    return outcome.outcome === "selected" ? outcome.optionId : undefined;
+    if (outcome.outcome !== "selected") return undefined;
+    if (q.kind === "permission" && !options.some((o) => o.optionId === outcome.optionId)) return undefined;
+    return outcome.optionId;
   }
 
   recordsAnswer(q: HumanInputQuery): boolean {
@@ -111,4 +119,24 @@ export class UpstreamHumanInput implements HumanInputPort {
     if (this.fallback) return this.fallback.ask(q);
     return Promise.resolve(undefined);
   }
+}
+
+/** Validate a complete, unambiguous source pairing before advertising any permission. */
+function originalPermissionOptions(q: HumanInputQuery): acp.PermissionOption[] | undefined {
+  const source = q.permissionOptions;
+  if (!Array.isArray(source) || source.length === 0 || source.length !== q.options.length) return undefined;
+  const ids = new Set<string>();
+  for (const [i, option] of q.options.entries()) {
+    const original = source[i];
+    if (
+      !original ||
+      original.optionId !== option.id ||
+      !option.id ||
+      ids.has(option.id) ||
+      !["allow_once", "allow_always", "reject_once", "reject_always"].includes(original.kind)
+    )
+      return undefined;
+    ids.add(option.id);
+  }
+  return q.options.map((o, i) => ({ optionId: o.id, name: o.label, kind: source[i]!.kind }));
 }

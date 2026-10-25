@@ -1977,9 +1977,11 @@ export class Orchestrator {
             // a card never selects first and an "always deny" has to answer with.
             options: offered.map((o) => ({
               id: o.optionId,
-              label: o.name || o.optionId,
+              label: live ? o.name || o.optionId : o.name,
               ...(o.kind === "reject_once" || o.kind === "reject_always" ? { destructive: true } : {}),
             })),
+            // Carry source semantics separately from the persisted gate presentation.
+            permissionOptions: offered.map((o) => ({ optionId: o.optionId, kind: o.kind })),
             // Whose turn is being held open (#248). It is recorded here because here is
             // where it is known: an attention card has to name the agent, and the push that
             // opens the card is a pure function of the event it comes from.
