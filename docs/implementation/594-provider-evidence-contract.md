@@ -1,5 +1,10 @@
 # #594 provider evidence and callback binding proposal
 
+Follow-on: the approved development direction is now specified by the
+[draft v1 offline reference and upstream handoff](594-command-evidence-v1.md).
+It preserves this dated audit and does not establish a supported installed pair
+or enable the positive live handoff.
+
 Investigated 25 October 2026 from ORCA main
 `0f45181c52dfc4bf1edd0e4469ff688dedef9189`. This is a source-backed decision
 proposal and offline loss witness, not an approved provider contract or runtime
