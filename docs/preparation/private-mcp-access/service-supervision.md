@@ -62,11 +62,16 @@ This preparation has synthetic tests only. It does not establish a working user 
 
 ## Who authorizes and who revokes each layer
 
-As deployed on agent-01 since 13 October 2026, every layer has one owner, Casey, and one
-way to cut it off. The [#391 ledger](https://github.com/cschadewitz/Project_Orca/issues/391#issuecomment-6149960966)
+For the dedicated single-owner setup recorded on 13 October 2026, Casey controls the
+administrative cutoffs below. The [#391 ledger](https://github.com/cschadewitz/Project_Orca/issues/391#issuecomment-6149960966)
 records the observed organization, tunnel, workspace and principal; the
 [#392 host record](https://github.com/cschadewitz/Project_Orca/issues/392#issuecomment-6138313527)
-records the installed build. Revoking any one layer stops Cal; none of them deletes ORCA work.
+records the installed build. These are administrative ways to withdraw access, not evidence
+that every cutoff immediately fences existing sessions or in-flight responses. The
+[#393 actual-Cal results](https://github.com/cschadewitz/Project_Orca/issues/393#issuecomment-6149584344)
+record successful single-owner operations and bounded daemon-unavailable/restart behavior;
+they do not establish live revocation. An access cutoff does not itself delete retained
+ORCA work or cancel an already admitted run.
 
 | Layer | What it grants | Who authorizes it | How to revoke or stop it |
 | --- | --- | --- | --- |
@@ -74,9 +79,11 @@ records the installed build. Revoking any one layer stops Cal; none of them dele
 | Tunnel | The private route between ChatGPT and agent-01, for its associated organization and ChatGPT workspace | The organization Owner | Delete the tunnel in the Platform tunnel settings. |
 | Tunnel runtime key | Transport for this one tunnel; it expires, so check its date in the Platform API keys list | The organization Owner, as a restricted project key | Revoke it in the Platform API keys list; stop `orca-tunnel.service` on the host. |
 | ChatGPT connector | Which conversations can call the ORCA tools | The ChatGPT workspace owner | Disconnect or remove the connector in ChatGPT's app/connector settings. |
-| ORCA credential | The service principal's operations and resources on the daemon | The host owner, with `orca auth issue` | `orca auth revoke <id>`: the next request is refused and open sockets close. `orca auth rotate <id>` replaces the secret. `orca auth list` shows expiry. |
+| ORCA credential | The service principal's operations and resources on the daemon | The host owner, with `orca auth issue` | `orca auth revoke <id>`: daemon source tests cover refusal of revoked credentials and closure of authenticated WebSockets; actual-connector live/in-flight revocation remains unverified in #598. `orca auth rotate <id>` replaces the secret. `orca auth list` shows expiry. |
 | Daemon and host | The loopback service, its store and the private profile files | The host owner | Stop the tunnel first, then `systemctl --user stop orca-daemon.service`. |
 
-Adding any other person, group, service account or shared connector changes this table, and
-needs the narrow-reader and live-revocation acceptance in
-[#598](https://github.com/cschadewitz/Project_Orca/issues/598) first.
+Actual-connector restricted-reader isolation and revocation across old/new connections and
+bounded in-flight reads/publication remain open and deferred in
+[#598](https://github.com/cschadewitz/Project_Orca/issues/598). A refused fresh request alone
+does not establish session or in-flight fencing. Adding any other person, group, service
+account or shared connector changes this table and requires that acceptance first.

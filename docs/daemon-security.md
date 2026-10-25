@@ -481,7 +481,7 @@ actors are excluded. Admission/continuation lookup reads are not mutation-audite
 
 On main `0c75d01eb0cab389ad1cbff5d1fb9a60bfe64362`, `orca serve`
 bootstraps token authentication, the CLI exposes `auth issue|list|rotate|revoke`,
-the desktop daemon client supplies its credential and `orca mcp` requires its own. The legacy
+the desktop daemon client supplies its credential and `orca mcp` requires an explicit credential. The legacy
 `--unauthenticated-loopback` mode is explicit and loopback-only. Authenticated
 operator methods are conditionally mounted with their production sources and
 audited through the same daemon boundary. The former #328 branch handoff and
@@ -507,7 +507,11 @@ acceptance and the compiled-build smoke test on Node 24. CI does not prove a
 deployed runtime or an actual client's behavior; the private agent-01 deployment
 and actual-Cal acceptance are recorded on
 [#392](https://github.com/cschadewitz/Project_Orca/issues/392) and
-[#393](https://github.com/cschadewitz/Project_Orca/issues/393).
+[#393](https://github.com/cschadewitz/Project_Orca/issues/393), within the dedicated
+single-owner setup. Actual-connector restricted-reader isolation and live/in-flight
+revocation remain open and deferred in
+[#598](https://github.com/cschadewitz/Project_Orca/issues/598); source tests and successful
+broad-principal calls do not establish those acceptance boundaries.
 
 Workflow drafts (#180) are in the operation inventory above as configuration reads
 and writes. Per-principal draft ownership and its security acceptance belong to
