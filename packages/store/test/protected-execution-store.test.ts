@@ -205,6 +205,7 @@ describe("authenticated private storage", () => {
       "id: legacy\nname: Legacy\nversion: '1'\nstart: e\nnodes: { e: { type: end } }\nedges: []",
     );
     await mkdir(join(directory, "workflows"), { mode: 0o755 });
+    const originalMode = (await stat(join(directory, "workflows"))).mode & 0o777;
     await writeFile(join(directory, "workflows", "legacy@v1.json"), JSON.stringify(legacy), { mode: 0o644 });
     const store = new FileWorkflowVersionStore(directory);
     expect(await store.get("legacy", "1")).toEqual(legacy);
@@ -213,6 +214,7 @@ describe("authenticated private storage", () => {
     expect(await store.versions("legacy")).toEqual(["1", "2"]);
     expect(await readFile(join(directory, "private-workflows", "legacy@v2.json"), "utf8")).not.toContain(SECRET);
     expect(await new FileWorkflowVersionStore(directory).get("legacy", "2")).toEqual(next);
-    if (process.platform !== "win32") expect((await stat(join(directory, "workflows"))).mode & 0o777).toBe(0o755);
+    if (process.platform !== "win32")
+      expect((await stat(join(directory, "workflows"))).mode & 0o777).toBe(originalMode);
   });
 });
