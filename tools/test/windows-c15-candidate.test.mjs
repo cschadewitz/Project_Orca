@@ -5,7 +5,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
-import { launchCli, validateLifecycle } from "../windows-c15/cli-lifecycle.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { preload, launchCli, validateLifecycle } from "../windows-c15/cli-lifecycle.mjs";
 import { createRequire } from "node:module";
 import {
   specification,
@@ -332,6 +333,59 @@ if (process.env.C15_SOURCE) {
   });
 }
 
+test("launch arguments use a file URL while native receipt and hash paths retain identity", async () => {
+  const f = fixture();
+  try {
+    const work = launchCli(
+      (command, args, options) => {
+        assert.equal(args[0], "--import");
+        assert.ok(args[1].startsWith("file:"), "Node --import requires an ESM file URL on Windows");
+        assert.equal(fileURLToPath(args[1]), preload);
+        assert.equal(
+          sha(regular(fileURLToPath(args[1]))),
+          specification.harness["tools/windows-c15/cli-lifecycle-preload.mjs"],
+        );
+        assert.equal(args[2], f.entry);
+        const binding = JSON.parse(options.env.C15_CLI_LIFECYCLE);
+        assert.equal(binding.entry, f.entry);
+        assert.equal(binding.cwd, f.root);
+        return spawn(command, args, options);
+      },
+      process.execPath,
+      [f.entry, path.join(f.root, "url-ticks")],
+      { cwd: f.root, env: { ...process.env } },
+    );
+    await work.completed;
+    const special = path.join(f.root, "space # % 日本語");
+    fs.mkdirSync(special);
+    for (const name of ["cli-lifecycle.mjs", "cli-lifecycle-preload.mjs", "manifest.mjs", "candidate.json"])
+      fs.copyFileSync(path.join(harness, "tools/windows-c15", name), path.join(special, name));
+    const relocated = await import(pathToFileURL(path.join(special, "cli-lifecycle.mjs")).href);
+    const relocatedWork = relocated.launchCli(
+      (command, args, options) => {
+        assert.equal(fileURLToPath(args[1]), path.join(special, "cli-lifecycle-preload.mjs"));
+        return spawn(command, args, options);
+      },
+      process.execPath,
+      [f.entry, path.join(f.root, "special-ticks")],
+      { cwd: f.root, env: { ...process.env } },
+    );
+    await relocatedWork.completed;
+    for (const [native, windows] of [
+      [String.raw`C:\runner path\#hash%percent\日本語\preload.mjs`, true],
+      [String.raw`\\server\share\space # %\preload.mjs`, true],
+      ["/tmp/space # %/日本語/preload.mjs", false],
+    ]) {
+      const url = pathToFileURL(native, { windows });
+      assert.equal(url.protocol, "file:");
+      assert.equal(fileURLToPath(url, { windows }), native);
+      assert.ok(!url.href.includes(" ") && !url.hash);
+    }
+  } finally {
+    await cleanupFixture(f);
+  }
+});
+
 // These fixtures exercise the production preload/pipe/validator with actual child
 // computations. Delays/blocking exist only in adversarial tests, never the campaign.
 function fixture() {
@@ -353,12 +407,23 @@ function fixture() {
     process.exit(0);
   `,
   );
-  return { root, entry };
+  return { root, entry, children: [] };
 }
-function tracked(f, index, entry = f.entry) {
+function tracked(f, index, entry = f.entry, launch = spawn) {
   const ticks = path.join(f.root, String(index));
-  const tracked = launchCli(spawn, process.execPath, [entry, ticks], { cwd: f.root, env: { ...process.env } });
+  const tracked = launchCli(launch, process.execPath, [entry, ticks], { cwd: f.root, env: { ...process.env } });
+  // Observe immediately, even when a synchronous adversary throws before await.
+  // Keep the original promise rejected so assertions still see the failure.
+  tracked.completed.catch(() => {});
+  const closed = new Promise((resolve) => tracked.child.once("close", resolve));
+  f.children.push({ ...tracked, closed });
   return { ...tracked, ticks };
+}
+async function cleanupFixture(f) {
+  for (const { child } of f.children) if (child.exitCode === null && child.signalCode === null) child.kill();
+  await Promise.all(f.children.map(({ closed }) => closed));
+  await Promise.allSettled(f.children.map(({ completed }) => completed));
+  fs.rmSync(f.root, { recursive: true, force: true });
 }
 async function clockWorkload(f) {
   const executionMembers = [],
@@ -381,7 +446,7 @@ test("child-owned lifecycle accepts faults during two actual subprocess computat
     validateOverlap({ ...row, mode: "off", diagnostic: { cells: [] } });
     for (const member of row.executionMembers) validateLifecycle(member);
   } finally {
-    fs.rmSync(f.root, { recursive: true, force: true });
+    await cleanupFixture(f);
   }
 });
 test("rejects missing, late, substituted, duplicate and failed child receipts", async () => {
@@ -446,9 +511,44 @@ test("rejects missing, late, substituted, duplicate and failed child receipts", 
       await assert.rejects(tracked(f, "bad", bad).completed);
     }
   } finally {
-    fs.rmSync(f.root, { recursive: true, force: true });
+    await cleanupFixture(f);
   }
 });
+test("startup failure reports bounded stderr and remains rejected during adversarial cleanup", async () => {
+  const f = fixture();
+  try {
+    const bad = path.join(f.root, "startup-failure.mjs");
+    fs.writeFileSync(bad, 'import "./missing-startup-module.mjs";');
+    const work = tracked(f, "startup", bad, (command, args, options) => {
+      // Inject a missing preload to fail before any receipt exit handler exists.
+      args[1] = pathToFileURL(path.join(f.root, "missing-startup-module.mjs")).href;
+      return spawn(command, args, options);
+    });
+    // Let failure settle before awaiting, as when the synchronous adversary throws.
+    await f.children.at(-1).closed;
+    await new Promise((resolve) => setImmediate(resolve));
+    await assert.rejects(work.completed, (error) => {
+      assert.match(error.message, /empty child lifecycle receipt/);
+      assert.match(error.message, /exit=1; receiptBytes=0/);
+      assert.match(error.message, /ERR_MODULE_NOT_FOUND/);
+      assert.match(error.message, /missing-startup-module/);
+      return true;
+    });
+    fs.writeFileSync(
+      bad,
+      'process.removeAllListeners("exit"); process.stderr.write("x".repeat(100000) + "TAIL-MARKER");',
+    );
+    await assert.rejects(tracked(f, "large-stderr", bad).completed, (error) => {
+      assert.match(error.message, /stderrBytes=100011/);
+      assert.match(error.message, /TAIL-MARKER/);
+      assert.ok(error.message.length < 5000, "stderr retention is bounded");
+      return true;
+    });
+  } finally {
+    await cleanupFixture(f);
+  }
+});
+
 function independentEntries(f, afterFile) {
   // execFileSync intentionally blocks the supervisor while a separate fault
   // process observes the CLI beginning exit, then records all 20 entries.
@@ -495,7 +595,7 @@ test("delayed parent exit delivery cannot accept 20 independent post-exit entrie
     // The superseded parent bracket would accept every one of these entries.
     assert.throws(() => validateOverlap(row), /fault-outside-cli-execution/);
   } finally {
-    fs.rmSync(f.root, { recursive: true, force: true });
+    await cleanupFixture(f);
   }
 });
 test("independent entries in the real inter-demo gap are rejected", async () => {
@@ -520,7 +620,7 @@ test("independent entries in the real inter-demo gap are rejected", async () => 
       /fault-outside-cli-execution/,
     );
   } finally {
-    fs.rmSync(f.root, { recursive: true, force: true });
+    await cleanupFixture(f);
   }
 });
 
@@ -547,7 +647,7 @@ test("conservative captured-clock gate rejects both boundaries and their exclusi
       assert.throws(() => validateOverlap(copy), /fault-outside-cli-execution/);
     }
   } finally {
-    fs.rmSync(f.root, { recursive: true, force: true });
+    await cleanupFixture(f);
   }
 });
 

@@ -4,7 +4,8 @@ import { randomUUID, createHash } from "node:crypto";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { specification } from "./manifest.mjs";
-export const preload = fileURLToPath(new URL("cli-lifecycle-preload.mjs", import.meta.url));
+const preloadUrl = new URL("cli-lifecycle-preload.mjs", import.meta.url);
+export const preload = fileURLToPath(preloadUrl);
 export function validateLifecycle(member) {
   const receipt = member.lifecycleReceipt;
   assert.equal(receipt?.schema, 1, "complete child lifecycle receipt required");
@@ -38,7 +39,7 @@ export function launchCli(launch, command, args, options) {
   );
   const binding = { nonce: randomUUID(), entry: args[0], cwd: options.cwd, preloadSha256 };
   const parentSpawnedNs = process.hrtime.bigint().toString();
-  const child = launch(command, ["--import", preload, ...args], {
+  const child = launch(command, ["--import", preloadUrl.href, ...args], {
     ...options,
     env: { ...options.env, C15_CLI_LIFECYCLE: JSON.stringify(binding) },
     stdio: ["ignore", "pipe", "pipe", "pipe"],
@@ -49,15 +50,28 @@ export function launchCli(launch, command, args, options) {
     let bytes = Buffer.alloc(0),
       ended = false,
       exited = false,
-      member;
+      member,
+      stderr = Buffer.alloc(0),
+      stderrBytes = 0;
+    // Drain all stderr, retaining only its last 4 KiB for startup diagnostics.
+    child.stderr.on("data", (data) => {
+      stderrBytes += data.length;
+      stderr = Buffer.concat([stderr, data.subarray(-4096)]).subarray(-4096);
+    });
     const finish = () => {
-      if (!ended || !exited) return;
+      if (!ended || !exited || !member) return;
       try {
+        assert.ok(bytes.length > 0, "empty child lifecycle receipt (preload/entry startup may have failed)");
         member.lifecycleReceipt = JSON.parse(bytes.toString("utf8"));
         validateLifecycle(member);
         resolve(member);
       } catch (error) {
-        reject(error);
+        reject(
+          new Error(
+            `child lifecycle failed: ${error.message}; pid=${child.pid}; exit=${member.exitCode}; receiptBytes=${bytes.length}; stderrBytes=${stderrBytes}; stderrTail=${JSON.stringify(stderr.toString("utf8"))}`,
+            { cause: error },
+          ),
+        );
       }
     };
     child.once("error", reject);
@@ -85,6 +99,8 @@ export function launchCli(launch, command, args, options) {
         reject(Error("child lifecycle terminated by signal"));
         return;
       }
+    });
+    child.once("close", () => {
       exited = true;
       finish();
     });
