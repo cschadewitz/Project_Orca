@@ -11,13 +11,13 @@
  * panel shows where the body would have been. That is not an error and is not rendered as
  * one — the artifact exists, and saying what it is is more use than a retry button.
  *
- * Neither hook polls and neither subscribes. An artifact is immutable once recorded — a
- * new version is a new version, not an edit — so there is nothing for a notification to
- * change about a body already in hand. A *new* version arrives as a fresh `list` when the
- * panel is opened again on that name, which is the moment a person can act on it.
+ * Neither hook polls. The metadata list follows relevant `artifact.recorded` events on
+ * the shared notification stream. Bodies remain immutable: a new version updates the
+ * choices, never the version or comparison the person has selected, nor bodies in hand.
  */
 import { useEffect, useState } from "react";
 import type { ArtifactOmitted, ArtifactView, ProtocolError } from "@orca/protocol";
+import { useNotifications } from "../notifications-context.js";
 
 export interface ArtifactsListState {
   loading: boolean;
@@ -35,35 +35,63 @@ export interface ArtifactsListQuery {
 }
 
 /**
- * One `artifacts.list`, re-read when the query changes and never otherwise. The query is
- * destructured into the effect's dependencies rather than passed as an object, so a caller
- * writing `{ runId, name }` inline does not re-read on every render.
+ * Read once and refresh on matching recorded artifacts. Subscribe before reading so an
+ * event during the initial snapshot is not lost. At most one request is in flight, with
+ * one dirty bit for a burst: an invalidated answer is discarded and followed by one fresh
+ * read. Keep the held metadata visible while refreshing. Query fields are dependencies
+ * rather than the inline object, so rendering does not cause another read.
  */
 export function useArtifactsList(query: ArtifactsListQuery): ArtifactsListState {
   const { runId, name, producedByStepRunId } = query;
+  const stream = useNotifications();
   const [state, setState] = useState<ArtifactsListState>({ loading: true, artifacts: NONE });
 
   useEffect(() => {
     let live = true;
+    let reading = false;
+    let dirty = false;
     setState({ loading: true, artifacts: NONE });
-    void window.orca.artifacts
-      .list({
-        ...(runId === undefined ? {} : { runId }),
-        ...(name === undefined ? {} : { name }),
-        ...(producedByStepRunId === undefined ? {} : { producedByStepRunId }),
-      })
-      .then((answer) => {
-        if (!live) return;
-        setState(
-          answer.ok
-            ? { loading: false, artifacts: answer.result.artifacts }
-            : { loading: false, artifacts: NONE, error: answer.error },
-        );
-      });
+    const read = (): void => {
+      reading = true;
+      dirty = false;
+      void window.orca.artifacts
+        .list({
+          ...(runId === undefined ? {} : { runId }),
+          ...(name === undefined ? {} : { name }),
+          ...(producedByStepRunId === undefined ? {} : { producedByStepRunId }),
+        })
+        .then((answer) => {
+          if (!live) return;
+          reading = false;
+          if (dirty) {
+            read();
+            return;
+          }
+          setState((current) =>
+            answer.ok
+              ? { loading: false, artifacts: answer.result.artifacts }
+              : { loading: false, artifacts: current.artifacts, error: answer.error },
+          );
+        });
+    };
+    const off = stream.on(
+      "event.appended",
+      ({ event }) => {
+        if (event.type !== "artifact.recorded") return;
+        const artifact = event.payload.artifact;
+        if (name !== undefined && artifact.name !== name) return;
+        if (producedByStepRunId !== undefined && artifact.producedBy.stepRunId !== producedByStepRunId) return;
+        dirty = true;
+        if (!reading) read();
+      },
+      { runId },
+    );
+    if (!reading) read();
     return () => {
       live = false;
+      off();
     };
-  }, [runId, name, producedByStepRunId]);
+  }, [stream, runId, name, producedByStepRunId]);
 
   return state;
 }

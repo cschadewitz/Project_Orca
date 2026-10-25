@@ -13,6 +13,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { DockedPanel } from "../src/chrome/docked-panel.js";
 import { ArtifactPanelProvider, useArtifactPanel, type ArtifactTarget } from "../src/artifacts/panel-context.js";
 import { RUN_ART } from "./fixtures-artifacts.js";
+import { artifactRecorded } from "./artifact-events.js";
 import { harness, installBridge, type Harness } from "./harness.js";
 import type { FakeBridge } from "./fake-bridge.js";
 
@@ -111,6 +112,32 @@ describe("the artifact panel", () => {
     // The toggle is absent, not disabled: a markdown renderer is a dependency decision
     // this package has not taken, and a disabled control would promise one.
     expect(screen.queryByRole("button", { name: /render|preview|markdown/i })).toBeNull();
+  });
+
+  it("refreshes mounted versions without moving the chosen historical version or comparison", async () => {
+    let artifacts = RUN_ART.artifacts.filter((a) => a.name === "spec");
+    fake.script({
+      "artifacts.list": () => ({ ok: true, result: { artifacts, total: artifacts.length, asOf: RUN_ART.asOf } }),
+    });
+    renderPanel({ ...SPEC, version: 2, compareWith: 1 });
+    await waitFor(() => expect(diffLines().length).toBeGreaterThan(0));
+    const before = diffLines();
+    const bodies = fake.calls.filter((c) => c.method === "artifacts.get");
+    const next = { ...artifacts[2]!, id: "art-spec-v4", version: 4 };
+    artifacts = [...artifacts, next];
+
+    const release = fake.hold("artifacts.list");
+    await act(async () => fake.notify(artifactRecorded("run-art", next)));
+    expect(diffLines()).toEqual(before);
+    expect(versionButtons()).toHaveLength(3);
+    await act(async () => release());
+
+    expect(versionButtons().map((b) => b.textContent)).toEqual(["v1", "v2", "v3", "v4"]);
+    expect(versionButtons().map((b) => b.getAttribute("aria-pressed"))).toEqual(["false", "true", "false", "false"]);
+    expect(screen.getByRole("button", { name: /Comparing with v1/ })).toBeTruthy();
+    expect(diffLines()).toEqual(before);
+    expect(fake.calls.filter((c) => c.method === "artifacts.get")).toEqual(bodies);
+    expect(fake.calls.filter((c) => c.method === "artifacts.list")).toHaveLength(2);
   });
 
   it("steps versions with [ and ], registered in the panel scope", async () => {
