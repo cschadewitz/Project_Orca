@@ -28,7 +28,16 @@ import { useNotifications } from "../notifications-context.js";
 export type WorkflowState =
   | { phase: "loading" }
   | { phase: "error"; error: ProtocolError }
-  | { phase: "ready"; workflow: WorkflowView; asOf: string };
+  | {
+      phase: "ready";
+      workflow: WorkflowView;
+      asOf: string;
+      /** Refreshes retain this snapshot so an active editor keeps its local input. */
+      refreshing: boolean;
+      refreshError: ProtocolError | undefined;
+      /** A matching invalidation was received; it does not advance a draft's base. */
+      changed: boolean;
+    };
 
 /** What a run did, once it has been read. The graph is usable long before this arrives. */
 export interface WorkflowOverlay {
@@ -65,16 +74,30 @@ export function useWorkflow(workflowId: string, runId?: string): WorkflowFeed {
 
   useEffect(() => {
     let live = true;
-    setState({ phase: "loading" });
+    setState((previous) =>
+      previous.phase === "ready" && previous.workflow.id === workflowId
+        ? { ...previous, refreshing: true, refreshError: undefined }
+        : { phase: "loading" },
+    );
     // No `version`: only the version on disk can be returned, so asking for another is the
     // one call guaranteed to fail (`WorkflowsGetParams`).
     void window.orca.workflows.get({ id: workflowId }).then((result) => {
       if (!live) return;
-      setState(
-        result.ok
-          ? { phase: "ready", workflow: result.result.workflow, asOf: result.result.asOf }
-          : { phase: "error", error: result.error },
-      );
+      setState((previous) => {
+        const retained = previous.phase === "ready" && previous.workflow.id === workflowId ? previous : undefined;
+        if (result.ok)
+          return {
+            phase: "ready",
+            workflow: result.result.workflow,
+            asOf: result.result.asOf,
+            refreshing: false,
+            refreshError: undefined,
+            changed: retained?.changed ?? false,
+          };
+        return retained
+          ? { ...retained, refreshing: false, refreshError: result.error }
+          : { phase: "error", error: result.error };
+      });
     });
     return () => {
       live = false;
@@ -86,7 +109,11 @@ export function useWorkflow(workflowId: string, runId?: string): WorkflowFeed {
      the stream filters by run, and a workflow is not a run. */
   useEffect(() => {
     return stream.on("workflows.changed", (params) => {
-      if (params.id === workflowId) setDefinitionRevision((n) => n + 1);
+      if (params.id !== workflowId) return;
+      setState((previous) =>
+        previous.phase === "ready" && previous.workflow.id === workflowId ? { ...previous, changed: true } : previous,
+      );
+      setDefinitionRevision((n) => n + 1);
     });
   }, [stream, workflowId]);
 

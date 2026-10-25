@@ -163,20 +163,48 @@ export function WorkflowSurface({
     );
   }
 
+  /* Definition reads do not own the draft or its uncommitted inspector text. Keep the
+     editor in the same position through refresh success/refusal, and say that the file
+     changed without treating the new viewer snapshot as a new draft base. */
+  const definitionNotice = state.phase === "ready" && (
+    <>
+      {(state.refreshing || state.refreshError || (editing && state.changed)) && (
+        <div className={`orca-banner ${textClass("caption")} orca-banner--stale`} role="status">
+          <Text style="caption">
+            {state.refreshing
+              ? "Refreshing the workflow definition…"
+              : state.refreshError
+                ? `Could not refresh the workflow definition: ${state.refreshError.code}: ${state.refreshError.message}`
+                : "The workflow definition changed."}
+            {editing && state.changed && " This draft keeps its original base; review and publish will check it."}
+          </Text>
+          {state.refreshError && (
+            <Button size="sm" onClick={reload}>
+              Try again
+            </Button>
+          )}
+        </div>
+      )}
+    </>
+  );
+
   if (editing)
     return (
-      <WorkflowEditor
-        workflowId={workflowId}
-        onClose={() => {
-          setEditing(false);
-          refreshDraft();
-        }}
-        onPublished={() => {
-          setEditing(false);
-          refreshDraft();
-          reload();
-        }}
-      />
+      <div className="orca-wf">
+        {definitionNotice}
+        <WorkflowEditor
+          workflowId={workflowId}
+          onClose={() => {
+            setEditing(false);
+            refreshDraft();
+          }}
+          onPublished={() => {
+            setEditing(false);
+            refreshDraft();
+            reload();
+          }}
+        />
+      </div>
     );
 
   /* Across the nested graphs too (#177): clicking a node inside an expanded `parallel` branch
@@ -186,6 +214,7 @@ export function WorkflowSurface({
 
   return (
     <div className="orca-wf">
+      {definitionNotice}
       {connection !== "live" && (
         <div className={`orca-banner ${textClass("caption")} orca-banner--stale`} role="status">
           <Text style="caption">Not connected — this is the last the daemon said about this workflow.</Text>
