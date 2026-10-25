@@ -19,6 +19,7 @@ import {
   git,
   regular,
 } from "../windows-c15/manifest.mjs";
+import { DEMO_COUNT, validateOverlap } from "../windows-c15/overlap.mjs";
 const read = (name) => fs.readFileSync(path.join(harness, name), "utf8");
 function diagnostic(mode, schedule) {
   return {
@@ -128,12 +129,13 @@ test("rejects partial, duplicate, regression, missing checks, weakened bounds an
   failure.memory.managedPass = false;
   validateDiagnostic(failure, "on", "failure"); // Correctly reports memory failure; supervisor rejects the gate.
 });
-test("candidate preserves the frozen cell campaign byte-for-byte apart from observer construction", () => {
+test("candidate preserves the frozen cell campaign byte-for-byte apart from observer construction and entry evidence", () => {
   const campaign = (name) => {
     const text = read(`packages/app/test/recovery-preparation/${name}`);
     return text
-      .slice(text.indexOf("    // Every asynchronous"), text.indexOf("    sampleFinalMemory();"))
-      .replaceAll("ObservedPayloadMemory", "ControlledPayloadMemory");
+      .slice(text.indexOf("    // Every asynchronous"), text.indexOf('    phase = "execution-wait";'))
+      .replaceAll("ObservedPayloadMemory", "ControlledPayloadMemory")
+      .replace("      cell.faultEnteredNs = fault.enteredNs;\n", "");
   };
   assert.equal(campaign("windows-c15-candidate-child.cjs"), campaign("windows-c15-child.cjs"));
   const child = read("packages/app/test/recovery-preparation/windows-c15-candidate-child.cjs");
@@ -144,7 +146,10 @@ test("candidate preserves the frozen cell campaign byte-for-byte apart from obse
   const supervisor = read("packages/app/test/recovery-preparation/windows-c15-candidate.mjs");
   assert.match(supervisor, /enteredMs < row.executionElapsedMs/);
   assert.match(supervisor, /await run\("off"\);\s+await run\("on"\)/);
-  assert.match(supervisor, /artifactCount, 29/);
+  assert.match(supervisor, /oracle.artifactCount, 29/);
+  assert.match(supervisor, /index < DEMO_COUNT/);
+  assert.match(supervisor, /validateOverlap\(row\)/);
+  assert.match(child, /this.enteredNs = process.hrtime.bigint\(\).toString\(\);\s+entered\(\)/);
   assert.match(supervisor, /semanticEqual, true/);
   assert.match(supervisor, /!result.disposableStateRemoved/);
 });
@@ -306,3 +311,78 @@ if (process.env.C15_SOURCE) {
     }
   });
 }
+
+// Real subprocess clocks must inhabit the parent's same-host monotonic interval.
+// Hashing is bounded actual work; these probes do not run the Windows product.
+function clockWorkload() {
+  const executionMembers = [],
+    cells = [];
+  for (let index = 0; index < DEMO_COUNT; index++) {
+    const startedNs = process.hrtime.bigint().toString();
+    const ticks = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+      import {createHash} from "node:crypto";
+      let bytes = Buffer.alloc(262144, 7);
+      const ticks = [];
+      for (let i = 0; i < 10; i++) {
+        bytes = createHash("sha256").update(bytes).digest();
+        ticks.push(process.hrtime.bigint().toString());
+      }
+      process.stdout.write(JSON.stringify(ticks));
+    `,
+        ],
+        { encoding: "utf8", timeout: 10000 },
+      ),
+    );
+    const endedNs = process.hrtime.bigint().toString();
+    executionMembers.push({ index, startedNs, endedNs, exitCode: 0 });
+    cells.push(...ticks.map((faultEnteredNs) => ({ target: targets[cells.length], faultEnteredNs })));
+  }
+  cells.forEach((cell, index) => {
+    cell.target = targets[index];
+  });
+  return { mode: "on", executionMembers, diagnostic: { cells } };
+}
+test("corrected overlap accepts every original fault during two fixed real subprocess executions", () => {
+  const row = clockWorkload();
+  assert.equal(row.diagnostic.cells.length, 20);
+  validateOverlap(row);
+  validateOverlap({ ...row, mode: "off", diagnostic: { cells: [] } });
+});
+test("short workload, inter-demo gap, missing timestamps and incomplete work reject overlap", () => {
+  const row = clockWorkload();
+  const mutate = (change) => {
+    const copy = structuredClone(row);
+    change(copy);
+    assert.throws(() => validateOverlap(copy));
+  };
+  mutate((copy) => {
+    copy.diagnostic.cells[19].faultEnteredNs = copy.executionMembers[1].endedNs;
+  });
+  mutate((copy) => {
+    copy.diagnostic.cells[19].faultEnteredNs = copy.executionMembers[0].endedNs;
+  });
+  mutate((copy) => {
+    delete copy.diagnostic.cells[0].faultEnteredNs;
+  });
+  mutate((copy) => {
+    copy.diagnostic.cells.pop();
+  });
+  mutate((copy) => {
+    copy.executionMembers.pop();
+  });
+  mutate((copy) => {
+    copy.executionMembers[1].exitCode = 2;
+  });
+  mutate((copy) => {
+    copy.executionMembers[1].startedNs = copy.executionMembers[0].startedNs;
+  });
+  mutate((copy) => {
+    copy.diagnostic.cells[0].faultEnteredNs = "-1";
+  });
+});
