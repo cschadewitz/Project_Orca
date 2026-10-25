@@ -21,8 +21,9 @@ and project reference; the frozen lockfile changes only that workspace link.
 No provider, runtime activation, protection, workflow or playbook source changes.
 
 The counter save stays after deliverable work. Errors before that save commit none
-of the prompt's increments, even after an earlier file write. Cancellation before
-an entry's write leaves it unconsumed while saving earlier entries. Skips and denied
+of the prompt's increments, even after an earlier file write. Cancellation observed
+at the existing pre-write checkpoint leaves that entry unconsumed while saving earlier
+entries. Skips and denied
 permissions still consume entries; cancellation during a pending permission response
 retains the existing consumption behavior. No-state prompts still reset counters.
 This is not a crash-atomic artifact/counter transaction. A hung holder can delay other
@@ -41,7 +42,8 @@ observes `false:1` instead of the next `true:2`; the same-kind case also repeats
 passes, including duplicate occurrences `[1, 1, 2, 2]` in the eight-process case.
 The corrected thirteen-case suite passes locally, including independent same/different
 kind increments, absent-state initialization, write-error whole-prompt rollback,
-failed state save, cancellation before a write, partial completion, cancellation
+failed state save, cancellation observed at the existing pre-write checkpoint, partial
+completion, cancellation
 while waiting, cancellation during permission response, skips/denials, no-state/no-
 deliverables behavior and recovery after terminating a deliberately hung test child.
 
@@ -66,7 +68,7 @@ All four demos exited zero and produced exactly **29 artifacts**; both modes tot
 provenance and times are normalized, while front matter, prose, kind, name and
 multiplicity are retained. All four signatures equal
 `ec72d1f4cd300ea6fd291cd29fc79179a48f91522ff16dce73a4dc3a34fea6ba`.
-Work oracles match: `auth-model`, `login-api` and `login-ui` are all done.
+Work oracles match: `docs`, `login-api` and `schema` are all done.
 Every final counter matches, including `test-report: 4`, `implementation: 4`,
 `review: 3`, `spec: 3`, `plan: 4` and `intent: 3`. Playbook bytes and configs with
 only their fresh root paths normalized also match. See JSON for all counter values,
@@ -79,3 +81,75 @@ cells or diagnostic overlap. PR #663 stays held. Its source/compiled provenance 
 be deliberately updated only after this fix is reviewed and merged; no candidate
 repin, Windows dispatch or relaxation of the original 29/58, semantic/work, memory,
 timing or fault gates is included.
+
+## Retained evidence and reconstruction limits
+
+The JSON now includes each original run's normalized work-item and counter snapshots
+and each preload run's parsed lifecycle receipt. These values were copied from the
+existing report; no demo or broad experiment was rerun for this reconciliation.
+The [evidence directory](evidence/2026-10-25-scripted-agent-counters) retains the
+original report bytes as deterministic gzip, the exact executed bounded runner as
+`parity-runner.mjs.txt`, and the exact preload as `cli-lifecycle-preload.mjs.txt`.
+The `.txt` suffix preserves their original bytes and formatting as execution evidence;
+they are not imported or run by the test suite. The JSON records their hashes,
+original command/cwd, build command/worktree/commit and execution root. The original
+build commit's agent implementation is byte-identical to `cc67cf19`; the reconciliation
+changes only documentation and retained evidence.
+
+The exact recorded command was
+`node /tmp/orca-counter-parity.mjs > /tmp/orca-counter-demo-parity.log 2>&1`.
+The retained runner contains its literal paths, four-run schedule, fresh-directory
+creation, 50-second bound, fd 3 size/key/binding/exit/interval checks and unchanged
+normalization/oracle. It is archived for inspection, not rerun by these checks.
+
+Raw fd 3 byte streams and independent expected launch nonce/PID values were **not
+separately persisted**. The runner records the live comparisons with its generated
+binding and actual `child.pid`; the parsed receipts alone cannot independently
+re-attest those two bindings. Their exact keys, nonce/PID shape, entry, cwd, preload
+digest, exit and positive interval can be checked offline. Full artifact bodies,
+compiled inventories and child stdout/stderr are not included in this compact archive;
+no broader provenance/graph or C15 acceptance claim is added.
+
+For example, the following offline check recomputes work/counter equality and checks
+the retained receipt fields without launching a demo or trusting the equality flags:
+
+```sh
+python3 - <<'PY'
+import gzip, hashlib, json, pathlib, re
+p = pathlib.Path('docs/reviews/2026-10-25-scripted-agent-counter-parity.json')
+s = json.loads(p.read_text())
+e = s['retainedEvidence']
+d = p.parent / e['directory']
+archive = (d / e['rawReportArchive']).read_bytes()
+assert hashlib.sha256(archive).hexdigest() == e['archiveSha256']
+raw = gzip.decompress(archive)
+assert hashlib.sha256(raw).hexdigest() == e['rawReportSha256']
+assert hashlib.sha256((d / e['runner']).read_bytes()).hexdigest() == e['runnerSha256']
+assert hashlib.sha256((d / e['preload']).read_bytes()).hexdigest() == s['preloadSha256']
+r = json.loads(raw)
+assert len(r['rows']) == len(s['rows']) == 4
+for x, y in zip(r['rows'], s['rows']):
+    assert (x['mode'], x['index']) == (y['mode'], y['index'])
+    assert x['oracle']['workItems'] == y['workItems'] == s['sharedWorkItems']
+    assert x['counts'] == y['counts'] == s['sharedFinalCounts']
+    assert x['oracle']['artifactCount'] == y['artifactCount'] == 29
+    assert x['exitCode'] == y['exitCode'] == 0
+    if x['mode'] == 'normal':
+        assert 'lifecycleReceipt' not in x and 'lifecycleReceipt' not in y
+        continue
+    a = x['lifecycleReceipt']
+    assert a == y['lifecycleReceipt']
+    assert set(a) == {'schema', 'nonce', 'entry', 'cwd', 'preloadSha256',
+                      'pid', 'startedNs', 'endedNs', 'exitCode'}
+    assert a['schema'] == 1 and a['exitCode'] == x['exitCode']
+    assert re.fullmatch(r'[0-9a-f-]{36}', a['nonce'])
+    assert isinstance(a['pid'], int) and a['pid'] > 0
+    assert a['entry'] == e['buildWorktree'] + '/packages/cli/dist/main.js'
+    assert a['cwd'] == e['originalExecutionRoot'] + '/preload-' + str(x['index'])
+    assert a['preloadSha256'] == s['preloadSha256']
+    assert 0 <= int(a['startedNs']) < int(a['endedNs'])
+for mode in ('normal', 'preload'):
+    assert sum(x['oracle']['artifactCount'] for x in r['rows'] if x['mode'] == mode) == 58
+print('PASS: retained hashes, per-run work/counters, 29/58 and receipt fields')
+PY
+```

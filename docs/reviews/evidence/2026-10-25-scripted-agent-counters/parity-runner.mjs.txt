@@ -1,0 +1,122 @@
+/** Bounded corrected-source demo parity probe; uses PR663's unchanged semantic oracle. */
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { fileStores } from "/tmp/orca-counter-verify/packages/store/dist/index.js";
+import { parseFrontMatter } from "/tmp/orca-counter-verify/packages/core/dist/index.js";
+const sha = x => createHash("sha256").update(x).digest("hex");
+const repo = "/tmp/orca-counter-verify";
+const entry = path.join(repo, "packages/cli/dist/main.js");
+const preload = "/tmp/orca-counter-c15-preload.mjs";
+const preloadSha256 = "3081716b64e2ece587bf02486300fed401db826d1debabe4d6175fdc773a7cf4";
+assert.equal(sha(fs.readFileSync(preload)), preloadSha256);
+const root = fs.mkdtempSync("/tmp/orca-counter-demo-parity-");
+const result = { base: "f5680cfc996efc15bd0da019b9a32d06912a16ce", sourceAgentSha256: sha(fs.readFileSync(path.join(repo,"packages/testing/src/scripted-agent/agent.ts"))), node: process.version, platform: process.platform, preloadSourceCommit: "d3543733b05335b1629dc795404b031a53a7fc66", preloadSha256, root, rows: [] };
+function normalize(v) {
+  if (Array.isArray(v)) return v.map(normalize);
+  if (v && typeof v === "object")
+    return Object.fromEntries(
+      Object.entries(v)
+        .filter(
+          ([k]) =>
+            ![
+              "id",
+              "requestId",
+              "runId",
+              "stepRunId",
+              "createdAt",
+              "updatedAt",
+              "timestamp",
+              "producedBy",
+              "parentId",
+            ].includes(k),
+        )
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([k, x]) => [k, normalize(x)]),
+    );
+  if (typeof v === "string")
+    return v
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<generated-id>")
+      .replace(
+        /\b(req|wi|wf|run|step|art|evt|sess|orc|tpl|host|hi|plan|dep|risk|dec|pev)_[0-9A-HJKMNP-TV-Z]{26}\b/g,
+        "$1_<generated-id>",
+      )
+      .replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z/g, "<generated-time>");
+  return v;
+}
+async function semanticOracle(directory) {
+  const stores = fileStores(path.join(directory, ".orca"));
+  const inventory = await stores.artifacts.list(),
+    semantic = [];
+  for (const artifact of inventory) {
+    const parsed = parseFrontMatter(await stores.artifacts.content(artifact.id));
+    semantic.push({
+      kind: artifact.kind,
+      name: normalize(artifact.name),
+      data: normalize(parsed.data),
+      body: normalize(parsed.body),
+    });
+  }
+  semantic.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return {
+    artifactCount: inventory.length,
+    semanticSignature: sha(JSON.stringify(semantic)),
+    semanticByKind: semantic.map((x) => ({ kind: x.kind, name: x.name, sha256: sha(JSON.stringify(x)) })),
+    workItems: (await stores.workItems.list())
+      .map((x) => ({ slug: x.slug, status: x.status }))
+      .sort((a, b) => a.slug.localeCompare(b.slug)),
+    normalization:
+      "Reused successful-pair oracle: generated identities/provenance/times removed, semantic front matter/prose/kind/name/multiplicity retained. Not complete execution graph equivalence.",
+  };
+}
+
+async function run(mode, index) {
+  const directory = path.join(root, `${mode}-${index}`);
+  fs.mkdirSync(directory);
+  const binding = { nonce: randomUUID(), entry, cwd: directory, preloadSha256 };
+  const start = performance.now();
+  const child = spawn(process.execPath, [...(mode === "preload" ? ["--import", preload] : []), entry, "demo", "--dir", directory, "--keep", "--quiet"], {
+    cwd: directory, env: { ...process.env, ...(mode === "preload" ? { C15_CLI_LIFECYCLE: JSON.stringify(binding) } : {}) }, stdio: ["ignore", "pipe", "pipe", "pipe"]
+  });
+  let stdout = "", stderr = "", receiptText = "";
+  child.stdout.on("data", x => { stdout += x; });
+  child.stderr.on("data", x => { stderr += x; });
+  child.stdio[3].on("data", x => { receiptText += x; assert.ok(receiptText.length <= 4096); });
+  const exitCode = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill("SIGTERM"); reject(Error("CLI exceeded unchanged 50-second bound")); }, 50000);
+    child.once("error", e => { clearTimeout(timer); reject(e); });
+    child.once("close", (code, signal) => { clearTimeout(timer); if(signal) reject(Error(signal)); else resolve(code); });
+  });
+  fs.writeFileSync(path.join(directory,"stdout.log"), stdout);
+  fs.writeFileSync(path.join(directory,"stderr.log"), stderr);
+  const row = { mode, index, exitCode, elapsedMs: performance.now()-start, oracle: await semanticOracle(directory), counts: normalize(JSON.parse(fs.readFileSync(path.join(directory,".orca-demo/state.json"),"utf8")).counts), playbookSha256: sha(fs.readFileSync(path.join(directory,"demo-playbook.yaml"))), normalizedConfigSha256: sha(fs.readFileSync(path.join(directory,"orca.config.yaml"),"utf8").replaceAll(directory,"<demo-root>")) };
+  if(mode === "preload") {
+    const receipt = JSON.parse(receiptText);
+    assert.deepEqual(Object.keys(receipt).sort(), ["schema","nonce","entry","cwd","preloadSha256","pid","startedNs","endedNs","exitCode"].sort());
+    assert.equal(receipt.schema,1);
+    for(const [key,value] of Object.entries(binding)) assert.equal(receipt[key],value);
+    assert.equal(receipt.pid,child.pid);
+    assert.equal(receipt.exitCode,0);
+    assert.ok(BigInt(receipt.startedNs) < BigInt(receipt.endedNs));
+    row.lifecycleReceipt = receipt;
+  } else assert.equal(receiptText, "");
+  result.rows.push(row);
+  fs.writeFileSync("/tmp/orca-counter-demo-parity.json", JSON.stringify(result,null,2)+"\n");
+  process.stdout.write(JSON.stringify({mode,index,exitCode,elapsedMs:row.elapsedMs,artifactCount:row.oracle.artifactCount,semanticSignature:row.oracle.semanticSignature,counts:row.counts})+"\n");
+  assert.equal(exitCode,0);
+  assert.equal(row.oracle.artifactCount,29);
+}
+for(const mode of ["normal","preload"]) for(let index=0;index<2;index++) await run(mode,index);
+const first=result.rows[0];
+result.semanticEqual=result.rows.every(row => row.oracle.semanticSignature===first.oracle.semanticSignature);
+result.workEqual=result.rows.every(row => JSON.stringify(row.oracle.workItems)===JSON.stringify(first.oracle.workItems));
+result.counterEqual=result.rows.every(row => JSON.stringify(row.counts)===JSON.stringify(first.counts));
+result.playbookEqual=result.rows.every(row => row.playbookSha256===first.playbookSha256);
+result.configEqual=result.rows.every(row => row.normalizedConfigSha256===first.normalizedConfigSha256);
+result.artifactsByMode = Object.fromEntries(["normal","preload"].map(mode => [mode,result.rows.filter(row=>row.mode===mode).reduce((n,row)=>n+row.oracle.artifactCount,0)]));
+fs.writeFileSync("/tmp/orca-counter-demo-parity.json", JSON.stringify(result,null,2)+"\n");
+for(const key of ["semanticEqual","workEqual","counterEqual","playbookEqual","configEqual"]) assert.equal(result[key],true,key);
+assert.deepEqual(result.artifactsByMode,{normal:58,preload:58});
+console.log("PASS",root);

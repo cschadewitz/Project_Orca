@@ -866,8 +866,9 @@ initialized under the lock. A prompt without deliverables does not create state.
 `--state`, counters still reset each prompt.
 
 Counters retain the original commit boundary: an exception before the final save commits
-none of that prompt's increments, even if earlier files were written. Cancellation before
-an entry's write leaves that entry unconsumed and commits earlier completed entries;
+none of that prompt's increments, even if earlier files were written. Cancellation observed
+at the existing pre-write checkpoint leaves that entry unconsumed and commits earlier
+completed entries;
 skipped or permission-denied entries consume counters. Cancellation during an already
 pending permission request retains that entry's prior consumption behavior. This is counter
 serialization, not a filesystem transaction or crash-atomic artifact/counter commit.
