@@ -11,6 +11,39 @@ host operation, credential changes or additional invitations. For a docs-only PR
 follow [scoped documentation validation](docs/DEVELOPMENT.md#documentation-only-review)
 and distinguish source, review, CI, deployed and native evidence.
 
+## Track work in GitHub
+
+Track public-safe work and unfinished follow-ups in GitHub issues and pull requests,
+reusing existing owners and linking implementation, evidence and remaining acceptance.
+Write for the repository's eventual public audience. Keep work that cannot eventually
+be public, private host/account details, credentials, private commands and owner
+personal notes out of repository content, issue/PR tracking and the site.
+
+Use GitHub issues as the source for the site's read-only workboard, following
+[#692](https://github.com/cschadewitz/Project_Orca/issues/692). Derive columns from
+issue tags using this mapping:
+
+| Issue label | Board column |
+| --- | --- |
+| `status:backlog` | Backlog |
+| `status:ready` | Ready |
+| `status:in-progress` | In progress |
+| `status:review` | Review |
+| `status:blocked` | Blocked |
+| `status:done` | Done |
+| `status:cancelled` | Cancelled |
+
+Each classified issue has exactly one status label; preserve unrelated labels.
+No status label means **Untriaged**. Unknown or multiple status labels, a closed
+issue with an active status, or an open issue with a terminal status means
+**Needs classification**; do not guess. Done requires closed/completed; Cancelled
+requires closed/not planned (`state_reason: not_planned`). If `state_reason` is
+missing, report it as unknown rather than inventing completion or cancellation.
+A PR's state does not prove its parent issue is done.
+
+Keep the site read-only and preserve the existing owner-only connection guard.
+This workflow does not change repository visibility or authorize upstream publication.
+
 ## Inventory before creating
 
 1. Search open issues and pull requests for the outcome, affected area and likely

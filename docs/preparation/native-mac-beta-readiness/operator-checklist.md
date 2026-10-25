@@ -52,7 +52,10 @@ Otherwise record **blocked** and explain the missing prerequisite; do not improv
    automatic install and coherent matching-binary/protected-state restore. #604 must
    show explicit default-off consent, no pre-consent retention/network traffic,
    isolation/authority/expiry and 8 MiB binary / 32 MiB combined-memory acceptance;
-   C15 managed-memory failure remains blocking. #594 must supply installed-provider,
+   [C15 run 5](../crash-recovery/windows-c15-readiness-run5.md) passes hosted Windows
+   x64 synthetic failure/stall memory checks only; Mac/installed/physical,
+   renderer-combined and Layout gates remain, with only 4 ms deferred in #597.
+   #594 must supply installed-provider,
    exact-command and live permission-callback lifetime proof. Before agent use, agree
    tool/sign-in, transmitted data, payer/limit,
    exact disposable task, permissions and stopping plan. No paid work is authorized by

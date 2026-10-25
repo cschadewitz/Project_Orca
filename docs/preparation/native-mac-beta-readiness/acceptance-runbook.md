@@ -2,7 +2,7 @@
 
 ## Current reconciliation — 25 October 2026
 
-Audited main: `0f45181c52dfc4bf1edd0e4469ff688dedef9189`. The integrated
+Audited main: `c693e0456a7d28dc1600afab1c9f9c863f2f93b6`. The integrated
 [#607](https://github.com/cschadewitz/Project_Orca/pull/607) source is implemented,
 not a physical-Mac acceptance receipt. Core configuration/launch
 [#333](https://github.com/cschadewitz/Project_Orca/issues/333)/
@@ -71,7 +71,7 @@ inputs under [#385](https://github.com/cschadewitz/Project_Orca/issues/385).
 | Delivery / packaged-test owners | Candidate-bound production-validator and browser-download receipts, actual arm64 app and authenticated bundled-daemon execution on the unchanged signed package, accepted gate/artifact/cancel/failure fixtures and supported provider versions. | #602; unsigned staging, external daemon smoke and source-built Windows receipts cannot substitute. |
 | App / recovery owner | Bind mounted setup, saved-config review/Bind and ownership recovery to the exact candidate and native paths. Same-boot exited-writer reconciliation and person-confirmed previous-boot settlement are implemented; surviving/foreign writers and legacy uncertain claims remain refused. | Native acceptance under #602/#390, not missing #570 implementation. Preserve retained work and use explicit continuation; settlement alone is not work completion or updater quiescence. |
 | Updater owner | Exact signed N/N+1 approval, natural drain/positive quiescence, automatic installation, continuity and coherent matching-binary/protected-state restore evidence. | #603; integrated composition is implemented, production activation remains held. |
-| Diagnostics owner | Exact-candidate consent/authority/storage/isolation/resource and local Save/export evidence. Closed producers are composed; native load and physical proof remain open. | #604 plus retained #416/#469 non-Mac obligations. Corrected C15 managed memory still fails the 32 MiB gate; default-off inactive code is not acceptance. |
+| Diagnostics owner | Exact-candidate consent/authority/storage/isolation/resource and local Save/export evidence. Closed producers are composed; native load and physical proof remain open. | #604 plus retained #416/#469 non-Mac obligations. [C15 run 5](../crash-recovery/windows-c15-readiness-run5.md) passes narrow hosted Windows x64 synthetic memory checks; renderer-combined/Layout, signed Mac and physical gates remain. Default-off inactive code is not acceptance. |
 | Cal / provider-contract owner; Casey for additional product choices | Supported provider evidence contract/version, installed correspondence, exact-command and transferred live-callback lifetime actual-Cal proof. | #594; generic #393 closure and synthetic callbacks do not clear it. |
 | Documentation / existing-Hub owner and physical coordinator / tester | Candidate-matched source/Hub revision and access-valid download/support links; actual device/session/agent consent and unassisted participant receipt. | #389 prepares; #390 accepts. Existing audience stays unchanged. Device access, installation, paid agent use and sharing require their own agreed scope. |
 
@@ -87,14 +87,20 @@ requirements are [#602 delivery](https://github.com/cschadewitz/Project_Orca/iss
 [#604 diagnostics](https://github.com/cschadewitz/Project_Orca/issues/604) and
 [#390 unassisted acceptance](https://github.com/cschadewitz/Project_Orca/issues/390).
 The [corrected C15 receipt](../crash-recovery/windows-c15-corrected-followup.md)
-records the unresolved managed-memory failure; it supplies no Darwin acceptance.
+preserves the earlier managed-memory failure. The later
+[run 5 receipt](../crash-recovery/windows-c15-readiness-run5.md), merged in
+[#663](https://github.com/cschadewitz/Project_Orca/pull/663), passes hosted synthetic
+Windows x64 failure/stall comparisons: managed measurements **15,319,656 / 19,596,119 bytes**
+and controlled binary peaks **2,490,368 bytes**, within unchanged 32 MiB / 8 MiB budgets.
+It supplies no Darwin, signed/installed/physical, renderer-combined or Layout acceptance;
+the numeric 4 ms target remains deferred under #597. Production capture stays disabled.
 
 | Receipt section / consuming owner | Existing evidence to supply |
 | --- | --- |
 | Candidate identity / #602 | Exact source and harness SHA; trusted manifest and DMG/ZIP/contained-app digests; app/build/protocol, bundled-daemon and provider versions; approved signing identity/notary/staple records; actual model/chip/macOS, runtime architecture/translation, guide/sample revision, alias and consent reference. Keep unsupported combinations explicit. |
 | Delivery and installed execution / #602 | Approved private invited-browser route, access/expiry/revocation checks without embedded credentials or implicit source access; trusted hashes and validator result; normal quarantine/Gatekeeper/Finder installation and first-open. Actual packaged arm64 app and authenticated owned bundled daemon, without checkout/PATH/daemon overrides; fresh/reused isolated state, sample, gates/artifacts/cancel/failure, quit/reopen, permissions, sleep/wake and accessibility observations. No unsigned fallback or security bypass. |
 | Exact N/N+1 and restore / #603 | Bind both signed candidates. Approve the specific update; close new-work admission while existing work/authorized answers finish naturally; install automatically only after positive quiescence, preserving closure through accepted startup/health/identity. Stalled work defers; no force-kill. Record stale/changed approval, callbacks/drafts, interruption/restart/reboot/failure, Keychain/TCC/journal continuity and coherent protected-state plus matching-binary backup/restore. Rollback needs positive proof no newer writes are discarded; otherwise retain complete generations for explicit recovery. |
-| Diagnostics consent, isolation and memory / #604, #416/#469 | Exact signed Darwin/Electron native load, APFS ownership/durability and separate diagnostics Keychain; explicit persistent default-off consent, zero pre-consent retention, opt-out/revocation/expiry/session-generation and same-boot/24-hour recovery bounds. Current/recovered immutable report-to-export byte identity, separate destination choice and Save/cancel/back/retry/races/cleanup; startup-before-handshake, offline/no-network, allowlist/redaction, crash/sleep/reboot uncertainty, keyboard/VoiceOver/disclosure. Measure 8 MiB controlled binary and 32 MiB combined-memory gates and paired execution. C15 managed-memory failure remains blocking; #597 defers only 4 ms, and the viewer is removed scope. |
+| Diagnostics consent, isolation and memory / #604, #416/#469 | Exact signed Darwin/Electron native load, APFS ownership/durability and separate diagnostics Keychain; explicit persistent default-off consent, zero pre-consent retention, opt-out/revocation/expiry/session-generation and same-boot/24-hour recovery bounds. Current/recovered immutable report-to-export byte identity, separate destination choice and Save/cancel/back/retry/races/cleanup; startup-before-handshake, offline/no-network, allowlist/redaction, crash/sleep/reboot uncertainty, keyboard/VoiceOver/disclosure. Measure candidate-bound 8 MiB controlled binary and 32 MiB combined-memory gates and paired execution. C15 run 5's Windows synthetic pass does not satisfy these Mac/renderer gates; Layout remains unaccepted, #597 defers only 4 ms, and the viewer is removed scope. |
 | Unassisted first run / #390 | Target-like participant follows candidate-matched guide with no hidden coaching: delivery, JEV-free workspace/sample, one separately authorized real-agent run and support/recovery/diagnostics Save/export comprehension. Record any hints, defects/severity and guide corrections, linking #602/#603/#604 and #594 results. Device/installation/agent consent and workplace-sharing authority come from the tester/owner, not product approval. Resolve launch/security/data-loss blockers before wider invitation. |
 
 Only safe codes, IDs/digests/byte counts and approved public identity facts belong in
