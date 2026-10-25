@@ -15,7 +15,7 @@
  */
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type JSX } from "react";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import type { DraftGraphPath, DraftIssue, DraftOperation } from "@orca/protocol";
+import { draftGraphKey, type DraftGraphPath, type DraftIssue, type DraftOperation } from "@orca/protocol";
 import {
   Button,
   Chip,
@@ -171,11 +171,15 @@ export const EditorInspector = forwardRef<InspectorHandle, EditorInspectorProps>
 
     const node = selection?.kind === "node" ? graph.nodes.find((n) => n.id === selection.id) : undefined;
     const edge = selection?.kind === "edge" ? graph.edges.find((e) => e.index === selection.index) : undefined;
+    // A graph snapshot changes on every operation; only its path changes field ownership.
+    // Keep the node body mounted across a rename so its focused Id input survives.
+    const graphKey = draftGraphKey(props.path);
 
     return (
       <aside ref={aside} className="orca-inspector orca-wfedit__inspector" aria-label="Inspector">
         {node ? (
           <NodeInspector
+            key={graphKey}
             {...props}
             node={node}
             nameRef={nameInput}
@@ -183,7 +187,11 @@ export const EditorInspector = forwardRef<InspectorHandle, EditorInspectorProps>
             onConnectOpen={setConnectOpen}
           />
         ) : edge ? (
-          <EdgeInspector {...props} edgeIndex={edge.index} />
+          <EdgeInspector
+            key={JSON.stringify([graphKey, edge.index, edge.from, edge.to])}
+            {...props}
+            edgeIndex={edge.index}
+          />
         ) : (
           <WorkflowInspector {...props} />
         )}
@@ -307,7 +315,7 @@ function NodeInspector({
         <div className="orca-inspector__group">Configuration</div>
         {specs.map((spec) => (
           <FieldEditor
-            key={spec.key}
+            key={JSON.stringify([node.id, spec.key])}
             spec={spec}
             path={`${at}.${spec.key}`}
             value={node.raw[spec.key]}
@@ -321,7 +329,7 @@ function NodeInspector({
         ))}
         {others.map((key) => (
           <FieldEditor
-            key={key}
+            key={JSON.stringify([node.id, key])}
             spec={{ key, label: key, kind: "yaml" }}
             path={`${at}.${key}`}
             value={node.raw[key]}
