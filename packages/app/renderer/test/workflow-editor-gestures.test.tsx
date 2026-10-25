@@ -458,10 +458,10 @@ describe("the draft bar", () => {
     const { drafts } = await openEditor((fake) =>
       scripted(fake, {
         answers: {
-          "workflowDrafts.review": () => ({
+          "workflowDrafts.review": (params) => ({
             ok: true,
             result: {
-              revision: 0,
+              revision: params.expectedRevision,
               baseVersion: "1",
               nextVersion: "2",
               baseText: "a: 1\n",

@@ -14,7 +14,7 @@
  * edit the daemon has not seen: closing the window, or the editor, loses nothing, and the
  * workflow itself changes only when a person reviews the diff and publishes it.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 import type {
   DraftGraphPath,
   DraftIssue,
@@ -80,10 +80,48 @@ function Editor({
 }): JSX.Element {
   const writable = useWritability();
   const announce = useAnnounce();
+  const root = useRef<HTMLDivElement>(null);
+  const returnReviewFocus = useCallback(() => {
+    // The draft bar survives review invalidation, including a switch to read-only.
+    root.current?.querySelector<HTMLButtonElement>(".orca-draftbar button:last-child")?.focus();
+  }, []);
   const readOnly = !draft.owner.you || !writable.can;
   const [path, setPath] = useState<DraftGraphPath>([]);
   const [selection, setSelection] = useState<EditorSelection | undefined>(undefined);
-  const [review, setReview] = useState<WorkflowDraftReview | undefined>(undefined);
+  const [heldReview, setReview] = useState<
+    { value: WorkflowDraftReview; request: number; targetEpoch: number | undefined } | undefined
+  >(undefined);
+  const reviewRequest = useRef(0);
+  const latest = useRef({ draft, readOnly, busy: controller.busy });
+  latest.current = { draft, readOnly, busy: controller.busy };
+  const invalidateReview = useCallback(() => {
+    reviewRequest.current += 1;
+    setReview(undefined);
+  }, []);
+  // A review is evidence for one revision. Drop it on observed revision/base or access
+  // changes, and retire outstanding review responses too, even if access later returns.
+  useEffect(invalidateReview, [
+    draft.revision,
+    draft.base.revision,
+    draft.base.current,
+    draft.owner.principalId,
+    readOnly,
+    controller.conflict,
+    invalidateReview,
+  ]);
+  useEffect(
+    () => () => {
+      reviewRequest.current += 1;
+    },
+    [],
+  );
+  const review =
+    heldReview?.request === reviewRequest.current &&
+    heldReview.value.revision === draft.revision &&
+    !readOnly &&
+    draft.base.current
+      ? heldReview.value
+      : undefined;
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const workflows = useWorkflowIds();
   const inspector = useRef<InspectorHandle>(null);
@@ -110,7 +148,21 @@ function Editor({
       path.length === 0 ? ops : ops.map((op) => (op.op === "setWorkflow" ? op : { ...op, graph: path })),
     [path],
   );
-  const apply = useCallback((ops: DraftOperation[]) => controller.apply(scoped(ops)), [controller, scoped]);
+  const apply = useCallback(
+    (ops: DraftOperation[]) => {
+      invalidateReview();
+      return controller.apply(scoped(ops));
+    },
+    [controller, scoped, invalidateReview],
+  );
+  const undo = () => {
+    invalidateReview();
+    return controller.undo();
+  };
+  const redo = () => {
+    invalidateReview();
+    return controller.redo();
+  };
 
   if (!graph)
     return (
@@ -118,7 +170,7 @@ function Editor({
         kind="error"
         title="The draft does not parse"
         body="Its YAML cannot be read. Undo the last change, or discard the draft."
-        action={{ label: "Undo", onClick: () => void controller.undo() }}
+        action={{ label: "Undo", onClick: () => void undo() }}
       />
     );
 
@@ -240,12 +292,33 @@ function Editor({
   };
 
   const startReview = async () => {
+    if (readOnly || controller.busy) return;
+    const request = ++reviewRequest.current;
+    const revision = draft.revision;
+    const targetEpoch = window.orca.daemonConnection?.read().epoch;
     const result = await controller.review();
-    if (result) setReview(result);
+    if (
+      result &&
+      request === reviewRequest.current &&
+      !latest.current.readOnly &&
+      latest.current.draft.base.current &&
+      latest.current.draft.revision === revision &&
+      result.revision === revision &&
+      targetEpoch === window.orca.daemonConnection?.read().epoch
+    )
+      setReview({ value: result, request, targetEpoch });
   };
 
   const publish = async () => {
-    if (!review) return;
+    if (
+      !review ||
+      heldReview?.request !== reviewRequest.current ||
+      latest.current.readOnly ||
+      latest.current.busy ||
+      latest.current.draft.revision !== review.revision ||
+      heldReview.targetEpoch !== window.orca.daemonConnection?.read().epoch
+    )
+      return;
     const result = await controller.publish(review.reviewToken);
     if (!result) return;
     announce(`Published ${draft.workflowId} version ${result.version}.`);
@@ -257,6 +330,7 @@ function Editor({
       setConfirmDiscard(true);
       return;
     }
+    invalidateReview();
     if (await controller.discard()) {
       announce("Draft discarded.");
       onClose();
@@ -289,7 +363,7 @@ function Editor({
               : "Saved in the draft";
 
   return (
-    <div className="orca-wfedit">
+    <div ref={root} className="orca-wfedit">
       <div
         className={`orca-draftbar ${textClass("caption")}${blocked || !draft.base.current ? " orca-draftbar--blocked" : ""}`}
         role="group"
@@ -310,7 +384,7 @@ function Editor({
             <Button
               size="sm"
               tone="ghost"
-              onClick={() => void controller.undo()}
+              onClick={() => void undo()}
               disabled={!draft.canUndo}
               disabledReason="Nothing to undo"
             >
@@ -319,7 +393,7 @@ function Editor({
             <Button
               size="sm"
               tone="ghost"
-              onClick={() => void controller.redo()}
+              onClick={() => void redo()}
               disabled={!draft.canRedo}
               disabledReason="Nothing to redo"
             >
@@ -389,7 +463,8 @@ function Editor({
           busy={controller.busy}
           errors={errors}
           message={controller.message}
-          onBack={() => setReview(undefined)}
+          returnFocus={returnReviewFocus}
+          onBack={invalidateReview}
           onPublish={() => void publish()}
         />
       ) : (
@@ -429,8 +504,8 @@ function Editor({
               onConnectMenu={() => inspector.current?.openConnect()}
               onAddMenu={() => palette.current?.focus()}
               onReorder={reorder}
-              onUndo={() => void controller.undo()}
-              onRedo={() => void controller.redo()}
+              onUndo={() => void undo()}
+              onRedo={() => void redo()}
             />
             <ValidationPanel issues={draft.issues} path={path} onGo={goTo} />
           </div>
@@ -462,6 +537,7 @@ function ReviewPanel({
   busy,
   errors,
   message,
+  returnFocus,
   onBack,
   onPublish,
 }: {
@@ -469,12 +545,20 @@ function ReviewPanel({
   busy: boolean;
   errors: number;
   message: string | undefined;
+  returnFocus: () => void;
   onBack: () => void;
   onPublish: () => void;
 }): JSX.Element {
   const diff = useMemo(() => diffText(review.baseText, review.text), [review]);
+  const panel = useRef<HTMLElement>(null);
+  useLayoutEffect(
+    () => () => {
+      if (panel.current?.contains(document.activeElement)) returnFocus();
+    },
+    [returnFocus],
+  );
   return (
-    <section className="orca-wfedit__review" aria-labelledby="orca-wfedit-review">
+    <section ref={panel} className="orca-wfedit__review" aria-labelledby="orca-wfedit-review">
       <header className="orca-wfedit__review-head">
         <h2 id="orca-wfedit-review" className={textClass("heading")}>
           {`Publish v${review.nextVersion}`}
