@@ -509,6 +509,40 @@ describe("following and holding", () => {
     await waitFor(() => expect(stream().getAttribute("aria-activedescendant")).toBe("log-line-3"));
   });
 
+  it.each(["Enter", "N", "Shift+N"])("holds a %s search landing across live appends", async (navigation) => {
+    scriptLog(Array.from({ length: 80 }, (_, i) => text("s-fan", `line ${i}\n`)));
+    renderStep("s-fan");
+    await screen.findByRole("listbox", { name: /^Output of fanout/ });
+    await waitFor(() => expect(scroller().scrollTop).toBeGreaterThan(0));
+    const field = screen.getByRole("searchbox", { name: /Search the output/ });
+    fireEvent.change(field, { target: { value: "line 2" } });
+    if (navigation === "Enter") fireEvent.keyDown(field, { key: "Enter", code: "Enter" });
+    else fireEvent.keyDown(stream(), { key: "n", code: "KeyN", shiftKey: navigation === "Shift+N" });
+    const heldAt = scroller().scrollTop;
+    expect(heldAt).toBeLessThan(81 * ROW - VIEWPORT);
+
+    vi.useFakeTimers();
+    act(() => {
+      fake.notify(agentUpdate("s-fan", 100, "arrived while reading\n"));
+      vi.advanceTimersByTime(200);
+    });
+    vi.useRealTimers();
+    expect(scroller().scrollTop).toBe(heldAt);
+    expect(await screen.findByRole("button", { name: /1.new line/ })).toBeTruthy();
+
+    // End explicitly resumes following; the next live append must reach the end.
+    fireEvent.keyDown(stream(), { key: "End", code: "End" });
+    expect(screen.queryByRole("button", { name: /new line/ })).toBeNull();
+    const latest = scroller().scrollTop;
+    vi.useFakeTimers();
+    act(() => {
+      fake.notify(agentUpdate("s-fan", 101, "following again\n"));
+      vi.advanceTimersByTime(200);
+    });
+    vi.useRealTimers();
+    expect(scroller().scrollTop).toBeGreaterThan(latest);
+  });
+
   it("marks where the stream stopped and where it came back, inline and not as a banner", async () => {
     scriptLog([text("s-fan", "before\n")]);
     const { rerender } = renderConnection("live");

@@ -80,6 +80,7 @@ export interface VirtualListTick {
  * exactly the page they just asked to see.
  */
 export interface VirtualListHandle {
+  /** Explicit navigation: releases following when targeting an earlier row. */
   reveal: (index: number) => void;
   shiftBy: (rows: number) => void;
 }
@@ -123,7 +124,7 @@ export interface VirtualListProps<T> {
    * the substrate says when following stopped, not whether it should start again.
    */
   follow?: boolean;
-  /** Called once when a scroll leaves the bottom while `follow` is set. */
+  /** Called once when scrolling or explicit navigation releases `follow`. */
   onHold?: () => void;
   /**
    * What the rows *are*, as ARIA sees them. `listbox` of `option`s is a flat list of
@@ -197,7 +198,21 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
   const leaveBottom = useCallback(() => hold.current?.(), []);
 
   const viewport = useListViewport(count, variant === "two-line" ? 2 : 1, follow ? leaveBottom : undefined);
-  const { metricsRef, reveal, shiftBy, window: slice } = viewport;
+  const { metricsRef, reveal: revealAutomatically, shiftBy, window: slice } = viewport;
+  const following = useRef(follow);
+  following.current = follow;
+  // Keys, the minimap and imperative search landings belong to the reader. Selection
+  // synchronization, density changes, prepends and appends remain automatic maintenance.
+  const reveal = useCallback(
+    (index: number) => {
+      if (following.current && index >= 0 && index < metricsRef.current.count - 1) {
+        following.current = false;
+        leaveBottom();
+      }
+      revealAutomatically(index);
+    },
+    [metricsRef, leaveBottom, revealAutomatically],
+  );
 
   useImperativeHandle(ref, () => ({ reveal, shiftBy }), [reveal, shiftBy]);
 
@@ -225,8 +240,8 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
      is the surface's state and survives all of it; this only moves the window to it. */
   const rowHeight = viewport.metrics.rowHeight;
   useEffect(() => {
-    if (selectedIndex !== undefined) reveal(selectedIndex);
-  }, [selectedIndex, rowHeight, reveal]);
+    if (selectedIndex !== undefined) revealAutomatically(selectedIndex);
+  }, [selectedIndex, rowHeight, revealAutomatically]);
 
   /* Following is half an effect and half a scroll handler, and the split is the point: the
      list grew, so go to its end — and a person scrolled away from the end, so stop, which
@@ -234,8 +249,8 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
      frame between the new offset being computed and being committed, when nobody touched
      anything. */
   useEffect(() => {
-    if (follow && count > 0) reveal(count - 1);
-  }, [follow, count, rowHeight, reveal]);
+    if (follow && count > 0) revealAutomatically(count - 1);
+  }, [follow, count, rowHeight, revealAutomatically]);
 
   /* The id of the selected row, and only while that row is one the list actually has: a
      dangling `aria-activedescendant` names nothing, which is worse than naming nothing. */
@@ -299,7 +314,10 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
                 role={ROW_ROLE[role]}
                 aria-selected={isSelected}
                 className={["orca-list__row", rowClassName?.(item, index, isSelected) ?? ""].filter(Boolean).join(" ")}
-                onClick={() => onSelect(index)}
+                onClick={() => {
+                  reveal(index);
+                  onSelect(index);
+                }}
               >
                 {renderRow(item, index, isSelected)}
               </div>

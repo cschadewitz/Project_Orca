@@ -133,15 +133,25 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
      step is in hand. Two effects rather than one because the second cannot run until a read
      has answered, and the first must not wait for it: the tree shows the run immediately. */
   const { selectRun, selectStep } = selection;
+  const appliedOpen = useRef<RunsSurfaceProps["open"]>(undefined);
+  const pendingOpen = useRef<RunsSurfaceProps["open"]>(undefined);
   useEffect(() => {
-    if (open) selectRun(open.runId);
-  }, [open, selectRun]);
+    // Wait for the run list: selection drops ids absent from it while it is loading.
+    // Only a new navigation may claim selection, including an identical URL opened again.
+    if (!open || state.phase !== "ready" || appliedOpen.current === open) return;
+    appliedOpen.current = open;
+    pendingOpen.current = open;
+    selectRun(open.runId);
+  }, [open, state.phase, selectRun]);
   useEffect(() => setFollow(true), [selectedRunId]);
   const onHold = useCallback(() => setFollow(false), []);
 
   const detail = selectedRunId === undefined ? undefined : tree.detailOf(selectedRunId);
   useEffect(() => {
-    if (!open?.nodeId || detail?.run.id !== open.runId) return;
+    if (!open?.nodeId || pendingOpen.current !== open || detail?.run.id !== open.runId) return;
+    // Consume the step request once its projection arrives. Later projection updates must
+    // not override a step the reader selected after landing.
+    pendingOpen.current = undefined;
     const matching = detail.steps.filter((step) => step.nodeId === open.nodeId);
     // An attempt names one; without one the highest attempt is the step a person means,
     // which is the same rule the tree draws the row by.
@@ -209,6 +219,7 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
 
   const onSelectRow = useCallback(
     (row: TreeRow) => {
+      pendingOpen.current = undefined;
       if (row.stepRunId !== undefined) selection.selectStep(row.runId, row.stepRunId);
       else selection.selectRun(row.runId);
     },
@@ -217,6 +228,7 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
 
   const onSelectEntry = useCallback(
     (entry: TimelineEntry) => {
+      pendingOpen.current = undefined;
       if (selectedRunId !== undefined) selection.selectEvent(selectedRunId, entry.seq);
     },
     [selection, selectedRunId],

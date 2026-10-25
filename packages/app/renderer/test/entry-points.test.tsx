@@ -10,7 +10,7 @@
  * process pushes.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ObjectHeader } from "../src/ui/object-header.js";
 import { harness, installBridge, renderChrome, stubMatchMedia, type Harness } from "./harness.js";
 import { AS_OF } from "./fixtures.js";
@@ -72,6 +72,73 @@ describe("deep links", () => {
     const detail = await screen.findByRole("complementary", { name: "Step detail" });
     await waitFor(() => expect(detail.textContent).toContain("attempt 1"));
     expect(detail.textContent).toContain("build");
+  });
+
+  it("hands a linked run back to the reader until the same link is explicitly opened again", async () => {
+    const { fake } = mount();
+    await screen.findByRole("button", { name: "Attention" });
+    await act(async () => fake.link("orca://run/run-parent"));
+    const tree = await screen.findByRole("tree", { name: "Run tree" });
+    await waitFor(() => expect(tree.getAttribute("aria-activedescendant")).toBe("tree-row-run-parent"));
+
+    fireEvent.click(document.getElementById("tree-row-run-old")!);
+    await waitFor(() => expect(tree.getAttribute("aria-activedescendant")).toBe("tree-row-run-old"));
+    // A chrome update must not turn the retained route into another navigation request.
+    await act(async () => fake.connect({ ...fake.connection, orcaVersion: "updated" }));
+    expect(tree.getAttribute("aria-activedescendant")).toBe("tree-row-run-old");
+
+    await act(async () => fake.link("orca://run/run-parent"));
+    await waitFor(() => expect(tree.getAttribute("aria-activedescendant")).toBe("tree-row-run-parent"));
+  });
+
+  it("applies a step link once and honors the same explicit step link again", async () => {
+    const { fake } = mount();
+    await screen.findByRole("button", { name: "Attention" });
+    await act(async () => fake.link("orca://run/run-parent/step/build.1"));
+    const detail = await screen.findByRole("complementary", { name: "Step detail" });
+    await waitFor(() => expect(detail.textContent).toContain("attempt 1"));
+    const tree = screen.getByRole("tree", { name: "Run tree" });
+    // Expand the linked run and choose the later attempt.
+    fireEvent.keyDown(tree, { key: "ArrowRight", code: "ArrowRight" });
+    await waitFor(() => expect(document.getElementById("tree-row-run-parent/s-build-2")).toBeTruthy());
+    fireEvent.click(document.getElementById("tree-row-run-parent/s-build-2")!);
+    await waitFor(() => expect(detail.textContent).toContain("attempt 2"));
+    await act(async () => fake.connect({ ...fake.connection, orcaVersion: "updated" }));
+    expect(detail.textContent).toContain("attempt 2");
+    await act(async () =>
+      fake.notify({
+        kind: "notification",
+        method: "step.changed",
+        params: {
+          subscriptionId: "sub-1",
+          runId: "run-parent",
+          seq: 40,
+          at: AS_OF,
+          stepRunId: "s-fan",
+          status: "failed",
+          event: "step.failed",
+        },
+      }),
+    );
+    expect(detail.textContent).toContain("attempt 2");
+
+    await act(async () => fake.link("orca://run/run-parent/step/build.1"));
+    await waitFor(() => expect(detail.textContent).toContain("attempt 1"));
+  });
+
+  it("lets a user selection supersede a step link whose projection is still loading", async () => {
+    const { fake } = mount();
+    await screen.findByRole("button", { name: "Attention" });
+    const release = fake.hold("runs.get");
+    await act(async () => fake.link("orca://run/run-parent/step/build.1"));
+    const tree = await screen.findByRole("tree", { name: "Run tree" });
+    await waitFor(() => expect(tree.getAttribute("aria-activedescendant")).toBe("tree-row-run-parent"));
+    // Choosing the run itself asks for its summary, superseding the pending step landing.
+    fireEvent.click(document.getElementById("tree-row-run-parent")!);
+    await act(async () => release());
+    const detail = screen.getByRole("complementary", { name: "Step detail" });
+    await waitFor(() => expect(detail.textContent).toContain("Variables ("));
+    expect(detail.textContent).not.toContain("attempt 1");
   });
 
   it("takes the highest attempt when the URL names a node and no attempt", async () => {
