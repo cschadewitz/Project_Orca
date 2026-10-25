@@ -77,6 +77,43 @@ function renderForm(shape: FieldShape, initial: unknown, additions: Partial<Stru
   );
   return { ...result, onEdit, current: () => current };
 }
+/** Keep the same mounted Union while copied values, schema and paths arrive from its parent. */
+function renderVariantReview() {
+  h = harness();
+  const Providers = h.Providers;
+  const onEdit = vi.fn<(edits: readonly EditIntent[]) => void>();
+  const access = vi.fn<StructuredFormProps["access"]>(() => ({ allowed: true }));
+  const value = { type: "local", id: "h", command: "tool", extension: { nested: [false, 0, "", null] } };
+  let props: StructuredFormProps = {
+    shape: union,
+    value,
+    path: ["fixture"],
+    label: "Fixture",
+    errors: [],
+    access,
+    onEdit,
+    rowKey: (_path, index) => String(index),
+  };
+  const view = () => (
+    <Providers>
+      <StructuredForm {...props} />
+    </Providers>
+  );
+  const result = render(view());
+  return {
+    value,
+    onEdit,
+    access,
+    rerender: (changes: Partial<StructuredFormProps>) => {
+      props = { ...props, ...changes };
+      result.rerender(view());
+    },
+  };
+}
+function chooseVariant() {
+  fireEvent.click(screen.getByRole("button", { name: "Fixture variant" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "ssh" }));
+}
 const input = (label: string): HTMLInputElement =>
   screen.getByLabelText<HTMLInputElement>(new RegExp(`^${label}fixture`));
 
@@ -180,6 +217,103 @@ describe.each(THEMES)("structured forms in %s", (theme) => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm variant change" }));
     expect(form.current()).toEqual({ type: "ssh", id: "h", extension: true });
     expect(input("hostname").value).toBe("");
+  });
+});
+
+describe("pending variant review identity", () => {
+  it("confirms the exact reviewed batch after copied/reordered input, preserving common fields and nested extensions", () => {
+    const form = renderVariantReview();
+    chooseVariant();
+    const proposed = form.access.mock.calls
+      .map(([edits]) => edits)
+      .filter((edits) => edits.some((edit) => edit.kind === "remove" && edit.path.at(-1) === "command"));
+    expect(proposed.length).toBeGreaterThan(0);
+    form.rerender({
+      shape: structuredClone(union),
+      path: ["fixture"],
+      value: {
+        extension: structuredClone(form.value.extension),
+        command: "tool",
+        id: "h",
+        type: "local",
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm variant change" }));
+    expect(form.onEdit).toHaveBeenCalledOnce();
+    const confirmed = form.onEdit.mock.calls[0]![0];
+    expect(proposed).toContain(confirmed);
+    expect(confirmed).toEqual([
+      { kind: "remove", path: ["fixture", "command"] },
+      { kind: "set", path: ["fixture", "type"], value: "ssh" },
+    ]);
+    expect(projectEdits({ fixture: form.value }, confirmed)).toEqual({
+      fixture: { type: "ssh", id: "h", extension: { nested: [false, 0, "", null] } },
+    });
+    // A delayed parent update cannot leave the already-consumed confirmation available.
+    expect(screen.queryByRole("button", { name: "Confirm variant change" })).toBeNull();
+  });
+  it.each(["draft", "extension", "path", "schema"])(
+    "invalidates %s changes permanently, including after a revert",
+    (change) => {
+      const form = renderVariantReview();
+      chooseVariant();
+      const changes: Partial<StructuredFormProps> =
+        change === "path"
+          ? { path: ["other"] }
+          : change === "schema"
+            ? {
+                shape: {
+                  ...union,
+                  branches: {
+                    ...union.branches,
+                    ssh: object({ type: scalar(), id: scalar(), hostname: scalar(), command: scalar() }),
+                  },
+                },
+              }
+            : {
+                value: {
+                  ...form.value,
+                  ...(change === "draft" ? { command: "new" } : { extension: { nested: [true, 0, "", null] } }),
+                },
+              };
+      form.rerender(changes);
+      expect(screen.queryByRole("button", { name: "Confirm variant change" })).toBeNull();
+      form.rerender({ value: structuredClone(form.value), shape: structuredClone(union), path: ["fixture"] });
+      expect(screen.queryByRole("button", { name: "Confirm variant change" })).toBeNull();
+      expect(form.onEdit).not.toHaveBeenCalled();
+    },
+  );
+  it("invalidates a moved row review instead of applying its old paths to a different row", () => {
+    const form = renderForm({ ...meta, kind: "array", item: union }, [
+      { type: "local", id: "a", command: "first" },
+      { type: "local", id: "b", command: "second" },
+    ]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Fixture entry variant" })[0]!);
+    fireEvent.click(screen.getByRole("menuitem", { name: "ssh" }));
+    expect(screen.getByRole("button", { name: "Confirm variant change" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Move fixture[1] up" }));
+    expect(screen.queryByRole("button", { name: "Confirm variant change" })).toBeNull();
+    expect(form.current()).toEqual([
+      { type: "local", id: "b", command: "second" },
+      { type: "local", id: "a", command: "first" },
+    ]);
+    expect(form.onEdit).toHaveBeenCalledExactlyOnceWith([{ kind: "move", path: ["fixture"], from: 1, to: 0 }]);
+  });
+  it("rechecks access at the click even without an intervening render", () => {
+    const form = renderVariantReview();
+    chooseVariant();
+    const confirm = screen.getByRole("button", { name: "Confirm variant change" });
+    form.access.mockReturnValue({ allowed: false, reason: "Synthetic authority revoked." });
+    fireEvent.click(confirm);
+    expect(form.onEdit).not.toHaveBeenCalled();
+  });
+  it("keeps cancellation final through copied rerenders", () => {
+    const form = renderVariantReview();
+    chooseVariant();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel variant change" }));
+    form.rerender({ value: structuredClone(form.value), shape: structuredClone(union) });
+    expect(screen.queryByRole("button", { name: "Confirm variant change" })).toBeNull();
+    expect(form.onEdit).not.toHaveBeenCalled();
   });
 });
 

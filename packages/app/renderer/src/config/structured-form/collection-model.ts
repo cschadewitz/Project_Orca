@@ -6,6 +6,19 @@ export const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 export const samePath = (a: DocumentPath, b: DocumentPath): boolean =>
   a.length === b.length && a.every((part, i) => part === b[i]);
+/** Display projections and parsed metadata are copied on reads; object identity is not a draft change. */
+export function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) && Array.isArray(b))
+    return a.length === b.length && a.every((value, index) => sameValue(value, b[index]));
+  if (isObject(a) && isObject(b)) {
+    const keys = Object.keys(a);
+    return (
+      keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && sameValue(a[key], b[key]))
+    );
+  }
+  return false;
+}
 export const pathLabel = (path: DocumentPath): string =>
   path.reduce<string>(
     (s, p) =>

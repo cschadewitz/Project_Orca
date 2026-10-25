@@ -2,7 +2,15 @@
 import { useLayoutEffect, useRef, useState, type JSX } from "react";
 import { Button, Card, ConfigField, Menu, Text, textClass } from "../../ui/index.js";
 import type { DocumentPath, EditAccess, EditIntent, FieldError, FieldShape } from "./contracts.js";
-import { initialValue, isObject, pathLabel, recordKeyError, samePath, switchVariant } from "./collection-model.js";
+import {
+  initialValue,
+  isObject,
+  pathLabel,
+  recordKeyError,
+  samePath,
+  sameValue,
+  switchVariant,
+} from "./collection-model.js";
 
 export interface StructuredFormProps {
   shape: FieldShape;
@@ -478,14 +486,26 @@ function Union({
   form: StructuredFormProps;
   shape: Extract<FieldShape, { kind: "union" }>;
 }): JSX.Element {
-  const [pending, setPending] = useState<{ value: unknown; branch: string }>();
+  const [pending, setPending] = useState<{
+    value: unknown;
+    shape: FieldShape;
+    path: DocumentPath;
+    edits: readonly EditIntent[];
+  }>();
   const current = isObject(form.value) ? form.value[shape.discriminator] : undefined;
   const branch =
     typeof current === "string" && Object.hasOwn(shape.branches, current) ? shape.branches[current] : undefined;
   const edits =
-    pending !== undefined && pending.value === form.value
-      ? switchVariant(shape, form.value, form.path, pending.branch)
+    pending !== undefined &&
+    samePath(pending.path, form.path) &&
+    sameValue(pending.value, form.value) &&
+    sameValue(pending.shape, shape)
+      ? pending.edits
       : undefined;
+  useLayoutEffect(() => {
+    // Once invalidated, a review must not reappear if the draft/path/schema later returns to its old value.
+    if (pending && !edits) setPending(undefined);
+  }, [pending, edits]);
   return (
     <>
       <Menu
@@ -495,7 +515,9 @@ function Union({
           return { id, label: id, disabled: edits === undefined || !form.access(edits).allowed };
         })}
         onChoose={(item) => {
-          if (item.id !== current) setPending({ value: form.value, branch: item.id });
+          const edits = switchVariant(shape, form.value, form.path, item.id);
+          if (item.id !== current && edits && form.access(edits).allowed)
+            setPending({ value: form.value, shape, path: [...form.path], edits });
         }}
       >
         {typeof current === "string" ? current : "Choose variant"}
@@ -512,7 +534,16 @@ function Union({
                 {pathLabel(edit.path)}
               </Text>
             ))}
-          <Action form={form} edits={edits}>
+          <Action
+            form={{
+              ...form,
+              onEdit: (edits) => {
+                setPending(undefined);
+                form.onEdit(edits);
+              },
+            }}
+            edits={edits}
+          >
             Confirm variant change
           </Action>
           <Button onClick={() => setPending(undefined)}>Cancel variant change</Button>
