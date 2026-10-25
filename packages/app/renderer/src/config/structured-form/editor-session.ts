@@ -77,7 +77,21 @@ export class StructuredEditorSession {
   }
   edit(edits: readonly EditIntent[]): boolean {
     if (this.frozen || !sameTarget(this.target, this.currentTarget)) return false;
-    this.edits = [...this.edits, ...structuredClone(edits)];
+    const next = [...this.edits];
+    for (const edit of structuredClone(edits)) {
+      const previous = next.at(-1);
+      // Only adjacent sets to the same typed path can replace one another.
+      // Structural operations and other paths remain ordered barriers.
+      if (
+        edit.kind === "set" &&
+        previous?.kind === "set" &&
+        edit.path.length === previous.path.length &&
+        edit.path.every((segment, index) => segment === previous.path[index])
+      ) {
+        next[next.length - 1] = edit;
+      } else next.push(edit);
+    }
+    this.edits = next;
     this.sequence++;
     this.review = undefined;
     this.applyOutcome = undefined;
