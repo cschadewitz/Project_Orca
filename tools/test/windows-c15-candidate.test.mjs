@@ -1,12 +1,14 @@
 /** Portable adversarial protocol/pin checks and static validation; no Windows acceptance. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { EventEmitter, once } from "node:events";
+import { PassThrough } from "node:stream";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { preload, launchCli, validateLifecycle } from "../windows-c15/cli-lifecycle.mjs";
+import { preload, launchCli, validateLifecycle, CLI_LIMIT_MS } from "../windows-c15/cli-lifecycle.mjs";
 import { createRequire } from "node:module";
 import {
   specification,
@@ -156,6 +158,10 @@ test("candidate preserves the frozen cell campaign byte-for-byte apart from obse
   assert.match(supervisor, /workEqual, true/);
   assert.match(supervisor, /row.executionOracle.artifactCount, 29 \* DEMO_COUNT/);
   assert.match(supervisor, /bounded\(completed, 50000/);
+  assert.match(
+    supervisor,
+    /await ready;\s+if \(index === 0\) fs.writeFileSync\(path.join\(base, "execution.running"\)/,
+  );
   assert.match(child, /120000/);
   assert.match(supervisor, /!result.disposableStateRemoved/);
 });
@@ -527,6 +533,7 @@ test("startup failure reports bounded stderr and remains rejected during adversa
     // Let failure settle before awaiting, as when the synchronous adversary throws.
     await f.children.at(-1).closed;
     await new Promise((resolve) => setImmediate(resolve));
+    await assert.rejects(work.ready, /before readiness/);
     await assert.rejects(work.completed, (error) => {
       assert.match(error.message, /empty child lifecycle receipt/);
       assert.match(error.message, /exit=1; receiptBytes=0/);
@@ -546,6 +553,195 @@ test("startup failure reports bounded stderr and remains rejected during adversa
     });
   } finally {
     await cleanupFixture(f);
+  }
+});
+
+// The blocker is a separate test-only preload, released explicitly by IPC. No
+// timer determines success: both modes must remain parked until the real,
+// digest-pinned child preload can emit its validated start frame.
+test("slow child startup gates both Off and On fault work on actual preload readiness", async () => {
+  for (const mode of ["off", "on"]) {
+    const f = fixture();
+    try {
+      const blocker = path.join(f.root, "before-preload.mjs");
+      fs.writeFileSync(
+        blocker,
+        `
+        process.send("blocked");
+        await new Promise(resolve => process.once("message", resolve));
+      `,
+      );
+      fs.writeFileSync(
+        f.entry,
+        `
+        process.send("entry");
+        await new Promise(resolve => process.once("message", resolve));
+        process.disconnect();
+      `,
+      );
+      const work = tracked(f, mode, f.entry, (command, args, options) =>
+        spawn(command, ["--import", pathToFileURL(blocker).href, ...args], {
+          ...options,
+          stdio: [...options.stdio, "ipc"],
+        }),
+      );
+      let faultEnteredNs;
+      const campaign = work.ready.then(() => {
+        faultEnteredNs = process.hrtime.bigint().toString();
+      });
+      campaign.catch(() => {});
+      assert.deepEqual(await once(work.child, "message"), ["blocked", undefined]);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(faultEnteredNs, undefined, `${mode} must not start faults on spawn`);
+      const entry = once(work.child, "message");
+      work.child.send("release-start");
+      const ready = await work.ready;
+      await campaign;
+      await entry;
+      assert.equal(ready.startReceipt.pid, work.child.pid);
+      assert.ok(BigInt(ready.startReceipt.startedNs) < BigInt(faultEnteredNs));
+      assert.ok(BigInt(ready.parentReadyDeliveredNs) <= BigInt(faultEnteredNs));
+      work.child.send("finish");
+      const member = await work.completed;
+      assert.deepEqual(member.startReceipt, ready.startReceipt);
+      validateLifecycle(member);
+    } finally {
+      await cleanupFixture(f);
+    }
+  }
+});
+
+// Controlled child pipe events exercise framing, early failure and deadlines
+// without a real-time sleep or relying on OS chunk/exit delivery order.
+function protocolFixture() {
+  let expected;
+  const child = new EventEmitter();
+  Object.assign(child, {
+    pid: process.pid,
+    exitCode: null,
+    signalCode: null,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    stdio: [null, null, null, new PassThrough()],
+  });
+  const work = launchCli(
+    (_command, _args, options) => {
+      expected = JSON.parse(options.env.C15_CLI_LIFECYCLE);
+      return child;
+    },
+    process.execPath,
+    ["synthetic-entry"],
+    { cwd: "synthetic-cwd", env: {} },
+  );
+  const start = {
+    schema: 2,
+    kind: "start",
+    ...expected,
+    pid: child.pid,
+    startedNs: process.hrtime.bigint().toString(),
+  };
+  const write = (...frames) => child.stdio[3].write(frames.map((frame) => JSON.stringify(frame) + "\n").join(""));
+  const close = (code = 0) => {
+    child.exitCode = code;
+    child.emit("exit", code, null);
+    child.stdio[3].end();
+    // Let PassThrough deliver EOF before ChildProcess.close, as spawn does.
+    setImmediate(() => child.emit("close", code, null));
+  };
+  return { ...work, start, write, close };
+}
+test("fragmented start/final frames require final receipt, EOF and exit before acceptance", async () => {
+  const f = protocolFixture();
+  let ready = false,
+    completed = false;
+  f.ready.then(() => {
+    ready = true;
+  });
+  f.completed.then(() => {
+    completed = true;
+  });
+  const frame = JSON.stringify(f.start);
+  f.child.stdio[3].write(frame.slice(0, 10));
+  await Promise.resolve();
+  assert.equal(ready, false);
+  f.child.stdio[3].write(frame.slice(10));
+  await Promise.resolve();
+  assert.equal(ready, false, "newline framing is mandatory");
+  f.child.stdio[3].write("\n");
+  await f.ready;
+  assert.equal(ready, true);
+  f.write({ ...f.start, kind: "final", endedNs: process.hrtime.bigint().toString(), exitCode: 0 });
+  await Promise.resolve();
+  assert.equal(completed, false);
+  f.close();
+  validateLifecycle(await f.completed);
+});
+test("invalid, stale, duplicate or failed starts cannot authorize diagnostic work", async () => {
+  const cases = [
+    (f) => f.child.emit("error", Error("spawn failed")),
+    (f) => f.close(2),
+    (f) => f.child.emit("close", 0, null),
+    (f) => f.child.stdio[3].destroy(),
+    (f) => f.child.stdio[3].write("not-json\n"),
+    (f) => f.write({ ...f.start, schema: 1 }),
+    (f) => f.write({ ...f.start, kind: "final" }),
+    (f) => f.write({ ...f.start, startedNs: "0" }),
+    (f) => f.write({ ...f.start, startedNs: String(process.hrtime.bigint() + 10n ** 18n) }),
+    (f) => f.write(f.start, f.start),
+    (f) => f.write({ ...f.start, unexpected: true }),
+    ...["nonce", "pid", "entry", "cwd", "preloadSha256"].map((key) => (f) => f.write({ ...f.start, [key]: "wrong" })),
+    (f) => f.child.stdio[3].write("x".repeat(4097)),
+  ];
+  for (const inject of cases) {
+    const f = protocolFixture();
+    let campaignStarted = false;
+    const campaign = f.ready.then(() => {
+      campaignStarted = true;
+    });
+    campaign.catch(() => {});
+    inject(f);
+    await assert.rejects(campaign);
+    await assert.rejects(f.completed);
+    assert.equal(campaignStarted, false);
+  }
+});
+test("readiness alone cannot replace final frame, EOF, successful exit or the launch deadline", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    // Missing or unterminated start remains bounded, even with no child events.
+    for (const partial of ["", '{"schema":2']) {
+      const f = protocolFixture();
+      if (partial) f.child.stdio[3].write(partial);
+      t.mock.timers.tick(CLI_LIMIT_MS);
+      await assert.rejects(f.ready, /cli-deadline/);
+      await assert.rejects(f.completed, /cli-deadline/);
+    }
+    for (const state of [
+      "no-final",
+      "no-eof",
+      "no-close",
+      "failed-exit",
+      "mismatched-final",
+      "duplicate-start",
+      "oversized-total",
+    ]) {
+      const f = protocolFixture();
+      // Move most of the launch budget before readiness, then prove it is not reset.
+      t.mock.timers.tick(CLI_LIMIT_MS - 1000);
+      f.write(f.start);
+      await f.ready;
+      const final = { ...f.start, kind: "final", endedNs: process.hrtime.bigint().toString(), exitCode: 0 };
+      if (state === "no-eof" || state === "no-close") f.write(final);
+      if (state === "no-close") f.child.stdio[3].end();
+      if (state === "failed-exit") f.close(2);
+      if (state === "mismatched-final") f.write({ ...final, startedNs: String(BigInt(f.start.startedNs) + 1n) });
+      if (state === "duplicate-start") f.write(f.start);
+      if (state === "oversized-total") f.child.stdio[3].write(" ".repeat(4096));
+      t.mock.timers.tick(1000);
+      await assert.rejects(f.completed);
+    }
+  } finally {
+    t.mock.timers.reset();
   }
 });
 

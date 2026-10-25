@@ -211,12 +211,18 @@ async function run(mode) {
   for (let index = 0; index < DEMO_COUNT; index++) {
     const directory = path.join(execution, String(index));
     fs.mkdirSync(directory);
-    const { child: cli, completed } = launchCli(
+    const {
+      child: cli,
+      ready,
+      completed,
+    } = launchCli(
       launch,
       process.execPath,
       [path.join(repo, "packages/cli/dist/main.js"), "demo", "--dir", directory, "--keep", "--quiet"],
       { cwd: directory, env: { ...env, PATH: process.env.PATH } },
     );
+    // Symmetric Off/On authorization comes only from the actual preload.
+    await ready;
     if (index === 0) fs.writeFileSync(path.join(base, "execution.running"), "running");
     const member = await bounded(completed, 50000, "cli-deadline");
     row.executionMembers.push({ index, ...member });

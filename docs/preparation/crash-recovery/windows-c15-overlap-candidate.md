@@ -93,13 +93,36 @@ or pipe writes. It adds no timer, work gate, candidate import, engine hook or ex
 interception. It does not fabricate workflow work. Each corresponding demo still
 must independently exit successfully and meet the original artifact/oracle gate.
 
-The child sends exactly one complete JSON receipt over spawn's dedicated anonymous
-fd 3 pipe. There is no receipt pathname to substitute, poll late or reuse. The
-parent requires EOF and successful exit within the unchanged 50-second bound;
-missing, malformed, extra, oversized and signaled receipts fail closed. Receipt
-schema, launch nonce, actual child PID, CLI entry, working directory, preload digest
-and exit code must match the launch. Child timestamps must fall within the parent
-launch audit envelope. A duplicated/substituted receipt from the other demo fails.
+The child sends two newline-delimited schema-2 JSON frames over spawn's dedicated
+anonymous fd 3 pipe: `kind: "start"` after binding validation and exit-listener
+installation, then `kind: "final"` at exit. Both contain the same child-captured
+`startedNs`; final adds `endedNs` and `exitCode`. Total captured pipe data remains
+bounded at **4096 bytes**, including both frames. There is no receipt pathname to
+substitute, poll late or reuse. The parent validates exact keys, schema/kind/order,
+launch nonce, actual child PID, CLI entry, working directory and preload digest
+before releasing readiness. Start must be no earlier than parent launch and no
+later than delivery; final must match the same start and remain within the launch/
+exit audit envelope. Extra/duplicate/malformed/stale frames fail closed.
+
+The supervisor awaits validated readiness before writing `execution.running`,
+symmetrically for Off and On. Diagnostic setup and its existing memory baseline
+still precede CLI launch; its fault campaign remains parked until that signal.
+Each real CLI runs immediately, without waiting for parent acknowledgement,
+additional work, sleeps or a delayed exit. The second demo also requires readiness,
+with no diagnostic/oracle work inserted between demos. Late delivery may make a
+campaign fail the unchanged post-hoc overlap gate; it never enlarges a child interval.
+
+Readiness is permission to start diagnostic work, not acceptance. A complete final
+frame, matching start/final bindings and strict timestamps, pipe EOF, child close,
+exit 0, both demo oracles and all overlap gates remain mandatory. One collector
+deadline starts immediately before spawn and covers readiness through final/EOF/
+close within the unchanged **50 seconds**; readiness never resets that deadline.
+Both promises have rejection handlers attached at creation, retaining their
+rejected state for callers. A missing start, spawn/pipe error, early exit/close or
+unterminated frame cannot leave the supervisor waiting indefinitely. Stderr is
+drained with only its final 4096 bytes retained. Owned-tree cleanup remains the
+supervisor's existing responsibility after any failure.
+
 The binding environment variable is deleted before CLI entry and `--import` is
 passed only on this CLI's argv, so scripted agents do not inherit instrumentation.
 This trusts the pinned CLI and harness; it is not authentication against a malicious
@@ -189,7 +212,7 @@ and the new selected-source comparison below address parity separately; they do
 not explain the exact historical 32-artifact interleaving. No Windows workflow was
 dispatched; parent review remains required first.
 
-## Selected-source Linux verification
+## Historical selected-source Linux verification
 
 The [source/build provenance report](windows-c15-selected-source-provenance.json)
 records the selected source/tree, regenerated 365-file inventory digest, all five
@@ -243,3 +266,57 @@ Self-review confirms the 29/58, two-demo sequence, 50/120-second limits, memory
 baseline/budgets, no-GC/no-idle rules and frozen failure evidence are preserved.
 Parent independent review and CI remain separate. No Windows dispatch, activation,
 signing, release, credentials or security-setting changes were performed.
+
+## Startup-ordering correction after Windows run 4
+
+Fresh remote resolution and fetch before branching found main at
+`14666a315b43bc859ad0b73dda92ddf280b0de10` and draft #663 at
+`6fdb00d6791144bf86f7413c3c77dcdfa3ede13b`. Main is already an ancestor of that
+head. Product source/tree, all 365 compiled hashes, native/Electron pins, the
+frozen child campaign, historical files and workflow source checkout stay unchanged.
+Only the changed harness files' legitimate hashes are refreshed.
+
+Parent-verified [Windows run 4/job 40215243034](https://github.com/cschadewitz/Project_Orca/actions/jobs/40215243034)
+passed all 18 then-current portable tests, source/build/native setup and Documents
+ancestry. The full stall Off/On campaign passed correctness, memory, overlap,
+owned exits and cleanup. Failure's only rejected gate was
+`fault-outside-cli-execution:readSetting`. Failure On first CLI
+`startedNs=1434218167500`, `endedNs=1469018317800`; first readSetting
+`faultEnteredNs=1434110054800`, **108.1127 ms before** the child-owned start.
+Other failure cells/checks passed, `diagnostic.ok=true`, both exits 0; On managed
+memory was **15,885,890 bytes** (stall On **16,252,060 bytes**). This demonstrates
+that signaling immediately after spawn can release faults before preload execution.
+
+The parent materialized artifact **12607157449** through the supported GitHub plus
+`download_file` route and verified **68,202 bytes**, SHA-256
+`3a3b718471c4d688f1a29f57af6eb4c10285bcd200796807eac9ee3e8849e932`.
+These receipt findings are trusted parent evidence; this correction environment
+did not download, hash or independently parse that ZIP. The historical failure
+and successful stall remain results for the old harness, with no retroactive pass.
+
+The new IPC-controlled slow-start test parks a real child in a test-only earlier
+preload, checks that neither Off nor On starts fault work, then explicitly releases
+it to the actual digest-pinned preload and verifies readiness precedes fault entry.
+Additional deterministic pipe tests cover split frames, missing/malformed/duplicate/
+stale starts, every binding, spawn/pipe errors, exit/close before readiness and a
+single launch-time deadline that cannot reset after readiness. Final receipt,
+EOF, exit and delayed-parent/post-exit/inter-demo-gap/2-microsecond negatives remain.
+No test-only blocker is used by the real demos or Windows campaign.
+
+On Linux Node **24.19.0**, all **22 portable tests** pass with
+`C15_SOURCE=/workspace/c15-readiness-source`, including exact source/compiled/native/
+harness pin verification and substitution/seal rejection. A fresh isolated frozen
+install used **pnpm 11.19.0**, scripts disabled and task-owned store/state/cache
+paths; pinned pnpm **12.4.2** is unavailable locally, so package-manager parity is
+unverified. TypeScript **7.0.2** forced LF build reproduces every compiled digest.
+Targeted ESLint, Prettier and whitespace checks pass. No product, lockfile,
+activation state, credentials, sandbox, security settings or unrelated work changed.
+
+Self-review checks the actual-preload readiness source, both-mode signal placement,
+frame order and total bound, immediate promise handling, launch-time deadline,
+mandatory final/EOF/exit validation and existing owned cleanup. Two real demos,
+29/58 and semantic/work gates, all 20 cells, original elapsed and strict overlap
+gates, diagnostic 120-second watchdog and memory baseline/accounting/budgets remain.
+No Windows workflow is dispatched. Parent review and exact-head CI are required
+before any later bounded Windows run; this Linux verification does not establish
+Windows pipe/clock behavior or new C15 campaign acceptance.

@@ -162,7 +162,14 @@ async function run(mode, index) {
       eof: receiptEof,
       actualPid: child.pid,
     };
-    assert.deepEqual(JSON.parse(receiptBytes), member.lifecycleReceipt);
+    assert.deepEqual(
+      receiptBytes
+        .toString("utf8")
+        .trimEnd()
+        .split("\n")
+        .map((frame) => JSON.parse(frame)),
+      [member.startReceipt, member.lifecycleReceipt],
+    );
   } else assert.equal(receiptBytes.length, 0);
   result.rows.push(row);
   save();

@@ -13,18 +13,18 @@
   "harness": {
     ".github/workflows/windows-c15-candidate.yml": "fca3ad411f8682eb8bab625079e696c4d62f3edae9ae445caf80f58b916c6cd6",
     "packages/app/test/recovery-preparation/windows-c15-candidate-child.cjs": "c8f5baefeb6433c0b3368183d5e04b3b426f9489eb176fdea010578c145b1942",
-    "packages/app/test/recovery-preparation/windows-c15-candidate.mjs": "75a37f83f93235c1cbeb8a64973c7c9d876ecefa2773bfcea00bc321a2b54cac",
+    "packages/app/test/recovery-preparation/windows-c15-candidate.mjs": "9bafacfae52f5632eb1d08c23a70d7fd0de739aecca986d849801ddfb1ebd18e",
     "packages/app/test/recovery-preparation/windows-c15-child.cjs": "a02888f23a46435fb488003eda1c9a95d79a710fadd183522292bd5fe3e818fc",
     "packages/app/test/recovery-preparation/windows-c15-paired.mjs": "60e3cc4efd0da3a9c9b18bd3f718957d9d8b7919699335ab75c0781ac061c2e5",
-    "tools/test/windows-c15-candidate.test.mjs": "1603fba1a38950102f818105380c3a1c15c9a340e30aead6ad60df043f000b1c",
+    "tools/test/windows-c15-candidate.test.mjs": "28750be818c542d08201cf839ac233bba1e5452160639620bec1ffbacfa5b689",
     "tools/windows-c15/build.mjs": "1472e6fae9a8679c54279b266db86b75dca330c568f9dfba9be299621eeb6e7a",
-    "tools/windows-c15/cli-lifecycle-preload.mjs": "3081716b64e2ece587bf02486300fed401db826d1debabe4d6175fdc773a7cf4",
-    "tools/windows-c15/cli-lifecycle.mjs": "5b8f4484b850e7cdfc868f9af397d4dbb793dfba53b83d20005dd032b9d14250",
+    "tools/windows-c15/cli-lifecycle-preload.mjs": "fb55a23eb3443e0ecbf9ba0ec06595dc0129f2ed73dae8b00b7e8b112d3fdae5",
+    "tools/windows-c15/cli-lifecycle.mjs": "f272f0b3dfb62c2d7b4d8ca3c5663e37ffbfe7809fb176bddff62267440bdccd",
     "tools/windows-c15/manifest.mjs": "cc83952b16eea28fcc4296ba143b6f1d6b08b98e9a818173d8f69973a9f6d88c",
     "tools/windows-c15/overlap.mjs": "ece75cef7bd5be129d8bff6045000533020361b6bdc90f5d18898725827eb3ac",
     "tools/windows-c15/root-probe.mjs": "b5b04d9b962bf2845046631300216a89e3ebf844666ec588d1a16bfcae5deae7",
     "tools/windows-c15/stage.mjs": "ab9c3073544f5ef701978843a5db4089bd937973514321df3dbe758d711fbd34",
-    "tools/windows-c15/parity.mjs": "c01abb2d7f9fbeb8efbcab6059debda4e0cfb0e6fa4e461cca085ec59579a6b3"
+    "tools/windows-c15/parity.mjs": "36c3e2e4ed5ea1c3e62b00735d303f490fb7f527d570e2bc799d2033f77bf31b"
   },
   "compiled": {
     "packages/agents/dist/acp-session.js": "400bbd45b23b9bdb9bf26776bb183cca6a103437427e37047d039bdc8ae9ccdd",
