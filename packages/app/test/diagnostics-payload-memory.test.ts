@@ -25,13 +25,74 @@ it("reuses aligned storage, erases released bytes and refuses before the unchang
   expect(first.bytes.every((byte) => byte === 0)).toBe(true);
   const second = memory.from("next");
   expect(second.bytes.byteOffset).toBe(offset);
-  const release = memory.allowance(3 * RECOVERY_LIMITS.exportBytes);
+  const release = memory.allowance(RECOVERY_LIMITS.payloadBytes - memory.stats().arenaBytes);
   expect(memory.stats().allocatedBytes).toBe(RECOVERY_LIMITS.payloadBytes);
   expect(() => memory.allowance(1)).toThrow("capacity_limited");
   expect(memory.stats().peakBytes).toBe(RECOVERY_LIMITS.payloadBytes);
   ring.release();
   second.release();
   release();
+  release();
+  expect(memory.stats().allocatedBytes).toBe(0);
+});
+
+it("bounds metadata/ring backing storage before growing for a report, without moving live bytes", () => {
+  const memory = new ControlledPayloadMemory();
+  const metadata = memory.from("synthetic metadata");
+  const ring = memory.allocate(81_920);
+  ring.bytes.fill(7);
+  expect(memory.stats().arenaBytes).toBeLessThanOrEqual(131_072);
+  const original = ring.bytes.buffer;
+  const report = memory.allocate(RECOVERY_LIMITS.exportBytes);
+  report.bytes.fill(9);
+  expect(memory.stats().arenaBytes).toBe(131_072 + RECOVERY_LIMITS.exportBytes);
+  expect(ring.bytes.buffer).toBe(original);
+  expect(ring.bytes.every((byte) => byte === 7)).toBe(true);
+  metadata.release();
+  ring.release();
+  expect(ring.bytes.every((byte) => byte === 0)).toBe(true);
+  expect(report.bytes.every((byte) => byte === 9)).toBe(true);
+  const again = memory.allocate(81_920);
+  expect(again.bytes.buffer).toBe(original);
+  expect(again.bytes.every((byte) => byte === 0)).toBe(true);
+  again.release();
+  report.release();
+  expect(memory.stats().allocatedBytes).toBe(0);
+});
+
+it("admits arena growth before allocation and keeps outstanding provider allowances charged", () => {
+  const memory = new ControlledPayloadMemory();
+  const metadata = memory.from("synthetic metadata");
+  const release = memory.allowance(RECOVERY_LIMITS.payloadBytes - memory.stats().arenaBytes);
+  const before = memory.stats();
+  expect(() => memory.allocate(RECOVERY_LIMITS.exportBytes)).toThrow("capacity_limited");
+  expect(memory.stats()).toEqual(before);
+  metadata.release();
+  expect(memory.stats().externalAllowanceBytes).toBe(before.externalAllowanceBytes);
+  release();
+  expect(memory.stats().allocatedBytes).toBe(0);
+});
+
+it("charges every region through the original arena/provider ceilings and reuses fragmented space", () => {
+  const memory = new ControlledPayloadMemory();
+  const leases = Array.from({ length: 40 }, () => memory.allocate(131_072));
+  expect(memory.stats().arenaBytes).toBe(5 * RECOVERY_LIMITS.exportBytes);
+  const release = memory.allowance(3 * RECOVERY_LIMITS.exportBytes);
+  expect(memory.stats().allocatedBytes).toBe(RECOVERY_LIMITS.payloadBytes);
+  expect(() => memory.allocate(1)).toThrow("capacity_limited");
+  expect(() => memory.allowance(1)).toThrow("capacity_limited");
+  const backing = leases[17]!.bytes.buffer;
+  leases[17]!.release();
+  const first = memory.allocate(65_536),
+    second = memory.allocate(65_536);
+  expect(first.bytes.buffer).toBe(backing);
+  expect(second.bytes.buffer).toBe(backing);
+  first.release();
+  second.release();
+  const combined = memory.allocate(131_072);
+  expect(combined.bytes.buffer).toBe(backing);
+  combined.release();
+  for (const lease of leases) lease.release();
   release();
   expect(memory.stats().allocatedBytes).toBe(0);
 });

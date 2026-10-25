@@ -149,8 +149,8 @@ export function OutputPane(props: OutputPaneProps): JSX.Element {
 
   /* Everything the shortcuts act on, through refs, so the five registrations below happen
      once for the life of the pane rather than on every frame of a stream. */
-  const state = useRef({ items, matches, selected, onJumpToLatest, onHold });
-  state.current = { items, matches, selected, onJumpToLatest, onHold };
+  const state = useRef({ items, matches, selected, onJumpToLatest });
+  state.current = { items, matches, selected, onJumpToLatest };
 
   const goTo = useCallback((index: number) => {
     setSelected(index);
@@ -176,13 +176,7 @@ export function OutputPane(props: OutputPaneProps): JSX.Element {
       {
         key: "G",
         label: "Top of the output",
-        /* Going to the top *is* leaving the end, so following stops here rather than
-           waiting for a scroll event: the substrate reports a person scrolling away, and
-           a key that moves the offset itself is not one of those. */
-        action: () => {
-          goTo(0);
-          state.current.onHold();
-        },
+        action: () => goTo(0),
       },
       {
         key: "Shift+G",

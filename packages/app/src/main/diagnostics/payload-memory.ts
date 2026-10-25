@@ -1,4 +1,4 @@
-/** Fixed reusable binary arena and continuous admission before external payload allocation. */
+/** Bounded reusable binary regions and admission before backing/provider allocation. */
 import { RECOVERY_LIMITS } from "./recovery-contract.js";
 
 export interface PayloadLease {
@@ -7,24 +7,32 @@ export interface PayloadLease {
 }
 
 const ARENA_BYTES = 5 * RECOVERY_LIMITS.exportBytes;
+// Metadata, keys and the 81,920-byte ring do not need a full report arena.
+// Add only the required region without copying live views. All regions share
+// the original ceiling, including unused space and provider allowances.
+const ARENA_GRANULARITY = 128 * 1024;
+interface Arena {
+  bytes: Buffer;
+  free: { offset: number; size: number }[];
+}
 
 /** One profile composition shares this owner across ring/controller/disk/key work.
  * This tracks controlled binary storage. Engine strings/objects and OS/provider
  * internals remain the separate measured managed/external/native evidence.
  */
 export class ControlledPayloadMemory {
-  private arena: Buffer | undefined;
-  private free: { offset: number; size: number }[] = [];
+  private arenas: Arena[] = [];
   private leases = 0;
   private external = 0;
   private peak = 0;
   private allocations = 0;
 
   stats() {
+    const arenaBytes = this.arenas.reduce((sum, arena) => sum + arena.bytes.length, 0);
     return {
-      allocatedBytes: (this.arena?.length ?? 0) + this.external,
+      allocatedBytes: arenaBytes + this.external,
       peakBytes: this.peak,
-      arenaBytes: this.arena?.length ?? 0,
+      arenaBytes,
       externalAllowanceBytes: this.external,
       leases: this.leases,
       allocations: this.allocations,
@@ -53,22 +61,26 @@ export class ControlledPayloadMemory {
   allocate(length: number): PayloadLease {
     if (!Number.isSafeInteger(length) || length < 0 || length > ARENA_BYTES) throw new Error("capacity_limited");
     const size = Math.max(8, Math.ceil(length / 8) * 8);
-    if (!this.arena) {
-      this.admit(ARENA_BYTES);
-      this.arena = Buffer.alloc(ARENA_BYTES);
-      this.free = [{ offset: 0, size: ARENA_BYTES }];
+    let arena = this.arenas.find((candidate) => candidate.free.some((entry) => entry.size >= size));
+    if (!arena) {
+      const remaining = ARENA_BYTES - this.stats().arenaBytes;
+      if (size > remaining) throw new Error("capacity_limited");
+      const capacity = Math.min(remaining, Math.ceil(size / ARENA_GRANULARITY) * ARENA_GRANULARITY);
+      this.admit(capacity);
+      arena = { bytes: Buffer.alloc(capacity), free: [{ offset: 0, size: capacity }] };
+      this.arenas.push(arena);
       this.observe();
     }
-    const index = this.free.findIndex((entry) => entry.size >= size);
-    if (index < 0) throw new Error("capacity_limited");
-    const entry = this.free[index]!;
+    const free = arena.free;
+    const index = free.findIndex((entry) => entry.size >= size);
+    const entry = free[index]!;
     const offset = entry.offset;
     entry.offset += size;
     entry.size -= size;
-    if (!entry.size) this.free.splice(index, 1);
+    if (!entry.size) free.splice(index, 1);
     this.leases++;
     this.allocations++;
-    const bytes = this.arena.subarray(offset, offset + length);
+    const bytes = arena.bytes.subarray(offset, offset + length);
     let live = true;
     return {
       bytes,
@@ -76,16 +88,16 @@ export class ControlledPayloadMemory {
         if (!live) return;
         live = false;
         // Erase before reusing, including alignment padding, without waiting for GC.
-        this.arena!.fill(0, offset, offset + size);
+        arena.bytes.fill(0, offset, offset + size);
         this.leases--;
-        this.free.push({ offset, size });
-        this.free.sort((a, b) => a.offset - b.offset);
-        for (let i = 1; i < this.free.length;) {
-          const previous = this.free[i - 1]!,
-            current = this.free[i]!;
+        free.push({ offset, size });
+        free.sort((a, b) => a.offset - b.offset);
+        for (let i = 1; i < free.length;) {
+          const previous = free[i - 1]!,
+            current = free[i]!;
           if (previous.offset + previous.size === current.offset) {
             previous.size += current.size;
-            this.free.splice(i, 1);
+            free.splice(i, 1);
           } else i++;
         }
         this.disposeIfIdle();
@@ -105,9 +117,8 @@ export class ControlledPayloadMemory {
   }
 
   private disposeIfIdle(): void {
-    if (this.leases || this.external || !this.arena) return;
-    this.arena.fill(0);
-    this.arena = undefined;
-    this.free = [];
+    if (this.leases || this.external) return;
+    for (const arena of this.arenas) arena.bytes.fill(0);
+    this.arenas = [];
   }
 }

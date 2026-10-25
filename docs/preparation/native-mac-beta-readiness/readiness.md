@@ -1,18 +1,29 @@
 # Invited native Mac beta readiness ledger
 
-**Current slice, 2026-10-09:** [acceptance runbook](acceptance-runbook.md) and
-[operator checklist](operator-checklist.md) reconcile #555's exact unrun staging
-source with #567 `9ac19ead4347180e44be6162a41d2d5726b3f929` mounted setup/launch
-and #569 `1a2e003e04beaa2e13cd35115faa6c4234145264` durable ownership protection.
-No runtime head is imported. #570 recovery remains with the separate integration owner;
-the current owner-loss path has no supported orphan-reconciliation command.
-The [guide](getting-started-draft.md) now matches those draft-source controls and
-agent-free marker-only sample. Gate/artifact/cancel and real-agent configuration
-persistence still require owner outputs. An executable packet generator emits exact
-arm64 prepackaged DMG/ZIP and bounded verification/launch vectors, executes none and
-leaves candidate acceptance blocked. Signing metadata remains unknown after Forbidden.
-Mac availability is later, not now. No Hub publication, device operation or parent
-acceptance is claimed. Exact remaining non-secret prerequisites are in the runbook.
+**Current reconciliation, 2026-10-25:** audited main
+`0f45181c52dfc4bf1edd0e4469ff688dedef9189`, including merged
+[#607](https://github.com/cschadewitz/Project_Orca/pull/607). The
+[acceptance runbook](acceptance-runbook.md#current-reconciliation--25-october-2026)
+and its [shared physical-Mac receipt](acceptance-runbook.md#shared-candidate-bound-physical-mac-receipt)
+are the current owner/evidence handoff, used by the
+[operator checklist](operator-checklist.md) and [guide](getting-started-draft.md).
+Core #333/#334 config/launch and generic actual-Cal #393 are closed; mounted setup,
+reviewed config binding, #570 ownership recovery, production delivery adapters and
+closed diagnostics producers are implemented. Source/fixture/Windows evidence is not
+signed Darwin or unassisted acceptance. Production capture and updater activation
+remain held; diagnostics are Save/export-only, with no in-app report viewer.
+
+#389 prepares versioned source and existing-Hub content/access-valid links; #390
+owns final candidate-matched guide and unassisted physical proof. #602 owns signed
+private delivery/installed bundled execution, #603 exact N/N+1 and coherent restore,
+and #604 native diagnostics. #594 remains mandatory before beta, including the
+[13 October live permission-callback lifetime transfer](https://github.com/cschadewitz/Project_Orca/issues/594#issuecomment-6150016812).
+Closed #393 does not clear that row. #597/#598/#600/#601 remain separately deferred.
+No device, provider, signing, publication or acceptance operation ran here.
+
+**Historical preparation slice, 2026-10-09:** the original #555/#567/#569 packet
+emitted unrun vectors and awaited #570 composition. Its separate-head and missing-code
+observations are superseded by the current reconciliation above, not physical proof.
 
 **Historical preparation audit, 2026-10-08:** main independently confirmed/fetched as
 `db579fb7ac9cfce2e4e6901713088a80602311da`. #529 and #541 are merged. Their executor/
@@ -40,9 +51,9 @@ and no redundant tests are run solely for that main movement.
 
 This is source/preparation progress for M22, **invited native Apple Silicon Mac
 beta**, not acceptance or issue completion. M3–M5 with current macOS are target
-combinations, with **no verified coverage here**. The release requires the relevant
-M10 actual-Cal and M21 configuration/launch outcomes. Independent preparation can
-run early. Canvas, fleet, Docker and #486 are not blanket dependencies.
+combinations, with **no verified coverage here**. The release consumes the completed
+relevant M10 actual-Cal and M21 configuration/launch outcomes, with #594 still
+required. Independent preparation can run early. Canvas, fleet, Docker and #486 are not blanket dependencies.
 
 ## Historical work and ownership snapshot
 
@@ -65,7 +76,7 @@ test and this new documentation directory. Parent retains review, central CI and
 workboard ownership. No new issue, assignee, milestone or acceptance checkbox is
 changed. No homelab job, workflow edit/dispatch, merge or release is performed.
 
-## Concrete source increment
+## Historical concrete source increment — 7 October preparation
 
 [Executor preflight and environment helper](../../../tools/packaged-mac/README.md)
 prepare #388's MAC-02/04/12 environment boundary without choosing #386's UI/API.
@@ -80,44 +91,32 @@ validator. Tests inject synthetic system observations; no Apple tool or product
 process is launched. The existing desktop/app-smoke workflows still need parent
 resolution of dispatch and runner routing. Do not mutate or dispatch them here.
 
-## Acceptance ledger and smallest next slices
+## Current acceptance ledger
 
-| Gate | Current evidence | Exact remaining owner step / ordering |
+The [runbook owner handoffs](acceptance-runbook.md#current-owner-handoffs) and
+[shared receipt](acceptance-runbook.md#shared-candidate-bound-physical-mac-receipt)
+consolidate the existing gates; use their exact source links and ownership rather
+than the historical open-PR table above. No final gate is marked pass. Missing
+candidate, consent or executor is **blocked**; attempted failed oracles are **fail**;
+unexecuted cases are **not run**. Skipped launch and unsigned fallback never pass.
+
+| Gate | Implemented preparation | Remaining owner evidence |
 | --- | --- | --- |
-| #385 signed/notarized/stapled private candidate | Source foundations only; no actual signed artifact | Apple/release owner verifies existing certificate/private-key authority and approved Team `Q2FP9UY5T4` / bundle `com.schadewitz.orca`, signing environment/trusted source/runner and notary method. Resolve D3 private catalog/access, D4 OS floor/executor and D5 candidate channel/plist mapping. Only a separately authorized native run may create the candidate; validate both final container copies, signatures/entitlements, notary/staple and trusted hashes before authorized private delivery and exact invited browser download. |
-| #386 identity/onboarding/preflight | Authenticated target substrate and offline sample available; #333/#334 UI incomplete | Freeze #440 packet/runtime with config/launch owners, including FieldShape and node-preserving comment rules. Independently implement dedicated workspace selection/local tool error modeling, but do not add a rival config/launcher or silently choose agent/version policy. Native first run must observe actual owned daemon/store identity before sample writes, Finder PATH, spaces/non-ASCII, denied workspace, cancel/back/retry and real-agent ACP/tool/auth preflight. Preserve old protected keys/intents and test bundle-ID migration; no reset shortcut. |
-| #388 packaged arm64 coverage | Source/fixture checks only; this slice prepares executor/environment input | Once #385/#386 produce agreed outputs, prove automation against unchanged signed app/fuses and an approved arm64 GUI executor. Run both exact DMG and ZIP with fresh/reused isolated state, packaged app and owned bundled daemon arm64 observations, authenticated/negative auth, sample/artifacts/gate/cancel, quit/reopen and failures. Hosted arm64 does not pass physical Gatekeeper/TCC/VoiceOver/sleep rows. |
-| #389 matching guide | Repository draft added; Hub unchanged | Bind tested candidate/download/version, actual UI labels/sample/local-agent support, updater result and safe diagnostics controls. Existing Hub owner publishes matching prose under its existing audience only after authorization. Verify invited-user access without implicit repo membership, then revise from an unassisted walkthrough. |
-| #416 manual diagnostics/privacy | Approved #469 product bounds; #470 disabled source; no native acceptance here | Diagnostics owner finishes current-base CI/review, native protected storage/save authority, clock/producers and resource/privacy acceptance. Test default-off/declined consent, exact immutable preview/local export/cancel, startup before handshake, no network, bounded recovery/retention/cleanup and unknown outcomes on exact packaged Mac/Windows. First-run/guide consume these results; do not duplicate collector or activate it here. |
-| #390 physical signed N→N+1 + unassisted tester | #422/#426 feedback packet and #420 fixture only | After #385/#386/#387/#388/#389/#416 and relevant M10/M21 outcomes, separately consented physical session records actual model/chip/OS/build and exact downloaded signed N and N+1. Link updater owner's complete-state/protected-key recovery acceptance rather than copying twelve rows. Test install/Finder/TCC/sleep/restart/accessibility and approved real agent, plus unassisted guide and diagnostics preview/export/cancel. Resolve launch/security/data-loss blockers before wider invitation. |
+| #385 → #602 delivery / packaged execution | Native pre-sign identity, trusted candidate validator and bounded DMG/ZIP containment; bundle `com.schadewitz.orca`, Team `Q2FP9UY5T4` settled | Existing Apple custodian confirms usable signing/notary authority and trusted boundary. Release/private-delivery owners confirm version/channel/OS/workflow/publisher policy, catalog/invitation/freshness/revocation and independently accepted installed manifest. #602 executor supplies signed downloaded candidate, normal Gatekeeper and actual arm64 app/bundled-daemon receipt. Forbidden metadata means unknown, not absent credentials. |
+| #386/#333/#334 first run and launch → #602/#390 | Mounted JEV-free setup/launch, config review/Save/Apply and saved-config binding, same-boot recovery and explicit previous-boot settlement | App/provider and physical owners bind supported versions/native paths, Finder preflight, real-agent configuration persistence and exact installed lifecycle/permissions/sample/gate/artifact/cancel evidence. Legacy uncertain and surviving/foreign writer limits remain explicit. No new config/launcher is needed. |
+| #387/#571 update → #603 | Exact approval, natural drain/closed admission, native provider and fixed-pair coherent recovery composition | Updater/physical owners prove exact signed N/N+1 automatic install after positive quiescence, continuity and complete protected-state plus matching-binary recovery. Activation remains held; manual replacement is insufficient. |
+| #416/#469 diagnostics → #604 | Save/export-only source and closed producers composed; default-off capture held | Diagnostics owner supplies native consent/isolation/storage/expiry/crash/no-network/accessibility and 8 MiB binary / 32 MiB combined-memory evidence. Corrected C15 managed memory still fails; non-Mac obligations remain #416/#469. Viewer/text selection is removed scope; only 4 ms is deferred in #597. |
+| #594 exact command and live callback lifetime | Generic actual-Cal #393 closed; exact-command support remains unsupported | Cal coordinates supported provider contract/version, bounded authority/projection, installed correspondence and separately authorized actual-Cal one-command and live-callback lifetime proof. Casey retains additional product choices. Synthetic evidence cannot clear beta. |
+| #389 → #390 guide / unassisted first run | Versioned guide aligned to implemented controls and Save/export-only diagnostics; Hub unchanged | Documentation/Hub owner supplies candidate version/download/support/update facts and access-valid matching source/Hub revision. Physical coordinator and target-like participant supply consented unassisted evidence, record hints and correct guide defects. Pre-Mac preparation need not await #390 closure. |
 
-No final gate is marked pass. Missing candidate, unresolved interface or absent executor
-is **blocked**, rather than an attempted native failure or skipped success. The next
-unowned source increment can be archive-containment and owned-root/evidence helpers,
-reusing delivery v1 and leaving candidate-mode refusal intact until native provenance
-and execution are implemented. GUI-context extensions require a concrete reviewed
-need; never inherit the parent environment to make launch work.
+Existing #469 bounds remain: 1–15 minutes (default 5), 1 MiB complete report,
+8,192 events, persistent default-off opt-in, one prior crash session within the same
+boot/up to 24 hours, approximately 5-second checkpoints and separate protected key.
+Decisions are not privacy proof, tester consent or upload authority. #417/#418 remain
+outside the beta gate. Shared evidence uses the stricter #416 allowlist; raw logs,
+screenshots, personal paths, credentials and prompt/code/output are excluded.
 
-## Decisions to return to owners
-
-Bundle/Team identifiers are settled. Publisher/certificate authority, private binary
-delivery provider/invite/revocation/retention, minimum macOS/runner image and candidate
-version/plist policy remain unknown under [D1–D6](../native-mac-delivery/prerequisites.md#decision-register).
-Do not replace them with test values. #386's supported agent/version/auth-error policy,
-dedicated writable first-run route and exact configuration/launch contract require
-their owners; the helper deliberately chooses none. #388's signed-app automation and
-evidence retention are still acceptance decisions. #389's support destination and
-candidate wording require confirmation before publication.
-
-#469's nine product decisions are reused: configurable 1–15 minutes, default 5,
-1 MiB complete report, 8,192 events, default-off persistent opt-in, one prior crash
-session within the same boot/up to 24 hours, approximately 5-second checkpoints,
-separate protected key and approved bounded private local staging/save. These are
-decisions, not native privacy proof, tester consent or permission to upload. Later
-#417/#418 remain outside the beta gate. Avoid raw log tails/screenshots in tester
-support despite historical #403 evidence proposals; use #416's stricter allowlist.
-
-## Verification and evidence limits
+## Historical verification and evidence limits — 7 October preparation
 
 At the source change: Node 24.21.0 / pnpm 12.4.2; pnpm verified all 534 existing
 supply-chain policies without exclusions and retained the frozen lock. Final focused

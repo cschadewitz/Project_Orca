@@ -1,11 +1,13 @@
 # Later Mac session: guided operator checklist
 
-**Prepared only; Mac not yet available.** Use one step at a time, with Casey/the
-tester present. This checklist grants no remote access, account creation, installation,
+**Prepared only; no physical acceptance is claimed.** Use one step at a time, with
+Casey/the tester present. This checklist grants no remote access, account creation, installation,
 permission, credential, provider or sharing authority. The signed candidate, native
 validator, final recovery and owner evidence listed in the
-[acceptance runbook](acceptance-runbook.md) must be ready first. Otherwise record
-**blocked** and explain the missing prerequisite; do not improvise a workaround.
+[acceptance runbook](acceptance-runbook.md) must be ready first. Bind observations to its
+[shared candidate receipt](acceptance-runbook.md#shared-candidate-bound-physical-mac-receipt),
+which maps existing #602/#603/#604/#390 gates and #594 evidence to their owners.
+Otherwise record **blocked** and explain the missing prerequisite; do not improvise a workaround.
 
 1. **Agree the session.** Name the exact candidate/version/digests, tested OS/chip,
    matching guide, private support contact and scope. Record only a tester alias and
@@ -39,19 +41,31 @@ validator, final recovery and owner evidence listed in the
    gate or coding fix. Keep those later exercises separately identified.
 8. **Check ordinary lifecycle.** Follow the agreed close-window, Quit and reopen cases;
    confirm retained history and one owned daemon. Stop on uncertainty. Crash/relaunch
-   recovery requires #570's accepted procedure; do not erase journals, reset keys, kill
+   recovery uses the implemented same-boot review/reconciliation or explicit previous-boot
+   settlement contract, matched to this candidate. Surviving/foreign writers and legacy
+   uncertain claims stay refused; do not erase journals, reset keys, kill
    a guessed PID or treat a new workspace as recovery.
 9. **Pause for each later exercise.** Gate/cancel/failure fixtures, one real-agent
    coding task, update/recovery and sleep/accessibility checks each use their accepted
-   owner procedure. Before agent use, agree tool/sign-in, transmitted data, payer/limit,
+   owner procedure, linked in the shared receipt: #603 must show exact signed N/N+1,
+   specific approval, natural completion under closed admission, positive quiescence,
+   automatic install and coherent matching-binary/protected-state restore. #604 must
+   show explicit default-off consent, no pre-consent retention/network traffic,
+   isolation/authority/expiry and 8 MiB binary / 32 MiB combined-memory acceptance;
+   C15 managed-memory failure remains blocking. #594 must supply installed-provider,
+   exact-command and live permission-callback lifetime proof. Before agent use, agree
+   tool/sign-in, transmitted data, payer/limit,
    exact disposable task, permissions and stopping plan. No paid work is authorized by
    this checklist. Diagnostics stay off unless the tester opts in to validated capture;
-   preview/local Save/cancel and any later sharing are separate choices.
+   current/recovered report preparation, destination choice, local Save/export/cancel
+   and any later sharing are separate choices. There is no in-app report viewer.
 10. **Record and stop.** Mark each case pass/fail/blocked/not run and distinguish
     controlled native execution from physical usability. Use aliases and safe codes;
     keep raw logs, screenshots, secrets and personal paths out of shared evidence.
     An unassisted participant then follows the candidate-matched guide; record any hints
-    as coaching. Wider invitations wait for #390/#416 and relevant M10/M21 results.
+    as coaching. Wider invitations wait for #390 consuming #602/#603/#604, retained
+    #416/#469 obligations and #594. Core #333/#334 and generic actual-Cal #393 are closed; their
+    closure is not a native acceptance result.
 
 The coordinator can guide an initial rehearsal. It cannot count as the unassisted
 #390 walkthrough. No device cleanup/deletion or evidence upload is assumed at the end;
