@@ -153,9 +153,9 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Document
       this.pending = undefined;
       const batch = this.queue.slice();
       if (batch.length === 0) return;
-      await mkdir(dirname(this.file), { recursive: true });
-      await withFileLock(`${this.file}.lock`, async () => {
-        try {
+      try {
+        await mkdir(dirname(this.file), { recursive: true });
+        await withFileLock(`${this.file}.lock`, async () => {
           // Inside the lock, so nothing can write between this read and the rename.
           const map = new Map(await this.load());
           for (const m of batch) apply(map, m);
@@ -178,12 +178,13 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Document
           await rename(tmp, this.file);
           this.cache = map;
           this.fingerprint = await this.fingerprintOf();
-        } finally {
-          // The batch is the head of the queue: it was snapshotted from the
-          // front and only appends have happened since.
-          this.queue.splice(0, batch.length);
-        }
-      });
+        });
+      } finally {
+        // Retire this batch even when setup or lock acquisition fails before
+        // callback entry. Only appends can happen while this write is running,
+        // so later mutations remain queued for their own serialized write.
+        this.queue.splice(0, batch.length);
+      }
     });
     this.pending = p;
     // Keep the chain alive (and unrejected) so one failed write does not poison later ones.
