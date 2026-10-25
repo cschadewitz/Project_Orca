@@ -21,6 +21,7 @@ import { ArtifactPanelProvider, useArtifactPanel, type ArtifactTarget } from "..
 import { StepDetail } from "../src/step/step-detail.js";
 import type { AgentUpdate, LogEvent } from "../src/step/line-buffer.js";
 import { RUN_DETAILS } from "./fixtures.js";
+import { artifactRecorded } from "./artifact-events.js";
 import { harness, installBridge, type Harness } from "./harness.js";
 import type { FakeBridge } from "./fake-bridge.js";
 
@@ -231,6 +232,28 @@ describe("the step detail pane", () => {
 
     fireEvent.click(chip);
     expect(opened).toEqual({ runId: "run-parent", name: "spec", version: 1 });
+  });
+
+  it.each([false, true])("adds Produced chips to a mounted running step (initially empty: %s)", async (empty) => {
+    const existing = PARENT.artifacts.filter((a) => a.producedByStepRunId === "s-build-2");
+    let artifacts = empty ? [] : existing;
+    fake.script({
+      "artifacts.list": () => ({ ok: true, result: { artifacts, total: artifacts.length, asOf: PARENT.asOf } }),
+    });
+    scriptLog([]);
+    renderStep("s-build-2");
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: "spec@v1" }) !== null).toBe(!empty);
+    const next = { ...existing[0]!, id: "art-implementation", name: "implementation", kind: "implementation" };
+    artifacts = [...artifacts, next];
+
+    await act(async () => fake.notify(artifactRecorded("run-parent", next)));
+
+    const chip = screen.getByRole("button", { name: "implementation@v1" });
+    fireEvent.click(chip);
+    expect(opened).toEqual({ runId: "run-parent", name: "implementation", version: 1 });
+    expect(fake.calls.filter((c) => c.method === "artifacts.list")).toHaveLength(2);
+    expect(fake.calls.filter((c) => c.method === "artifacts.get")).toHaveLength(0);
   });
 
   it("lists the tool calls, with the state in a word and not only in a colour", async () => {

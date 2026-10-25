@@ -145,11 +145,28 @@ export function ArtifactPanel({ target }: ArtifactPanelProps): JSX.Element {
         </Menu>
       </div>
 
+      {/* Metadata status belongs to the version choices, independently of immutable body reads. */}
+      {loadingVersions && (
+        <Text style="caption" as="div" className="orca-artifact__prov">
+          Loading artifact versions
+        </Text>
+      )}
+      {listError !== undefined && (
+        <div className="orca-artifact__prov">
+          <Text style="caption" as="div">
+            Could not read artifact versions
+          </Text>
+          <Text style="mono-id" as="div">
+            {`${listError.code}: ${listError.message}`}
+          </Text>
+        </div>
+      )}
+
       <Provenance target={target} current={current} consumers={consumers} producer={producer} />
 
       <Body
-        loading={body.loading || loadingVersions || against.loading}
-        error={body.error ?? listError}
+        loading={body.loading || against.loading}
+        error={body.error}
         text={body.text}
         omitted={body.omitted}
         {...(target.compareWith === undefined ? {} : { againstText: against.text ?? "" })}

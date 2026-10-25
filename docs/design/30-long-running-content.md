@@ -77,6 +77,16 @@ matter is parsed and shown as fields above the body; everything below it is verb
 rendered view is ever wanted, that is a new issue naming the sanitising renderer, not a
 toggle added to this panel.
 
+Artifact metadata follows `artifact.recorded` through the shared `event.appended` stream:
+the mounted step's Produced chips refresh for its run and producing step, and the panel's
+version list refreshes for its run and artifact name. Reads are serialized, with one pending
+refresh for events overlapping a read. Existing choices stay visible while refreshing; a
+late or invalidated response cannot replace the current query's metadata. New versions
+never change the selected historical version or comparison, or reread immutable bodies.
+Metadata read failures stay visible beside the version choices, with their code and message;
+they never replace a successfully loaded body or diff. A later matching event can retry the
+metadata read through the same bounded refresh path.
+
 ## Rules and guides are borders, not glyphs
 
 `mono-log` stays at **12px/18px**. The tight line height is the reason a screen of log is
