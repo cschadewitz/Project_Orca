@@ -172,3 +172,83 @@ as `2d2d7d018c88c19a6214bcdcf33ced7e5d2c4074bdcb4cf8b4ea054de0379c97`.
 Fresh execution remains pending a justified timing
 diagnosis or a verified resolved transient condition. All bounds, source bytes,
 bootstrap prerequisites and disabled accepting outcome remain unchanged.
+
+### Bounded resource and timing follow-up
+
+Parent reports that #768 preparation has source-only review approval. This
+records no execution or aggregate acceptance. A further read-only diagnosis
+examined current cgroup, scheduler, memory, block-I/O and process counters and ran
+small fixed metadata probes. No unrelated process, resource limit, security
+setting, provider or account credential changed.
+
+The old successful bootstrap remains the published 13.795040008 s / 112905714
+byte record above, at observer tree `d65be8effc03ce0fc658bc86cce5fd51fe3a5964`.
+Its raw/original packet is absent here, so no historical CPU/quota/throttling,
+pressure, I/O, scheduler distribution or Node-byte comparison is available.
+Producer source and all three producer/child/manifest hashes match the failed
+attempt. The published historical tracer hash equals the failed/current tracer
+hash `69f88291a4e47f258b8e32b089c919a247509f063ef3d6afe5389939051102b3`.
+Current Node bytes equal the failed original's
+`bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12`;
+that is not a claim about the unavailable historical Node bytes.
+
+The failed trace grows by 82.193246 MB over its first 25 seconds and 24.992788 MB
+over the remaining approximately 35 seconds. Its five-second windows include
+only 901 lines / 630343 bytes at 25–30 s and 790 lines / 565737 bytes at 45–50 s,
+despite ongoing currentness operations. Source/image equality and this progress
+distribution narrow the failure to wall-budget exhaustion during active work,
+but do not identify the resource or scheduler cause of the long entry gaps.
+
+Available current resource evidence:
+
+* CPU quota is `400000 100000` (four CPU equivalents), weight 100, no burst.
+  Cumulative throttling is 163 periods / 14428633 microseconds; it has not
+  increased since the first post-failure inspection or during these probes.
+  There is no pre-failure sample assigning that cumulative total to the run.
+* Memory limit is 17179869184 bytes, historical cgroup peak 1400745984 bytes,
+  `memory.high` is unlimited, current swap is zero, and all memory-limit/OOM
+  event counters are zero. Current probe memory stayed far below the limit.
+* Global and cgroup CPU/memory/I/O pressure files are unavailable. This absence
+  is recorded, not treated as zero pressure. Current block-I/O counters cannot
+  reconstruct historical filesystem stalls.
+* Clean-probe load averages were 0.30 / 0.29 / 0.26. The before/after process
+  snapshots show no other active workload making CPU progress. Existing
+  non-running Git/build zombies and service processes were left untouched.
+  The original owned trace IDs/group and all probe trace IDs are absent after
+  cleanup; unrelated jobs are not part of that cleanup claim.
+
+Both probes read only metadata on the same three image files. They never import
+or activate the producer. Each runs exactly 9216 `lstat` checks, compares full
+physical stamps, and has a 10-second process / 16 MiB trace bound. The tracer
+uses the same original strace options. Raw probe traces and scripts stay local.
+
+| Diagnostic | Untraced loop | Traced loop | Interpretation |
+| --- | --- | --- | --- |
+| Initial sampled probe | 0.101446408 s | 6.112134760 s | Contaminated by repeated resource sampling and a concurrently launched diagnostic packet reader; not an isolated tracing estimate. |
+| One corrected probe, no sampler/concurrent commands | 0.076964040 s | 2.079994505 s | Current metadata tracing overhead; not proof of prior cause or full bootstrap timing. |
+
+The corrected probe's full process wall times are 0.200134494 s / 2.538094447 s.
+Its trace contains 9228 total `statx` entries, with a largest global inter-prefix
+gap of 0.012864 s. The Node leader's measured loop scheduler deltas are about
+0.517140 s runtime / 0.018636 s runnable wait. Cgroup CPU usage increases by
+2.202980 s with no new throttle, memory-limit event or recorded block-I/O byte.
+These measurements establish current small-probe health only. They neither
+attribute the original second-long gaps nor verify recovery of their cause.
+
+Local sanitized report hashes:
+
+* `resource-timing-probe.json`:
+  `fe2a273af3c1941a65b3f69b43be606c2fe1d3489dab24802b659473db0d8ee2`.
+* `resource-timing-clean.json`:
+  `207ace9ff607ed50a27922195ef010336263d4c453e543a0dbe373f3e69d8841`.
+* `resource-checkpoint.json`:
+  `bff189f3a193f9e0ccb5436155041be9adb1847186b27f658876fb3c7402177f`.
+
+All are under `/tmp/orca-connected-diagnostics`, mode 0600. The negative original
+packet remains unchanged. No new bootstrap/connected attempt was run: no concrete
+original transient cause has been verified recovered. The next useful diagnostic,
+if separately authorized, is one original run under unchanged bounds with sparse
+retained monotonic trace-progress and cgroup CPU/I/O/memory-event samples plus
+pinned supervisor/tracer/leader scheduler counters. Whole-packet inspection and
+other diagnostic subprocesses should wait until it settles. This would gather
+missing cause evidence; it adds no acceptance prerequisite or production gate.
