@@ -300,6 +300,17 @@ export function createOwnedFileReadServiceForTest(options: {
           assertCurrent: owner.assertCurrent.bind(owner),
           withOwnership: owner.withOwnership.bind(owner),
         });
+        const retainedPolicy = Object.freeze<PolicyPortV1>({
+          version: policy.version,
+          evaluate: policy.evaluate.bind(policy),
+          bindReview: policy.bindReview.bind(policy),
+          completeReview: policy.completeReview.bind(policy),
+        });
+        const retainedEvidence = Object.freeze<SyntheticFenceEvidence>({
+          recordCapture: evidence.recordCapture.bind(evidence),
+          recordAuthorization: evidence.recordAuthorization.bind(evidence),
+          read: evidence.read.bind(evidence),
+        });
         let refreshed = false;
         const build = (
           original: SyntheticReadOwnerSnapshot,
@@ -394,7 +405,7 @@ export function createOwnedFileReadServiceForTest(options: {
               });
             },
           });
-          const fence = new SyntheticReadFence(boundOwner, executor, policy, evidence);
+          const fence = new SyntheticReadFence(boundOwner, executor, retainedPolicy, retainedEvidence);
           const action = fence.capture(immutable({ resourceRef, offset, length }));
           const facade: TrustedOwnedReadInvocation = Object.freeze<TrustedOwnedReadInvocation>({
             version: 1,

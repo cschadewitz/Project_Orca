@@ -113,6 +113,37 @@ describe.skipIf(process.platform !== "linux")("stable owned file read service", 
     },
   );
 
+  it("revision refresh retains the original policy and record methods despite injection mutation", async () => {
+    const f = await fixture();
+    const b = await f.binding();
+    const old = b.capture();
+    await old.evaluate(f.base.caller.signal);
+    await f.save(old.action);
+    b.snapshot.authority.currentPolicyRevision = (await f.store.read()).revision;
+    const policy = vi.spyOn(b.policy, "evaluate").mockRejectedValue(new Error("replacement policy"));
+    const writer = vi.spyOn(f.base.evidence, "recordAuthorization").mockRejectedValue(new Error("replacement writer"));
+    f.parameters.length = 1;
+    const fresh = f.service.refreshPolicyRevision(old);
+    expect((await f.run(fresh)).state).toBe("completed");
+    expect(reads.mock.results[0]?.value).toBe(9);
+    const retainedBefore = await f.base.store.getPayload(
+      old.action.invocation.runId,
+      old.action.original.privateRef,
+      "agent.update",
+    );
+    const retainedAfter = await f.base.store.getPayload(
+      fresh.action.invocation.runId,
+      fresh.action.original.privateRef,
+      "agent.update",
+    );
+    if (!("update" in retainedBefore) || !("update" in retainedAfter))
+      throw new Error("actual retained captures required");
+    expect(JSON.parse(retainedAfter.update.text!).bytes).toBe(JSON.parse(retainedBefore.update.text!).bytes);
+    expect(policy).not.toHaveBeenCalled();
+    expect(writer).not.toHaveBeenCalled();
+    expect(reads).toHaveBeenCalledTimes(1);
+  });
+
   it("original caller cancellation survives a successful revision refresh", async () => {
     const f = await fixture();
     const b = await f.binding();
