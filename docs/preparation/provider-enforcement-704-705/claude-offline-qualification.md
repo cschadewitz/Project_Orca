@@ -331,8 +331,26 @@ A complete sequence must contain exactly this, in order:
    denies it (decision and hook response) and the counter reads `unchanged`. A block by
    a fresh native ask, a crashed checker or a missing reading does not count.
 
-Pre-revocation decisions must carry a generation different from the revocation's, and
-the post-revocation decision must carry the revocation's. A counter reading whose
+Within each call, completion requires `native-dispatch < hook-invoked <
+orca-decision < hook-response`. Allowed calls also require `hook-response <
+tool-start < effect-observed < effect-check`, and the first native ask must precede
+its tool start. The denied call requires `hook-response < effect-check`: a snapshot
+before the denied attempt cannot establish absence after it. These are partial
+orders grounded in `nativeCall`, `checker`, `execute` and `checkedEffects` in the
+[harness](../../../tools/test/claude-qualification-704.test.js). They impose no total
+order on optional stages. The typed harness emits its optional `permit-claim`
+inside execution, after `tool-start`; the synthetic shell path emits none.
+
+The revoked call needs an explicit `deny` in both `orca-decision` and
+`hook-response`. Missing outcomes, `require-human`, `indeterminate`, `refused` or
+checker failures cannot substitute for that decision. Every decision and the
+revocation must carry a generation before comparisons are made. Pre-revocation
+decisions must carry a generation different from the revocation's, and the
+post-revocation decision must carry the revocation's. Dispatch, decision and
+tool-start rows must carry `bindingRef`; the checked bindings must agree across
+the identical attempts and each start must match its decision. Missing identities
+are reported explicitly, never accepted through equality of absent values.
+A counter reading whose
 `sourceRef` equals the decision's or the hook response's is not counted as
 independent. Even a distinct `sourceRef` is only a claim until rows can be
 authenticated.
@@ -377,6 +395,39 @@ file turned all 140 green again:
 | Independent post-revocation reading not required | The missing-reading control (1) |
 | Duplicate stage within a call ignored | The renumbered replay control (1) |
 | Rows not passed through `validReceipt` | Unknown key, path value, string `seq` and the authenticity-claims test (4) |
+
+### Independent review correction (PR #760)
+
+[Review 5658997393](https://github.com/cschadewitz/Project_Orca/pull/760#pullrequestreview-5658997393)
+found that PR #760 at `0a882f1dec780f987e5b7f5ba9aa434a5c184ae1` still
+accepted a post-revocation `effect-check` moved before dispatch and renumbered,
+non-deny post-revocation decisions, and missing generation/binding labels.
+The correction adds 69 controls: 18 coherently reordered stage pairs, 20 missing
+stages, 12 missing/non-deny outcomes, five missing-generation combinations, nine
+missing-binding combinations, two binding disagreements, and three positive
+controls (typed, shell, and omitted optional typed permit claims).
+Every negative uses rows that still pass `validReceipt` with consecutive sequence
+labels. All records are hypothetical relabelled synthetic rows; none is persisted
+as installed evidence.
+
+The tests-only red commit is `978645e7df6dd67a5cc774c4eabef1ad162e2469`, directly
+on the original PR head; its classifier is unchanged. In a disposable checkout with
+the existing dependencies available, run this command at that red commit and then
+at the correction PR's head:
+
+```sh
+./node_modules/.bin/vitest run tools/test/claude-qualification-704.test.js \
+  --maxWorkers=1 --testNamePattern='review correction'
+```
+
+Red: 38 failed, 31 passed, 140 skipped. This includes newly rejected false completions
+and explicit diagnostics for missing labels already rejected by the merged assessor.
+Green: 69 passed, 140 skipped. The whole file passes 209 tests. The existing 12-file
+regression command above passes 635 tests with no skips. Scoped ESLint, Prettier,
+JavaScript syntax and document-link/text checks plus `git diff --check` pass.
+These correction checks used Node 24.19.0 and the preinstalled Vitest 5.0.2,
+directly through `node_modules/.bin`; no dependency installation was needed.
+Full-suite/coverage, build, app smoke and installed/provider runs were not performed.
 
 ### Limitations and what the installed experiment still needs
 
