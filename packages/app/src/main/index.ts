@@ -1,5 +1,3 @@
-import { callScopedPermission } from "../client/scoped-permission-client.js";
-import type { ScopedPermissionMethod } from "@orca/protocol";
 /**
  * Electron main process. Owns the daemon connection, the preferences file, the application
  * menu and the window; the renderer only sees what the preload bridge exposes.
@@ -20,6 +18,8 @@ import type { ScopedPermissionMethod } from "@orca/protocol";
  * set, which is what `pnpm --filter @orca/app dev` does to point it at the Vite dev
  * server for hot reload (scripts/dev.js).
  */
+import { callScopedPermission } from "../client/scoped-permission-client.js";
+import type { ScopedPermissionMethod } from "@orca/protocol";
 import { z } from "zod";
 import { createDiagnosticsInitializer } from "./diagnostics/initialize.js";
 import { createManagedMacReplacementStartup } from "./mac-managed-replacement-startup.js";

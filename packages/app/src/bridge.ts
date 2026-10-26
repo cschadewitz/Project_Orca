@@ -1,4 +1,3 @@
-import type { ScopedPermissionBridge } from "./scoped-permission-bridge.js";
 /**
  * The shape of `window.orca` — the only thing the sandboxed renderer can reach. Declared
  * once here so the preload that builds it and the renderer that calls it cannot drift:
@@ -15,6 +14,7 @@ import type { ScopedPermissionBridge } from "./scoped-permission-bridge.js";
  * says so. `alerts.update` is the one call in the other direction with nothing to answer:
  * it states what is waiting, and the main process has no verdict to give back.
  */
+import type { ScopedPermissionBridge } from "./scoped-permission-bridge.js";
 import type { TemplateBridge } from "./template-bridge.js";
 import type { WorkflowDraftBridge } from "./workflow-draft-bridge.js";
 import type { DiagnosticsBridge } from "./diagnostics-contract.js";
