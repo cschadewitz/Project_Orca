@@ -99,6 +99,10 @@ async function fixture(initialize = true) {
     scopeEvidenceRef: "test:scope-projection",
     approvalRecordRef: "test:approval-projection",
     authorityRevision: grantRevision,
+    assertCurrent: () => {
+      if (!approvalCurrent) throw new Error("protected review revoked");
+      return undefined;
+    },
   }));
   const assertCompatibilityCurrent = vi.fn((expected: TypedCompatibilityMarker) => {
     expect(currentMarker).toEqual(expected);
