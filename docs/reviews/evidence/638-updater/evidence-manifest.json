@@ -1,0 +1,82 @@
+[
+  {
+    "path": "baseline-audit-full.json.txt",
+    "size": 282,
+    "sha256": "754c3032cdfb7f71d0f76346d8500fc787393926eea3ae127184c4907f936c17"
+  },
+  {
+    "path": "baseline-audit-prod.json.txt",
+    "size": 279,
+    "sha256": "eabfbbeff7f2a3c226ddaa924026140a5fd00c0b11db38044f95b18599e6c67f"
+  },
+  {
+    "path": "baseline-cache-regression.json",
+    "size": 227,
+    "sha256": "cd51d767d47e451344c68568ad8872bd0dc0b190cc4ab2fb72fef140f31631cb"
+  },
+  {
+    "path": "baseline-install.txt",
+    "size": 1696,
+    "sha256": "4178489d42ceb5c121ac469ef8012ca964b6433a058ea3351a91fc79204f47a0"
+  },
+  {
+    "path": "candidate-audit-full.json.txt",
+    "size": 282,
+    "sha256": "754c3032cdfb7f71d0f76346d8500fc787393926eea3ae127184c4907f936c17"
+  },
+  {
+    "path": "candidate-audit-prod.json.txt",
+    "size": 279,
+    "sha256": "eabfbbeff7f2a3c226ddaa924026140a5fd00c0b11db38044f95b18599e6c67f"
+  },
+  {
+    "path": "candidate-install.txt",
+    "size": 467,
+    "sha256": "7562999d5ada05308e269b81dba5475db68a9abb5e4005fc7ce331a9b892f294"
+  },
+  {
+    "path": "candidate-policy-install.txt",
+    "size": 317,
+    "sha256": "22181f96e04d562731d34aea434eb2370ffc8f9418d6cdecd826895bb8a1c47f"
+  },
+  {
+    "path": "installed-payload-manifest.json",
+    "size": 15653,
+    "sha256": "4cd9f65ab7df15b43d35f060c6423a17dc727624927cffca5e7538107a7119ad"
+  },
+  {
+    "path": "lock-invariants.json",
+    "size": 362,
+    "sha256": "4ac5b07ae784ed23848ad37db3a838813ec66779450374c5a5bf22bac5028073"
+  },
+  {
+    "path": "payload-integrity.json",
+    "size": 2675,
+    "sha256": "a016360d2d80026448d5682c3f9afdc2b24e4bf0b8185a8e1107027527a29be0"
+  },
+  {
+    "path": "provenance-attestation.json.txt",
+    "size": 17343,
+    "sha256": "7d10fa503ec3743a5c03d5ae9ed3614f6ddffa13abfce2f01edc7a4ffc4ba79e"
+  },
+  {
+    "path": "provenance-comparison.json",
+    "size": 415,
+    "sha256": "cb6ef53f32b9784c871f985ed7196b78a729ef51a348ce49e562aa0cd1d81461"
+  },
+  {
+    "path": "provenance-statement.json.txt",
+    "size": 1093,
+    "sha256": "cb47036f5aa9d322a1a969ea4f7bb4ae7d6f5c4005354335a737e448ea85bdde"
+  },
+  {
+    "path": "registry-signatures.txt",
+    "size": 69,
+    "sha256": "a7b7cb2ca8d70b30b66cefc094b9341d805e353f8f79da84d3cba811ca027b16"
+  },
+  {
+    "path": "validation-summary.json",
+    "size": 12463,
+    "sha256": "f2b62da2fa15ab925389be89a21c0d56c8bd4f1777046ff5288ec5a9df21e87d"
+  }
+]
