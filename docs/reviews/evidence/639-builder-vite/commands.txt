@@ -1,0 +1,36 @@
+Validation environment: Node 24.19.0, pnpm 12.4.2, Linux x64.
+Base: 7627b2e7606f0deec6e29e67919ae09837190f73
+Original PR639 head: 93ad06992ae6d12aa9012ecc75d68cbbfbf7ee6d
+Package-manager executable: /tmp/orca638/bin/pnpm (12.4.2); PATH prepended for pnpm child commands.
+
+Baseline and candidate:
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 XDG_CACHE_HOME=/tmp/orca638/cache XDG_DATA_HOME=/tmp/orca638/data pnpm install --frozen-lockfile --store-dir=/tmp/orca638/store
+pnpm audit --json
+pnpm audit --prod --json
+pnpm audit signatures
+
+Candidate build/package:
+pnpm run build
+pnpm --filter @orca/app run build:daemon
+node tools/probe-bundled-daemon.js
+NODE_USE_ENV_PROXY=1 electron_config_cache=/tmp/orca639/electron-cache node packages/app/node_modules/electron/install.js
+NODE_USE_ENV_PROXY=1 XDG_CACHE_HOME=/tmp/orca639/cache ELECTRON_BUILDER_CACHE=/tmp/orca639/builder-cache pnpm --filter @orca/app exec electron-builder --linux tar.gz --x64 --publish never --config.electronDist=/workspace/Project_Orca/packages/app/node_modules/electron/dist --config.directories.output=/tmp/orca639/package
+node /tmp/orca639/inspect-package.cjs
+node /tmp/orca639/import-production.cjs
+XDG_CACHE_HOME=/tmp/orca639/cache ELECTRON_BUILDER_CACHE=/tmp/orca639/builder-cache node /tmp/orca639/archive-fixtures.cjs
+python3 /tmp/orca639/inspect-archives.py
+NODE_USE_ENV_PROXY=1 node /tmp/orca639/payload.mjs
+
+Checks:
+pnpm run typecheck
+pnpm run lint
+pnpm run format:check
+VITEST_MAX_WORKERS=2 ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm run test:coverage --reporter=default --reporter=json --outputFile.json=/tmp/orca639/full-suite.json
+# Initial run: stale explicit builder pin. Next run: unchanged fixed-path fixture EADDRINUSE.
+# After retaining every assertion and checking the fixture separately, final full coverage:
+VITEST_MAX_WORKERS=1 ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm run test:coverage --reporter=default --reporter=json --outputFile.json=/tmp/orca639/full-suite.json
+ORCA_RETRY_INTEGRATION=1 VITEST_MAX_WORKERS=2 pnpm exec vitest run packages/cli/test/admission-retry-wiring.test.ts packages/integrations/test/admission-retry-acp.test.ts
+node packages/cli/dist/main.js demo
+
+Browser attempt: Playwright chromium.launch({executablePath: '/usr/bin/chromium', headless: true, chromiumSandbox: true}); blocked before a page could launch. No sandbox workaround attempted.
+The retained probe sources contain exact local paths; they are evidence for this execution, not portable production commands.

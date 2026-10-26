@@ -1,0 +1,52 @@
+import tarfile, zipfile, json, pathlib, posixpath, stat, hashlib, zlib, base64
+root=pathlib.Path('/tmp/orca639')
+file=root/'package/ORCA-0.1.0-linux-x64.tar.gz'
+def hash_file(p):
+ h=hashlib.sha512()
+ with open(p,'rb') as f:
+  for chunk in iter(lambda:f.read(1024*1024),b''):h.update(chunk)
+ return h.hexdigest()
+critical={};symlinks=[]
+with tarfile.open(file,'r:gz') as tar:
+ members=tar.getmembers()
+ for m in members:
+  assert not m.name.startswith('/') and '..' not in pathlib.PurePosixPath(m.name).parts,m.name
+  if m.issym() or m.islnk():
+   target=posixpath.normpath(posixpath.join(posixpath.dirname(m.name),m.linkname))
+   assert not target.startswith('/') and '..' not in pathlib.PurePosixPath(target).parts,(m.name,m.linkname)
+   symlinks.append({'name':m.name,'target':m.linkname})
+  for suffix in ['resources/app.asar','resources/daemon/orca-daemon.mjs','orca']:
+   if m.isfile() and m.name.endswith('/'+suffix):
+    expected=root/'package/linux-unpacked'/suffix
+    stream=tar.extractfile(m);h=hashlib.sha256()
+    for chunk in iter(lambda:stream.read(1024*1024),b''):h.update(chunk)
+    assert h.hexdigest()==hashlib.sha256(expected.read_bytes()).hexdigest(),suffix
+    critical[suffix]={'size':m.size,'mode':oct(m.mode),'sha256':h.hexdigest()}
+assert len(critical)==3
+def validate_chunks(data, blockmap):
+ offset=0
+ for file in blockmap['files']:
+  assert file['offset']==0
+  for size,expected in zip(file['sizes'],file['checksums'],strict=True):
+   actual=base64.b64encode(hashlib.blake2b(data[offset:offset+size],digest_size=18).digest()).decode()
+   assert actual==expected,(offset,size)
+   offset+=size
+ assert offset==len(data)
+archives=json.loads((root/'archive-fixtures.json').read_text())
+assert next(r for r in archives['results'] if r['name']=='web-stored')['blockMapSize']>0
+for row in archives['results']:
+ path=pathlib.Path(row['path'])
+ if row['blockMapSize']:
+  blob=path.read_bytes();length=int.from_bytes(blob[-4:],'big');assert length==row['blockMapSize'];blockmap=json.loads(zlib.decompress(blob[-4-length:-4],-15));assert sum(blockmap['files'][0]['sizes'])==len(blob)-length-4;validate_chunks(blob[:-length-4],blockmap)
+stored=next(r for r in archives['results'] if r['name']=='stored')
+blob=pathlib.Path(stored['path']).read_bytes();bmap=json.loads(zlib.decompress(pathlib.Path(stored['path']+'.blockmap').read_bytes(),31));assert sum(bmap['files'][0]['sizes'])==len(blob);validate_chunks(blob,bmap)
+for region in stored['regions']:
+ assert blob[region['offset']:region['offset']+region['size']]==(root/'package/linux-unpacked/resources/app.asar').read_bytes()
+links=[]
+with zipfile.ZipFile(archives['macLikeZip']) as z:
+ for info in z.infolist():
+  if stat.S_ISLNK(info.external_attr>>16):links.append({'path':info.filename,'target':z.read(info).decode()})
+assert sorted(x['target']for x in links)==['A','Versions/Current/Owned'],links
+result={'linuxTar':{'size':file.stat().st_size,'sha512':hash_file(file),'entries':len(members),'criticalFilesMatchUnpackedBytes':critical,'containedSymlinks':symlinks},'nsisPayloadFixtures':archives,'embeddedWebBlockmapParsedAndSizeMatched':True,'storedAsarBytesMatchPackagedAsar':True,'allStoredAndEmbeddedBlockChecksumsIndependentlyVerified':True,'macLikeZipSymlinks':links,'limits':'Linux artifact and synthetic payload archives only; no native Windows installer or Mac signing/install proof.'}
+(root/'archive-inspection.json').write_text(json.dumps(result,indent=2)+'\n')
+print(json.dumps({'linuxTarEntries':len(members),'criticalFilesVerified':list(critical),'macLikeZipSymlinks':links,'embeddedBlockmap':True,'storedAsarMatches':True},indent=2))

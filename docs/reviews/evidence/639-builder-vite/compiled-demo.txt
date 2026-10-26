@@ -1,0 +1,627 @@
+demo workspace: /tmp/orca-demo-Ud8UCt
+03:09:53 run run_928b874e-913b-4daf-87f1-4602484e2929 created (workflow program)
+03:09:54     run.started
+03:09:54   ▶ start (start, attempt 1)
+2026-10-26T03:09:54.072Z INFO  step {"runId":"run_928b874e-913b-4daf-87f1-4602484e2929","node":"start","type":"start","attempt":1}
+03:09:54     step.started
+03:09:54   ✔ step 01M5V2Z70PD6S8ZP41A6PN8RWF
+03:09:54   ▶ decompose (agent, attempt 1)
+2026-10-26T03:09:54.078Z INFO  step {"runId":"run_928b874e-913b-4daf-87f1-4602484e2929","node":"decompose","type":"agent","attempt":1}
+03:09:54     step.started
+03:09:54   … waiting on agent-turn
+03:09:54     session sess_01M5V2Z7147KXKQZFA4AMZZ6X3 agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:54     prompt (27be8191) follow-up=0
+03:09:54     │ Scripted demo agent reporting for duty.
+03:09:54     ⚙ Write decomposition to /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/.orca-attempts/run_928b874e-913b-4daf-87f1-4602484e2929/step_01M5V2Z70W5XFYB0WVNJ5RVNMX/decomposition.md in_progress
+03:09:54     ⚙  completed
+03:09:54     │ Wrote decomposition (1097 chars) to /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/.orca-attempts/run_928b874e-913b-4daf-87f1-4602484e2929/step_01M5V2Z70W5XFYB0WVNJ5RVNMX/decomposition.md
+03:09:54     turn ended: end_turn in 12ms
+03:09:54     ⬒ artifact decomposition (decomposition v1) /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/.orca-attempts/run_928b874e-913b-4daf-87f1-4602484e2929/step_01M5V2Z70W5XFYB0WVNJ5RVNMX/decomposition.md
+03:09:54     agent.session.closed
+03:09:54   ✔ step 01M5V2Z70W5XFYB0WVNJ5RVNMX [1 artifact(s)]
+03:09:54   ▶ register (custom:plan-register, attempt 1)
+2026-10-26T03:09:54.362Z INFO  step {"runId":"run_928b874e-913b-4daf-87f1-4602484e2929","node":"register","type":"custom:plan-register","attempt":1}
+03:09:54     step.started
+03:09:54     ⬓ inputs art_01M5V2Z78FJBW34VC40ERF23QD
+03:09:54     vars planId, plan, workItems, workItemIds, openDecisions, registration
+03:09:54   ✔ step 01M5V2Z79MFDM9C00H4PT8NKH1
+03:09:54   ▶ assess-risks (agent, attempt 1)
+2026-10-26T03:09:54.407Z INFO  step {"runId":"run_928b874e-913b-4daf-87f1-4602484e2929","node":"assess-risks","type":"agent","attempt":1}
+03:09:54     step.started
+03:09:54     ⬓ inputs art_01M5V2Z78FJBW34VC40ERF23QD
+03:09:54   … waiting on agent-turn
+03:09:54     session sess_01M5V2Z7BGZ8HA59RA5NZ74ZXX agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:54     prompt (d8b0d0b4) follow-up=0
+03:09:54     │ Scripted demo agent reporting for duty.
+03:09:54     ⚙ Write risk-register to /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/.orca-attempts/run_928b874e-913b-4daf-87f1-4602484e2929/step_01M5V2Z7B4RCWC1A48DE2RXYRH/risk-register.md in_progress
+03:09:54     ⚙  completed
+03:09:54     │ Wrote risk-register (260 chars) to /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/.orca-attempts/run_928b874e-913b-4daf-87f1-4602484e2929/step_01M5V2Z7B4RCWC1A48DE2RXYRH/risk-register.md
+03:09:54     turn ended: end_turn in 7ms
+03:09:54     ⬒ artifact riskRegister (risk-register v1) /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/.orca-attempts/run_928b874e-913b-4daf-87f1-4602484e2929/step_01M5V2Z7B4RCWC1A48DE2RXYRH/risk-register.md
+03:09:54     agent.session.closed
+03:09:54   ✔ step 01M5V2Z7B4RCWC1A48DE2RXYRH [1 artifact(s)]
+03:09:54   ▶ decide (loop, attempt 1)
+2026-10-26T03:09:54.608Z INFO  step {"runId":"run_928b874e-913b-4daf-87f1-4602484e2929","node":"decide","type":"loop","attempt":1}
+03:09:54     step.started
+03:09:54     ↻ iteration 0
+03:09:54 run run_01M5V2Z7HWENQ47SVFSEYX9EGK created (workflow program::decide)
+03:09:54     ↳ child run run_01M5V2Z7HWENQ47SVFSEYX9EGK (0)
+03:09:54     run.started
+03:09:54   ▶ start (start, attempt 1)
+2026-10-26T03:09:54.645Z INFO  step {"runId":"run_01M5V2Z7HWENQ47SVFSEYX9EGK","node":"start","type":"start","attempt":1}
+03:09:54     step.started
+03:09:54   ✔ step 01M5V2Z7JJZBZYRN84438CS0Y7
+03:09:54   ▶ matrix (agent, attempt 1)
+2026-10-26T03:09:54.658Z INFO  step {"runId":"run_01M5V2Z7HWENQ47SVFSEYX9EGK","node":"matrix","type":"agent","attempt":1}
+03:09:54     step.started
+03:09:54   … waiting on agent-turn
+03:09:54     session sess_01M5V2Z7KCSHDDT035G6ZPJYKW agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:54     prompt (e2fa6134) follow-up=0
+03:09:54     │ Scripted demo agent reporting for duty.
+03:09:54     ⚙ Write decision-matrix to /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/decisions/.orca-attempts/run_01M5V2Z7HWENQ47SVFSEYX9EGK/step_01M5V2Z7JVB6S5DBEV43CJEE1F/session-store.md in_progress
+03:09:54     ⚙  completed
+03:09:54     │ Wrote decision-matrix (445 chars) to /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/decisions/.orca-attempts/run_01M5V2Z7HWENQ47SVFSEYX9EGK/step_01M5V2Z7JVB6S5DBEV43CJEE1F/session-store.md
+03:09:54     turn ended: end_turn in 9ms
+03:09:54     ⬒ artifact decisionMatrix (decision-matrix v1) /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/decisions/.orca-attempts/run_01M5V2Z7HWENQ47SVFSEYX9EGK/step_01M5V2Z7JVB6S5DBEV43CJEE1F/session-store.md
+03:09:54     agent.session.closed
+03:09:54   ✔ step 01M5V2Z7JVB6S5DBEV43CJEE1F [1 artifact(s)]
+03:09:54   ▶ resolve (custom:decision-matrix, attempt 1)
+2026-10-26T03:09:54.895Z INFO  step {"runId":"run_01M5V2Z7HWENQ47SVFSEYX9EGK","node":"resolve","type":"custom:decision-matrix","attempt":1}
+03:09:54     step.started
+03:09:54     ⬓ inputs art_01M5V2Z7SYBG4Y37TQ32MQHSY5
+03:09:54     decision: cookie (matrix:session-store:matrix)
+03:09:54   ✔ step 01M5V2Z7TCVF5P37RPDCGCR96D → cookie
+03:09:54   ▶ done (end, attempt 1)
+2026-10-26T03:09:54.914Z INFO  step {"runId":"run_01M5V2Z7HWENQ47SVFSEYX9EGK","node":"done","type":"end","attempt":1}
+03:09:54     step.started
+03:09:54   ✔ step 01M5V2Z7TZETYG259SF4KJGFGQ
+03:09:54 run run_01M5V2Z7HWENQ47SVFSEYX9EGK completed: success
+03:09:54     ↲ child run run_01M5V2Z7HWENQ47SVFSEYX9EGK completed/success
+03:09:54   ✔ step 01M5V2Z7HETC8ADZH5Y0ZYBA4Z
+03:09:54   ▶ schedule (custom:plan-schedule, attempt 1)
+2026-10-26T03:09:54.950Z INFO  step {"runId":"run_928b874e-913b-4daf-87f1-4602484e2929","node":"schedule","type":"custom:plan-schedule","attempt":1}
+03:09:54     step.started
+03:09:54     vars schedule
+03:09:54     ⬒ artifact schedule (schedule v1) /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/schedule.md
+03:09:54   ✔ step 01M5V2Z7VYKSHNNZ8TK1SJ2VJC [1 artifact(s)]
+03:09:54   ▶ plan-gate (gate, attempt 1)
+2026-10-26T03:09:54.990Z INFO  step {"runId":"run_928b874e-913b-4daf-87f1-4602484e2929","node":"plan-gate","type":"gate","attempt":1}
+03:09:55     step.started
+03:09:55     decision: approve (gate:auto)
+03:09:55   ✔ step 01M5V2Z7X7E59063CTQJM8ZP7V → approve
+03:09:55   ▶ dispatch (custom:plan-dispatch, attempt 1)
+2026-10-26T03:09:55.026Z INFO  step {"runId":"run_928b874e-913b-4daf-87f1-4602484e2929","node":"dispatch","type":"custom:plan-dispatch","attempt":1}
+03:09:55     step.started
+03:09:55 run run_01M5V2Z7Z23X3PGYS2JRAHWFQF created (workflow ai-sdlc)
+03:09:55     ↳ child run run_01M5V2Z7Z23X3PGYS2JRAHWFQF (schema)
+03:09:55     run.started
+03:09:55   ▶ start (start, attempt 1)
+2026-10-26T03:09:55.077Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"start","type":"start","attempt":1}
+03:09:55     step.started
+03:09:55   ✔ step 01M5V2Z802MB5ED3H4NPB94TPT
+03:09:55 run run_01M5V2Z80CFGNDVFCHZ2AP2RBH created (workflow ai-sdlc)
+03:09:55   ▶ plan (agent, attempt 1)
+2026-10-26T03:09:55.099Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"plan","type":"agent","attempt":1}
+03:09:55     ↳ child run run_01M5V2Z80CFGNDVFCHZ2AP2RBH (docs)
+03:09:55     step.started
+03:09:55   … waiting on agent-turn
+03:09:55     run.started
+03:09:55   ▶ start (start, attempt 1)
+2026-10-26T03:09:55.133Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"start","type":"start","attempt":1}
+03:09:55     step.started
+03:09:55   ✔ step 01M5V2Z81SG2VXW3E83ZNN3PB8
+03:09:55   ▶ plan (agent, attempt 1)
+2026-10-26T03:09:55.143Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"plan","type":"agent","attempt":1}
+03:09:55     step.started
+03:09:55   … waiting on agent-turn
+03:09:55     session sess_01M5V2Z8187XWBMAMGEQB8YCTE agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:55     prompt (83165305) follow-up=0
+03:09:55     │ Scripted demo agent reporting for duty.
+03:09:55     ⚙ Write intent to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z80P8D87RD3W2G5BRGGE/intent.md in_progress
+03:09:55     ⚙  completed
+03:09:55     │ Wrote intent (79 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z80P8D87RD3W2G5BRGGE/intent.md
+03:09:55     turn ended: end_turn in 8ms
+03:09:55     session sess_01M5V2Z82G6WWPHNJJKG1Q751K agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:55     ⬒ artifact intent (intent v1) /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z80P8D87RD3W2G5BRGGE/intent.md
+03:09:55     prompt (efb4f1e3) follow-up=0
+03:09:55     agent.session.closed
+03:09:55   ✔ step 01M5V2Z80P8D87RD3W2G5BRGGE [1 artifact(s)]
+03:09:55     │ Scripted demo agent reporting for duty.
+03:09:55     ⚙ Write intent to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z82442PTXD54TMH1TPSQ/intent.md in_progress
+03:09:55   ▶ design (agent, attempt 1)
+2026-10-26T03:09:55.361Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"design","type":"agent","attempt":1}
+03:09:55     ⚙  completed
+03:09:55     step.started
+03:09:55     │ Wrote intent (79 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z82442PTXD54TMH1TPSQ/intent.md
+03:09:55     ⬓ inputs art_01M5V2Z87ZB7HDKSXQ4K6QZGV7
+03:09:55     turn ended: end_turn in 8ms
+03:09:55   … waiting on agent-turn
+03:09:55     ⬒ artifact intent (intent v1) /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z82442PTXD54TMH1TPSQ/intent.md
+03:09:55     agent.session.closed
+03:09:55   ✔ step 01M5V2Z82442PTXD54TMH1TPSQ [1 artifact(s)]
+03:09:55   ▶ design (agent, attempt 1)
+2026-10-26T03:09:55.397Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"design","type":"agent","attempt":1}
+03:09:55     step.started
+03:09:55     ⬓ inputs art_01M5V2Z89FR8TE83PDFDWGDGKS
+03:09:55   … waiting on agent-turn
+03:09:55     session sess_01M5V2Z89G9G1DF3AYBJND9FAN agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:55     prompt (199b1111) follow-up=0
+03:09:55     session sess_01M5V2Z8AH5613X14X9TAA09XA agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:55     prompt (83ba056d) follow-up=0
+03:09:55     │ Scripted demo agent reporting for duty.
+03:09:55     ⚙ Write spec to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z88XWPYZM787PKQG2BGK/spec.md in_progress
+03:09:55     │ Scripted demo agent reporting for duty.
+03:09:55     ⚙  completed
+03:09:55     ⚙ Write spec to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z8A3QRRK6E0WAK93RK7A/spec.md in_progress
+03:09:55     │ Wrote spec (139 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z88XWPYZM787PKQG2BGK/spec.md
+03:09:55     ⚙  completed
+03:09:55     turn ended: end_turn in 17ms
+03:09:55     │ Wrote spec (139 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z8A3QRRK6E0WAK93RK7A/spec.md
+03:09:55     turn ended: end_turn in 10ms
+03:09:55     ⬒ artifact spec (spec v1) /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z88XWPYZM787PKQG2BGK/spec.md
+03:09:55     ⬒ artifact spec (spec v1) /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z8A3QRRK6E0WAK93RK7A/spec.md
+03:09:55     agent.session.closed
+03:09:55     agent.session.closed
+03:09:55   ✔ step 01M5V2Z88XWPYZM787PKQG2BGK [1 artifact(s)]
+03:09:55   ✔ step 01M5V2Z8A3QRRK6E0WAK93RK7A [1 artifact(s)]
+03:09:55   ▶ spec-gate (gate, attempt 1)
+03:09:55   ▶ spec-gate (gate, attempt 1)
+2026-10-26T03:09:55.668Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"spec-gate","type":"gate","attempt":1}
+2026-10-26T03:09:55.668Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"spec-gate","type":"gate","attempt":1}
+03:09:55     step.started
+03:09:55     step.started
+03:09:55     decision: approve (gate:auto)
+03:09:55     decision: approve (gate:auto)
+03:09:55   ✔ step 01M5V2Z8JHCJF4RCY71N834HZ0 → approve
+03:09:55   ✔ step 01M5V2Z8JHYEEBGWCTM54HR8XG → approve
+03:09:55   ▶ await-deps (custom:plan-await, attempt 1)
+03:09:55   ▶ await-deps (custom:plan-await, attempt 1)
+2026-10-26T03:09:55.691Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"await-deps","type":"custom:plan-await","attempt":1}
+2026-10-26T03:09:55.691Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"await-deps","type":"custom:plan-await","attempt":1}
+03:09:55     step.started
+03:09:55     step.started
+03:09:55     vars upstream
+03:09:55     vars upstream
+03:09:55   ✔ step 01M5V2Z8K66Y54ZC1HT2BGMXCA
+03:09:55   ✔ step 01M5V2Z8K660HT1F5CQVC823MN
+03:09:55   ▶ bump-build (set, attempt 1)
+03:09:55   ▶ bump-build (set, attempt 1)
+2026-10-26T03:09:55.713Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"bump-build","type":"set","attempt":1}
+2026-10-26T03:09:55.713Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"bump-build","type":"set","attempt":1}
+03:09:55     step.started
+03:09:55     step.started
+03:09:55     vars buildAttempt
+03:09:55     vars buildAttempt
+03:09:55   ✔ step 01M5V2Z8KXX7D4AQVD2TST8THR
+03:09:55   ✔ step 01M5V2Z8KXQZPR6KZRH9VD5X7B
+03:09:55   ▶ build (agent, attempt 1)
+03:09:55   ▶ build (agent, attempt 1)
+2026-10-26T03:09:55.729Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"build","type":"agent","attempt":1}
+2026-10-26T03:09:55.729Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"build","type":"agent","attempt":1}
+03:09:55     step.started
+03:09:55     step.started
+03:09:55     ⬓ inputs art_01M5V2Z8HWTR3ZQC9TG4W16AVX
+03:09:55     ⬓ inputs art_01M5V2Z8HPTQ2PG2EJ2QZW0ZD8
+03:09:55   … waiting on agent-turn
+03:09:55   … waiting on agent-turn
+03:09:55     session sess_01M5V2Z8MYEZEHC0WFB06FNYGZ agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:55     prompt (70c92039) follow-up=0
+03:09:55     │ Scripted demo agent reporting for duty.
+03:09:55     session sess_01M5V2Z8N1XAGQZA92CZYHK3PE agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:55     ⚙ Write plan to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z8MDQAPBQQN6H56QJPT2/plan.md in_progress
+03:09:55     prompt (27d45f85) follow-up=0
+03:09:55     ⚙  completed
+03:09:55     │ Wrote plan (77 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z8MDQAPBQQN6H56QJPT2/plan.md
+03:09:55     │ Scripted demo agent reporting for duty.
+03:09:55     ⚙ Write implementation to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z8MDQAPBQQN6H56QJPT2/implementation.md in_progress
+03:09:55     ⚙ Write plan to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z8MDNBCSM392TKQ2CR9D/plan.md in_progress
+03:09:55     ⚙  completed
+03:09:55     ⚙  completed
+03:09:55     │ Wrote implementation (59 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z8MDQAPBQQN6H56QJPT2/implementation.md
+03:09:55     │ Wrote plan (77 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z8MDNBCSM392TKQ2CR9D/plan.md
+03:09:55     turn ended: end_turn in 10ms
+03:09:55     ⚙ Write implementation to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z8MDNBCSM392TKQ2CR9D/implementation.md in_progress
+03:09:55     ⬒ artifact plan (plan v1) /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z8MDQAPBQQN6H56QJPT2/plan.md
+03:09:55     ⚙  completed
+03:09:55     │ Wrote implementation (59 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z8MDNBCSM392TKQ2CR9D/implementation.md
+03:09:55     ⬒ artifact implementation (implementation v1) /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z8MDQAPBQQN6H56QJPT2/implementation.md
+03:09:55     turn ended: end_turn in 9ms
+03:09:55     agent.session.closed
+03:09:55     ⬒ artifact plan (plan v1) /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z8MDNBCSM392TKQ2CR9D/plan.md
+03:09:55   ✔ step 01M5V2Z8MDQAPBQQN6H56QJPT2 [2 artifact(s)]
+03:09:55   ▶ test (agent, attempt 1)
+03:09:55     ⬒ artifact implementation (implementation v1) /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z8MDNBCSM392TKQ2CR9D/implementation.md
+2026-10-26T03:09:55.997Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"test","type":"agent","attempt":1}
+03:09:56     step.started
+03:09:56     ⬓ inputs art_01M5V2Z8HPTQ2PG2EJ2QZW0ZD8, art_01M5V2Z8W0WP8RGQ4FG82PXXZB
+03:09:56     agent.session.closed
+03:09:56   ✔ step 01M5V2Z8MDNBCSM392TKQ2CR9D [2 artifact(s)]
+03:09:56   … waiting on agent-turn
+03:09:56   ▶ test (agent, attempt 1)
+2026-10-26T03:09:56.023Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"test","type":"agent","attempt":1}
+03:09:56     step.started
+03:09:56     ⬓ inputs art_01M5V2Z8HWTR3ZQC9TG4W16AVX, art_01M5V2Z8WRPE88B2JM7GP3SB72
+03:09:56   … waiting on agent-turn
+03:09:56     session sess_01M5V2Z8XEWGN8WGT9Y9TXF8CP agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:56     prompt (8f4739fd) follow-up=0
+03:09:56     │ Scripted demo agent reporting for duty.
+03:09:56     ⚙ Write test-report to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z8WTY3D6H26G0PF0GK0B/test-report.md in_progress
+03:09:56     ⚙  completed
+03:09:56     │ Wrote test-report (63 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z8WTY3D6H26G0PF0GK0B/test-report.md
+03:09:56     turn ended: end_turn in 17ms
+03:09:56     ⬒ artifact testReport (test-report v1) /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z8WTY3D6H26G0PF0GK0B/test-report.md
+03:09:56     session sess_01M5V2Z8YA4PHQZTZ7SQ3SX8FB agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:56     agent.session.closed
+03:09:56     prompt (c52fa03b) follow-up=0
+03:09:56   ✔ step 01M5V2Z8WTY3D6H26G0PF0GK0B [1 artifact(s)]
+03:09:56   ▶ tests-passed (decision, attempt 1)
+2026-10-26T03:09:56.250Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"tests-passed","type":"decision","attempt":1}
+03:09:56     │ Scripted demo agent reporting for duty.
+03:09:56     step.started
+03:09:56     ⚙ Write test-report to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z8XDXQHT09XFQZ4468EW/test-report.md in_progress
+03:09:56     ⬓ inputs art_01M5V2Z93WEEEMTWRKAK66W1JQ
+03:09:56     ⚙  completed
+03:09:56     decision: false (artifact:testReport.passed)
+03:09:56     │ Wrote test-report (56 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z8XDXQHT09XFQZ4468EW/test-report.md
+03:09:56   ✔ step 01M5V2Z94HPM9PESKJKYAFHBCC → false
+03:09:56     turn ended: end_turn in 9ms
+03:09:56   ▶ bump-build (set, attempt 1)
+2026-10-26T03:09:56.278Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"bump-build","type":"set","attempt":1}
+03:09:56     step.started
+03:09:56     ⬒ artifact testReport (test-report v1) /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z8XDXQHT09XFQZ4468EW/test-report.md
+03:09:56     vars buildAttempt
+03:09:56     agent.session.closed
+03:09:56   ✔ step 01M5V2Z95H1KDQKAFSDEBSBGN3
+03:09:56   ✔ step 01M5V2Z8XDXQHT09XFQZ4468EW [1 artifact(s)]
+03:09:56   ▶ build (agent, attempt 1)
+2026-10-26T03:09:56.308Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"build","type":"agent","attempt":1}
+03:09:56   ▶ tests-passed (decision, attempt 1)
+2026-10-26T03:09:56.309Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"tests-passed","type":"decision","attempt":1}
+03:09:56     step.started
+03:09:56     step.started
+03:09:56     ⬓ inputs art_01M5V2Z8HPTQ2PG2EJ2QZW0ZD8, art_01M5V2Z93WEEEMTWRKAK66W1JQ
+03:09:56     ⬓ inputs art_01M5V2Z95N1BCCA2MFBWVYHD0K
+03:09:56   … waiting on agent-turn
+03:09:56     decision: true (artifact:testReport.passed)
+03:09:56   ✔ step 01M5V2Z96JNAA38Z2W46GC0ZJN → true
+03:09:56   ▶ bump-review (set, attempt 1)
+2026-10-26T03:09:56.331Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"bump-review","type":"set","attempt":1}
+03:09:56     step.started
+03:09:56     vars reviewRound
+03:09:56   ✔ step 01M5V2Z9793MPANDNGVDA7NRG3
+03:09:56   ▶ review (agent, attempt 1)
+2026-10-26T03:09:56.344Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"review","type":"agent","attempt":1}
+03:09:56     step.started
+03:09:56     ⬓ inputs art_01M5V2Z8HWTR3ZQC9TG4W16AVX, art_01M5V2Z8WRPE88B2JM7GP3SB72, art_01M5V2Z95N1BCCA2MFBWVYHD0K
+03:09:56   … waiting on agent-turn
+03:09:56     session sess_01M5V2Z973FVFJNYQKWGAK99WM agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:56     prompt (5c6417f7) follow-up=0
+03:09:56     │ Scripted demo agent reporting for duty.
+03:09:56     ⚙ Write plan to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z96D2T9EVDEJG60D2KYF/plan.md in_progress
+03:09:56     ⚙  completed
+03:09:56     session sess_01M5V2Z982SKC3C2Y50AFA9PCF agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:56     │ Wrote plan (77 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z96D2T9EVDEJG60D2KYF/plan.md
+03:09:56     prompt (56065be2) follow-up=0
+03:09:56     ⚙ Write implementation to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z96D2T9EVDEJG60D2KYF/implementation.md in_progress
+03:09:56     ⚙  completed
+03:09:56     │ Wrote implementation (59 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z96D2T9EVDEJG60D2KYF/implementation.md
+03:09:56     │ Scripted demo agent reporting for duty.
+03:09:56     turn ended: end_turn in 17ms
+03:09:56     ⚙ Write review to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z97N7RAHKPPHY8FDMEK6/review.md in_progress
+03:09:56     ⚙  completed
+03:09:56     ⬒ artifact plan (plan v2) /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z96D2T9EVDEJG60D2KYF/plan.md
+03:09:56     │ Wrote review (42 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z97N7RAHKPPHY8FDMEK6/review.md
+03:09:56     turn ended: end_turn in 8ms
+03:09:56     ⬒ artifact implementation (implementation v2) /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z96D2T9EVDEJG60D2KYF/implementation.md
+03:09:56     ⬒ artifact review (review v1) /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z97N7RAHKPPHY8FDMEK6/review.md
+03:09:56     agent.session.closed
+03:09:56   ✔ step 01M5V2Z96D2T9EVDEJG60D2KYF [2 artifact(s)]
+03:09:56     agent.session.closed
+03:09:56   ▶ test (agent, attempt 1)
+2026-10-26T03:09:56.632Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"test","type":"agent","attempt":1}
+03:09:56   ✔ step 01M5V2Z97N7RAHKPPHY8FDMEK6 [1 artifact(s)]
+03:09:56     step.started
+03:09:56   ▶ review-verdict (decision, attempt 1)
+2026-10-26T03:09:56.640Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"review-verdict","type":"decision","attempt":1}
+03:09:56     ⬓ inputs art_01M5V2Z8HPTQ2PG2EJ2QZW0ZD8, art_01M5V2Z9FW4GW9TXAR7GDW0763
+03:09:56     step.started
+03:09:56   … waiting on agent-turn
+03:09:56     ⬓ inputs art_01M5V2Z9G3K7CRSZJ8604F916W
+03:09:56     decision: approve (artifact:review.verdict)
+03:09:56   ✔ step 01M5V2Z9GTKQ9AQFYGVTKZ97K5 → approve
+03:09:56   ▶ deploy (agent, attempt 1)
+2026-10-26T03:09:56.703Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"deploy","type":"agent","attempt":1}
+03:09:56     step.started
+03:09:56     ⬓ inputs art_01M5V2Z8WRPE88B2JM7GP3SB72, art_01M5V2Z9G3K7CRSZJ8604F916W
+03:09:56   … waiting on agent-turn
+03:09:56     session sess_01M5V2Z9HWE0MHA17P7RAJMDMJ agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:56     prompt (4cf10169) follow-up=0
+03:09:56     │ Scripted demo agent reporting for duty.
+03:09:56     ⚙ Write test-report to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z9GNPX4XTF5PFPJ143P5/test-report.md in_progress
+03:09:56     ⚙  completed
+03:09:56     │ Wrote test-report (56 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z9GNPX4XTF5PFPJ143P5/test-report.md
+03:09:56     turn ended: end_turn in 9ms
+03:09:56     ⬒ artifact testReport (test-report v2) /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z9GNPX4XTF5PFPJ143P5/test-report.md
+03:09:56     agent.session.closed
+03:09:56     session sess_01M5V2Z9KFZ5397JYFQM94KWRX agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:56   ✔ step 01M5V2Z9GNPX4XTF5PFPJ143P5 [1 artifact(s)]
+03:09:56     prompt (ca43d4d4) follow-up=0
+03:09:56   ▶ tests-passed (decision, attempt 1)
+2026-10-26T03:09:56.917Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"tests-passed","type":"decision","attempt":1}
+03:09:56     step.started
+03:09:56     ⬓ inputs art_01M5V2Z9RX1SEFEXWP457RJNHJ
+03:09:56     │ Scripted demo agent reporting for duty.
+03:09:56     decision: true (artifact:testReport.passed)
+03:09:56     ⚙ Write deploy-report to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z9JPFFQPAH74AB6H9GCH/deploy-report.md in_progress
+03:09:56   ✔ step 01M5V2Z9SHBFD8Y42SRG7F938J → true
+03:09:56     ⚙  completed
+03:09:56     │ Wrote deploy-report (86 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z9JPFFQPAH74AB6H9GCH/deploy-report.md
+03:09:56   ▶ bump-review (set, attempt 1)
+2026-10-26T03:09:56.944Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"bump-review","type":"set","attempt":1}
+03:09:56     turn ended: end_turn in 10ms
+03:09:56     step.started
+03:09:56     vars reviewRound
+03:09:56     ⬒ artifact deployReport (deploy-report v1) /tmp/orca-demo-Ud8UCt/.orca/work/docs/.orca-attempts/run_01M5V2Z80CFGNDVFCHZ2AP2RBH/step_01M5V2Z9JPFFQPAH74AB6H9GCH/deploy-report.md
+03:09:56   ✔ step 01M5V2Z9TB7SXSTXHM90K72XPM
+03:09:56   ▶ review (agent, attempt 1)
+2026-10-26T03:09:56.960Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"review","type":"agent","attempt":1}
+03:09:56     step.started
+03:09:56     agent.session.closed
+03:09:56     ⬓ inputs art_01M5V2Z8HPTQ2PG2EJ2QZW0ZD8, art_01M5V2Z9FW4GW9TXAR7GDW0763, art_01M5V2Z9RX1SEFEXWP457RJNHJ
+03:09:56   ✔ step 01M5V2Z9JPFFQPAH74AB6H9GCH [1 artifact(s)]
+03:09:56   ▶ delivery-status (decision, attempt 1)
+2026-10-26T03:09:56.980Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"delivery-status","type":"decision","attempt":1}
+03:09:56   … waiting on agent-turn
+03:09:56     step.started
+03:09:56     ⬓ inputs art_01M5V2Z9TMJYN6F2PS23BH72QS
+03:09:56     decision: done (artifact:deployReport.status)
+03:09:57   ✔ step 01M5V2Z9V9R8SN6JJSNFQ10CZ6 → done
+03:09:57   ▶ done (end, attempt 1)
+2026-10-26T03:09:57.007Z INFO  step {"runId":"run_01M5V2Z80CFGNDVFCHZ2AP2RBH","node":"done","type":"end","attempt":1}
+03:09:57     step.started
+03:09:57   ✔ step 01M5V2Z9WBZPTDFECJZC0NRDQE
+03:09:57 run run_01M5V2Z80CFGNDVFCHZ2AP2RBH completed: success
+03:09:57     ↲ child run run_01M5V2Z80CFGNDVFCHZ2AP2RBH completed/success
+03:09:57     session sess_01M5V2Z9VM7QX6RVF6CA6Q0E3B agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:57     prompt (457b9e95) follow-up=0
+03:09:57     │ Scripted demo agent reporting for duty.
+03:09:57     ⚙ Write review to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z9TXTS0T6P1X06K18EXW/review.md in_progress
+03:09:57     ⚙  completed
+03:09:57     │ Wrote review (42 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z9TXTS0T6P1X06K18EXW/review.md
+03:09:57     turn ended: end_turn in 6ms
+03:09:57     ⬒ artifact review (review v1) /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2Z9TXTS0T6P1X06K18EXW/review.md
+03:09:57     agent.session.closed
+03:09:57   ✔ step 01M5V2Z9TXTS0T6P1X06K18EXW [1 artifact(s)]
+03:09:57   ▶ review-verdict (decision, attempt 1)
+2026-10-26T03:09:57.200Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"review-verdict","type":"decision","attempt":1}
+03:09:57     step.started
+03:09:57     ⬓ inputs art_01M5V2ZA1CTEDBGMJQPAC5Y42F
+03:09:57     decision: approve (artifact:review.verdict)
+03:09:57   ✔ step 01M5V2ZA2CP4KZEWC9GE218CP4 → approve
+03:09:57   ▶ deploy (agent, attempt 1)
+2026-10-26T03:09:57.218Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"deploy","type":"agent","attempt":1}
+03:09:57     step.started
+03:09:57     ⬓ inputs art_01M5V2Z9FW4GW9TXAR7GDW0763, art_01M5V2ZA1CTEDBGMJQPAC5Y42F
+03:09:57   … waiting on agent-turn
+03:09:57     session sess_01M5V2ZA3AZVT2AMGBTDDPW0M4 agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:57     prompt (13059ea4) follow-up=0
+03:09:57     │ Scripted demo agent reporting for duty.
+03:09:57     ⚙ Write deploy-report to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2ZA309PR1JEHHET8YHFA8/deploy-report.md in_progress
+03:09:57     ⚙  completed
+03:09:57     │ Wrote deploy-report (86 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2ZA309PR1JEHHET8YHFA8/deploy-report.md
+03:09:57     turn ended: end_turn in 7ms
+03:09:57     ⬒ artifact deployReport (deploy-report v1) /tmp/orca-demo-Ud8UCt/.orca/work/schema/.orca-attempts/run_01M5V2Z7Z23X3PGYS2JRAHWFQF/step_01M5V2ZA309PR1JEHHET8YHFA8/deploy-report.md
+03:09:57     agent.session.closed
+03:09:57   ✔ step 01M5V2ZA309PR1JEHHET8YHFA8 [1 artifact(s)]
+03:09:57   ▶ delivery-status (decision, attempt 1)
+2026-10-26T03:09:57.433Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"delivery-status","type":"decision","attempt":1}
+03:09:57     step.started
+03:09:57     ⬓ inputs art_01M5V2ZA92K4FNZE6KBQR4E9M7
+03:09:57     decision: done (artifact:deployReport.status)
+03:09:57   ✔ step 01M5V2ZA9PHCGMPGEPFTK64DSK → done
+03:09:57   ▶ done (end, attempt 1)
+2026-10-26T03:09:57.450Z INFO  step {"runId":"run_01M5V2Z7Z23X3PGYS2JRAHWFQF","node":"done","type":"end","attempt":1}
+03:09:57     step.started
+03:09:57   ✔ step 01M5V2ZAA7THCWY33H82GZXJM5
+03:09:57 run run_01M5V2Z7Z23X3PGYS2JRAHWFQF completed: success
+03:09:57     ↲ child run run_01M5V2Z7Z23X3PGYS2JRAHWFQF completed/success
+03:09:57 run run_01M5V2ZABJ5W7Z3E9DZYSZVB42 created (workflow ai-sdlc)
+03:09:57     ↳ child run run_01M5V2ZABJ5W7Z3E9DZYSZVB42 (login-api)
+03:09:57     run.started
+03:09:57   ▶ start (start, attempt 1)
+2026-10-26T03:09:57.517Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"start","type":"start","attempt":1}
+03:09:57     step.started
+03:09:57   ✔ step 01M5V2ZACB207RJGVA3SBRQTMB
+03:09:57   ▶ plan (agent, attempt 1)
+2026-10-26T03:09:57.524Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"plan","type":"agent","attempt":1}
+03:09:57     step.started
+03:09:57   … waiting on agent-turn
+03:09:57     session sess_01M5V2ZACS9S7X18RVGDYEKJ77 agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:57     prompt (6461a91e) follow-up=0
+03:09:57     │ Scripted demo agent reporting for duty.
+03:09:57     ⚙ Write intent to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZACH4RTDNX4VST5CPCCS/intent.md in_progress
+03:09:57     ⚙  completed
+03:09:57     │ Wrote intent (79 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZACH4RTDNX4VST5CPCCS/intent.md
+03:09:57     turn ended: end_turn in 8ms
+03:09:57     ⬒ artifact intent (intent v1) /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZACH4RTDNX4VST5CPCCS/intent.md
+03:09:57     agent.session.closed
+03:09:57   ✔ step 01M5V2ZACH4RTDNX4VST5CPCCS [1 artifact(s)]
+03:09:57   ▶ design (agent, attempt 1)
+2026-10-26T03:09:57.732Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"design","type":"agent","attempt":1}
+03:09:57     step.started
+03:09:57     ⬓ inputs art_01M5V2ZAJN9ZACK4MRHWMFEM04
+03:09:57   … waiting on agent-turn
+03:09:57     session sess_01M5V2ZAKH2K0PZTC92K674EVQ agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:57     prompt (9b3f9e7d) follow-up=0
+03:09:57     │ Scripted demo agent reporting for duty.
+03:09:57     ⚙ Write spec to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZAK1FJ7T49NDWNQ5JRJ4/spec.md in_progress
+03:09:57     ⚙  completed
+03:09:57     │ Wrote spec (139 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZAK1FJ7T49NDWNQ5JRJ4/spec.md
+03:09:57     turn ended: end_turn in 8ms
+03:09:57     ⬒ artifact spec (spec v1) /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZAK1FJ7T49NDWNQ5JRJ4/spec.md
+03:09:57     agent.session.closed
+03:09:57   ✔ step 01M5V2ZAK1FJ7T49NDWNQ5JRJ4 [1 artifact(s)]
+03:09:57   ▶ spec-gate (gate, attempt 1)
+2026-10-26T03:09:57.948Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"spec-gate","type":"gate","attempt":1}
+03:09:57     step.started
+03:09:57     decision: approve (gate:auto)
+03:09:57   ✔ step 01M5V2ZASSNAN7BYVJC8ZWR35B → approve
+03:09:57   ▶ await-deps (custom:plan-await, attempt 1)
+2026-10-26T03:09:57.959Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"await-deps","type":"custom:plan-await","attempt":1}
+03:09:57     step.started
+03:09:57     vars upstream
+03:09:57   ✔ step 01M5V2ZAT51195DS1D0RXTQZ5H
+03:09:57   ▶ bump-build (set, attempt 1)
+2026-10-26T03:09:57.972Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"bump-build","type":"set","attempt":1}
+03:09:57     step.started
+03:09:57     vars buildAttempt
+03:09:57   ✔ step 01M5V2ZATHJ63JJGP3SE776J6H
+03:09:57   ▶ build (agent, attempt 1)
+2026-10-26T03:09:57.981Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"build","type":"agent","attempt":1}
+03:09:57     step.started
+03:09:57     ⬓ inputs art_01M5V2ZASC78PBNAH4TSTRZ5A5
+03:09:57   … waiting on agent-turn
+03:09:58     session sess_01M5V2ZAV4P8VKDD9WWQ8QM8DM agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:58     prompt (01e49c53) follow-up=0
+03:09:58     │ Scripted demo agent reporting for duty.
+03:09:58     ⚙ Write plan to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZATVB3AYMNEB0ZPEJTH1/plan.md in_progress
+03:09:58     ⚙  completed
+03:09:58     │ Wrote plan (77 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZATVB3AYMNEB0ZPEJTH1/plan.md
+03:09:58     ⚙ Write implementation to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZATVB3AYMNEB0ZPEJTH1/implementation.md in_progress
+03:09:58     ⚙  completed
+03:09:58     │ Wrote implementation (59 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZATVB3AYMNEB0ZPEJTH1/implementation.md
+03:09:58     turn ended: end_turn in 9ms
+03:09:58     ⬒ artifact plan (plan v1) /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZATVB3AYMNEB0ZPEJTH1/plan.md
+03:09:58     ⬒ artifact implementation (implementation v1) /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZATVB3AYMNEB0ZPEJTH1/implementation.md
+03:09:58     agent.session.closed
+03:09:58   ✔ step 01M5V2ZATVB3AYMNEB0ZPEJTH1 [2 artifact(s)]
+03:09:58   ▶ test (agent, attempt 1)
+2026-10-26T03:09:58.211Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"test","type":"agent","attempt":1}
+03:09:58     step.started
+03:09:58     ⬓ inputs art_01M5V2ZASC78PBNAH4TSTRZ5A5, art_01M5V2ZB1J5J0CF2WKGNRHAZSA
+03:09:58   … waiting on agent-turn
+03:09:58     session sess_01M5V2ZB2G4EQA4JXQ0Z75WEVQ agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:58     prompt (c5290f25) follow-up=0
+03:09:58     │ Scripted demo agent reporting for duty.
+03:09:58     ⚙ Write test-report to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZB20Z8FD44JSZZD9TFKA/test-report.md in_progress
+03:09:58     ⚙  completed
+03:09:58     │ Wrote test-report (56 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZB20Z8FD44JSZZD9TFKA/test-report.md
+03:09:58     turn ended: end_turn in 7ms
+03:09:58     ⬒ artifact testReport (test-report v1) /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZB20Z8FD44JSZZD9TFKA/test-report.md
+03:09:58     agent.session.closed
+03:09:58   ✔ step 01M5V2ZB20Z8FD44JSZZD9TFKA [1 artifact(s)]
+03:09:58   ▶ tests-passed (decision, attempt 1)
+2026-10-26T03:09:58.417Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"tests-passed","type":"decision","attempt":1}
+03:09:58     step.started
+03:09:58     ⬓ inputs art_01M5V2ZB802WE5B6FW12WBZK7G
+03:09:58     decision: true (artifact:testReport.passed)
+03:09:58   ✔ step 01M5V2ZB8E43CX4WATEWMGJQW8 → true
+03:09:58   ▶ bump-review (set, attempt 1)
+2026-10-26T03:09:58.438Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"bump-review","type":"set","attempt":1}
+03:09:58     step.started
+03:09:58     vars reviewRound
+03:09:58   ✔ step 01M5V2ZB93YD3RAWVY4JS496BZ
+03:09:58   ▶ review (agent, attempt 1)
+2026-10-26T03:09:58.455Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"review","type":"agent","attempt":1}
+03:09:58     step.started
+03:09:58     ⬓ inputs art_01M5V2ZASC78PBNAH4TSTRZ5A5, art_01M5V2ZB1J5J0CF2WKGNRHAZSA, art_01M5V2ZB802WE5B6FW12WBZK7G
+03:09:58   … waiting on agent-turn
+03:09:58     session sess_01M5V2ZBA7D01G7RN67JETQTGP agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:58     prompt (75c19b08) follow-up=0
+03:09:58     │ Scripted demo agent reporting for duty.
+03:09:58     ⚙ Write review to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZB9KN53Q13MRWECV48CN/review.md in_progress
+03:09:58     ⚙  completed
+03:09:58     │ Wrote review (42 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZB9KN53Q13MRWECV48CN/review.md
+03:09:58     turn ended: end_turn in 10ms
+03:09:58     ⬒ artifact review (review v1) /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZB9KN53Q13MRWECV48CN/review.md
+03:09:58     agent.session.closed
+03:09:58   ✔ step 01M5V2ZB9KN53Q13MRWECV48CN [1 artifact(s)]
+03:09:58   ▶ review-verdict (decision, attempt 1)
+2026-10-26T03:09:58.699Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"review-verdict","type":"decision","attempt":1}
+03:09:58     step.started
+03:09:58     ⬓ inputs art_01M5V2ZBGE1SY837AT9KY7QGNW
+03:09:58     decision: approve (artifact:review.verdict)
+03:09:58   ✔ step 01M5V2ZBH55QFXP4W9HEP20SAP → approve
+03:09:58   ▶ deploy (agent, attempt 1)
+2026-10-26T03:09:58.723Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"deploy","type":"agent","attempt":1}
+03:09:58     step.started
+03:09:58     ⬓ inputs art_01M5V2ZB1J5J0CF2WKGNRHAZSA, art_01M5V2ZBGE1SY837AT9KY7QGNW
+03:09:58   … waiting on agent-turn
+03:09:58     session sess_01M5V2ZBJHQ5HERZK6TACRNPRZ agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:58     prompt (4e3bff48) follow-up=0
+03:09:58     │ Scripted demo agent reporting for duty.
+03:09:58     ⚙ Write deploy-report to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZBHZCYVP359SCQ0Y6KR2/deploy-report.md in_progress
+03:09:58     ⚙  completed
+03:09:58     │ Wrote deploy-report (86 chars) to /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZBHZCYVP359SCQ0Y6KR2/deploy-report.md
+03:09:58     turn ended: end_turn in 7ms
+03:09:58     ⬒ artifact deployReport (deploy-report v1) /tmp/orca-demo-Ud8UCt/.orca/work/login-api/.orca-attempts/run_01M5V2ZABJ5W7Z3E9DZYSZVB42/step_01M5V2ZBHZCYVP359SCQ0Y6KR2/deploy-report.md
+03:09:58     agent.session.closed
+03:09:58   ✔ step 01M5V2ZBHZCYVP359SCQ0Y6KR2 [1 artifact(s)]
+03:09:58   ▶ delivery-status (decision, attempt 1)
+2026-10-26T03:09:58.989Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"delivery-status","type":"decision","attempt":1}
+03:09:58     step.started
+03:09:59     ⬓ inputs art_01M5V2ZBSNX1KAQ0K7EKP58K77
+03:09:59     decision: done (artifact:deployReport.status)
+03:09:59   ✔ step 01M5V2ZBT94XNCSZ5W283ZX8TW → done
+03:09:59   ▶ done (end, attempt 1)
+2026-10-26T03:09:59.019Z INFO  step {"runId":"run_01M5V2ZABJ5W7Z3E9DZYSZVB42","node":"done","type":"end","attempt":1}
+03:09:59     step.started
+03:09:59   ✔ step 01M5V2ZBV6QSTZWHZW572EDHBT
+03:09:59 run run_01M5V2ZABJ5W7Z3E9DZYSZVB42 completed: success
+03:09:59     ↲ child run run_01M5V2ZABJ5W7Z3E9DZYSZVB42 completed/success
+03:09:59     vars dispatched, dispatchOutcome
+03:09:59   ✔ step 01M5V2Z7YCT6ZMW69TK7F1826Z
+03:09:59   ▶ summarize (agent, attempt 1)
+2026-10-26T03:09:59.062Z INFO  step {"runId":"run_928b874e-913b-4daf-87f1-4602484e2929","node":"summarize","type":"agent","attempt":1}
+03:09:59     step.started
+03:09:59     ⬓ inputs art_01M5V2Z78FJBW34VC40ERF23QD, art_01M5V2Z7H2HKT2PFMXSJC32VM8, art_01M5V2Z7WQ83TWSBC5B38EMQBD
+03:09:59   … waiting on agent-turn
+03:09:59     session sess_01M5V2ZC3ERKYXAT3077A1XGA5 agent=scripted host=local cwd=/tmp/orca-demo-Ud8UCt
+03:09:59     prompt (367925d1) follow-up=0
+03:09:59     │ Scripted demo agent reporting for duty.
+03:09:59     ⚙ Write generic to /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/.orca-attempts/run_928b874e-913b-4daf-87f1-4602484e2929/step_01M5V2ZBWK5F069ASZMM6775E2/summary.md in_progress
+03:09:59     ⚙  completed
+03:09:59     │ Wrote generic (80 chars) to /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/.orca-attempts/run_928b874e-913b-4daf-87f1-4602484e2929/step_01M5V2ZBWK5F069ASZMM6775E2/summary.md
+03:09:59     turn ended: end_turn in 7ms
+03:09:59     ⬒ artifact programSummary (generic v1) /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/.orca-attempts/run_928b874e-913b-4daf-87f1-4602484e2929/step_01M5V2ZBWK5F069ASZMM6775E2/summary.md
+03:09:59     agent.session.closed
+03:09:59   ✔ step 01M5V2ZBWK5F069ASZMM6775E2 [1 artifact(s)]
+03:09:59   ▶ done (end, attempt 1)
+2026-10-26T03:09:59.576Z INFO  step {"runId":"run_928b874e-913b-4daf-87f1-4602484e2929","node":"done","type":"end","attempt":1}
+03:09:59     step.started
+03:09:59   ✔ step 01M5V2ZCCNR52ZC565KEF64Z20
+03:09:59 run run_928b874e-913b-4daf-87f1-4602484e2929 completed: success
+
+run run_928b874e-913b-4daf-87f1-4602484e2929  workflow=program@2  status=completed/success
+workspace local:/tmp/orca-demo-Ud8UCt
+
+steps:
+  completed start                  start          attempt=1
+  completed decompose              agent          attempt=1
+  completed register               custom:plan-register attempt=1 inputs=1
+  completed assess-risks           agent          attempt=1 inputs=1
+  completed decide                 loop           attempt=1 children=1
+  completed schedule               custom:plan-schedule attempt=1
+  completed plan-gate              gate           attempt=1 choice=approve
+  completed dispatch               custom:plan-dispatch attempt=1 children=3
+  completed summarize              agent          attempt=1 inputs=3
+  completed done                   end            attempt=1
+
+artifacts:
+  decomposition    decomposition  v1  /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/.orca-attempts/run_928b874e-913b-4daf-87f1-4602484e2929/step_01M5V2Z70W5XFYB0WVNJ5RVNMX/decomposition.md
+  riskRegister     risk-register  v1  /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/.orca-attempts/run_928b874e-913b-4daf-87f1-4602484e2929/step_01M5V2Z7B4RCWC1A48DE2RXYRH/risk-register.md
+  schedule         schedule       v1  /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/schedule.md
+  programSummary   generic        v1  /tmp/orca-demo-Ud8UCt/.orca/program/req_01M5V2Z6Q5VPYAFC2ENJCZQZT8/.orca-attempts/run_928b874e-913b-4daf-87f1-4602484e2929/step_01M5V2ZBWK5F069ASZMM6775E2/summary.md
+
+work items:
+  done     schema       run=run_01M5V2Z7Z23X3PGYS2JRAHWFQF
+  done     login-api    run=run_01M5V2ZABJ5W7Z3E9DZYSZVB42
+  done     docs         run=run_01M5V2Z80CFGNDVFCHZ2AP2RBH
+
+plan 'demo': 3 dependencies, 2 risks, 1 decisions (session-store=cookie)
+  login-api: done (priority high)
+  dependency (blocks): decision session-store = cookie
+  dependency (blocks): schema is done
+  risk token-leak: open (L2 x I5)
+
+removing demo workspace /tmp/orca-demo-Ud8UCt (pass --keep or --dir <path> to inspect it afterwards)

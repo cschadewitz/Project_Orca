@@ -1,0 +1,362 @@
+{
+  "base": "7627b2e7606f0deec6e29e67919ae09837190f73",
+  "originalPR639Head": "93ad06992ae6d12aa9012ecc75d68cbbfbf7ee6d",
+  "node": "24.19.0",
+  "pnpm": "12.4.2",
+  "platform": "linux-x64",
+  "fullSuite": {
+    "command": "VITEST_MAX_WORKERS=1 ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm run test:coverage --reporter=default --reporter=json --outputFile.json=/tmp/orca639/full-suite.json",
+    "success": true,
+    "exitCode": 0,
+    "maxWorkers": 1,
+    "filesTotal": 520,
+    "filesPassed": 515,
+    "filesSkipped": 5,
+    "testsPassed": 8010,
+    "testsSkipped": 36,
+    "testsTodo": 1,
+    "testsFailed": 0,
+    "coverage": {
+      "lines": {
+        "total": 28325,
+        "covered": 26575,
+        "skipped": 0,
+        "pct": 93.82
+      },
+      "statements": {
+        "total": 33473,
+        "covered": 30549,
+        "skipped": 0,
+        "pct": 91.26
+      },
+      "functions": {
+        "total": 7480,
+        "covered": 6976,
+        "skipped": 0,
+        "pct": 93.26
+      },
+      "branches": {
+        "total": 27237,
+        "covered": 23245,
+        "skipped": 0,
+        "pct": 85.34
+      },
+      "branchesTrue": {
+        "total": 0,
+        "covered": 0,
+        "skipped": 0,
+        "pct": 100
+      }
+    },
+    "unchangedThresholdsPassed": true,
+    "relevantFiles": [
+      {
+        "path": "tools/test/builder-compatibility.test.js",
+        "status": "passed",
+        "passed": 7,
+        "skipped": 0,
+        "todo": 0
+      },
+      {
+        "path": "tools/test/diagnostics-native-package.test.js",
+        "status": "passed",
+        "passed": 16,
+        "skipped": 0,
+        "todo": 0
+      },
+      {
+        "path": "tools/test/electron-updater.test.js",
+        "status": "passed",
+        "passed": 20,
+        "skipped": 0,
+        "todo": 0
+      },
+      {
+        "path": "tools/test/native-mac-builder.test.js",
+        "status": "passed",
+        "passed": 7,
+        "skipped": 0,
+        "todo": 0
+      },
+      {
+        "path": "tools/test/vite-renderer-compatibility.test.js",
+        "status": "passed",
+        "passed": 2,
+        "skipped": 0,
+        "todo": 0
+      },
+      {
+        "path": "packages/app/test/mac-fixed-path-recovery.test.ts",
+        "status": "passed",
+        "passed": 19,
+        "skipped": 0,
+        "todo": 0
+      },
+      {
+        "path": "packages/app/test/update-driver.test.ts",
+        "status": "passed",
+        "passed": 8,
+        "skipped": 0,
+        "todo": 0
+      },
+      {
+        "path": "packages/app/test/updates.test.ts",
+        "status": "passed",
+        "passed": 16,
+        "skipped": 0,
+        "todo": 0
+      }
+    ],
+    "skippedTests": [
+      {
+        "path": "tools/test/ci-shadow-evidence.test.js",
+        "name": "refuses report paths on another Windows drive",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/diagnostics-windows-refusal.test.ts",
+        "name": "repeated actual Windows off/refused attempts and recreation retain no files or key/picker authority",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/first-run-windows.test.ts",
+        "name": "native Windows first-run reviews a missing private child, creates exact samples and preserves the receipt across recreation",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/first-run-windows.test.ts",
+        "name": "native Windows first-run refuses a replaced reviewed parent before creating its child",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/first-run-windows.test.ts",
+        "name": "native Windows first-run refuses hard-linked, reparse and replaced sample assets without changing the receipt",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/first-run-windows.test.ts",
+        "name": "native Windows first-run refuses inherited non-private ACLs and unsafe path namespaces",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/first-run-windows.test.ts",
+        "name": "native Windows first-run refuses physical workspace replacement and uncertified legacy Windows receipts",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/first-run-windows.test.ts",
+        "name": "native Windows first-run releases short recovery locks, refuses competing writers and uses stable native boot identity",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/first-run-windows.test.ts",
+        "name": "native Windows first-run retains a native writer lock across ordinary release and garbage collection",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/first-run.test.ts",
+        "name": "unknown owner identity fails closed",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/guided-launch-adapter.test.ts",
+        "name": "reserved harmless first-run sample binding reports unavailable ownership on Windows without starting the sample",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-fixed-path-native.test.ts",
+        "name": "compiled fixed-path descriptor backend provisions native namespaces once and refuses lost/replaced identity",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-fixed-path-native.test.ts",
+        "name": "compiled fixed-path descriptor backend refuses a missing established journal, unsafe namespace and stale backend",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-fixed-path-native.test.ts",
+        "name": "compiled fixed-path descriptor backend copies and restores the actual protected trees and binary without changing live root inodes",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-fixed-path-native.test.ts",
+        "name": "compiled fixed-path descriptor backend refuses a changed source identity before native destructive restore",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-fixed-path-native.test.ts",
+        "name": "compiled fixed-path descriptor backend retains private modes, internal links and xattrs through the native mutation path",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-fixed-path-native.test.ts",
+        "name": "compiled fixed-path descriptor backend full descriptor flush refuses unsafe/nonprivate handles",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-fixed-path-native.test.ts",
+        "name": "compiled fixed-path descriptor backend a real supervisor SIGKILL after clearing a live root resumes the retained complete pair on the same boot",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path a missing updater root remains unknown without recreating lost recovery authority",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path persists an encrypted >4 KiB identity and keeps fresh bootstrap closed across normal quit",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path refuses competing journal handles, retaining the first owner and durable identity",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path lost before-rename acknowledgement preserves evidence and refuses fresh ordinary startup",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path lost after-rename acknowledgement preserves evidence and refuses fresh ordinary startup",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path refuses ciphertext damage without reset or evidence deletion",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path refuses key damage without reset or evidence deletion",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path refuses symlink damage without reset or evidence deletion",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path refuses hardlink damage without reset or evidence deletion",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path refuses permissions damage without reset or evidence deletion",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path isolates namespaces, refuses evidence removal/export, and fails closed at the 40 KiB envelope bound",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path a root replaced while owned cannot redirect journal writes or reopen that owner",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path a process crash at temp retains closure and releases only its kernel lock",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-replacement-native-storage.test.ts",
+        "name": "disposable native replacement syscall/Node-API path a process crash at committed retains closure and releases only its kernel lock",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/app/test/mac-update-candidates.test.ts",
+        "name": "refuses Windows storage before transport, inspection or owned writes",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/cli/test/admission-retry-wiring.test.ts",
+        "name": "HTTP/WS and legacy start share one real admission, ownership and current authorization",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/integrations/test/admission-retry-acp.test.ts",
+        "name": "ACP metadata keeps retries stable across new sessions and distinguishes intentional new work",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/integrations/test/jev-eval.live.test.ts",
+        "name": "custom:jev-eval against the TypeSafe API (live) records an evaluation artifact from a real answer",
+        "status": "skipped"
+      },
+      {
+        "path": "packages/engine/test/restoration-acceptance.test.ts",
+        "name": "#396 provisional contract bindings: acceptance remains INCOMPLETE [Actual-Cal; final acceptance pending] actual private MCP route inspects and explicitly resumes the agreed permitted plugin",
+        "status": "todo"
+      }
+    ]
+  },
+  "retryAcceptance": {
+    "maxWorkers": 2,
+    "success": true,
+    "exitCode": 0,
+    "files": [
+      {
+        "path": "packages/cli/test/admission-retry-wiring.test.ts",
+        "status": "passed",
+        "passed": 1,
+        "skipped": 0,
+        "todo": 0
+      },
+      {
+        "path": "packages/integrations/test/admission-retry-acp.test.ts",
+        "status": "passed",
+        "passed": 1,
+        "skipped": 0,
+        "todo": 0
+      }
+    ]
+  },
+  "focusedCompatibility": {
+    "files": 4,
+    "passed": 32,
+    "skipped": 0
+  },
+  "otherChecks": {
+    "typecheck": 0,
+    "lint": 0,
+    "formatCheck": 0,
+    "build": 0,
+    "buildDaemon": 0,
+    "authenticatedBundledDaemonProbe": 0,
+    "linuxTarPackage": 0,
+    "productionClosureAndColdImports": 0,
+    "archiveInspectionAndIndependentChunkChecksums": 0,
+    "compiledCliDemo": 0,
+    "frozenBaselineInstall": 0,
+    "frozenCandidateInstall": 0,
+    "registrySignaturesVerified": 549,
+    "changedPackages": 9,
+    "candidateDistributedFilesCompared": 1004
+  },
+  "priorRuns": [
+    "initial-suite-summary.json: stale explicit reviewed builder pin, then updated without changing other assertions",
+    "parallel-suite-summary.json: EADDRINUSE in unchanged fixed-path fixture; isolated 19 passed; final full coverage used one worker"
+  ],
+  "remainingLimits": {
+    "browserLaunch": {
+      "status": "failed before page launch",
+      "action": "Playwright chromium.launch with chromiumSandbox=true",
+      "target": "/usr/bin/chromium",
+      "reason": "SUID sandbox helper /usr/lib/chromium/chrome-sandbox not configured root-owned mode 4755; crashpad database also unavailable",
+      "approvalDenied": false,
+      "workaroundAttempted": false
+    },
+    "notRun": [
+      "Actual Electron/file:// browser rendering, font loading and CSP enforcement",
+      "Native Windows NSIS installer/compiler, native Mac packaging/NFD/signature verification and installed N-to-N+1 cycle",
+      "Signing/notarization, deployment/publication or user-machine installation",
+      "App smoke or homelab workflow dispatch",
+      "Independent cryptographic SLSA verification; inherited trusted-root HTTP 403 not retried/bypassed"
+    ]
+  }
+}

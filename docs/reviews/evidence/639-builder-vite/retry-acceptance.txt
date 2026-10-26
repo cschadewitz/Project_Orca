@@ -1,0 +1,13 @@
+
+ RUN  v5.0.5 /workspace/Project_Orca
+
+ ✓ packages/integrations/test/admission-retry-acp.test.ts (1 test) 195ms
+ ✓ packages/cli/test/admission-retry-wiring.test.ts (1 test) 1277ms
+   ✓ HTTP/WS and legacy start share one real admission, ownership and current authorization 1276ms
+
+ Test Files  2 passed (2)
+      Tests  2 passed (2)
+   Start at  03:09:50
+   Duration  3.00s (transform 52%, tests 36%, import 12%)
+
+JSON report written to /tmp/orca639/retry-acceptance.json

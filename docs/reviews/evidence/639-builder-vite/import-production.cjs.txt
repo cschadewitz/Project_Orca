@@ -1,0 +1,6 @@
+const fs=require('node:fs');const {createRequire}=require('node:module');const {execFileSync}=require('node:child_process');
+const a=createRequire('/workspace/Project_Orca/packages/app/package.json');const b=createRequire(a.resolve('electron-builder'));const c=createRequire(b.resolve('app-builder-lib'));const asar=c('@electron/asar');const dir='/tmp/orca639/extracted-production';
+fs.rmSync(dir,{recursive:true,force:true});asar.extractAll('/tmp/orca639/package/linux-unpacked/resources/app.asar',dir);
+const names=JSON.parse(fs.readFileSync('/tmp/orca639/production-closure.json')).uniqueProductionPackages.map(n=>n.slice(0,n.lastIndexOf('@')));
+const script="import fs from 'node:fs'; const names="+JSON.stringify(names)+"; const loaded=[];for(const name of names){await import(name);loaded.push(name);} fs.writeFileSync('/tmp/orca639/production-imports.json',JSON.stringify({runtime:process.version,loaded,failed:[],limits:'Cold imports from the extracted packaged production closure under Node; no Electron main/renderer, updater instance, native installation or provider.'},null,2)+'\\n');console.log('Cold imported '+loaded.length+' packaged production modules');";
+fs.writeFileSync(dir+'/owned-import-probe.mjs',script);execFileSync(process.execPath,[dir+'/owned-import-probe.mjs'],{stdio:'inherit'});

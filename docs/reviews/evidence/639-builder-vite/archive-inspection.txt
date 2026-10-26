@@ -1,0 +1,20 @@
+{
+  "linuxTarEntries": 79,
+  "criticalFilesVerified": [
+    "orca",
+    "resources/app.asar",
+    "resources/daemon/orca-daemon.mjs"
+  ],
+  "macLikeZipSymlinks": [
+    {
+      "path": "Owned.app/Contents/Frameworks/Owned.framework/Owned",
+      "target": "Versions/Current/Owned"
+    },
+    {
+      "path": "Owned.app/Contents/Frameworks/Owned.framework/Versions/Current",
+      "target": "A"
+    }
+  ],
+  "embeddedBlockmap": true,
+  "storedAsarMatches": true
+}

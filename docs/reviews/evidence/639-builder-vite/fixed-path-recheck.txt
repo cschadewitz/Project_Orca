@@ -1,0 +1,11 @@
+
+ RUN  v5.0.5 /workspace/Project_Orca
+
+ ✓ packages/app/test/mac-fixed-path-recovery.test.ts (19 tests) 1496ms
+
+ Test Files  1 passed (1)
+      Tests  19 passed (19)
+   Start at  03:14:26
+   Duration  1.91s (tests 83%, transform 11%, import 7%)
+
+JSON report written to /tmp/orca639/fixed-path-recheck.json
