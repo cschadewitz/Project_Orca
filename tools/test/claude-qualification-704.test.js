@@ -375,9 +375,39 @@ function experimentFindings({ run, receipts }, expected, review) {
   const revocation = revocations[0];
 
   const has = (call, stage, outcome) => call?.get(stage)?.outcome === outcome;
+  // The pinned nativeCall/checker path emits this causal chain. Do not turn the optional typed
+  // permit claim (emitted inside execute, after tool-start) into a prerequisite for the shell path.
+  const requireBefore = (call, earlier, later) => {
+    const left = call.get(earlier);
+    const right = call.get(later);
+    if (left && right && left.seq >= right.seq) incomplete.add("stage-order");
+  };
+  const checkedBindings = new Set();
   for (const call of calls.values()) {
     const decision = call.get("orca-decision");
     const check = call.get("effect-check");
+    requireBefore(call, "native-dispatch", "hook-invoked");
+    requireBefore(call, "hook-invoked", "orca-decision");
+    requireBefore(call, "orca-decision", "hook-response");
+    requireBefore(call, "hook-response", "tool-start");
+    requireBefore(call, "native-ask", "tool-start");
+    requireBefore(call, "tool-start", "effect-observed");
+    requireBefore(call, "effect-observed", "effect-check");
+    requireBefore(call, "hook-response", "effect-check");
+    for (const stage of EXPERIMENT.boundStages) {
+      const row = call.get(stage);
+      if (!row) continue; // Required stage membership is checked below.
+      if (row.bindingRef === undefined) incomplete.add("missing-binding");
+      else if (stage !== "tool-start") checkedBindings.add(row.bindingRef);
+    }
+    const start = call.get("tool-start");
+    if (
+      decision?.bindingRef !== undefined &&
+      start?.bindingRef !== undefined &&
+      start.bindingRef !== decision.bindingRef
+    )
+      failed.add("effect-binding-mismatch");
+    if (decision && decision.generation === undefined) incomplete.add("missing-generation");
     const effected = call.has("effect-observed") || check?.outcome === "changed";
     if (decision && decision.outcome !== "allow") {
       if (has(call, "tool-start", "started")) failed.add("started-after-denial");
@@ -391,6 +421,9 @@ function experimentFindings({ run, receipts }, expected, review) {
     if (check && [decision, call.get("hook-response")].some((row) => row && row.sourceRef === check.sourceRef))
       incomplete.add("effect-check-not-independent");
   }
+  // All three attempts declare the same action/cwd. Present dispatch/decision bindings must agree;
+  // missing labels are incomplete evidence, never an equality between two undefined values.
+  if (checkedBindings.size > 1) inconsistent.add("binding-mismatch");
 
   const seqs = (call) => [...call.values()].map((row) => row.seq);
   const ordered = [...calls.values()];
@@ -422,11 +455,9 @@ function experimentFindings({ run, receipts }, expected, review) {
     // A fresh native ask could block on its own; the block has to come from ORCA on a cached dispatch.
     if (!has(after, "native-dispatch", "cached") || after.has("native-ask"))
       incomplete.add("post-revocation-not-cached");
-    const decision = after.get("orca-decision");
     if (
       !has(after, "hook-invoked", "invoked") ||
-      !decision ||
-      decision.outcome === "allow" ||
+      !has(after, "orca-decision", "deny") ||
       !has(after, "hook-response", "deny")
     )
       incomplete.add("post-revocation-not-blocked-at-guard");
@@ -439,12 +470,16 @@ function experimentFindings({ run, receipts }, expected, review) {
     incomplete.add("stage-order");
   if (first && repeat && Math.max(...seqs(first)) > Math.min(...seqs(repeat))) incomplete.add("stage-order");
   if (revocation) {
-    const generations = (calls) => calls.map((call) => call.get("orca-decision")?.generation).filter(Boolean);
-    if (
-      generations(pre).some((g) => g === revocation.generation) ||
-      generations(post).some((g) => g !== revocation.generation)
-    )
-      inconsistent.add("generation-mismatch");
+    if (revocation.generation === undefined) incomplete.add("missing-generation");
+    else {
+      const generations = (calls) =>
+        calls.map((call) => call.get("orca-decision")?.generation).filter((g) => g !== undefined);
+      if (
+        generations(pre).some((g) => g === revocation.generation) ||
+        generations(post).some((g) => g !== revocation.generation)
+      )
+        inconsistent.add("generation-mismatch");
+    }
   }
 
   const state = inconsistent.size
