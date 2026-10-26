@@ -6,7 +6,9 @@ explicit authorization that names:
 - the operator and the host;
 - the payer, with a budget cap (suggested: one provider key with a hard spend limit of a
   few US dollars);
-- the stop limits.
+- the stop limits;
+- dependency downloads, registry/network access and config/cache writes described below,
+  in addition to the platform-binary download, authentication and paid provider calls.
 
 Nothing below has been executed. Its results would be **connectivity-tested** and, for
 section B only, **approval-tested** evidence for exactly: OpenCode 1.19.4 platform binary
@@ -22,8 +24,21 @@ evidence for OpenCode 2, another backend or another host.
   - read `notes.txt`;
   - write one line to `notes.txt`;
   - run `git status` and `printf ok`.
-- **Forbidden:** no network tools (natively denied), no package installs, no destructive
-  commands.
+- **Forbidden agent requests:** no network tools (natively denied), no agent-requested
+  package installs, no destructive commands.
+- **Startup dependency/network effects (source-reviewed, not installed-tested):** the pinned
+  [config loader](https://github.com/anomalyco/opencode/blob/148842ef7cb1bc34192b3fff57d0f9721ab9c801/packages/opencode/src/config/config.ts#L434-L471)
+  unconditionally schedules a background `@opencode-ai/plugin` dependency installation for
+  every config directory, including the fresh writable profile config directory. The
+  [installer](https://github.com/anomalyco/opencode/blob/148842ef7cb1bc34192b3fff57d0f9721ab9c801/packages/core/src/npm.ts#L87-L201)
+  can fetch registry packages and write `package.json`, `package-lock.json`, `node_modules`
+  and cache data; its Arborist setup uses `ignoreScripts: true`. This is separate from
+  loading external plugins: `--pure` suppresses that loading, **not** the config loader's
+  install call. Native tool denies do not mediate these startup effects. Fresh directories,
+  an empty plugin list and `--pure` therefore do not prove dependency or network isolation.
+  Obtain the separate authorization above before any installed stage; if dependency/network
+  effects are excluded, stop rather than run this plan. Record observed package versions,
+  file changes and available independent network observations, or mark them unobserved.
 - **Budget:** at most 10 prompts and 30 minutes of wall-clock time. Stop at the first
   unexpected effect.
 - **Observation, independent of OpenCode and ORCA logs:**
@@ -74,10 +89,30 @@ Each step records:
 4. **Human answer, once.** `git status` with ORCA asking a human, who answers once. A
    second identical command must ask again.
 5. **Human answer, always — scope probe.**
-   - Answer always on one edit.
-   - Then request an edit to a second file: expect **no ask** (native directory-wide
-     grant). Record this as the remembered-approval gap.
-   - Restart the agent and repeat: expect an ask (not persisted).
+   - Only in the disposable test workspace, temporarily prepend this rule to the copied
+     `opencode-acp-710` agent's `permissions.rules` (leave `default:` absent):
+
+     ```yaml
+     - { match: { kind: edit, scope: workspace }, decision: ask }
+     ```
+
+     This is a separately authorized test condition, not a change to the inactive profile
+     or production policy. ORCA evaluates configured rules before sidecar grants and #140
+     defaults ([policy layering](../../../packages/core/src/model/agent.ts),
+     [first-match evaluation](../../../packages/agents/src/permissions.ts)). Without it,
+     an ordinary in-workspace edit is answered automatically with `once`, even after restart;
+     that cannot exercise a human `always` answer.
+   - With that rule active and a human answerer attached, answer always on one edit.
+   - In the **same live OpenCode process**, request an edit to a second disposable workspace
+     file: expect **no native ACP permission ask** (native directory-wide grant). Keep both
+     requests in one step; the profile's `sessionMode: per-step` otherwise replaces the
+     process. Record this as the remembered-approval gap.
+   - Restart the agent, retain the scoped ORCA ask rule, and repeat the edit: expect a native
+     ask and a human ask. Native approvals are not persisted; the configured rule also takes
+     precedence over ORCA's persisted exact-file sidecar grant.
+   - After the probe, stop the test process, remove the temporary rule from the copied
+     config and discard this probe's disposable permission sidecar before continuing. Record
+     restoration; do not carry its grant into another test or a real workspace.
 6. **Changed arguments and cwd.**
    - `git status` approved once.
    - Then `git status && printf x > sentinel2`: expect a new ask.
@@ -101,17 +136,20 @@ Pass for B requires every denial to be independently observed as not executed.
 Record as **not covered** whatever B cannot observe:
 
 - shell child effects beyond the sentinel;
-- network;
-- plugins and formatters (disabled);
+- network beyond any independently recorded startup observations;
+- external plugin execution and formatters (disabled); startup dependency installation is
+  a separate effect, not plugin execution;
 - MCP (none).
 
 ## Stop conditions
 
 Stop immediately and report if any of these happens:
 
-- an effect occurs without a corresponding ask or allow;
+- a tool effect occurs without a corresponding ask or allow, apart from the native
+  remembered-grant probe in B5;
+- dependency or network activity falls outside the separately authorized startup scope;
 - a sentinel or canary changes after a denial;
-- any MCP, LSP, formatter or plugin activity appears;
+- any MCP, LSP, formatter or external plugin execution appears;
 - the binary hash or version differs;
 - any managed configuration appears;
 - spend approaches the cap.
