@@ -18,9 +18,13 @@ export interface CapturedSyntheticRead {
  * conditional read, stable handle or symlink/rename race guarantee on a real filesystem.
  */
 export class SyntheticReadBoundary {
+  readonly codecVersion = "orca-synthetic-acp-read-v1" as const;
   private readonly reads = new WeakMap<CapturedSyntheticRead, Readonly<SyntheticTextRead>>();
+  private readonly readFile: AgentHost["fs"]["readFile"];
 
-  constructor(private readonly host: Pick<AgentHost, "fs">) {}
+  constructor(host: Pick<AgentHost, "fs">) {
+    this.readFile = host.fs.readFile.bind(host.fs);
+  }
 
   /** Synchronous capture before policy or any other await. Caller metadata is not a capability. */
   capture(parameters: SyntheticTextRead): CapturedSyntheticRead {
@@ -36,10 +40,28 @@ export class SyntheticReadBoundary {
     return parameters;
   }
 
+  /** Bounded fixture codec. Preserve omitted/null/undefined/numeric fields without path normalization. */
+  encode(handle: CapturedSyntheticRead): string {
+    const parameters = this.inspect(handle);
+    if (Object.keys(parameters).some((key) => !["path", "line", "limit"].includes(key)))
+      throw new Error("Unsupported synthetic read fields");
+    if (typeof parameters.path !== "string" || parameters.path.length > 4096)
+      throw new Error("Unsupported synthetic read path");
+    const parameter = (name: "line" | "limit") => {
+      if (!Object.hasOwn(parameters, name)) return ["omitted"];
+      const value = parameters[name];
+      if (value === undefined) return ["undefined"];
+      if (value === null) return ["null"];
+      if (!Number.isSafeInteger(value)) throw new Error("Unsupported synthetic read parameter");
+      return ["number", Object.is(value, -0) ? "-0" : String(value)];
+    };
+    return JSON.stringify([this.codecVersion, parameters.path, parameter("line"), parameter("limit")]);
+  }
+
   /** Synthetic executor capability only; this helper itself provides no policy or one-use check. */
   async read(handle: CapturedSyntheticRead): Promise<string> {
     const { path, line, limit } = this.inspect(handle);
-    const content = await this.host.fs.readFile(path);
+    const content = await this.readFile(path);
     // Mirrors the existing ACP callback, including reading the whole file before slicing.
     if (line === undefined || line === null) return content;
     const start = Math.max(0, line - 1);
