@@ -74,6 +74,8 @@ async function fixture() {
   const available = await managed.currentStore();
   if (!available.available) throw new Error("managed test owner unavailable");
   const active = available.binding;
+  let provider = () => managed.currentStore();
+  const currentStore = () => provider();
   const stores = fileStores(storeDir);
   await stores.execution.putInputs({
     runId: "run",
@@ -135,7 +137,7 @@ async function fixture() {
     requestId: "unused-until-ask",
   };
   const owner = protectedScopedPermissionOwner({
-    currentStore: managed.currentStore,
+    currentStore,
     live,
     credentials,
     leases: stores.leases,
@@ -243,7 +245,7 @@ async function fixture() {
   const readFacts = vi.fn(owner.readCaptureFacts.bind(owner));
   const producer = ownedReadScopedCapture({
     service,
-    currentStore: managed.currentStore,
+    currentStore,
     live,
     readCaptureFacts: readFacts,
   });
@@ -362,6 +364,16 @@ async function fixture() {
     readFacts,
     identity,
     call,
+    replaceOwner: async () => {
+      const replacement = createManagedTypedWorkspace({
+        binding: roots,
+        lifetime: { mode: "enrollment", assertCurrent: () => undefined },
+        assertBuildCurrent: () => undefined,
+        qualify: (...args) => owner.qualify(...args),
+      });
+      provider = () => replacement.currentStore();
+      return replacement.currentStore();
+    },
     breakLease: () => stores.leases.forceRelease(lease.resource),
     loseLifetime: () => {
       lifetime = false;
@@ -382,6 +394,7 @@ it("retains actual service capture after protected facts, preserving independent
   const c = f.producer.port.snapshot(f.captured.token);
   expect(c.action).toBe(f.captured.invocation.action);
   expect(c.binding).toBe(f.active);
+  expect(f.producer.invocation(f.captured.token)).toBe(f.captured.invocation);
   expect(c.resourceWorkspaceRef).not.toBe(f.active.workspaceRef);
   expect(c.review).toEqual({ result: "unavailable", sourceRefs: [] });
   expect(c.action.coverage.level).toBe("policy-per-ask");
@@ -451,32 +464,47 @@ it("lost durable answer acknowledgement never delivers, reopens a callback or cr
   expect(() => f.producer.port.snapshot(f.captured.token)).toThrow();
   expect(f.observed).not.toHaveBeenCalled();
 });
-it.each(["actor", "binding", "image", "revision", "credential", "lease", "cancellation", "inode", "expiry"] as const)(
-  "retained capture refuses stale %s without a read",
-  async (reason) => {
-    const f = await fixture();
-    const facts = await f.owner.readCaptureFacts(f.actor);
-    if (reason === "actor")
-      await expect(
-        f.owner.prepare(f.target, { ...f.actor, principalId: "other" }, await f.policy.read(), f.active),
-      ).rejects.toThrow();
-    if (reason === "binding") {
-      await rename(join(f.storeDir, "workspace-identity"), join(f.storeDir, "old-identity"));
-    }
-    if (reason === "image") f.changeBuild();
-    if (reason === "revision") await writeFile(f.sidecar, `${await readFile(f.sidecar, "utf8")}\n`);
-    if (reason === "credential") await f.revoke();
-    if (reason === "lease") await f.breakLease();
-    if (reason === "cancellation") {
-      f.abort.abort();
-      expect(await f.delivered).toBeUndefined();
-    }
-    if (reason === "inode") f.service.close();
-    if (reason === "expiry") f.snapshot.expiresAt = new Date(0).toISOString();
-    if (reason !== "actor") await expect(f.producer.port.read(f.target, f.active, facts)).rejects.toThrow();
-    expect(f.observed).not.toHaveBeenCalled();
-  },
-);
+it.each([
+  "actor",
+  "binding",
+  "owner-binding",
+  "image",
+  "revision",
+  "credential",
+  "lease",
+  "cancellation",
+  "inode",
+  "expiry",
+] as const)("retained capture refuses stale %s without a read", async (reason) => {
+  const f = await fixture();
+  const facts = await f.owner.readCaptureFacts(f.actor);
+  if (reason === "actor")
+    await expect(
+      f.owner.prepare(f.target, { ...f.actor, principalId: "other" }, await f.policy.read(), f.active),
+    ).rejects.toThrow();
+  if (reason === "binding") {
+    await rename(join(f.storeDir, "workspace-identity"), join(f.storeDir, "old-identity"));
+  }
+  if (reason === "owner-binding") {
+    const bytes = await readFile(f.sidecar);
+    const replacement = await f.replaceOwner();
+    expect(replacement.available).toBe(true);
+    if (replacement.available) expect(replacement.binding).not.toBe(f.active);
+    expect(await readFile(f.sidecar)).toEqual(bytes);
+  }
+  if (reason === "image") f.changeBuild();
+  if (reason === "revision") await writeFile(f.sidecar, `${await readFile(f.sidecar, "utf8")}\n`);
+  if (reason === "credential") await f.revoke();
+  if (reason === "lease") await f.breakLease();
+  if (reason === "cancellation") {
+    f.abort.abort();
+    expect(await f.delivered).toBeUndefined();
+  }
+  if (reason === "inode") f.service.close();
+  if (reason === "expiry") f.snapshot.expiresAt = new Date(0).toISOString();
+  if (reason !== "actor") await expect(f.producer.port.read(f.target, f.active, facts)).rejects.toThrow();
+  expect(f.observed).not.toHaveBeenCalled();
+});
 it("policyChanged refuses unqualified source evaluation and consumes the failed transition without replay", async () => {
   const f = await fixture();
   await f.captured.invocation.evaluate(f.abort.signal);
