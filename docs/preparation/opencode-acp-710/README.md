@@ -229,6 +229,13 @@ every shell child it starts. See F2.
   - Both are disabled in the isolated config.
 - **Plugins:** JS plugins run in-process and can hook tool execution. They are excluded by
   `--pure`, the isolated directories and the disabled project config.
+  This does not suppress dependency installation: the pinned
+  [config loader](https://github.com/anomalyco/opencode/blob/148842ef7cb1bc34192b3fff57d0f9721ab9c801/packages/opencode/src/config/config.ts#L434-L471)
+  schedules `@opencode-ai/plugin` installation in every config directory, including fresh
+  writable profile directories, independently of `--pure`. Registry downloads and
+  config/cache writes require separate installed-test authorization; the profile is not
+  proof of dependency or network isolation. See the
+  [installed plan's effects](installed-test-plan.md#scope-and-effects).
 
 ### What can execute without asking the ACP client
 

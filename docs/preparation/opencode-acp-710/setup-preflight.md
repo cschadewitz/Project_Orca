@@ -77,7 +77,7 @@ overridden by `OPENCODE_PERMISSION`.
 Also check that `PROFILE/home` and `PROFILE/xdg/config` are empty, apart from the
 `$schema`-only `opencode.json` OpenCode may seed there.
 
-## 4. Start ORCA from a scrubbed environment
+## 4. Scrub the environment and make the first execution a version check
 
 ORCA passes its whole environment to the agent, and the profile cannot remove a variable.
 Start the ORCA daemon for this test from a shell that holds no credentials. In particular,
@@ -86,6 +86,15 @@ none of: cloud provider keys, `GITHUB_TOKEN`, `AWS_*`, `GOOGLE_*`, `AZURE_*`, an
 
 Record the variable *names* present (never their values) as evidence. Every shell command
 OpenCode runs inherits this environment.
+
+Before starting an ORCA agent session or running `auth login`, run
+`PROFILE/opencode-1.19.4/bin/opencode --version` with the profile's `HOME`, `XDG_*` and
+`OPENCODE_*` environment values. This must be the **first execution** of the verified
+binary, after steps 1–3, and is part of the separately authorized installed test. Expect
+`1.19.4`; stop on a mismatch or launch failure. Record the result before continuing to
+step 5. A version check does not prove subsequent config-loading commands are free of
+side effects: they can start the background dependency installation described in the
+[installed plan](installed-test-plan.md#scope-and-effects), even with `--pure`.
 
 ## 5. Authenticate the one backend, outside ORCA
 
@@ -111,8 +120,8 @@ ORCA has no sign-in button and never calls ACP `authenticate`: that method is a 
 
 ## 6. Check before the first prompt
 
-- `PROFILE/opencode-1.19.4/bin/opencode --version` prints `1.19.4`. This is the first
-  execution of the binary and is part of the authorized test.
+- The first-execution version result from step 4 is recorded as `1.19.4`, before the
+  step 5 `auth login`.
 - #386 review shows the executable observed, with the expected architecture (Mach-O arm64
   on Apple Silicon).
 - The ORCA config still has the profile's `permissions` rules and **no** `default:`.
