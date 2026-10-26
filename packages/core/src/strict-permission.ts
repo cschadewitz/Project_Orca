@@ -1,6 +1,7 @@
 /** Pure opt-in strict policy phases. Legacy policy ordering/defaults and all production wiring stay elsewhere. */
 import type {
   ActionEvidenceV1,
+  ActionResourceV1,
   AuthorityStampV1,
   DecisionBindingV1,
   PolicyVerdictV1,
@@ -58,6 +59,42 @@ export function ruleAllow(
   };
 }
 
+/** Runtime frames may not mix resource kinds or match missing identities to one another. */
+function validResource(value: unknown): value is ActionResourceV1 {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const resource = value as Record<string, unknown>;
+  const keys =
+    resource.targetKind === "disposable-memory"
+      ? ["operation", "targetKind", "ownerRef", "resourceRef", "resourceRevision"]
+      : ["operation", "physicalTargetRef"];
+  return (
+    Reflect.ownKeys(resource).length === keys.length &&
+    keys.every(
+      (key) =>
+        Object.hasOwn(resource, key) &&
+        Object.hasOwn(Object.getOwnPropertyDescriptor(resource, key)!, "value") &&
+        typeof resource[key] === "string" &&
+        resource[key] !== "",
+    ) &&
+    (!Object.hasOwn(resource, "targetKind") || resource.targetKind === "disposable-memory")
+  );
+}
+
+function sameResource(left: ActionResourceV1, right: ActionResourceV1): boolean {
+  if (left.operation !== right.operation) return false;
+  if (left.targetKind === "disposable-memory" && right.targetKind === "disposable-memory")
+    return (
+      left.ownerRef === right.ownerRef &&
+      left.resourceRef === right.resourceRef &&
+      left.resourceRevision === right.resourceRevision
+    );
+  return (
+    left.targetKind === undefined &&
+    right.targetKind === undefined &&
+    left.physicalTargetRef === right.physicalTargetRef
+  );
+}
+
 function matches(rule: StrictPermissionRule, action: ActionEvidenceV1): boolean {
   const m = rule.match;
   return (
@@ -73,12 +110,7 @@ function matches(rule: StrictPermissionRule, action: ActionEvidenceV1): boolean 
     action.workspaceRef.state === "complete" &&
     m.workspaceRef === action.workspaceRef.value &&
     action.resources.state === "complete" &&
-    action.resources.value.every((resource) =>
-      m.resources.some(
-        (allowed) =>
-          allowed.operation === resource.operation && allowed.physicalTargetRef === resource.physicalTargetRef,
-      ),
-    ) &&
+    action.resources.value.every((resource) => m.resources.some((allowed) => sameResource(allowed, resource))) &&
     action.environmentAndCredentialRefs.state === "complete" &&
     action.environmentAndCredentialRefs.value.every((ref) => m.environmentAndCredentialRefs.includes(ref))
   );
@@ -155,6 +187,15 @@ export function evaluateStrictPermission(
     if (fact.state !== "complete" && !(fact.state === "absent" && profile.facts[key] === "complete-or-absent"))
       return finish("indeterminate", `required-fact:${key}`);
   }
+  if (
+    action.resources.state === "complete" &&
+    (!Array.isArray(action.resources.value) || !action.resources.value.every(validResource))
+  )
+    return finish("indeterminate", "invalid-resource");
+  if (
+    !state.rules.value.every((rule) => Array.isArray(rule.match.resources) && rule.match.resources.every(validResource))
+  )
+    return finish("indeterminate", "invalid-rule-resource");
   const rule = state.rules.value.find((candidate) => matches(candidate, action));
   if (!rule) return finish("require-human", "no-approved-match");
   if (rule.status === "revoked") return finish("deny", "rule-revoked");

@@ -73,6 +73,15 @@ use stable I/O handles/preconditions or an independently enforced resource bound
 Relevant state includes file preimages/handles, script/config versions and remote expected
 state as appropriate. Same command text with changed state is a new decision.
 
+The additive inactive #706 composition repair declares `ActionResourceV1` once in core.
+Existing physical targets retain `physicalTargetRef`; an explicit `disposable-memory`
+alternative binds one original owner lifetime, resource identity and never-reused resource
+revision. The same canonical type is used by approved rule predicates. Mixed/malformed
+kinds and missing identities refuse; no cross-kind or undefined-field match is permitted.
+The actual private-cell capability supplies synthetic memory evidence only. Resource-kind
+support does not qualify a provider, lower a profile or turn a path into a physical handle.
+See [the bounded composed slice](../enforcement-conformance/composition-slice.md).
+
 `CoverageV1.level` has four distinct meanings: unknown; observation/UI only; current
 policy per received ask; verified check at every execution on the **named path**.
 Even verified interception does not imply every effect is constrained: list the exact

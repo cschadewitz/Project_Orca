@@ -19,6 +19,7 @@ import {
   type PolicyPortV1,
   type PolicyVerdictV1,
 } from "@orca/core";
+import { memoryCaptureQualifier } from "./disposable-memory-read.js";
 import type { LiveInputBinding } from "./live-input.js";
 
 type Allow = Extract<PolicyVerdictV1, { outcome: "allow" }>;
@@ -47,7 +48,7 @@ export interface SyntheticReadOwner {
 
 /** Only the reviewed fixture codec is admitted. No arbitrary tool registration surface. */
 export interface SyntheticReadExecutor<Parameters, Capture> {
-  readonly codecVersion: "orca-synthetic-acp-read-v1";
+  readonly codecVersion: "orca-synthetic-acp-read-v1" | "orca-disposable-memory-read-v1";
   capture(parameters: Parameters): Capture;
   encode(capture: Capture): string;
   /** Must start the injected read synchronously; the returned promise settles outside ownership. */
@@ -137,6 +138,7 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
 export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV1 {
   readonly version = 1 as const;
   private entry?: Entry<Capture>;
+  private readonly memoryQualification: ReturnType<typeof memoryCaptureQualifier>;
 
   constructor(
     private readonly owner: SyntheticReadOwner,
@@ -144,6 +146,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     private readonly policy: PolicyPortV1,
     private readonly evidence: SyntheticFenceEvidence,
   ) {
+    this.memoryQualification = memoryCaptureQualifier(owner, executor);
     // Retain the original lifetime and registered capabilities. Mutating an injection
     // object after capture must not substitute another executor, policy or record writer.
     this.owner = Object.freeze({
@@ -174,13 +177,19 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
   }
 
   capture(parameters: Parameters): ActionEvidenceV1 {
-    if (this.executor.codecVersion !== "orca-synthetic-acp-read-v1" || this.policy.version !== 1) throw refused();
+    if (
+      (this.executor.codecVersion !== "orca-synthetic-acp-read-v1" &&
+        !(this.executor.codecVersion === "orca-disposable-memory-read-v1" && this.memoryQualification)) ||
+      this.policy.version !== 1
+    )
+      throw refused();
     this.owner.signal.throwIfAborted();
     const snapshot = immutable(this.owner.snapshot());
     const remaining = Date.parse(snapshot.expiresAt) - this.owner.clock.now();
     if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 60_000) throw refused();
     const capture = this.executor.capture(parameters);
     const bytes = this.executor.encode(capture);
+    const qualification = this.memoryQualification?.(capture);
     if (Buffer.byteLength(bytes, "utf8") > 32_768) throw refused();
     if (this.entry) {
       if (this.entry.bytes !== bytes || !isDeepStrictEqual(this.entry.owner, snapshot)) throw refused();
@@ -223,15 +232,21 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
       invocation: snapshot.invocation,
       authority: snapshot.authority,
       coverage: snapshot.coverage,
-      operation: "fs.readTextFile",
-      profileRef: "orca-synthetic-read-fixture-v1",
+      operation: qualification?.operation ?? "fs.readTextFile",
+      profileRef: qualification?.profileRef ?? "orca-synthetic-read-fixture-v1",
       original: representation,
       dispatch: representation,
       transformations: [],
-      rawDuplicateKeyValidation: { state: "unknown", reason: "Parsed SDK parameters do not retain raw duplicate keys" },
+      rawDuplicateKeyValidation: qualification?.rawDuplicateKeyValidation ?? {
+        state: "unknown",
+        reason: "Parsed SDK parameters do not retain raw duplicate keys",
+      },
       effectiveCwd: { state: "complete", value: snapshot.cwd },
       workspaceRef: { state: "complete", value: snapshot.workspaceRef },
-      resources: { state: "unknown", reason: "String-path host API has no stable physical target guarantee" },
+      resources: qualification?.resources ?? {
+        state: "unknown",
+        reason: "String-path host API has no stable physical target guarantee",
+      },
       executableAndInterpreter: { state: "absent", reason: "Injected read has no child executable" },
       stdin: { state: "absent", reason: "Injected read has no stdin" },
       environmentAndCredentialRefs: { state: "complete", value: [] },

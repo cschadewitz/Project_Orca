@@ -1,5 +1,5 @@
 /** Inactive #702 policy inputs projected from existing protected rules and authority, never an RPC or new store. */
-import type { ActionEvidenceV1, AuthorityStampV1, FactV1 } from "./tool-execution-guards.js";
+import type { ActionEvidenceV1, ActionResourceV1, AuthorityStampV1, FactV1 } from "./tool-execution-guards.js";
 
 export type StrictActionFact =
   | "rawDuplicateKeyValidation"
@@ -47,7 +47,7 @@ export interface StrictPermissionRule {
     readonly coverageId: string;
     readonly effectiveCwd: string;
     readonly workspaceRef: string;
-    readonly resources: readonly { readonly operation: string; readonly physicalTargetRef: string }[];
+    readonly resources: readonly ActionResourceV1[];
     readonly environmentAndCredentialRefs: readonly string[];
   };
   readonly decision: "allow" | "deny" | "require-human";
