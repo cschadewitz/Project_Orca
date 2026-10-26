@@ -26,6 +26,7 @@ import { fileCaptureQualifier } from "./disposable-file-read.js";
 import { ownedFileCaptureQualifier } from "./owned-file-read-service.js";
 import {
   assertOriginalDelivery,
+  bindOriginalDelivery,
   claimOriginalDelivery,
   type LiveOriginalDelivery,
   type LiveInputBinding,
@@ -111,6 +112,7 @@ interface Entry<Capture> {
     actor: MutationActor;
     onceOptionId: string;
     delivery: LiveOriginalDelivery;
+    scope: object;
     baseline?: PolicyVerdictV1;
     acceptedAnswerRef?: string;
   };
@@ -364,6 +366,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     query: HumanInputQuery,
     actor: MutationActor,
     onceOptionId: string,
+    scope: object,
   ): undefined {
     const entry = this.retained(action);
     if (
@@ -381,7 +384,8 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
       if (query.live?.identity[key] !== action.invocation[key]) throw refused();
     if (query.runId !== action.invocation.runId || query.stepRunId !== action.invocation.stepRunId) throw refused();
     this.check(entry, this.owner.signal);
-    entry.human = { query, delivery, actor: immutable(actor), onceOptionId };
+    bindOriginalDelivery(delivery, query, scope);
+    entry.human = { query, delivery, actor: immutable(actor), onceOptionId, scope };
     return undefined;
   }
 
@@ -397,7 +401,14 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
         const human = entry.human!;
         this.check(entry, active);
         const accepted = await abortable(
-          claimOriginalDelivery(human.delivery, human.query, human.actor, human.onceOptionId, entry.action),
+          claimOriginalDelivery(
+            human.delivery,
+            human.query,
+            human.actor,
+            human.onceOptionId,
+            entry.action,
+            human.scope,
+          ),
           active,
         );
         this.check(entry, active);
@@ -414,7 +425,6 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
           evaluated.phase !== "final" ||
           !["require-human", "allow"].includes(evaluated.verdict.outcome) ||
           (evaluated.verdict.outcome === "allow" && evaluated.verdict.authorizedBy.kind !== "rule") ||
-          entry.pending ||
           entry.bound
         )
           throw refused();

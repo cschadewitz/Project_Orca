@@ -434,6 +434,7 @@ export function createOwnedFileReadServiceForTest(options: {
               entry.human.query,
               entry.human.actor,
               entry.human.onceOptionId,
+              entry,
             );
           const facade: TrustedOwnedReadInvocation = Object.freeze<TrustedOwnedReadInvocation>({
             version: 1,
@@ -441,7 +442,7 @@ export function createOwnedFileReadServiceForTest(options: {
             assertCurrent: () => fence.assertCaptureCurrent(action),
             bindHumanInput: (delivery, query, actor, onceOptionId) => {
               if (entry.human) throw refuse();
-              fence.bindHumanInput(action, delivery, query, actor, onceOptionId);
+              fence.bindHumanInput(action, delivery, query, actor, onceOptionId, entry);
               entry.human = { delivery, query, actor: immutable(actor), onceOptionId };
               return undefined;
             },

@@ -70,8 +70,10 @@ type Delivery = {
   query: HumanInputQuery;
   wait: Promise<Delivered | undefined>;
   value?: Delivered | undefined;
+  scope?: object;
   action?: object;
   assertCurrent(): void;
+  assertPending(): void;
 };
 const originalDeliveries = new WeakMap<LiveOriginalDelivery, Delivery>();
 /** Internal synchronous check after disposal of the pending callback; no durable lookup. */
@@ -81,28 +83,45 @@ export function assertOriginalDelivery(handle: LiveOriginalDelivery, query: Huma
   retained.assertCurrent();
   return undefined;
 }
-/** Only an actual settled original callback can bind its accepted record to one action. */
+/** Bind before answering to the actual closed service's private invocation lineage. */
+export function bindOriginalDelivery(handle: LiveOriginalDelivery, query: HumanInputQuery, scope: object): undefined {
+  const retained = originalDeliveries.get(handle);
+  if (!retained || retained.query !== query || (retained.scope && retained.scope !== scope))
+    throw unavailable("owner-unavailable");
+  retained.assertPending();
+  retained.scope = scope;
+  return undefined;
+}
+/** Correlation observation only; the returned string cannot install a verdict or permit. */
+export async function readOriginalDelivery(
+  handle: LiveOriginalDelivery,
+  query: HumanInputQuery,
+  actor: MutationActor,
+  optionId: string,
+): Promise<{ acceptedAnswerRef: string }> {
+  const retained = originalDeliveries.get(handle);
+  if (!retained || retained.query !== query) throw unavailable("owner-unavailable");
+  const delivered = await retained.wait;
+  assertOriginalDelivery(handle, query);
+  if (!delivered || delivered.standing || delivered.optionId !== optionId || !isDeepStrictEqual(delivered.actor, actor))
+    throw unavailable("owner-unavailable");
+  return { acceptedAnswerRef: delivered.acceptedAnswerRef };
+}
+/** Only a prebound original callback can bind its accepted record to one action. */
 export async function claimOriginalDelivery(
   handle: LiveOriginalDelivery,
   query: HumanInputQuery,
   actor: MutationActor,
   optionId: string,
   action: object,
+  scope: object,
 ): Promise<{ acceptedAnswerRef: string }> {
   const retained = originalDeliveries.get(handle);
-  if (!retained || retained.query !== query) throw unavailable("owner-unavailable");
-  const delivered = await retained.wait;
-  assertOriginalDelivery(handle, query);
-  if (
-    !delivered ||
-    delivered.standing ||
-    delivered.optionId !== optionId ||
-    !isDeepStrictEqual(delivered.actor, actor) ||
-    (retained.action && retained.action !== action)
-  )
-    throw unavailable("owner-unavailable");
+  if (!retained || retained.scope !== scope) throw unavailable("owner-unavailable");
+  const result = await readOriginalDelivery(handle, query, actor, optionId);
+  if (retained.action && retained.action !== action) throw unavailable("owner-unavailable");
   retained.action = action;
-  return { acceptedAnswerRef: delivered.acceptedAnswerRef };
+  return result;
 }
 
 interface Pending {
@@ -237,8 +256,14 @@ export class LiveHumanInput implements HumanInputPort {
       !entry ||
       entry.originalQuery !== query ||
       query.live !== entry.binding ||
+      query.signal !== entry.query.signal ||
+      entry.query.signal?.aborted ||
+      query.kind !== entry.query.kind ||
       query.runId !== entry.target.runId ||
       query.stepRunId !== entry.target.stepRunId ||
+      (["instanceId", "sessionId", "turnId", "invocationId"] as const).some(
+        (key) => entry.binding.identity[key] !== entry.target[key],
+      ) ||
       this.inspect(entry.target) !== entry.state ||
       entry.binding.signal.aborted
     )
@@ -254,10 +279,14 @@ export class LiveHumanInput implements HumanInputPort {
     const handle = Object.freeze({}) as LiveOriginalDelivery;
     const binding = entry.binding,
       signal = binding.signal,
-      querySignal = query.signal;
+      querySignal = entry.query.signal;
+    const target = structuredClone(entry.target);
     const retained: Delivery = {
       query,
       wait: entry.delivery,
+      assertPending: () => {
+        this.assertOriginalQuery(query);
+      },
       assertCurrent: () => {
         if (
           this.closed ||
@@ -265,7 +294,13 @@ export class LiveHumanInput implements HumanInputPort {
           binding.signal !== signal ||
           signal.aborted ||
           querySignal?.aborted ||
-          query.signal !== querySignal
+          query.signal !== querySignal ||
+          query.runId !== target.runId ||
+          query.stepRunId !== target.stepRunId ||
+          query.requestId !== target.requestId ||
+          (["instanceId", "sessionId", "turnId", "invocationId"] as const).some(
+            (key) => binding.identity[key] !== target[key],
+          )
         )
           throw unavailable("owner-unavailable");
       },

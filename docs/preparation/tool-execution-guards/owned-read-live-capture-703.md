@@ -60,7 +60,11 @@ lease acknowledgement cannot issue the capability. In particular the callback ma
 have resolved before a failing lease wrapper reports its failure; that ambiguous
 case produces no delivery authority. No durable state can reconstruct the capability.
 
-`claimOriginalDelivery` requires the exact original query, actor and original owner
+`bindOriginalDelivery` binds the callback to the service's private original lineage
+while it is still pending. Query target/identity changes and a different service
+lineage refuse. `readOriginalDelivery` exposes only correlation from that capability;
+its returned reference is never execution authority. `claimOriginalDelivery` requires
+the prebound lineage, exact original query, actor and original owner
 option, rejects standing answers, checks original signals/registry lifetime and binds
 the capability to one actual action object. A copied query/token, public boolean,
 answer string or durable event id is insufficient. The producer binds the original
