@@ -1,4 +1,4 @@
-/** #700 v1 design ports only. No runtime implementation, exports or production registration. */
+/** #700 v1 design ports only. No runtime implementation, package exports or production registration. */
 
 /** Complete means authoritative for the named attribute, not knowledge of every future effect. */
 export type FactV1<T> =
@@ -118,35 +118,75 @@ export type PolicyVerdictV1 = DecisionBindingV1 &
     | { readonly outcome: "deny" | "require-human" | "indeterminate"; readonly reason: string }
   );
 
-/** The daemon binds this internal port to verified authority; never deserialize it from RPC. */
-export interface PolicyPortV1 {
-  readonly version: 1;
-  evaluate(action: ActionEvidenceV1, signal: AbortSignal, review?: JudgeResultV1): Promise<PolicyVerdictV1>;
+declare const pendingReviewBrand: unique symbol;
+declare const boundReviewBrand: unique symbol;
+/** Policy-owned retained eligibility/action; not an authorization or serialized review ID. */
+export interface PendingReviewV1 {
+  readonly [pendingReviewBrand]: true;
+}
+/** Policy-owned exact request registration; distinct from eligibility and from an execution permit. */
+export interface BoundReviewV1 {
+  readonly [boundReviewBrand]: true;
 }
 
-/** Constructed only after deterministic ceilings and explicit rule-delegated judgment eligibility. */
-export interface JudgeRequestV1 extends DecisionBindingV1 {
+/** Policy constructs this only after verified ceilings and explicit rule-delegated eligibility. */
+export interface ReviewEligibilityV1 extends DecisionBindingV1 {
   readonly reviewId: string;
   readonly delegation: { readonly ruleId: string; readonly ruleRevision: string };
   readonly requirement: "advisory" | "required";
-  readonly approvedProjection: RepresentationV1;
   readonly projectionPolicyRevision: string;
   readonly destinationPolicyRef: string;
+  /** Immutable method/model/config revision, selected by policy and retained before scheduling. */
+  readonly judgeConfigRef: string;
   readonly deadlineAt: string;
 }
 
-export interface JudgeResultV1 extends DecisionBindingV1 {
+export type PolicyEvaluationV1 =
+  | { readonly phase: "final"; readonly verdict: PolicyVerdictV1 }
+  | {
+      readonly phase: "needs-review";
+      readonly review: ReviewEligibilityV1;
+      readonly pending: PendingReviewV1;
+    };
+
+/** The daemon binds this internal port to verified authority; never deserialize it from RPC. */
+export interface PolicyPortV1 {
+  readonly version: 1;
+  evaluate(action: ActionEvidenceV1, signal: AbortSignal): Promise<PolicyEvaluationV1>;
+  /** Before judge scheduling: recheck eligibility; retain an exact copied request or refuse. */
+  bindReview(pending: PendingReviewV1, request: JudgeRequestV1, signal: AbortSignal): Promise<BoundReviewV1>;
+  /** Resolve retained request/action; rerun current ceilings/delegation and validate the exact result. */
+  completeReview(bound: BoundReviewV1, result: JudgeResultV1, signal: AbortSignal): Promise<PolicyVerdictV1>;
+}
+
+/** Engine adds only a privacy-approved projection to policy-owned eligibility, then registers it. */
+export interface JudgeRequestV1 extends ReviewEligibilityV1 {
+  readonly approvedProjection: RepresentationV1;
+}
+
+export type JudgeResultV1 = DecisionBindingV1 & {
   readonly reviewId: string;
-  readonly result: "fit" | "not-fit" | "indeterminate";
   readonly reasonCode: string;
+  /** Immutable manifest identity, matched against the registered judgeConfigRef, not model claims. */
   readonly judgeVersion: string;
   readonly projectionBindingRef: string;
+} & (
+    | { readonly execution: "unavailable"; readonly result: "indeterminate" }
+    | { readonly execution: "evaluated"; readonly result: "fit" | "not-fit" | "indeterminate" }
+  );
+
+/** Engine-materialized bounded approved content only; no general protected-store reader. */
+export interface ApprovedJudgePayloadV1 {
+  readonly version: 1;
+  readonly bindingRef: string;
+  readonly schemaVersion: string;
+  readonly content: string;
 }
 
 /** Replaceable method/transport; no credential, tool, policy-write or permit capability. */
 export interface ReviewJudgeV1 {
   readonly version: 1;
-  assess(request: JudgeRequestV1, signal: AbortSignal): Promise<JudgeResultV1>;
+  assess(request: JudgeRequestV1, payload: ApprovedJudgePayloadV1, signal: AbortSignal): Promise<JudgeResultV1>;
 }
 
 declare const permitBrand: unique symbol;

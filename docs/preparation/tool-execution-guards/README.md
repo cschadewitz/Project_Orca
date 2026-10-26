@@ -2,10 +2,11 @@
 
 Owner: #700 under [#699](https://github.com/cschadewitz/Project_Orca/issues/699).
 Baseline: main `32f92cc16b9faf1748059e930c3f77b3934151ae`, freshly fetched on
-26 October 2026. No runtime imports, package exports, configuration, hook installation,
+26 October 2026. No runtime imports, package exports, runtime configuration, hook installation,
 policy defaults, capability advertisement or activation are added. The interfaces in
 [contract.ts](contract.ts) are the single proposed v1 vocabulary for #701–#706;
-they are not a public wire protocol. [ADR 0010](../../adr/0010-versioned-tool-execution-guard-ports.md)
+they are not a public wire protocol. The narrow ESLint project override retains all
+repository type-aware rules for these no-emit preparation files. [ADR 0010](../../adr/0010-versioned-tool-execution-guard-ports.md)
 records the decision for review. Parent #699 coordinates adoption; this draft is not
 reviewed acceptance or proof of support.
 
@@ -33,7 +34,7 @@ source inspection and synthetic tests cannot close it. Existing live/sandbox/pri
 | Proposed port | Owner and eventual package seam | Consumer obligations |
 | --- | --- | --- |
 | `ActionEvidenceV1`, `FactV1`, `CoverageV1`, `PolicyVerdictV1` | #700 shared vocabulary; pure types eventually in core | Peer workers reference these names and semantics; incompatible changes return to #700/#699 |
-| `PolicyPortV1` | #702 deterministic evaluation in agents/core; engine coordinates; daemon binds verified authority | Reread required current policy/revocation, enforce captured ceiling, explain matched rule/revision, validate optional judge result |
+| `PolicyPortV1` | #702 deterministic evaluation in agents/core; engine coordinates; daemon binds verified authority | Reread required current policy/revocation, enforce captured ceiling, explain matched rule/revision, issue review eligibility and retain/revalidate exact review requests |
 | `ReviewJudgeV1` | #701 method/transport adapters; engine owns scheduling/projection | Consume only approved projection and delegated rule; no policy-write, tools, permit or credentials in the request |
 | `EnforcementPortV1` | #703 engine coordinator and existing agents/host I/O boundary | Trust capture, validate authorization, record/consume once under ownership, dispatch only retained bytes; no caller IDs mint authority |
 | Coverage qualification | #704 Claude; #705 other providers; #706 independent lifecycle/effects/privacy acceptance | Pin provider/bridge/tool/schema/host/platform, separate source and installed evidence, list bypasses; never infer enforcement from a prompt or hook name |
@@ -113,22 +114,74 @@ than persist a native remembered denial. An ORCA-owned I/O path need not manufac
 options when it performs the dispatch itself.
 
 A judge is invoked only for a scope in which an approved rule explicitly delegates fit
-assessment. The coordinator creates `JudgeRequestV1` from a privacy-approved projection;
-never send arbitrary agent instructions or the complete private envelope. #701 may vary
+assessment. `PolicyPortV1.evaluate(action, signal)` returns either `phase: final` with
+a verdict, or `phase: needs-review` with policy-created `ReviewEligibilityV1` and an opaque
+`PendingReviewV1`. Only policy determines whether verified ceilings and delegated rules
+permit this phase; the engine must not duplicate rule eligibility. Policy retains the
+original action, decision binding, matched rule/revision, requirement, review ID, approved
+projection/destination policies, immutable judge method/model/config `judgeConfigRef` and
+deadline. A needs-review result is neither a final verdict nor an execution permit. Pending/bound
+review handles are ephemeral owner-local state invalidated by the original lifetime; they
+are not a new durable answer or recovery ledger.
+
+The engine adds only the privacy-approved projection to form `JudgeRequestV1` and calls
+`PolicyPortV1.bindReview(pending, request, signal)` **before** scheduling a judge. Policy
+revalidates current eligibility, verifies every eligibility/config field against its retained
+record, validates projection policy/provenance, copies the exact request including projection
+binding, and returns opaque `BoundReviewV1`. Stale, forged, duplicate-registration or changed
+requests refuse registration; errors cannot release a judge call or execution. The engine
+schedules `ReviewJudgeV1.assess(request, payload, signal)` only for this registered immutable
+request. It neither substitutes a different model/config nor rewrites a policy requirement.
+The trusted engine projection/materialization seam resolves only the approved projection,
+validates schema, codec, byte bound, exact binding and destination/disclosure policy, and
+supplies an immutable `ApprovedJudgePayloadV1` string. The adapter receives no general
+protected-store reader. Never serialize the entire internal request/authority/private refs
+into a provider prompt; send only explicitly approved payload fields. Insufficient or
+unresolvable safe content blocks the review without egress.
+
+Never send arbitrary agent instructions or the complete private envelope. #701 may vary
 small-model/JEV/other methods and hosted/BYOK transports without changing policy authority.
 No provider setup or egress is authorized here. Destination/retention/projection policy,
 finite deadline, frame bytes, response schema, pending count/concurrency and cancellation
-must be validated before any future call. Unknown versions/labels, timeout, contradictory,
+must be validated before any future call. `judgeVersion` pins an immutable manifest covering
+method, transport, model, config/prompt, input/output schemas and destination/disclosure
+versions; policy-owned `judgeConfigRef` binds the selected manifest before scheduling.
+The engine/adapter negotiates compatibility against that exact identity before invocation;
+failure blocks the call. A response cannot select its own version. Convert deadlineAt to a
+finite remaining local timeout bounded by the original invocation/action lifetime; retry
+and late delivery cannot extend it. Unknown versions/labels, timeout, contradictory,
 oversized or stale results are indeterminate, never a reason to shop for a permissive judge.
 
-`PolicyPortV1.evaluate` may consume a `JudgeResultV1` only after checking its review ID,
-action/authority/coverage/projection binding, rule ID/revision retained with the request,
-judge version, lifetime and approved destination. A fit result does not itself authorize:
-the deterministic evaluator reruns the ceilings and rule checks. Required judge failure
-blocks. Advisory absence may proceed only when the approved deterministic rule already
-permits that path; audit it as unavailable rather than reviewed. Not-fit stops/escalates
-according to that rule. A mandatory-human class always remains human. Judgment cannot
-create a rule, broaden resources, persist a grant or mint a permit.
+`PolicyPortV1.completeReview(bound, result, signal)` resolves the exact request/action
+from policy-owned registration, never from caller-supplied replacement action fields. It
+checks the review ID, action/authority/coverage/projection binding, retained rule revision,
+judge version and immutable judge config, destination, lifetime and original principal.
+It then reruns current ceilings, policy/delegation, revocation, relevant state and limits
+before producing a final `PolicyVerdictV1`. A fit result does not itself authorize. Config,
+model or request changes require a new eligible request and registration; a late/repeated
+completion cannot overwrite a settled evaluation. The engine must attribute actual model/
+config execution to that retained config; an untrusted model echo is not proof of it.
+
+`JudgeResultV1.execution` is a closed classification: `evaluated` means validated assessment
+(fit/not-fit/indeterminate); `unavailable` permits only indeterminate. The trusted adapter
+normalizes transport failure/timeout/malformed output and unexpected rejection into an
+unavailable result with a sanitized reason and retained execution attribution, without raw
+provider errors. Evaluated abstention remains evaluated-indeterminate. Unknown labels or
+status do not become permissive unavailable; policy treats invalid results as indeterminate.
+#702 composes these distinct cases only as the approved rule declares.
+
+Required judge failure blocks. Advisory absence may proceed only when the approved
+deterministic rule already permits that path; audit it as unavailable rather than reviewed.
+Transport/projection failures complete the retained review with an accurately attributed
+indeterminate result or cancel it; they cannot bypass registration/completion. Not-fit
+stops/escalates according to that rule. Mandatory-human classes remain human. Judgment
+cannot create a rule, broaden resources, persist a grant or mint a permit. #712's separate
+symbolic recommendations require an explicit validated mapping by the judge adapter to
+this registered request's `JudgeResultV1`; they are not a policy verdict or bound result by
+themselves. Local allow advice maps only to candidate fit, deny advice to not-fit, and
+valid abstain/escalate advice to evaluated-indeterminate; transport failures map to
+unavailable-indeterminate. None maps directly to policy allow/deny. Policy still owns
+final composition/revalidation and never delegates eligibility to #712.
 
 ## One-use enforcement lifecycle
 
@@ -165,6 +218,17 @@ after an uncertain append. This is distinct from execution completion. An extern
 is not in the store transaction: crash/uncertain delivery after consumption returns
 execution-unknown, never blind replay. Reuse #338/#357 recovery and #474 durable receipt
 coordination; do not implement a new answer/cancel/effect ledger in this contract slice.
+
+`ExecutionReceiptV1.state` is a coarse execution result, not a combined proof that an answer
+was recorded, a native reply delivered, dispatch started and effects observed. #703 owns an
+internal receipt-inspection seam backed by the existing protected execution/recovery records:
+resolve `protectedEvidenceRef` under current exact-run read authority and expose separate
+recording, delivery, dispatch and independent effect observations, each with observed / not
+observed / unknown state and retained source/time attribution. A missing observation stays
+unknown. Inspection is read-only and cannot replay, authorize or infer completion from reply
+delivery. #338/#357/#474 own durable receipt/storage reconciliation; #706 supplies independent
+effect evidence; #363 and protocol owners define safe public projection. This draft requires
+that inspection behavior before advertising supported operation; it adds no RPC or ledger.
 
 ## Work that can start next
 
@@ -205,12 +269,14 @@ See the [verification record](verification.md) for exact results and environment
 
 ```sh
 node_modules/.bin/tsc -p docs/preparation/tool-execution-guards/tsconfig.json
+node_modules/.bin/eslint .
+node tools/eslint-config/bin/check-css-tokens.js packages/app/renderer packages/design/css/components.css
 node_modules/.bin/vitest run packages/agents/test/permissions.test.ts packages/agents/test/live-input-session.test.ts packages/engine/test/live-input.test.ts packages/daemon/test/live-input-authority.test.ts --maxWorkers=2
 git diff --check
 ```
 
 [contract-fixtures.ts](contract-fixtures.ts) contains one explicitly unqualified synthetic
-action and six compile-time negative consumers. These verify representability and type
+action, one positive review-phase consumer and thirteen compile-time negative consumers. These verify representability and type
 separation only. [acceptance.md](acceptance.md) is an adjudicated expected-outcome corpus,
 not an executable policy simulator. No test here qualifies an installed provider or
 proves actual dispatch, one-use atomicity, confinement, privacy approval or model quality.

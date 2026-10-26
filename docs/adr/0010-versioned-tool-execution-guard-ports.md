@@ -35,6 +35,10 @@ outside legacy ordering, and never substitutes a remembered grant for a proven
 invocation-only choice. A matching approved rule automatically answers the request;
 no redundant human confirmation is required. Optional judges assess fit only where
 a rule explicitly delegates judgment. They never create authority or weaken ceilings.
+Policy returns explicit final/needs-review phases;
+the engine builds the approved projection and registers the exact request with policy before
+judge scheduling. Policy retains action/eligibility, rule/config revisions and exact request,
+then revalidates current state on completion. Engine scheduling never duplicates eligibility.
 
 Capture exact original/final representations and authoritative complete/absent/unknown
 facts before review. Versioned codecs and exact adapter/provider/tool/host coverage
@@ -48,6 +52,9 @@ state and budgets under its dispatch fence, records authorization and consumes o
 before using retained final bytes. A changed action requires reevaluation. External
 effects are outside the record transaction; uncertain completion is execution-unknown
 and must not be blindly replayed. Reuse existing live acceptance and recovery owners.
+The executor owner must provide authorized read-only inspection of
+separate recording/delivery/dispatch/effect observations through existing protected records;
+the coarse execution receipt alone is not proof of those distinct events.
 
 ## Consequences and alternatives
 
