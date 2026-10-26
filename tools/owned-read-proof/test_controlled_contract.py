@@ -3,8 +3,10 @@ import copy
 import json
 import stat
 import unittest
+from unittest.mock import patch
 
 from controlled_contract import frame_trace, validate_plan, wire
+from verify import SUPPORTED
 
 
 def plan(lane='connected'):
@@ -137,6 +139,63 @@ class ControlledGrammarTests(unittest.TestCase):
         changed.insert(3, '11 <... read resumed>) = 1')
         with self.assertRaisesRegex(RuntimeError, 'crosses phase boundary'):
             frame_trace('\n'.join(changed) + '\n', p, log, set())
+
+    def test_unfinished_close_crossing_command_or_ack_refuses(self):
+        p = plan()
+        text, log = trace_and_log(p)
+        # Descriptor 20 is deliberately not a control descriptor. Its close
+        # starts before each command/ack and completes after that boundary.
+        for boundary in range(len(text.splitlines())):
+            changed = text.splitlines()
+            changed.insert(boundary, '11 close(20 <unfinished ...>')
+            changed.insert(boundary + 2, '11 <... close resumed>) = 0')
+            with self.subTest(boundary=boundary), self.assertRaisesRegex(RuntimeError, 'crosses phase boundary'):
+                frame_trace('\n'.join(changed) + '\n', p, log, set())
+
+    def test_metadata_factories_and_process_effects_crossing_boundaries_refuse(self):
+        p = plan()
+        text, log = trace_and_log(p)
+        calls = [
+            ('chmod', '"/base/store/credential", 0600', '0'),
+            ('fchmod', '20, 0600', '0'),
+            ('umask', '0077', '0022'),
+            ('readlink', '"/base/store/credential", "target", 32', '6'),
+            ('stat', '"/base/store/credential", {st_mode=S_IFREG|0600}', '0'),
+            ('pipe2', '[20, 21], O_CLOEXEC', '0'),
+            ('eventfd2', '0, EFD_CLOEXEC', '20'),
+            ('epoll_create1', 'EPOLL_CLOEXEC', '20'),
+            ('prctl', 'PR_SET_NAME, "worker"', '0'),
+            ('clone', 'child_stack=NULL, flags=CLONE_THREAD|CLONE_FILES|CLONE_VM|CLONE_SIGHAND', '12'),
+            ('mprotect', '0x123000, 4096, PROT_READ', '0'),
+            ('restart_syscall', '<... resuming interrupted read ...>', '1'),
+        ]
+        for call, args, result in calls:
+            for boundary in range(len(text.splitlines())):
+                changed = text.splitlines()
+                changed.insert(boundary, f'11 {call}({args} <unfinished ...>')
+                changed.insert(boundary + 2, f'11 <... {call} resumed>) = {result}')
+                with self.subTest(call=call, boundary=boundary), self.assertRaisesRegex(RuntimeError, 'crosses phase boundary'):
+                    frame_trace('\n'.join(changed) + '\n', p, log, set())
+
+    def test_new_supported_call_defaults_to_crossing_refusal(self):
+        p = plan()
+        text, log = trace_and_log(p)
+        changed = text.splitlines()
+        changed.insert(0, '11 future_supported_effect(20 <unfinished ...>')
+        changed.insert(2, '11 <... future_supported_effect resumed>) = 0')
+        # Simulates vocabulary growth without a corresponding passive decision.
+        with patch('controlled_contract.SUPPORTED', SUPPORTED | {'future_supported_effect'}):
+            with self.assertRaisesRegex(RuntimeError, 'crosses phase boundary'):
+                frame_trace('\n'.join(changed) + '\n', p, log, set())
+
+    def test_passive_wait_crosses_without_assigning_an_effect_to_a_phase(self):
+        p = plan()
+        text, log = trace_and_log(p)
+        changed = text.splitlines()
+        changed.insert(0, '11 futex(0x123, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>')
+        changed.insert(2, '11 <... futex resumed>) = 0')
+        result = frame_trace('\n'.join(changed) + '\n', p, log, set())
+        self.assertEqual([r[1] for r in result['outsideEvents']], ['futex'])
 
     def test_unfinished_missing_completion_and_unknown_effects_refuse(self):
         p = plan()

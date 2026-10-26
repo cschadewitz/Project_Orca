@@ -57,8 +57,14 @@ those bytes and must not be reused unchanged. Only disposable test credentials
 may appear in the controlled trace; no real credential input is authorized.
 
 A phase begins after command-read completion and ends before ack-write entry.
-Unknown syscalls refuse; relevant open, descriptor and path effects intersecting
-either boundary's entry/completion interval refuse. Events inside each window and
+Unknown syscalls refuse. Every supported call intersecting either boundary's
+entry/completion interval refuses unless it is explicitly passive: `futex`,
+`clock_gettime`, `clock_nanosleep`, `nanosleep`, `gettimeofday`, `sched_yield`, or
+the instantaneous `settled` record. This conservative default covers descriptor
+close/factories, path metadata and process/memory effects, and applies to any new
+supported call without adding a second effect list. A passive wait does not
+establish a phase effect; its record remains available for full replay.
+Events inside each window and
 outside all windows are returned for subsequent full replay. Outside events are
 not discarded or implicitly allowed. This framing stage does not establish
 control-descriptor lineage, resource inodes, kernel effects or full settlement.

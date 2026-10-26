@@ -22,8 +22,12 @@ OPEN_FLAGS = ({'O_RDONLY', 'O_CLOEXEC'},
               {'O_RDONLY', 'O_NOFOLLOW', 'O_NONBLOCK', 'O_CLOEXEC'},
               {'O_RDWR', 'O_NOFOLLOW', 'O_CLOEXEC'},
               {'O_WRONLY', 'O_NOFOLLOW', 'O_CLOEXEC'})
-BOUNDARY_EFFECTS = FD_FIRST | {'openat', 'mkdir', 'rmdir', 'unlink', 'rename',
-                              'renameat', 'renameat2', 'mmap', 'mremap', 'munmap'}
+# Every supported call is a boundary effect unless explicitly passive here.
+# Descriptor factories/close, path metadata and process/memory effects must not
+# depend on the descriptor-first argument decoder's necessarily different set.
+# A new supported syscall therefore refuses crossing intervals by default.
+BOUNDARY_PASSIVE = {'futex', 'clock_gettime', 'clock_nanosleep', 'nanosleep',
+                    'gettimeofday', 'sched_yield', 'settled'}
 
 
 def require(condition, reason):
@@ -182,11 +186,11 @@ def frame_trace(text, plan, supervisor_log, used_tokens):
         marks.append(record)
         next_mark += 1
     require(next_mark == len(plan['phases']) * 2, 'missing phase command/acknowledgement')
-    # A relevant operation spanning either edge cannot safely be assigned by
-    # entry order. Even unrelated open/descriptor effects refuse at these edges.
+    # A non-passive operation spanning either edge cannot safely be assigned by
+    # entry order. Classify it here, before returning events for downstream replay.
     boundaries = [(r[4], r[5]) for r in marks]
     for record in records:
-        if record in marks or record[1] not in BOUNDARY_EFFECTS:
+        if record in marks or record[1] in BOUNDARY_PASSIVE:
             continue
         require(not any(record[4] <= b and record[5] >= a for a, b in boundaries),
                 'effect crosses phase boundary interval')
