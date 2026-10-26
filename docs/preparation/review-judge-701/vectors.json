@@ -1,0 +1,163 @@
+{
+  "version": "orca-701-preparation/v0",
+  "notice": "Symbolic synthetic placeholders; not the #700 action/evidence schema or production policy.",
+  "cases": [
+    {
+      "name": "disabled automatic rule",
+      "baseline": "approved-rule",
+      "mode": "disabled",
+      "advice": "allow",
+      "expected": "respond-scoped-choice"
+    },
+    {
+      "name": "required reviewed automatic rule",
+      "baseline": "approved-rule",
+      "mode": "required",
+      "advice": "allow",
+      "expected": "respond-scoped-choice"
+    },
+    {
+      "name": "advisory reviewed automatic rule",
+      "baseline": "approved-rule",
+      "mode": "advisory",
+      "advice": "allow",
+      "expected": "respond-scoped-choice"
+    },
+    {
+      "name": "required absent advice holds",
+      "baseline": "approved-rule",
+      "mode": "required",
+      "advice": "unavailable",
+      "expected": "hold"
+    },
+    {
+      "name": "advisory failure explicitly reported",
+      "baseline": "approved-rule",
+      "mode": "advisory",
+      "advice": "unavailable",
+      "expected": "respond-scoped-choice"
+    },
+    {
+      "name": "required timeout holds",
+      "baseline": "approved-rule",
+      "mode": "required",
+      "advice": "timeout",
+      "expected": "hold"
+    },
+    {
+      "name": "advisory timeout under declared policy",
+      "baseline": "approved-rule",
+      "mode": "advisory",
+      "advice": "timeout",
+      "expected": "respond-scoped-choice"
+    },
+    {
+      "name": "advisory malformed reported",
+      "baseline": "approved-rule",
+      "mode": "advisory",
+      "advice": "malformed",
+      "expected": "respond-scoped-choice"
+    },
+    {
+      "name": "required malformed holds",
+      "baseline": "approved-rule",
+      "mode": "required",
+      "advice": "malformed",
+      "expected": "hold"
+    },
+    {
+      "name": "required abstention escalates",
+      "baseline": "approved-rule",
+      "mode": "required",
+      "advice": "abstain",
+      "expected": "escalate"
+    },
+    {
+      "name": "advisory abstention escalates",
+      "baseline": "approved-rule",
+      "mode": "advisory",
+      "advice": "abstain",
+      "expected": "escalate"
+    },
+    {
+      "name": "required deny stops",
+      "baseline": "approved-rule",
+      "mode": "required",
+      "advice": "deny",
+      "expected": "deny"
+    },
+    {
+      "name": "advisory deny stops",
+      "baseline": "approved-rule",
+      "mode": "advisory",
+      "advice": "deny",
+      "expected": "deny"
+    },
+    {
+      "name": "required escalation",
+      "baseline": "approved-rule",
+      "mode": "required",
+      "advice": "escalate",
+      "expected": "escalate"
+    },
+    {
+      "name": "advisory cancellation never responds",
+      "baseline": "approved-rule",
+      "mode": "advisory",
+      "advice": "cancelled",
+      "expected": "hold"
+    },
+    {
+      "name": "judge allow cannot create a rule",
+      "baseline": "no-rule",
+      "mode": "required",
+      "advice": "allow",
+      "expected": "escalate"
+    },
+    {
+      "name": "judge allow cannot override human class",
+      "baseline": "mandatory-human",
+      "mode": "required",
+      "advice": "allow",
+      "expected": "escalate"
+    },
+    {
+      "name": "judge allow cannot override denial",
+      "baseline": "deny",
+      "mode": "required",
+      "advice": "allow",
+      "expected": "deny"
+    },
+    {
+      "name": "unknown facts cannot be invented",
+      "baseline": "unknown",
+      "mode": "required",
+      "advice": "allow",
+      "expected": "hold"
+    },
+    { "name": "stale authority holds", "baseline": "stale", "mode": "disabled", "advice": "allow", "expected": "hold" },
+    {
+      "name": "unknown mode never disables review",
+      "baseline": "approved-rule",
+      "mode": "typo",
+      "advice": "allow",
+      "expected": "hold"
+    },
+    {
+      "name": "missing native choice never broadens",
+      "baseline": "approved-rule",
+      "mode": "disabled",
+      "nativeChoiceAvailable": false,
+      "advice": "allow",
+      "expected": "hold"
+    },
+    {
+      "name": "expired callback never responds",
+      "baseline": "approved-rule",
+      "mode": "disabled",
+      "live": false,
+      "advice": "allow",
+      "expected": "hold"
+    }
+  ]
+}
