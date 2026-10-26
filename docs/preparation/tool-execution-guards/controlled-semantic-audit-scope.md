@@ -182,3 +182,67 @@ read-only replay of those originals and a fresh integrated exact-image attempt
 remain pending parent review/coordination. The previously documented concurrent
 eventfd interval refusal is unaffected. No fresh bootstrap success, accepting
 exit, connected launch/token, production change or main/PR merge is claimed.
+
+## Finite authenticated bootstrap grammar closure
+
+This semantic-only follow-up starts at combined preparation
+`9f258860ec306afd5aa9f4b6f4aaede052c28ced`, on
+`cal/706-bootstrap-schema-closure`. Its three-file scope remains semantic code,
+dedicated controls and this note. #748, kernel/provider/notification files,
+supervisor, producer/runtime/sharedcore, all timing bounds and non-accepting gates
+are unchanged. This is authenticated grammar closure, not an observed production
+exploit or a new policy framework.
+
+The five inspected emitters exactly match reviewed source
+`557f62fbe86fc8371d48f11ec37bf9db71cac436`: the fence, owned file service, producer,
+`packages/core/src/strict-permission.ts` and
+`packages/store/src/execution-store.ts`. Their finite bootstrap output requires:
+
+* Exactly the fence's action keys, integer version 1, parsed-json original and
+  dispatch representations bound to that action's parameters reference, empty
+  transformations/offeredChoices, and the service's exact raw-parser absence fact
+  and fence's exact executable/stdin absence facts. The explicit action UUID
+  regex is defense in depth: integrated kernel filename grammar and exact
+  reference binding already constrain its syntax. No missing integrated UUID
+  obligation or bypass is claimed.
+* Exactly the service's coverage keys and values, including source refs, hook and
+  configuration facts, ordered guarantees/unsupported paths, false independently
+  observed effects, empty installed refs and policy-per-ask tier. Platform comes
+  from the existing retained native Node ELF header and matching local machine:
+  ELF64 little-endian x86-64 or AArch64, yielding linux-x64 or linux-arm64. Unknown
+  or mismatched architecture refuses; no child platform string grants scope.
+  This relies on the existing trusted native runtime observation, not emulation
+  support. No new supervisor field or interface is introduced.
+* Exactly the rule-only `strictDecisionBinding`/`ruleAllow` verdict: integer
+  version 1, action binding, authority, coverage, outcome and rule authorizer.
+  No judgeResultRef, human/judge provenance, child permit/dispatch flag or unknown
+  field is accepted. Bootstrap source has no configured judge or delegation.
+* Exact encrypted plaintext wrapper, update, semantic-text and four record-value
+  key sets. Outer update.kind must equal semantic.kind inside its text. Capture
+  bytes must equal the pinned service's compact JSON.stringify array encoding;
+  admissible components are fixed ASCII refs/stamps and integer interval values,
+  so the Python re-encoding matches that exact finite source output.
+
+JSON parsing now rejects NaN/Infinity/-Infinity with parse_constant and rejects
+nonfinite numeric overflow such as 1e999. Version checks and finite expected JSON
+comparisons preserve scalar types, preventing Python True==1 or 1.0==1 from
+standing in for integer version 1. Cross-record comparison also preserves types;
+boolean/numeric coverage flags, interval and ceiling substitutions refuse.
+
+Local validation: **44 dedicated semantic tests pass (0.294 s)** and **166 total
+Python tests pass (3.010 s)** with the documented unittest commands.
+`git diff --check` passes. Reauthenticated coherent negatives cover the closed
+fields/constants, forged judge provenance, outer/inner kind mismatch, canonical
+capture encoding, nonfinite JSON and scalar-type aliases. AEAD decrypt roundtrips
+establish valid cryptography even when the plaintext grammar intentionally fails.
+Synthetic positives retain both enrollmentBinding and resourceProjection and
+still return `authority: none`.
+
+These checks do not observe in-memory permit identity, infer callback/dispatch
+identity from booleans, reconstruct random UUID issuance, or qualify general
+policy/precedence/mandatory-judge semantics. The original managed authority and
+projected resource remain separately checked under trusted reviewed source/kernel,
+stable clocks/mounts/hostname and cooperative same-UID assumptions. Actual
+preserved originals/traces are unavailable here; no fresh integrated run is
+claimed. Parent review and exact-image integrated evidence remain pending, with
+no accepting exit, connected token, deployment, credentials change or merge.
