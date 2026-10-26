@@ -31,7 +31,7 @@ node_modules/.bin/vitest run \
   packages/store/test/lease-store.test.ts --maxWorkers=2
 ```
 
-Result: **8 files / 355 tests passed, zero skips**. This includes 39 composed
+Result: **8 files / 358 tests passed, zero skips**. This includes 39 composed
 Vitest cases (with the mutation loop additionally covering 13 changes at each
 of three barriers), 19 canonical-resource cases, and the existing policy,
 judge, capture, fence, live-input and lease regressions. The stable corpus
@@ -65,3 +65,33 @@ A separate owner is diagnosing that baseline UI/test failure. This slice does
 not modify first-run code or weaken its assertion. The focused local result
 above is not a full-suite or CI-green claim. Parent-owned exact-head CI and
 independent review remain required before merge.
+
+## #722 terminal-state race follow-up
+
+Peer review identified a blocking policy terminality race on implementation head
+`e9a20a0473fe08ad2e900bd3c0610dee43937942`. Explicit source/projection barriers
+reproduce the microtask order: an unchanged bind eligibility returns, concurrent
+same-object evaluation terminalizes the review on a source outage, then bind's
+continuation overwrites terminal status with bound. Before the fix, completing
+that handle recorded and returned allow. The existing terminal marker/fence
+recheck is a separate execution barrier; these policy-only reproductions do not
+demonstrate a dispatch bypass.
+
+The retained [failing-before receipt](evidence/722-terminal-races-before.txt)
+contains the original failing test output and analogous-race failure excerpts.
+Three deterministic regressions use promise barriers, without sleeps or production
+instrumentation. They establish registration refusal, zero post-terminal projection/
+completion records, and terminal behavior after source recovery. The two analogous
+cases previously authorized projection after the first bind eligibility gap and
+recorded completion after its initial eligibility gap.
+
+The minimal repair requires status `binding` after both bind eligibility awaits,
+then checks terminal state immediately after completion eligibility before any
+record write. Existing post-record completion and retained-evaluation writes already
+check terminal state after their awaits, with no intervening await before commit.
+No contracts, owner generation, resource kinds or fence safety assertions changed.
+
+The three filtered reproductions failed before and passed after the fix; 87
+unselected tests were intentionally skipped only in those filtered runs. The full
+affected rerun passed **358 tests in eight files with zero skips**. Types, lint
+and build results above apply to this repaired content.

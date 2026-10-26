@@ -79,6 +79,12 @@ source reads are bounded separately; uncooperative in-flight work keeps its
 reservation until settlement. Weak terminal markers retain no full review snapshot.
 Ordinary final evaluation still works when completed-review capacity is full.
 
+A peer-reviewed microtask race was reproduced and repaired in #722: bind now
+rechecks status after both eligibility awaits before authorizing projection or
+installing a bound handle, and completion checks terminal state before recording.
+Three deterministic regressions preserve permanent invalidation through those gaps.
+The failing-before evidence and limits are retained in the validation document.
+
 The fence owns its pending and bound handles and installs only its registered
 policy's completed verdict. Manufactured/copied actions or verdicts do not mint
 permits. Completion cannot reset one-use/dispatch state. Authorization recording

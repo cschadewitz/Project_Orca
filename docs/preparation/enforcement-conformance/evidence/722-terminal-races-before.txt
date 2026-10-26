@@ -1,0 +1,48 @@
+Expected failing-before regression evidence
+Implementation baseline: e9a20a0473fe08ad2e900bd3c0610dee43937942
+Only regression tests were added; implementation source was unchanged.
+No dispatch bypass is demonstrated: this reproduction exercises policy registration/completion only.
+Filtered skips below are intentional; the full affected regression run is separate.
+
+Primary command:
+node_modules/.bin/vitest run packages/agents/test/strict-permission.test.ts -t 'cannot bind or record allow when concurrent evaluation terminalizes' --maxWorkers=2
+
+ RUN  v5.0.5 /workspace/Project_Orca
+
+ ❯ packages/agents/test/strict-permission.test.ts (88 tests | 1 failed | 87 skipped) 14ms
+   × cannot bind or record allow when concurrent evaluation terminalizes after final bind eligibility resolves 13ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/agents/test/strict-permission.test.ts > cannot bind or record allow when concurrent evaluation terminalizes after final bind eligibility resolves
+AssertionError: expected 'allow' not to be 'allow' // Object.is equality
+ ❯ packages/agents/test/strict-permission.test.ts:855:34
+    853|   const completed =
+    854|     registered.status === "fulfilled" ? await h.port.completeReview(re…
+    855|   expect(completed?.outcome).not.toBe("allow");
+       |                                  ^
+    856|   expect(h.recordReview).not.toHaveBeenCalled();
+    857|   expect(registered.status).toBe("rejected");
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 87 skipped (88)
+   Start at  04:34:22
+   Duration  415ms (import 55%, transform 39%, tests 5%, worker 1%)
+
+
+Additional analogous races (verbatim failure/summary excerpts; synthetic argument dumps omitted):
+Command: node_modules/.bin/vitest run packages/agents/test/strict-permission.test.ts -t terminaliz --maxWorkers=2
+Full additional raw-log SHA-256: 33f68c44af97be848db3072b5dd3d1958472b0e69a9b3982b519a638f7ea86a9
+ FAIL  packages/agents/test/strict-permission.test.ts > cannot bind or record allow when concurrent evaluation terminalizes after final bind eligibility resolves
+AssertionError: expected 'allow' not to be 'allow' // Object.is equality
+ FAIL  packages/agents/test/strict-permission.test.ts > does not authorize projection after concurrent terminalization in the first bind eligibility gap
+AssertionError: expected "vi.fn()" to not be called at all, but actually been called 1 times
+Number of calls: 1
+ FAIL  packages/agents/test/strict-permission.test.ts > does not record completion after concurrent terminalization in the completion eligibility gap
+AssertionError: expected "vi.fn()" to not be called at all, but actually been called 1 times
+Number of calls: 1
+ Test Files  1 failed (1)
+      Tests  3 failed | 87 skipped (90)

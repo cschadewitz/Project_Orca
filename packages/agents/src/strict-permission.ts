@@ -218,13 +218,18 @@ export function createStrictPolicyPort(options: StrictPolicyOptions): PolicyPort
           (approvedProjection.kind !== "utf8-bytes" && approvedProjection.kind !== "parsed-json")
         )
           throw refuse();
-        if ((await eligible(entry, signal)).phase !== "needs-review") throw refuse();
+        if ((await eligible(entry, signal)).phase !== "needs-review" || entry.status !== "binding") throw refuse();
         await authorizeProjection(
           structuredClone(exactRequest),
           structuredClone(entry.action),
           AbortSignal.any([signal, entry.originalSignal]),
         );
-        if ((await eligible(entry, signal)).phase !== "needs-review" || !live(entry, signal)) throw refuse();
+        if (
+          (await eligible(entry, signal)).phase !== "needs-review" ||
+          !live(entry, signal) ||
+          entry.status !== "binding"
+        )
+          throw refuse();
         const registered = Object.freeze({}) as BoundReviewV1;
         entry.dispose();
         entry.request = freeze(exactRequest);
@@ -258,6 +263,7 @@ export function createStrictPolicyPort(options: StrictPolicyOptions): PolicyPort
           return terminal(entry, stopped(entry.action, "invalid-judge-result"));
         }
         const current = await eligible(entry, signal);
+        if (isTerminal(entry)) return entry.verdict!;
         if (current.phase === "final") return terminal(entry, current.verdict);
         if (!live(entry, signal)) return terminal(entry, stopped(entry.action, "review-expired"));
         const request = entry.request;

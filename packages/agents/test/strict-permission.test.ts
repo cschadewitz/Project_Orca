@@ -778,3 +778,143 @@ it("preserves ordinary final policy evaluation when settled review capacity is f
   expect(await port.evaluate(actionFixture(), r.signal)).toMatchObject({ verdict: { outcome: "allow" } });
   expect(await port.evaluate(r.action, r.signal)).toMatchObject({ verdict: { outcome: "indeterminate" } });
 });
+
+it("cannot bind or record allow when concurrent evaluation terminalizes after final bind eligibility resolves", async () => {
+  const h = harness(reviewState());
+  const action = actionFixture();
+  const signal = new AbortController().signal;
+  const evaluation = await h.port.evaluate(action, signal);
+  if (evaluation.phase !== "needs-review") throw new Error("fixture");
+  const request = { ...evaluation.review, approvedProjection: action.original };
+  let projectionEntered!: () => void;
+  let releaseProjection!: () => void;
+  const projectionReached = new Promise<void>((resolve) => {
+    projectionEntered = resolve;
+  });
+  const projectionGate = new Promise<void>((resolve) => {
+    releaseProjection = resolve;
+  });
+  h.authorizeProjection.mockImplementationOnce(async () => {
+    projectionEntered();
+    await projectionGate;
+  });
+  const binding = h.port.bindReview(evaluation.pending, request, signal);
+  const bindingResult = Promise.allSettled([binding]);
+  await projectionReached;
+
+  let bindReadEntered!: () => void;
+  let releaseBindRead!: (state: StrictPermissionState) => void;
+  const bindReadReached = new Promise<void>((resolve) => {
+    bindReadEntered = resolve;
+  });
+  const bindReadGate = new Promise<StrictPermissionState>((resolve) => {
+    releaseBindRead = resolve;
+  });
+  h.readCurrent.mockImplementationOnce(async () => {
+    bindReadEntered();
+    return await bindReadGate;
+  });
+  releaseProjection();
+  await bindReadReached;
+
+  let outageReadEntered!: () => void;
+  let releaseOutage!: () => void;
+  const outageReached = new Promise<void>((resolve) => {
+    outageReadEntered = resolve;
+  });
+  const outageGate = new Promise<void>((resolve) => {
+    releaseOutage = resolve;
+  });
+  h.readCurrent.mockImplementationOnce(async () => {
+    outageReadEntered();
+    await outageGate;
+    throw new Error("synthetic policy outage");
+  });
+  const invalidating = h.port.evaluate(action, signal);
+  await outageReached;
+  // Resolve both source barriers in this turn. The outage recheck queues its
+  // terminal transition between bind's final eligible return and bind continuation.
+  releaseOutage();
+  releaseBindRead(reviewState());
+  expect(await invalidating).toMatchObject({
+    phase: "final",
+    verdict: { outcome: "indeterminate", reason: "current-policy-unavailable" },
+  });
+  const [registered] = await bindingResult;
+  if (!registered) throw new Error("missing binding outcome");
+  const result: JudgeResultV1 = {
+    ...evaluation.review,
+    judgeVersion: "judge-1",
+    projectionBindingRef: action.original.bindingRef,
+    reasonCode: "synthetic-fit",
+    execution: "evaluated",
+    result: "fit",
+  };
+  const completed =
+    registered.status === "fulfilled" ? await h.port.completeReview(registered.value, result, signal) : undefined;
+  expect(completed?.outcome).not.toBe("allow");
+  expect(h.recordReview).not.toHaveBeenCalled();
+  expect(registered.status).toBe("rejected");
+  expect(await h.port.evaluate(action, signal)).toMatchObject({
+    phase: "final",
+    verdict: { outcome: "indeterminate" },
+  });
+});
+
+function stalledPolicyRead(h: ReturnType<typeof harness>) {
+  let entered!: () => void;
+  let resolve!: (state: StrictPermissionState) => void;
+  let reject!: (error: Error) => void;
+  const reached = new Promise<void>((ready) => {
+    entered = ready;
+  });
+  const gate = new Promise<StrictPermissionState>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  h.readCurrent.mockImplementationOnce(async () => {
+    entered();
+    return await gate;
+  });
+  return { reached, recover: () => resolve(reviewState()), fail: () => reject(new Error("synthetic policy outage")) };
+}
+
+it("does not authorize projection after concurrent terminalization in the first bind eligibility gap", async () => {
+  const h = harness(reviewState());
+  const action = actionFixture();
+  const signal = new AbortController().signal;
+  const evaluation = await h.port.evaluate(action, signal);
+  if (evaluation.phase !== "needs-review") throw new Error("fixture");
+  const bindRead = stalledPolicyRead(h);
+  const binding = Promise.allSettled([
+    h.port.bindReview(evaluation.pending, { ...evaluation.review, approvedProjection: action.original }, signal),
+  ]);
+  await bindRead.reached;
+  const outage = stalledPolicyRead(h);
+  const invalidating = h.port.evaluate(action, signal);
+  await outage.reached;
+  outage.fail();
+  bindRead.recover();
+  expect(await invalidating).toMatchObject({ verdict: { outcome: "indeterminate" } });
+  await binding;
+  expect(h.authorizeProjection).not.toHaveBeenCalled();
+  expect(h.recordReview).not.toHaveBeenCalled();
+  expect(await h.port.evaluate(action, signal)).toMatchObject({ verdict: { outcome: "indeterminate" } });
+});
+
+it("does not record completion after concurrent terminalization in the completion eligibility gap", async () => {
+  const h = harness(reviewState());
+  const r = await registerReview(h.port);
+  const completionRead = stalledPolicyRead(h);
+  const completing = h.port.completeReview(r.bound, r.result, r.signal);
+  await completionRead.reached;
+  const outage = stalledPolicyRead(h);
+  const invalidating = h.port.evaluate(r.action, r.signal);
+  await outage.reached;
+  outage.fail();
+  completionRead.recover();
+  expect(await invalidating).toMatchObject({ verdict: { outcome: "indeterminate" } });
+  expect(await completing).toMatchObject({ outcome: "indeterminate" });
+  expect(h.recordReview).not.toHaveBeenCalled();
+  expect(await h.port.evaluate(r.action, r.signal)).toMatchObject({ verdict: { outcome: "indeterminate" } });
+});
