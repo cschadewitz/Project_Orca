@@ -78,10 +78,13 @@ strict lock and source files remain its sole ownership.
 2. Implement pending-to-enrolled orchestration only behind that trusted owner: close/exclude
    all original writers; durably publish pending intent; bind the pending token; invoke
    `initializeFresh()` once on an absent sidecar; retain its exact revision; durably commit
-   enrolled status; bind a new enrolled token. Failure/uncertain acknowledgement leaves the
-   intent pending and admission closed. Do not retry initialization over existing bytes or
-   erase intent. Ordinary writes use `createScopedRule`/`revokeScopedRule` and their existing
-   authority/receipt contracts; the gate adds no standing-write command.
+   enrolled status; bind a new enrolled token only after confirmed completion. Failure or
+   uncertain acknowledgement preserves intent/evidence and keeps admission closed/unavailable.
+   After an attempted enrolled-status commit, lost acknowledgement does not prove the durable
+   state is still pending. Do not bind an enrolled owner or retry automatically; later inspect
+   the actual durable outcome. Do not retry initialization over existing bytes or erase intent.
+   Ordinary writes use `createScopedRule`/`revokeScopedRule` and their existing authority/receipt
+   contracts; the gate adds no standing-write command.
 3. Hook `packages/cli/src/main.ts`, `bootstrap.ts`, `update-bootstrap.ts` and
    `commands/auth.ts` before producers. Preserve help/version. Resolve actual config/store
    roles without plugins or store/identity/auth creation, verify the retained binding, then
