@@ -1,6 +1,7 @@
 /** Closed real Linux composition. Accepted image/lifetime and prompt presentation remain synthetic;
  * actual managed store, protected owner, strict policy, leases/auth, service and live registry are used.
  */
+import fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -303,6 +304,8 @@ async function fixture() {
     evidence,
   };
   const captured = await producer.capture(input);
+  const reads = vi.spyOn(fs, "readSync");
+  cleanup.push(async () => reads.mockRestore());
   const authorizer = new Authorizer({
     ownership: new OwnershipStore(),
     resolver: {
@@ -362,6 +365,7 @@ async function fixture() {
     respond,
     evidence,
     readFacts,
+    reads,
     identity,
     call,
     replaceOwner: async () => {
@@ -403,6 +407,7 @@ it("retains actual service capture after protected facts, preserving independent
   expect(await f.producer.port.forAction(structuredClone(c.action), f.active)).toBe(f.captured.token);
   await expect(f.producer.capture(f.input)).rejects.toThrow();
   expect(f.observed).not.toHaveBeenCalled();
+  expect(f.reads).not.toHaveBeenCalled();
 });
 it("real strict source and protected command bridge refuse unqualified review/Save, without answering or I/O", async () => {
   const f = await fixture();
@@ -420,6 +425,7 @@ it("real strict source and protected command bridge refuse unqualified review/Sa
   expect(await f.stores.events.readTypes("run", ["agent.permission", "human.answered"])).toEqual([]);
   expect(await readFile(f.sidecar)).toEqual(before);
   expect(f.observed).not.toHaveBeenCalled();
+  expect(f.reads).not.toHaveBeenCalled();
 });
 it("actual explicit live delivery reaches the original callback exactly once but supplies no native choice or permit authority", async () => {
   const f = await fixture();
@@ -450,6 +456,7 @@ it("actual explicit live delivery reaches the original callback exactly once but
   ).rejects.toThrow();
   expect(f.evidence.recordAuthorization).not.toHaveBeenCalled();
   expect(f.observed).not.toHaveBeenCalled();
+  expect(f.reads).not.toHaveBeenCalled();
 });
 it("lost durable answer acknowledgement never delivers, reopens a callback or creates execution authority", async () => {
   const f = await fixture();
@@ -463,6 +470,7 @@ it("lost durable answer acknowledgement never delivers, reopens a callback or cr
   expect(restarted.pendingCount).toBe(0);
   expect(() => f.producer.port.snapshot(f.captured.token)).toThrow();
   expect(f.observed).not.toHaveBeenCalled();
+  expect(f.reads).not.toHaveBeenCalled();
 });
 it.each([
   "actor",
@@ -504,6 +512,7 @@ it.each([
   if (reason === "expiry") f.snapshot.expiresAt = new Date(0).toISOString();
   if (reason !== "actor") await expect(f.producer.port.read(f.target, f.active, facts)).rejects.toThrow();
   expect(f.observed).not.toHaveBeenCalled();
+  expect(f.reads).not.toHaveBeenCalled();
 });
 it("policyChanged refuses unqualified source evaluation and consumes the failed transition without replay", async () => {
   const f = await fixture();
@@ -522,4 +531,5 @@ it("policyChanged refuses unqualified source evaluation and consumes the failed 
   expect(f.captured.invocation.action).toBe(original);
   expect(() => f.producer.port.snapshot(f.captured.token)).toThrow();
   expect(f.observed).not.toHaveBeenCalled();
+  expect(f.reads).not.toHaveBeenCalled();
 });
