@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Preparation scenarios only; not a runtime action contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "baseline", "integration", "evidenceClass", "syntheticCanaries", "cases"],
+  "properties": {
+    "format": {
+      "const": "orca.enforcement-preparation-corpus/1"
+    },
+    "baseline": {
+      "const": "32f92cc16b9faf1748059e930c3f77b3934151ae"
+    },
+    "integration": {
+      "const": "awaiting-parent-agreed-700-interface"
+    },
+    "evidenceClass": {
+      "const": "preparation-only"
+    },
+    "syntheticCanaries": {
+      "const": ["SYNTHETIC_PRIVATE_CONTEXT_706", "SYNTHETIC_CREDENTIAL_706"]
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "family", "title", "trace", "checks", "variations", "status"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^E706-[a-z-]+$"
+          },
+          "family": {
+            "enum": ["coverage", "lifecycle", "evidence", "bypass", "judge"]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "trace": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "checks": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "variations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "status": {
+            "const": "not-run"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "id": {
+                  "const": "E706-native-shell"
+                }
+              },
+              "required": ["id"]
+            },
+            "then": {
+              "properties": {
+                "checks": {
+                  "const": ["Observe actual dispatch; absent telemetry leaves blocking and execution unknown"]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "id": {
+                  "const": "E706-remote-custom"
+                }
+              },
+              "required": ["id"]
+            },
+            "then": {
+              "properties": {
+                "checks": {
+                  "const": [
+                    "Coverage remains unsupported or unknown until separately qualified; a local sandbox cannot establish remote confinement or absence of remote effects"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
