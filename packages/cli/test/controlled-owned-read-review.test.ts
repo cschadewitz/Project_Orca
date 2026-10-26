@@ -312,32 +312,100 @@ it.each(["review-proof", "reviewer-revoked"] as const)(
   60000,
 );
 
-it("a tampered protected Save approval refuses the fresh rule read but not the delivered answer", async () => {
-  const b = await bootstrap();
-  const c = await supervisor("connected", b.grant);
-  const original = c.options.phase.bind(c.options);
-  c.options.phase = async (name, work) => {
-    if (name === "rule-read") {
-      const approvals = await events(c.base, "agent.permission");
-      const path = join(
-        storeOf(c.base),
-        "private-execution",
-        `${encodeURIComponent(approvals[0]!.executionPayloadRef!)}.payload.json`,
-      );
-      const bytes = await readFile(path);
-      bytes[bytes.length - 2] = bytes[bytes.length - 2]! ^ 1;
-      await writeFile(path, bytes);
-    }
-    return original(name, work);
-  };
-  const error = await failure(runControlledOwnedReadTest(c.base, "connected", c.options));
-  // Refused at the fresh invocation's policy verdict (qualification cannot read the record).
-  expect(error.message).toContain('result.verdict.outcome === "allow"');
-  expect(c.phases).toEqual(["save", "human-read", "rule-read"]);
-  expect(c.observed.map((read) => read.phase)).toEqual(["human-read"]);
-  expect(await events(c.base, "human.answered")).toHaveLength(1);
-  expect((await semanticKinds(c.base))["controlled-authorization-v1"]).toBe(1);
-}, 60000);
+// Corrupt only after the fresh capture is durably recorded, at the real policy
+// boundary. Earlier corruption may correctly stop the store's key preflight first.
+it.each(["malformed-envelope", "ciphertext"] as const)(
+  "a %s protected Save approval refuses fresh policy without undoing the delivered answer",
+  async (corruption) => {
+    const b = await bootstrap();
+    const c = await supervisor("connected", b.grant);
+    const originalPhase = c.options.phase.bind(c.options);
+    const completed: string[] = [];
+    c.options.phase = (name, work) =>
+      originalPhase(name, async () => {
+        await work();
+        completed.push(name);
+      });
+    const automatic: { action: ActionEvidenceV1; result: PolicyEvaluationV1 }[] = [];
+    const createPolicy = agents.createStrictPolicyPort;
+    let tampered = 0;
+    const evaluationSpy = vi.spyOn(agents, "createStrictPolicyPort").mockImplementation((options) => {
+      const policy = createPolicy(options);
+      return {
+        ...policy,
+        evaluate: async (action, signal) => {
+          if (action.invocation.invocationId !== "controlled-rule-invocation") return policy.evaluate(action, signal);
+          const stores = fileStores(storeOf(c.base));
+          // This authenticated read proves the real capture write completed while
+          // the store was intact. No policy verdict or write result is substituted.
+          const capture = (await stores.execution.getPayload(
+            runId,
+            `capture:${action.bindingRef}`,
+            "agent.update",
+          )) as {
+            update: { text: string };
+          };
+          expect(JSON.parse(capture.update.text)).toMatchObject({
+            kind: "controlled-capture-v1",
+            value: { action },
+          });
+          expect(completed).toEqual(["save", "human-read"]);
+          expect(c.observed).toEqual([{ phase: "human-read", offset: 2, length: 4, bytes: "spos" }]);
+          const approvals = await events(c.base, "agent.permission");
+          expect(approvals).toHaveLength(1);
+          const ref = approvals[0]!.executionPayloadRef!;
+          await stores.execution.getPayload(runId, ref, "agent.permission");
+          const path = join(storeOf(c.base), "private-execution", `${encodeURIComponent(ref)}.payload.json`);
+          const bytes = await readFile(path);
+          let corrupt: Buffer;
+          if (corruption === "malformed-envelope") {
+            // Reproduce the original fixture's exact operation: } becomes |.
+            expect(bytes.subarray(-2).toString()).toBe("}\n");
+            corrupt = Buffer.from(bytes);
+            corrupt[corrupt.length - 2] = corrupt[corrupt.length - 2]! ^ 1;
+          } else {
+            // Preserve valid envelope syntax while invalidating its AEAD tag.
+            const envelope = JSON.parse(bytes.toString()) as { ciphertext: string };
+            const ciphertext = Buffer.from(envelope.ciphertext, "base64");
+            expect(ciphertext.length).toBeGreaterThan(0);
+            ciphertext[0] = ciphertext[0]! ^ 1;
+            envelope.ciphertext = ciphertext.toString("base64");
+            corrupt = Buffer.from(JSON.stringify(envelope) + "\n");
+          }
+          await writeFile(path, corrupt);
+          expect(await readFile(path)).toEqual(corrupt);
+          await expect(stores.execution.getPayload(runId, ref, "agent.permission")).rejects.toMatchObject({
+            code: "RUN_STATE",
+            message: "protected execution record or key is missing, invalid or unreadable",
+          });
+          tampered++;
+          const result = await policy.evaluate(action, signal);
+          automatic.push({ action, result });
+          return result;
+        },
+      };
+    });
+    cleanup.push(async () => evaluationSpy.mockRestore());
+    const error = await failure(runControlledOwnedReadTest(c.base, "connected", c.options));
+    expect(tampered).toBe(1);
+    expect(automatic).toHaveLength(1);
+    expect(automatic[0]!.result).toMatchObject({
+      phase: "final",
+      verdict: { outcome: "indeterminate", reason: "required-policy-unavailable" },
+    });
+    expect(error).toBeInstanceOf(assert.AssertionError);
+    expect(error.message).toContain('result.verdict.outcome === "allow"');
+    expect(c.phases).toEqual(["save", "human-read", "rule-read"]);
+    expect(completed).toEqual(["save", "human-read"]);
+    expect(c.observed).toEqual([{ phase: "human-read", offset: 2, length: 4, bytes: "spos" }]);
+    expect(await events(c.base, "human.answered")).toHaveLength(1);
+    const kinds = await semanticKinds(c.base);
+    expect(kinds["controlled-authorization-v1"]).toBe(1);
+    expect(kinds["controlled-producer-observation-v1"]).toBe(1);
+    expect(kinds["controlled-final-delivery-ack-v1"]).toBe(1);
+  },
+  60000,
+);
 
 // Cal reconciliation of the original #744 reproduction. Requires the reviewed #749
 // correction: an unrelated fixture exception must fail this ordinary regression.
