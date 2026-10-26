@@ -1,0 +1,13 @@
+        onConfirm: async (outcome: ToolConfirmationOutcome) => {
+          if (outcome === ToolConfirmationOutcome.ProceedAlwaysAndSave) {
+            this.context.config.sandboxPolicyManager.addPersistentApproval(
+              rootCommand,
+              effectiveAdditionalPermissions,
+            );
+          } else if (outcome === ToolConfirmationOutcome.ProceedAlways) {
+            this.context.config.sandboxPolicyManager.addSessionApproval(
+              rootCommand,
+              effectiveAdditionalPermissions,
+            );
+          }
+        },

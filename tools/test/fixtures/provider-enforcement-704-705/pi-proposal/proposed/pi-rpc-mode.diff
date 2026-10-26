@@ -1,0 +1,103 @@
+diff --git a/packages/coding-agent/src/modes/rpc/rpc-mode.ts b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+index 1c0995d36ec752155f1d13b019728f9343bb263c..96e22a84c0a7d9e81ee5caa536012f4820b5b1f8 100644
+--- a/packages/coding-agent/src/modes/rpc/rpc-mode.ts
++++ b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+@@ -25,6 +25,7 @@ import {
+ 	waitForRawStdoutBackpressure,
+ 	writeRawStdout,
+ } from "../../core/output-guard.ts";
++import type { BashFinalAction, BashFinalCheck, BashFinalDecision } from "../../core/tools/bash.ts";
+ import { killTrackedDetachedChildren } from "../../utils/shell.ts";
+ import { type Theme, theme } from "../interactive/theme/theme.ts";
+ import { toJsonEvent } from "../json-event.ts";
+@@ -47,6 +48,46 @@ export type {
+ 	RpcSessionState,
+ } from "./rpc-types.ts";
+ 
++/** The options a final-action request offers. Allow is one use for this one tool call. */
++const FINAL_ACTION_OPTIONS = Object.freeze([
++	Object.freeze({ optionId: "final-allow-once", kind: "allow_once", effect: "this-invocation" }),
++	Object.freeze({ optionId: "final-reject-once", kind: "reject_once", effect: "this-invocation" }),
++]);
++
++/** Typed request for one final action. Environment values stay in pi; only their names are sent. */
++function finalActionRequest(action: BashFinalAction): Record<string, unknown> {
++	return {
++		method: "authorize_final_action",
++		toolCallId: action.toolCallId,
++		toolName: action.toolName,
++		executor: action.executor,
++		shell: action.shell ?? null,
++		command: action.command,
++		cwd: action.cwd,
++		envKeys: Object.keys(action.env).sort(),
++		timeout: action.timeout ?? null,
++		transformations: action.transformations,
++		options: FINAL_ACTION_OPTIONS,
++	};
++}
++
++/** Allow only the offered allow option for this tool call; text, confirm, cancel or anything else blocks. */
++function finalActionDecision(action: BashFinalAction, response: unknown): BashFinalDecision {
++	const authorization =
++		typeof response === "object" && response !== null && !("cancelled" in response && response.cancelled)
++			? (response as { authorization?: unknown }).authorization
++			: undefined;
++	if (
++		typeof authorization === "object" &&
++		authorization !== null &&
++		(authorization as { toolCallId?: unknown }).toolCallId === action.toolCallId &&
++		(authorization as { optionId?: unknown }).optionId === FINAL_ACTION_OPTIONS[0].optionId
++	) {
++		return { outcome: "allow", action };
++	}
++	return { outcome: "block", reason: "final action was not authorized for this tool call" };
++}
++
+ /**
+  * Run in RPC mode.
+  * Listens for JSON commands on stdin, outputs events and responses on stdout.
+@@ -87,6 +128,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 	let shuttingDown = false;
+ 	const signalCleanupHandlers: Array<() => void> = [];
+ 
++	// Typed final bash authorization over the one-shot dialog channel; off until the client opts in.
++	let finalActionAuthorization = false;
++	const authorizeFinalAction: BashFinalCheck = async (action, signal) =>
++		finalActionDecision(
++			action,
++			await createDialogPromise<unknown>({ signal }, undefined, finalActionRequest(action), (r) => r),
++		);
++
+ 	/** Helper for dialog methods with signal/timeout support */
+ 	function createDialogPromise<T>(
+ 		opts: ExtensionUIDialogOptions | undefined,
+@@ -319,6 +368,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 		await session.bindExtensions({
+ 			uiContext: createExtensionUIContext(),
+ 			mode: "rpc",
++			finalActionCheck: () => (finalActionAuthorization ? authorizeFinalAction : undefined),
+ 			commandContextActions: {
+ 				waitForIdle: () => session.waitForIdle(),
+ 				newSession: async (options) => runtimeHost.newSession(options),
+@@ -763,6 +813,20 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 			return;
+ 		}
+ 
++		// Opt in to typed final bash authorization; this response is the client's negotiation evidence.
++		if (
++			typeof parsed === "object" &&
++			parsed !== null &&
++			"type" in parsed &&
++			parsed.type === "enable_final_action_authorization"
++		) {
++			finalActionAuthorization = true;
++			const id = "id" in parsed && typeof parsed.id === "string" ? parsed.id : undefined;
++			output({ id, type: "response", command: "enable_final_action_authorization", success: true });
++			await waitForRawStdoutBackpressure();
++			return;
++		}
++
+ 		// Handle extension UI responses
+ 		if (
+ 			typeof parsed === "object" &&

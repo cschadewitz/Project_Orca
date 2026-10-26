@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { runControlledOwnedReadTest } from "./controlled-producer.mjs";
+import { assertControlledLifetimeFdinfo, runControlledOwnedReadTest } from "./controlled-producer.mjs";
 const [base, lane, lifetimeArg, commandArg, ackArg] = process.argv.slice(2);
 assert.ok(base && ["bootstrap", "connected"].includes(lane));
 const lifetimeFd = Number(lifetimeArg),
@@ -36,7 +36,7 @@ for (const [path, original] of Object.entries(plan.inventory)) {
 const check = () => {
   assert.deepEqual(identity(fs.fstatSync(lifetimeFd)), plan.lifetime.identity);
   assert.deepEqual(actualIdentity(plan.lifetime.path), plan.lifetime.identity);
-  assert.match(fs.readFileSync(`/proc/self/fdinfo/${lifetimeFd}`, "utf8"), /lock:\s+\d+: FLOCK\s+ADVISORY\s+WRITE /);
+  assertControlledLifetimeFdinfo(lifetimeFd);
   for (const [path, original] of Object.entries(plan.roots)) assert.deepEqual(actualIdentity(path), original);
   for (const [path, original] of Object.entries(plan.originalFiles)) {
     assert.deepEqual(actualIdentity(path), original.identity);

@@ -1,0 +1,111 @@
+{
+  "format": "orca.gemini-authorization-proposal/1",
+  "issue": 705,
+  "status": "offline-proposal-not-submitted",
+  "repository": "google-gemini/gemini-cli",
+  "revision": "6006c14a4decfe4b891c6263ad6ad5992e404b5b",
+  "version": "0.65.0",
+  "license": "Apache-2.0",
+  "checkedAt": "2026-10-26",
+  "excerpts": [
+    {
+      "id": "acp-session-run-tool",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/acp-session-run-tool.txt",
+      "upstreamPath": "packages/cli/src/acp/acpSession.ts",
+      "startLine": 694,
+      "endLine": 840,
+      "sourceBlobSha": "471e265a865d60d7da67dbd0cdc0265c86782d3a",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/cli/src/acp/acpSession.ts#L694-L840",
+      "sha256": "71faad6b30f0188761004c75f46e470d1b85bbb997e9aeaea000f51eadf2b636",
+      "bytes": 4500
+    },
+    {
+      "id": "acp-utils-permission-options",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/acp-utils-permission-options.txt",
+      "upstreamPath": "packages/cli/src/acp/acpUtils.ts",
+      "startLine": 85,
+      "endLine": 200,
+      "sourceBlobSha": "a0a4ae7a475364d9133039f13497e81f9fcddec7",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/cli/src/acp/acpUtils.ts#L85-L200",
+      "sha256": "0eaf741e11d96f675325db67b10214e86259ac20f977bd026085d228869c3010",
+      "bytes": 3272
+    },
+    {
+      "id": "tools-invocation-tail",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/tools-invocation-tail.txt",
+      "upstreamPath": "packages/core/src/tools/tools.ts",
+      "startLine": 108,
+      "endLine": 113,
+      "sourceBlobSha": "ab2870984aba77e77fc5bacb25009cd47698582e",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/tools/tools.ts#L108-L113",
+      "sha256": "35a7f9e84017e845fce585af35d743d487b38ccc66545aa6ad6d90e525879494",
+      "bytes": 110
+    },
+    {
+      "id": "tools-confirmation-outcome",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/tools-confirmation-outcome.txt",
+      "upstreamPath": "packages/core/src/tools/tools.ts",
+      "startLine": 1106,
+      "endLine": 1114,
+      "sourceBlobSha": "ab2870984aba77e77fc5bacb25009cd47698582e",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/tools/tools.ts#L1106-L1114",
+      "sha256": "e11f20b962c35b745cde48aa004a1cfc569919be9d03a82d5264766bd963510f",
+      "bytes": 318
+    },
+    {
+      "id": "shell-imports",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/shell-imports.txt",
+      "upstreamPath": "packages/core/src/tools/shell.ts",
+      "startLine": 21,
+      "endLine": 26,
+      "sourceBlobSha": "59ec724c99fbdd2951a339fc473449878687046f",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/tools/shell.ts#L21-L26",
+      "sha256": "e00cac7d54debcd96947bffa0ea8d856306e5957410535e92056a4a1a0d1b7da",
+      "bytes": 185
+    },
+    {
+      "id": "shell-display-title",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/shell-display-title.txt",
+      "upstreamPath": "packages/core/src/tools/shell.ts",
+      "startLine": 253,
+      "endLine": 258,
+      "sourceBlobSha": "59ec724c99fbdd2951a339fc473449878687046f",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/tools/shell.ts#L253-L258",
+      "sha256": "61c73edb1d42550c1b1d352b5152c51d01bbd8e5bc7ac3b70749a2667fc1dbee",
+      "bytes": 213
+    },
+    {
+      "id": "shell-sandbox-on-confirm",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/shell-sandbox-on-confirm.txt",
+      "upstreamPath": "packages/core/src/tools/shell.ts",
+      "startLine": 487,
+      "endLine": 499,
+      "sourceBlobSha": "59ec724c99fbdd2951a339fc473449878687046f",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/tools/shell.ts#L487-L499",
+      "sha256": "1ca393e4ed509611494e00333ad4f861b53128dfb63c517d59e8e4618548d28e",
+      "bytes": 561
+    }
+  ],
+  "files": [
+    {
+      "id": "license",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/license-gemini-cli.txt",
+      "upstreamPath": "LICENSE",
+      "role": "exact upstream license bytes",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+      "bytes": 11357
+    },
+    {
+      "id": "proposal",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/proposed-upstream.diff",
+      "role": "ORCA-authored proposed diff against the pinned revision; not submitted upstream",
+      "targets": [
+        "packages/core/src/tools/tools.ts",
+        "packages/core/src/tools/shell.ts",
+        "packages/cli/src/acp/acpSession.ts"
+      ],
+      "sha256": "80c7a90ad0339be34188ba4e8f657cd8534029076f207d0f08acdb02ca5e582e",
+      "bytes": 5610
+    }
+  ]
+}

@@ -1,0 +1,147 @@
+    try {
+      const invocation = tool.build(args);
+
+      const displayTitle =
+        typeof invocation.getDisplayTitle === 'function'
+          ? invocation.getDisplayTitle()
+          : invocation.getDescription();
+
+      const explanation =
+        typeof invocation.getExplanation === 'function'
+          ? invocation.getExplanation()
+          : '';
+
+      const confirmationDetails =
+        await invocation.shouldConfirmExecute(abortSignal);
+
+      if (confirmationDetails) {
+        const content: acp.ToolCallContent[] = [];
+
+        if (confirmationDetails.type === 'edit') {
+          content.push({
+            type: 'diff',
+            path: confirmationDetails.filePath,
+            oldText: confirmationDetails.originalContent,
+            newText: confirmationDetails.newContent,
+            _meta: {
+              kind: !confirmationDetails.originalContent
+                ? 'add'
+                : confirmationDetails.newContent === ''
+                  ? 'delete'
+                  : 'modify',
+            },
+          });
+        }
+
+        if (explanation) {
+          content.push({
+            type: 'content',
+            content: { type: 'text', text: explanation },
+          });
+        }
+
+        await this.sendUpdate({
+          sessionUpdate: 'tool_call',
+          toolCallId: callId,
+          status: 'pending',
+          title: displayTitle,
+          content,
+          locations: invocation.toolLocations(),
+          kind: toAcpToolKind(tool.kind),
+        });
+
+        const params: acp.RequestPermissionRequest = {
+          sessionId: this.id,
+          options: toPermissionOptions(
+            confirmationDetails,
+            this.context.config,
+            this.settings.merged.security.enablePermanentToolApproval,
+          ),
+          toolCall: {
+            toolCallId: callId,
+            status: 'pending',
+            title: displayTitle,
+            content,
+            locations: invocation.toolLocations(),
+            kind: toAcpToolKind(tool.kind),
+          },
+        };
+
+        const output = RequestPermissionResponseSchema.parse(
+          await this.connection.requestPermission(params),
+        );
+
+        const outcome =
+          output.outcome.outcome === 'cancelled'
+            ? ToolConfirmationOutcome.Cancel
+            : z
+                .nativeEnum(ToolConfirmationOutcome)
+                .parse(output.outcome.optionId);
+
+        await confirmationDetails.onConfirm(outcome);
+
+        // Update policy to enable Always Allow persistence
+        await updatePolicy(
+          tool,
+          outcome,
+          confirmationDetails,
+          this.context,
+          this.context.messageBus,
+          invocation,
+        );
+
+        switch (outcome) {
+          case ToolConfirmationOutcome.Cancel: {
+            const cancelError = new Error(
+              `Tool "${fc.name}" was canceled by the user.`,
+            );
+            await this.sendUpdate({
+              sessionUpdate: 'tool_call_update',
+              toolCallId: callId,
+              status: 'failed',
+              content: [
+                {
+                  type: 'content',
+                  content: { type: 'text', text: cancelError.message },
+                },
+              ],
+              kind: toAcpToolKind(tool.kind),
+            });
+            return errorResponse(cancelError);
+          }
+          case ToolConfirmationOutcome.ProceedOnce:
+          case ToolConfirmationOutcome.ProceedAlways:
+          case ToolConfirmationOutcome.ProceedAlwaysAndSave:
+          case ToolConfirmationOutcome.ProceedAlwaysServer:
+          case ToolConfirmationOutcome.ProceedAlwaysTool:
+          case ToolConfirmationOutcome.ModifyWithEditor:
+            break;
+          default: {
+            const resultOutcome: never = outcome;
+            throw new Error(`Unexpected: ${resultOutcome}`);
+          }
+        }
+      } else {
+        const content: acp.ToolCallContent[] = [];
+
+        if (explanation) {
+          content.push({
+            type: 'content',
+            content: { type: 'text', text: explanation },
+          });
+        }
+
+        await this.sendUpdate({
+          sessionUpdate: 'tool_call',
+          toolCallId: callId,
+          status: 'in_progress',
+          title: displayTitle,
+          content,
+          locations: invocation.toolLocations(),
+          kind: toAcpToolKind(tool.kind),
+        });
+      }
+
+      const toolResult: ToolResult = await invocation.execute({
+        abortSignal,
+      });
