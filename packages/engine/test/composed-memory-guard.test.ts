@@ -68,6 +68,20 @@ describe("actual disposable memory composition", () => {
     },
   );
 
+  it("current owner changes during response acknowledgement remain execution-unknown", async () => {
+    const f = await fixture("disabled");
+    const gate = barrier();
+    f.controls.response = gate.wait;
+    const running = f.run();
+    await gate.entered;
+    f.memory.replace({ authority: { ...f.memory.snapshot().authority, revocationEpoch: "revoked-after-read" } });
+    gate.release();
+    expect((await running).state).toBe("execution-unknown");
+    expect(f.memory.observedReads).toBe(1);
+    await Promise.allSettled([f.fence.run(f.parameters, f.caller.signal)]);
+    expect(f.memory.observedReads).toBe(1);
+  });
+
   it.each(["required", "advisory"] as const)(
     "E706-advisory: %s transport unavailability follows the actual approved composition",
     async (mode) => {
