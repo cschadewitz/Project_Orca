@@ -52,6 +52,32 @@ const bindingIdentity = (binding: ManagedTypedStoreBinding) => ({
   enrollmentRef: binding.enrollmentRef,
 });
 
+/** Source-owned query only. The child separately asserts the retained lifetime
+ * descriptor/path identity. Proc fdinfo size is zero even when its content is not.
+ * The observer must independently bind this query to that process/mount/descriptor.
+ */
+export function assertControlledLifetimeFdinfo(lifetimeFd: number): undefined {
+  assert.ok(Number.isSafeInteger(lifetimeFd) && lifetimeFd > 2);
+  const query = fs.openSync(`/proc/self/fdinfo/${lifetimeFd}`, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const info = fs.fstatSync(query, { bigint: true });
+    assert.ok(info.isFile() && info.ino > 0n, "Lifetime fdinfo query is not a physical regular file");
+    const maximumBytes = 4096;
+    const bytes = Buffer.alloc(maximumBytes + 1); // One sentinel byte detects oversized content.
+    let length = 0;
+    for (;;) {
+      const count = fs.readSync(query, bytes, length, bytes.length - length, null);
+      if (count === 0) break;
+      length += count;
+      assert.ok(length <= maximumBytes, "Lifetime fdinfo query exceeds 4096 bytes");
+    }
+    assert.match(bytes.toString("utf8", 0, length), /lock:\s+\d+: FLOCK\s+ADVISORY\s+WRITE /);
+  } finally {
+    fs.closeSync(query);
+  }
+  return undefined;
+}
+
 export interface ControlledReadTestSupervisor {
   /** Actual retained image/root/identity/lifetime checks, never no-op test substitutions. */
   assertCurrent(): undefined;

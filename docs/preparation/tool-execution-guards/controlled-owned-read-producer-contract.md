@@ -13,9 +13,9 @@ Build a new private image with `node tools/owned-read-proof/build-controlled.mjs
 /absolute/new/image`. The builder refuses an existing target. The exact emitted
 entrypoint is `controlled-child.mjs`; it imports `./controlled-producer.mjs`.
 `controlled-build.json` pins the emitted hashes, source-input hashes and profile.
-The producer exports only `runControlledOwnedReadTest` from the test bundle; it is
-not in a production package barrel or daemon mount. The image contains these three
-physical files, with no source loader, source alias or symlink. Bundling preserves
+The test bundle exports `runControlledOwnedReadTest` and the bounded
+`assertControlledLifetimeFdinfo` query helper; neither is in a production package
+barrel or daemon mount. The image contains these three physical files, with no source loader, source alias or symlink. Bundling preserves
 one shared instance of the actual stores, fence, registry and internal modules.
 Ordinary tsc output was rejected for this lane because existing internal relative
 source imports do not resolve in a package-only installed tree.
@@ -229,3 +229,31 @@ Credential IDs, action IDs, approval refs and payload refs are actual fresh valu
 from the real stores and are correlated to these predesignated roles. The original
 owner expiry is real wall time plus 55 seconds, below the fence's unchanged
 60-second ceiling. No expiry or default coverage constant was widened.
+
+
+## Source-owned lifetime fdinfo query
+
+The child retains its existing lifetime-descriptor/path identity assertions and
+kernel `FLOCK ADVISORY WRITE` content assertion. Only this source-owned query now
+uses an explicit descriptor, through the helper in the existing producer bundle:
+
+1. Open exactly `/proc/self/fdinfo/<retained lifetimeFd>` with
+   `O_RDONLY|O_NOFOLLOW` (Node adds `O_CLOEXEC`).
+2. `fstatSync(queryFd, {bigint:true})` before any read; require a regular file and
+   positive inode. Its physical identity is the **query's** identity, distinct
+   from the retained lifetime file's identity. On Linux/Node 24 this was observed
+   as `statx(queryFd, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_ALL, ...)`.
+3. Read sequentially on that same query descriptor, with `position=null`. Each
+   request is the unused remainder of a 4097-byte buffer; accept at most 4096
+   content bytes and require EOF before checking the unchanged flock expression.
+   The extra byte detects oversize, including a valid flock prefix followed by
+   additional content. Proc fdinfo may report size zero despite nonempty content.
+4. Close only the query descriptor in `finally`, including stat/read/content
+   failures. An open failure has no query to close; a close failure refuses.
+
+The remaining root/image/control-FIFO assertions are unchanged. Existing trace/runtime budgets, owner expiry, default coverage, production maps,
+credentials and OS settings are unchanged.
+A new reviewed source/image pin and fresh runs are required; older traces remain
+historical. This adds no generic kernel-query permission. The independent observer
+still owns process/mount provenance and classification of Node/libuv/native
+cgroup probes, as well as complete replay and bootstrap/connected acceptance.
