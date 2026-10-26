@@ -105,10 +105,9 @@ def retained_binding(replay, baseline, action):
     require(intent == expected and parse(paths[base + '/control/enrolled.json'].data) ==
             {**expected, 'state': 'enrolled'}, 'actual intent/enrollment correspondence differs')
     binding = {'workspaceRef': workspace, 'rootBindingRef': root, 'enrollmentRef': enrollment}
-    require(baseline['binding'] == binding and action['workspaceRef'] == {'state': 'complete', 'value': workspace}
-            and action['effectiveCwd'] == {'state': 'complete', 'value': w} and
-            action['environmentAndCredentialRefs'] == {'state': 'complete', 'value': []},
-            'baseline/action differs from original managed binding')
+    # The protected owner hashes enrollment identity, while the file service
+    # separately projects action cwd/workspace to its owned disposable tree.
+    require(baseline['binding'] == binding, 'baseline differs from original managed binding')
     sidecar = paths[w + '/orca.permissions.json'].data
     require(parse(sidecar) == {'version': 2, 'agents': {}, 'scopedRules': {'version': 1, 'records': []}},
             'bootstrap actual sidecar is not empty initial policy')
@@ -116,6 +115,26 @@ def retained_binding(replay, baseline, action):
     require(baseline['initialRevision'] == revision == action['authority']['currentPolicyRevision'],
             'actual initial sidecar revision differs')
     return binding
+
+
+def resource_projection(replay, resource, action, parameters):
+    """Check the service projection independently of the enrollment authority root."""
+    # creation_path belongs to the kernel-validated exclusive original fixture
+    # open (resource_entry validates its raw record before this predicate).
+    path = resource.creation_path
+    require(re.fullmatch(re.escape(replay.original['base']) +
+            r'/orca-owned-service-[A-Za-z0-9]{6}/fixture', path) is not None,
+            'noncanonical original owned resource path')
+    projected = {'effectiveCwd': {'state': 'complete', 'value': str(Path(path).parent)},
+                 'workspaceRef': {'state': 'complete', 'value': parameters[1] + ':temporary-tree'},
+                 'resources': {'state': 'complete', 'value': [
+                     {'operation': 'fs.readOwnedBytes', 'physicalTargetRef': parameters[2]}]},
+                 'relevantStateRefs': {'state': 'complete', 'value': [parameters[2]]},
+                 'environmentAndCredentialRefs': {'state': 'complete', 'value': []}}
+    require(all(action.get(k) == v for k, v in projected.items()) and
+            action['coverage']['coverageId'] == parameters[1] + ':source-v1',
+            'action differs from original owned resource projection')
+    return projected
 
 
 def original_authority(replay, baseline, action, binding, actors, lease, times):
@@ -237,8 +256,8 @@ def authenticate_bootstrap(replay):
             tuple(map(int, physical)) in resource.resource_stamps and list(map(int, physical[:7])) ==
             [os.makedev(*resource.physical[:2]), resource.physical[2], resource.mode,
              resource.uid, resource.gid, 0, len(resource.data)], 'captured resource physical identity differs')
-    require(action['resources'] == {'state': 'complete', 'value': [
-        {'operation': 'fs.readOwnedBytes', 'physicalTargetRef': parameters[2]}]}, 'action resource projection differs')
+    creation_ns = resource_entry(replay, resource)
+    projected = resource_projection(replay, resource, action, parameters)
     require(baseline['interval'] == {'offset': original['offset'], 'length': original['length']} and
             baseline['installedEvidenceRef'] is None and baseline['version'] == 1 and
             baseline['profileRef'] == 'orca-owned-file-read-v1', 'wrong bootstrap designation')
@@ -278,13 +297,13 @@ def authenticate_bootstrap(replay):
     binding = retained_binding(replay, baseline, action)
     times = causal_records(replay, records, resource, rule)
     lease = parse(paths[base + '/workspace/.orca/leases/run%3Acontrolled.json'].data)
-    creation_ns = resource_entry(replay, resource)
     original_authority(replay, baseline, action, binding, actors, lease, times + [creation_ns])
     require(not any(path.endswith('controlled.jsonl') for path in paths), 'bootstrap produced live-answer journal')
     expiry = iso_ns(action['expiresAt'])
     expiry_bound(original, creation_ns, expiry)
     return {'record': 'authenticated-bootstrap-correlations', 'authority': 'none',
             'authorizationRef': authorization_ref, 'actionId': action['actionId'], 'semanticRecords': len(records),
+            'enrollmentBinding': binding, 'resourceProjection': projected,
             'resourceCreateEntryNs': creation_ns, 'authenticatedExpiryNs': expiry,
             'resourceCreateEntryRawLine': resource.creation_entry + 1,
             'ownerOrigin': 'unmeasured-source-precedes-create-entry', 'maximumOwnerDurationNs': 55000000000}

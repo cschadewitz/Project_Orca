@@ -59,6 +59,7 @@ class CredentialIdentityControls(unittest.TestCase):
 
 # All data below is deliberately synthetic. Passing these predicates is not a
 # bootstrap run, source review, kernel-provider proof or connected capability.
+from copy import deepcopy
 from types import SimpleNamespace
 from urllib.parse import quote
 import hashlib
@@ -132,20 +133,23 @@ def synthetic_bootstrap():
     resource_ref = 'owned-file:' + uid
     physical = resource_ref + ':' + ':'.join(map(str, stamp))
     resources = [{'operation': 'fs.readOwnedBytes', 'physicalTargetRef': physical}]
+    resource_root = base + '/orca-owned-service-abcdef'
+    coverage_id = resource_ref + ':source-v1'
     action = {'actionId': uid, 'profileRef': 'orca-owned-file-read-v1', 'capturedByBoundaryId': 'orca-owned-file-read-v1',
               'operation': 'fs.readOwnedBytes', 'invocation': invocation,
               'authority': {'capturedGeneration': 'controlled-original-ceiling', 'currentPolicyRevision': revision,
                   'revocationEpoch': revocation, 'leaseEpoch': epoch, 'authorityRevision': digest([binding, revocation, epoch])},
-              'workspaceRef': {'state': 'complete', 'value': binding['workspaceRef']},
-              'effectiveCwd': {'state': 'complete', 'value': w},
+              'workspaceRef': {'state': 'complete', 'value': resource_ref + ':temporary-tree'},
+              'effectiveCwd': {'state': 'complete', 'value': resource_root},
+              'relevantStateRefs': {'state': 'complete', 'value': [physical]},
               'environmentAndCredentialRefs': {'state': 'complete', 'value': []},
-              'coverage': {'level': 'policy-per-ask', 'coverageId': 'synthetic-coverage', 'evidence':
+              'coverage': {'level': 'policy-per-ask', 'coverageId': coverage_id, 'evidence':
                            {'installedRefs': [], 'independentlyObservedEffects': False}},
               'resources': {'state': 'complete', 'value': resources}, 'expiresAt': iso(55),
               'bindingRef': 'synthetic-read:' + uid + ':action'}
     match = {k: invocation[k] for k in ('principalRef', 'agentId', 'hostId', 'runnerId')}
-    match.update(operation=action['operation'], profileRef=action['profileRef'], coverageId='synthetic-coverage',
-                 effectiveCwd=w, workspaceRef=binding['workspaceRef'], resources=resources, environmentAndCredentialRefs=[])
+    match.update(operation=action['operation'], profileRef=action['profileRef'], coverageId=coverage_id,
+                 effectiveCwd=resource_root, workspaceRef=resource_ref + ':temporary-tree', resources=resources, environmentAndCredentialRefs=[])
     rule = {'ruleId': 'controlled-bootstrap-only', 'ruleRevision': '', 'status': 'approved',
             'notBefore': iso(2), 'expiresAt': iso(55), 'decision': 'allow', 'match': match}
     rule['ruleRevision'] = digest({k: v for k, v in rule.items() if k != 'ruleRevision'})
@@ -158,7 +162,7 @@ def synthetic_bootstrap():
     auth_ref = 'synthetic-read:' + uid + ':evidence'
     authorization = {'action': action, 'protectedEvidenceRef': auth_ref, 'verdict': {'outcome': 'allow',
                      'authorizedBy': {'kind': 'rule', 'ruleId': rule['ruleId'], 'ruleRevision': rule['ruleRevision']},
-                     'actionBindingRef': action['bindingRef'], 'authority': action['authority'], 'coverageId': 'synthetic-coverage'}}
+                     'actionBindingRef': action['bindingRef'], 'authority': action['authority'], 'coverageId': coverage_id}}
     semantics = {'controlled-baseline-v1': (uid, baseline),
                  'controlled-capture-v1': ('capture:' + action['bindingRef'], {'action': action, 'bytes': encoded([action['profileRef'], resource_ref, physical, 2, 4])}),
                  'controlled-authorization-v1': (auth_ref, authorization),
@@ -171,7 +175,7 @@ def synthetic_bootstrap():
                                  ('controlled-authorization-v1', 50, 55), ('controlled-producer-observation-v1', 70, 75)]:
         record_objects[kind] = SimpleNamespace(creation_entry=entry, durable_publication_completion=durable,
             physical=(0, 1, entry), published=True, directory_synced=True)
-    resource_path = base + '/orca-owned-service-abcdef/fixture'
+    resource_path = resource_root + '/fixture'
     resource = SimpleNamespace(data=data, physical=(0, 1, 99), mode=stamp[2], uid=stamp[3], gid=stamp[4],
         resource_stamps={stamp}, birth_ns=START+2*NS, creation_entry=20, creation_path=resource_path,
         effect_entries=[60], creation_record=(10, 'openat', ['AT_FDCWD', json.dumps(resource_path),
@@ -218,7 +222,7 @@ class SyntheticOriginalAuthorityControls(unittest.TestCase):
     def test_reauthenticated_binding_tampering(self):
         for field in ('workspaceRef', 'rootBindingRef', 'enrollmentRef'):
             self.refuses(lambda r, s, o, k: s['controlled-baseline-v1'][1]['binding'].__setitem__(field, 'wrong'), 'managed binding')
-        self.refuses(lambda r, s, o, k: s['controlled-capture-v1'][1]['action']['effectiveCwd'].__setitem__('value', '/elsewhere'), 'applicability|managed binding')
+        self.refuses(lambda r, s, o, k: s['controlled-capture-v1'][1]['action']['effectiveCwd'].__setitem__('value', '/elsewhere'), 'owned resource projection')
 
     def test_reauthenticated_revision_tampering_even_when_records_agree(self):
         def change(r, s, o, k):
@@ -345,3 +349,123 @@ class SyntheticOriginalAuthorityControls(unittest.TestCase):
         value['credentials'][0]['scope'] = {'runs': 'all', 'workflows': '*'}
         obj.data = encoded(value).encode()
         self.assertEqual(authenticate_bootstrap(reauthenticate(fixture))['authority'], 'none')
+
+    def coherent_action(self, semantics, mutate):
+        """Change all authenticated copies plus rule/revision/verdict consistently."""
+        action = deepcopy(semantics['controlled-capture-v1'][1]['action'])
+        mutate(action)
+        baseline = semantics['controlled-baseline-v1'][1]
+        baseline['originalAction'] = deepcopy(action)
+        semantics['controlled-capture-v1'][1]['action'] = deepcopy(action)
+        authorization = semantics['controlled-authorization-v1'][1]
+        authorization['action'] = deepcopy(action)
+        authorization['verdict']['authority'] = deepcopy(action['authority'])
+        authorization['verdict']['coverageId'] = action['coverage']['coverageId']
+        rule = baseline['rules'][0]
+        for field in ('effectiveCwd', 'workspaceRef', 'resources', 'environmentAndCredentialRefs'):
+            rule['match'][field] = deepcopy(action[field]['value'])
+        rule['match']['coverageId'] = action['coverage']['coverageId']
+        rule['ruleRevision'] = digest({k: v for k, v in rule.items() if k != 'ruleRevision'})
+        authorization['verdict']['authorizedBy']['ruleRevision'] = rule['ruleRevision']
+
+    def test_synthetic_enrollment_and_resource_identities_are_both_retained(self):
+        fixture = synthetic_bootstrap()
+        result = authenticate_bootstrap(reauthenticate(fixture))
+        baseline = fixture[1]['controlled-baseline-v1'][1]
+        resource = fixture[0].resources[0]
+        self.assertEqual(result['enrollmentBinding'], baseline['binding'])
+        projection = result['resourceProjection']
+        self.assertEqual(projection['effectiveCwd'], {'state': 'complete', 'value': '/synthetic/orca-owned-service-abcdef'})
+        self.assertEqual(projection['workspaceRef'], {'state': 'complete',
+            'value': baseline['capturedCeiling']['resourceRef'] + ':temporary-tree'})
+        self.assertNotEqual(projection['workspaceRef']['value'], result['enrollmentBinding']['workspaceRef'])
+        self.assertNotEqual(projection['effectiveCwd']['value'], '/synthetic/workspace')
+        self.assertEqual(projection['relevantStateRefs']['value'][0],
+                         baseline['capturedCeiling']['resourceRef'] + ':' + ':'.join(map(str, next(iter(resource.resource_stamps)))))
+        authority = baseline['originalAction']['authority']
+        self.assertEqual(authority['authorityRevision'], digest([baseline['binding'],
+            authority['revocationEpoch'], authority['leaseEpoch']]))
+        self.assertEqual(result['authority'], 'none')
+
+    def test_coherent_wrong_enrollment_root_and_workspace_still_refuse(self):
+        for field, value in [('rootBindingRef', 'f' * 64), ('workspaceRef', 'e' * 64)]:
+            def change(r, s, o, k):
+                binding = s['controlled-baseline-v1'][1]['binding']
+                binding[field] = value
+                # Actual markers agree with the forged baseline, but not with
+                # the independently retained original identity/roots/witness.
+                for name in ('intent', 'enrolled'):
+                    marker = r.paths['/synthetic/control/' + name + '.json']
+                    data = parse(marker.data); data[field] = value; marker.data = encoded(data).encode()
+                def update(action):
+                    facts = action['authority']
+                    facts['authorityRevision'] = digest([binding, facts['revocationEpoch'], facts['leaseEpoch']])
+                self.coherent_action(s, update)
+            self.refuses(change, 'intent/enrollment correspondence')
+
+    def test_coherent_wrong_projected_root_refuses_against_original_fixture_path(self):
+        for root in ['/synthetic/workspace', '/synthetic/orca-owned-service-ghijkl',
+                     '/synthetic/orca-owned-service-abcdef/..', '/other/orca-owned-service-abcdef']:
+            self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                lambda a: a['effectiveCwd'].__setitem__('value', root)), 'owned resource projection')
+
+    def test_coherent_wrong_projected_workspace_refuses(self):
+        for workspace in ['e' * 64, 'owned-file:23456789-1234-4123-8123-123456789abc:temporary-tree']:
+            self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                lambda a: a['workspaceRef'].__setitem__('value', workspace)), 'owned resource projection')
+        def enrolled_workspace(r, s, o, k):
+            self.coherent_action(s, lambda a: a['workspaceRef'].__setitem__('value', s['controlled-baseline-v1'][1]['binding']['workspaceRef']))
+        self.refuses(enrolled_workspace, 'owned resource projection')
+
+    def test_coherent_wrong_physical_resource_refuses_against_actual_stamps(self):
+        for component in (0, 1, 6, 7, 8):
+            def change(r, s, o, k):
+                capture = s['controlled-capture-v1'][1]
+                params = parse(capture['bytes'])
+                stamp = params[2][len(params[1]) + 1:].split(':')
+                stamp[component] = str(int(stamp[component]) + 1)
+                target = params[1] + ':' + ':'.join(stamp)
+                params[2] = target; capture['bytes'] = encoded(params)
+                def update(action):
+                    action['resources']['value'][0]['physicalTargetRef'] = target
+                    action['relevantStateRefs']['value'] = [target]
+                self.coherent_action(s, update)
+            self.refuses(change, 'captured resource physical identity')
+
+    def test_coherent_wrong_resource_projection_links_refuse(self):
+        for field, value in [('relevantStateRefs', []),
+                ('relevantStateRefs', ['owned-file:23456789-1234-4123-8123-123456789abc:other']),
+                ('resources', []), ('environmentAndCredentialRefs', ['unexpected-credential'])]:
+            self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                lambda a: a[field].__setitem__('value', value)), 'owned resource projection')
+        self.refuses(lambda r, s, o, k: self.coherent_action(s,
+            lambda a: a['coverage'].__setitem__('coverageId', 'owned-file:23456789-1234-4123-8123-123456789abc:source-v1')),
+            'owned resource projection')
+
+    def test_reauthenticated_cross_record_projection_disagreement_refuses(self):
+        for kind, field in [('controlled-baseline-v1', 'originalAction'), ('controlled-capture-v1', 'action'),
+                            ('controlled-authorization-v1', 'action')]:
+            def change(r, s, o, k):
+                # Break Python fixture aliasing explicitly: only one protected
+                # copy changes, yet every resulting ciphertext authenticates.
+                altered = deepcopy(s[kind][1][field])
+                altered['workspaceRef']['value'] = 'owned-file:23456789-1234-4123-8123-123456789abc:temporary-tree'
+                s[kind][1][field] = altered
+            self.refuses(change, 'original action/authentication binding')
+
+    def test_projected_workspace_cannot_replace_managed_authority_epoch(self):
+        def change(r, s, o, k):
+            binding = deepcopy(s['controlled-baseline-v1'][1]['binding'])
+            binding['workspaceRef'] = s['controlled-capture-v1'][1]['action']['workspaceRef']['value']
+            def update(action):
+                facts = action['authority']
+                facts['authorityRevision'] = digest([binding, facts['revocationEpoch'], facts['leaseEpoch']])
+            self.coherent_action(s, update)
+        self.refuses(change, 'original credential/lease/authority epoch differs')
+
+    def test_projected_cwd_cannot_designate_a_different_kernel_creation_record(self):
+        def change(r, s, o, k):
+            resource = r.resources[0]
+            resource.creation_path = '/synthetic/orca-owned-service-ghijkl/fixture'
+            self.coherent_action(s, lambda a: a['effectiveCwd'].__setitem__('value', '/synthetic/orca-owned-service-ghijkl'))
+        self.refuses(change, 'original successful leader/exclusive resource create anchor')

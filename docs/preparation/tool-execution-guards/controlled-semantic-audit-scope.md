@@ -45,7 +45,8 @@ entries through process finish; no exact completion timestamp is synthesized.
 * Reconstruct the exact root-binding JSON construction order from original physical
   config/sidecar/store/control/releases roots and original workspace identity.
   Check the retained never-typed witness, actual intent/enrolled correspondence,
-  enrollment UUID and baseline/action binding. Markers corroborate original
+  enrollment UUID and baseline enrollment binding. Independently check the
+  action's resource projection as described below. Markers corroborate original
   ownership; they do not create it.
 * Require the actual initial sidecar to have empty agents and empty version-1
   scopedRules within format version 2. Require `baseline.initialRevision ==
@@ -91,12 +92,93 @@ roundtripped successfully before refusal is checked. A positive result still say
 `authority: none`; it is not fresh observed evidence.
 
 Validation: `python3 -B -m unittest discover -s tools/owned-read-proof -p
- 'test_controlled_semantics.py' -v` passes **21 tests**. The complete Python control
-suite passes **108 tests**; `git diff --check` passes. These results are local
+ 'test_controlled_semantics.py' -v` initially passed **21 tests**. That checkpoint's
+complete Python control suite passed **108 tests**; `git diff --check` passes. These results are local
 controls, not an integrated bootstrap. No services, native/Mac providers,
 credentials, security/network settings or user workspaces are changed.
 
-The final integrated bootstrap is deliberately pending the kernel field provider
-and the parent-reviewed exact image. #748 remains draft/incomplete with no
+At the initial #755 checkpoint the final integrated bootstrap was pending the
+kernel field provider and the parent-reviewed exact image. The integration
+follow-up below supersedes that provider status; full qualification is still pending. #748 remains draft/incomplete with no
 accepting exit or connected token. Source-reviewed facts above are separate from
 fresh evidence, which this delta does not claim.
+
+
+## Enrollment authority versus owned-resource projection correction
+
+This follow-up starts at #756 exact
+`1d2dd1c6602526e9e2db52925f55928551808f0c`, on separate semantic-owner branch
+`cal/706-enrollment-resource-projection`. Ownership remains limited to this note,
+`controlled_semantics.py` and its dedicated tests. Kernel replay/provider/tests,
+supervisor, candidate verifier and producer/runtime/sharedcore bytes are unchanged.
+
+The integrated refusal exposed an incorrect #755 assumption: action cwd/workspace
+were required to equal the managed enrollment values. Reviewed source intentionally
+keeps two identities:
+
+* Enrollment authority is the original managed workspace's identity digest,
+  physical root-binding digest and enrollment UUID. The producer obtains the
+  original authority facts from `protectedScopedPermissionOwner.readCaptureFacts`
+  and sets its source owner snapshot cwd to `config` and workspaceRef to
+  `active.workspaceRef` in
+  [controlled-owned-read-producer.ts](../../../packages/cli/test/controlled-owned-read-producer.ts).
+  The protected owner's `currentFacts` hashes `identity(active)` with the actual
+  credential/lease epochs in
+  [protected-scoped-permission-owner.ts](../../../packages/daemon/src/protected-scoped-permission-owner.ts).
+* The owned file service's `build()` explicitly overrides that snapshot's cwd with
+  its newly created disposable `root`, workspaceRef with
+  `resourceRef + ":temporary-tree"`, and relevantStateRefs with its original
+  physical target reference in
+  [owned-file-read-service.ts](../../../packages/engine/src/owned-file-read-service.ts).
+  The fence then copies those projected facts into the authenticated action in
+  [synthetic-read-fence.ts](../../../packages/engine/src/synthetic-read-fence.ts).
+  The bootstrap rule is constructed from that projected action. The protected
+  capture interface separately retains `binding: active` and the action's
+  `resourceWorkspaceRef`; it does not equate them.
+
+The corrected observer still reconstructs enrollment roots/identity/witness,
+compares actual intent/enrolled markers and baseline binding, checks exact actual
+sidecar revision, and computes the authority epoch with the reconstructed
+**enrollment binding**. Those checks were not removed or replaced by the action's
+workspaceRef. The projected action cwd must separately equal the parent of the
+kernel-validated original exclusive fixture creation path. That exact path must
+have the controlled base's finite `orca-owned-service-XXXXXX/fixture` shape; no
+prefix/path-normalization alternative is accepted. Existing replay validates the
+physical parent/create/read-only-reopen/unlink/retained-descriptor lineage.
+
+Action workspaceRef must equal the captured original `owned-file:<UUID>` plus
+`:temporary-tree`, and coverageId must use the same UUID plus `:source-v1`.
+Resources and relevantStateRefs must both designate the captured physical target,
+whose full nine-component stamp already must match the actual retained detached
+inode. Environment/credential references remain complete and empty. Baseline,
+capture and authorization must still contain identical actions; the exact
+bootstrap rule must still match the projected action and its revision/verdict.
+The non-authoritative result preserves both `enrollmentBinding` and
+`resourceProjection` explicitly with `authority: none`.
+
+No new input field or supervisor interface is needed. `resource.creation_path`,
+its original raw creation record and timestamp already come from kernel replay;
+the action cannot designate a different root by supplying a path string. The
+logical resource UUID is random source-owned identity, not derivable from an
+inode: its correspondence relies on the reviewed exact image, authenticated
+records and physical stamp checks. This does not independently measure random
+UUID issuance or recover the unprojected in-memory snapshot; its original cwd and
+workspace assignment are source-reviewed facts. Trusted kernel/source, stable
+clocks/mounts/hostname and cooperative same-UID assumptions remain unchanged.
+All lifetime, durable ordering and incomplete/non-connected gates remain intact.
+
+Local follow-up validation: **30 dedicated semantic tests** and **135 total Python
+tests pass**, using the commands above. `git diff --check` passes. New controls
+re-encrypt and authenticate coherent wrong enrollment roots/workspaces, projected
+cwd/workspace/resource/state/coverage, and rule/verdict revisions; separately
+changed protected copies refuse. They also reject substituting the resource
+workspace into the managed authority epoch or designating another kernel creation
+path. Synthetic positives retain both identities and carry no acceptance authority.
+
+#756's actual preserved-trace semantic refusal is parent-reported evidence, not a
+run performed here. Those private originals/traces are unavailable in this fresh
+workspace. The additive provider is present in the starting #756 code, but
+read-only replay of those originals and a fresh integrated exact-image attempt
+remain pending parent review/coordination. The previously documented concurrent
+eventfd interval refusal is unaffected. No fresh bootstrap success, accepting
+exit, connected launch/token, production change or main/PR merge is claimed.
