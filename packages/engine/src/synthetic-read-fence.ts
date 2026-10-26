@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   OrcaError,
+  strictDecisionBinding,
+  type MutationActor,
   type ActionEvidenceV1,
   type AuthorityStampV1,
   type Clock,
@@ -22,7 +24,14 @@ import {
 import { memoryCaptureQualifier } from "./disposable-memory-read.js";
 import { fileCaptureQualifier } from "./disposable-file-read.js";
 import { ownedFileCaptureQualifier } from "./owned-file-read-service.js";
-import type { LiveInputBinding } from "./live-input.js";
+import {
+  assertOriginalDelivery,
+  bindOriginalDelivery,
+  claimOriginalDelivery,
+  type LiveOriginalDelivery,
+  type LiveInputBinding,
+} from "./live-input.js";
+import type { HumanInputQuery } from "./human-input.js";
 
 type Allow = Extract<PolicyVerdictV1, { outcome: "allow" }>;
 
@@ -98,6 +107,18 @@ interface Entry<Capture> {
   consumed: boolean;
   terminal: boolean;
   state: ExecutionReceiptV1["state"];
+  human?: {
+    query: HumanInputQuery;
+    actor: MutationActor;
+    onceOptionId: string;
+    delivery: LiveOriginalDelivery;
+    scope: object;
+    baseline?: PolicyVerdictV1;
+    acceptedAnswerRef?: string;
+  };
+  humanAcceptance?: Promise<Allow>;
+  reviewRequirement?: "required" | "advisory";
+  requiredReview?: { result: "passed" | "failed" | "unavailable"; sourceRefs: readonly string[] };
 }
 
 // Ephemeral original-lifetime registration only. A second coordinator cannot mint a
@@ -294,6 +315,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
       entry.pending ||
       entry.bound ||
       entry.authorization ||
+      entry.humanAcceptance ||
       entry.dispatch ||
       entry.consumed ||
       entry.terminal ||
@@ -312,6 +334,14 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     return this.entry;
   }
 
+  /** Internal producer check over the original capture, including physical executor state. */
+  assertCaptureCurrent(action: ActionEvidenceV1): undefined {
+    const entry = this.retained(action);
+    if (entry.terminal || entry.consumed) throw refused();
+    this.check(entry, entry.originalSignal ?? this.owner.signal);
+    return undefined;
+  }
+
   private check(entry: Entry<Capture>, signal: AbortSignal): void {
     signal.throwIfAborted();
     this.owner.signal.throwIfAborted();
@@ -319,6 +349,109 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     if (!isDeepStrictEqual(this.owner.snapshot(), entry.owner)) throw refused();
     if (this.executor.encode(entry.capture) !== entry.bytes) throw refused();
     this.owner.assertCurrent(entry.action);
+    if (entry.human?.acceptedAnswerRef) assertOriginalDelivery(entry.human.delivery, entry.human.query);
+  }
+
+  /** Provenance only from this fence's actual completed required-review path. */
+  reviewProvenance(action: ActionEvidenceV1) {
+    const entry = this.retained(action);
+    this.assertCaptureCurrent(action);
+    return immutable(entry.requiredReview ?? { result: "unavailable" as const, sourceRefs: [] });
+  }
+
+  /** Closed owned-I/O input binding, before evaluation. Presentation options are not ACP choices. */
+  bindHumanInput(
+    action: ActionEvidenceV1,
+    delivery: LiveOriginalDelivery,
+    query: HumanInputQuery,
+    actor: MutationActor,
+    onceOptionId: string,
+    scope: object,
+  ): undefined {
+    const entry = this.retained(action);
+    if (
+      !this.ownedFileQualification ||
+      entry.human ||
+      entry.evaluation ||
+      entry.authorization ||
+      entry.terminal ||
+      query.kind !== "permission" ||
+      !query.options.some((option) => option.id === onceOptionId) ||
+      actor.principalId !== action.invocation.principalRef
+    )
+      throw refused();
+    for (const key of ["instanceId", "sessionId", "turnId", "invocationId"] as const)
+      if (query.live?.identity[key] !== action.invocation[key]) throw refused();
+    if (query.runId !== action.invocation.runId || query.stepRunId !== action.invocation.stepRunId) throw refused();
+    this.check(entry, this.owner.signal);
+    bindOriginalDelivery(delivery, query, scope);
+    entry.human = { query, delivery, actor: immutable(actor), onceOptionId, scope };
+    return undefined;
+  }
+
+  /** Derive human attribution only from actual original delivery, never from answer JSON.
+   * This installs a verdict; ordinary authorize/dispatch still revalidate it and consume once. */
+  completeHumanDelivery(action: ActionEvidenceV1, signal: AbortSignal): Promise<Allow> {
+    const entry = this.retained(action);
+    if (!entry.human || entry.terminal || entry.consumed || entry.authorization || entry.dispatch)
+      return Promise.reject(refused());
+    entry.originalSignal ??= signal;
+    entry.humanAcceptance ??= this.lifetime(entry, signal, async (active) => {
+      try {
+        const human = entry.human!;
+        this.check(entry, active);
+        const accepted = await abortable(
+          claimOriginalDelivery(
+            human.delivery,
+            human.query,
+            human.actor,
+            human.onceOptionId,
+            entry.action,
+            human.scope,
+          ),
+          active,
+        );
+        this.check(entry, active);
+        // The existing service has no installed qualification; never promote it here.
+        const coverage = entry.action.coverage;
+        if (
+          coverage.level !== "verified-per-execution" ||
+          !coverage.evidence.installedRefs.length ||
+          !coverage.evidence.independentlyObservedEffects
+        )
+          throw refused();
+        const evaluated = await this.evaluate(entry.action, active);
+        if (
+          evaluated.phase !== "final" ||
+          !["require-human", "allow"].includes(evaluated.verdict.outcome) ||
+          (evaluated.verdict.outcome === "allow" && evaluated.verdict.authorizedBy.kind !== "rule") ||
+          entry.bound
+        )
+          throw refused();
+        await abortable(this.owner.authorize(entry.action, active), active);
+        const current = await abortable(this.policy.evaluate(entry.action, active), active);
+        this.check(entry, active);
+        if (current.phase !== "final" || !isDeepStrictEqual(current.verdict, evaluated.verdict)) throw refused();
+        human.baseline = evaluated.verdict;
+        human.acceptedAnswerRef = accepted.acceptedAnswerRef;
+        const verdict: Allow = immutable({
+          ...strictDecisionBinding(entry.action),
+          outcome: "allow",
+          authorizedBy: { kind: "human", acceptedAnswerRef: accepted.acceptedAnswerRef },
+          ...(evaluated.verdict.outcome === "allow" && evaluated.verdict.judgeResultRef
+            ? { judgeResultRef: evaluated.verdict.judgeResultRef }
+            : {}),
+        });
+        this.check(entry, active);
+        entry.verdict = verdict;
+        entry.evaluation = Promise.resolve({ phase: "final", verdict });
+        return verdict;
+      } catch {
+        entry.terminal = true;
+        throw refused();
+      }
+    });
+    return entry.humanAcceptance;
   }
 
   private async lifetime<T>(
@@ -363,7 +496,10 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
           : { phase: "needs-review", review: immutable(result.review), pending: result.pending };
       this.check(entry, active);
       if (evaluated.phase === "final") entry.verdict = evaluated.verdict;
-      else entry.pending = evaluated.pending;
+      else {
+        entry.pending = evaluated.pending;
+        entry.reviewRequirement = evaluated.review.requirement;
+      }
       return evaluated;
     });
     return entry.evaluation;
@@ -401,6 +537,14 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
         const verdict = immutable(await abortable(this.policy.completeReview(bound, exact, active), active));
         this.check(entry, active);
         entry.verdict = verdict;
+        if (entry.reviewRequirement === "required")
+          entry.requiredReview =
+            exact.execution === "evaluated" &&
+            exact.result === "fit" &&
+            verdict.outcome === "allow" &&
+            verdict.judgeResultRef
+              ? { result: "passed", sourceRefs: [verdict.judgeResultRef] }
+              : { result: exact.execution === "unavailable" ? "unavailable" : "failed", sourceRefs: [] };
         entry.evaluation = Promise.resolve({ phase: "final", verdict });
         return verdict;
       });
@@ -417,8 +561,9 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     this.check(entry, signal);
     if (
       current.phase !== "final" ||
-      current.verdict.outcome !== "allow" ||
-      !isDeepStrictEqual(current.verdict, verdict)
+      (verdict.authorizedBy.kind === "human"
+        ? !entry.human?.acceptedAnswerRef || !isDeepStrictEqual(current.verdict, entry.human.baseline)
+        : current.verdict.outcome !== "allow" || !isDeepStrictEqual(current.verdict, verdict))
     )
       throw refused();
     if (

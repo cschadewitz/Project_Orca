@@ -34,6 +34,7 @@ import {
 } from "@orca/store";
 import { ScopedPermissionScopeSchema } from "@orca/protocol";
 import type { LiveDecisionTarget, LiveHumanInput } from "@orca/engine";
+import { ownedReadInputOptions } from "./owned-read-scoped-capture.js";
 import {
   projectGuardDecision,
   type GuardDecisionView,
@@ -454,7 +455,16 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
           choice.effect === "this-invocation" &&
           choice.qualificationRef.state === "complete",
       );
-      if (!once || !deny) return fail();
+      let onceOptionId = once?.optionId,
+        denyOptionId = deny?.optionId;
+      if (!onceOptionId || !denyOptionId) {
+        // Owned I/O has an actual original owner prompt, not fabricated ACP choices.
+        // Only the closed producer can resolve it, and installed coverage remains mandatory.
+        verified(action);
+        const owned = ownedReadInputOptions(capture, source.action);
+        if (!owned) return fail();
+        ({ onceOptionId, denyOptionId } = owned);
+      }
       const rule = {
         ruleId: randomUUID(),
         ruleRevision: "",
@@ -491,8 +501,8 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         action,
         scopeEvidenceRef: randomUUID(),
         reviewUntil: ends,
-        onceOptionId: once.optionId,
-        denyOptionId: deny.optionId,
+        onceOptionId,
+        denyOptionId,
         projection,
         scope,
         requiredReview: source.review.result,

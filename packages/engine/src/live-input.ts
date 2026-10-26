@@ -3,6 +3,7 @@
  * deliver its answer to the original callback. A workflow gate still parks.
  */
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { OrcaError, type MutationActor, type OrcaEventInput } from "@orca/core";
 import { HumanInputPending, type HumanInputPort, type HumanInputQuery } from "./human-input.js";
 
@@ -59,8 +60,76 @@ export interface LiveAnswer {
 
 export type LiveInputState = "pending" | "accepting" | "expired" | "owner-unavailable";
 
+declare const originalDeliveryBrand: unique symbol;
+/** Ephemeral original-query capability. It is never serialized or recovered from an answer event. */
+export interface LiveOriginalDelivery {
+  readonly [originalDeliveryBrand]: true;
+}
+type Delivered = { actor: MutationActor; optionId: string; standing: boolean; acceptedAnswerRef: string };
+type Delivery = {
+  query: HumanInputQuery;
+  wait: Promise<Delivered | undefined>;
+  value?: Delivered | undefined;
+  scope?: object;
+  action?: object;
+  assertCurrent(): void;
+  assertPending(): void;
+};
+const originalDeliveries = new WeakMap<LiveOriginalDelivery, Delivery>();
+/** Internal synchronous check after disposal of the pending callback; no durable lookup. */
+export function assertOriginalDelivery(handle: LiveOriginalDelivery, query: HumanInputQuery): undefined {
+  const retained = originalDeliveries.get(handle);
+  if (!retained || retained.query !== query || !retained.value) throw unavailable("owner-unavailable");
+  retained.assertCurrent();
+  return undefined;
+}
+/** Bind before answering to the actual closed service's private invocation lineage. */
+export function bindOriginalDelivery(handle: LiveOriginalDelivery, query: HumanInputQuery, scope: object): undefined {
+  const retained = originalDeliveries.get(handle);
+  if (!retained || retained.query !== query || (retained.scope && retained.scope !== scope))
+    throw unavailable("owner-unavailable");
+  retained.assertPending();
+  retained.scope = scope;
+  return undefined;
+}
+/** Correlation observation only; the returned string cannot install a verdict or permit. */
+export async function readOriginalDelivery(
+  handle: LiveOriginalDelivery,
+  query: HumanInputQuery,
+  actor: MutationActor,
+  optionId: string,
+): Promise<{ acceptedAnswerRef: string }> {
+  const retained = originalDeliveries.get(handle);
+  if (!retained || retained.query !== query) throw unavailable("owner-unavailable");
+  const delivered = await retained.wait;
+  assertOriginalDelivery(handle, query);
+  if (!delivered || delivered.standing || delivered.optionId !== optionId || !isDeepStrictEqual(delivered.actor, actor))
+    throw unavailable("owner-unavailable");
+  return { acceptedAnswerRef: delivered.acceptedAnswerRef };
+}
+/** Only a prebound original callback can bind its accepted record to one action. */
+export async function claimOriginalDelivery(
+  handle: LiveOriginalDelivery,
+  query: HumanInputQuery,
+  actor: MutationActor,
+  optionId: string,
+  action: object,
+  scope: object,
+): Promise<{ acceptedAnswerRef: string }> {
+  const retained = originalDeliveries.get(handle);
+  if (!retained || retained.scope !== scope) throw unavailable("owner-unavailable");
+  const result = await readOriginalDelivery(handle, query, actor, optionId);
+  if (retained.action && retained.action !== action) throw unavailable("owner-unavailable");
+  retained.action = action;
+  return result;
+}
+
 interface Pending {
   query: HumanInputQuery;
+  originalQuery: HumanInputQuery;
+  delivery: Promise<Delivered | undefined>;
+  settleDelivery(value: Delivered | undefined): void;
+  originalDelivery?: LiveOriginalDelivery;
   binding: LiveInputBinding;
   target: LiveDecisionTarget;
   state: "pending" | "accepting";
@@ -120,18 +189,26 @@ export class LiveHumanInput implements HumanInputPort {
     if (this.pending.has(query.requestId)) return Promise.reject(unavailable("accepting"));
     const release = this.runtimeActivity?.enter("callback");
     return new Promise((resolve, reject) => {
+      let settleDelivery!: Pending["settleDelivery"];
+      const delivery = new Promise<Delivered | undefined>((settle) => {
+        settleDelivery = settle;
+      });
       const expire = () => {
         entry.dispose(true);
         resolve(undefined);
       };
       const entry: Pending = {
         query: { ...query, options: structuredClone(query.options) },
+        originalQuery: query,
+        delivery,
+        settleDelivery,
         binding,
         target: { ...binding.identity, runId: query.runId, stepRunId: query.stepRunId, requestId: query.requestId },
         state: "pending",
         resolve,
         reject,
         dispose: (invalidated = false) => {
+          if (invalidated) entry.settleDelivery(undefined);
           const removed = this.pending.get(query.requestId) === entry;
           if (removed) {
             this.pending.delete(query.requestId);
@@ -172,6 +249,70 @@ export class LiveHumanInput implements HumanInputPort {
     return entry && IDENTITY_KEYS.every((key) => entry.target[key] === target[key]) ? entry.state : "expired";
   }
 
+  /** Internal producer attachment to the exact in-process ask, never a target/JSON proof. */
+  assertOriginalQuery(query: HumanInputQuery): undefined {
+    const entry = this.pending.get(query.requestId);
+    if (
+      !entry ||
+      entry.originalQuery !== query ||
+      query.live !== entry.binding ||
+      query.signal !== entry.query.signal ||
+      entry.query.signal?.aborted ||
+      query.kind !== entry.query.kind ||
+      query.runId !== entry.target.runId ||
+      query.stepRunId !== entry.target.stepRunId ||
+      (["instanceId", "sessionId", "turnId", "invocationId"] as const).some(
+        (key) => entry.binding.identity[key] !== entry.target[key],
+      ) ||
+      this.inspect(entry.target) !== entry.state ||
+      entry.binding.signal.aborted
+    )
+      throw unavailable("owner-unavailable");
+    return undefined;
+  }
+
+  /** Register before answering. The exact query object, original signals and registry boot stay retained. */
+  retainOriginalDelivery(query: HumanInputQuery): LiveOriginalDelivery {
+    this.assertOriginalQuery(query);
+    const entry = this.pending.get(query.requestId)!;
+    if (entry.originalDelivery) return entry.originalDelivery;
+    const handle = Object.freeze({}) as LiveOriginalDelivery;
+    const binding = entry.binding,
+      signal = binding.signal,
+      querySignal = entry.query.signal;
+    const target = structuredClone(entry.target);
+    const retained: Delivery = {
+      query,
+      wait: entry.delivery,
+      assertPending: () => {
+        this.assertOriginalQuery(query);
+      },
+      assertCurrent: () => {
+        if (
+          this.closed ||
+          query.live !== binding ||
+          binding.signal !== signal ||
+          signal.aborted ||
+          querySignal?.aborted ||
+          query.signal !== querySignal ||
+          query.runId !== target.runId ||
+          query.stepRunId !== target.stepRunId ||
+          query.requestId !== target.requestId ||
+          (["instanceId", "sessionId", "turnId", "invocationId"] as const).some(
+            (key) => binding.identity[key] !== target[key],
+          )
+        )
+          throw unavailable("owner-unavailable");
+      },
+    };
+    void entry.delivery.then((value) => {
+      retained.value = value;
+    });
+    originalDeliveries.set(handle, retained);
+    entry.originalDelivery = handle;
+    return handle;
+  }
+
   async answer(
     command: LiveAnswer,
     authority: LiveAnswerAuthority,
@@ -206,13 +347,14 @@ export class LiveHumanInput implements HumanInputPort {
     this.observationCounter++;
     let recorded = false;
     let attemptedWrite = false;
+    let acceptedEvent: unknown;
     try {
-      return await entry.binding.withOwnership(async () => {
+      const result = await entry.binding.withOwnership(async () => {
         await authority.authorize(answer.target, answer.standing === true);
         if (this.pending.get(entry.target.requestId) !== entry || entry.binding.signal.aborted)
           throw unavailable("expired");
         attemptedWrite = true;
-        await entry.binding.emitOwned({
+        acceptedEvent = await entry.binding.emitOwned({
           type: "human.answered",
           payload: {
             stepRunId: entry.target.stepRunId,
@@ -241,7 +383,30 @@ export class LiveHumanInput implements HumanInputPort {
         entry.resolve(delivered ? answer.optionId : undefined);
         return { answerRecorded: true, delivered };
       });
+      // A callback can have resolved before a failing ownership wrapper reports its
+      // acknowledgement. Only successful completion of the exact lease operation
+      // issues delivery authority. The event id is correlation, never proof on its own.
+      const event = acceptedEvent as { type?: unknown; id?: unknown; runId?: unknown } | undefined;
+      entry.settleDelivery(
+        result.delivered &&
+          !this.closed &&
+          !entry.binding.signal.aborted &&
+          event?.type === "human.answered" &&
+          event.runId === entry.target.runId &&
+          typeof event.id === "string" &&
+          event.id
+          ? {
+              actor,
+              optionId: answer.optionId,
+              standing: answer.standing === true,
+              acceptedAnswerRef: JSON.stringify([entry.target.runId, event.id]),
+            }
+          : undefined,
+      );
+      return { answerRecorded: true, delivered: result.delivered };
     } catch (error) {
+      // If the owning write was attempted, any failure is terminal for delivery proof.
+      if (attemptedWrite || recorded) entry.settleDelivery(undefined);
       if (!recorded && this.pending.get(entry.target.requestId) === entry) {
         if (attemptedWrite) {
           // An append may have reached disk before reporting failure. Never reopen that

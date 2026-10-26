@@ -4,7 +4,9 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import type { ActionEvidenceV1, CoverageV1, EnforcementPortV1, PolicyPortV1 } from "@orca/core";
+import type { ActionEvidenceV1, CoverageV1, EnforcementPortV1, MutationActor, PolicyPortV1 } from "@orca/core";
+import type { HumanInputQuery } from "./human-input.js";
+import type { LiveOriginalDelivery } from "./live-input.js";
 import {
   SyntheticReadFence,
   type SyntheticFenceEvidence,
@@ -83,6 +85,16 @@ const invocationKey = (snapshot: SyntheticReadOwnerSnapshot) => {
 /** Canonical contracts only. No executor, descriptor, replacement arguments or unchecked read method. */
 export interface TrustedOwnedReadInvocation extends EnforcementPortV1 {
   readonly action: ActionEvidenceV1;
+  /** Synchronous original owner/physical inode/cancellation/expiry assertion. */
+  assertCurrent(): undefined;
+  bindHumanInput(
+    delivery: LiveOriginalDelivery,
+    query: HumanInputQuery,
+    actor: MutationActor,
+    onceOptionId: string,
+  ): undefined;
+  completeHumanDelivery(signal: AbortSignal): ReturnType<SyntheticReadFence<never, never>["completeHumanDelivery"]>;
+  reviewProvenance(): ReturnType<SyntheticReadFence<never, never>["reviewProvenance"]>;
   evaluate(signal: AbortSignal): ReturnType<SyntheticReadFence<never, never>["evaluate"]>;
   bindReview: SyntheticReadFence<never, never>["bindReview"];
   completeReview: SyntheticReadFence<never, never>["completeReview"];
@@ -202,6 +214,10 @@ export function createOwnedFileReadServiceForTest(options: {
         evidence: SyntheticFenceEvidence;
         facade: TrustedOwnedReadInvocation | undefined;
         refresh: (() => TrustedOwnedReadInvocation) | undefined;
+        humanEligible: boolean;
+        human?:
+          | { delivery: LiveOriginalDelivery; query: HumanInputQuery; actor: MutationActor; onceOptionId: string }
+          | undefined;
       }
     >();
     const close = () => {
@@ -287,6 +303,10 @@ export function createOwnedFileReadServiceForTest(options: {
           evidence,
           facade: undefined as TrustedOwnedReadInvocation | undefined,
           refresh: undefined as (() => TrustedOwnedReadInvocation) | undefined,
+          humanEligible: false,
+          human: undefined as
+            | { delivery: LiveOriginalDelivery; query: HumanInputQuery; actor: MutationActor; onceOptionId: string }
+            | undefined,
         };
         entries.set(key, entry);
         const retainedOwner = Object.freeze({
@@ -407,12 +427,44 @@ export function createOwnedFileReadServiceForTest(options: {
           });
           const fence = new SyntheticReadFence(boundOwner, executor, retainedPolicy, retainedEvidence);
           const action = fence.capture(immutable({ resourceRef, offset, length }));
+          if (entry.human)
+            fence.bindHumanInput(
+              action,
+              entry.human.delivery,
+              entry.human.query,
+              entry.human.actor,
+              entry.human.onceOptionId,
+              entry,
+            );
           const facade: TrustedOwnedReadInvocation = Object.freeze<TrustedOwnedReadInvocation>({
             version: 1,
             action,
-            evaluate: (signal) => fence.evaluate(action, signal),
+            assertCurrent: () => fence.assertCaptureCurrent(action),
+            bindHumanInput: (delivery, query, actor, onceOptionId) => {
+              if (entry.human) throw refuse();
+              fence.bindHumanInput(action, delivery, query, actor, onceOptionId, entry);
+              entry.human = { delivery, query, actor: immutable(actor), onceOptionId };
+              return undefined;
+            },
+            completeHumanDelivery: (signal) => {
+              // A fresh rule-authorized invocation cannot acquire human attribution.
+              // Only the original evaluated ask (retained across Save refresh) may do so.
+              // The fence awaits settled original delivery before any fresh evaluation.
+              if (!entry.humanEligible) return Promise.reject(refuse());
+              return fence.completeHumanDelivery(action, signal);
+            },
+            reviewProvenance: () => fence.reviewProvenance(action),
+            evaluate: async (signal) => {
+              const result = await fence.evaluate(action, signal);
+              if (result.phase === "final" && result.verdict.outcome === "require-human") entry.humanEligible = true;
+              return result;
+            },
             bindReview: fence.bindReview.bind(fence),
-            completeReview: fence.completeReview.bind(fence),
+            completeReview: async (bound, result, signal) => {
+              const verdict = await fence.completeReview(bound, result, signal);
+              if (verdict.outcome === "require-human") entry.humanEligible = true;
+              return verdict;
+            },
             authorize: fence.authorize.bind(fence),
             dispatch: fence.dispatch.bind(fence),
             inspect: fence.inspect.bind(fence),
