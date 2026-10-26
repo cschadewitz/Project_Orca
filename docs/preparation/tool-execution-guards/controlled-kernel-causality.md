@@ -230,3 +230,13 @@ concurrent eventfd contract if one is proposed, semantic-owner reconciliation of
 these actual projections, and fresh integrated evidence after any corrections.
 The 55-second/60-second/256 MiB bounds and all no-accepting/no-connected restrictions
 remain in force.
+
+
+## Notification follow-up
+
+The separately bounded [notification counter draft](controlled-notification-counter-contract.md)
+now models the exact leader-loop eventfd unit counter against complete raw
+intervals. The original FD19 refusals above remain preserved historical outcomes;
+they are not removed, rewritten or promoted to acceptance. The new component has
+its own finite role, counter-state proof, negative controls and pending review.
+It changes no general shared-descriptor/path, publication or lifetime rule.

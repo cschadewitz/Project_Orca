@@ -18,6 +18,7 @@ from controlled_contract import BOUNDARY_PASSIVE, require, wire
 from verify import SUPPORTED as CANDIDATE_SUPPORTED, FD_FIRST, fd, identity, string
 from kernel_runtime_queries import QUERIES as NATIVE_QUERIES, retained_contract
 from controlled_timestamps import timestamped_events
+from controlled_notifications import notification_io, prove_unit_counter
 
 LIMIT = 256 * 1024 * 1024
 UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
@@ -104,6 +105,12 @@ class Object:
     temporary_cleanup_entry: int | None = None
     temporary_cleanup_completion: int | None = None
     durable_publication_completion: int | None = None
+    factory_record: tuple | None = field(default=None, repr=False)
+    factory_handle: object | None = field(default=None, repr=False)
+    notification_records: list = field(default_factory=list, repr=False)
+    notification_role: tuple | None = field(default=None, repr=False)
+    notification_tainted: bool = False
+    notification_overlaps: list = field(default_factory=list)
 
 
 @dataclass
@@ -141,6 +148,7 @@ class Replay:
         self.total_written, self.counts = 0, Counter()
         self.execs = 0
         self.entry_times = {}
+        self.notification_objects = []
         self.initial = original['immutable']
         for path, value in original['directories'].items():
             self.add_original(path, value, b'', 'original-directory')
@@ -334,6 +342,92 @@ class Replay:
                     del epoll.watches[number]
                     epoll.registered_data.pop(number, None)
                     epoll.watch_handles.pop(number, None)
+                    getattr(epoll, 'registration_records', {}).pop(number, None)
+
+    def notification_operation(self, record):
+        """Candidate for the independently audited leader-loop counter grammar.
+
+        This does not authorize a report: the entire object's history must later
+        pass prove_notifications(). No other descriptor overlap is waived.
+        """
+        pid, call, args, _, entered, _ = record
+        if call not in {'read', 'write'} or not args or not args[0].isdigit():
+            return None
+        number = int(args[0])
+        handle = self.handles.get(number)
+        if handle is None or handle.obj.family != 'eventfd':
+            return None
+        obj = handle.obj
+        factory = obj.factory_record
+        if (obj.notification_tainted or factory is None or obj.factory_handle is not handle or
+                obj.names or pid not in self.threads or pid in self.settled or
+                factory[0] != self.leader or factory[1:4] != (
+                    'eventfd2', ['0', 'EFD_CLOEXEC|EFD_NONBLOCK'], str(number)) or
+                not factory[5] < entered or sum(h.obj is obj for h in self.handles.values()) != 1):
+            return None
+        try:
+            operation = notification_io(record, self.leader)
+        except RuntimeError:
+            return None
+        roles = []
+        for epoll_handle in self.handles.values():
+            epoll = epoll_handle.obj
+            creation = epoll.factory_record
+            registration = getattr(epoll, 'registration_records', {}).get(number)
+            if (epoll.family != 'epoll' or creation is None or creation[0] != self.leader or
+                    creation[1:3] != ('epoll_create1', ['EPOLL_CLOEXEC']) or
+                    epoll.watches.get(number) is not obj or epoll.watch_handles.get(number) is not handle or
+                    epoll.registered_data.get(number) != number or registration is None or
+                    registration[0] != self.leader or registration[1] != 'epoll_ctl' or
+                    registration[2][1] != 'EPOLL_CTL_ADD' or registration[3] != '0' or
+                    not registration[5] < entered):
+                continue
+            self.epoll_bindings(epoll)
+            roles.append((epoll, registration[4]))
+        if len(roles) != 1 or obj.notification_role is not None and obj.notification_role != roles[0]:
+            return None
+        return obj, handle, roles[0], operation
+
+    def record_notification_effect(self, record, handle):
+        obj = handle.obj
+        obj.notification_records.append((record, handle))
+        if record[1] == 'close':
+            return
+        try:
+            notification_io(record, self.leader)
+        except RuntimeError:
+            obj.notification_tainted = True
+            require(obj.notification_role is None, 'unreviewed effect on proven notification counter')
+            return
+        candidate = self.notification_operation(record)
+        if candidate is not None:
+            obj.notification_role = candidate[2]
+        else:
+            require(obj.notification_role is None, 'notification I/O lost original epoll/handle role')
+
+    def prove_notifications(self):
+        proofs = []
+        for obj in getattr(self, 'notification_objects', []):
+            if obj.notification_role is None:
+                continue
+            require(not obj.notification_tainted, 'tainted notification counter history')
+            operations, close = [], None
+            for record, handle in obj.notification_records:
+                require(handle is obj.factory_handle and record[2][0] == obj.factory_record[3],
+                        'notification history changes original descriptor/handle')
+                if record[1] == 'close':
+                    require(record[3] == '0' and close is None, 'invalid repeated notification close')
+                    close = record
+                else:
+                    require(close is None, 'notification operation follows original close')
+                    operations.append(notification_io(record, self.leader))
+            require(close is None or all(op.completed < close[4] for op in operations),
+                    'notification close overlaps counter operation')
+            proof = prove_unit_counter(operations, self.leader)
+            proof.update(creationEntry=obj.factory_record[4], epollRegistrationEntry=obj.notification_role[1],
+                         overlapPairs=len(obj.notification_overlaps))
+            proofs.append(proof)
+        return proofs
 
     def wait(self, record):
         _, call, args, _, _, _ = record
@@ -453,11 +547,13 @@ class Replay:
                 require(Path(path).read_bytes() == item.data, 'final named file bytes differ')
             if item.published:
                 self.durable_publication(item)
+        notification_proofs = self.prove_notifications()
         return {'record': 'controlled-bootstrap-kernel-evidence', 'authority': 'none',
                 'traceSha256': sha(text.encode()), 'traceBytes': len(text.encode()),
                 'settledThreads': len(self.settled), 'serviceReads': 1,
                 'resourcePhysical': list(obj.physical), 'resultHex': obj.reads[0].hex(),
-                'waitIntervalsRetained': len(self.waits), 'syscalls': dict(self.counts)}
+                'waitIntervalsRetained': len(self.waits), 'syscalls': dict(self.counts),
+                'notificationCounterProofs': notification_proofs}
 
     def event(self, record):
         pid, call, args, result, entered, completed = record
@@ -515,7 +611,14 @@ class Replay:
                 obj.watches = {}
                 obj.registered_data = {}
                 obj.watch_handles = {}
+                obj.registration_records = {}
+                obj.factory_record = record
                 self.handles[number] = Handle(obj, set())
+                obj.factory_handle = self.handles[number]
+                if family == 'eventfd':
+                    if not hasattr(self, 'notification_objects'):
+                        self.notification_objects = []
+                    self.notification_objects.append(obj)
             return
         if call == 'openat':
             require(args[0] == 'AT_FDCWD', 'relative descriptor open')
@@ -720,6 +823,7 @@ class Replay:
                 del epoll.obj.watches[fd(args[2])]
                 del epoll.obj.registered_data[fd(args[2])]
                 del epoll.obj.watch_handles[fd(args[2])]
+                getattr(epoll.obj, 'registration_records', {}).pop(fd(args[2]), None)
             else:
                 require((args[1] == 'EPOLL_CTL_ADD' and fd(args[2]) not in epoll.obj.watches) or
                         (args[1] == 'EPOLL_CTL_MOD' and fd(args[2]) in epoll.obj.watches),
@@ -732,6 +836,9 @@ class Replay:
                 epoll.obj.watches[fd(args[2])] = target.obj
                 epoll.obj.registered_data[fd(args[2])] = data
                 epoll.obj.watch_handles[fd(args[2])] = target
+                if not hasattr(epoll.obj, 'registration_records'):
+                    epoll.obj.registration_records = {}
+                epoll.obj.registration_records[fd(args[2])] = record
             return
         if call == 'epoll_pwait':
             verified = self.wait(record)
@@ -789,6 +896,8 @@ class Replay:
                 return  # Failed startup query creates neither a handle nor an alias.
             require(handle is not None, 'unknown descriptor effect')
             obj = handle.obj
+            if obj.family == 'eventfd':
+                self.record_notification_effect(record, handle)
             if obj.family == 'trusted-kernel-runtime-query':
                 require(pid == self.leader and entered == completed and call in {'read', 'close', 'fstat', 'newfstatat', 'statx'},
                         'native query thread/interval/descriptor effect')
@@ -998,6 +1107,7 @@ class Replay:
         epoll waits remain visible and conflict with close/registration changes.
         """
         pid, call, args, result, entered, completed = record
+        notification = self.notification_operation(record)
         entities, paths = set(), set()
         mutating = call in {'close', 'fcntl', 'ioctl', 'write', 'writev', 'read', 'readv',
                            'lseek', 'epoll_ctl', 'mkdir', 'rmdir', 'unlink', 'link', 'rename', 'chmod'}
@@ -1066,7 +1176,7 @@ class Replay:
                     require(stat.S_ISDIR(parent.mode), 'namespace mutation parent is not a directory')
                     entities.add(('object', id(parent)))
         self.pending_intervals = [p for p in self.pending_intervals if p[1] >= entered]
-        for start, end, other_pid, other_mutating, other_object_mutating, other_path_mutating, other_entities, other_paths, other_watch_change in self.pending_intervals:
+        for start, end, other_pid, other_mutating, other_object_mutating, other_path_mutating, other_entities, other_paths, other_watch_change, other_notification in self.pending_intervals:
             related_paths = any(a == b or a.startswith(b + '/') or b.startswith(a + '/')
                                 for a in paths for b in other_paths)
             shared = entities & other_entities
@@ -1074,7 +1184,14 @@ class Replay:
                         (object_mutating or other_object_mutating) and any(k[0] == 'object' for k in shared) or
                         (watch_change or other_watch_change) and any(k[0].startswith('epoll-watch-') for k in shared) or
                         (path_mutating or other_path_mutating) and related_paths)
-            require(not (pid != other_pid and conflict), 'ambiguous shared descriptor/path interval')
+            if pid != other_pid and conflict:
+                proven_shape = (notification is not None and other_notification is not None and
+                                notification[0] is other_notification[0] and notification[1] is other_notification[1] and
+                                notification[2] == other_notification[2])
+                require(proven_shape, 'ambiguous shared descriptor/path interval')
+                obj = notification[0]
+                obj.notification_role = notification[2]
+                obj.notification_overlaps.append((start, end, entered, completed))
         if completed > entered and (entities or paths):
             self.pending_intervals.append((entered, completed, pid, mutating, object_mutating,
-                                           path_mutating, entities, paths, watch_change))
+                                           path_mutating, entities, paths, watch_change, notification))
