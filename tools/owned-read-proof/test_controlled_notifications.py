@@ -96,7 +96,7 @@ class CounterProofControls(unittest.TestCase):
 
 
 class NotificationRoleControls(unittest.TestCase):
-    def replay(self):
+    def replay(self, registered=True):
         r=helpers.DraftReplayControls().replay()
         r.threads |= {11,12}
         r.original={'queries':{}}
@@ -104,7 +104,8 @@ class NotificationRoleControls(unittest.TestCase):
         r.command,r.ack,r.lifetime=4,7,3
         self.event(r,'epoll_create1',['EPOLL_CLOEXEC'],'16',en=1)
         self.event(r,'eventfd2',['0','EFD_CLOEXEC|EFD_NONBLOCK'],'19',en=2)
-        self.event(r,'epoll_ctl',['16','EPOLL_CTL_ADD','19','{events=EPOLLIN, data=0x13}'],en=3)
+        if registered:
+            self.event(r,'epoll_ctl',['16','EPOLL_CTL_ADD','19','{events=EPOLLIN, data=0x13}'],en=3)
         return r
 
     def event(self,r,call,args,result='0',en=5,co=None,pid=10):
@@ -113,6 +114,23 @@ class NotificationRoleControls(unittest.TestCase):
 
     def counter(self,r,call,value,en,co=None,pid=10):
         self.event(r,call,['19',quoted_counter(value),'1024' if call=='read' else '8'],'8',en,co,pid)
+
+    def test_original_diagnostic_registration_overlap_remains_explicitly_unsupported(self):
+        # Original diagnostic raw intervals: worker write4091..4093 versus
+        # leader ADD4092..4094. No generic success-return ordering inference.
+        r=self.replay(registered=False)
+        self.counter(r,'write',1,4091,4093,11)
+        with self.assertRaisesRegex(RuntimeError,'ambiguous shared descriptor/path interval'):
+            self.event(r,'epoll_ctl',['16','EPOLL_CTL_ADD','19','{events=EPOLLIN, data=0x13}'],en=4092,co=4094)
+
+    def test_settled_preregistration_unit_then_registration_and_drain_is_supported(self):
+        r=self.replay(registered=False)
+        self.counter(r,'write',1,4091,4093,11)
+        self.event(r,'epoll_ctl',['16','EPOLL_CTL_ADD','19','{events=EPOLLIN, data=0x13}'],en=4094)
+        self.counter(r,'read',1,4100)
+        proof=r.prove_notifications()[0]
+        self.assertEqual((proof['unitWrites'],proof['counterReads'],proof['counterFinal']), (1,1,0))
+        self.assertEqual(proof['authority'],'none')
 
     def test_exact_live_role_permits_only_counter_overlap_pending_whole_lifetime_proof(self):
         r=self.replay()

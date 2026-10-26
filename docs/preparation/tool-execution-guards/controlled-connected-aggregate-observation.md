@@ -292,3 +292,73 @@ limit, 256 MiB trace cap and all bootstrap physical/authority/notification/clock
 guards are unchanged. No concurrent packet inspection is performed during the
 run. Pre-run validation passed 266 Python tests (6.004 s), nine optimized
 diagnostic controls (0.013 s), and `git diff --check`.
+
+### Diagnostic outcome: process completes; original kernel grammar refuses
+
+Exactly one instrumented original ran at observer commit
+`935d5193aa3eea3cb0c61c2859c5ee9542bd590d`, retained under
+`/tmp/orca-bootstrap-diagnostic-zk8ulzb1`. The producer pin and all three image
+hashes remain unchanged. Producer exit is 0; measured monotonic process interval
+is **41372058646 ns** and complete trace size **113151210 bytes**. The bootstrap
+phase log contains its actual sent/received sequence. The process fits the
+unchanged limits, but this is **not a bootstrap check pass**: original replay
+refuses `RuntimeError: line 4092 epoll_ctl: ambiguous shared descriptor/path interval`.
+The outer diagnostic exits 1 with `missing permanently closed original bootstrap`.
+No connected constructor or command is used. No accepting token is emitted.
+
+The exact unsupported overlap is startup registration of the original eventfd:
+
+| Actual operation | Original raw interval |
+| --- | --- |
+| Worker eight-byte unit write to eventfd 19 | 4091–4093 |
+| Leader `epoll_ctl(16, EPOLL_CTL_ADD, 19, {events=EPOLLIN, data=0x13})`, result 0 | 4092–4094 |
+
+The original eventfd factory is raw entry 403 and original epoll factory entry
+400. The worker write overlaps registration completion. Both are shared-FD
+mutations under the current interval grammar. The notification exception requires
+an already completed original registration and two qualifying counter operations;
+`epoll_ctl` is not such an operation. Its successful return cannot establish an
+ordering inside the overlap. The unrelated pending worker epoll wait remains
+visible as well. This is a newly observed unsupported native startup schedule,
+not an inferred accepting-path exploit or a reason to remove interval guards.
+
+New regression controls retain refusal of this exact interval shape and accept
+the contrasting settled unit-write → completed registration → counter-drain
+history. No replay/notification guard changed. Any support for overlapping
+registration and counter I/O requires a separate finite causal/native grammar
+review, including readiness and full counter lifetime obligations. Re-running
+until registration happens to settle first would not close this obligation.
+
+The sampler retains **40 samples**, zero sampler/counter errors and the final
+exited-pidfd states of original tracer and leader. Its actual sampling brackets
+have median 0.8280345 ms, sum 1631.082924 ms and maximum 1341.633427 ms. These are
+wall brackets including descheduling/GIL/kernel waits, not claimed added CPU
+overhead. The largest bracket occurs near 38.9 s, in the same sample window as
+three new cgroup throttled periods / **803339 microseconds**. This correlation
+does not prove the historical timeout's cause. The current cgroup CPU delta is
+32.311768 s; memory ranges from 1030356992 to 1357807616 bytes, with zero
+memory-limit/OOM events. Recorded block-I/O bytes do not change. Last live pinned
+scheduler deltas show about 15.522224 s tracer runtime / 0.726192 s runnable wait
+and 10.057993 s leader runtime / 0.710416 s runnable wait. Snapshots bracket live
+samples, so they are not complete per-process lifetime totals.
+
+The trace progresses throughout the run: approximately 71.2 MB at 25.438 s,
+104.5 MB at 36.840 s, and 113.15 MB at final settlement. The earlier 60-second
+timeout is not reproduced, but its cause remains unresolved and is not attributed
+to a verified recovery. All 12 newly observed trace thread IDs are absent after
+cleanup. The earlier negative report and all its hashes remain unchanged.
+
+| New complete retained packet | SHA-256 |
+| --- | --- |
+| `bootstrap/trace` | `e7ce418b8da24f77420240f41fed4dd7dbdc751e46afddf26b0235d4a9856e91` |
+| `bootstrap-attempt.json` | `db3e7913630766fe65e18210cd17b957fab9d6220c9dff8a7deb644eed266e2c` |
+| `bootstrap-originals.json` | `a20c79eb410bdc69079cc07748e25a4a066f60c833b1b290cb2b06cfbf26fb27` |
+| `bootstrap-diagnostics.json` | `9367cb82721e9b4ed2f127350c546bd28c909fe794ba7572a4660dae19b6e0a1` |
+| `sanitized-checkpoint.json` | `05e58a6405bea39adfd8c9eafb20e99115ab76746f97918ad1fa9433c48cb8fd` |
+
+Raw packets, physical process pins and full metrics remain private locally.
+The concrete next blocker is the finite registration/counter overlap grammar;
+timing is not the refusal in this new original. Fresh connected effect closure
+and independent aggregate acceptance remain incomplete. No further original
+attempt ran. Final checks pass 268 Python tests (8.442 s), 19 optimized
+notification controls (0.041 s), and `git diff --check`.
