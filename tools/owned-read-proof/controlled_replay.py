@@ -15,8 +15,9 @@ import re
 import stat
 
 from controlled_contract import BOUNDARY_PASSIVE, require, wire
-from verify import SUPPORTED as CANDIDATE_SUPPORTED, FD_FIRST, events, fd, identity, string
+from verify import SUPPORTED as CANDIDATE_SUPPORTED, FD_FIRST, fd, identity, string
 from kernel_runtime_queries import QUERIES as NATIVE_QUERIES, retained_contract
+from controlled_timestamps import timestamped_events
 
 LIMIT = 256 * 1024 * 1024
 UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
@@ -122,6 +123,7 @@ class Replay:
         self.pending_intervals = []
         self.total_written, self.counts = 0, Counter()
         self.execs = 0
+        self.entry_times = {}
         self.initial = original['immutable']
         for path, value in original['directories'].items():
             self.add_original(path, value, b'', 'original-directory')
@@ -282,7 +284,7 @@ class Replay:
 
     def run(self, text):
         require(len(text.encode()) <= LIMIT, 'trace exceeds 256 MiB bound')
-        records = list(events(text, with_intervals=True))
+        records, self.entry_times = timestamped_events(text, self.original)
         if self.native_queries:
             anchor = self.original['kernelRuntimeQueries']['traceAnchorLine']
             leader_records = [r for r in records if r[0] == self.leader]
@@ -475,6 +477,9 @@ class Replay:
                 self.used_paths.add(path)
                 if family == 'resource':
                     require(pid == self.leader and not self.resources, 'extra/thread-created resource')
+                    require(entered in self.entry_times, 'resource create lacks original entry timestamp')
+                    obj.creation_record = record
+                    obj.creation_path = path
                     self.resources.append(obj)
             else:
                 require(flags in ({'O_RDONLY', 'O_CLOEXEC'}, {'O_RDONLY'},

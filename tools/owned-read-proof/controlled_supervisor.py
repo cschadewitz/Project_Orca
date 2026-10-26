@@ -27,6 +27,7 @@ from controlled_replay import Replay, LIMIT
 from controlled_contract import require
 from controlled_semantics import authenticate_bootstrap
 from kernel_runtime_queries import KernelRuntimeQueries
+from controlled_timestamps import OPTION, NS, RUN_NS, probe_clock, sample_clock, clock_namespaces, sha as clock_sha, validate_clock
 
 REPO = Path(__file__).resolve().parents[2]
 SOURCE = '557f62fbe86fc8371d48f11ec37bf9db71cac436'
@@ -160,6 +161,7 @@ def bootstrap():
     plan = prepare(base, image, lifetime, command, ack, phases)
     node, tracer = shutil.which('node'), shutil.which('strace')
     require_exitkill(tracer)
+    trace_clock = probe_clock(tracer, root)
     argv = [node, str(image / 'controlled-child.mjs'), str(base), 'bootstrap', str(lifetime), str(command), str(ack)]
     originals = {p: immutable(p, 'image') for p in plan['inventory']}
     originals.update(runtime_originals(node))
@@ -183,6 +185,7 @@ def bootstrap():
               str(base / '.node_modules'), str(base / '.node_libraries'), str(Path(node).parent.parent / 'lib/node')]
     require(all(not Path(p).exists() and not Path(p).is_symlink() for p in probes), 'probe is not originally absent')
     original = {'base': str(base), 'lane': 'bootstrap', 'node': node, 'argv': argv,
+                'sourceHead': SOURCE, 'controlledBuild': build, 'traceClock': trace_clock,
                 'supervisorPid': os.getpid(),
                 'readlinks': {p: (os.path.realpath(node) if p == '/proc/self/exe' else
                     os.readlink(p) if Path(p).is_symlink() else None) for p in (
@@ -213,19 +216,20 @@ def bootstrap():
     trace = base / 'trace'
     trace.touch(mode=0o600)
     log, errors = [], []
-    started = time.monotonic()
-    original['startedWallTime'] = time.time()
+    start_clock = sample_clock()
+    original['startedWallNs'] = start_clock['wallNs']
+    original['clockSamples'] = {'start': start_clock, 'phases': []}
     def control():
         try:
-            deadline = started + 60
-            require(tracer_ready.wait(max(0, deadline - time.monotonic())), 'owned tracer not observed')
+            deadline = start_clock['monotonicBeforeNs'] + RUN_NS
+            require(tracer_ready.wait(max(0, deadline - time.monotonic_ns()) / NS), 'owned tracer not observed')
             while True:
                 with trace.open() as f:
                     first = f.readline()
-                match = re.match(r'(\d+)\s+execve\(', first)
+                match = re.match(r'(\d+)\s+[1-9][0-9]*\.[0-9]{9}\s+execve\(', first)
                 if match:
                     break
-                if time.monotonic() > deadline:
+                if time.monotonic_ns() > deadline:
                     raise RuntimeError('initial kernel exec not observed')
                 time.sleep(.01)
             original['leaderPid'] = int(match[1])
@@ -243,13 +247,16 @@ def bootstrap():
                 require(phase['token'] not in used_tokens, 'supervisor retained-original check failed')
                 used_tokens.add(phase['token'])
                 data = f"orca-phase:{phase['name']}:{phase['token']}\n".encode()
+                original['clockSamples']['phases'].append({'event': 'before-command-write', **sample_clock()})
                 require(os.write(send, data) == len(data), 'supervisor retained-original check failed')
+                original['clockSamples']['phases'].append({'event': 'after-command-write', **sample_clock()})
                 log.append({'event': 'sent', **phase})
                 expected = f"orca-done:{phase['name']}:{phase['token']}\n".encode()
                 with selectors.DefaultSelector() as selector:
                     selector.register(receive, selectors.EVENT_READ)
-                    require(selector.select(max(0, deadline - time.monotonic())), 'ack timeout')
+                    require(selector.select(max(0, deadline - time.monotonic_ns()) / NS), 'ack timeout')
                 require(os.read(receive, len(expected)) == expected, 'partial/changed ack')
+                original['clockSamples']['phases'].append({'event': 'after-ack-read', **sample_clock()})
                 log.append({'event': 'received', **phase})
         except BaseException as error:
             errors.append(repr(error))
@@ -263,18 +270,27 @@ def bootstrap():
               'imageBuildSha256': digest((image / 'controlled-build.json').read_bytes())}
     try:
         result = run_traced(['prlimit', '--fsize=268435456:268435456', '--core=0:0', tracer,
-                    '--kill-on-exit', '-f', '-q', '-v', '-x', '-s', '131072', '-o', str(trace), *argv],
+                    '--kill-on-exit', '--always-show-pid', OPTION, '-f', '-q', '-v', '-x', '-s', '131072', '-o', str(trace), *argv],
                     pass_fds=(lifetime, command, ack), cwd=image,
                     env={'PATH': os.environ['PATH'], 'HOME': str(base), 'TMPDIR': str(base)},
                     stdout=out_write, stderr=err_write, text=True, timeout=60, on_started=launched)
-        original['finishedWallTime'] = time.time()
+        worker.join(timeout=1)
+        require(not worker.is_alive() and not errors, errors)
+        finish_clock = sample_clock()
+        original['finishedWallNs'] = finish_clock['wallNs']
+        original['clockSamples']['finish'] = finish_clock
+        validate_clock(original)
+        require(clock_sha(Path(tracer).read_bytes()) == trace_clock['tracerSha256'] and
+                Path('/proc/sys/kernel/random/boot_id').read_text().strip() == trace_clock['bootId'] and
+                clock_namespaces() == trace_clock['namespaces'], 'changed tracer/kernel clock provenance')
         os.close(out_write)
         os.close(err_write)
         out_write = err_write = None
         producer_out = os.read(out_read, 65537)
         producer_err = os.read(err_read, 65537)
         require(len(producer_out) <= 65536 and len(producer_err) <= 65536, 'bounded producer output exceeded')
-        report.update(elapsedSeconds=time.monotonic() - started, traceBytes=trace.stat().st_size,
+        elapsed_ns = finish_clock['monotonicAfterNs'] - start_clock['monotonicBeforeNs']
+        report.update(elapsedNanoseconds=elapsed_ns, elapsedSeconds=elapsed_ns / NS, traceBytes=trace.stat().st_size,
                       returncode=result.returncode, producerStderr=producer_err.decode()[-4000:])
         worker.join(timeout=1)
         require(not worker.is_alive() and not errors, errors)

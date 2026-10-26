@@ -377,3 +377,127 @@ assumptions and refusing status remain unchanged. No guessed slack, launch-based
 rebasing or circular `expiry-55` acceptance was added. A precision-based correction
 requires separately reviewed evidence; this checkpoint proposes no numerical
 allowance and creates no accepting or connected path.
+
+## Fresh-observation correction: integer UNIX create-entry expiry bound
+
+The supervisor now requests the installed strace 6.13 option
+`--absolute-timestamps=format:unix,precision:ns`, verified against its actual
+`--help` and an owned, harmless `/usr/bin/true` capability probe. `-ttt` is not
+used because its default precision is microseconds. `-T` is not used. A normal
+one-line record provides an **entry-prefix sample**, not a separately observed
+absolute completion timestamp. The adapter preserves the original unfinished /
+resumed raw-line framing; it does not derive a completion time from a duration
+or substitute a resumed prefix for the resource's entry prefix.
+
+The upstream 6.13 [entry decoder](https://github.com/strace/strace/blob/v6.13/src/syscall.c)
+prints the prefix on syscall entry, and its
+[prefix implementation](https://github.com/strace/strace/blob/v6.13/src/strace.c)
+samples `CLOCK_REALTIME`. The supervisor retains the installed tracer path,
+binary SHA-256, version/help digest, actual probe trace/digest and realtime
+before/after samples. The probe must have exact nine-digit fractional UNIX
+prefixes inside that independent wall-clock bracket. A different tracer version
+or unsupported documented option refuses rather than changing host settings.
+
+`controlled_timestamps.py` strips only this exact prefix before calling the
+unchanged candidate event decoder. Missing, malformed, wrong-precision,
+out-of-run or backward prefixes refuse, as do unrequested elapsed-time suffixes.
+Every raw prefix remains in the preserved original trace and its kernel digest.
+Supervisor start, phase-send brackets, acknowledgement observation and finish
+are retained as integer UNIX nanoseconds, each surrounded by monotonic reads.
+The samples must admit one common realtime-minus-monotonic offset within their
+actual read brackets, without guessed tolerance. The run retains the independent
+60-second monotonic limit and the unchanged cleanup helper. Boot identity,
+installed tracer bytes and the actual namespace inventory are checked again.
+This environment exposes no `time` / `time_for_children` namespace links; that
+absence is explicitly retained from the real inventory, not synthesized as a
+namespace identity. Available namespace checks remain in place.
+
+The expiry check now uses only:
+
+```
+S <= C <= F < E <= C + 55_000_000_000  # all integer nanoseconds
+```
+
+`S` and `F` are independent retained supervisor samples; `E` is parsed from the
+AES-GCM-authenticated, exactly UTC-millisecond expiry without float conversion.
+`C` is the entry prefix of the already validated original leader's successful
+exclusive fixture writer open. It is bound to the original resource object,
+canonical resource path, exact open call/flags/mode/result and raw entry-line
+index. Failed/readonly opens, other PIDs, duplicate resources, other objects and
+completion-line substitution cannot supply this anchor. The exact reviewed
+producer source `557f62fbe86fc8371d48f11ec37bf9db71cac436` and input SHA-256
+`c9d4a7185bdb07d05b7f0ca192e65fc6efa574141862f3994c8cc35bbd584e86`
+establish that expiry construction precedes service/resource creation. The
+supervisor still verifies all original build inputs and image bytes; the expiry
+check also requires that source ordering and the exact retained producer/child
+image association.
+
+This is a necessary conservative **post-owner create-entry anchor**, not a
+measurement of the owner issuance instant. The source's 55-second owner duration
+is unchanged. Btime remains part of physical metadata; it is no longer substituted
+for a fine-grained wall-clock upper anchor. No guessed slack, lifetime extension,
+clock-assumption change or accepting status was added. The old untimestamped
+trace is still preserved and now refuses for missing timestamp provenance; it
+cannot retrospectively pass this check.
+
+Validation: **93 Python tests pass**, plus `git diff --check`. New controls cover
+missing/wrong precision/format/clock, independent probe mismatch, child-supplied
+timestamp rejection, backward/reversed/out-of-run times, incompatible monotonic
+samples, fractional rollover, exact equality and +1 ns overrun, `F == E`,
+failed/readonly/wrong-PID/duplicate/wrong-object/raw-line anchors, delayed
+completion that cannot excuse excess expiry, missing source ordering and changed
+image bytes. These remain grammar/negative controls, not synthetic qualification.
+The earlier explicit native read/close leader checks remain clarity/regression
+hardening: the preceding common guard already required leader/read-close-stat
+shape, so no demonstrated read/close bypass is claimed.
+
+### Fresh timestamped evidence: modeled checks complete, still incomplete status
+
+The final fresh run is `/tmp/orca-controlled-replay-23z4v0qu`, using a newly built
+physical image of reviewed source `557f62f`. Producer, child and build manifest
+hashes remain the exact three hashes recorded above. It produced **112949571**
+trace bytes in **10537562270 ns** (10.537562270 seconds), with producer exit **0**
+and supervisor exit **2**, explicitly incomplete evidence. Kernel replay records
+12 settled threads, one service pread (offset 2, length 4, `73706f73`) and the
+retained query checks. Four semantic records authenticate/correlate, and the
+new necessary expiry predicate passes:
+
+| Value | Actual integer nanoseconds |
+| --- | --- |
+| `S` | `1793040346953488096` |
+| `C` | `1793040349389751722` |
+| `F` | `1793040357491049200` |
+| `E` | `1793040404388000000` |
+| `C + 55_000_000_000` | `1793040404389751722` |
+
+The upper difference is **1751722 ns**; `E - F` is **46896950800 ns**. `C` is raw
+one-based line **23320**, original leader **3605**, writer FD/result **21**, flags
+`O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC`, mode `0400`. Its literal prefix is
+`1793040349.389751722`. The raw line SHA-256 (excluding newline) is
+`c2e0aab946cb89479b824a8109421eaa8a66993bdb342aadb6fcddbd2812a75b`.
+The complete original timestamped trace SHA-256 is
+`f62ed5f7621d2028f46ad60798d5951521e27b7edf4b4d52a4bbd594850f13a7`.
+Installed tracer SHA-256 is
+`69f88291a4e47f258b8e32b089c919a247509f063ef3d6afe5389939051102b3`;
+its retained independent capability-probe trace SHA-256 is
+`45a041ec60e3f4961cb2e17537163a21004220fac955fcff95745afc464a39e1`.
+
+The first fresh timestamped bootstrap, `/tmp/orca-controlled-replay-itopmgup`, is
+also preserved. It produced 112924716 bytes in 13490842087 ns, producer exit 0,
+supervisor exit 1, and refused **`line 5434 read: ambiguous shared descriptor/path
+interval`** (the diagnostic uses zero-based entry indices). An unfinished known
+thread operation on shared FD 19 spans indices 5432–5436 while the leader reads
+that FD at index 5434. No interval exception was introduced. Its trace SHA-256 is
+`be34b2a129b52deaa478447053d64b3231c577b1b775d0e377c7876f8963d4e2`.
+This refusal remains relevant to the outstanding interval/effect audit; the
+second run's modeled completion does not dispose of it. A preliminary prelaunch
+attempt stopped on an unavailable optional time-namespace link before Node or a
+protected bootstrap command was launched; actual namespace absence is now
+retained as described above.
+
+The second run has no remaining modeled syscall/semantic refusal, but reports
+**`unavailable-effect-audit-and-source-review-pending`**. The broader audit and
+independent final source review remain required. There is still no accepting
+exit, connected launch or connected token. Raw traces/private originals stay
+local. Candidate `verify.py`, producer/runtime bytes, security settings and all
+55-second/60-second/256 MiB bounds remain unchanged.

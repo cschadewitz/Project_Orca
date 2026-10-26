@@ -132,10 +132,14 @@ class NativeReplayControls(unittest.TestCase):
         self.event(r, 'read', ['20', encoded, str(QUERIES[path][0])], str(len(data)), **kwargs)
 
     def test_process_observation_must_fall_in_original_traced_leader_lifetime(self):
+        from test_controlled_timestamps import clock_original, prefix, START
         for trace in ['11 execve("/node", [], []) = 0\n11 +++ exited with 0 +++\n',
                       '10 execve("/node", [], []) = 0\n10 +++ exited with 0 +++\n']:
             r = self.replay()
+            r.original.update(clock_original())
             r.original['kernelRuntimeQueries'] = observation()
+            trace = ''.join(line.split(' ', 1)[0] + ' ' + prefix(START+index) + ' ' + line.split(' ', 1)[1] + '\n'
+                            for index, line in enumerate(trace.splitlines()))
             with self.subTest(trace=trace), self.assertRaisesRegex(RuntimeError, 'traced leader lifetime'):
                 r.run(trace)
 

@@ -1,6 +1,5 @@
 """Authenticate actual replayed bootstrap records; no report/JSON capability intake."""
 import base64
-from datetime import datetime
 import hashlib
 import json
 import os
@@ -10,6 +9,7 @@ from urllib.parse import unquote
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from controlled_contract import require
+from controlled_timestamps import iso_ns, resource_entry, expiry_bound
 
 
 def unique_object(pairs):
@@ -133,11 +133,11 @@ def authenticate_bootstrap(replay):
         require(type(credential['permissions']) is list and len(credential['permissions']) == len(permissions) and
                 set(credential['permissions']) == permissions and credential['scope'] == {'workflows': '*', 'runs': 'all'},
                 'credential permissions/scope differ from designation')
-        created = datetime.fromisoformat(credential['createdAt'].replace('Z', '+00:00')).timestamp()
-        require(created <= resource.birth_ns / 10**9, 'credential created after original resource')
+        created = iso_ns(credential['createdAt'])
+        require(created <= resource.birth_ns, 'credential created after original resource')
         if 'expiresAt' in credential:
-            require(datetime.fromisoformat(credential['expiresAt'].replace('Z', '+00:00')).timestamp() >
-                    original['finishedWallTime'], 'credential expired during original execution')
+            require(iso_ns(credential['expiresAt']) > original['finishedWallNs'],
+                    'credential expired during original execution')
     require(baseline['operator']['credential'] == {k: v for k, v in actors['controlled-test-operator'].items()
             if k != 'secretSha256'}, 'authenticated public credential snapshot differs')
     lease = parse(paths[base + '/workspace/.orca/leases/run%3Acontrolled.json'].data)
@@ -147,11 +147,14 @@ def authenticate_bootstrap(replay):
     logical_lease = {**lease, 'host': lease['guardedHost'], 'ttlMs': lease['guardedTtlMs']}
     require(baseline['lease'] == logical_lease, 'authenticated lease differs from actual guarded lease')
     require(not any(path.endswith('controlled.jsonl') for path in paths), 'bootstrap produced live-answer journal')
-    expiry = datetime.fromisoformat(action['expiresAt'].replace('Z', '+00:00')).timestamp()
-    require(original['startedWallTime'] <= original['finishedWallTime'] < expiry <= resource.birth_ns / 10**9 + 55,
-            'bootstrap expiry outside original bounded execution')
+    expiry = iso_ns(action['expiresAt'])
+    creation_ns = resource_entry(replay, resource)
+    expiry_bound(original, creation_ns, expiry)
     require(authorization_object.publication_completion < min(resource.effect_entries) and
             records['controlled-producer-observation-v1'][2].creation_entry > max(resource.effect_entries),
             'authorization/effect/observation publication order differs')
     return {'record': 'authenticated-bootstrap-correlations', 'authority': 'none',
-            'authorizationRef': authorization_ref, 'actionId': action['actionId'], 'semanticRecords': len(records)}
+            'authorizationRef': authorization_ref, 'actionId': action['actionId'], 'semanticRecords': len(records),
+            'resourceCreateEntryNs': creation_ns, 'authenticatedExpiryNs': expiry,
+            'resourceCreateEntryRawLine': resource.creation_entry + 1,
+            'ownerOrigin': 'unmeasured-source-precedes-create-entry', 'maximumOwnerDurationNs': 55000000000}
