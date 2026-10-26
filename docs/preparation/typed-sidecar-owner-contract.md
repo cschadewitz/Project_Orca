@@ -84,7 +84,8 @@ owner; that is exactly how disposable tests inject it, and is **not** evidence o
 managed production gate. No bootstrap, UI, protocol method or recovery path calls
 the constructor. Parent owns those integrations after review.
 
-The owner supplies `file`, the exact marker, `checkCompatibility`, and `qualify`.
+The owner supplies `file`, the exact marker, `checkCompatibility`,
+`assertCompatibilityCurrent`, and `qualify`.
 The first binds the existing sidecar path under existing protected-path ownership;
 `sidecarRef` is a protected identity, not a client pathname. `checkCompatibility`
 must freshly observe the retained marker and exclusive writer generation, including
@@ -125,8 +126,9 @@ resulting revoked rule; no supplied reference can revoke by itself. Used rule ID
 cannot be recycled, even after expiry/revocation, and stale/duplicate/replayed
 commands are refused rather than merged or returned as a new successful save.
 
-`ScopedRuleGrantAuthority` binds actor, `authorizeGrant(): Promise<string>` and
-`verifyApproval(exactCommand, actor): Promise<{scopeEvidenceRef}>`. Approval and
+`ScopedRuleGrantAuthority` binds actor, `authorizeGrant(): Promise<string>`,
+`verifyApproval(exactCommand, actor): Promise<{scopeEvidenceRef}>`, and the synchronous
+`assertCommitCurrent(exactCommand, actor, {authorityRevision, scopeEvidenceRef})`. Approval and
 original-principal grant authority are checked under the shared lock and again
 immediately before rename; the grant revision and protected scope proof must remain
 identical. [Authorizer.scopedRuleGrantAuthority](../../packages/daemon/src/auth/guard.ts)
@@ -236,9 +238,10 @@ second root resolver or independently reinterpret it.
 Typed mutation acquires managed lifetime/root ownership first (trusted injected
 port), then creates the existing sidecar `.lock` name as a directory, publishes a
 unique owner token, snapshots/compares current bytes, verifies explicit approval
-and original-principal grant authority, writes a temporary file, rechecks approval,
-managed ownership/current grant, exact token/directory identity and expected bytes,
-then renames. All participating typed writers use that directory without takeover.
+and original-principal grant authority, writes a temporary file, checks exact
+lock ownership and expected bytes, then rechecks approval, managed ownership and
+current grant (grant last). After all awaits, synchronous retained-owner and
+exact approval/current-grant assertions run without yielding before rename dispatch. All participating typed writers use that directory without takeover.
 A legacy mtime waiter can only unlink a file and cannot remove the typed directory.
 Only the owner that successfully unlinks its exact unique token may remove the
 empty directory. Lost ownership never removes a successor's token/directory.
@@ -303,3 +306,57 @@ Shared source names for consumers: `TypedSidecar`, `TypedRuleRecord`,
 `bindInactiveTypedSidecarOwner` is trusted injection, and
 `createInactiveTypedSidecarStore` returns the sole owner-bound read/write port.
 Do not add a second UI grant endpoint or public marker/approval-authority input.
+
+
+## Final-await authority correction and canonical marker parsing
+
+Review reproduced a race at integrated source `12e052314d43365f73be51beb529f9136d2aca44`:
+originally the last current grant/compatibility checks preceded awaited token and
+sidecar reads. Revocation during those reads still published a Saved receipt.
+The deterministic two-case regression against that source failed as expected:
+[before-fix evidence](strict-rule-persistence-evidence/final-await-race-before.txt).
+The earlier checkpoint/broad-suite green results did not prove this boundary safe.
+
+Final mutation order is now: temporary bytes prepared; awaited token/directory and
+expected-policy-revision checks; exact protected approval; managed compatibility;
+current original-principal grant revision last. There are no further filesystem
+awaits before the last trusted assertions. After the asynchronous callback settles,
+the same synchronous call stack invokes `assertCompatibilityCurrent(marker)` first
+and `assertCommitCurrent(exactCommand, actor, {authorityRevision, scopeEvidenceRef})`
+last, then dispatches rename without an intervening await/microtask. The daemon
+assertion calls currentPrincipal/holds before the protected proof assertion and again
+as its last check, including original credential/actor/captured ceiling. Both trusted
+assertions must be nonmutating and return exactly `undefined`; missing or accidentally
+asynchronous assertions refuse before dispatch. They are required constructor/interface
+methods, not optional defaults. Initialization uses the synchronous pending-owner
+assertion too. Structural reads also assert retained owner state after their last IO.
+
+This closes the reproduced awaited-read race and same-process queued-microtask gaps.
+It does **not** make the credential-file lock and sidecar lock one atomic transaction:
+`CredentialStore.current` can synchronously reread credentials, but independent credential
+publication may still overlap the actual rename syscall after the final observation.
+No supported production integrated fence for a stronger cross-process atomicity claim
+is implemented here. The trusted integration must supply/accept the exact ownership
+and dispatch guarantee before activation; the sidecar lock alone cannot freeze grants
+or approval records. Default-off status remains unchanged. A revocation observed by
+the final checks refuses before dispatch and preserves policy bytes. Once rename is
+dispatched it cannot be recalled; a lost acknowledgement is uncertain and never a clean
+refusal/replay permission. The tests cover both sides, including a separate file-backed
+CredentialStore revocation during the final sidecar read, and post-dispatch revocation
+with lost acknowledgement. Only synthetic credentials in disposable roots are used.
+
+`parseTypedCompatibilityMarkerBytes(bytes: Uint8Array): TypedCompatibilityMarker`
+is the sole added diagnostic parser export requested by the managed owner at #730
+`33f366a2e45599f76129817bdcf43a623ed5e6bd`. It reuses the same strict UTF-8 and
+unambiguous JSON decoder as sidecar reads, and the canonical exact marker validator
+used by the trusted binder. Both supported enrollment phases are parsed; missing,
+empty/corrupt, duplicate/escaped-duplicate keys, unknown fields, versions, formats,
+contracts and states refuse. Parsing cannot mint a WeakMap owner token or certify
+never-typed legacy state. The managed owner supplies bounded no-follow checked bytes
+and resolves protected refs; no second marker reader, locator or schema is introduced.
+Focused coverage is in [typed-marker.test.ts](../../packages/agents/test/typed-marker.test.ts).
+
+Lock-review evidence correction: the crashed-owner subprocess case now directly
+asserts that owner-bound `store.read()` rejects and `store.readRules()` returns
+unavailable, in addition to token retention, raw-byte preservation and writer refusal.
+No stale-lock takeover or automatic dead-owner recovery was added.

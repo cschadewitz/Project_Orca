@@ -23,11 +23,25 @@ import {
 } from "@orca/agents";
 import { actionFixture, complete, NOW, ruleFixture, stateFixture } from "./strict-permission-fixtures.js";
 
-const faults = vi.hoisted(() => ({ rename: "none", write: false }));
+const faults = vi.hoisted(() => ({
+  rename: "none",
+  write: false,
+  readTarget: "",
+  afterRead: undefined as (() => void) | undefined,
+}));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...fs,
+    readFile: vi.fn(async (...args: Parameters<typeof fs.readFile>) => {
+      const result = await fs.readFile(...args);
+      if (args[0] === faults.readTarget && faults.afterRead) {
+        const hook = faults.afterRead;
+        faults.afterRead = undefined;
+        hook();
+      }
+      return result;
+    }),
     writeFile: vi.fn(async (...args: Parameters<typeof fs.writeFile>) => {
       if (faults.write && typeof args[0] === "string" && args[0].endsWith(".tmp"))
         throw new Error("synthetic disk full");
@@ -45,6 +59,8 @@ const children: ChildProcess[] = [];
 afterEach(async () => {
   faults.rename = "none";
   faults.write = false;
+  faults.readTarget = "";
+  faults.afterRead = undefined;
   await Promise.all(
     children.splice(0).map(async (child) => {
       if (child.exitCode === null && child.signalCode === null) {
@@ -76,6 +92,7 @@ async function fixture(initialize = true) {
   };
   let currentMarker = marker;
   let grantRevision = "test:authority";
+  let approvalCurrent = true;
   const checkCompatibility = vi.fn(async () => currentMarker);
   const qualify = vi.fn(async () => ({
     sourceRefs: ["test:protected-reviews"],
@@ -83,19 +100,41 @@ async function fixture(initialize = true) {
     approvalRecordRef: "test:approval-projection",
     authorityRevision: grantRevision,
   }));
-  const owner = bindInactiveTypedSidecarOwner({ file, marker, checkCompatibility, qualify, lockTimeoutMs: 50 });
+  const assertCompatibilityCurrent = vi.fn((expected: TypedCompatibilityMarker) => {
+    expect(currentMarker).toEqual(expected);
+    return undefined;
+  });
+  const owner = bindInactiveTypedSidecarOwner({
+    file,
+    marker,
+    checkCompatibility,
+    assertCompatibilityCurrent,
+    qualify,
+    lockTimeoutMs: 50,
+  });
   const store = createInactiveTypedSidecarStore(owner);
   const authority: ScopedRuleGrantAuthority = {
     actor: { principalId: "test:principal", credentialId: "test:credential" },
     authorizeGrant: vi.fn(async () => grantRevision),
     verifyApproval: vi.fn(async () => ({ scopeEvidenceRef: "test:scope" })),
+    assertCommitCurrent: vi.fn((_command, _actor, proof) => {
+      expect(approvalCurrent).toBe(true);
+      expect(proof).toEqual({ authorityRevision: grantRevision, scopeEvidenceRef: "test:scope" });
+      return undefined;
+    }),
   };
   const pendingMarker = { ...marker, state: "enrollment-pending" as const };
+  let pendingCurrent = pendingMarker;
+  const pendingCheck = vi.fn(async () => pendingCurrent);
   const initializer = createInactiveTypedSidecarStore(
     bindInactiveTypedSidecarOwner({
       file,
       marker: pendingMarker,
-      checkCompatibility: async () => pendingMarker,
+      checkCompatibility: pendingCheck,
+      assertCompatibilityCurrent: (expected) => {
+        expect(expected).toEqual(pendingCurrent);
+        return undefined;
+      },
       qualify,
       lockTimeoutMs: 50,
     }),
@@ -128,14 +167,23 @@ async function fixture(initialize = true) {
     owner,
     store,
     initializer,
+    pendingMarker,
+    pendingCheck,
+    revokePendingEnrollment: () => {
+      pendingCurrent = { ...pendingMarker, enrollmentRef: "test:revoked-enrollment" };
+    },
     marker,
     authority,
     checkCompatibility,
+    assertCompatibilityCurrent,
     qualify,
     command,
     source,
     setMarker: (m: TypedCompatibilityMarker) => {
       currentMarker = m;
+    },
+    revokeApproval: () => {
+      approvalCurrent = false;
     },
     setGrantRevision: (r: string) => {
       grantRevision = r;
@@ -630,6 +678,10 @@ describe("cross-process strict policy ownership", () => {
     writer.child.kill("SIGKILL");
     await exited;
     await utimes(`${f.file}.lock`, new Date(0), new Date(0));
+    await expect(f.store.read()).rejects.toThrow(/pending or owner unavailable/);
+    expect(await f.store.readRules(actionFixture(), new AbortController().signal)).toMatchObject({
+      state: "unavailable",
+    });
     await expect(
       f.store.revokeScopedRule(
         {
@@ -672,4 +724,66 @@ it("ownership-loss fault injection cannot resume an old writer over a later succ
   expect((await f.store.read()).revision).toBe(revoked.revision);
   expect(await readFile(f.file, "utf8")).toBe(bytes);
   expect(await readdir(`${f.file}.retired-lock`)).toHaveLength(1);
+});
+
+it.each(["authority", "enrollment"])("rejects %s changes during the final filesystem read", async (kind) => {
+  const f = await fixture();
+  const command = await f.command();
+  const before = await readFile(f.file, "utf8");
+  vi.mocked(f.authority.verifyApproval).mockImplementationOnce(async () => {
+    faults.readTarget = f.file;
+    faults.afterRead = () => {
+      if (kind === "authority") f.setGrantRevision("test:revoked-authority");
+      else f.setMarker({ ...f.marker, enrollmentRef: "test:revoked-enrollment" });
+    };
+    return { scopeEvidenceRef: "test:scope" };
+  });
+  await expect(f.store.createScopedRule(command, f.authority)).rejects.toThrow();
+  expect(await readFile(f.file, "utf8")).toBe(before);
+});
+
+it.each(["authority", "enrollment", "approval"])(
+  "rejects %s revoked by a microtask after the final asynchronous grant check",
+  async (kind) => {
+    const f = await fixture();
+    const command = await f.command();
+    const before = await readFile(f.file, "utf8");
+    let calls = 0;
+    vi.mocked(f.authority.authorizeGrant).mockImplementation(async () => {
+      if (++calls === 2)
+        queueMicrotask(() => {
+          if (kind === "authority") f.setGrantRevision("test:revoked-authority");
+          else if (kind === "approval") f.revokeApproval();
+          else f.setMarker({ ...f.marker, enrollmentRef: "test:revoked-enrollment" });
+        });
+      return "test:authority";
+    });
+    await expect(f.store.createScopedRule(command, f.authority)).rejects.toThrow();
+    expect(await readFile(f.file, "utf8")).toBe(before);
+  },
+);
+
+it.each(["owner", "grant"])(
+  "refuses an accidentally asynchronous %s commit assertion before dispatch",
+  async (kind) => {
+    const f = await fixture();
+    const command = await f.command();
+    const before = await readFile(f.file, "utf8");
+    if (kind === "owner")
+      f.assertCompatibilityCurrent.mockImplementationOnce((() => Promise.resolve(undefined)) as never);
+    else Object.assign(f.authority, { assertCommitCurrent: () => Promise.resolve(undefined) });
+    await expect(f.store.createScopedRule(command, f.authority)).rejects.toThrow(/must be synchronous/);
+    expect(await readFile(f.file, "utf8")).toBe(before);
+  },
+);
+
+it("a pending enrollment lost after its final asynchronous check cannot initialize typed bytes", async () => {
+  const f = await fixture(false);
+  f.pendingCheck.mockResolvedValueOnce(f.pendingMarker).mockImplementationOnce(async () => {
+    queueMicrotask(f.revokePendingEnrollment);
+    return f.pendingMarker;
+  });
+  await expect(f.initializer.initializeFresh()).rejects.toThrow();
+  await expect(readFile(f.file)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await readdir(f.root)).toEqual([]);
 });

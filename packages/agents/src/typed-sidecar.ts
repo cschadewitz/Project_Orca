@@ -66,6 +66,14 @@ export interface ScopedRuleGrantAuthority {
   readonly actor: MutationActor;
   /** Bound to the ORIGINAL credential, captured ceiling and current permissions.grant. */
   authorizeGrant(this: void): Promise<string>;
+  /** Fresh synchronous/nonmutating exact review + authority observation. Never a Promise.
+   * Cross-process credential/publication serialization requires integrated ownership. */
+  assertCommitCurrent(
+    this: void,
+    command: CreateScopedRule,
+    actor: MutationActor,
+    proof: { readonly authorityRevision: string; readonly scopeEvidenceRef: string },
+  ): undefined;
   /** Protected review lookup binds exact rule, actor and approval; never trust a public reference. */
   verifyApproval(
     this: void,
@@ -83,6 +91,8 @@ export interface TypedSidecarOwnerPorts {
   readonly marker: TypedCompatibilityMarker;
   /** Must observe exclusive generation, durable marker and all managed launch/recovery fences. */
   checkCompatibility(this: void): Promise<TypedCompatibilityMarker>;
+  /** Synchronous/nonmutating retained lifetime/enrollment assertion, not cached disk parsing. */
+  assertCompatibilityCurrent(this: void, marker: TypedCompatibilityMarker): undefined;
   /** Verify ALL protected approval/scope records against this action and fresh current authority. */
   qualify(
     this: void,
@@ -204,20 +214,31 @@ function refuseDuplicateKeys(bytes: string): void {
   }
 }
 
-/** Required file; absence, empty, corrupt and unsupported data all refuse without a legacy fallback. */
-export async function readTypedSidecar(file: string): Promise<TypedSidecarSnapshot> {
-  const bytes = await readFile(file);
+/** Structural bytes only: no authority capability, legacy classification or filesystem lookup. */
+export function parseTypedCompatibilityMarkerBytes(bytes: Uint8Array): TypedCompatibilityMarker {
+  const raw = decodeStrictJson(bytes);
+  if (!validMarker(raw)) invalid("unsupported or malformed compatibility marker");
+  return structuredClone(raw);
+}
+function decodeStrictJson(input: Uint8Array): unknown {
+  if (!(input instanceof Uint8Array)) invalid("JSON input must be bytes");
+  const bytes = Buffer.from(input);
   const text = bytes.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(bytes)) invalid("invalid UTF-8");
-  let raw: unknown;
   try {
-    raw = JSON.parse(text);
+    const raw: unknown = JSON.parse(text);
     refuseDuplicateKeys(text);
+    return raw;
   } catch {
     invalid("invalid JSON");
   }
-  return { document: parseTypedSidecar(raw), revision: hash(bytes) };
 }
+/** Required file; absence, empty, corrupt and unsupported data all refuse without a legacy fallback. */
+export async function readTypedSidecar(file: string): Promise<TypedSidecarSnapshot> {
+  const bytes = await readFile(file);
+  return { document: parseTypedSidecar(decodeStrictJson(bytes)), revision: hash(bytes) };
+}
+
 function validateCreate(v: CreateScopedRule): void {
   if (
     !object(v) ||
@@ -236,7 +257,8 @@ function validateCreate(v: CreateScopedRule): void {
 export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner) {
   const ports = owners.get(owner);
   if (!ports) throw new OrcaError("NOT_SUPPORTED", "typed persistence requires its trusted owner");
-  const { file, marker, checkCompatibility, qualify } = ports;
+  const { file, marker, checkCompatibility, assertCompatibilityCurrent, qualify } = ports;
+  if (typeof assertCompatibilityCurrent !== "function") invalid("synchronous compatibility assertion required");
   const lock = { strictOwnership: true, timeoutMs: ports.lockTimeoutMs ?? 10_000 };
   if (!Number.isFinite(lock.timeoutMs) || lock.timeoutMs <= 0 || lock.timeoutMs > 10_000)
     invalid("invalid lock timeout");
@@ -246,6 +268,11 @@ export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner
     const current = structuredClone(await checkCompatibility());
     if (!validMarker(current) || !isDeepStrictEqual(current, marker))
       throw new OrcaError("NOT_SUPPORTED", "typed managed compatibility ownership unavailable");
+  }
+  function assertOwnerCurrent(): undefined {
+    if (assertCompatibilityCurrent(structuredClone(marker)) !== undefined)
+      invalid("compatibility assertion must be synchronous");
+    return undefined;
   }
   async function noPendingWriter() {
     try {
@@ -262,9 +289,10 @@ export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner
     const snapshot = await readTypedSidecar(file);
     await check();
     await noPendingWriter();
+    assertOwnerCurrent();
     return snapshot;
   }
-  async function publish(document: TypedSidecar, authorize: () => Promise<void>) {
+  async function publish(document: TypedSidecar, authorize: () => Promise<void>, beforeDispatch: () => undefined) {
     const bytes = `${JSON.stringify(parseTypedSidecar(document), null, 2)}\n`;
     const revision = hash(bytes);
     const tmp = `${file}.${process.pid}.tmp`;
@@ -272,6 +300,9 @@ export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner
     try {
       await writeFile(tmp, bytes, "utf8");
       await authorize();
+      // There are NO awaits between these trusted current-state assertions and dispatch.
+      // A revocation after dispatch cannot recall an irreversible filesystem operation.
+      if (beforeDispatch() !== undefined) invalid("commit assertion must be synchronous");
       attempted = true;
       await rename(tmp, file);
     } catch (error) {
@@ -302,6 +333,8 @@ export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner
     const actor = structuredClone(authority.actor);
     const authorizeGrant = authority.authorizeGrant;
     const verifyApproval = authority.verifyApproval;
+    const assertCommitCurrent = authority.assertCommitCurrent;
+    if (typeof assertCommitCurrent !== "function") invalid("synchronous grant assertion required");
     if (!validActor(actor)) invalid("invalid grant actor");
     if (!revoke) validateCreate(input as CreateScopedRule);
     else if (
@@ -352,23 +385,36 @@ export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner
         authorityRevision: initialAuthority,
       };
       const next = revoke ? records.map((r) => (r.rule.ruleId === rule.ruleId ? record : r)) : [...records, record];
-      const revision = await publish({ ...snapshot.document, scopedRules: { version: 1, records: next } }, async () => {
-        const currentReview = await verifyApproval(
-          {
-            rule: structuredClone(rule),
-            expectedRevision: input.expectedRevision,
-            approvalRecordRef: input.approvalRecordRef,
-          },
-          structuredClone(actor),
-        );
-        if (!isDeepStrictEqual(currentReview, reviewed)) invalid("protected approval changed during write");
-        await check();
-        if ((await authorizeGrant()) !== initialAuthority)
-          throw new OrcaError("CONFIG_STALE", "grant authority changed during write");
-        await checkOwnership();
-        if ((await readTypedSidecar(file)).revision !== snapshot.revision)
-          throw new OrcaError("CONFIG_STALE", "typed sidecar changed before publication");
-      });
+      const reviewedCommand = {
+        rule: structuredClone(rule),
+        expectedRevision: input.expectedRevision,
+        approvalRecordRef: input.approvalRecordRef,
+      };
+      const revision = await publish(
+        { ...snapshot.document, scopedRules: { version: 1, records: next } },
+        async () => {
+          // Complete filesystem IO before the last asynchronous trusted-state checks.
+          await checkOwnership();
+          if ((await readTypedSidecar(file)).revision !== snapshot.revision)
+            throw new OrcaError("CONFIG_STALE", "typed sidecar changed before publication");
+          const currentReview = await verifyApproval(structuredClone(reviewedCommand), structuredClone(actor));
+          if (!isDeepStrictEqual(currentReview, reviewed)) invalid("protected approval changed during write");
+          await check();
+          if ((await authorizeGrant()) !== initialAuthority)
+            throw new OrcaError("CONFIG_STALE", "grant authority changed during write");
+        },
+        () => {
+          assertOwnerCurrent();
+          if (
+            assertCommitCurrent(structuredClone(reviewedCommand), structuredClone(actor), {
+              authorityRevision: initialAuthority,
+              scopeEvidenceRef: reviewed.scopeEvidenceRef,
+            }) !== undefined
+          )
+            invalid("grant assertion must be synchronous");
+          return undefined;
+        },
+      );
       return structuredClone({ outcome: "saved", ...record, previousRevision: snapshot.revision, revision });
     });
   }
@@ -383,10 +429,14 @@ export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner
         } catch (e) {
           if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
           const document: TypedSidecar = { version: 2, agents: {}, scopedRules: { version: 1, records: [] } };
-          const revision = await publish(document, async () => {
-            await check("initialize");
-            await checkOwnership();
-          });
+          const revision = await publish(
+            document,
+            async () => {
+              await checkOwnership();
+              await check("initialize");
+            },
+            assertOwnerCurrent,
+          );
           return { document, revision };
         }
         invalid("fresh opt-in requires absent sidecar");

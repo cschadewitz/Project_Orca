@@ -22,6 +22,7 @@ const owner = bindInactiveTypedSidecarOwner({
   marker,
   lockTimeoutMs: 40,
   checkCompatibility: async () => marker,
+  assertCompatibilityCurrent: () => undefined,
   qualify: async () => {
     throw new Error("not evaluated by lock fixture");
   },
@@ -31,6 +32,7 @@ let paused = false;
 const authority = {
   actor: { principalId: "test:principal", credentialId: "test:credential" },
   authorizeGrant: async () => "test:authority",
+  assertCommitCurrent: () => undefined,
   verifyApproval: async () => {
     if (mode === "pause" && !paused) {
       paused = true;

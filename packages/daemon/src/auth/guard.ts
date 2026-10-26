@@ -236,6 +236,7 @@ export class Authorizer {
     review: {
       readonly readAuthorityRevision: () => Promise<string>;
       readonly verifyApproval: ScopedRuleGrantAuthority["verifyApproval"];
+      readonly assertCommitCurrent: ScopedRuleGrantAuthority["assertCommitCurrent"];
     },
   ): ScopedRuleGrantAuthority {
     const original: Principal = {
@@ -246,6 +247,7 @@ export class Authorizer {
     const capturedGrant = holds(original, "permissions.grant");
     const readRevision = review.readAuthorityRevision;
     const verifyApproval = review.verifyApproval;
+    const assertCommitCurrent = review.assertCommitCurrent;
     const check = () => {
       if (!this.currentPrincipal) throw authRequired();
       const current = this.currentPrincipal(original);
@@ -270,6 +272,17 @@ export class Authorizer {
         return revision;
       },
       verifyApproval,
+      assertCommitCurrent: (
+        ...[command, actor, proof]: Parameters<ScopedRuleGrantAuthority["assertCommitCurrent"]>
+      ): undefined => {
+        check();
+        if (actor.principalId !== original.id || actor.credentialId !== original.credentialId) throw authForbidden();
+        // The protected review owner must synchronously validate the exact approval and
+        // current authority revision. Async observation alone is not a commit capability.
+        if (assertCommitCurrent(command, actor, proof) !== undefined) throw authForbidden();
+        check();
+        return undefined;
+      },
     });
   }
 

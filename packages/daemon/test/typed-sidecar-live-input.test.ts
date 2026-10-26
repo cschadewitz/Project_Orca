@@ -18,15 +18,41 @@ import {
   strictPermissionRuleRevision,
   type CreateScopedRule,
 } from "@orca/agents";
-import { Authorizer, OwnershipStore, type Principal, type ResourceResolver } from "../src/auth/index.js";
+import {
+  Authorizer,
+  CredentialStore,
+  authInvalid,
+  OwnershipStore,
+  type Principal,
+  type ResourceResolver,
+} from "../src/auth/index.js";
 import { ruleFixture } from "../../agents/test/strict-permission-fixtures.js";
-const faults = vi.hoisted(() => ({ publication: false }));
+const faults = vi.hoisted(() => ({
+  publication: false,
+  readTarget: "",
+  afterRead: undefined as (() => Promise<void>) | undefined,
+  afterDispatch: undefined as (() => Promise<void>) | undefined,
+}));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...fs,
+    readFile: async (...args: Parameters<typeof fs.readFile>) => {
+      const result = await fs.readFile(...args);
+      if (args[0] === faults.readTarget && faults.afterRead) {
+        const hook = faults.afterRead;
+        faults.afterRead = undefined;
+        await hook();
+      }
+      return result;
+    },
     rename: async (...args: Parameters<typeof fs.rename>) => {
       await fs.rename(...args);
+      if (String(args[1]).endsWith("orca.permissions.json") && faults.afterDispatch) {
+        const hook = faults.afterDispatch;
+        faults.afterDispatch = undefined;
+        await hook();
+      }
       if (faults.publication && String(args[1]).endsWith("orca.permissions.json"))
         throw new Error("lost policy acknowledgement");
     },
@@ -35,6 +61,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 const roots: string[] = [];
 afterEach(async () => {
   faults.publication = false;
+  faults.readTarget = "";
+  faults.afterRead = undefined;
+  faults.afterDispatch = undefined;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 async function fixture() {
@@ -57,6 +86,7 @@ async function fixture() {
     file,
     marker,
     checkCompatibility: async () => marker,
+    assertCompatibilityCurrent: () => undefined,
     qualify: async () => {
       throw new Error("fixture never evaluates actions");
     },
@@ -68,20 +98,24 @@ async function fixture() {
       file,
       marker: pendingMarker,
       checkCompatibility: async () => pendingMarker,
+      assertCompatibilityCurrent: () => undefined,
       qualify: async () => {
         throw new Error("not evaluated");
       },
     }),
   );
   const snapshot = await initializer.initializeFresh();
-  const principal: Principal = {
-    id: "synthetic:alice",
-    kind: "credential",
-    credentialId: "synthetic:credential",
-    permissions: new Set(["permissions.grant", "inputs.answer"]),
+  const credentialFile = join(root, "credentials.json");
+  const credentialOwner = new CredentialStore({ file: credentialFile });
+  const issued = await credentialOwner.issue({
+    principal: "synthetic-alice",
+    permissions: ["permissions.grant", "inputs.answer"],
     scope: { workflows: "*", runs: "all" },
-  };
-  let current = principal;
+  });
+  const checked = credentialOwner.current(issued.credential.id);
+  if (!checked.ok) throw new Error("synthetic credential unavailable");
+  const principal = checked.principal;
+  let currentOverride: Principal | undefined;
   const resolver: ResourceResolver = {
     run: async () => ({ workflowId: "synthetic" }),
     inputRun: async () => "run",
@@ -89,7 +123,16 @@ async function fixture() {
     claimRun: async () => undefined,
     workflowExists: () => true,
   };
-  const authorizer = new Authorizer({ ownership: new OwnershipStore(), resolver, currentPrincipal: () => current });
+  const authorizer = new Authorizer({
+    ownership: new OwnershipStore(),
+    resolver,
+    currentPrincipal: () => {
+      if (currentOverride) return currentOverride;
+      const latest = credentialOwner.current(issued.credential.id);
+      if (!latest.ok) throw authInvalid();
+      return latest.principal;
+    },
+  });
   const command: CreateScopedRule = {
     rule: { ...ruleFixture(), ruleRevision: strictPermissionRuleRevision(ruleFixture()) },
     expectedRevision: snapshot.revision,
@@ -97,14 +140,26 @@ async function fixture() {
   };
   // Protected synthetic review is captured independently, before any client command. It is not derived from an answer.
   const approved = structuredClone(command);
-  const grant = authorizer.scopedRuleGrantAuthority(principal, {
-    readAuthorityRevision: async () => "synthetic:current-authority",
-    verifyApproval: async (candidate, actor) => {
+  const verifyApproval = vi.fn(
+    async (candidate: CreateScopedRule, actor: { principalId: string; credentialId?: string }) => {
       expect(candidate).toEqual(approved);
       expect(actor).toEqual({ principalId: principal.id, credentialId: principal.credentialId });
       expect(await stores.events.readTypes("run", ["human.answered"])).toHaveLength(1);
       return { scopeEvidenceRef: "synthetic:explicit-scope-evidence" };
     },
+  );
+  const grant = authorizer.scopedRuleGrantAuthority(principal, {
+    readAuthorityRevision: async () => "synthetic:current-authority",
+    assertCommitCurrent: (candidate, actor, proof) => {
+      expect(candidate).toEqual(approved);
+      expect(actor).toEqual({ principalId: principal.id, credentialId: principal.credentialId });
+      expect(proof).toEqual({
+        authorityRevision: "synthetic:current-authority",
+        scopeEvidenceRef: "synthetic:explicit-scope-evidence",
+      });
+      return undefined;
+    },
+    verifyApproval,
   });
   const port = new LiveHumanInput("boot");
   const abort = new AbortController();
@@ -173,8 +228,10 @@ async function fixture() {
     answer,
     liveAuthority,
     loseGrant: () => {
-      current = { ...principal, permissions: new Set(["inputs.answer"]) };
+      currentOverride = { ...principal, permissions: new Set(["inputs.answer"]) };
     },
+    verifyApproval,
+    revokeOriginal: () => new CredentialStore({ file: credentialFile }).revoke(issued.credential.id),
     uncertainAppend: () => {
       uncertainAppend = true;
     },
@@ -254,4 +311,40 @@ describe("typed standing writes at the existing live-input boundary", () => {
     expect(f.writer).toHaveBeenCalledTimes(1);
     expect(await readFile(f.file, "utf8")).toBe(retained);
   });
+});
+
+it("a separate credential-file revocation during the final policy read parks without publication or delivery", async () => {
+  const f = await fixture();
+  const before = await readFile(f.file, "utf8");
+  const verify = f.verifyApproval.getMockImplementation()!;
+  f.verifyApproval.mockImplementationOnce(async (command, actor) => {
+    const proof = await verify(command, actor);
+    faults.readTarget = f.file;
+    faults.afterRead = async () => {
+      expect(await f.revokeOriginal()).toBe(true);
+    };
+    return proof;
+  });
+  await expect(f.answer()).rejects.toMatchObject({ details: { answerRecorded: true } });
+  await expect(f.delivered).rejects.toBeInstanceOf(HumanInputPending);
+  expect(f.order).toEqual(["record"]);
+  expect(await readFile(f.file, "utf8")).toBe(before);
+  expect(await f.stores.events.readTypes("run", ["human.answered"])).toHaveLength(1);
+});
+
+it("revocation after rename dispatch with lost acknowledgement remains uncertain and is never replayed", async () => {
+  const f = await fixture();
+  faults.afterDispatch = async () => {
+    expect(await f.revokeOriginal()).toBe(true);
+  };
+  faults.publication = true;
+  await expect(f.answer()).rejects.toMatchObject({ details: { answerRecorded: true } });
+  await expect(f.delivered).rejects.toBeInstanceOf(HumanInputPending);
+  const attempted = f.writer.mock.results[0]!;
+  if (attempted.type !== "return") throw new Error("missing synthetic write attempt");
+  await expect(attempted.value).rejects.toMatchObject({ details: { publication: "uncertain" } });
+  expect((await f.policy.read()).document.scopedRules.records).toHaveLength(1);
+  expect(f.order).toEqual(["record"]);
+  await expect(f.answer()).rejects.toMatchObject({ code: "AUTH_INVALID" });
+  expect(f.writer).toHaveBeenCalledTimes(1);
 });
