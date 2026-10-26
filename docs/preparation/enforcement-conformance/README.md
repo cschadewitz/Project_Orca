@@ -37,7 +37,7 @@ research matrix is not a runtime support registry.
 ## Isolated corpus and provisional interface needs
 
 [corpus.v1.json](corpus.v1.json) contains symbolic traces, variations and expected
-invariant IDs, with no executable command, live identifier or provider request.
+invariants, with no executable command, live identifier or provider request.
 [corpus.schema.json](corpus.schema.json) validates preparation data only; it is
 not the #700 action/evidence schema. `trace` entries are ordered stimuli, not
 observations. `checks` are assertions a future harness must implement against real
@@ -118,7 +118,7 @@ separately from command identity. #449 retains unattended host containment;
 
 Keep four independent observations for each invocation: approval recorded, native
 callback delivered, dispatch started, effect independently observed. Each can be
-yes/no/unknown/not-applicable with its evidence source. No callback is legitimately
+yes/no/unknown/not-applicable with its evidence source. Callback delivery is legitimately
 not-applicable only when the path itself is established; missing telemetry is
 unknown. A lost acknowledgement stays unknown unless read-only evidence resolves
 it. An unexpected effect fails the scenario even if authorization/delivery is

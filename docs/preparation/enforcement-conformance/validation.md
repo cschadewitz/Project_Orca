@@ -28,8 +28,10 @@ README was inspected, not all rerun here.
 
 Python jsonschema 4.26.0 Draft202012Validator accepted corpus.schema.json and
 all 52 scenarios in corpus.v1.json. Separate checks verified unique case IDs.
-Five invalid mutations were rejected: status `passed`, invented observed-effect
-field, integration `active`, empty checks and unknown `universal` family. These
+Seven invalid mutations were rejected: status `passed`, invented observed-effect
+field, integration `active`, empty checks, unknown `universal` family and the two
+misleading native-shell/remote-sandbox guarantee strings. The latter are explicitly
+rejected by case-specific schema constraints. These
 are preparation-format checks, not runtime security proof.
 
 Reproduce schema/negative checks with the existing Python jsonschema module:
@@ -53,6 +55,13 @@ for patch in ({"status": "passed"}, {"observedEffect": True},
 bad = copy.deepcopy(d)
 bad["integration"] = "active"
 assert list(v.iter_errors(bad))
+for case_id, misleading in (
+    ("E706-native-shell", "Observe actual dispatch; telemetry absence proves no block"),
+    ("E706-remote-custom", "Explicit coverage exclusion; local sandbox proves no remote effect"),
+):
+    bad = copy.deepcopy(d)
+    next(c for c in bad["cases"] if c["id"] == case_id)["checks"] = [misleading]
+    assert list(v.iter_errors(bad))
 ```
 
 UTF-8, LF, final newline, trailing whitespace, balanced fences, relative-file
@@ -61,3 +70,8 @@ installed-provider, actual-Cal, C6b, privacy authorization or live effect proof
 was run. No provider hook, runtime interface, policy default, credential,
 activation, service or deployment changed. Executable adapter integration is
 pending the parent-agreed #700 interface; all new cases remain `not-run`.
+
+Follow-up review correction: both affected checks now preserve unknown/unsupported
+coverage. Preparation schema regression checks reject the earlier misleading
+assertions. The 52 scenarios remain unexecuted; the 139-test result above belongs
+to the initial preparation validation and was not rerun for these data/prose edits.

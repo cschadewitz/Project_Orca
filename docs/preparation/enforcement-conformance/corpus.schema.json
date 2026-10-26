@@ -90,7 +90,51 @@
           "status": {
             "const": "not-run"
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "id": {
+                  "const": "E706-native-shell"
+                }
+              },
+              "required": [
+                "id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "checks": {
+                  "const": [
+                    "Observe actual dispatch; absent telemetry leaves blocking and execution unknown"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "id": {
+                  "const": "E706-remote-custom"
+                }
+              },
+              "required": [
+                "id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "checks": {
+                  "const": [
+                    "Coverage remains unsupported or unknown until separately qualified; a local sandbox cannot establish remote confinement or absence of remote effects"
+                  ]
+                }
+              }
+            }
+          }
+        ]
       }
     }
   }
