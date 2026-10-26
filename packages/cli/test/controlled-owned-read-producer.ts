@@ -777,6 +777,13 @@ export async function runControlledOwnedReadTest(
         if (fault === "revoke-rule") {
           const state = await policy.read(),
             record = state.document.scopedRules.records[0]!;
+          // Capture the authority revision before taking the policy write lock. Its
+          // callbacks below revalidate only actual credential/lease/binding authority;
+          // a sidecar read from inside that lock would refuse our own transition.
+          const authorityCredential = currentCredential(operator);
+          const authority = await owner.readCaptureFacts(operator);
+          same(currentCredential(operator), authorityCredential);
+          same(authority.policyRevision, state.revision);
           const proofRef = randomUUID();
           const revoke = {
             ruleId: record.rule.ruleId,
@@ -790,7 +797,7 @@ export async function runControlledOwnedReadTest(
           const proof = {
             command,
             actor: operator,
-            credential: currentCredential(operator),
+            credential: authorityCredential,
             lease,
             binding: bindingIdentity(active),
           };
@@ -800,24 +807,40 @@ export async function runControlledOwnedReadTest(
             { maxRecords: 32 },
           );
           await observed.verifyUnchanged();
-          await policy.revokeScopedRule(
-            revoke,
-            grantAuthority(authenticatedPrincipal, {
-              readAuthorityRevision: async () => (await owner.readCaptureFacts(operator)).authorityRevision,
-              verifyApproval: async (supplied, actor) => {
-                same(supplied, command);
-                same(actor, operator);
-                same(await read(proofRef, "controlled-rule-revocation-v1"), proof);
-                check();
-                return { scopeEvidenceRef: proofRef };
-              },
-              assertCommitCurrent: (supplied, actor) => {
-                same(supplied, command);
-                same(actor, operator);
-                observed.assertUnchanged!();
-                return check();
-              },
-            }),
+          const assertAuthorityCurrent = (): undefined => {
+            check();
+            active.assertCurrent();
+            same(currentCredential(operator), proof.credential);
+            assert.ok(!lapsed(lease, Date.now()));
+            assert.equal(physicalStamp(leasePath), leaseStamp);
+            assert.ok(leaseBytes && fs.readFileSync(leasePath).equals(leaseBytes));
+            observed.assertUnchanged!();
+            return undefined;
+          };
+          await leases.withOwnership(lease, () =>
+            policy.revokeScopedRule(
+              revoke,
+              grantAuthority(authenticatedPrincipal, {
+                readAuthorityRevision: async () => {
+                  same(await stores.leases.get(lease.resource), lease);
+                  assertAuthorityCurrent();
+                  return authority.authorityRevision;
+                },
+                verifyApproval: async (supplied, actor) => {
+                  same(supplied, command);
+                  same(actor, operator);
+                  same(await read(proofRef, "controlled-rule-revocation-v1"), proof);
+                  assertAuthorityCurrent();
+                  return { scopeEvidenceRef: proofRef };
+                },
+                assertCommitCurrent: (supplied, actor, accepted) => {
+                  same(supplied, command);
+                  same(actor, operator);
+                  same(accepted, { scopeEvidenceRef: proofRef, authorityRevision: authority.authorityRevision });
+                  return assertAuthorityCurrent();
+                },
+              }),
+            ),
           );
           assert.equal((await policy.read()).document.scopedRules.records[0]!.rule.status, "revoked");
         }
