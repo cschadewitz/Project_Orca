@@ -196,6 +196,37 @@ async function fixture(initialize = true) {
 }
 
 describe("inactive typed sidecar owner and exact format", () => {
+  it.each(["initialize", "create", "revoke"])(
+    "preserves existing temporary evidence and policy bytes on %s refusal",
+    async (phase) => {
+      const f = await fixture(phase !== "initialize");
+      const saved = phase === "revoke" ? await f.store.createScopedRule(await f.command(), f.authority) : undefined;
+      const before = phase === "initialize" ? undefined : await readFile(f.file);
+      const temporary = `${f.file}.${process.pid}.tmp`;
+      await writeFile(temporary, "retained synthetic publication evidence", { mode: 0o600, flag: "wx" });
+      if (phase === "initialize")
+        await expect(f.initializer.initializeFresh()).rejects.toMatchObject({ code: "EEXIST" });
+      else if (saved)
+        await expect(
+          f.store.revokeScopedRule(
+            {
+              ruleId: saved.rule.ruleId,
+              ruleRevision: saved.rule.ruleRevision,
+              expectedRevision: saved.revision,
+              approvalRecordRef: "test:explicit-revoke",
+            },
+            f.authority,
+          ),
+        ).rejects.toMatchObject({ code: "EEXIST" });
+      else
+        await expect(f.store.createScopedRule(await f.command(), f.authority)).rejects.toMatchObject({
+          code: "EEXIST",
+        });
+      expect(await readFile(temporary, "utf8")).toBe("retained synthetic publication evidence");
+      if (before) expect(await readFile(f.file)).toEqual(before);
+      else await expect(readFile(f.file)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
   it("rejects a structural/serialized owner token and fresh opt-in on any existing bytes", async () => {
     expect(() => createInactiveTypedSidecarStore({} as InactiveTypedSidecarOwner)).toThrow(/trusted owner/);
     const f = await fixture();

@@ -222,3 +222,55 @@ A tool or descendant can close inherited descriptors. Such a process-tree guaran
 requires its own audited launch/settlement contract and is not claimed here.
 The stable bridge/full inventory proof remains missing; typed activation and the
 accepted real build map remain off/empty.
+
+## CI metadata/umask correction
+
+CI run `40293652000`, job `121474435549`, failed 14 managed-owner tests at
+`metadata ownership or size` after canonical fresh publication. Its log did not
+record umask, UID, mode, link count or size; those CI values are not retroactively
+claimed here. The local execution environment used umask `0077`, which masked a
+producer-contract mismatch: canonical typed `publish` used default temporary-file
+creation permissions rather than specifying private mode.
+
+The new bounded disposable child runs the actual managed owner and canonical
+initializer/create/revoke path. Only its own process umask changes; workers and
+operator files are untouched. Before the fix, initial sidecar observations were:
+
+| Child umask | Published mode | UID matches child | nlink | Bytes | Managed outcome |
+| --- | --- | --- | --- | --- | --- |
+| `0022` | `0644` | yes | 1 | 95 | refused |
+| `0002` | `0664` | yes | 1 | 95 | refused |
+| `0077` | `0600` | yes | 1 | 95 | enrolled |
+| `0000` | `0666` | yes | 1 | 95 | refused |
+
+Identity and enrollment metadata remained `0600`, regular, single-link and owned
+by the child in each case. Thus the mode predicate, not UID/link/size, explains the
+reproduced difference. Ordinary `0022` reproduces the CI failure path; the precise
+CI umask was not logged. The independent regression failed three of four cases on
+the pre-correction source, with only the local `0077` case succeeding.
+
+Producer correction `557970ee82b640633dc89c7162f59a7173138dad` is confined to
+canonical typed `publish`: create the temporary file with explicit private `0600`
+mode and `wx`, before any policy bytes are written. Exclusive creation prevents
+reusing an existing temporary file's broader mode. Cleanup removes only a
+successfully prepared file; an existing temporary file (or failed preparation
+evidence) is retained rather than overwritten/deleted. Initializer, create and
+revoke share this one publication function. There is no second writer, schema or
+parser, no chmod/repair of existing policy, and no new retry or recovery path.
+Final authority/approval/owner assertions and uncertainty semantics are unchanged.
+
+Regression observes private temporary-file mode before rename and checks regular,
+single-link, owner-matching bounded `0600` policy after initialize, create and revoke
+under all four masks. Exact revisions advance and enrollment evidence stays
+unchanged. Persistence tests also verify pre-existing temporary evidence and policy
+bytes survive initialization/create/revoke refusal. The managed guard's privacy,
+UID, link, size and root checks are unchanged; failed/pending real enrollment would
+still require explicit inspection rather than initialization retry.
+
+Validation: 77 focused tests passed; the final four-mask probe also passed after
+adding pre-rename observations. Affected CLI/agents/daemon suites run under `0022`:
+2,023 passed, one existing opt-in skipped. Root/renderer type checks, full lint,
+build, focused formatting and diff checks passed. TypeScript policy producer is the
+only runtime source changed; the wrapper lifetime correction and dependency lock/
+lifecycle policy remain byte-identical. No live policy, credentials, service,
+deployment, OS setting or Mac hardware was used. Activation remains off.
