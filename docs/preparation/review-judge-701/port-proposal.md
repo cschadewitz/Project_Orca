@@ -48,6 +48,12 @@ an existing approved rule/delegation, current authority, sufficient coverage, ma
 constraints, exact scoped native choice and live callback. They do not verify those facts.
 No judge output can establish them. Revalidate current state after any awaited review and
 before delivery/permit consumption using #700's agreed owner, not fixture booleans.
+For advisory/required vectors, the symbolic approved-rule prerequisite must additionally
+mean that the rule explicitly delegates fit assessment. The current fixture harness
+does not represent or test this distinction. An ordinary approved rule without such
+delegation must not invoke a judge. See the [#708 cross-check](contract-708-feedback.md);
+the local recommendation labels and composition outcomes must not be mapped directly
+to the proposed canonical vocabulary before the parent confirms the reviewed interface.
 
 | Mode | Eligible existing approved rule | Failure behavior |
 | --- | --- | --- |

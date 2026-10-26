@@ -44,3 +44,9 @@ deployment was requested. Production integration remains blocked pending the rev
 No changelog fragment is needed: this preparation changes no shipped runtime behavior.
 PR CI results remain separate evidence and must not be described as native or provider
 acceptance. This does not close #701.
+
+The subsequent #708 compatibility cross-check is documentation only. It identifies
+unimplemented delegated-eligibility and binding/mapping vectors and does not add them
+to the 79 executed tests. Markdown links, UTF-8/LF/newline/whitespace, fences and diff
+checks were repeated for that documentation update. No runtime or peer-branch import
+was added; the reviewed-interface dependency remains pending.

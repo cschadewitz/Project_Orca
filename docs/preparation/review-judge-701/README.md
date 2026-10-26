@@ -5,6 +5,10 @@ This directory is standalone preparation for [#701](https://github.com/cschadewi
 coordinated under [#699](https://github.com/cschadewitz/Project_Orca/issues/699).
 It does not complete either issue or define a parallel canonical action schema.
 Source inspection baseline: main `32f92cc16b9faf1748059e930c3f77b3934151ae`.
+The proposed #700 interface at [draft #708](https://github.com/cschadewitz/Project_Orca/pull/708),
+commit `e08bc96ab3250718c93f77057b5560e7b6421dcd`, has now been inspected.
+It is **not frozen or accepted**. [Compatibility feedback](contract-708-feedback.md)
+records the required mapping and review questions; this draft imports none of its code.
 
 Run the preparation suite with Node >=24, from the repository root:
 
@@ -49,6 +53,8 @@ ordinary CI success alone is not proof that these preparation checks ran.
   response, abstention, escalation, denial, unavailable/malformed/timeout/cancelled
   outcomes, ceilings and no fallback broadening.
 - [Validation evidence](validation.md): exact checks and their limits.
+- [#708 compatibility feedback](contract-708-feedback.md): differences in delegated
+  judgment eligibility, result vocabulary, projection delivery and failure attribution.
 
 The sole implemented destination is `offline:fixture`. Small models, JEV, ensembles,
 isolated workers, hosted services and BYOK remain adapter design options. No provider
