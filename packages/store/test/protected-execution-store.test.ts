@@ -172,6 +172,49 @@ describe("authenticated private storage", () => {
     expect(String(error)).not.toContain(SECRET);
   });
 
+  // keyFor(create=true) authenticates an existing record before any publication.
+  // One existing record removes directory order/random-reference dependence.
+  it.each(["malformed-envelope", "ciphertext"] as const)(
+    "a %s key-check record refuses later publication without replacing the key or records",
+    async (corruption) => {
+      const directory = await dir();
+      const store = new FileExecutionStore(directory);
+      await store.putGeneration("existing", { purpose: "key-check-control" });
+      const path = privatePath(directory, "existing.generation.json");
+      const keyPath = privatePath(directory, ".execution-key");
+      const key = await readFile(keyPath);
+      const bytes = await readFile(path);
+      let corrupt: Buffer;
+      if (corruption === "malformed-envelope") {
+        expect(bytes.subarray(-2).toString()).toBe("}\n");
+        corrupt = Buffer.from(bytes);
+        corrupt[corrupt.length - 2] = corrupt[corrupt.length - 2]! ^ 1;
+      } else {
+        const envelope = JSON.parse(bytes.toString()) as { ciphertext: string };
+        const ciphertext = Buffer.from(envelope.ciphertext, "base64");
+        expect(ciphertext.length).toBeGreaterThan(0);
+        ciphertext[0] = ciphertext[0]! ^ 1;
+        envelope.ciphertext = ciphertext.toString("base64");
+        corrupt = Buffer.from(JSON.stringify(envelope) + "\n");
+      }
+      await writeFile(path, corrupt);
+      await expect(store.getGeneration("existing")).rejects.toMatchObject({
+        code: "RUN_STATE",
+        message: "protected execution record or key is missing, invalid or unreadable",
+      });
+      await expect(store.putGeneration("fresh-capture", { purpose: "must-not-publish" })).rejects.toMatchObject({
+        code: "RUN_STATE",
+        message: "protected execution record or key could not be written safely",
+      });
+      expect(await readFile(keyPath)).toEqual(key);
+      expect(await readFile(path)).toEqual(corrupt);
+      expect((await readdir(privatePath(directory, ""))).sort()).toEqual([
+        ".execution-key",
+        "existing.generation.json",
+      ]);
+    },
+  );
+
   it("restores from an encrypted records-plus-key backup at a new root", async () => {
     const original = await dir();
     const backup = await dir();
