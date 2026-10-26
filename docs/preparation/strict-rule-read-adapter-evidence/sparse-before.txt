@@ -1,0 +1,75 @@
+
+ RUN  v5.0.5 /workspace/Project_Orca
+
+ ❯ packages/agents/test/strict-permission-source.test.ts (64 tests | 9 failed) 82ms
+   ❯ strict read projection (53)
+     × refuses sparse sourceRefs arrays before admission (valid entry: false) 13ms
+     × refuses sparse sourceRefs arrays before admission (valid entry: true) 2ms
+     × refuses sparse rules arrays before admission (valid entry: false) 2ms
+     × refuses sparse rules arrays before admission (valid entry: true) 1ms
+     × refuses sparse resources arrays before admission (valid entry: false) 1ms
+     × refuses sparse resources arrays before admission (valid entry: true) 1ms
+     × refuses sparse environmentAndCredentialRefs arrays before admission (valid entry: false) 1ms
+     × refuses sparse environmentAndCredentialRefs arrays before admission (valid entry: true) 1ms
+   ❯ existing persistence compatibility and write boundary seam (8)
+     × refuses a sparse sidecar source list without reading it 2ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 9 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/agents/test/strict-permission-source.test.ts > strict read projection > refuses sparse sourceRefs arrays before admission (valid entry: false)
+ FAIL  packages/agents/test/strict-permission-source.test.ts > strict read projection > refuses sparse sourceRefs arrays before admission (valid entry: true)
+ FAIL  packages/agents/test/strict-permission-source.test.ts > strict read projection > refuses sparse rules arrays before admission (valid entry: false)
+ FAIL  packages/agents/test/strict-permission-source.test.ts > strict read projection > refuses sparse rules arrays before admission (valid entry: true)
+ FAIL  packages/agents/test/strict-permission-source.test.ts > strict read projection > refuses sparse resources arrays before admission (valid entry: false)
+ FAIL  packages/agents/test/strict-permission-source.test.ts > strict read projection > refuses sparse resources arrays before admission (valid entry: true)
+ FAIL  packages/agents/test/strict-permission-source.test.ts > strict read projection > refuses sparse environmentAndCredentialRefs arrays before admission (valid entry: false)
+ FAIL  packages/agents/test/strict-permission-source.test.ts > strict read projection > refuses sparse environmentAndCredentialRefs arrays before admission (valid entry: true)
+AssertionError: expected { state: 'complete', …(1) } to match object { state: 'unknown' }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+  {
+-   "state": "unknown",
++   "state": "complete",
+  }
+
+ ❯ packages/agents/test/strict-permission-source.test.ts:91:25
+     89|     }
+     90|     const state = await fixture(bad).source.readCurrent(actionFixture(…
+     91|     expect(state.rules).toMatchObject({ state: "unknown" });
+       |                         ^
+     92|   });
+     93|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯
+
+ FAIL  packages/agents/test/strict-permission-source.test.ts > existing persistence compatibility and write boundary seam > refuses a sparse sidecar source list without reading it
+AssertionError: expected { state: 'unsupported', …(1) } to match object { state: 'malformed' }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+  {
+-   "state": "malformed",
++   "state": "unsupported",
+  }
+
+ ❯ packages/agents/test/strict-permission-source.test.ts:381:7
+    379|     expect(
+    380|       await readLegacyStrictRuleMaterial({ configured: { rules: [] }, …
+    381|     ).toMatchObject({ state: "malformed" });
+       |       ^
+    382|     expect(read).not.toHaveBeenCalled();
+    383|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/9]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  9 failed | 55 passed (64)
+   Start at  05:23:35
+   Duration  525ms (import 51%, transform 24%, tests 23%, worker 1%)
+
