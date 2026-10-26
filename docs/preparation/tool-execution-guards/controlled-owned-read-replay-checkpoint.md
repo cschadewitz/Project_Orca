@@ -181,3 +181,16 @@ so current metadata cannot retroactively qualify it. This proposal retains the
 trusted-kernel/stable-mount/cooperative same-UID assumptions and adds no path
 exemption or acceptance. Fresh source/image/observations are required after the
 producer owner's child change and the reviewed producer updates.
+
+### Matching the source-owned helper candidate
+
+Reviewed candidate #751 `557f62fbe86fc8371d48f11ec37bf9db71cac436` supplies the
+source-owned helper. The observer now recognizes only the retained lifetime
+fdinfo path with `O_RDONLY|O_NOFOLLOW|O_CLOEXEC`, requires its positive-inode
+per-open stat, checks each request equals the unused 4097-byte sentinel buffer,
+permits at most 4096 bytes, and requires EOF before close. The actual original
+supervisor/flock/lifetime checks still apply. Other query flags are unchanged.
+Grammar controls reject missing stat, pre-EOF close, oversize, old/broadened
+flags and extra reads after EOF. The suite has 65 passing tests. This is not an
+installed passing run against #751; hosted CI/source integration and a fresh
+reviewed image pin remain prerequisites. No producer child edit was duplicated.

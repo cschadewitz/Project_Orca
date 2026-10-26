@@ -95,6 +95,7 @@ class Handle:
     directory_seen: set = field(default_factory=set)
     directory_eof: bool = False
     query_bytes: bytes = b''
+    query_eof: bool = False
     physical_bound: bool = False
 
 
@@ -204,6 +205,8 @@ class Replay:
 
     def bind(self, obj, call, args):
         physical, mode, uid, gid, size, links = physical_fields(call, args)
+        if obj.family == 'runtime-query':
+            require(physical[2] > 0, 'query has no positive physical inode')
         require((mode, uid, gid) == (obj.mode, obj.uid, obj.gid), 'changed mode/owner physical binding')
         if obj.physical is None:
             require(physical not in self.inodes or self.inodes[physical] is obj, 'unexpected physical alias')
@@ -444,7 +447,9 @@ class Replay:
                         {'O_RDONLY', 'O_NONBLOCK', 'O_CLOEXEC', 'O_DIRECTORY'}), 'unknown readonly flags')
                 obj = self.paths.get(path)
                 if obj is None and family == 'runtime-query':
-                    require(flags in ({'O_RDONLY', 'O_CLOEXEC'}, {'O_RDONLY'}), 'query is not readonly')
+                    require(self.query_flags(path, flags), 'query readonly flags differ from exact role')
+                    if path == f'/proc/self/fdinfo/{self.lifetime}':
+                        require(pid == self.leader, 'source lifetime query opened by unexpected thread')
                     meta = self.original['queryMetadata'][path]
                     require(stat.S_ISREG(meta[0]), 'query original is not regular')
                     obj = self.query_objects.get(path)
@@ -666,6 +671,8 @@ class Replay:
                 require(result == '0' and number not in {self.lifetime, self.command, self.ack}, 'unplanned inherited/failed close')
                 require(not handle.directory_seen or handle.directory_eof, 'directory handle closed before complete enumeration')
                 if obj.family == 'runtime-query' and next(iter(obj.names)) == f'/proc/self/fdinfo/{self.lifetime}':
+                    require(pid == self.leader and handle.physical_bound and handle.query_eof,
+                            'source lifetime query closed before bound EOF')
                     self.check_fdinfo(handle.query_bytes)
                 if 'O_WRONLY' in handle.flags:
                     obj.writer_closed = True
@@ -674,11 +681,18 @@ class Replay:
             if call in FILE_OPS:
                 if obj.family == 'runtime-query':
                     require(handle.physical_bound, 'query read lacks per-open physical bind')
-                    require(call == 'read' and handle.flags in ({'O_RDONLY', 'O_CLOEXEC'}, {'O_RDONLY'}),
+                    path = next(iter(obj.names))
+                    require(call == 'read' and self.query_flags(path, handle.flags),
                             'writable/positional query operation')
                     count = positive_result(result)
                     data = string(args[1])
                     limit = self.original['queries'][next(iter(obj.names))]
+                    if path == f'/proc/self/fdinfo/{self.lifetime}':
+                        require(pid == self.leader and not handle.query_eof and
+                                int(args[2]) == 4097 - handle.position,
+                                'source lifetime query does not follow bounded sentinel sequence')
+                        if count == 0:
+                            handle.query_eof = True
                     require(count == len(data) and count <= int(args[2]) <= 65536 and
                             handle.position + count <= limit, 'query bytes/count bound')
                     handle.position += count
@@ -772,6 +786,11 @@ class Replay:
             require(not hasattr(item, 'directory_inode') or item.directory_inode == inode, 'changed directory-entry inode')
             item.directory_inode = inode
             handle.directory_seen.add(name)
+
+    def query_flags(self, path, flags):
+        if path == f'/proc/self/fdinfo/{self.lifetime}':
+            return flags == {'O_RDONLY', 'O_NOFOLLOW', 'O_CLOEXEC'}
+        return flags in ({'O_RDONLY', 'O_CLOEXEC'}, {'O_RDONLY'})
 
     def check_fdinfo(self, data):
         text = data.decode('ascii')

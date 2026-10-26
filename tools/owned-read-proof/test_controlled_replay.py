@@ -307,3 +307,50 @@ class ImmutablePublicationControls(unittest.TestCase):
             r.event((10, 'unlink', ['"' + final + '"'], '0', 0, 0))
         with self.assertRaisesRegex(RuntimeError, 'original unpublished temporary'):
             r.event((10, 'link', ['"' + final + '"', '"' + other + '"'], '0', 0, 0))
+
+class SourceLifetimeQueryControls(unittest.TestCase):
+    """#751 helper grammar only; no synthetic bootstrap authority."""
+    def replay(self):
+        r = QueryObjectControls().replay()
+        r.original['queries']['/proc/self/fdinfo/3'] = 4096
+        r.original['queryMetadata']['/proc/self/fdinfo/3'] = [0o100444, 1000, 1000]
+        r.original['supervisorPid'] = 99
+        r.handles[3] = Handle(Object('lifetime', 0o100600, physical=(0, 33, 88)), {'O_RDWR'})
+        r.event((10, 'openat', ['AT_FDCWD', '"/proc/self/fdinfo/3"', 'O_RDONLY|O_NOFOLLOW|O_CLOEXEC'], '20', 0, 0))
+        return r
+
+    def read(self, r, data, request):
+        import json
+        r.event((10, 'read', ['20', json.dumps(data.decode()), str(request)], str(len(data)), 1, 1))
+
+    def test_exact_role_flags_stat_sentinel_eof_and_close(self):
+        r = self.replay()
+        data = b'pos:\t0\nflags:\t02000002\nmnt_id:\t1\nino:\t88\nlock:\t1: FLOCK ADVISORY WRITE 99 00:21:88 0 EOF\n'
+        with self.assertRaisesRegex(RuntimeError, 'per-open physical bind'):
+            self.read(r, data, 4097)
+        r.event((10, 'fstat', QueryObjectControls().stat(), '0', 0, 0))
+        self.read(r, data, 4097)
+        with self.assertRaisesRegex(RuntimeError, 'closed before bound EOF'):
+            r.event((10, 'close', ['20'], '0', 2, 2))
+        self.read(r, b'', 4097-len(data))
+        r.event((10, 'close', ['20'], '0', 3, 3))
+        self.assertNotIn(20, r.handles)
+        self.assertIn(3, r.handles)
+
+    def test_no_flag_expansion_for_other_queries_and_no_old_fdinfo_flags(self):
+        r = self.replay()
+        self.assertFalse(r.query_flags('/proc/self/maps', {'O_RDONLY', 'O_NOFOLLOW', 'O_CLOEXEC'}))
+        self.assertFalse(r.query_flags('/proc/self/fdinfo/3', {'O_RDONLY', 'O_CLOEXEC'}))
+        self.assertFalse(r.query_flags('/proc/self/fdinfo/3', {'O_RDWR', 'O_NOFOLLOW', 'O_CLOEXEC'}))
+
+    def test_missing_sentinel_oversize_and_read_after_eof_refuse(self):
+        for data, request in [(b'x', 8192), (b'x'*4097, 4097)]:
+            r = self.replay()
+            r.event((10, 'fstat', QueryObjectControls().stat(), '0', 0, 0))
+            with self.subTest(request=request), self.assertRaises(RuntimeError):
+                self.read(r, data, request)
+        r = self.replay()
+        r.event((10, 'fstat', QueryObjectControls().stat(), '0', 0, 0))
+        self.read(r, b'', 4097)
+        with self.assertRaisesRegex(RuntimeError, 'sentinel sequence'):
+            self.read(r, b'', 4097)
