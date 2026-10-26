@@ -48,12 +48,29 @@ export async function ownedServiceFixture(maximumInvocations = 8) {
       return undefined;
     },
     // Synthetic boot/protected proof assumption. This is NOT service/build qualification.
-    qualify: async () => ({
-      sourceRefs: ["test:protected-record"],
-      scopeEvidenceRef: "test:scope",
-      approvalRecordRef: "test:approval",
-      authorityRevision: base.state.snapshot.authority.authorityRevision,
-    }),
+    qualify: async () => {
+      const capturedMarker = structuredClone(marker);
+      const authorityRevision = base.state.snapshot.authority.authorityRevision;
+      return {
+        sourceRefs: ["test:protected-record"],
+        scopeEvidenceRef: "test:scope",
+        approvalRecordRef: "test:approval",
+        authorityRevision,
+        // #736 adds a final synchronous source check. Preserve this fixture's
+        // explicit synthetic proof assumption; this does not qualify its coverage.
+        assertCurrent: (): undefined => {
+          if (
+            !isDeepStrictEqual(marker, capturedMarker) ||
+            base.state.snapshot.authority.authorityRevision !== authorityRevision ||
+            base.state.revoked ||
+            base.state.authorityUnavailable ||
+            lapsed(base.lease, base.clock.now())
+          )
+            throw new Error("test synthetic qualification changed");
+          return undefined;
+        },
+      };
+    },
   };
   await createInactiveTypedSidecarStore(bindInactiveTypedSidecarOwner(ports)).initializeFresh();
   marker = { ...marker, state: "enrolled" };
