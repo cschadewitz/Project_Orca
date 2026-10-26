@@ -56,8 +56,59 @@ async function outcome(f = fixture(), action = actionFixture()) {
   const state = await f.source.readCurrent(action, signal());
   return evaluateStrictPermission(action, state, NOW, "synthetic:review");
 }
+function sparse<T>(value: T, populated: boolean): T[] {
+  const items = new Array<T>(populated ? 2 : 1);
+  if (populated) items[0] = value;
+  return items;
+}
 
 describe("strict read projection", () => {
+  it.each(
+    (["sourceRefs", "rules", "resources", "environmentAndCredentialRefs"] as const).flatMap((key) =>
+      [false, true].map((populated) => ({ key, populated })),
+    ),
+  )("refuses sparse $key arrays before admission (valid entry: $populated)", async ({ key, populated }) => {
+    const typed = material();
+    let bad: StrictRuleRead;
+    if (key === "sourceRefs") {
+      bad = { ...typed, provenance: { ...typed.provenance, sourceRefs: sparse("synthetic:source", populated) } };
+    } else if (key === "rules") {
+      bad = material(sparse(revised(ruleFixture()), populated));
+    } else {
+      const rule = revised({
+        ...ruleFixture(),
+        match: {
+          ...ruleFixture().match,
+          [key]:
+            key === "resources"
+              ? sparse(ruleFixture().match.resources[0]!, populated)
+              : sparse("synthetic:environment", populated),
+        },
+      });
+      bad = material([rule]);
+    }
+    const state = await fixture(bad).source.readCurrent(actionFixture(), signal());
+    expect(state.rules).toMatchObject({ state: "unknown" });
+  });
+
+  it("preserves valid dense empty rule, resource and environment arrays", async () => {
+    expect((await fixture(material([])).source.readCurrent(actionFixture(), signal())).rules).toEqual(complete([]));
+    expect(await outcome(fixture(material([])))).toMatchObject({
+      phase: "final",
+      verdict: { outcome: "require-human" },
+    });
+    const rule = revised({
+      ...ruleFixture(),
+      match: { ...ruleFixture().match, resources: [], environmentAndCredentialRefs: [] },
+    });
+    expect((await fixture(material([rule])).source.readCurrent(actionFixture(), signal())).rules).toEqual(
+      complete([rule]),
+    );
+    expect(await outcome(fixture(material([rule])), { ...actionFixture(), resources: complete([]) })).toMatchObject({
+      phase: "final",
+      verdict: { outcome: "allow" },
+    });
+  });
   it("projects an ordered qualified immutable snapshot into accepted strict state, without caching", async () => {
     const typed = material();
     const f = fixture(typed);
@@ -316,6 +367,21 @@ const legacy = {
 };
 
 describe("existing persistence compatibility and write boundary seam", () => {
+  it("refuses sparse configured rules before inspecting sources", async () => {
+    const read = vi.fn(async () => JSON.stringify(legacy));
+    expect(
+      await readLegacyStrictRuleMaterial({ configured: { rules: new Array(1) }, files: ["synthetic"], read }),
+    ).toMatchObject({ state: "malformed" });
+    expect(read).not.toHaveBeenCalled();
+  });
+  it("refuses a sparse sidecar source list without reading it", async () => {
+    const read = vi.fn(async () => JSON.stringify(legacy));
+    expect(
+      await readLegacyStrictRuleMaterial({ configured: { rules: [] }, files: new Array<string>(1), read }),
+    ).toMatchObject({ state: "malformed" });
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("classifies missing, corrupt, unsupported and legacy sources explicitly", async () => {
     const file = await sidecar();
     const inspect = () => readLegacyStrictRuleMaterial({ configured: { rules: [] }, files: [file] });

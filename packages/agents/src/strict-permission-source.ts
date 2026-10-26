@@ -50,6 +50,9 @@ export async function readLegacyStrictRuleMaterial(options: {
   files: readonly string[];
   read?: (file: string) => Promise<string>;
 }): Promise<StrictRuleRead> {
+  if (!strings(options.files)) return { state: "malformed", reason: "sidecar-source-list-invalid" };
+  if (object(options.configured) && options.configured.rules !== undefined && !denseArray(options.configured.rules))
+    return { state: "malformed", reason: "configured-policy-invalid" };
   if (!PermissionPolicySchema.safeParse(options.configured).success)
     return { state: "malformed", reason: "configured-policy-invalid" };
   for (const file of options.files) {
@@ -122,7 +125,7 @@ function projectRules(material: StrictRuleRead, boundary: CurrentBoundary): Stri
   const p = material.provenance;
   if (
     !p ||
-    !Array.isArray(p.sourceRefs) ||
+    !denseArray(p.sourceRefs) ||
     !p.sourceRefs.length ||
     !p.sourceRefs.every(nonempty) ||
     !nonempty(p.scopeEvidenceRef) ||
@@ -133,7 +136,7 @@ function projectRules(material: StrictRuleRead, boundary: CurrentBoundary): Stri
     p.authorityRevision !== boundary.authority.authorityRevision
   )
     return unknown("strict-policy-untrusted-provenance");
-  if (!Array.isArray(material.rules) || !material.rules.every(validRule))
+  if (!denseArray(material.rules) || !material.rules.every(validRule))
     return unknown("strict-policy-malformed-typed-rules");
   if (new Set(material.rules.map((rule) => rule.ruleId)).size !== material.rules.length)
     return unknown("strict-policy-ambiguous-rule-identity");
@@ -153,8 +156,16 @@ function nonempty(value: unknown): value is string {
 function oneOf(value: unknown, values: readonly string[]): boolean {
   return typeof value === "string" && values.includes(value);
 }
+/** Array iteration methods skip holes; every admitted slot must be an own element. */
+function denseArray(value: unknown): value is unknown[] {
+  if (!Array.isArray(value)) return false;
+  for (let index = 0; index < value.length; index++) {
+    if (!Object.hasOwn(value, index)) return false;
+  }
+  return true;
+}
 function strings(value: unknown): boolean {
-  return Array.isArray(value) && value.every(nonempty);
+  return denseArray(value) && value.every(nonempty);
 }
 function exact(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []) {
   return (
@@ -197,7 +208,7 @@ function validRule(value: unknown): value is StrictPermissionRule {
     !exact(m, [...identity, "resources", "environmentAndCredentialRefs"]) ||
     !identity.every((key) => nonempty(m[key])) ||
     !strings(m.environmentAndCredentialRefs) ||
-    !Array.isArray(m.resources) ||
+    !denseArray(m.resources) ||
     !m.resources.every((resource: unknown) => {
       if (!object(resource)) return false;
       const keys =

@@ -84,6 +84,22 @@ without changing a sidecar. Existing live-input persistence-failure, strict reta
 memory composition/generation and daemon authority regressions provide the relevant accepted
 boundary coverage; the final validation results are recorded in the PR.
 
+Independent review found that `Array.every` skipped holes in four qualified-material
+admission checks. The adapter now requires an own element at every index before validating
+source references, rules, resources and environment references. Legacy source lists and
+configured rule arrays receive the same explicit density check. This is an inactive,
+trusted-owner contract-validation defect, not a demonstrated production privilege escalation.
+No core evaluator or scope semantics changed.
+
+The [failing-before evidence](strict-rule-read-adapter-evidence/sparse-before.txt) runs the
+final regression tests against adapter source from `2c35a83`: all eight all-hole/valid-plus-hole
+qualified-array cases and the sparse source-list case fail (9 failures, 55 passes). Tests
+recompute rule revisions and projection digests and assert unknown rules directly, isolating
+density rather than a later evaluator failure. The fixed adapter passes all 388 tests across
+the same 12 regression files, including 64 adapter tests. Dense empty rules remain complete
+and require human approval; dense empty resource/environment scopes still allow a genuinely
+empty-resource action. Full typecheck, lint, build and formatting are rerun for the fix.
+
 This does not complete #702's production scoped rules, migration, UI choices or live automatic
 response acceptance. Main's combined CI was pending when this task was delegated; local
 checks do not establish main green. Parent owns independent review, integration and activation.
