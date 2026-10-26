@@ -4,10 +4,18 @@ This unregistered integration builds on green main
 `a4ae53d1d5a8d7945f5c6782da46c833accdb29d`, published managed owner #732
 `ba39c77aa98d2776a3d63a807f245539f0fddd9c` and scoped bridge #733
 `c94826f0c81e180db384ece1d0347f6a05397e65`. The two unmerged dependencies were
-incorporated by ordinary merge. The separately owned publication mode correction
-`eea39555913e57f996d704bf738408f1962e4b93` was inspected; parent review/integration
-is still pending at this checkpoint. No wrapper, app source, app coverage test,
-lockfile, accepted production build map or production registration was changed.
+incorporated by ordinary merge. After independent source review, parent authorized
+the separately owned publication mode correction
+`eea39555913e57f996d704bf738408f1962e4b93`. It was merged without conflict into runtime
+head `48ce0d25041eed30417d8412961090533be98018`; only the reviewed private/exclusive
+temporary publication, evidence preservation, regression tests and documentation
+were incorporated. Parent subsequently approved merged main
+`653dbcae1017bc6565b631f3a492b4908ce17f0b`, containing only #737's reviewed
+initial fixture-port admission correction. It was incorporated by a second
+conflict-free, non-force merge at `4c9c1c243aa8897f4e7de23949220551601944a9`.
+That reviewed fixture is the only inherited app-test change. This slice edits no
+wrapper or app runtime/coverage-test source. Lockfiles, accepted production builds
+and production registration remain unchanged.
 
 Parent subsequently supplied #734
 `c12a2a2aaf5f1f8383aa8a3582d5b4d2dafc4801`. Its actual service source and
@@ -208,3 +216,41 @@ observation API's exact-key expectation. The observation test now verifies both
 opaque verifiers; no unrelated app/wrapper files or coverage thresholds were edited.
 That interrupted run is diagnostic only and is not global coverage acceptance.
 The final exact-head full suite, coverage and CI remain parent integration gates.
+
+## Review correction: shared permission-event metadata
+
+Independent review reproduced a disclosure bug in the new permission-event branch:
+it encrypted `entry` but copied the remaining metadata into the public log and
+notifications. The shared API accepts arbitrary metadata, so the current producer's
+fixed strings were insufficient protection. At runtime head
+`48ce0d25041eed30417d8412961090533be98018`, all three new regression cases failed
+with an actual file-backed public event containing the synthetic secret.
+
+The correction applies the existing `redactExecutionValue` to **all** scoped
+permission metadata after removing `entry`. The encrypted original remains intact;
+public append results, restarted reads and subscription notifications receive the
+same redacted projection. No caller-provided string or UUID-shaped reference is
+restored as a privileged structural field. Only the existing internally generated
+event identifiers and execution-payload correlation retain their established
+structural treatment. If redaction makes a lookup field unavailable, existing exact
+proof checks refuse; there is no fallback or authority inferred from redacted text.
+Journal-event behavior and owner/binding/source qualification checks are unchanged.
+
+Reproduction used `umask 0022`, newly created disposable roots, actual encrypted
+execution/event stores and synthetic secrets only. The targeted before run had
+three failed regressions and eight tests not selected by the name filter. After
+the correction, the complete store test file passed all 11 cases, including secret
+title/decision/tool-call metadata, ordinary and secret/UUID-shaped correlation
+values, public notifications and exact private restoration.
+
+The reviewed mode merge was first validated under `umask 0022`: 2,893 affected
+tests passed, one existing opt-in skipped. The corrected metadata projection then
+passed the same agents/daemon/CLI/store/core/protocol selection under `0022`:
+2,896 tests passed, one existing opt-in skipped, with at most two Vitest workers.
+The approved #737 recovery fixture separately passed all 22 cases on Linux under
+`0022`; no Mac hardware was used. Root/renderer types, changed-file lint/format,
+full TypeScript/Vite build and diff checks also passed on the combined tree.
+The original owner/binding/source checks and the verified-per-execution Save gate
+were not modified by this privacy correction. No positive qualified Save evidence
+was manufactured. Final full-suite/global coverage and parent re-review remain
+required before integration acceptance.

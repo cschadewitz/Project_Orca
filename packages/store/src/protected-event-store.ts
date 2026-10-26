@@ -226,7 +226,12 @@ export class ProtectedEventStore implements EventStore {
       const executionPayloadRef = randomUUID();
       await this.execution.putPayload(executionPayloadRef, input);
       const { entry: _entry, ...metadata } = input.payload;
-      return this.publicEvents.append({ ...input, payload: metadata, executionPayloadRef } as OrcaEventInput);
+      // The shared permission API accepts free-form metadata, even though the current
+      // scoped producer uses fixed text. Neither strings nor UUID-shaped caller refs
+      // are disclosure authority. Keep their original values in the encrypted payload.
+      const publicMetadata =
+        input.type === "agent.permission" ? redactExecutionValue(metadata, inputs.secrets) : metadata;
+      return this.publicEvents.append({ ...input, payload: publicMetadata, executionPayloadRef } as OrcaEventInput);
     }
     if (!inputs) {
       if (!this.publicOnlyRuns.has(input.runId)) {

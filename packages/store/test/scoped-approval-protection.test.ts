@@ -52,6 +52,58 @@ it("protects explicit Save independently of secret matching, survives restart, a
   for (const name of await readdir(f.path("")))
     expect(await readFile(f.path(name), "utf8")).not.toContain("private-synthetic-disclosure");
 });
+it.each(["ordinary", "secret", "uuid-secret"] as const)(
+  "redacts every scoped approval metadata field from public reads and notifications (%s)",
+  async (kind) => {
+    const root = await mkdtemp(join(tmpdir(), "orca-scoped-metadata-"));
+    roots.push(root);
+    const stores = fileStores(root);
+    const secret = "synthetic-secret";
+    const uuidSecret = "8a729bca-466a-4d7b-98d4-86b7ad8c17b6";
+    await stores.execution.putInputs({
+      runId: "run",
+      workflowId: "synthetic",
+      workflowVersion: "1",
+      vars: {},
+      sensitiveNames: [],
+      secrets: [secret, uuidSecret],
+    });
+    const notifications: unknown[] = [];
+    const unsubscribe = stores.events.subscribe((event) => notifications.push(structuredClone(event)));
+    const input = {
+      type: "agent.permission" as const,
+      runId: "run",
+      payload: {
+        stepRunId: "step",
+        sessionId: "session",
+        title: `${secret} title`,
+        decision: `${secret} decision`,
+        toolCallId: `${secret} tool call`,
+        scopedApprovalRef: kind === "ordinary" ? "x" : kind === "secret" ? secret : uuidSecret,
+        entry: { choice: "save", privateScope: secret },
+      },
+    };
+    const event = await stores.events.append(input);
+    unsubscribe();
+    const persisted = await fileStores(root).events.read("run");
+    expect(notifications).toHaveLength(1);
+    for (const publicValue of [event, ...persisted, ...notifications]) {
+      expect(JSON.stringify(publicValue)).not.toContain(secret);
+      expect(JSON.stringify(publicValue)).not.toContain(uuidSecret);
+      expect(publicValue).toMatchObject({
+        payload: {
+          title: "[REDACTED] title",
+          decision: "[REDACTED] decision",
+          toolCallId: "[REDACTED] tool call",
+          scopedApprovalRef: kind === "ordinary" ? "x" : "[REDACTED]",
+        },
+      });
+      expect((publicValue as { payload: unknown }).payload).not.toHaveProperty("entry");
+    }
+    const restored = await executionEvents(persisted, new FileExecutionStore(root));
+    expect(restored[0]?.payload).toEqual(input.payload);
+  },
+);
 it.each(["payload", "key", "inputs", "overlay", "new-overlay"] as const)(
   "final synchronous seal refuses changed %s without rehydrating protected text",
   async (target) => {
