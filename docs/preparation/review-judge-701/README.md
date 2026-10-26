@@ -1,6 +1,9 @@
 # ReviewJudge offline preparation (#701)
 
-Status: **local proposal v0; integration blocked by the reviewed #700 interface**.
+Status: **offline preparation archive; inactive source adapter now follows the accepted contract**.
+The historical proposal and feedback below describe the pre-review preparation.
+[Source implementation and validation](source-implementation.md) records the scoped
+follow-up using merged #708/#712 and the reviewed canonical type dependency #716.
 This directory is standalone preparation for [#701](https://github.com/cschadewitz/Project_Orca/issues/701),
 coordinated under [#699](https://github.com/cschadewitz/Project_Orca/issues/699).
 It does not complete either issue or define a parallel canonical action schema.
