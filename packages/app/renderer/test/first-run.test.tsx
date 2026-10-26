@@ -286,6 +286,13 @@ function configReview(state: FirstRunAgentCheck["state"] = "handshake-required")
     },
   };
 }
+function pendingStatus() {
+  let resolve!: (result: Awaited<ReturnType<FirstRunBridge["status"]>>) => void;
+  const promise = new Promise<Awaited<ReturnType<FirstRunBridge["status"]>>>((finish) => {
+    resolve = finish;
+  });
+  return { promise, resolve };
+}
 it.each([
   ["missing", /set the approved executable to an absolute path/],
   ["unavailable", /Check the configured path, file access and runtime prerequisites/],
@@ -338,6 +345,57 @@ it("retires stale evidence on failed rereview, hides private errors and permits 
   expect(screen.queryByRole("button", { name: "Bind reviewed saved configuration" })).toBeNull();
   await act(async () => fireEvent.click(review));
   expect(screen.getByText(/Executable missing from the app PATH/)).toBeTruthy();
+  expect(bindConfiguration).not.toHaveBeenCalled();
+});
+it.each(["initial", "workspace"])("retires a queued %s status review before its render commits", async (read) => {
+  const status = pendingStatus();
+  const readStatus = vi.fn<FirstRunBridge["status"]>(() => status.promise);
+  if (read === "workspace") readStatus.mockResolvedValueOnce({ ok: true, result: configReview() });
+  const reviewConfiguration = vi.fn<NonNullable<FirstRunBridge["reviewConfiguration"]>>().mockResolvedValue({
+    ok: false,
+    error: { code: "AGENT_TRANSPORT", message: "private secret needle" },
+  });
+  const bindConfiguration = vi.fn();
+  const f = setup({ status: readStatus, reviewConfiguration, bindConfiguration });
+  if (read === "workspace") {
+    await screen.findByRole("button", { name: "Bind reviewed saved configuration" });
+    await act(async () => {
+      await f.fake.bridge.workspace.connectLive();
+    });
+  }
+  const review = screen.getByRole("button", { name: "Review saved configuration for reopening" });
+  await act(async () => {
+    status.resolve({ ok: true, result: configReview() });
+    // Run the status continuation, queuing its state update without committing a new handler yet.
+    await status.promise;
+    expect(screen.queryByRole("button", { name: "Bind reviewed saved configuration" })).toBeNull();
+    fireEvent.click(review);
+  });
+  expect(reviewConfiguration).toHaveBeenCalledOnce();
+  expect(screen.getByText(/Configuration review could not complete/)).toBeTruthy();
+  expect(screen.queryByText(/private secret needle/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Bind reviewed saved configuration" })).toBeNull();
+  expect(screen.queryByText(/Executable file observed/)).toBeNull();
+  expect(bindConfiguration).not.toHaveBeenCalled();
+});
+it("ignores a pending status review that completes after a failed rereview", async () => {
+  const status = pendingStatus();
+  const reviewConfiguration = vi
+    .fn<NonNullable<FirstRunBridge["reviewConfiguration"]>>()
+    .mockResolvedValueOnce({ ok: false, error: { code: "AGENT_TRANSPORT", message: "private secret needle" } })
+    .mockResolvedValueOnce({ ok: true, result: configReview("missing") });
+  const bindConfiguration = vi.fn();
+  setup({ status: () => status.promise, reviewConfiguration, bindConfiguration });
+  const review = screen.getByRole("button", { name: "Review saved configuration for reopening" });
+  await act(async () => fireEvent.click(review));
+  await act(async () => status.resolve({ ok: true, result: configReview() }));
+  expect(screen.getByText(/Configuration review could not complete/)).toBeTruthy();
+  expect(screen.queryByText(/private secret needle/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Bind reviewed saved configuration" })).toBeNull();
+  expect(screen.queryByText(/Executable file observed/)).toBeNull();
+  await act(async () => fireEvent.click(review));
+  expect(screen.getByText(/Executable missing from the app PATH/)).toBeTruthy();
+  expect(reviewConfiguration).toHaveBeenCalledTimes(2);
   expect(bindConfiguration).not.toHaveBeenCalled();
 });
 it("ignores a late configuration review after the workspace changes", async () => {

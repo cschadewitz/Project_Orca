@@ -77,11 +77,11 @@ export function FirstRunSection(): JSX.Element | null {
   const perform = async (action: () => ReturnType<FirstRunBridge["status"]>, success: string, refused?: string) => {
     if (busy) return;
     const token = ++revision.current;
+    if (state?.state === "configuration-review" && section.current?.contains(document.activeElement))
+      leftHoldingFocus.current = true;
+    // Retire queued status evidence too: the handler's render may precede the status update's commit.
     // A failed rereview or binding must not leave a stale Bind control on screen.
-    if (state?.state === "configuration-review") {
-      if (section.current?.contains(document.activeElement)) leftHoldingFocus.current = true;
-      setState(undefined);
-    }
+    setState((previous) => (previous?.state === "configuration-review" ? undefined : previous));
     setBusy(true);
     setMessage("");
     try {
