@@ -1,0 +1,238 @@
+{
+  "format": "orca.provider-qualification-source-record/1",
+  "status": "offline-only-not-capability-negotiation",
+  "baseline": "32f92cc16b9faf1748059e930c3f77b3934151ae",
+  "checkedAt": "2026-10-26",
+  "excerpts": [
+    {
+      "id": "claude-decode",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/claude-decode.txt",
+      "repository": "agentclientprotocol/claude-agent-acp",
+      "revision": "ebfbfbdaa9c2a6a8bd9eb0a4965b521009152350",
+      "upstreamPath": "src/permissions/response.ts",
+      "startLine": 6,
+      "endLine": 36,
+      "sourceBlobSha": "7577054c8ad37c1aa8bdb3cda1e8cfad58a559ea",
+      "url": "https://github.com/agentclientprotocol/claude-agent-acp/blob/ebfbfbdaa9c2a6a8bd9eb0a4965b521009152350/src/permissions/response.ts#L6-L36",
+      "sha256": "97856957e63c658ef88a54deed151d538df24dc7859b9ad73e521e9489bfc10e",
+      "bytes": 1030
+    },
+    {
+      "id": "claude-callback",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/claude-callback.txt",
+      "repository": "agentclientprotocol/claude-agent-acp",
+      "revision": "ebfbfbdaa9c2a6a8bd9eb0a4965b521009152350",
+      "upstreamPath": "src/acp-agent.ts",
+      "startLine": 10462,
+      "endLine": 10490,
+      "sourceBlobSha": "9ab7092bde5cf0a013634bb0dc5baad3c5af8036",
+      "url": "https://github.com/agentclientprotocol/claude-agent-acp/blob/ebfbfbdaa9c2a6a8bd9eb0a4965b521009152350/src/acp-agent.ts#L10462-L10490",
+      "sha256": "bd16821cd456ca350b38974348d8489b7808c3fc8bf8032da532ac8533387b3b",
+      "bytes": 945
+    },
+    {
+      "id": "pi-emit",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/pi-emit.txt",
+      "repository": "earendil-works/pi",
+      "revision": "4a080252f06caf63a525d7873c5d94d3c23887e0",
+      "upstreamPath": "packages/coding-agent/src/core/extensions/runner.ts",
+      "startLine": 1249,
+      "endLine": 1267,
+      "sourceBlobSha": "77712e677f91dde65d4d4db906a26b16bbd9de9c",
+      "url": "https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/packages/coding-agent/src/core/extensions/runner.ts#L1249-L1267",
+      "sha256": "0ceff565b925460de057f197a9cd50729d0020087bde68863c6f8daa2230e595",
+      "bytes": 511
+    },
+    {
+      "id": "pi-spawn",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/pi-spawn.txt",
+      "repository": "earendil-works/pi",
+      "revision": "4a080252f06caf63a525d7873c5d94d3c23887e0",
+      "upstreamPath": "packages/coding-agent/src/core/tools/bash.ts",
+      "startLine": 186,
+      "endLine": 212,
+      "sourceBlobSha": "4620e24648b6ba9e8aa4f5083eb99927549ebcaa",
+      "url": "https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/packages/coding-agent/src/core/tools/bash.ts#L186-L212",
+      "sha256": "bbb12ad61efebb332e53489e2c2fe922cf75c79ba6bc9c6f96fa25b4c57b2b64",
+      "bytes": 880
+    },
+    {
+      "id": "pi-resolve",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/pi-resolve.txt",
+      "repository": "earendil-works/pi",
+      "revision": "4a080252f06caf63a525d7873c5d94d3c23887e0",
+      "upstreamPath": "packages/coding-agent/src/core/tools/bash.ts",
+      "startLine": 268,
+      "endLine": 275,
+      "sourceBlobSha": "4620e24648b6ba9e8aa4f5083eb99927549ebcaa",
+      "url": "https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/packages/coding-agent/src/core/tools/bash.ts#L268-L275",
+      "sha256": "fbd6975c95d081668d6520df37f5dc176873399c2f687467169455f40270c80b",
+      "bytes": 232
+    },
+    {
+      "id": "pi-dispatch",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/pi-dispatch.txt",
+      "repository": "earendil-works/pi",
+      "revision": "4a080252f06caf63a525d7873c5d94d3c23887e0",
+      "upstreamPath": "packages/coding-agent/src/core/agent-session.ts",
+      "startLine": 658,
+      "endLine": 685,
+      "sourceBlobSha": "3a9174cf6ea4cdce791c08a84f6ac25b95b6fb01",
+      "url": "https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/packages/coding-agent/src/core/agent-session.ts#L658-L685",
+      "sha256": "07046c3587ae108561a5786a519ed593097bfd670b35efd3d30927637c9d2659",
+      "bytes": 851
+    },
+    {
+      "id": "pi-ui",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/pi-ui.txt",
+      "repository": "svkozak/pi-acp",
+      "revision": "b0581c9c1d675e634234674484247008b03d69b4",
+      "upstreamPath": "src/acp/session.ts",
+      "startLine": 957,
+      "endLine": 1029,
+      "sourceBlobSha": "1c97b24fdcd2eb6f2ad9b23f96ead9e451b8be96",
+      "url": "https://github.com/svkozak/pi-acp/blob/b0581c9c1d675e634234674484247008b03d69b4/src/acp/session.ts#L957-L1029",
+      "sha256": "ad61dc5c861bb0c5aed45c60ba6d00195456541e35618ecfbf3524cc83fa4ae2",
+      "bytes": 2384
+    },
+    {
+      "id": "gemini-permission",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-permission.txt",
+      "repository": "google-gemini/gemini-cli",
+      "revision": "6006c14a4decfe4b891c6263ad6ad5992e404b5b",
+      "upstreamPath": "packages/cli/src/acp/acpSession.ts",
+      "startLine": 694,
+      "endLine": 815,
+      "sourceBlobSha": "471e265a865d60d7da67dbd0cdc0265c86782d3a",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/cli/src/acp/acpSession.ts#L694-L815",
+      "sha256": "2dd849411b2390ef4c03c23b21e7197cb3d24da0f53489555a76bbc17611df26",
+      "bytes": 3869
+    },
+    {
+      "id": "gemini-abort",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-abort.txt",
+      "repository": "google-gemini/gemini-cli",
+      "revision": "6006c14a4decfe4b891c6263ad6ad5992e404b5b",
+      "upstreamPath": "packages/core/src/tools/shell.ts",
+      "startLine": 540,
+      "endLine": 551,
+      "sourceBlobSha": "59ec724c99fbdd2951a339fc473449878687046f",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/tools/shell.ts#L540-L551",
+      "sha256": "ead9cfd2ed7ab57f351ba96b90ca2cfd37801efa119c3a224c76592c738adf31",
+      "bytes": 291
+    },
+    {
+      "id": "codex-parser",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/codex-parser.txt",
+      "repository": "openai/codex",
+      "revision": "6aaac694803004a63c6f393d153c96d22521a6b9",
+      "upstreamPath": "codex-rs/hooks/src/events/pre_tool_use.rs",
+      "startLine": 203,
+      "endLine": 323,
+      "sourceBlobSha": "7613c15b87580c82a653cb177e85bc339de87b01",
+      "url": "https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/hooks/src/events/pre_tool_use.rs#L203-L323",
+      "sha256": "08249eb14a8f144b8ce40dc32c9e576a758c1c00e213ea4b6ee5a219f2fd04f7",
+      "bytes": 4975
+    },
+    {
+      "id": "codex-ask-test",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/codex-ask-test.txt",
+      "repository": "openai/codex",
+      "revision": "6aaac694803004a63c6f393d153c96d22521a6b9",
+      "upstreamPath": "codex-rs/hooks/src/events/pre_tool_use.rs",
+      "startLine": 556,
+      "endLine": 587,
+      "sourceBlobSha": "7613c15b87580c82a653cb177e85bc339de87b01",
+      "url": "https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/hooks/src/events/pre_tool_use.rs#L556-L587",
+      "sha256": "c935eff20dec0d4f8e3b87f2bf4fbb7ca249b2c8a80118ec2471344f5a041b8c",
+      "bytes": 1047
+    },
+    {
+      "id": "codex-rewrite",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/codex-rewrite.txt",
+      "repository": "openai/codex",
+      "revision": "6aaac694803004a63c6f393d153c96d22521a6b9",
+      "upstreamPath": "codex-rs/hooks/src/events/pre_tool_use.rs",
+      "startLine": 158,
+      "endLine": 175,
+      "sourceBlobSha": "7613c15b87580c82a653cb177e85bc339de87b01",
+      "url": "https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/hooks/src/events/pre_tool_use.rs#L158-L175",
+      "sha256": "8b149cf673ff0b2ceabfca3c0c8d4d4442c914de729a4b354c11e68ff7dcade5",
+      "bytes": 774
+    }
+  ],
+  "providers": [
+    {
+      "id": "claude",
+      "native": {
+        "name": "Claude Code",
+        "candidateVersion": "2.1.309",
+        "evidence": "npm publication metadata only; closed native implementation and SDK/native linkage unverified"
+      },
+      "sdk": {
+        "name": "@anthropic-ai/claude-agent-sdk",
+        "version": "0.3.309",
+        "integrity": "sha512-Tou0fXBkxKJDcgT09v3Iv/Jd7bNgapgfAiHxGPctAADPFQhidfhZbcv7at1cVL0Lon5sbs+OzP/pEOigw2TI0A=="
+      },
+      "adapter": {
+        "name": "@agentclientprotocol/claude-agent-acp",
+        "version": "0.95.0",
+        "revision": "ebfbfbdaa9c2a6a8bd9eb0a4965b521009152350"
+      },
+      "installed": "unknown",
+      "feasibility": "unknown",
+      "next": "bounded separately authorized cached-approval experiment"
+    },
+    {
+      "id": "codex",
+      "native": {
+        "version": "0.160.1",
+        "revision": "d27764b82f7118f674371e6d6e76271d9d606edb"
+      },
+      "candidate": {
+        "version": "0.164.0",
+        "revision": "6aaac694803004a63c6f393d153c96d22521a6b9"
+      },
+      "adapter": {
+        "name": "codex-acp",
+        "version": "2.2.2",
+        "revision": "202e66e63343ec4f5a5e35ab590251d813d129ca",
+        "nativeDependency": "^0.160.1",
+        "candidateWithinDeclaredNativeRange": false
+      },
+      "installed": "unknown",
+      "feasibility": "no-go-current-strict-hook-and-exact-command-route",
+      "next": "retain #594 evidence-preserving supported native/bridge work"
+    },
+    {
+      "id": "pi",
+      "native": {
+        "version": "1.4.0",
+        "revision": "4a080252f06caf63a525d7873c5d94d3c23887e0"
+      },
+      "adapter": {
+        "name": "svkozak/pi-acp",
+        "version": "0.0.34",
+        "revision": "b0581c9c1d675e634234674484247008b03d69b4",
+        "nativeDependency": "external launcher; tuple correspondence unknown"
+      },
+      "installed": "unknown",
+      "feasibility": "no-go-current-generic-ui-as-authorization",
+      "next": "final post-transform execution seam plus typed callback"
+    },
+    {
+      "id": "gemini",
+      "native": {
+        "version": "0.65.0",
+        "revision": "6006c14a4decfe4b891c6263ad6ad5992e404b5b"
+      },
+      "adapter": {
+        "name": "native ACP",
+        "revision": "6006c14a4decfe4b891c6263ad6ad5992e404b5b"
+      },
+      "installed": "unknown",
+      "feasibility": "no-go-current-strict-projection",
+      "next": "native invocation projection, offered membership and pre-policy cancellation check"
+    }
+  ]
+}

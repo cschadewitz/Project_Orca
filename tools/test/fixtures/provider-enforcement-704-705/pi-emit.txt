@@ -1,0 +1,19 @@
+	async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
+		const ctx = this.createContext();
+		let result: ToolCallEventResult | undefined;
+
+		for (const { handlers } of snapshotEventHandlers(this.extensions, "tool_call")) {
+			for (const handler of handlers) {
+				const handlerResult = await handler(event, ctx);
+
+				if (handlerResult) {
+					result = handlerResult as ToolCallEventResult;
+					if (result.block) {
+						return result;
+					}
+				}
+			}
+		}
+
+		return result;
+	}

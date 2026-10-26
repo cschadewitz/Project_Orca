@@ -1,0 +1,29 @@
+      const response = await this.requestPermissionFromClient(
+        {
+          ...presentation,
+          options: permissionOptions,
+          sessionId: permissionSessionId,
+        },
+        toolName,
+        signal,
+        parentToolUseId,
+        sessionId,
+        agentID,
+        toolInput,
+        previewContent,
+      );
+      if (signal.aborted) throw new Error("Tool use aborted");
+      const decodedPermission = decodeClaudePermissionResponse(
+        response,
+        toolName,
+        toolInput,
+        toolUseID,
+        permissionOptions,
+        durableChangeSet,
+      );
+      let permissionResult = decodedPermission.permissionResult;
+      const autoFallback = this.sessionModes.applyPermissionFallback(session, permissionResult);
+      permissionResult = autoFallback.permissionResult;
+      if (autoFallback.fallbackApplied) {
+        await this.sessionModes.publishFallbackWarning(sessionId, session);
+      }
