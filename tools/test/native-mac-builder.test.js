@@ -23,7 +23,7 @@ it("resolves the selected lock and validates inert hook/version/entitlement inte
   const lock = loadAll(readFileSync(new URL("../../pnpm-lock.yaml", import.meta.url), "utf8")).find(
     (doc) => doc?.importers?.["packages/app"],
   );
-  expect(builderRequire("app-builder-lib/package.json").version).toBe("26.15.3");
+  expect(builderRequire("app-builder-lib/package.json").version).toBe("26.18.0");
   expect(appRequire("electron-builder/package.json").version).toBe(
     lock.importers["packages/app"].devDependencies["electron-builder"].version.split("(")[0],
   );

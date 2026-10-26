@@ -1,0 +1,105 @@
+{
+  "linuxTar": {
+    "size": 123571137,
+    "sha512": "60645c17e7f3cab6829e3d3910a7aaa59fffd15cefb095009a3b4ba0897369b2f79b4dfdc8a7ac079e281fc15394ce1408b0947bce1c952eccc74777020feada",
+    "entries": 79,
+    "criticalFilesMatchUnpackedBytes": {
+      "orca": {
+        "size": 228826440,
+        "mode": "0o755",
+        "sha256": "3ba9114b7fbaafaf548f72c5d1bc86b7dc81098a85361784359c2c1199625bfc"
+      },
+      "resources/app.asar": {
+        "size": 19614226,
+        "mode": "0o600",
+        "sha256": "76f46dbecf6c3e63b5480610bba63994a9592492d9aa32e8e789b5b41bfb7367"
+      },
+      "resources/daemon/orca-daemon.mjs": {
+        "size": 3584020,
+        "mode": "0o644",
+        "sha256": "e6f2df82dec9dbafae867d24a348543c52ad3f89a3dd568678338389db207002"
+      }
+    },
+    "containedSymlinks": []
+  },
+  "nsisPayloadFixtures": {
+    "results": [
+      {
+        "name": "default",
+        "targetName": "nsis",
+        "path": "/tmp/orca639/archive-fixtures/default/owned-fixture-1.0.0-x64.nsis.7z",
+        "size": 2503292,
+        "sha512": "99WMonavmoybsArW515KwpKGySY3yULeetbAN2Al6VATlQB0Rlpogc4H2nGQrYzVR5JMdgEuD0eM/LmHLAiFNw==",
+        "blockMapSize": null,
+        "storedMembers": [],
+        "regions": []
+      },
+      {
+        "name": "zip",
+        "targetName": "nsis",
+        "path": "/tmp/orca639/archive-fixtures/zip/owned-fixture-1.0.0-x64.nsis.zip",
+        "size": 3782778,
+        "sha512": "6hge3p7botCjHmGU2CGw3sfIKkHYNVKAE/gxUYPJsCcoxx2rcwJ777FrCebIN32eTje45lme8QJA/5j350tIlA==",
+        "blockMapSize": null,
+        "storedMembers": [],
+        "regions": []
+      },
+      {
+        "name": "zip-with-differential",
+        "targetName": "nsis",
+        "path": "/tmp/orca639/archive-fixtures/zip-with-differential/owned-fixture-1.0.0-x64.nsis.7z",
+        "size": 2503292,
+        "sha512": "99WMonavmoybsArW515KwpKGySY3yULeetbAN2Al6VATlQB0Rlpogc4H2nGQrYzVR5JMdgEuD0eM/LmHLAiFNw==",
+        "blockMapSize": null,
+        "storedMembers": [],
+        "regions": []
+      },
+      {
+        "name": "stored",
+        "targetName": "nsis",
+        "path": "/tmp/orca639/archive-fixtures/stored/owned-fixture-1.0.0-x64.nsis.7z",
+        "size": 19614459,
+        "sha512": "AFNPhkUd9PN/J0kkbfKYiTWiXtp8gPPvn0nFDBgrpluVTEo4EdJfmPDjx3wsKYZaBIUuNydz+Nqn81DjaBBruQ==",
+        "blockMapSize": null,
+        "storedMembers": ["app.asar"],
+        "regions": [
+          {
+            "offset": 32,
+            "size": 19614226,
+            "chunker": {
+              "min": 4096,
+              "avg": 8192,
+              "max": 16384
+            }
+          }
+        ]
+      },
+      {
+        "name": "web-stored",
+        "targetName": "nsis-web",
+        "path": "/tmp/orca639/archive-fixtures/web-stored/owned-fixture-1.0.0-x64.nsis.7z",
+        "size": 19650164,
+        "sha512": "nMmMXT3e2gHlM0/euTFeG7jhzYe50mmahdbLZwjfwWtf4raxj/TvdItCJBaIcsig0a55xx6ujpEVA0DbbJN/hg==",
+        "blockMapSize": 35701,
+        "storedMembers": ["app.asar"],
+        "regions": []
+      }
+    ],
+    "macLikeZip": "/tmp/orca639/archive-fixtures/mac-like-framework.zip",
+    "limits": "Synthetic payload archive construction on Linux, no NSIS compiler/installer or native Mac/signing execution; ORCA config does not opt into store-asar."
+  },
+  "embeddedWebBlockmapParsedAndSizeMatched": true,
+  "storedAsarBytesMatchPackagedAsar": true,
+  "allStoredAndEmbeddedBlockChecksumsIndependentlyVerified": true,
+  "macLikeZipSymlinks": [
+    {
+      "path": "Owned.app/Contents/Frameworks/Owned.framework/Owned",
+      "target": "Versions/Current/Owned"
+    },
+    {
+      "path": "Owned.app/Contents/Frameworks/Owned.framework/Versions/Current",
+      "target": "A"
+    }
+  ],
+  "limits": "Linux artifact and synthetic payload archives only; no native Windows installer or Mac signing/install proof."
+}

@@ -1,0 +1,17 @@
+{
+  "success": false,
+  "testsPassed": 8009,
+  "testsFailed": 1,
+  "maxWorkers": 2,
+  "failure": [
+    {
+      "path": "/workspace/Project_Orca/packages/app/test/mac-fixed-path-recovery.test.ts",
+      "name": "refuses root/binary aliases, cancellation and replaced live root identity",
+      "messages": [
+        "Error: listen EADDRINUSE: address already in use 127.0.0.1:35354\n    at Server.setupListenHandle [as _listen2] (node:net:2167:16)\n    at listenInCluster (node:net:2224:12)\n    at node:net:2448:7\n    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)"
+      ]
+    }
+  ],
+  "focusedRecheck": 19,
+  "resolution": "Unchanged fixture hit listen EADDRINUSE on 127.0.0.1:35354; all 19 cases pass isolated. No fixture/assertion/runtime change; repeat full coverage with one worker to remove cross-file listener contention."
+}

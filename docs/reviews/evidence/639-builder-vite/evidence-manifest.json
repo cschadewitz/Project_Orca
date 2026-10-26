@@ -1,0 +1,172 @@
+[
+  {
+    "path": "archive-fixtures.cjs.txt",
+    "size": 3674,
+    "sha256": "df47cac20b426298facd39fd12d6ed45b7c5cb92040c5d8c54932570ff4f7235"
+  },
+  {
+    "path": "archive-fixtures.txt",
+    "size": 1101,
+    "sha256": "46ce5130d962ca9585e909248e664863d31e03d673a98338362f25629dfafff7"
+  },
+  {
+    "path": "archive-inspection.json",
+    "size": 3817,
+    "sha256": "0c8375540722247b613a5e81fdbb222d7dfc88adc811a0b1e61d5f3d19cad782"
+  },
+  {
+    "path": "archive-inspection.txt",
+    "size": 462,
+    "sha256": "1d047f49939c47fc154837dd82a5c0458961086d2ab9016df293f284ca09fc2a"
+  },
+  {
+    "path": "asar-contents.txt",
+    "size": 67627,
+    "sha256": "c5e1e00ac945fcb820e282f1c0ee2806b97f01ff1755fddad94238f51a4c2dd5"
+  },
+  {
+    "path": "baseline-audit-full.json.txt",
+    "size": 282,
+    "sha256": "754c3032cdfb7f71d0f76346d8500fc787393926eea3ae127184c4907f936c17"
+  },
+  {
+    "path": "baseline-audit-prod.json.txt",
+    "size": 279,
+    "sha256": "eabfbbeff7f2a3c226ddaa924026140a5fd00c0b11db38044f95b18599e6c67f"
+  },
+  {
+    "path": "baseline-install.txt",
+    "size": 318,
+    "sha256": "61d85a01b78a8fa29deb1e43357ac8eddbc9e426a4b541737a18cdaabe0c9a69"
+  },
+  {
+    "path": "binary-download-integrity.json",
+    "size": 623,
+    "sha256": "d49c36d2cda7b3f15976061ff62f30b2564d702b8a7c439fef269cd05b75eda3"
+  },
+  {
+    "path": "browser-check.txt",
+    "size": 8354,
+    "sha256": "8f433bb182c83b95c3690cdf241b78be75252375b4ee44cce2462c53d896d3cf"
+  },
+  {
+    "path": "bundled-daemon-probe.txt",
+    "size": 78,
+    "sha256": "46844ab04b1aabd98eafaaedc0ea1eaf82f859a19eada3a235ab4c0395244736"
+  },
+  {
+    "path": "candidate-audit-full.json.txt",
+    "size": 282,
+    "sha256": "754c3032cdfb7f71d0f76346d8500fc787393926eea3ae127184c4907f936c17"
+  },
+  {
+    "path": "candidate-audit-prod.json.txt",
+    "size": 279,
+    "sha256": "eabfbbeff7f2a3c226ddaa924026140a5fd00c0b11db38044f95b18599e6c67f"
+  },
+  {
+    "path": "candidate-install.txt",
+    "size": 549,
+    "sha256": "93ff0151f020387f6a2aee2cfae99c948d654d97ab85ffc5500b8d0353f4e186"
+  },
+  {
+    "path": "commands.txt",
+    "size": 2464,
+    "sha256": "ce627063064604556128b6bfa74a28bbc08e99824787e9211c5022d6c4ff40b2"
+  },
+  {
+    "path": "compiled-demo.txt",
+    "size": 47070,
+    "sha256": "7ee17ceba60466cb704b90ec2a5c3bd8c3c09b58dfe12612177f69516e4a37d6"
+  },
+  {
+    "path": "distributed-change-summary.json",
+    "size": 13787,
+    "sha256": "f1985b6babac478968aa303cf71e3379b71a7867eabdca6373e3653234820b89"
+  },
+  {
+    "path": "fixed-path-recheck.txt",
+    "size": 307,
+    "sha256": "9b5bfa865460243d84ebd0c4303c5c368e709ba1724e9cb77f768639224fab4f"
+  },
+  {
+    "path": "import-production.cjs.txt",
+    "size": 1311,
+    "sha256": "b5fa7479e558e3f55ce9e953fc8892ad992d5b6cafbd34fac4a2b400bb85168d"
+  },
+  {
+    "path": "initial-suite-summary.json",
+    "size": 3842,
+    "sha256": "8de7d2724e098f9696b20414a7ccf0ddb6b721f3b47e17c290e1463c403069a7"
+  },
+  {
+    "path": "inspect-archives.py.txt",
+    "size": 3624,
+    "sha256": "92d6b21c6725a6e0b871f0a4831042134a71c9b8b16a530cdc480c7e489c0e64"
+  },
+  {
+    "path": "inspect-package.cjs.txt",
+    "size": 4468,
+    "sha256": "354d40eb7821ecfc48dc73e980fd80f80ae71a70cf361c3a403b78085123027f"
+  },
+  {
+    "path": "linux-package.txt",
+    "size": 1404,
+    "sha256": "dbda94741f952ce067481362646ef0e448db1b284e9372f21dc429db85b787b9"
+  },
+  {
+    "path": "lock-invariants.json",
+    "size": 1215,
+    "sha256": "d7dd375c1890f50c2a70a5b938a251f156dcf99b40d0769903a115e16cefdb90"
+  },
+  {
+    "path": "parallel-suite-summary.json",
+    "size": 866,
+    "sha256": "d3ce7764a5a5b75ae9c483c7361c7a19d997e06ffef88b58bb4be88cf8b86fee"
+  },
+  {
+    "path": "payload-check.mjs.txt",
+    "size": 4221,
+    "sha256": "67fec641d489fe9f0f8f321c5c477fe09d3008e6966d2c10e5c93c179a173eb8"
+  },
+  {
+    "path": "payload-integrity.json",
+    "size": 40760,
+    "sha256": "e4ce3a21b5564aa5c139ef46eef024bd711990329e1f4fe711c6c1d1f2dfffe9"
+  },
+  {
+    "path": "production-closure.json",
+    "size": 6844,
+    "sha256": "31c03106cbdf0eeba162056b2cc7e74bbd386ed4706605c56825bfd90c4b6d95"
+  },
+  {
+    "path": "production-imports.json",
+    "size": 650,
+    "sha256": "fa45ea7c963e5c367b328e634ae2c3a4015661132fdd91ef8cd12625b104655a"
+  },
+  {
+    "path": "production-imports.txt",
+    "size": 45,
+    "sha256": "1dd3db3a4894db922f0dd6d1441f9a616a15fa49d73f7fd265f4240e6eecb8e0"
+  },
+  {
+    "path": "registry-signatures.txt",
+    "size": 69,
+    "sha256": "a7b7cb2ca8d70b30b66cefc094b9341d805e353f8f79da84d3cba811ca027b16"
+  },
+  {
+    "path": "retry-acceptance.txt",
+    "size": 477,
+    "sha256": "86e925d5ab965f8b55ef98c09609150abc2484120be12eeed67338bc7853dabc"
+  },
+  {
+    "path": "upstream-change-inventory.json",
+    "size": 20051,
+    "sha256": "fe7fb2af05d2b2252ab27d44c4b9986e4d405f6891707139f53d33a10a81cb5b"
+  },
+  {
+    "path": "validation-summary.json",
+    "size": 13975,
+    "sha256": "cf68ee05311000e9c077132d9da19c95c7d0e87d4e99d0fb81922847b588faac"
+  }
+]

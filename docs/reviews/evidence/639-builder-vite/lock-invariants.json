@@ -1,0 +1,39 @@
+{
+  "base": "7627b2e7606f0deec6e29e67919ae09837190f73",
+  "originalPRHead": "93ad06992ae6d12aa9012ecc75d68cbbfbf7ee6d",
+  "bootstrapLockDocumentByteIdentical": true,
+  "lifecyclePolicyByteIdentical": true,
+  "addedPackages": [
+    "@electron/rebuild@4.2.1",
+    "@noble/hashes@1.8.0",
+    "app-builder-lib@26.18.0",
+    "builder-util@26.16.0",
+    "dmg-builder@26.18.0",
+    "electron-builder-squirrel-windows@26.18.0",
+    "electron-builder@26.18.0",
+    "electron-publish@26.18.0",
+    "vite@8.3.5"
+  ],
+  "removedPackages": [
+    "@electron/rebuild@4.2.0",
+    "@noble/hashes@2.4.0",
+    "app-builder-lib@26.15.3",
+    "builder-util@26.15.3",
+    "dmg-builder@26.15.3",
+    "electron-builder-squirrel-windows@26.15.3",
+    "electron-builder@26.15.3",
+    "electron-publish@26.15.3",
+    "vite@8.3.4"
+  ],
+  "unexpectedChangedPackageMetadata": [],
+  "retainedUpdater": {
+    "specifier": "^6.8.11",
+    "version": "6.8.11(supports-color@7.2.0)"
+  },
+  "retainedHappyDom": {
+    "specifier": "^21.0.4",
+    "version": "21.0.4"
+  },
+  "baseLockSHA256": "232285c4ae83718c82c5513731622ea54e391d74f4dded0bffa8177f449065cd",
+  "candidateLockSHA256": "352f24faa4a0b52765738749035e39a89e1d0f40c5312b61655be1040cdb6c8a"
+}

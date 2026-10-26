@@ -1,0 +1,24 @@
+const fs=require('node:fs');const path=require('node:path');const crypto=require('node:crypto');const {createRequire}=require('node:module');
+const a=createRequire('/workspace/Project_Orca/packages/app/package.json');const b=createRequire(a.resolve('electron-builder'));const c=createRequire(b.resolve('app-builder-lib'));const asar=c('@electron/asar');
+const base='/tmp/orca639/package/linux-unpacked';const archive=base+'/resources/app.asar';const files=asar.listPackage(archive).map(p=>p.replaceAll('\\','/').replace(/^\//,''));const available=new Set(files);const expected=[];const seen=new Set();const absentOptionals=[];
+function pkgdir(r,name){for(const search of r.resolve.paths(name)??[]){const p=path.join(search,name);if(fs.existsSync(p+'/package.json'))return fs.realpathSync(p);}try{return path.dirname(r.resolve(name+'/package.json'));}catch{let p=path.dirname(r.resolve(name));while(p!==path.dirname(p)){if(fs.existsSync(p+'/package.json')&&JSON.parse(fs.readFileSync(p+'/package.json')).name===name)return p;p=path.dirname(p);}throw Error('cannot locate '+name);}}
+function walk(dir,prefix='',ancestor=new Set()){
+ const pkg=JSON.parse(fs.readFileSync(dir+'/package.json'));const id=pkg.name+'@'+pkg.version;if(ancestor.has(id))return;const r=createRequire(dir+'/package.json');
+ for(const [name,range]of Object.entries({...pkg.dependencies,...pkg.optionalDependencies})){
+  let actual;try{actual=pkgdir(r,name);}catch(e){if(pkg.optionalDependencies?.[name]){absentOptionals.push(name);continue;}throw e;}
+  const target=JSON.parse(fs.readFileSync(actual+'/package.json'));const expectedPath=(prefix?prefix+'/':'')+'node_modules/'+name;const key=expectedPath+'@'+target.version;if(seen.has(key))continue;seen.add(key);
+  const possibilities=[];let current=prefix;while(true){possibilities.push((current?current+'/':'')+'node_modules/'+name+'/package.json');if(!current)break;current=path.posix.dirname(path.posix.dirname(current));if(current==='.')current='';}
+  const found=possibilities.find(f=>available.has(f)&&JSON.parse(asar.extractFile(archive,f)).version===target.version);
+  if(!found)throw Error('missing production package '+name+'@'+target.version+' from '+pkg.name);
+  expected.push({name,version:target.version,requiredBy:id,path:found});
+  walk(actual,path.posix.dirname(found),new Set([...ancestor,id]));
+ }
+}
+walk('/workspace/Project_Orca/packages/app');
+const leaked=files.filter(f=>/(?:^|\/)node_modules\/(?:vite|vitest|happy-dom|electron-builder|typescript)(?:\/|$)/.test(f));if(leaked.length)throw Error('development package leak');
+const unwanted=files.filter(f=>/\.map$|\.d\.ts$|\.tsbuildinfo$|^dist\/(?:daemon|release|diagnostics-native)(?:\/|$)/.test(f));if(unwanted.length)throw Error('excluded app artifact leak '+unwanted[0]);
+for(const file of ['dist/main/index.js','dist/preload/index.cjs','dist/bridge.js','dist/renderer/index.html'])if(!available.has(file))throw Error('missing '+file);
+const daemon=fs.readFileSync(base+'/resources/daemon/orca-daemon.mjs');const compiled=fs.readFileSync('/workspace/Project_Orca/packages/app/dist/daemon/orca-daemon.mjs');if(!daemon.equals(compiled))throw Error('daemon resource mismatch');
+const sourceHtml=fs.readFileSync('/workspace/Project_Orca/packages/app/dist/renderer/index.html');if(!asar.extractFile(archive,'dist/renderer/index.html').equals(sourceHtml))throw Error('renderer mismatch');
+const result={platform:'linux-x64',electronVersion:fs.readFileSync('/workspace/Project_Orca/packages/app/node_modules/electron/dist/version','utf8').trim(),asarBytes:fs.statSync(archive).size,asarSHA256:crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex'),entries:files.length,uniqueProductionPackages:[...new Set(expected.map(x=>x.name+'@'+x.version))].sort(),productionResolutionEdges:expected,absentOptionals,developmentPackagesLeaked:leaked,excludedArtifactsLeaked:unwanted,daemonResourceSHA256:crypto.createHash('sha256').update(daemon).digest('hex'),rendererMatchesBuiltBytes:true,nativeAddonEntries:files.filter(f=>f.endsWith('.node')),fontEntries:files.filter(f=>f.endsWith('.woff2')),nativeWindowsMacResourcesNotBuilt:true};
+fs.writeFileSync('/tmp/orca639/production-closure.json',JSON.stringify(result,null,2)+'\n');fs.writeFileSync('/tmp/orca639/asar-contents.txt',files.join('\n')+'\n');console.log({entries:files.length,packages:result.uniqueProductionPackages,edges:expected.length,fonts:result.fontEntries.length,native:result.nativeAddonEntries});

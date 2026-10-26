@@ -1,0 +1,1142 @@
+[
+  {
+    "name": "@electron/rebuild",
+    "baseline": {
+      "version": "4.2.0",
+      "sha512": "sha512-RKL/O+jGoXJMxrx/5771y1n0xTKmFuOYGO3gMmwypBM6rsH0kou0mswwdXA2JrhIkE4xyC7v9vGk0n6NPzgOxQ==",
+      "sha1": "ee7429a97134d13eb37b7f517d737e02d1dea877",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 0,
+      "scripts": {
+        "build": "tsc",
+        "build:docs": "typedoc src/main.ts",
+        "coverage": "yarn prewarm-headers && yarn spec --coverage",
+        "watch": "tsc -w",
+        "prepare": "husky && yarn build",
+        "lint": "oxlint && oxfmt --check",
+        "spec": "tsc && vitest run",
+        "test": "yarn prewarm-headers && yarn lint && yarn spec",
+        "prewarm-headers": "node-gyp install --ensure"
+      },
+      "dependencies": {
+        "@malept/cross-spawn-promise": "^2.0.0",
+        "debug": "^4.1.1",
+        "node-abi": "^4.2.0",
+        "node-api-version": "^0.2.1",
+        "node-gyp": "^12.2.0",
+        "read-binary-file-arch": "^1.0.6"
+      },
+      "optionalDependencies": {},
+      "engines": {
+        "node": ">=22.12.0"
+      },
+      "provenance": null
+    },
+    "candidate": {
+      "version": "4.2.1",
+      "sha512": "sha512-IS4pG3BysRrCLJ8xTAfvg+IQDbiUoAzdJy2SfjcYKnLDy5DpCdjnPdhS5Zf5UMfrkB24xu0KC+TqcOxg+eG+6w==",
+      "sha1": "89f22183fcb26b8661382097fa38531505310728",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        },
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 75,
+      "scripts": {
+        "build": "tsc",
+        "build:docs": "typedoc src/main.ts",
+        "coverage": "yarn prewarm-headers && yarn spec --coverage",
+        "watch": "tsc -w",
+        "prepare": "husky && yarn build",
+        "lint": "oxlint && oxfmt --check",
+        "spec": "tsc && vitest run",
+        "test": "yarn prewarm-headers && yarn lint && yarn spec",
+        "prewarm-headers": "node-gyp install --ensure"
+      },
+      "dependencies": {
+        "@malept/cross-spawn-promise": "^2.0.0",
+        "debug": "^4.1.1",
+        "node-abi": "^4.2.0",
+        "node-api-version": "^0.2.1",
+        "node-gyp": "^12.2.0",
+        "read-binary-file-arch": "^1.0.6"
+      },
+      "optionalDependencies": {},
+      "engines": {
+        "node": ">=22.12.0"
+      },
+      "provenance": {
+        "digestMatches": true,
+        "cryptographicallyVerified": false,
+        "statements": [
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+              {
+                "name": "pkg:npm/%40electron/rebuild@4.2.1",
+                "digest": {
+                  "sha512": "212e291b7072b11ac22c9f314c07ef83e2100db894a00cdd272d927e37182a72c3cb90e909d8e73dd852e597f950c7eb901db8c6ed0a0be4ea70ec60f9e1beeb"
+                }
+              }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+                "externalParameters": {
+                  "workflow": {
+                    "ref": "refs/heads/main",
+                    "repository": "https://github.com/electron/rebuild",
+                    "path": ".github/workflows/release.yml"
+                  }
+                },
+                "internalParameters": {
+                  "github": {
+                    "event_name": "push",
+                    "repository_id": "35023956",
+                    "repository_owner_id": "13409222"
+                  }
+                },
+                "resolvedDependencies": [
+                  {
+                    "uri": "git+https://github.com/electron/rebuild@refs/heads/main",
+                    "digest": {
+                      "gitCommit": "d62d5a2c9dbee5dd27234490f695412d36ca65e2"
+                    }
+                  }
+                ]
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "https://github.com/actions/runner/github-hosted"
+                },
+                "metadata": {
+                  "invocationId": "https://github.com/electron/rebuild/actions/runs/37540435904/attempts/1"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "@noble/hashes",
+    "baseline": {
+      "version": "2.4.0",
+      "sha512": "sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==",
+      "sha1": "e6a3e98edbed3c8659b28bb8f9b18ca02ec8ea4b",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 0,
+      "scripts": {
+        "benchmark": "node benchmark/hashes.ts",
+        "benchmark:thirdparty": "cd benchmark/thirdparty; npm ci; JSBT_BENCHMARK_DIMENSIONS='algorithm,buffer,library' node hashes.ts",
+        "benchmark:thirdparty-scrypt": "cd benchmark/thirdparty; npm ci; JSBT_BENCHMARK_DIMENSIONS='iters,library' FILTER='async' node scrypt.ts",
+        "benchmark:size": "bismar -bsm",
+        "build": "tsc",
+        "build:clean": "rm *.{js,d.ts} 2> /dev/null",
+        "check": "jsbt-check",
+        "format": "prettier --write 'src/**/*.{js,ts}' 'test/**/*.{js,ts}'",
+        "test": "node test/index.ts",
+        "test:dos": "node test/slow-dos.test.ts",
+        "test:slow": "node test/slow-big.test.ts",
+        "test:acvp": "node test/slow-acvp.test.ts",
+        "test:kdf": "node test/slow-kdf.test.ts",
+        "test:ultra": "node test/slow-ultra.test.ts",
+        "test:ultra:scrypt": "node test/slow-extreme-scrypt.test.ts"
+      },
+      "dependencies": {},
+      "optionalDependencies": {},
+      "engines": {
+        "node": ">= 20.19.0"
+      },
+      "provenance": null
+    },
+    "candidate": {
+      "version": "1.8.0",
+      "sha512": "sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==",
+      "sha1": "cee43d801fcef9644b11b8194857695acd5f815a",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 247,
+      "scripts": {
+        "bench": "node benchmark/noble.js",
+        "bench:compare": "MBENCH_DIMS='algorithm,buffer,library' node benchmark/hashes.js",
+        "bench:compare-hkdf": "MBENCH_DIMS='algorithm,length,library' node benchmark/hkdf.js",
+        "bench:compare-scrypt": "MBENCH_DIMS='iters,library' MBENCH_FILTER='async' node benchmark/scrypt.js",
+        "bench:install": "cd benchmark; npm install; npm install .. --install-links",
+        "build": "npm run build:clean; tsc && tsc -p tsconfig.cjs.json",
+        "build:clean": "rm -f *.{js,d.ts,js.map,d.ts.map} esm/*.{js,js.map,d.ts.map}",
+        "build:release": "npx jsbt esbuild test/build",
+        "lint": "prettier --check 'src/**/*.{js,ts}' 'test/**/*.{js,ts}'",
+        "format": "prettier --write 'src/**/*.{js,ts}' 'test/**/*.{js,ts}'",
+        "test": "node --import ./test/esm-register.js test/index.js",
+        "test:bun": "bun test/index.js",
+        "test:deno": "deno --allow-env --allow-read --import-map=./test/import_map.json test/index.js",
+        "test:dos": "node --import ./test/esm-register.js test/slow-dos.test.js",
+        "test:big": "node --import ./test/esm-register.js test/slow-big.test.js",
+        "test:kdf": "node --import ./test/esm-register.js test/slow-kdf.test.js"
+      },
+      "dependencies": {},
+      "optionalDependencies": {},
+      "engines": {
+        "node": "^14.21.3 || >=16"
+      },
+      "provenance": {
+        "digestMatches": true,
+        "cryptographicallyVerified": false,
+        "statements": [
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+              {
+                "name": "pkg:npm/%40noble/hashes@1.8.0",
+                "digest": {
+                  "sha512": "8c2b3d95d77b370ce98170c87fa3f7f8dac787dfec0fa0907711f28d023e87feab0cda3cf32a41c71cf8e540ee647cfdaf7b4dcfb37f5489d256855db57108e0"
+                }
+              }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+                "externalParameters": {
+                  "workflow": {
+                    "ref": "refs/tags/1.8.0",
+                    "repository": "https://github.com/paulmillr/noble-hashes",
+                    "path": ".github/workflows/release.yml"
+                  }
+                },
+                "internalParameters": {
+                  "github": {
+                    "event_name": "release",
+                    "repository_id": "414330605",
+                    "repository_owner_id": "574696"
+                  }
+                },
+                "resolvedDependencies": [
+                  {
+                    "uri": "git+https://github.com/paulmillr/noble-hashes@refs/tags/1.8.0",
+                    "digest": {
+                      "gitCommit": "32f700f38ec49d7e6b2ab687904d6b2d7d60d80a"
+                    }
+                  }
+                ]
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "https://github.com/actions/runner/github-hosted"
+                },
+                "metadata": {
+                  "invocationId": "https://github.com/paulmillr/noble-hashes/actions/runs/14581682598/attempts/1"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "app-builder-lib",
+    "baseline": {
+      "version": "26.15.3",
+      "sha512": "sha512-2VnyWkqsP5v5XbBhL3tD5Syx8iNPBYsoU7kY4S2fz7wg8Rj/nztWKCUzGKaFRTv0Xwf3/H058CR1Kvtd/3lRow==",
+      "sha1": "0fa6c965e307bb6d86226407c750a45b3fd6b1bf",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 0,
+      "scripts": {},
+      "dependencies": {
+        "@electron/asar": "3.4.1",
+        "@electron/fuses": "^1.8.0",
+        "@electron/get": "^3.0.0",
+        "@electron/notarize": "2.5.0",
+        "@electron/osx-sign": "1.3.3",
+        "@electron/rebuild": "^4.0.4",
+        "@electron/universal": "2.0.3",
+        "@malept/flatpak-bundler": "^0.4.0",
+        "@noble/hashes": "^2.2.0",
+        "@peculiar/webcrypto": "^1.7.1",
+        "@types/fs-extra": "9.0.13",
+        "ajv": "^8.18.0",
+        "asn1js": "^3.0.10",
+        "async-exit-hook": "^2.0.1",
+        "chromium-pickle-js": "^0.2.0",
+        "ci-info": "4.3.1",
+        "debug": "^4.3.4",
+        "dotenv": "^16.4.5",
+        "dotenv-expand": "^11.0.6",
+        "ejs": "^3.1.8",
+        "fs-extra": "^10.1.0",
+        "hosted-git-info": "^4.1.0",
+        "isbinaryfile": "^5.0.0",
+        "jiti": "^2.4.2",
+        "js-yaml": "^4.1.0",
+        "json5": "^2.2.3",
+        "lazy-val": "^1.0.5",
+        "minimatch": "^10.2.5",
+        "pkijs": "^3.4.0",
+        "plist": "3.1.0",
+        "proper-lockfile": "^4.1.2",
+        "resedit": "^1.7.0",
+        "semver": "~7.7.3",
+        "tar": "^7.5.7",
+        "temp-file": "^3.4.0",
+        "tiny-async-pool": "1.3.0",
+        "unzipper": "^0.12.3",
+        "which": "^5.0.0",
+        "builder-util-runtime": "9.7.0",
+        "builder-util": "26.15.3",
+        "electron-publish": "26.15.3"
+      },
+      "optionalDependencies": {},
+      "engines": {
+        "node": ">=14.0.0"
+      },
+      "provenance": null
+    },
+    "candidate": {
+      "version": "26.18.0",
+      "sha512": "sha512-lx+KkuCSZHcbECf4R3IAcC9VOFk0+cMUwljO63s5y8yqS1Lw0sRGmjPaWsPwP3zv3ohZYbMhUvjXeiQXXZhJXA==",
+      "sha1": "83e1ac45d8d60b446278f8cab2d2d45bc8710761",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        },
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 493,
+      "scripts": {},
+      "dependencies": {
+        "@electron/asar": "3.4.1",
+        "@electron/fuses": "^1.8.0",
+        "@electron/get": "^3.0.0",
+        "@electron/notarize": "2.5.0",
+        "@electron/osx-sign": "1.3.3",
+        "@electron/rebuild": "^4.2.1",
+        "@electron/universal": "2.0.3",
+        "@malept/flatpak-bundler": "^0.4.0",
+        "@noble/hashes": "^1.8.0",
+        "@peculiar/webcrypto": "^1.7.1",
+        "@types/fs-extra": "9.0.13",
+        "ajv": "^8.18.0",
+        "asn1js": "^3.0.10",
+        "async-exit-hook": "^2.0.1",
+        "chromium-pickle-js": "^0.2.0",
+        "ci-info": "4.3.1",
+        "debug": "^4.3.4",
+        "dotenv": "^16.4.5",
+        "dotenv-expand": "^11.0.6",
+        "ejs": "^3.1.8",
+        "fs-extra": "^10.1.0",
+        "hosted-git-info": "^4.1.0",
+        "isbinaryfile": "^5.0.0",
+        "jiti": "^2.4.2",
+        "js-yaml": "^4.1.0",
+        "json5": "^2.2.3",
+        "lazy-val": "^1.0.5",
+        "minimatch": "^10.2.5",
+        "pkijs": "^3.4.0",
+        "plist": "3.1.0",
+        "proper-lockfile": "^4.1.2",
+        "resedit": "^1.7.0",
+        "semver": "~7.7.3",
+        "tar": "^7.5.7",
+        "temp-file": "^3.4.0",
+        "tiny-async-pool": "1.3.0",
+        "unzipper": "^0.12.3",
+        "which": "^5.0.0",
+        "builder-util": "26.16.0",
+        "builder-util-runtime": "9.7.0",
+        "electron-publish": "26.18.0"
+      },
+      "optionalDependencies": {},
+      "engines": {
+        "node": ">=14.0.0"
+      },
+      "provenance": {
+        "digestMatches": true,
+        "cryptographicallyVerified": false,
+        "statements": [
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+              {
+                "name": "pkg:npm/app-builder-lib@26.18.0",
+                "digest": {
+                  "sha512": "971f8a92e09264771b1027f8477200702f55385934f9c314c258ceeb7b39cbccaa4b52f0d2c4469a33da5ac3f03f7cefde885961b32152f8d77a24175d98495c"
+                }
+              }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+                "externalParameters": {
+                  "workflow": {
+                    "ref": "refs/heads/release/v26",
+                    "repository": "https://github.com/electron-userland/electron-builder",
+                    "path": ".github/workflows/pr-release.yml"
+                  }
+                },
+                "internalParameters": {
+                  "github": {
+                    "event_name": "push",
+                    "repository_id": "35998691",
+                    "repository_owner_id": "17519142"
+                  }
+                },
+                "resolvedDependencies": [
+                  {
+                    "uri": "git+https://github.com/electron-userland/electron-builder@refs/heads/release/v26",
+                    "digest": {
+                      "gitCommit": "e2a8604535bdc626bd068ddf5b6afb67bed45725"
+                    }
+                  }
+                ]
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "https://github.com/actions/runner/github-hosted"
+                },
+                "metadata": {
+                  "invocationId": "https://github.com/electron-userland/electron-builder/actions/runs/39499771914/attempts/1"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "builder-util",
+    "baseline": {
+      "version": "26.15.3",
+      "sha512": "sha512-q2hn7Mbo2nFNkVekPiHFx6Nfo3hURmES3tfBn+k5Pqxl2RkmP3QGqZUhH/q9Pch/4G05NRhPjDlVj1O8q4Txvw==",
+      "sha1": "1eeab37f0d4a6421fe18ce9db38ced58881d9519",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 0,
+      "scripts": {},
+      "dependencies": {
+        "@types/debug": "^4.1.6",
+        "chalk": "^4.1.2",
+        "cross-spawn": "^7.0.6",
+        "debug": "^4.3.4",
+        "fs-extra": "^10.1.0",
+        "http-proxy-agent": "^7.0.0",
+        "https-proxy-agent": "^7.0.0",
+        "js-yaml": "^4.1.0",
+        "sanitize-filename": "^1.6.3",
+        "source-map-support": "^0.5.19",
+        "stat-mode": "^1.0.0",
+        "temp-file": "^3.4.0",
+        "tiny-async-pool": "1.3.0",
+        "builder-util-runtime": "9.7.0"
+      },
+      "optionalDependencies": {},
+      "engines": {
+        "node": ">=14.0.0"
+      },
+      "provenance": null
+    },
+    "candidate": {
+      "version": "26.16.0",
+      "sha512": "sha512-RLyJhB7Si3YkzKR9ubQslWuXW3Vhs3CGe1i+SeixBZ0qTd1mk3XBmssvY22TlB6CS5blyko8Gu1JzpYk8UkYAg==",
+      "sha1": "fa6f0a9af739d47d1adcabf089d3450b7e95c8df",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        },
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 42,
+      "scripts": {},
+      "dependencies": {
+        "@types/debug": "^4.1.6",
+        "chalk": "^4.1.2",
+        "cross-spawn": "^7.0.6",
+        "debug": "^4.3.4",
+        "fs-extra": "^10.1.0",
+        "http-proxy-agent": "^7.0.0",
+        "https-proxy-agent": "^7.0.0",
+        "js-yaml": "^4.1.0",
+        "sanitize-filename": "^1.6.3",
+        "source-map-support": "^0.5.19",
+        "stat-mode": "^1.0.0",
+        "temp-file": "^3.4.0",
+        "tiny-async-pool": "1.3.0",
+        "builder-util-runtime": "9.7.0"
+      },
+      "optionalDependencies": {},
+      "engines": {
+        "node": ">=14.0.0"
+      },
+      "provenance": {
+        "digestMatches": true,
+        "cryptographicallyVerified": false,
+        "statements": [
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+              {
+                "name": "pkg:npm/builder-util@26.16.0",
+                "digest": {
+                  "sha512": "44bc89841ed28b7624cca47db9b42c956b975b7561b370867b58be49e8b1059d2a4ddd669375c19acb2f636d93941e824b96e5ca4a3c1aed49ce9624f1491802"
+                }
+              }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+                "externalParameters": {
+                  "workflow": {
+                    "ref": "refs/heads/release/v26",
+                    "repository": "https://github.com/electron-userland/electron-builder",
+                    "path": ".github/workflows/pr-release.yml"
+                  }
+                },
+                "internalParameters": {
+                  "github": {
+                    "event_name": "push",
+                    "repository_id": "35998691",
+                    "repository_owner_id": "17519142"
+                  }
+                },
+                "resolvedDependencies": [
+                  {
+                    "uri": "git+https://github.com/electron-userland/electron-builder@refs/heads/release/v26",
+                    "digest": {
+                      "gitCommit": "f4610970f78b6ce223b1f4cee2b5e8f5caa14a48"
+                    }
+                  }
+                ]
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "https://github.com/actions/runner/github-hosted"
+                },
+                "metadata": {
+                  "invocationId": "https://github.com/electron-userland/electron-builder/actions/runs/33585252373/attempts/1"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "dmg-builder",
+    "baseline": {
+      "version": "26.15.3",
+      "sha512": "sha512-O3zJUFUYHJKgzPqioHxfxzBzlSC1eXCSr79gMSBKBP5AgjjpmrydMsMLotEg9fAJF36vdUncb+4ndRNxoPdlSQ==",
+      "sha1": "d884362e223551ee0dbc96bbb7187b42905378f8",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 0,
+      "scripts": {},
+      "dependencies": {
+        "fs-extra": "^10.1.0",
+        "js-yaml": "^4.1.0",
+        "builder-util": "26.15.3",
+        "app-builder-lib": "26.15.3"
+      },
+      "optionalDependencies": {},
+      "engines": {},
+      "provenance": null
+    },
+    "candidate": {
+      "version": "26.18.0",
+      "sha512": "sha512-ozCGC54wi2C1RkS2v69y9lQxvoQ1Coh+iT8CmWiyY8y1ZuOKVvuNson2Hd+HEOs9+EZNNsOBbzKgQZ4SNqWd0w==",
+      "sha1": "061dc211149e3f55657a50ea5abdbd5750081f02",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        },
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 18,
+      "scripts": {},
+      "dependencies": {
+        "fs-extra": "^10.1.0",
+        "js-yaml": "^4.1.0",
+        "app-builder-lib": "26.18.0",
+        "builder-util": "26.16.0"
+      },
+      "optionalDependencies": {},
+      "engines": {},
+      "provenance": {
+        "digestMatches": true,
+        "cryptographicallyVerified": false,
+        "statements": [
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+              {
+                "name": "pkg:npm/dmg-builder@26.18.0",
+                "digest": {
+                  "sha512": "a330860b9e308b60b54644b6bfaf72f65431be84350a887e893f029968b263ccb566e38a56fb8db289f61ddf8710eb3df8464d36c3816f32a0419e1236a59dd3"
+                }
+              }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+                "externalParameters": {
+                  "workflow": {
+                    "ref": "refs/heads/release/v26",
+                    "repository": "https://github.com/electron-userland/electron-builder",
+                    "path": ".github/workflows/pr-release.yml"
+                  }
+                },
+                "internalParameters": {
+                  "github": {
+                    "event_name": "push",
+                    "repository_id": "35998691",
+                    "repository_owner_id": "17519142"
+                  }
+                },
+                "resolvedDependencies": [
+                  {
+                    "uri": "git+https://github.com/electron-userland/electron-builder@refs/heads/release/v26",
+                    "digest": {
+                      "gitCommit": "e2a8604535bdc626bd068ddf5b6afb67bed45725"
+                    }
+                  }
+                ]
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "https://github.com/actions/runner/github-hosted"
+                },
+                "metadata": {
+                  "invocationId": "https://github.com/electron-userland/electron-builder/actions/runs/39499771914/attempts/1"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "electron-builder-squirrel-windows",
+    "baseline": {
+      "version": "26.15.3",
+      "sha512": "sha512-Jc19XPV9y9+2bAdZPkXuVNGNIEFBq9poHC61l8Kv6FdK7DRG3+Ic0rerC0DXOaeHNz8yW0fg/JnF8GQROOF5MA==",
+      "sha1": "be718541f5ce2eb0d3461f0fcdd9a7fd9dfe002a",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 0,
+      "scripts": {},
+      "dependencies": {
+        "electron-winstaller": "5.4.0",
+        "app-builder-lib": "26.15.3",
+        "builder-util": "26.15.3"
+      },
+      "optionalDependencies": {},
+      "engines": {},
+      "provenance": null
+    },
+    "candidate": {
+      "version": "26.18.0",
+      "sha512": "sha512-a2elgTipboXNIsxqS1HOmHMGp4Pd3LJgIZOdIFTOskBSawvxKyZWYWQ1d7KKA4CtINSchYCYEKzhxRqiKZev9Q==",
+      "sha1": "f3b004a73b795c68c3195b184eed1625a20904a1",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        },
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 7,
+      "scripts": {},
+      "dependencies": {
+        "electron-winstaller": "5.4.0",
+        "app-builder-lib": "26.18.0",
+        "builder-util": "26.16.0"
+      },
+      "optionalDependencies": {},
+      "engines": {},
+      "provenance": {
+        "digestMatches": true,
+        "cryptographicallyVerified": false,
+        "statements": [
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+              {
+                "name": "pkg:npm/electron-builder-squirrel-windows@26.18.0",
+                "digest": {
+                  "sha512": "6b67a58138a96e85cd22cc6a4b51ce987306a783dddcb26021939d2054ceb240526b0bf12b265661643577b28a0380ad20d49c85809810ace1c51aa22997aff5"
+                }
+              }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+                "externalParameters": {
+                  "workflow": {
+                    "ref": "refs/heads/release/v26",
+                    "repository": "https://github.com/electron-userland/electron-builder",
+                    "path": ".github/workflows/pr-release.yml"
+                  }
+                },
+                "internalParameters": {
+                  "github": {
+                    "event_name": "push",
+                    "repository_id": "35998691",
+                    "repository_owner_id": "17519142"
+                  }
+                },
+                "resolvedDependencies": [
+                  {
+                    "uri": "git+https://github.com/electron-userland/electron-builder@refs/heads/release/v26",
+                    "digest": {
+                      "gitCommit": "e2a8604535bdc626bd068ddf5b6afb67bed45725"
+                    }
+                  }
+                ]
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "https://github.com/actions/runner/github-hosted"
+                },
+                "metadata": {
+                  "invocationId": "https://github.com/electron-userland/electron-builder/actions/runs/39499771914/attempts/1"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "electron-builder",
+    "baseline": {
+      "version": "26.15.3",
+      "sha512": "sha512-a1KM5heqS3gQCZzizXEI8RjJy3QVogULPdeSknt76uLDpBIW/HDGsMg/XgP0riP6PI9COsRvFITKKGDqA8fJxA==",
+      "sha1": "0e82828f6829c0b2596338365209170ac0acbcd5",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 0,
+      "scripts": {},
+      "dependencies": {
+        "chalk": "^4.1.2",
+        "ci-info": "^4.2.0",
+        "fs-extra": "^10.1.0",
+        "lazy-val": "^1.0.5",
+        "simple-update-notifier": "2.0.0",
+        "yargs": "^17.6.2",
+        "app-builder-lib": "26.15.3",
+        "builder-util-runtime": "9.7.0",
+        "dmg-builder": "26.15.3",
+        "builder-util": "26.15.3"
+      },
+      "optionalDependencies": {},
+      "engines": {
+        "node": ">=14.0.0"
+      },
+      "provenance": null
+    },
+    "candidate": {
+      "version": "26.18.0",
+      "sha512": "sha512-ASgIuQnOq4RuD8jMhS9hI0LS3EMRT1I/M5R6utqifB/BHN80IcCjBdt+DED+NmNPvmBgEtrlExXZitNdA7kXOg==",
+      "sha1": "27d87cd51da618bb2d9e4c5321fc55e4556c028f",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        },
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 31,
+      "scripts": {},
+      "dependencies": {
+        "chalk": "^4.1.2",
+        "ci-info": "^4.2.0",
+        "fs-extra": "^10.1.0",
+        "lazy-val": "^1.0.5",
+        "simple-update-notifier": "2.0.0",
+        "yargs": "^17.6.2",
+        "builder-util": "26.16.0",
+        "app-builder-lib": "26.18.0",
+        "builder-util-runtime": "9.7.0",
+        "dmg-builder": "26.18.0"
+      },
+      "optionalDependencies": {},
+      "engines": {
+        "node": ">=14.0.0"
+      },
+      "provenance": {
+        "digestMatches": true,
+        "cryptographicallyVerified": false,
+        "statements": [
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+              {
+                "name": "pkg:npm/electron-builder@26.18.0",
+                "digest": {
+                  "sha512": "012808b909ceab846e0fc8cc852f612342d2dc43114f523f33947abadaa27c1fc11cdf3421c0a305db7e0c40fe36634fbe606012dae51315d98ad35d03b9173a"
+                }
+              }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+                "externalParameters": {
+                  "workflow": {
+                    "ref": "refs/heads/release/v26",
+                    "repository": "https://github.com/electron-userland/electron-builder",
+                    "path": ".github/workflows/pr-release.yml"
+                  }
+                },
+                "internalParameters": {
+                  "github": {
+                    "event_name": "push",
+                    "repository_id": "35998691",
+                    "repository_owner_id": "17519142"
+                  }
+                },
+                "resolvedDependencies": [
+                  {
+                    "uri": "git+https://github.com/electron-userland/electron-builder@refs/heads/release/v26",
+                    "digest": {
+                      "gitCommit": "e2a8604535bdc626bd068ddf5b6afb67bed45725"
+                    }
+                  }
+                ]
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "https://github.com/actions/runner/github-hosted"
+                },
+                "metadata": {
+                  "invocationId": "https://github.com/electron-userland/electron-builder/actions/runs/39499771914/attempts/1"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "electron-publish",
+    "baseline": {
+      "version": "26.15.3",
+      "sha512": "sha512-g/2bn8YTavY4cuS5F+jOS7zmZbXXBV8KZ8yHKfJjFPoKtzBqrpCdNPxBd3tqdBwP7BVd0lGzf7Bk2s0KesWZ4Q==",
+      "sha1": "db65642070bf60c7bd26d607441506891d3ad054",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 0,
+      "scripts": {},
+      "dependencies": {
+        "@types/fs-extra": "^9.0.11",
+        "aws4": "^1.13.2",
+        "chalk": "^4.1.2",
+        "form-data": "^4.0.5",
+        "fs-extra": "^10.1.0",
+        "lazy-val": "^1.0.5",
+        "mime": "^2.5.2",
+        "builder-util": "26.15.3",
+        "builder-util-runtime": "9.7.0"
+      },
+      "optionalDependencies": {},
+      "engines": {},
+      "provenance": null
+    },
+    "candidate": {
+      "version": "26.18.0",
+      "sha512": "sha512-MagnqaZSALSWjcdKu5HEVhYUZD/2BDL3q7XzrqWwub6gf/UfD3ItMgmthVDv9w5y9E0gH1C3JWqKaXwf6f4ROg==",
+      "sha1": "fce508669730d9dbc7d99a54498fbd536e38eb06",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        },
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 54,
+      "scripts": {},
+      "dependencies": {
+        "@types/fs-extra": "^9.0.11",
+        "aws4": "^1.13.2",
+        "chalk": "^4.1.2",
+        "form-data": "^4.0.5",
+        "fs-extra": "^10.1.0",
+        "lazy-val": "^1.0.5",
+        "mime": "^2.5.2",
+        "builder-util": "26.16.0",
+        "builder-util-runtime": "9.7.0"
+      },
+      "optionalDependencies": {},
+      "engines": {},
+      "provenance": {
+        "digestMatches": true,
+        "cryptographicallyVerified": false,
+        "statements": [
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+              {
+                "name": "pkg:npm/electron-publish@26.18.0",
+                "digest": {
+                  "sha512": "31a827a9a65200b4968dc74abb91c4561614643ff60432f7abb5f3aea5b0b9bea07ff51f0f722d3209ad8550eff70e72f44d201f50b7256a8a697c1fe9fe113a"
+                }
+              }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+                "externalParameters": {
+                  "workflow": {
+                    "ref": "refs/heads/release/v26",
+                    "repository": "https://github.com/electron-userland/electron-builder",
+                    "path": ".github/workflows/pr-release.yml"
+                  }
+                },
+                "internalParameters": {
+                  "github": {
+                    "event_name": "push",
+                    "repository_id": "35998691",
+                    "repository_owner_id": "17519142"
+                  }
+                },
+                "resolvedDependencies": [
+                  {
+                    "uri": "git+https://github.com/electron-userland/electron-builder@refs/heads/release/v26",
+                    "digest": {
+                      "gitCommit": "e2a8604535bdc626bd068ddf5b6afb67bed45725"
+                    }
+                  }
+                ]
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "https://github.com/actions/runner/github-hosted"
+                },
+                "metadata": {
+                  "invocationId": "https://github.com/electron-userland/electron-builder/actions/runs/39499771914/attempts/1"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "vite",
+    "baseline": {
+      "version": "8.3.4",
+      "sha512": "sha512-IftLE8phJhdNRIGNEV4JCCvfNScoZQVfcXaN8TQropWGJtOHcu+iAB9pHcuGvmEb/kddw0LBe/jS8ztdC6xdiQ==",
+      "sha1": "ba08678ba41ba53f41c251b1772946c27b1c874e",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        },
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 0,
+      "scripts": {
+        "dev": "premove dist && pnpm build-bundle -w",
+        "build": "premove dist && pnpm build-bundle && pnpm build-types",
+        "build-bundle": "rolldown --config rolldown.config.ts",
+        "build-types": "pnpm build-types-roll && pnpm build-types-check",
+        "build-types-roll": "rolldown --config rolldown.dts.config.ts",
+        "build-types-check": "tsc --project tsconfig.check.json",
+        "typecheck": "tsc && tsc -p src/node && tsc -p src/client && tsc -p src/module-runner && tsc -p src/shared && tsc -p src/node/__tests_dts__ && tsc -p src/module-runner/__tests_dts__",
+        "lint": "eslint --cache --ext .ts src/**",
+        "format": "oxfmt",
+        "generate-target": "tsx scripts/generateTarget.ts"
+      },
+      "dependencies": {
+        "lightningcss": "^1.33.0",
+        "picomatch": "^4.0.7",
+        "postcss": "^8.5.29",
+        "rolldown": "~1.2.12",
+        "tinyglobby": "^0.2.17"
+      },
+      "optionalDependencies": {
+        "fsevents": "~2.3.3"
+      },
+      "engines": {
+        "node": "^20.19.0 || >=22.12.0"
+      },
+      "provenance": null
+    },
+    "candidate": {
+      "version": "8.3.5",
+      "sha512": "sha512-z1YpjieJ9g0ebTmQpLBv/oq9E3F9EIlOe+7LahW8SrE3LTiG3udBRUXQOlYXP9b+IC2q2phHeVxj9xGlw34OEQ==",
+      "sha1": "9614f66026cb92fe486cb9d3c90780b2a69fc85d",
+      "registrySignatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        },
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true
+        }
+      ],
+      "installedFilesCompared": 37,
+      "scripts": {
+        "dev": "premove dist && pnpm build-bundle -w",
+        "build": "premove dist && pnpm build-bundle && pnpm build-types",
+        "build-bundle": "rolldown --config rolldown.config.ts",
+        "build-types": "pnpm build-types-roll && pnpm build-types-check",
+        "build-types-roll": "rolldown --config rolldown.dts.config.ts",
+        "build-types-check": "tsc --project tsconfig.check.json",
+        "typecheck": "tsc && tsc -p src/node && tsc -p src/client && tsc -p src/module-runner && tsc -p src/shared && tsc -p src/node/__tests_dts__ && tsc -p src/module-runner/__tests_dts__",
+        "lint": "oxlint src",
+        "format": "oxfmt",
+        "generate-target": "tsx scripts/generateTarget.ts"
+      },
+      "dependencies": {
+        "lightningcss": "^1.33.0",
+        "picomatch": "^4.0.7",
+        "postcss": "^8.5.30",
+        "rolldown": "~1.2.14",
+        "tinyglobby": "^0.2.17"
+      },
+      "optionalDependencies": {
+        "fsevents": "~2.3.3"
+      },
+      "engines": {
+        "node": "^20.19.0 || >=22.12.0"
+      },
+      "provenance": {
+        "digestMatches": true,
+        "cryptographicallyVerified": false,
+        "statements": [
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+              {
+                "name": "pkg:npm/vite@8.3.5",
+                "digest": {
+                  "sha512": "cf56298e2789f60d1e6d3990a4b06ffe8abd13717d10894e7beecb6a15bc4ab1372d3886dee7414545d03a56173fd6fe202daada9847795c63f711a5c37e0e11"
+                }
+              }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+                "externalParameters": {
+                  "workflow": {
+                    "ref": "refs/heads/main",
+                    "repository": "https://github.com/vitejs/vite",
+                    "path": ".github/workflows/publish.yml"
+                  }
+                },
+                "internalParameters": {
+                  "github": {
+                    "event_name": "push",
+                    "repository_id": "257485422",
+                    "repository_owner_id": "65625612"
+                  }
+                },
+                "resolvedDependencies": [
+                  {
+                    "uri": "git+https://github.com/vitejs/vite@refs/heads/main",
+                    "digest": {
+                      "gitCommit": "981f07fa4580fb88b333c4450431e4715d2a0b82"
+                    }
+                  }
+                ]
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "https://github.com/actions/runner/github-hosted"
+                },
+                "metadata": {
+                  "invocationId": "https://github.com/vitejs/vite/actions/runs/39556040254/attempts/1"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+]
