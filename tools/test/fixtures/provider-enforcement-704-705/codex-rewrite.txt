@@ -1,0 +1,18 @@
+        .filter_map(|result| {
+            result
+                .data
+                .updated_input
+                .clone()
+                .map(|updated_input| (result.completion_order, updated_input))
+        })
+        .max_by_key(|(completion_order, _)| *completion_order)
+        .map(|(_, updated_input)| updated_input)
+}
+
+/// Serializes command stdin for a selected `PreToolUse` hook.
+///
+/// Handler selection may include internal matcher aliases, but hook stdin keeps
+/// the canonical `tool_name` so audit logs and downstream policy decisions stay
+/// stable. Shell-like tools pass `{ "command": ... }` as `tool_input`; MCP
+/// tools pass their resolved JSON arguments.
+fn command_input_json(request: &PreToolUseRequest) -> Result<String, serde_json::Error> {
