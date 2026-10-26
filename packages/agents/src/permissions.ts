@@ -37,11 +37,10 @@
  * (`model/agent.ts`), which is node-free; the reading, writing, locking and the physical
  * path checks are here.
  */
-import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { link, mkdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { revisionOf, withPolicyLock } from "./permission-file.js";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   derivePermissionRules,
@@ -612,21 +611,6 @@ async function refuseUnsupportedPolicyReplacement(file: string): Promise<void> {
 }
 
 /**
- * The content hash of a file as it is right now, `""` when it is not there - the same
- * "revision" `config.get` reports, computed the same way, so the two can be compared at all.
- */
-async function revisionOf(file: string): Promise<string> {
-  try {
-    return createHash("sha256")
-      .update(await readFile(file))
-      .digest("hex");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw e;
-  }
-}
-
-/**
  * Validate a sidecar document a client sent, refusing a `default`. Exported beside the
  * writer so a `validateOnly` call can ask the same question without taking the lock.
  */
@@ -670,57 +654,5 @@ async function writePolicyFile(
     await rename(tmp, file);
   } finally {
     await rm(tmp, { force: true });
-  }
-}
-
-/**
- * Serialise read-modify-write across processes, with the same `link()`-to-create idiom the
- * store's `withFileLock` uses. It is not reused: `@orca/agents` sits to the right of
- * `@orca/store` in the layering, so it cannot import it.
- *
- * The wait (10s) is deliberately shorter than the staleness window (30s), so a lock is only
- * ever broken when its holder died holding it, never when it is merely slow.
- */
-async function withPolicyLock<T>(
-  file: string,
-  opts: { timeoutMs?: number; staleMs?: number } | undefined,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const lock = `${file}.lock`;
-  const timeoutMs = opts?.timeoutMs ?? 10_000;
-  const staleMs = opts?.staleMs ?? 30_000;
-  await mkdir(dirname(file), { recursive: true });
-  const tmp = `${lock}.${process.pid}.${Math.random().toString(36).slice(2)}`;
-  await writeFile(tmp, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), "utf8");
-  const deadline = Date.now() + timeoutMs;
-  try {
-    for (let backoff = 1; ; backoff = Math.min(backoff * 2, 32)) {
-      try {
-        await link(tmp, lock);
-        break;
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-        await breakIfStale(lock, staleMs);
-        if (Date.now() >= deadline)
-          throw new OrcaError("STORE_LOCK_TIMEOUT", `${lock} is held by another writer`, { file });
-        await delay(backoff + Math.random() * backoff);
-      }
-    }
-  } finally {
-    await rm(tmp, { force: true });
-  }
-  try {
-    return await fn();
-  } finally {
-    await rm(lock, { force: true });
-  }
-}
-
-async function breakIfStale(lock: string, staleMs: number): Promise<void> {
-  try {
-    const st = await stat(lock);
-    if (Date.now() - st.mtimeMs > staleMs) await unlink(lock);
-  } catch {
-    // Gone already, or another waiter broke it first. Either way, retry the link.
   }
 }

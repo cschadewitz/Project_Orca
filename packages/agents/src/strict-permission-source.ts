@@ -136,7 +136,7 @@ function projectRules(material: StrictRuleRead, boundary: CurrentBoundary): Stri
     p.authorityRevision !== boundary.authority.authorityRevision
   )
     return unknown("strict-policy-untrusted-provenance");
-  if (!denseArray(material.rules) || !material.rules.every(validRule))
+  if (!denseArray(material.rules) || !material.rules.every(validStrictPermissionRule))
     return unknown("strict-policy-malformed-typed-rules");
   if (new Set(material.rules.map((rule) => rule.ruleId)).size !== material.rules.length)
     return unknown("strict-policy-ambiguous-rule-identity");
@@ -173,7 +173,7 @@ function exact(value: Record<string, unknown>, required: readonly string[], opti
     Object.keys(value).every((key) => required.includes(key) || optional.includes(key))
   );
 }
-function validRule(value: unknown): value is StrictPermissionRule {
+export function validStrictPermissionRule(value: unknown): value is StrictPermissionRule {
   if (!object(value) || !object(value.match)) return false;
   if (
     !exact(
@@ -244,19 +244,5 @@ function validRule(value: unknown): value is StrictPermissionRule {
   );
 }
 
-/**
- * Proposed internal contract ONLY, pending a sidecar compatibility decision. An implementation
- * must reuse the existing sidecar lock, compare expectedRevision inside it, reauthorize
- * permissions.grant for the original principal under it and immediately before replacement,
- * and preserve answer-recorded/write-failed delivery semantics. No implementation is registered.
- */
-export interface StrictScopedRuleWritePort {
-  createScopedRule(
-    command: {
-      readonly rule: StrictPermissionRule;
-      readonly expectedRevision: string;
-      readonly approvalRecordRef: string;
-    },
-    authority: { authorizeGrant(): Promise<void> },
-  ): Promise<{ readonly revision: string }>;
-}
+/** Persistence implementation and command types live together; no runtime registration. */
+export type { StrictScopedRuleWritePort } from "./typed-sidecar.js";
