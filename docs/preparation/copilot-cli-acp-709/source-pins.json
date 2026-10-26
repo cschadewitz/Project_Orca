@@ -1,0 +1,355 @@
+{
+  "format": "orca.provider-preparation-source-record/1",
+  "issue": 709,
+  "status": "offline-only-inactive-not-qualified",
+  "checkedAt": "2026-10-26",
+  "orcaBaseline": "890eb71847e4c38533ab8f5b2d35f14076b8f923",
+  "provider": {
+    "target": "GitHub Copilot CLI native ACP server",
+    "notTarget": "GitHub Copilot Language Server (@github/copilot-language-server, registry id github-copilot)",
+    "registryId": "github-copilot-cli",
+    "cliVersion": "1.0.103",
+    "cliReleaseStatus": "versioned 1.x release; changelog dates 1.0.103 to 2026-10-22",
+    "acpReleaseStatus": "public preview, subject to change (acp-server.md note)",
+    "launch": {
+      "documented": ["copilot", "--acp", "--stdio"],
+      "transport": "stdio NDJSON; --port selects TCP and is mutually exclusive with --stdio",
+      "profile": "orca.copilot-acp.example.yaml"
+    },
+    "runtime": {
+      "npmLoader": "Node.js 22 or later (data/variables/copilot.yml copilot_cli_npm_version); loader uses import.meta.resolve and spawnSync",
+      "nativeBinary": "platform package executable; the loader only spawns it with process.argv.slice(2) and stdio inherit (source-reviewed npm-loader.js)"
+    },
+    "license": "proprietary GitHub Copilot CLI License; native implementation is closed and was not inspected"
+  },
+  "acp": {
+    "negotiatedProtocolVersion": 1,
+    "protocolVersionEvidence": "registry-probed (third-party initialize probe), not installed-observed by ORCA",
+    "orcaSdk": {
+      "package": "@agentclientprotocol/sdk",
+      "version": "1.8.0",
+      "integrity": "sha512-fbP7qHZsFyTJVT0/RPrcWJ8An26qLXHEuGCHHEKDyxD1xpXV+Ejyh2LAE6vBAFePkpVjZeeohnbgvuEhZ7wLMg==",
+      "gitHead": "f4ea219505fcafcb3fa63e00f1c24559755c4b6b",
+      "tag": "v1.8.0",
+      "npmProvenance": "SLSA provenance v1 attestation present in registry metadata (not independently verified here)",
+      "lockfileEntry": "pnpm-lock.yaml '@agentclientprotocol/sdk@1.8.0' (unchanged)",
+      "clientProtocolVersion": 1
+    }
+  },
+  "documentation": {
+    "repository": "github/docs",
+    "revision": "943e6d816a55df71c974921348c177f344377c8d",
+    "retrievedVia": "git clone --depth 1 (docs.github.com itself was denied by this session's egress policy)",
+    "note": "Pins are the repository HEAD at retrieval; per-file last-change commits were not fetched (shallow clone). Liquid variables were resolved from data/ at the same revision.",
+    "files": [
+      {
+        "path": "content/copilot/reference/copilot-cli-reference/acp-server.md",
+        "blob": "08a75d7eae3a13e5039cdd54e673a7a8a35ad193",
+        "sha256": "77bd31bae7adcf3f1dd4cab74554efd83c418c02450bf36276cbf7b18a9b68c6",
+        "published": "https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server"
+      },
+      {
+        "path": "content/copilot/reference/copilot-cli-reference/cli-command-reference.md",
+        "blob": "23fb2ab4f674a7dd9cc0c7e3b882c0da7264e153",
+        "sha256": "daffbdcc2de9c790048263659ea080a9ec7855ef40c6494be6ba99b66b8d26b4"
+      },
+      {
+        "path": "content/copilot/reference/copilot-cli-reference/cli-config-dir-reference.md",
+        "blob": "0796a6d5a073ed0083444e3f325068762f0ab92d",
+        "sha256": "287b8614c01f6af20b62c62f4a7694b8a13108455a2afc81f83ba76b5db78e07"
+      },
+      {
+        "path": "content/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli.md",
+        "blob": "cc622a4ee642511ae170f71640b828c169138385",
+        "sha256": "786001812975a735f22a4aafc00540780065ab90584d068196d5e174d4abbad4"
+      },
+      {
+        "path": "content/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli.md",
+        "blob": "1d276a803a0b7fab703749b0eb46510c3fe57b7e",
+        "sha256": "835374c88196cc7263c684ab746a031a0ae4d2010bad518efc0747d0e300c913"
+      },
+      {
+        "path": "content/copilot/how-tos/copilot-cli/use-copilot-cli/allowing-tools.md",
+        "blob": "3a8306fb296f32e85862e82491865c47ac37037a",
+        "sha256": "66f9ea0f24ec263736a9817331c6456aeab951381989cedf128f0b5e4c4b5729"
+      },
+      {
+        "path": "content/copilot/reference/hooks-reference.md",
+        "blob": "0be7a2c689786017602bd8201cb38620b717843b",
+        "sha256": "1e62f5803250887f731928b29807aefaad03f6c455bcf629adbd3f2e625cbbe7"
+      },
+      {
+        "path": "content/copilot/concepts/security-governance-and-network-settings/about-cloud-and-local-sandboxes.md",
+        "blob": "4c12acf7e4268dbe415c6b89541868e1402c9b93",
+        "sha256": "171b9e3ee2f29b2cf28d8c1997620b208990bd4d3ede2a378714eee89202f319"
+      },
+      {
+        "path": "data/reusables/gated-features/copilot-cli.md",
+        "blob": "43c44c5124acd886734632b017849b8fe8f0be69",
+        "sha256": "93f6a35254b013f6a38ec915cb85ba866677f0103b54a6c1cfd0ff84b5002108"
+      },
+      {
+        "path": "data/reusables/copilot/copilot-cli-pat-steps.md",
+        "blob": "b69a8b1d83b85556fb93e0f131d099c3284d2824",
+        "sha256": "fff6d0390a6e383d71c411586b1907e2bdf016ccc4ef1ad9eb4dbec1cfbde651"
+      },
+      {
+        "path": "data/variables/copilot.yml",
+        "blob": "67221b29b1e71eddd17d6f1cf7e5f15d9154f91a",
+        "sha256": "3e5edddc0bd0467cf320f4733f46e914f7901eee7d8e20351a6b5693b8eb8f71"
+      }
+    ]
+  },
+  "vendorRepository": {
+    "repository": "github/copilot-cli",
+    "revision": "7ea98dfc33c68aaf6443ea8fc054e20ff7fcd120",
+    "committedAt": "2026-10-22T16:21:58+00:00",
+    "contents": "README, changelog, LICENSE and install script only; no CLI source",
+    "files": [
+      {
+        "path": "changelog.md",
+        "blob": "8c85ed89cb2a2e7bd52d9f717420d062a1143abe",
+        "sha256": "c4b793bd6555bf699c1f6ef61fb9052e6400df8f475c97fdae25ba5084531dfb"
+      },
+      {
+        "path": "LICENSE.md",
+        "blob": "4826459a60423f33c3767c3f0b0e1d400d0c0edf",
+        "sha256": "c694e2d9b3f3bb40704ca9bdc823dc90269999ab4c013dfd8a52c407046074b4"
+      },
+      {
+        "path": "README.md",
+        "blob": "347cf2dcbfd43632662496991582cf860bedd715",
+        "sha256": "33657f2e7383f2167b47d5f8c549a6071905a5c93d5d67d17e5c5399f126f07b"
+      },
+      {
+        "path": "install.sh",
+        "blob": "8a1352651545cb11d3fc2867d356293d427be2d7",
+        "sha256": "00efcc2e196f0793d097935d6230062fc66e8247dc01334d2ac3eae4e26a1c7f"
+      }
+    ],
+    "releaseAssets": "not retrieved: github.com release downloads (copilot-<platform>-<arch>.tar.gz, SHA256SUMS.txt) were denied by this session's egress policy"
+  },
+  "artifacts": {
+    "registry": "https://registry.npmjs.org",
+    "npmProvenanceAttestations": "absent for every @github/copilot package listed below; registry ECDSA signatures are present but are not build provenance",
+    "loader": {
+      "package": "@github/copilot",
+      "version": "1.0.103",
+      "publishedAt": "2026-10-22T16:21:46.381Z",
+      "integrity": "sha512-wj2x08GpqPtNEbUDTlxX+RPjSEd2rTdD+Am0oH70xopdgcQoGufW+pnIW123pBqJ9U5m/cZv1eFk8owo/yZATw==",
+      "shasum": "691708ad12404dc5baa7c78a8bb1b77205b527aa",
+      "tarballSha256": "f7e7909dd699a6b4dabf8c3bcb382a884cb25f5115c200118579c9bd2c4d8393",
+      "buildMetadataGitCommit": "131fc866123 (abbreviated; not resolvable in the public vendor repository)",
+      "inspected": "downloaded and read without executing: npm-loader.js, package.json, LICENSE.md, README.md"
+    },
+    "platformPackages": [
+      {
+        "package": "@github/copilot-darwin-arm64",
+        "version": "1.0.103",
+        "os": ["darwin"],
+        "cpu": ["arm64"],
+        "bin": "copilot",
+        "integrity": "sha512-5upfa7UdJJQbRRfyrYqaZ81xy0SSXba8HNRNwJYVw1NuONFFt3u7FzPBQJ/XpB/1m/YGPmmK4XRgITAF4oAu+A==",
+        "shasum": "f0d6c8b6fb8cfda4e2e7c1e6a9fc47f1600b5839",
+        "unpackedSize": 181811714,
+        "downloaded": false
+      },
+      {
+        "package": "@github/copilot-darwin-x64",
+        "version": "1.0.103",
+        "os": ["darwin"],
+        "cpu": ["x64"],
+        "bin": "copilot",
+        "integrity": "sha512-E0gt0Q4UyndutyT5bcEn8gBv7RiBJPkY2oOy4vvbF6nHZ8/+/FS0p7baIfOc6xTjJnS+3rfQ8ts9yCRKiSZa9Q==",
+        "shasum": "55469644dead0f390383c472256b4b59844bc6a6",
+        "unpackedSize": 190246566,
+        "downloaded": false
+      },
+      {
+        "package": "@github/copilot-linux-x64",
+        "version": "1.0.103",
+        "os": ["linux"],
+        "cpu": ["x64"],
+        "libc": ["glibc"],
+        "bin": "copilot",
+        "integrity": "sha512-9qNrzrecDTL4N94tPsxocXC1BJ+CykXGiwKQOdVYzpy26Jd43qLtGfYNIrrr4iQi9lAhQPp64Q5UDAkQ3JZgVw==",
+        "shasum": "bd365d904500af443d873263a381dc15a0d73944",
+        "unpackedSize": 198449901,
+        "downloaded": false
+      }
+    ],
+    "otherPlatformPackagesListed": ["linux-arm64", "linuxmusl-x64", "linuxmusl-arm64", "win32-x64", "win32-arm64"]
+  },
+  "acpRegistry": {
+    "repository": "agentclientprotocol/registry",
+    "revision": "1a52bbd4fc455f139879adfb24b16e887dcdf11a",
+    "files": [
+      {
+        "path": "github-copilot-cli/agent.json",
+        "blob": "149ffaf8839a49f6e52989eb12ae233bb6b21b02",
+        "sha256": "4b7983d8d77eedfb83a6d1166cda72c193eba6a450de277925df00af508a8177"
+      },
+      {
+        "path": "github-copilot/agent.json",
+        "blob": "fb5e4fee8a7546a3490c06fa11f6ea59f0a0da7b",
+        "sha256": "7b01f16891375dd6fca05c9cbe13c7910dbb093f7294d0f41bfae2e434ea087b",
+        "note": "Copilot Language Server; not the #709 target although it is also named Copilot"
+      },
+      {
+        "path": ".protocol-matrix/latest.json",
+        "blob": "fa698c62f04a00e106f4039fc35940eeb64e8183",
+        "sha256": "1f2c0a54b73ef58e0e086f85fd5f26f858cf5e4c1217d687d089b4fe67c587d5"
+      },
+      {
+        "path": "AUTHENTICATION.md",
+        "blob": "58855d727471fe63cb3622141df02515be861fef",
+        "sha256": "59972bbb22c119cf9a9d08dc5afcf9c50ac04598cf5f519a5949b5a1a76479a2"
+      }
+    ],
+    "registryDistribution": { "npx": { "package": "@github/copilot@1.0.103", "args": ["--acp"] } },
+    "initializeProbe": {
+      "probedAt": "2026-10-26T11:10:08+00:00",
+      "host": "registry CI runner (/home/runner); OS/arch not recorded in the row",
+      "unauthenticated": true,
+      "protocolVersion": 1,
+      "agentInfoVersion": "1.0.103",
+      "authMethodTypes": ["terminal"],
+      "authMethodIdsRecorded": false,
+      "capabilities": {
+        "loadSession": true,
+        "sessionList": true,
+        "sessionFork": false,
+        "sessionResume": false,
+        "sessionStop": false,
+        "setModel": false
+      },
+      "sessionNew": { "status": "auth_required", "code": -32000, "message": "Authentication required" },
+      "methodProbes": {
+        "session/list": "success",
+        "session/fork": -32601,
+        "session/resume": -32601,
+        "session/stop": -32601,
+        "session/set_model": -32002
+      },
+      "caveat": "Initialization probe only. Not conformance, not authenticated, not prompt/permission/cancellation behavior, not macOS."
+    }
+  },
+  "evidenceLevels": {
+    "documented": "Vendor documentation or changelog at the pinned revisions above",
+    "registry-probed": "Third-party ACP registry initialize/method probe, unauthenticated",
+    "source-reviewed": "Pinned source read by hand: npm loader, ORCA, ACP SDK. No native Copilot source exists publicly",
+    "offline-fixture": "ORCA's real session code driven by synthetic Copilot-shaped messages in packages/agents/test/copilot-cli-acp-709.test.ts; no process, network or credential",
+    "untested-installed": "Requires an installed, authenticated provider run; not performed",
+    "unknown": "No evidence; treated as unsupported"
+  },
+  "supportMatrix": [
+    {
+      "area": "stdio launch (--acp --stdio)",
+      "levels": ["documented", "offline-fixture"],
+      "status": "prepared",
+      "limit": "ORCA spawn path exercised with a mocked host only"
+    },
+    {
+      "area": "TCP launch (--port)",
+      "levels": ["documented"],
+      "status": "unsupported",
+      "limit": "ORCA hosts spawn stdio children; the profile preflight refuses --port"
+    },
+    {
+      "area": "macOS arm64 native package",
+      "levels": ["documented"],
+      "status": "untested-installed",
+      "limit": "npm metadata pinned; 182 MB binary not downloaded, signature/notarization unchecked"
+    },
+    {
+      "area": "Linux x64 / other platforms",
+      "levels": ["documented"],
+      "status": "untested-installed",
+      "limit": "Platform list from npm optionalDependencies and README"
+    },
+    {
+      "area": "initialize and protocol version 1",
+      "levels": ["registry-probed", "offline-fixture"],
+      "status": "prepared",
+      "limit": "Probe was unauthenticated and not on macOS"
+    },
+    {
+      "area": "authentication (OAuth keychain, env token, gh fallback, BYOK)",
+      "levels": ["documented", "registry-probed"],
+      "status": "untested-installed",
+      "limit": "ORCA never calls ACP authenticate; it fails closed on -32000 (offline-fixture). Account/plan not assumed"
+    },
+    {
+      "area": "session/new, session identity",
+      "levels": ["registry-probed", "offline-fixture"],
+      "status": "prepared",
+      "limit": "Copilot session id format unknown"
+    },
+    {
+      "area": "session/load",
+      "levels": ["documented", "registry-probed"],
+      "status": "unknown",
+      "limit": "ORCA loads only on explicit resumeSessionId; not exercised against Copilot"
+    },
+    {
+      "area": "streaming session/update",
+      "levels": ["documented", "offline-fixture"],
+      "status": "prepared",
+      "limit": "Copilot's actual update sequence and _meta extensions unknown"
+    },
+    {
+      "area": "prompt errors and stop reasons",
+      "levels": ["offline-fixture"],
+      "status": "prepared",
+      "limit": "Copilot's error codes for quota, policy and model refusal unknown"
+    },
+    {
+      "area": "cancellation",
+      "levels": ["offline-fixture"],
+      "status": "untested-installed",
+      "limit": "Whether Copilot ends the turn, aborts running shells, or answers pending permission asks is unknown; ORCA kills after cancelGraceMs"
+    },
+    {
+      "area": "unsupported client methods (terminal/*, custom _ methods, elicitation)",
+      "levels": ["offline-fixture"],
+      "status": "prepared",
+      "limit": "ORCA answers -32601; Copilot's reaction to that refusal is unknown"
+    },
+    {
+      "area": "permission option IDs, kinds, scope and lifetime",
+      "levels": [],
+      "status": "unknown",
+      "limit": "Closed source and not installed; fixtures use synthetic IDs. Native 'approve for session' and per-location persistence are documented for the interactive UI only"
+    },
+    {
+      "area": "rule-matched automatic answer bounded to this invocation",
+      "levels": ["source-reviewed", "offline-fixture"],
+      "status": "gap",
+      "limit": "ORCA falls back to allow_always when no allow_once is offered (proposal P1)"
+    },
+    {
+      "area": "allow_all session config option",
+      "levels": ["documented", "source-reviewed"],
+      "status": "not-set-by-orca",
+      "limit": "ORCA only sets category model options; the option still exists for other clients and launch flags"
+    },
+    {
+      "area": "native approval bypass routes",
+      "levels": ["documented"],
+      "status": "unsupported",
+      "limit": "See README inventory; none is mediated by ORCA"
+    },
+    {
+      "area": "controlled approval validation (support level B)",
+      "levels": [],
+      "status": "not-started",
+      "limit": "Needs separately authorized installed run"
+    },
+    {
+      "area": "execution-guard certification (support level C)",
+      "levels": [],
+      "status": "not-qualified",
+      "limit": "Requires #700 contract and #706 acceptance for this exact tuple"
+    }
+  ]
+}

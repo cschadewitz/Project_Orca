@@ -1,0 +1,52 @@
+# INACTIVE EXAMPLE (#709). Nothing in ORCA loads this file: it is not a default, not part of
+# examples/orca.config.yaml and not registered anywhere. Copy it deliberately, replace both
+# /REPLACE-WITH-ABSOLUTE-PREFIX placeholders, and follow setup-preflight.md before first use.
+#
+# Target: the GitHub Copilot CLI's own ACP server (`copilot --acp --stdio`), pinned to 1.0.103.
+# Not the Copilot Language Server (`@github/copilot-language-server --acp`), which the ACP
+# registry lists separately as `github-copilot`.
+#
+# A successful handshake with this profile is connectivity only. It is not approval
+# validation and not an execution guard; see README.md for what remains unqualified.
+version: 1
+
+hosts:
+  - id: local
+    type: local
+
+agents:
+  - id: copilot-cli-acp
+    name: GitHub Copilot CLI 1.0.103 (ACP public preview)
+    # The darwin-arm64 native executable from the pinned npm install in setup-preflight.md.
+    # An absolute path to a version-named directory, so neither PATH order nor a later
+    # `npm install -g` can swap the binary. On Linux x64 the package is copilot-linux-x64.
+    command: /REPLACE-WITH-ABSOLUTE-PREFIX/github-copilot-cli/1.0.103/node_modules/@github/copilot-darwin-arm64/copilot
+    args:
+      - --acp
+      - --stdio
+      - --no-auto-update # keep the pinned version; COPILOT_AUTO_UPDATE below says the same
+      - --sandbox # OS shell sandbox ceiling for this session; not an ORCA guard (README)
+      - --disable-builtin-mcps # no built-in GitHub MCP server as an alternate tool route
+      - --no-ask-user # no ask_user tool, whose ACP surface is unverified
+      - --disallow-temp-dir # no automatic access to the system temp directory
+    env:
+      # Isolated Copilot configuration and state: no ambient permissions-config.json,
+      # settings.json allowedUrls, user hooks, MCP config or providers.json. Authenticate
+      # with this same COPILOT_HOME (setup-preflight.md). Never put a token here: ORCA's
+      # config is visible on the Config surface and in exported configuration.
+      COPILOT_HOME: /REPLACE-WITH-ABSOLUTE-PREFIX/github-copilot-cli/profile
+      COPILOT_AUTO_UPDATE: "false"
+      # LocalHost passes the daemon's own environment through, so an inherited truthy
+      # value would auto-approve every tool. These documented-falsey values override it.
+      COPILOT_ALLOW_ALL: "false"
+      COPILOT_PLAN_THEN_AUTOPILOT: "false"
+    hostId: local
+    roles: []
+    sessionMode: per-step
+    turnTimeoutMs: 1800000
+    cancelGraceMs: 10000
+    # No `permissions:` block: ORCA's defaults (in-workspace read/search/edit, `ask` for the
+    # rest). Copilot only asks ORCA about what Copilot itself decides to ask about.
+
+humanInput:
+  mode: pause
