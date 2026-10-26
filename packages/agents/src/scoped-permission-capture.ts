@@ -32,6 +32,8 @@ export interface ScopedPermissionCapturePort {
     readonly action: ActionEvidenceV1;
     readonly target: ScopedCaptureTarget;
     readonly binding: ManagedTypedStoreBinding;
+    /** Original resource workspace; distinct from the managed policy workspace identity. */
+    readonly resourceWorkspaceRef: string;
     readonly actor: MutationActor;
     /** Outcome of the actual required review, retained by its owner, never a client/model claim. */
     readonly review: {
@@ -41,10 +43,12 @@ export interface ScopedPermissionCapturePort {
   };
   /** Synchronous retained executor/attempt/ceiling/expiry/lease assertion. Never deserialize a token. */
   assertCurrent(capture: ScopedPermissionCapture, authority: AuthorityStampV1): undefined;
-  /** After confirmed publication, retire every unconsumed old decision/permit and create
-   * a fresh decision attempt under the ORIGINAL invocation/captured ceilings. Never change
-   * an immutable action, resend an uncertain effect or reconstruct a callback from disk.
-   * A started/uncertain dispatch must refuse. A fresh capture must precede another review.
+  /** #734's actual service.refreshPolicyRevision transition: exactly once, only after
+   * evaluated require-human and BEFORE ANY permit authorization started. The original
+   * snapshot may change only currentPolicyRevision. Retire the old fence synchronously,
+   * preserve original parameters/policy/captured ceilings/expiry/cancellation and retain
+   * the returned real facade/action. Never mutate immutable evidence, resend an uncertain
+   * effect or reconstruct a callback from disk. A fresh capture precedes another review.
    */
   policyChanged(capture: ScopedPermissionCapture, facts: ScopedCaptureFacts): Promise<void>;
 }

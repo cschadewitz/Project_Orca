@@ -9,6 +9,11 @@ incorporated by ordinary merge. The separately owned publication mode correction
 is still pending at this checkpoint. No wrapper, app source, app coverage test,
 lockfile, accepted production build map or production registration was changed.
 
+Parent subsequently supplied #734
+`c12a2a2aaf5f1f8383aa8a3582d5b4d2dafc4801`. Its actual service source and
+`docs/preparation/tool-execution-guards/owned-read-service-703.md` were inspected
+without incorporating its branch. The handoff below follows its real facade.
+
 ## Canonical provider and lifetime
 
 `packages/agents/src/managed-typed-store.ts` owns the shared internal provider and
@@ -71,6 +76,34 @@ workaround. The bounded repeated-read service owner must implement and prove thi
 handoff before positive Save/read acceptance can be claimed. `policyChanged` has no
 default implementation. A failed handoff leaves a historical saved rule inspectable
 but does not revive the original attempt or turn a lost acknowledgement into retry.
+
+The actual #734 operation is `service.refreshPolicyRevision(invocation)`: it accepts
+the original retained `TrustedOwnedReadInvocation`, only once, after an evaluated
+`require-human` result and before **any** permit authorization has started. Only
+`currentPolicyRevision` may change in the original snapshot. It synchronously retires
+the old fence and returns a new facade/action while preserving parameters, policy,
+evidence ports, expiry, original cancellation and captured ceilings. The daemon
+capture owner must retain that returned facade; it must not synthesize a replacement
+action or recreate service/owner/policy objects. If source eligibility, another epoch,
+the binding or a ceiling changed, refresh refuses. Save cannot be used to force it.
+
+#734's resource workspace is its real resource-local temporary-tree identity. The
+capture handoff retains this separately from the managed policy workspace binding;
+it never relabels immutable action evidence to make the identifiers equal. Review,
+record lookup and the final qualification assertion bind both original identities
+and reject replacement across awaits. The actual #734 service remains policy-per-ask,
+has no installed qualification and supplies no offered native choices: it is not a
+positive Save producer. Its final physical-capture assertion and authenticated live
+input attachment still need a trusted capture-registry handoff, not action JSON.
+
+Human Allow once execution remains a separate composition obligation. Canonical
+`PolicyVerdictV1` already supports `authorizedBy: {kind: "human", acceptedAnswerRef}`;
+no standing rule may impersonate that origin. The trusted delivery owner must prove
+the exact accepted option reached the original live callback while original
+invocation/lease/expiry/ceiling checks still hold before a one-use permit is issued.
+A durable `human.answered` marker alone, failed/uncertain delivery, an expired turn or
+restart cannot recreate that authority. This checkpoint does not implement that
+human-to-execution permit handoff or claim positive acceptance for it.
 
 ## Protected approval and qualification
 

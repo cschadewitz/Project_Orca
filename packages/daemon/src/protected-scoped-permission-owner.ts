@@ -181,6 +181,7 @@ const recordSchema = z.strictObject({
   target: targetSchema,
   command: z.strictObject({ rule: ruleSchema, expectedRevision: z.string(), approvalRecordRef: z.string() }),
   action: actionSchema,
+  resourceWorkspaceRef: z.string().min(1),
   scopeEvidenceRef: z.uuid(),
   authorityRevision: z.string().min(1),
   scope: ScopedPermissionScopeSchema,
@@ -249,6 +250,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       invocation: ActionEvidenceV1["invocation"];
       capturedGeneration: string;
       actor: MutationActor;
+      resourceWorkspaceRef: string;
       saved?: boolean;
       blocked?: boolean;
     }
@@ -324,6 +326,8 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
     if (snapshot.binding !== entry.binding) fail();
     same(snapshot.target, entry.target);
     same(snapshot.action, entry.review.action);
+    if (entry.review.action.workspaceRef.state !== "complete") fail();
+    same(snapshot.resourceWorkspaceRef, entry.review.action.workspaceRef.value);
     same(snapshot.review, { result: entry.review.requiredReview, sourceRefs: entry.reviewSourceRefs });
     same(currentFacts(entry.actor, entry.review.command.expectedRevision, entry.binding), factsOf(snapshot.action));
     if (captures.assertCurrent(entry.capture, snapshot.action.authority) !== undefined) fail();
@@ -394,7 +398,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       fail();
     same(parsed.command.rule.match, matchFor(parsed.action));
     if (parsed.action.workspaceRef.state !== "complete") fail();
-    same(parsed.action.workspaceRef.value, parsed.binding.workspaceRef);
+    same(parsed.action.workspaceRef.value, parsed.resourceWorkspaceRef);
     if (marker[0].type !== "agent.permission") fail();
     same(marker[0].payload.sessionId, parsed.action.invocation.sessionId);
     same(marker[0].payload.title, "create a scoped rule");
@@ -422,7 +426,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       same(factsOf(source.action), observed);
       same(source.actor, actor);
       if (source.action.workspaceRef.state !== "complete") fail();
-      same(source.action.workspaceRef.value, active.workspaceRef);
+      same(source.action.workspaceRef.value, source.resourceWorkspaceRef);
       same(source.action.invocation.principalRef, actor.principalId);
       for (const key of ["instanceId", "sessionId", "turnId", "invocationId", "runId", "stepRunId"] as const)
         same(source.action.invocation[key], target[key]);
@@ -434,6 +438,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         same(originalCapture.invocation, action.invocation);
         same(originalCapture.capturedGeneration, action.authority.capturedGeneration);
         same(originalCapture.actor, actor);
+        same(originalCapture.resourceWorkspaceRef, source.resourceWorkspaceRef);
       }
       const ends = Math.min(Date.parse(action.expiresAt), now() + 60000);
       if (!Number.isFinite(ends) || ends <= now()) fail();
@@ -519,6 +524,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
           invocation: structuredClone(action.invocation),
           capturedGeneration: action.authority.capturedGeneration,
           actor: structuredClone(actor),
+          resourceWorkspaceRef: source.resourceWorkspaceRef,
         });
       entries.set(review.command.approvalRecordRef, entry);
       return structuredClone(review);
@@ -596,6 +602,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         target: entry.target,
         command: review.command,
         action: review.action,
+        resourceWorkspaceRef: captures.snapshot(entry.capture).resourceWorkspaceRef,
         scopeEvidenceRef: review.scopeEvidenceRef,
         authorityRevision: review.action.authority.authorityRevision,
         scope: review.scope,
@@ -730,13 +737,24 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         if (source.binding !== active || lease.resource !== `run:${action.invocation.runId}`) return fail();
         same(source.action, action);
         if (action.workspaceRef.state !== "complete") fail();
-        same(action.workspaceRef.value, active.workspaceRef);
-        const actor = source.actor;
+        same(action.workspaceRef.value, source.resourceWorkspaceRef);
+        const actor = structuredClone(source.actor);
+        const target = structuredClone(source.target),
+          resourceWorkspaceRef = source.resourceWorkspaceRef;
+        const assertCapture = () => {
+          const retained = captures.snapshot(capture);
+          if (retained.binding !== active) fail();
+          same(retained.action, action);
+          same(retained.actor, actor);
+          same(retained.target, target);
+          same(retained.resourceWorkspaceRef, resourceWorkspaceRef);
+          if (captures.assertCurrent(capture, action.authority) !== undefined) fail();
+        };
         same(actor.principalId, action.invocation.principalRef);
         const observed = await facts(actor, snapshot.revision, active);
         same(factsOf(action), observed);
         verified(action);
-        if (captures.assertCurrent(capture, action.authority) !== undefined) fail();
+        assertCapture();
         if (!snapshot.document.scopedRules.records.length) return fail();
         if (!execution.observe) return fail();
         const observation = await execution.observe(
@@ -757,8 +775,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         const assertProofs = observation.assertUnchanged.bind(observation);
         await binding();
         same(await facts(actor, snapshot.revision, active), observed);
-        same(captures.snapshot(capture).action, action);
-        if (captures.assertCurrent(capture, action.authority) !== undefined) fail();
+        assertCapture();
         signal.throwIfAborted();
         return {
           sourceRefs: proofs.flatMap((p) => p.reviewSourceRefs),
@@ -771,7 +788,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
             same(currentFacts(actor, snapshot.revision, active), observed);
             for (const proof of proofs) credential(proof.actor);
             signal.throwIfAborted();
-            if (captures.assertCurrent(capture, action.authority) !== undefined) fail();
+            assertCapture();
             return undefined;
           },
         };

@@ -133,6 +133,7 @@ async function fixture(capture = false) {
         target,
         binding: registeredBinding,
         actor,
+        resourceWorkspaceRef: retained.workspaceRef.state === "complete" ? retained.workspaceRef.value : unavailable(),
         review: { result: "unavailable", sourceRefs: [] },
       };
     },
