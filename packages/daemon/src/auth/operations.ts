@@ -59,6 +59,14 @@ export interface OperationSpec {
 export const WORKFLOWS_VALIDATE_INPUTS_OPERATION = "workflows.validateInputs";
 
 export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
+  "scopedPermissions.review": {
+    permission: "permissions.grant",
+    additionalPermissions: ["inputs.answer"],
+    resource: "none",
+  },
+  "scopedPermissions.choose": { permission: "inputs.answer", resource: "none", audit: "decision" },
+  "scopedPermissions.inspect": { permission: "permissions.grant", resource: "none" },
+  "scopedPermissions.cancel": { permission: "inputs.answer", resource: "none" },
   hello: { permission: null, resource: "none" },
   "operator.discover": { permission: null, resource: "none" },
   // The closed collection discriminant selects a grant; OperatorReadModel checks it before diagnostics.
