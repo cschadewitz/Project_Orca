@@ -15,6 +15,8 @@ import {
   utimes,
 } from "node:fs/promises";
 import { join } from "node:path";
+import { createServer, type Server } from "node:net";
+import { fenceBoot, fenceDirectory, fenceHash } from "@orca/protocol/first-run-fence";
 import { afterEach, expect, it as platformIt, vi } from "vitest";
 import { ClosedUpdateWindow, enterUpdateWriter, provisionUpdateWindow } from "@orca/protocol/update-window";
 import { createPairTreePort, type PairTreePort } from "../src/main/mac-fixed-path-files.js";
@@ -37,17 +39,35 @@ afterEach(async () => {
   for (const close of closers.splice(0).reverse()) await close();
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
-async function fixture(candidateHash = candidate) {
-  const base = await mkdtemp(join(process.cwd(), "orca-fixed-pair-"));
-  roots.push(base);
-  const control = join(base, "recovery"),
-    data = [join(base, "app"), join(base, "store")],
-    binary = join(base, "Orca.app");
-  for (const path of [control, ...data, binary]) await mkdir(path, { mode: 0o700 });
-  await writeFile(join(data[0]!, "intents.enc"), "protected-old", { mode: 0o600 });
-  await writeFile(join(data[1]!, "history.json"), "old-history", { mode: 0o600 });
-  await writeFile(join(binary, "manifest"), old, { mode: 0o600 });
-  await provisionUpdateWindow(control, data);
+type FixtureLayout = { base: string; control: string; data: string[]; binary: string };
+async function provisionFixture(beforeProvision?: (layout: FixtureLayout) => Promise<void>) {
+  // Fence slots are fixed by each root's identity, so unrelated listeners (or two
+  // roots hashing to one range) can refuse a new disposable fixture. Select another
+  // tree only during initial provisioning; never retry capture or recovery operations.
+  for (let attempt = 0; ; attempt++) {
+    const base = await mkdtemp(join(process.cwd(), "orca-fixed-pair-"));
+    roots.push(base);
+    const control = join(base, "recovery"),
+      data = [join(base, "app"), join(base, "store")],
+      binary = join(base, "Orca.app");
+    for (const path of [control, ...data, binary]) await mkdir(path, { mode: 0o700 });
+    await writeFile(join(data[0]!, "intents.enc"), "protected-old", { mode: 0o600 });
+    await writeFile(join(data[1]!, "history.json"), "old-history", { mode: 0o600 });
+    await writeFile(join(binary, "manifest"), old, { mode: 0o600 });
+    await beforeProvision?.({ base, control, data, binary });
+    try {
+      await provisionUpdateWindow(control, data);
+    } catch (error) {
+      // Provisioning awaits closure of every partial listener before rejecting.
+      await rm(base, { recursive: true, force: true });
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt >= 4) throw error;
+      continue;
+    }
+    return { base, control, data, binary };
+  }
+}
+async function fixture(candidateHash = candidate, beforeProvision?: (layout: FixtureLayout) => Promise<void>) {
+  const { base, control, data, binary } = await provisionFixture(beforeProvision);
   const window = new ClosedUpdateWindow(control);
   closers.push(() => window.detach());
   window.closeAdmission(candidateHash);
@@ -72,6 +92,83 @@ async function fixture(candidateHash = candidate) {
   };
   return { base, control, data, binary, window, ports, trees, recovery, changed, fresh };
 }
+// Contention is injected with an owned kernel listener, never a free-port probe or a
+// mocked fence. Mirror only the production identity mapping needed to occupy its slots.
+function fixtureSlots(root: string) {
+  const start =
+    20000 +
+    (Number.parseInt(
+      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, fenceDirectory(root)])).slice(0, 8),
+      16,
+    ) %
+      5000) *
+      8;
+  return Array.from({ length: 8 }, (_, slot) => start + slot);
+}
+async function occupy(port: number) {
+  const server: Server = createServer();
+  const close = async () => {
+    if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+  };
+  closers.push(close);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port, exclusive: true, reusePort: false }, () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
+  });
+  return { server, close };
+}
+it("admits a fresh fixture after real initial slot contention and releases every abandoned listener", async () => {
+  const abandoned: FixtureLayout[] = [],
+    slots = new Set<number>();
+  let blocker: Awaited<ReturnType<typeof occupy>> | undefined;
+  const f = await fixture(candidate, async (layout) => {
+    if (blocker) return;
+    abandoned.push(layout);
+    for (const root of layout.data) for (const port of fixtureSlots(root)) slots.add(port);
+    // Late in the second root: provisioning must release its already acquired slots.
+    blocker = await occupy(fixtureSlots(layout.data[1]!)[7]!);
+  });
+  expect(blocker!.server.listening).toBe(true);
+  expect(f.base).not.toBe(abandoned[0]!.base);
+  expect(f.window.check()).toBe(true);
+  expect(f.window.snapshot.phase).toBe("closed");
+  await expect(enterUpdateWriter(f.data[0]!)).rejects.toThrow();
+  await expect(lstat(abandoned[0]!.base)).rejects.toMatchObject({ code: "ENOENT" });
+  await f.window.detach();
+  await blocker!.close();
+  // Reacquire and retain the abandoned range, proving partial provisioning did not leak.
+  for (const port of slots) expect((await occupy(port)).server.listening).toBe(true);
+});
+it("bounds initial fixture admission and cleans every exhausted tree while contenders remain owned", async () => {
+  const attempted: FixtureLayout[] = [],
+    blockers = new Map<number, Awaited<ReturnType<typeof occupy>>>();
+  await expect(
+    fixture(candidate, async (layout) => {
+      attempted.push(layout);
+      const port = fixtureSlots(layout.data[1]!)[7]!;
+      if (!blockers.has(port)) blockers.set(port, await occupy(port));
+    }),
+  ).rejects.toMatchObject({ code: "EADDRINUSE" });
+  expect(attempted).toHaveLength(5);
+  expect(new Set(attempted.map((layout) => layout.base)).size).toBe(5);
+  for (const layout of attempted) await expect(lstat(layout.base)).rejects.toMatchObject({ code: "ENOENT" });
+  for (const { server } of blockers.values()) expect(server.listening).toBe(true);
+});
+it("propagates a non-contention provisioning refusal without resampling the fixture", async () => {
+  const attempted: FixtureLayout[] = [];
+  await expect(
+    fixture(candidate, async (layout) => {
+      attempted.push(layout);
+      // Invalid enrollment refuses before listening, independently of other test ports.
+      layout.data.push(layout.data[0]!);
+    }),
+  ).rejects.toThrow("Protected update window unavailable");
+  expect(attempted).toHaveLength(1);
+  await expect(lstat(attempted[0]!.base)).rejects.toMatchObject({ code: "ENOENT" });
+});
 it.each([1, 123, 199, 999])("preserves millisecond %i through fixed-path copy and restore", async (fraction) => {
   const f = await fixture(),
     file = join(f.binary, "manifest"),
