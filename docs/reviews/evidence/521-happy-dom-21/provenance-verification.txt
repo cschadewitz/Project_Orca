@@ -1,0 +1,22 @@
+TUFError: error refreshing TUF metadata
+    at getTargetPath (/opt/codex/cua_node/lib/node_modules/npm/node_modules/@sigstore/tuf/dist/target.js:51:15)
+    at async readTarget (/opt/codex/cua_node/lib/node_modules/npm/node_modules/@sigstore/tuf/dist/target.js:26:18)
+    at async Object.getTrustedRoot (/opt/codex/cua_node/lib/node_modules/npm/node_modules/@sigstore/tuf/dist/index.js:33:25)
+    at async createVerifier (/opt/codex/cua_node/lib/node_modules/npm/node_modules/sigstore/dist/sigstore.js:87:25)
+    at async Object.verify (/opt/codex/cua_node/lib/node_modules/npm/node_modules/sigstore/dist/sigstore.js:81:22)
+    at async /tmp/orca-verify-provenance.cjs:12:2 {
+  code: 'TUF_REFRESH_METADATA_ERROR',
+  cause: DownloadHTTPError: Failed to download
+      at DefaultFetcher.fetch (/opt/codex/cua_node/lib/node_modules/npm/node_modules/tuf-js/dist/fetcher.js:77:19)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async /opt/codex/cua_node/lib/node_modules/npm/node_modules/tuf-js/dist/fetcher.js:22:28
+      at async withTempDir (/opt/codex/cua_node/lib/node_modules/npm/node_modules/tuf-js/dist/utils/tmpfile.js:20:16)
+      at async Updater.loadTimestamp (/opt/codex/cua_node/lib/node_modules/npm/node_modules/tuf-js/dist/updater.js:210:27)
+      at async Updater.refresh (/opt/codex/cua_node/lib/node_modules/npm/node_modules/tuf-js/dist/updater.js:101:13)
+      at async Updater.getTargetInfo (/opt/codex/cua_node/lib/node_modules/npm/node_modules/tuf-js/dist/updater.js:111:13)
+      at async getTargetPath (/opt/codex/cua_node/lib/node_modules/npm/node_modules/@sigstore/tuf/dist/target.js:48:22)
+      at async readTarget (/opt/codex/cua_node/lib/node_modules/npm/node_modules/@sigstore/tuf/dist/target.js:26:18)
+      at async Object.getTrustedRoot (/opt/codex/cua_node/lib/node_modules/npm/node_modules/@sigstore/tuf/dist/index.js:33:25) {
+    statusCode: 403
+  }
+}

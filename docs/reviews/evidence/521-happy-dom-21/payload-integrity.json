@@ -1,0 +1,54 @@
+[
+  {
+    "name": "happy-dom",
+    "version": "21.0.4",
+    "tarball": "https://registry.npmjs.org/happy-dom/-/happy-dom-21.0.4.tgz",
+    "sha512": "sha512-tFm+GaLBgo6o0awHnvHaNoraVo27qJ+2tZEtZ+cIa08hXbeitrxAJajLI05hsUy/2/YTKcUjQYzHe5mCcraLBw==",
+    "sha256": "dab48a6ff5c17c6be99be1ef30ea82caa5f58172d12116413e20878246087109",
+    "shasum": "3b9e4b23a6ef5f94f6db242857a99742dd14f943",
+    "registryAndLockIntegrityMatch": true,
+    "gitHead": "fd163520b74d9fa146be91f7b4e4f46d6cccbe13",
+    "repository": {
+      "url": "git+https://github.com/capricorn86/happy-dom.git",
+      "type": "git"
+    },
+    "scripts": {
+      "test": "vitest run",
+      "watch": "tsc -w --preserveWatchOutput",
+      "compile": "npm run compile:build-css-properties && npm run compile:build-public-suffix-list && tsc && npm run compile:build-version-file",
+      "test:ui": "vitest --ui",
+      "test:debug": "vitest run --inspect-brk --no-file-parallelism",
+      "test:watch": "vitest",
+      "compile:build-version-file": "node ./bin/build-version-file.cjs",
+      "test:circular-dependencies": "madge --circular --extensions js lib/index.js",
+      "compile:build-css-properties": "node ./bin/build-css-properties.cjs",
+      "compile:build-public-suffix-list": "node ./bin/build-public-suffix-list.cjs"
+    }
+  },
+  {
+    "name": "magicast",
+    "version": "0.5.5",
+    "tarball": "https://registry.npmjs.org/magicast/-/magicast-0.5.5.tgz",
+    "sha512": "sha512-UicdXN8zQ3JHlxVq+28afMXPr1z7WNY6+7EJnzTdQWkTAlMLF5fNCCKxJHBQwGaNGR11581EiQmQzx73+MvszA==",
+    "sha256": "5561d86abd904681f987e64f2a9ffc203da3d2067db88c174580864462c7dbec",
+    "shasum": "66dfd87ba2a40b568d97ff0d2b888ad3580519cb",
+    "registryAndLockIntegrityMatch": true,
+    "gitHead": null,
+    "repository": {
+      "url": "unjs/magicast",
+      "type": "git"
+    },
+    "scripts": {
+      "dev": "vitest dev",
+      "lint": "eslint --cache .",
+      "test": "vitest",
+      "build": "tsdown",
+      "dev:ui": "vitest dev --ui",
+      "release": "pnpm run test run && bumpp",
+      "lint:fix": "eslint --cache . --fix",
+      "test:full": "pnpm run test --run && pnpm run build && pnpm run test:build --run",
+      "typecheck": "tsc --noEmit",
+      "test:build": "TEST_BUILD=true vitest"
+    }
+  }
+]

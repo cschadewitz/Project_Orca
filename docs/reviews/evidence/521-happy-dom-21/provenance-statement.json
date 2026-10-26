@@ -1,0 +1,51 @@
+{
+  "statement": {
+    "_type": "https://in-toto.io/Statement/v1",
+    "subject": [
+      {
+        "name": "pkg:npm/happy-dom@21.0.4",
+        "digest": {
+          "sha512": "b459be19a2c1828ea8d1ac079ef1da368ada568dbba89fb6b5912d67e7086b4f215db7a2b6bc4025a8cb234e61b14cbfdbf61329c523418cc77b998272b68b07"
+        }
+      }
+    ],
+    "predicateType": "https://slsa.dev/provenance/v1",
+    "predicate": {
+      "buildDefinition": {
+        "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+        "externalParameters": {
+          "workflow": {
+            "ref": "refs/heads/master",
+            "repository": "https://github.com/capricorn86/happy-dom",
+            "path": ".github/workflows/release.yml"
+          }
+        },
+        "internalParameters": {
+          "github": {
+            "event_name": "workflow_dispatch",
+            "repository_id": "207392577",
+            "repository_owner_id": "19155544"
+          }
+        },
+        "resolvedDependencies": [
+          {
+            "uri": "git+https://github.com/capricorn86/happy-dom@refs/heads/master",
+            "digest": {
+              "gitCommit": "fd163520b74d9fa146be91f7b4e4f46d6cccbe13"
+            }
+          }
+        ]
+      },
+      "runDetails": {
+        "builder": {
+          "id": "https://github.com/actions/runner/github-hosted"
+        },
+        "metadata": {
+          "invocationId": "https://github.com/capricorn86/happy-dom/actions/runs/39431177832/attempts/2"
+        }
+      }
+    }
+  },
+  "digestAndRegistryCommitMatch": true,
+  "cryptographicVerification": "blocked: HTTP 403 refreshing Sigstore TUF metadata; not retried"
+}

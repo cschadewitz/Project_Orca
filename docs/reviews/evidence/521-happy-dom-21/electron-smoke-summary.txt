@@ -1,0 +1,7 @@
+Unchanged command: pnpm run app:smoke
+Final attempt after standard pinned Electron download, with Node environment proxy enabled.
+- [pid=4565][err] [4565:1025/235846.034268:ERROR:ui/ozone/platform/x11/ozone_platform_x11.cc:257] Missing X server or $DISPLAY
+- [pid=4565][err] [4565:1025/235846.034290:ERROR:ui/aura/env.cc:246] The platform failed to initialize.  Exiting.
+1 failed
+27 did not run
+No native acceptance claimed; no Xvfb/xvfb-run is installed.
