@@ -138,8 +138,8 @@ The new controls use explicitly synthetic fixtures. They call the real grammar
 and base event/interval paths, but do not represent a full connected trace or
 claim physical/source acceptance from their mocked image checker.
 
-The final complete Python suite passes **194 tests** (6.921 s), including **28
-connected controls**. Those 28 controls also pass under `python3 -O` (0.166 s).
+The final complete Python suite passes **197 tests** (4.800 s), including **31
+connected controls**. Those 31 controls also pass under `python3 -O` (0.068 s).
 `git diff --check` passes. The TypeScript producer and its dependencies are
 unchanged; no new producer build or TypeScript acceptance is claimed. Markdown
 uses the repository's hand-wrapped prose convention (`.prettierignore`).
@@ -159,3 +159,23 @@ unsettled locks, cross-phase writers, readonly reopen/close, mapping/vector-writ
 refusal and shared-descriptor overlap. Runtime bootstrap guards remain covered by
 the existing full observer suite. Raw traces, protected bytes and secrets remain
 local and are not publication artifacts.
+
+## Independent-review correction: token close completion
+
+Parent-coordinated independent source review found a journal causality defect in
+initial head `2e54dc021657955c9c47edf3db0829f47c2d0321`. Base replay visits paired
+syscalls at their raw entry index, sets `writer_closed` there and separately
+retains `writer_close_completion`. A token close spanning raw indices 5–20 could
+therefore satisfy that flag before another thread's journal open at index 10.
+The token and journal have different interval entities, so the general overlap
+check alone cannot establish their publication ordering.
+
+`lock_owner(before_entry)` now requires integer raw indices satisfying
+`0 <= writer_close_entry <= writer_close_completion < before_entry` for journal
+open/write/close. It does not synthesize completion timestamps. The adversarial
+cross-thread close 5–20/open 10 regression failed before this correction with
+`RuntimeError not raised`; settled close 5–9/open 10 remains valid. Missing,
+boolean, same-boundary and later completion indices also refuse. These controls
+use the actual base close/event and interval methods. This is an incomplete
+grammar correction, not an exploit against an existing accepting path; no
+connected launcher/release, semantic authority or gate is introduced.

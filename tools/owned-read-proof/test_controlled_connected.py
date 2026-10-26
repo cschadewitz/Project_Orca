@@ -345,7 +345,7 @@ class JournalControls(unittest.TestCase):
         token = lock + '/owner.10.' + U + '.json'
         r.paths[token] = Object('lock-token', stat.S_IFREG | 0o644, {token},
             json.dumps({'pid': 10, 'at': START // 1000000 + 1000, 'host': os.uname().nodename}).encode(),
-            writes=1, writer_closed=True)
+            writes=1, writer_closed=True, writer_close_entry=8, writer_close_completion=9)
         return r, token
 
     def opening(self, r, flags='O_WRONLY|O_CREAT|O_APPEND|O_CLOEXEC', entered=10):
@@ -462,6 +462,46 @@ class JournalControls(unittest.TestCase):
         r.event((11, 'openat', ['AT_FDCWD', json.dumps(r.journal_path),
                  'O_WRONLY|O_CREAT|O_APPEND|O_CLOEXEC', '0666'], '20', 10, 12))
         self.assertEqual(r.open_intervals, [(10, 12)])
+
+    def test_unfinished_token_close_cannot_qualify_another_threads_journal_open(self):
+        r, path = self.writer()
+        token = r.paths[path]
+        token.writer_closed = False
+        token.writer_close_entry = token.writer_close_completion = None
+        r.handles[30] = Handle(token, {'O_WRONLY'})
+        close = (11, 'close', ['30'], '0', 5, 20)
+        r.check_intervals(close)
+        r.event(close)
+        self.assertTrue(token.writer_closed)
+        self.assertEqual(token.writer_close_completion, 20)
+        opening = (10, 'openat', ['AT_FDCWD', json.dumps(r.journal_path),
+                   'O_WRONLY|O_CREAT|O_APPEND|O_CLOEXEC', '0666'], '20', 10, 10)
+        # Distinct token/journal entities do not conflict in the base interval
+        # table. The connected publication-order predicate must reject this.
+        r.check_intervals(opening)
+        with self.assertRaisesRegex(RuntimeError, 'token close completion must precede journal operation'):
+            r.event(opening)
+
+    def test_settled_token_close_qualifies_later_journal_open_with_exact_raw_order(self):
+        r, path = self.writer()
+        token = r.paths[path]
+        token.writer_closed = False
+        token.writer_close_entry = token.writer_close_completion = None
+        r.handles[30] = Handle(token, {'O_WRONLY'})
+        close = (11, 'close', ['30'], '0', 5, 9)
+        r.check_intervals(close)
+        r.event(close)
+        self.opening(r, entered=10)
+        self.assertIs(r.handles[20].journal_token, token)
+        self.assertEqual(token.writer_close_completion, 9)
+
+    def test_token_close_missing_type_alias_or_boundary_completion_refuses(self):
+        for completion in (None, True, 10, 11):
+            r, path = self.writer()
+            r.paths[path].writer_close_completion = completion
+            with self.subTest(completion=completion), self.assertRaisesRegex(
+                    RuntimeError, 'token close completion must precede journal operation'):
+                self.opening(r, entered=10)
 
 
 if __name__ == '__main__':

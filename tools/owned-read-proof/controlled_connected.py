@@ -198,7 +198,7 @@ class ConnectedKernelReplay(Replay):
             return 'lock-token'
         return super().family(path)
 
-    def lock_owner(self):
+    def lock_owner(self, before_entry):
         root = self.journal_path + '.lock'
         require(root in self.paths, 'journal append without original lock directory')
         members = [(p, obj) for p, obj in self.paths.items() if str(Path(p).parent) == root]
@@ -207,6 +207,13 @@ class ConnectedKernelReplay(Replay):
         require(self.family(path) == token.family == 'lock-token' and token.writer_closed and
                 token.names == {path} and token.writes == 1,
                 'journal lock token lacks exclusive settled lineage')
+        # Base replay visits the close at its entry position and immediately sets
+        # writer_closed, even for a paired unfinished/resumed syscall. Only its
+        # retained raw completion index can establish publication before another
+        # thread's journal operation. These are causal indices, not wall times.
+        require(type(token.writer_close_entry) is int and type(token.writer_close_completion) is int and
+                0 <= token.writer_close_entry <= token.writer_close_completion < before_entry,
+                'token close completion must precede journal operation')
         value = parse(token.data)
         require(type(value) is dict and set(value) == {'pid', 'at', 'host'} and
                 type(value['pid']) is int and value['pid'] == self.leader and
@@ -274,7 +281,7 @@ class ConnectedKernelReplay(Replay):
             require(pid in self.threads and pid not in self.settled and self.execs == 1, 'journal from unknown/settled process')
             phase = self.active_phase()
             require(phase == ('save' if len(self.journal_records) < 3 else 'human-read'), 'journal append in wrong phase')
-            token = self.lock_owner()
+            token = self.lock_owner(entered)
             require(token not in self.journal_tokens, 'journal append reused a prior lock acquisition')
             require(args == ['AT_FDCWD', args[1], 'O_WRONLY|O_CREAT|O_APPEND|O_CLOEXEC', '0666'] and
                     result.isdigit() and fd(result) not in self.handles, 'journal append open flags/result differ')
@@ -300,7 +307,7 @@ class ConnectedKernelReplay(Replay):
             return
         if (handle is not None and handle.obj.family == 'connected-journal' and
                 'O_WRONLY' in handle.flags and call in {'write', 'close'}):
-            require(getattr(handle, 'journal_token', None) is self.lock_owner(), 'journal token changed during append')
+            require(getattr(handle, 'journal_token', None) is self.lock_owner(entered), 'journal token changed during append')
             require(self.active_phase() == handle.journal_phase, 'journal writer crosses phase')
             if call == 'write':
                 require(handle.journal_writes == 0 and self.active_phase() ==
