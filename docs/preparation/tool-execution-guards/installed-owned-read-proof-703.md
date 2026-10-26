@@ -76,3 +76,31 @@ trust. Only after that decision and actual evidence connection should a separate
 change consider emitting verified coverage and testing protected Save, refresh,
 explicit live Allow once and fresh bounded reads. Do not populate accepted maps or
 weaken existing qualification gates to run those positive branches.
+
+## Owned trace-process cleanup correction
+
+Review of `22b7c00cdf5d5c9d1758ad101861732315e3ea8a` found that Python's
+`subprocess.run(timeout=30)` settled only its direct strace child. Without
+PTRACE_O_EXITKILL, a traced Node descendant could survive, retain the lifetime
+lock and outlive temporary-directory disposal. That source did not prove safe
+failure cleanup; no claim is made that Python communicate necessarily hangs.
+
+The corrected sequential supervisor requires advertised `--kill-on-exit` support
+before launching scenarios and passes that option to the real tracer (unsupported
+or rejected execution fails closed). It creates one owned session/process group,
+uses bounded communicate, and always kills that group and waits for the tracer.
+Process-local Linux subreaper state lets it reap adopted tracees, including ones
+that changed groups, before returning or propagating timeout. It restores the
+previous process-local state afterward; no persistent OS configuration changes.
+This standalone supervisor launches no unrelated concurrent children. Its waitpid
+calls reap only its own children; there is no process discovery or arbitrary kill.
+If bounded settlement cannot be established, `OwnedCleanupError` preserves the
+new disposable directory instead of treating disposal as safe.
+
+Deterministic regressions launch an actual traced Node parent and Node descendant.
+Both reach a readiness handshake with the inherited lifetime descriptor. A hung
+tree times out; a second case deliberately kills its own tracer. After each case,
+both specifically recorded PIDs are absent and a fresh independent descriptor
+successfully takes the exclusive lock, with the directory still present. Missing
+EXITKILL support refuses before scenarios; injected uncertain cleanup preserves
+the disposable directory. These tests cover failure cleanup, not qualification.
