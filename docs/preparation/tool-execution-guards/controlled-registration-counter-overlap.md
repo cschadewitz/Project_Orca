@@ -103,6 +103,12 @@ The original observer bytes/report/refusal remain unchanged. This analysis is no
 complete bootstrap replay, semantic validation, connected release or acceptance.
 
 Validation: 278 Python tests pass (9.938 s), 29 optimized notification controls
-pass (0.055 s), and `git diff --check` is clean. Exact committed candidate source
-and the final sanitized offline checkpoint are recorded with publication. Raw
-traces and protected records remain private locally.
+pass (0.055 s), and `git diff --check` is clean. The measured committed candidate
+is `c69aee3d7a9310c2e174cbf9dbd082e9abc44cfa`; all 15 executable observer files
+were checked against that commit before offline classification and rehashed
+afterwards. The complete original trace and originals packet hashes were checked
+before analysis. The local sanitized checkpoint is
+`/tmp/orca-connected-diagnostics/offline-registration-committed-candidate.json`,
+SHA-256 `425e2e9f4ead8a36dbc635e773740093235fed94b5b91852533f35cc47e2b80e`.
+It explicitly records that original final physical and semantic checks were not
+performed. Raw traces and protected records remain private locally.
