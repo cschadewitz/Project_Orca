@@ -60,6 +60,7 @@ export function installFirstRunIPC(
   register("reconcileRecovery", z.string().uuid(), (value, check) => setup.reconcileRecovery(value as string, check));
   register("endPreviousSession", z.string().uuid(), (value, check) => setup.endPreviousSession(value as string, check));
   register("reviewConfiguration", z.undefined(), (_value, check) => setup.reviewConfiguration(check));
+  register("cancelConfigurationReview", z.undefined(), (_value, check) => setup.cancelConfigurationReview(check));
   register("bindConfiguration", z.string().uuid(), (value, check) => setup.bindConfiguration(value as string, check));
   register("connect", z.undefined(), (_value, check) => boundary.connect(check));
 }

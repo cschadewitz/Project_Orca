@@ -432,7 +432,11 @@ export class FirstRunSetup {
         throw selectionFailure();
       const checks = [];
       if (config.agents.length > 32) throw selectionFailure();
-      for (const agent of config.agents) checks.push(await inspectLocalTool(agent));
+      for (const agent of config.agents) {
+        boundary.check();
+        assertCurrent();
+        checks.push(await inspectLocalTool(agent));
+      }
       await this.verify(receipt, true);
       boundary.check();
       assertCurrent();
@@ -443,6 +447,22 @@ export class FirstRunSetup {
         state: "configuration-review",
         review: { id, revision: doc.revision, agentCount: config.agents.length, checks },
       };
+    });
+  }
+  /** Withdraw the ephemeral review handle; this never binds configuration or changes the selected directories. */
+  async cancelConfigurationReview(assertCurrent: () => void): Promise<FirstRunStatus> {
+    return this.exclusive(async () => {
+      assertCurrent();
+      const hadReview = this.configReview !== undefined;
+      this.configReview = undefined;
+      const status = await this.status();
+      return hadReview && status.state === "selection-required"
+        ? {
+            state: "selection-required",
+            reason:
+              "Saved configuration is still unbound. Review it again before binding and reopening this workspace.",
+          }
+        : status;
     });
   }
   async bindConfiguration(id: string, assertCurrent: () => void): Promise<FirstRunStatus> {

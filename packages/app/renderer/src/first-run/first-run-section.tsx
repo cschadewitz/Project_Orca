@@ -12,6 +12,7 @@ import {
 import { CHROME_GLYPHS } from "@orca/design";
 import type { OrcaBridge } from "../../../src/bridge.js";
 import type { FirstRunBridge, FirstRunStatus } from "../../../src/first-run-contract.js";
+import { AgentPreflightReview } from "./agent-preflight-review.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { useTransientLayer } from "../layers-context.js";
 import { Button, Card, Text, Well } from "../ui/index.js";
@@ -46,6 +47,9 @@ export function FirstRunSection(): JSX.Element | null {
     if (!bridge) return;
     const read = () => {
       const token = ++revision.current;
+      // A workspace notification retires evidence from the previous target immediately.
+      if (section.current?.contains(document.activeElement)) leftHoldingFocus.current = true;
+      setState((previous) => (previous?.state === "configuration-review" ? undefined : previous));
       void bridge
         .status()
         .then((result) => {
@@ -73,6 +77,11 @@ export function FirstRunSection(): JSX.Element | null {
   const perform = async (action: () => ReturnType<FirstRunBridge["status"]>, success: string, refused?: string) => {
     if (busy) return;
     const token = ++revision.current;
+    // A failed rereview or binding must not leave a stale Bind control on screen.
+    if (state?.state === "configuration-review") {
+      if (section.current?.contains(document.activeElement)) leftHoldingFocus.current = true;
+      setState(undefined);
+    }
     setBusy(true);
     setMessage("");
     try {
@@ -86,10 +95,10 @@ export function FirstRunSection(): JSX.Element | null {
         announce(text);
       } else {
         setMessage(
-          refused ??
-            (result.error.message.startsWith("Local startup ownership requires reconciliation.")
-              ? "Local startup ownership requires reconciliation. Review same-boot recovery, then reconcile when the owned writer has exited. Preserve all ownership evidence, work and credentials."
-              : "Setup was refused. Check directory ownership, writable access and Git; retry or choose a fresh empty workspace. Existing files were preserved."),
+          result.error.message.startsWith("Local startup ownership requires reconciliation.")
+            ? "Local startup ownership requires reconciliation. Review same-boot recovery, then reconcile when the owned writer has exited. Preserve all ownership evidence, work and credentials."
+            : (refused ??
+                "Setup was refused. Check directory ownership, writable access and Git; retry or choose a fresh empty workspace. Existing files were preserved."),
         );
         announce("Project setup was refused. Existing files were preserved.");
       }
@@ -220,24 +229,27 @@ export function FirstRunSection(): JSX.Element | null {
               stay fixed. This starts no agent and grants no permissions.
             </Text>
             <Well style="mono-id">Saved revision: {state.review.revision}</Well>
-            {state.review.checks.map((check) => (
-              <Text key={check.agentId} style="caption">
-                {check.agentId}:{" "}
-                {check.state === "handshake-required"
-                  ? "Executable available; explicitly check ACP, version and sign-in before real work."
-                  : check.state === "missing"
-                    ? "Executable missing from the app PATH; configure an absolute executable path in Config."
-                    : check.state === "architecture"
-                      ? "Executable architecture is incompatible with this app."
-                      : "Executable access or format could not be verified."}
-              </Text>
-            ))}
+            <AgentPreflightReview checks={state.review.checks} />
+            {bridge.cancelConfigurationReview && (
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  void perform(
+                    () => bridge.cancelConfigurationReview!(),
+                    "Configuration review cancelled. Saved configuration and selected directories were preserved.",
+                  )
+                }
+              >
+                Cancel configuration review
+              </Button>
+            )}
             <Button
               disabled={busy}
               onClick={() =>
                 void perform(
                   () => bridge.bindConfiguration!(state.review.id),
                   "Saved configuration bound for reopening. ACP and real-agent acceptance remain separate.",
+                  "Configuration binding could not be confirmed. Read setup again, then review the saved Config before retrying so any recorded binding can be reconciled. Keep the existing workspace and ownership evidence. No provider check was run.",
                 )
               }
             >
@@ -252,6 +264,7 @@ export function FirstRunSection(): JSX.Element | null {
               void perform(
                 () => bridge.reviewConfiguration!(),
                 "Review saved configuration and local executable checks before binding it.",
+                "Configuration review could not complete. Check that Config is saved for the selected local workspace, then retry this review. Reconnect the selected daemon if disconnected, or use offline saved-config review. No provider check was run.",
               )
             }
           >
@@ -280,7 +293,18 @@ export function FirstRunSection(): JSX.Element | null {
         <Button disabled={busy} onClick={() => void perform(() => bridge.choose(), "Directory selection finished.")}>
           Choose project and empty workspace
         </Button>
-        <Button disabled={busy} onClick={() => void perform(() => bridge.status(), "Project setup read again.")}>
+        <Button
+          disabled={busy}
+          onClick={() =>
+            void perform(
+              () =>
+                state?.state === "configuration-review" && bridge.cancelConfigurationReview
+                  ? bridge.cancelConfigurationReview()
+                  : bridge.status(),
+              "Project setup read again.",
+            )
+          }
+        >
           Read setup again
         </Button>
         {message && <Text style="caption">{message}</Text>}

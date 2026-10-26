@@ -2,7 +2,7 @@
 /** Directory review controls and safe refusal handling, with no automatic setup, provider or launch. */
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FirstRunBridge, FirstRunStatus } from "../../src/first-run-contract.js";
+import type { FirstRunAgentCheck, FirstRunBridge, FirstRunStatus } from "../../src/first-run-contract.js";
 import { FIRST_RUN_SAMPLE } from "../../src/first-run-sample.js";
 import { FirstRunSection } from "../src/first-run/first-run-section.js";
 import { useEscapeClosesTopLayer } from "../src/layers-context.js";
@@ -54,7 +54,7 @@ function setup(overrides: Partial<FirstRunBridge> = {}) {
       <FirstRunSection />
     </h.Providers>,
   );
-  return { firstRun, h };
+  return { firstRun, h, fake };
 }
 it("requires explicit directory review, create and connect actions, and labels the remaining coding/provider gates", async () => {
   const f = setup();
@@ -151,7 +151,7 @@ it("reviews executable availability and requires explicit saved-config binding w
         id,
         revision: "synthetic revision",
         agentCount: 1,
-        checks: [{ agentId: "local", state: "missing" as const }],
+        checks: [toolCheck("missing")],
       },
     },
   }));
@@ -258,4 +258,132 @@ describe("marking the previous session ended after a restart", () => {
     expect(screen.queryByText(/secret needle/)).toBeNull();
     expect(document.activeElement).toBe(trigger());
   });
+});
+
+function toolCheck(state: FirstRunAgentCheck["state"]): FirstRunAgentCheck {
+  return {
+    agentId: "local",
+    state,
+    evidence: {
+      configuredRoute: "codex-acp-candidate",
+      support: "unknown",
+      version: "unknown",
+      architecture: state === "architecture" ? "mismatch" : "unknown",
+      acp: "not-checked",
+      signIn: "unknown",
+      exactCommand: "unsupported",
+    },
+  };
+}
+function configReview(state: FirstRunAgentCheck["state"] = "handshake-required"): FirstRunStatus {
+  return {
+    state: "configuration-review",
+    review: {
+      id: "review-handle",
+      revision: "saved revision",
+      agentCount: 1,
+      checks: [toolCheck(state)],
+    },
+  };
+}
+it.each([
+  ["missing", /set the approved executable to an absolute path/],
+  ["unavailable", /Check the configured path, file access and runtime prerequisites/],
+  ["architecture", /Select an approved matching build in Config/],
+  ["handshake-required", /Executable file observed/],
+] as const)(
+  "shows actionable %s recovery while retaining unknown compatibility and the exact-command hold",
+  async (state, recovery) => {
+    setup({ status: async () => ({ ok: true, result: configReview(state) }), bindConfiguration: vi.fn() });
+    await screen.findByText(recovery);
+    expect(screen.getByText(/Agent\/version support: unknown. Installed version: unknown/)).toBeTruthy();
+    expect(screen.getByText(/ACP: not checked. Sign-in: unknown/)).toBeTruthy();
+    expect(screen.getByText(/Exact-command approval: unsupported \(#594\)/)).toBeTruthy();
+    expect(screen.getByText(/If sign-in is required or expired, use the provider's own sign-in flow/)).toBeTruthy();
+    expect(screen.getByText(/installed identity is unverified/)).toBeTruthy();
+  },
+);
+it("cancels a configuration review without binding or connecting and restores section focus", async () => {
+  const cancelConfigurationReview = vi.fn(async () => ({
+    ok: true as const,
+    result: { state: "selection-required" as const, reason: "Saved selection retained." },
+  }));
+  const bindConfiguration = vi.fn();
+  const f = setup({
+    status: async () => ({ ok: true, result: configReview() }),
+    cancelConfigurationReview,
+    bindConfiguration,
+  });
+  const cancel = await screen.findByRole("button", { name: "Cancel configuration review" });
+  cancel.focus();
+  await act(async () => fireEvent.click(cancel));
+  expect(cancelConfigurationReview).toHaveBeenCalledOnce();
+  expect(bindConfiguration).not.toHaveBeenCalled();
+  expect(f.firstRun.connect).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "Bind reviewed saved configuration" })).toBeNull();
+  expect(document.activeElement).toBe(screen.getByRole("region", { name: "First-run project setup" }));
+  expect(screen.getByText(/Configuration review cancelled/)).toBeTruthy();
+});
+it("retires stale evidence on failed rereview, hides private errors and permits explicit retry", async () => {
+  const reviewConfiguration = vi
+    .fn<NonNullable<FirstRunBridge["reviewConfiguration"]>>()
+    .mockResolvedValueOnce({ ok: false, error: { code: "AGENT_TRANSPORT", message: "private secret needle" } })
+    .mockResolvedValueOnce({ ok: true, result: configReview("missing") });
+  const bindConfiguration = vi.fn();
+  setup({ status: async () => ({ ok: true, result: configReview() }), reviewConfiguration, bindConfiguration });
+  const review = await screen.findByRole("button", { name: "Review saved configuration for reopening" });
+  await act(async () => fireEvent.click(review));
+  expect(screen.getByText(/Configuration review could not complete/)).toBeTruthy();
+  expect(screen.queryByText(/private secret needle/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Bind reviewed saved configuration" })).toBeNull();
+  await act(async () => fireEvent.click(review));
+  expect(screen.getByText(/Executable missing from the app PATH/)).toBeTruthy();
+  expect(bindConfiguration).not.toHaveBeenCalled();
+});
+it("ignores a late configuration review after the workspace changes", async () => {
+  let finish!: (result: Awaited<ReturnType<NonNullable<FirstRunBridge["reviewConfiguration"]>>>) => void;
+  const reviewConfiguration = vi.fn(
+    () =>
+      new Promise<Awaited<ReturnType<NonNullable<FirstRunBridge["reviewConfiguration"]>>>>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const f = setup({ reviewConfiguration, bindConfiguration: vi.fn() });
+  await screen.findByText("Explicit owned directories required.");
+  await act(async () =>
+    fireEvent.click(screen.getByRole("button", { name: "Review saved configuration for reopening" })),
+  );
+  await act(async () => {
+    await f.fake.bridge.workspace.connectLive();
+  });
+  await act(async () => {
+    finish({ ok: true, result: configReview() });
+  });
+  expect(screen.queryByRole("button", { name: "Bind reviewed saved configuration" })).toBeNull();
+  expect(screen.queryByText(/Executable file observed/)).toBeNull();
+});
+
+it("preserves ownership reconciliation guidance when configuration review is refused", async () => {
+  const reviewConfiguration = vi.fn<NonNullable<FirstRunBridge["reviewConfiguration"]>>().mockResolvedValue({
+    ok: false,
+    error: { code: "AGENT_TRANSPORT", message: "Local startup ownership requires reconciliation. private needle" },
+  });
+  setup({ reviewConfiguration });
+  const review = await screen.findByRole("button", { name: "Review saved configuration for reopening" });
+  await act(async () => fireEvent.click(review));
+  expect(screen.getByText(/Review same-boot recovery, then reconcile when the owned writer has exited/)).toBeTruthy();
+  expect(screen.queryByText(/private needle/)).toBeNull();
+});
+
+it("keeps an uncertain binding outcome explicit and requires fresh review before retry", async () => {
+  const bindConfiguration = vi.fn<NonNullable<FirstRunBridge["bindConfiguration"]>>().mockResolvedValue({
+    ok: false,
+    error: { code: "AGENT_TRANSPORT", message: "private publication error needle" },
+  });
+  setup({ status: async () => ({ ok: true, result: configReview() }), bindConfiguration });
+  const bind = await screen.findByRole("button", { name: "Bind reviewed saved configuration" });
+  await act(async () => fireEvent.click(bind));
+  expect(screen.getByText(/Configuration binding could not be confirmed/)).toBeTruthy();
+  expect(screen.queryByText(/private publication error needle/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Bind reviewed saved configuration" })).toBeNull();
 });
