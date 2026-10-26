@@ -192,10 +192,26 @@ class ControlledGrammarTests(unittest.TestCase):
         p = plan()
         text, log = trace_and_log(p)
         changed = text.splitlines()
-        changed.insert(0, '11 futex(0x123, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>')
-        changed.insert(2, '11 <... futex resumed>) = 0')
+        changed.insert(0, '11 clock_nanosleep(CLOCK_MONOTONIC, 0, {tv_sec=0, tv_nsec=1}, NULL <unfinished ...>')
+        changed.insert(2, '11 <... clock_nanosleep resumed>) = 0')
         result = frame_trace('\n'.join(changed) + '\n', p, log, set())
-        self.assertEqual([r[1] for r in result['outsideEvents']], ['futex'])
+        self.assertEqual([r[1] for r in result['outsideEvents']], ['clock_nanosleep'])
+
+    def test_all_futex_opcodes_crossing_command_or_ack_refuse(self):
+        p = plan()
+        text, log = trace_and_log(p)
+        for args in (
+            '0x123, FUTEX_LOCK_PI_PRIVATE, 0, NULL',
+            '0x123, FUTEX_WAKE_OP_PRIVATE, 1, 1, 0x456, FUTEX_OP(FUTEX_OP_ADD, 1, FUTEX_OP_CMP_EQ, 0)',
+            '0x123, 0xdead /* FUTEX_??? */, 1, NULL',
+            '0x123, FUTEX_WAIT_PRIVATE, 0, NULL',
+        ):
+            for boundary in range(len(text.splitlines())):
+                changed = text.splitlines()
+                changed.insert(boundary, f'11 futex({args} <unfinished ...>')
+                changed.insert(boundary + 2, '11 <... futex resumed>) = 0')
+                with self.subTest(args=args, boundary=boundary), self.assertRaisesRegex(RuntimeError, 'crosses phase boundary'):
+                    frame_trace('\n'.join(changed) + '\n', p, log, set())
 
     def test_unfinished_missing_completion_and_unknown_effects_refuse(self):
         p = plan()

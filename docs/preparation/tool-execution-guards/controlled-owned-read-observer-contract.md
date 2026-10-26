@@ -58,12 +58,16 @@ may appear in the controlled trace; no real credential input is authorized.
 
 A phase begins after command-read completion and ends before ack-write entry.
 Unknown syscalls refuse. Every supported call intersecting either boundary's
-entry/completion interval refuses unless it is explicitly passive: `futex`,
+entry/completion interval refuses unless it is explicitly passive:
 `clock_gettime`, `clock_nanosleep`, `nanosleep`, `gettimeofday`, `sched_yield`, or
 the instantaneous `settled` record. This conservative default covers descriptor
 close/factories, path metadata and process/memory effects, and applies to any new
 supported call without adding a second effect list. A passive wait does not
 establish a phase effect; its record remains available for full replay.
+All `futex` crossings refuse, including WAIT forms: PI locking, WAKE_OP and
+unknown opcodes cannot inherit passive status from the syscall name. Whether
+the actual producer needs a precisely decoded nonmutating WAIT form remains
+an explicit integration question; this draft adds no futex memory simulation.
 Events inside each window and
 outside all windows are returned for subsequent full replay. Outside events are
 not discarded or implicitly allowed. This framing stage does not establish

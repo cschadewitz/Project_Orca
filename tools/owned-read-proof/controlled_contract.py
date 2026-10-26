@@ -26,7 +26,9 @@ OPEN_FLAGS = ({'O_RDONLY', 'O_CLOEXEC'},
 # Descriptor factories/close, path metadata and process/memory effects must not
 # depend on the descriptor-first argument decoder's necessarily different set.
 # A new supported syscall therefore refuses crossing intervals by default.
-BOUNDARY_PASSIVE = {'futex', 'clock_gettime', 'clock_nanosleep', 'nanosleep',
+# All futex crossings refuse, including WAIT: the syscall name alone does not
+# distinguish nonmutating waits from PI locks, WAKE_OP or unknown opcodes.
+BOUNDARY_PASSIVE = {'clock_gettime', 'clock_nanosleep', 'nanosleep',
                     'gettimeofday', 'sched_yield', 'settled'}
 
 
