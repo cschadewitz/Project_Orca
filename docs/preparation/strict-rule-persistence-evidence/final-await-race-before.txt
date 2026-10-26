@@ -1,0 +1,72 @@
+
+ RUN  v5.0.5 /workspace/Project_Orca
+
+ ❯ packages/agents/test/typed-sidecar.test.ts (43 tests | 2 failed | 41 skipped) 51ms
+   × rejects authority changes during the final filesystem read 38ms
+   × rejects enrollment changes during the final filesystem read 12ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/agents/test/typed-sidecar.test.ts > rejects authority changes during the final filesystem read
+ FAIL  packages/agents/test/typed-sidecar.test.ts > rejects enrollment changes during the final filesystem read
+AssertionError: promise resolved "{ outcome: 'saved', …(7) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "actor": {
++     "credentialId": "test:credential",
++     "principalId": "test:principal",
++   },
++   "approvalRecordRef": "test:protected-approval",
++   "authorityRevision": "test:authority",
++   "outcome": "saved",
++   "previousRevision": "320b0266cdd30f7557fb735c17cf49c0b3023dc385f642bc9d549ecc1ace8bbc",
++   "revision": "510e68cfcade099750e11b62999a9d550f171f36e19d41cbe5b5f0ede76c6534",
++   "rule": {
++     "decision": "allow",
++     "expiresAt": "2026-10-26T03:01:00.000Z",
++     "match": {
++       "agentId": "agent",
++       "coverageId": "test:coverage",
++       "effectiveCwd": "test:cwd",
++       "environmentAndCredentialRefs": [],
++       "hostId": "host",
++       "operation": "read",
++       "principalRef": "test:principal",
++       "profileRef": "test:profile",
++       "resources": [
++         {
++           "operation": "read",
++           "physicalTargetRef": "test:resource",
++         },
++       ],
++       "runnerId": "runner",
++       "workspaceRef": "test:workspace",
++     },
++     "notBefore": "2026-10-26T02:59:59.000Z",
++     "ruleId": "rule-1",
++     "ruleRevision": "c4297312c2f9b1616751267f195f4c891c85ff968234854b760f674cf48c1ac6",
++     "status": "approved",
++   },
++   "scopeEvidenceRef": "test:scope",
+  }
+
+ ❯ packages/agents/test/typed-sidecar.test.ts:708:63
+    706|     return "test:authority";
+    707|   });
+    708|   await expect(f.store.createScopedRule(command, f.authority)).rejects…
+       |                                                               ^
+    709|   expect(await readFile(f.file, "utf8")).toBe(before);
+    710| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 41 skipped (43)
+   Start at  07:16:31
+   Duration  735ms (transform 47%, import 43%, tests 9%, worker 1%)

@@ -1,0 +1,114 @@
+Typed sidecar checkpoint — Refs #702 / #699
+Implementation source: c7268ce4ad55723573cca5ecf56611428a99bd70
+Branch: calcifer/702-typed-sidecar
+Base: exact reviewed #728 9e892d56ad3648e512dd7fc6c44bbd2f2fb23f57
+Parent integration main (not incorporated here): bc0c57d82925cefa001513b8431355b912e4d462
+Managed contract inspected: #730 f90c3dbf681f4cb19454767ae558f60a539da086
+
+Environment: Node 24.19.0, pinned pnpm 12.4.2.
+The existing lockfile passed the unchanged supply-chain policy and frozen resolution.
+No lockfile, dependency policy, lifecycle allow-list or sandbox setting changed.
+
+Focused tests:
+pnpm exec vitest run packages/agents/test/typed-sidecar.test.ts packages/daemon/test/typed-sidecar-authority.test.ts packages/daemon/test/typed-sidecar-live-input.test.ts --maxWorkers=2
+Result: 3 files passed; 58 tests passed; 4.18s.
+Includes actual temp-file writes, exact protected synthetic approvals, file-backed
+human.answered records, original-principal authority, repeat/expiry/revoke/restart,
+uncertain append/rename, real subprocess paused writer/aged lock/revoke contention,
+legacy replacement contention, crashed owner and ownership-loss fault injection.
+No installed provider, real credential or managed platform acceptance is implied.
+The final source-only difference after this test was exporting/renaming the owner
+ports interface; exact source c7268ce then passed the root TypeScript check again.
+
+Statics:
+pnpm run typecheck — PASS (root + renderer).
+pnpm exec eslint packages/agents/src/{permission-file,typed-sidecar,permissions,strict-permission-source,index}.ts packages/agents/test/typed-sidecar*.ts packages/daemon/src/auth/guard.ts packages/daemon/test/typed-sidecar*.ts — PASS.
+pnpm exec tsc -p tsconfig.json --noEmit — PASS again on c7268ce.
+pnpm exec eslint packages/agents/src/typed-sidecar.ts — PASS again on c7268ce.
+pnpm run build — PASS (TypeScript project build + renderer; existing large-chunk warning).
+pnpm run format:check — PASS.
+git diff --check — PASS.
+Final full-repository lint/coverage/CI are not claimed by this checkpoint.
+
+Default-off limits:
+- No production constructor caller, CLI/env flag, protocol method, UI grant endpoint,
+  managed enrollment filesystem writer, root resolver or recovery bypass is registered.
+- Explicit pending enrollment owner may initialize only an absent sidecar; ordinary
+  typed access requires a separate enrolled identity-bound owner capability.
+- Managed Linux owner must implement durable enrollment/lifetime exclusion and
+  categorical enrolled update/recovery/retarget/reset refusal, with accepted exact
+  build evidence before activation. Other platforms remain unavailable for typed use.
+- Legacy v1 repair semantics remain unchanged. #728 is not a typed-safe version floor.
+- Strict typed .lock directories never permit age-based takeover. A crashed/unknown
+  owner remains closed; no lock recovery procedure is implemented in this draft.
+- No external per-edit high-water transaction or second policy store is introduced.
+- Saved means persistence only, never answer or dispatch. Live callback failures and
+  uncertain outcomes park/consume the callback; restart does not replay it.
+
+Publication:
+Canonical branch was pushed and its remote commit was read back with git ls-remote.
+GitHub draft-PR creation/assignment to calciferschadewitz remain blocked: gh read APIs
+return Forbidden and gh auth status reports invalid configured GH_TOKEN; the connected
+GitHub tool reports Unknown tool. No credential change or auth bypass was attempted.
+No draft PR was created by those failed tool calls. The earlier contract-only
+calcifer/702-typed-persistence branch is superseded; no force-push/deletion was used.
+Parent owns draft PR creation, review, main integration, exact-head CI and merge.
+
+Integrated correction / #731 review handoff — 26 October 2026
+Parent created draft #731 and assigned Cal through its authorized connector. The
+API blocker above is historical; no duplicate PR or credential change was attempted.
+
+Pinned main bc0c57d82925cefa001513b8431355b912e4d462 was merged non-force as
+12e052314d43365f73be51beb529f9136d2aca44 without conflicts. All published history
+was preserved. Final implementation correction: 118bd6dd547eca5ec558e1bce8d5dc02d3794551.
+
+Review reproduction:
+The two deterministic final-read authority/enrollment regressions failed against
+12e0523 before the fix (2 failed, 41 filtered/skipped). Retained sanitized synthetic
+output: final-await-race-before.txt. Those are intentional before-fix failures,
+not final acceptance failures. Final filesystem checks now precede trusted approval,
+compatibility and grant checks; after every await, synchronous owner and exact
+approval/current-grant assertions (grant last) run without yielding before rename
+dispatch. Separate credential-file revocation during the final read refuses policy
+publication and delivery. Queued-microtask invalidation also refuses. Post-dispatch
+revocation with lost acknowledgement stays uncertain and cannot replay.
+
+Required interface delta:
+- TypedSidecarOwnerPorts.assertCompatibilityCurrent(marker): undefined.
+- ScopedRuleGrantAuthority.assertCommitCurrent(exactCommand, actor,
+  {authorityRevision, scopeEvidenceRef}): undefined. The daemon wrapper rechecks
+  original currentPrincipal/credential/holds before and after protected proof.
+- parseTypedCompatibilityMarkerBytes(Uint8Array) is the only new parser export.
+  Canonical strict UTF-8/unambiguous JSON/marker validation is shared; parsed data
+  cannot mint ownership or prove never-typed legacy status. No persisted field added.
+- Crashed-owner tests now directly check store.read/readRules refusal/unavailability.
+
+Final integrated validation on the 118bd6d source tree:
+pnpm run typecheck — PASS, root and renderer.
+pnpm run lint — PASS, full repository ESLint and CSS token check.
+pnpm run build — PASS, TypeScript + renderer; existing large-chunk warning only.
+pnpm run format:check — PASS.
+pnpm exec vitest run packages/agents/test packages/daemon/test packages/engine/test packages/app/renderer/test/scoped-rule-choices.test.tsx tools/test/changelog.test.js --maxWorkers=2
+  PASS: 169 files; 2743 passed, 1 existing TODO; 253.13s.
+  TODO is existing packages/engine/test/restoration-acceptance.test.ts:391, unrelated
+  final restoration acceptance. No new TODO/skip was added for typed persistence.
+Focused typed/marker/authority/live-input checks: 4 files, 101 passed (3.74s).
+ORCA_RETRY_INTEGRATION=1 pnpm exec vitest run packages/cli/test/admission-retry-wiring.test.ts packages/integrations/test/admission-retry-acp.test.ts --maxWorkers=2 --reporter=default --reporter=json --outputFile.json=/tmp/731-retry-acceptance.json
+  PASS: 2 files, 2 passed, 0 skipped; 2.56s. JSON report independently checked for
+  exact expected files, success and every assertion passed.
+git diff --check — PASS after normalizing the before-fix log's trailing blank line.
+
+Changelog requirement is satisfied with added and store-format fragments. The new
+store fragment explicitly documents the inactive v2 schema and future compatibility
+restriction. No no-changelog waiver, manual workflow dispatch or release was used.
+Dependency lock, lifecycle/supply-chain policy, pinned setup, signing and sandbox
+settings remain unchanged. No existing policy/workspace/provider/hook/credential was
+modified; file-backed credentials and stores in tests are disposable synthetic data.
+
+The synchronous assertions close the reproduced in-process await/microtask gap.
+They do not make independent credential-file publication and a filesystem rename
+one atomic cross-process transaction. A stronger guarantee requires separately
+reviewed integrated ownership/fencing; no such production acceptance is claimed.
+Typed writing/production construction remains default-off. Managed enrollment,
+exact-build acceptance, protocol/UI wiring, final source/lock re-review, CI and merge
+remain with their owners. No issue is broadly closed by this checkpoint.

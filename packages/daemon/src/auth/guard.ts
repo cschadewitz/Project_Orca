@@ -21,6 +21,7 @@
  * A principal with an unrestricted scope skips step 3's resource work entirely, so the
  * owner sees exactly the daemon it always saw.
  */
+import type { ScopedRuleGrantAuthority } from "@orca/agents";
 import { OrcaError, isOrcaError } from "@orca/core";
 import {
   AGENT_CHANGED,
@@ -226,6 +227,63 @@ export class Authorizer {
         if (!(await this.runs.allows(current, origin.rootId))) throw runNotFound(origin.rootId);
       },
     };
+  }
+
+  /** Inactive persistence owner seam; no method/endpoint registration. Same original-principal
+   * permissions.grant semantics as live standing answers, with a captured authority ceiling. */
+  scopedRuleGrantAuthority(
+    principal: Principal,
+    review: {
+      readonly readAuthorityRevision: () => Promise<string>;
+      readonly verifyApproval: ScopedRuleGrantAuthority["verifyApproval"];
+      readonly assertCommitCurrent: ScopedRuleGrantAuthority["assertCommitCurrent"];
+    },
+  ): ScopedRuleGrantAuthority {
+    const original: Principal = {
+      ...principal,
+      permissions: new Set(principal.permissions),
+      scope: structuredClone(principal.scope),
+    };
+    const capturedGrant = holds(original, "permissions.grant");
+    const readRevision = review.readAuthorityRevision;
+    const verifyApproval = review.verifyApproval;
+    const assertCommitCurrent = review.assertCommitCurrent;
+    const check = () => {
+      if (!this.currentPrincipal) throw authRequired();
+      const current = this.currentPrincipal(original);
+      if (
+        !capturedGrant ||
+        current.id !== original.id ||
+        current.credentialId !== original.credentialId ||
+        !holds(current, "permissions.grant")
+      )
+        throw authForbidden();
+    };
+    return Object.freeze({
+      actor: Object.freeze({
+        principalId: original.id,
+        ...(original.credentialId ? { credentialId: original.credentialId } : {}),
+      }),
+      authorizeGrant: async () => {
+        check();
+        const revision = await readRevision();
+        check();
+        if (!revision.trim()) throw authForbidden();
+        return revision;
+      },
+      verifyApproval,
+      assertCommitCurrent: (
+        ...[command, actor, proof]: Parameters<ScopedRuleGrantAuthority["assertCommitCurrent"]>
+      ): undefined => {
+        check();
+        if (actor.principalId !== original.id || actor.credentialId !== original.credentialId) throw authForbidden();
+        // The protected review owner must synchronously validate the exact approval and
+        // current authority revision. Async observation alone is not a commit capability.
+        if (assertCommitCurrent(command, actor, proof) !== undefined) throw authForbidden();
+        check();
+        return undefined;
+      },
+    });
   }
 
   /** Attribute a root run to a principal. The integration seam for `ControlModel.startRun`. */
