@@ -1,0 +1,13 @@
+Source: 5a7e3065de2723f05f39327916554ad4c5021694; new connected regression against published source.
+
+Command: node_modules/.bin/vitest run packages/app/renderer/test/scoped-rule-port.test.tsx -t "confirms save only" --testTimeout=2000 --maxWorkers=2
+
+ FAIL  packages/app/renderer/test/scoped-rule-port.test.tsx > confirms save only, then loads a fresh handle for a separately selected answer
+TestingLibraryElementError: Unable to find an accessible element with the role "button" and name "Review separate answer"
+      Tests  1 failed | 9 skipped (10)
+Exit status: 1
+
+The two production renderer modules were temporarily loaded from the exact published source above.
+The new regression file remained present. Both working renderer modules were restored in a finally block.
+This is synthetic transport/card evidence, not installed managed-owner or Electron evidence.
+Raw DOM output is omitted; the reported failure and source pin are retained verbatim.
