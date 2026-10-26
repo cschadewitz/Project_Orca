@@ -21,6 +21,7 @@ import {
 } from "@orca/core";
 import { memoryCaptureQualifier } from "./disposable-memory-read.js";
 import { fileCaptureQualifier } from "./disposable-file-read.js";
+import { ownedFileCaptureQualifier } from "./owned-file-read-service.js";
 import type { LiveInputBinding } from "./live-input.js";
 
 type Allow = Extract<PolicyVerdictV1, { outcome: "allow" }>;
@@ -50,7 +51,10 @@ export interface SyntheticReadOwner {
 /** Only the reviewed fixture codec is admitted. No arbitrary tool registration surface. */
 export interface SyntheticReadExecutor<Parameters, Capture> {
   readonly codecVersion:
-    "orca-synthetic-acp-read-v1" | "orca-disposable-memory-read-v1" | "orca-disposable-file-read-v1";
+    | "orca-synthetic-acp-read-v1"
+    | "orca-disposable-memory-read-v1"
+    | "orca-disposable-file-read-v1"
+    | "orca-owned-file-read-v1";
   capture(parameters: Parameters): Capture;
   encode(capture: Capture): string;
   /** Must start the injected read synchronously; the returned promise settles outside ownership. */
@@ -142,6 +146,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
   private entry?: Entry<Capture>;
   private readonly memoryQualification: ReturnType<typeof memoryCaptureQualifier>;
   private readonly fileQualification: ReturnType<typeof fileCaptureQualifier>;
+  private readonly ownedFileQualification: ReturnType<typeof ownedFileCaptureQualifier>;
 
   constructor(
     private readonly owner: SyntheticReadOwner,
@@ -151,6 +156,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
   ) {
     this.memoryQualification = memoryCaptureQualifier(owner, executor);
     this.fileQualification = fileCaptureQualifier(owner, executor);
+    this.ownedFileQualification = ownedFileCaptureQualifier(owner, executor);
     // Retain the original lifetime and registered capabilities. Mutating an injection
     // object after capture must not substitute another executor, policy or record writer.
     this.owner = Object.freeze({
@@ -184,7 +190,8 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     if (
       (this.executor.codecVersion !== "orca-synthetic-acp-read-v1" &&
         !(this.executor.codecVersion === "orca-disposable-memory-read-v1" && this.memoryQualification) &&
-        !(this.executor.codecVersion === "orca-disposable-file-read-v1" && this.fileQualification)) ||
+        !(this.executor.codecVersion === "orca-disposable-file-read-v1" && this.fileQualification) &&
+        !(this.executor.codecVersion === "orca-owned-file-read-v1" && this.ownedFileQualification)) ||
       this.policy.version !== 1
     )
       throw refused();
@@ -194,7 +201,10 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 60_000) throw refused();
     const capture = this.executor.capture(parameters);
     const bytes = this.executor.encode(capture);
-    const qualification = this.memoryQualification?.(capture) ?? this.fileQualification?.(capture);
+    const qualification =
+      this.memoryQualification?.(capture) ??
+      this.fileQualification?.(capture) ??
+      this.ownedFileQualification?.(capture);
     if (Buffer.byteLength(bytes, "utf8") > 32_768) throw refused();
     if (this.entry) {
       if (this.entry.bytes !== bytes || !isDeepStrictEqual(this.entry.owner, snapshot)) throw refused();
@@ -271,6 +281,30 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     };
     registered.add(key);
     return action;
+  }
+
+  /** Internal closed-service transition only: retire an evaluated ask before any permit/dispatch.
+   * The service retains original bytes/ceilings/lifetime and admits only a policy-revision change.
+   * No failed/uncertain authorization or execution can use this path. */
+  retireForPolicyReevaluation(action: ActionEvidenceV1): AbortSignal {
+    const entry = this.retained(action);
+    if (
+      !this.ownedFileQualification ||
+      entry.verdict?.outcome !== "require-human" ||
+      entry.pending ||
+      entry.bound ||
+      entry.authorization ||
+      entry.dispatch ||
+      entry.consumed ||
+      entry.terminal ||
+      !entry.originalSignal ||
+      this.owner.clock.now() >= Date.parse(entry.action.expiresAt)
+    )
+      throw refused();
+    this.owner.signal.throwIfAborted();
+    entry.originalSignal.throwIfAborted();
+    entry.terminal = true; // Synchronous retirement before a replacement fence can exist.
+    return entry.originalSignal;
   }
 
   private retained(action: ActionEvidenceV1): Entry<Capture> {
