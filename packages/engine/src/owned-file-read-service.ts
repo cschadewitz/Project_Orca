@@ -83,6 +83,8 @@ const invocationKey = (snapshot: SyntheticReadOwnerSnapshot) => {
 /** Canonical contracts only. No executor, descriptor, replacement arguments or unchecked read method. */
 export interface TrustedOwnedReadInvocation extends EnforcementPortV1 {
   readonly action: ActionEvidenceV1;
+  /** Synchronous original owner/physical inode/cancellation/expiry assertion. */
+  assertCurrent(): undefined;
   evaluate(signal: AbortSignal): ReturnType<SyntheticReadFence<never, never>["evaluate"]>;
   bindReview: SyntheticReadFence<never, never>["bindReview"];
   completeReview: SyntheticReadFence<never, never>["completeReview"];
@@ -410,6 +412,7 @@ export function createOwnedFileReadServiceForTest(options: {
           const facade: TrustedOwnedReadInvocation = Object.freeze<TrustedOwnedReadInvocation>({
             version: 1,
             action,
+            assertCurrent: () => fence.assertCaptureCurrent(action),
             evaluate: (signal) => fence.evaluate(action, signal),
             bindReview: fence.bindReview.bind(fence),
             completeReview: fence.completeReview.bind(fence),

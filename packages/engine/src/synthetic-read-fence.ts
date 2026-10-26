@@ -312,6 +312,14 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     return this.entry;
   }
 
+  /** Internal producer check over the original capture, including physical executor state. */
+  assertCaptureCurrent(action: ActionEvidenceV1): undefined {
+    const entry = this.retained(action);
+    if (entry.terminal || entry.consumed) throw refused();
+    this.check(entry, entry.originalSignal ?? this.owner.signal);
+    return undefined;
+  }
+
   private check(entry: Entry<Capture>, signal: AbortSignal): void {
     signal.throwIfAborted();
     this.owner.signal.throwIfAborted();
