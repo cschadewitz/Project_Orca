@@ -16,6 +16,7 @@ import stat
 
 from controlled_contract import BOUNDARY_PASSIVE, require, wire
 from verify import SUPPORTED as CANDIDATE_SUPPORTED, FD_FIRST, events, fd, identity, string
+from kernel_runtime_queries import QUERIES as NATIVE_QUERIES, retained_contract
 
 LIMIT = 256 * 1024 * 1024
 UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
@@ -97,6 +98,7 @@ class Handle:
     query_bytes: bytes = b''
     query_eof: bool = False
     physical_bound: bool = False
+    native_read: bool = False
 
 
 class Replay:
@@ -108,6 +110,10 @@ class Replay:
         require(self.umask in {0o022, 0o077}, 'unreviewed inherited umask')
         self.paths, self.handles, self.inodes = {}, {}, {}
         self.query_objects = {}
+        self.native_queries = (retained_contract(original['kernelRuntimeQueries'], self.leader)
+                               if 'kernelRuntimeQueries' in original else {})
+        self.native_completed = []
+        self.javascript_opened = False
         self.objects, self.resources, self.marks, self.waits = [], [], [], []
         self.threads, self.settled = {self.leader}, set()
         self.used_paths = set()
@@ -215,7 +221,11 @@ class Replay:
         require(obj.physical == physical, 'changed inode/descriptor binding')
         require(not hasattr(obj, 'directory_inode') or obj.directory_inode == physical[2],
                 'directory-entry inode differs from descriptor identity')
-        if stat.S_ISREG(mode):
+        if obj.family == 'trusted-kernel-runtime-query':
+            observation = self.native_queries[next(iter(obj.names))]
+            require((size, links) == (observation['size'], observation['links']),
+                    'changed native query stat size/links')
+        elif stat.S_ISREG(mode):
             require(size == len(obj.data) and links == len(obj.names), 'changed file size/link lineage')
             obj.stats.add(links)
         if obj.family == 'resource':
@@ -273,6 +283,12 @@ class Replay:
     def run(self, text):
         require(len(text.encode()) <= LIMIT, 'trace exceeds 256 MiB bound')
         records = list(events(text, with_intervals=True))
+        if self.native_queries:
+            anchor = self.original['kernelRuntimeQueries']['traceAnchorLine']
+            leader_records = [r for r in records if r[0] == self.leader]
+            require(leader_records and leader_records[0][1] == 'execve' and leader_records[0][5] <= anchor and
+                    leader_records[-1][1] == 'settled' and leader_records[-1][4] > anchor,
+                    'independent process observation is outside traced leader lifetime')
         for record in records:
             try:
                 self.check_intervals(record)
@@ -281,6 +297,10 @@ class Replay:
                 raise RuntimeError(f'line {record[4]} {record[1]}: {error}') from error
         require(self.execs == 1 and self.threads == self.settled, 'incomplete process settlement')
         require(len(self.marks) == 2, 'missing bootstrap command/ack')
+        if self.native_queries:
+            require(self.native_completed == list(NATIVE_QUERIES) and self.javascript_opened and
+                    self.original['kernelRuntimeQueries']['traceAnchorLine'] < self.marks[0][5],
+                    'native observations not correlated before phase release')
         wait_entries = {r[4] for r in self.waits}
         mark_entries = {r[4] for r in self.marks}
         for record in records:
@@ -363,6 +383,7 @@ class Replay:
             self.settled.add(pid)
             return
         if call in {'clone', 'clone3'}:
+            require('CLONE_NEW' not in ','.join(args), 'namespace-changing clone')
             if result.startswith(('-1 ENOSYS ', '-1 EAGAIN ')):
                 return
             require(all(flag in ','.join(args) for flag in ('CLONE_THREAD', 'CLONE_FILES', 'CLONE_VM', 'CLONE_SIGHAND')),
@@ -412,6 +433,21 @@ class Replay:
                         'original absent probe changed or acquired a descriptor')
                 return
             family = self.family(path) if path not in self.original['queries'] else 'runtime-query'
+            if path in NATIVE_QUERIES:
+                require(path in getattr(self, 'native_queries', {}),
+                        'missing trusted-kernel-runtime-query provenance: ' + path)
+                require(pid == self.leader and not self.javascript_opened and entered == completed and
+                        self.native_completed == list(NATIVE_QUERIES)[:len(self.native_completed)] and
+                        len(self.native_completed) < len(NATIVE_QUERIES) and
+                        path == list(NATIVE_QUERIES)[len(self.native_completed)] and
+                        not any(h.obj.family == 'trusted-kernel-runtime-query' for h in self.handles.values()) and
+                        args[2:] == ['O_RDONLY|O_CLOEXEC'] and result.isdigit(),
+                        'native query outside exact original-leader startup sequence')
+                family = 'trusted-kernel-runtime-query'
+            if path in getattr(self, 'initial', {}) and self.initial[path]['family'] == 'image':
+                if getattr(self, 'native_queries', {}):
+                    require(self.native_completed == list(NATIVE_QUERIES), 'JavaScript entry before native query settlement')
+                self.javascript_opened = True
             if entered != completed:
                 self.open_intervals.append((entered, completed))
             if result.startswith('-1 '):
@@ -446,6 +482,14 @@ class Replay:
                         {'O_RDONLY', 'O_NOFOLLOW', 'O_CLOEXEC', 'O_DIRECTORY'},
                         {'O_RDONLY', 'O_NONBLOCK', 'O_CLOEXEC', 'O_DIRECTORY'}), 'unknown readonly flags')
                 obj = self.paths.get(path)
+                if family == 'trusted-kernel-runtime-query':
+                    value = self.native_queries[path]['identity']
+                    dev, ino, mode, uid, gid = value
+                    physical = (os.major(dev), os.minor(dev), ino)
+                    require(physical not in self.inodes, 'native query physical alias')
+                    obj = Object(family, mode, {path}, physical=physical, uid=uid, gid=gid)
+                    self.inodes[physical] = obj
+                    self.objects.append(obj)
                 if obj is None and family == 'runtime-query':
                     require(self.query_flags(path, flags), 'query readonly flags differ from exact role')
                     if path == f'/proc/self/fdinfo/{self.lifetime}':
@@ -458,7 +502,8 @@ class Replay:
                         self.query_objects[path] = obj
                 require(obj is not None, 'open without original/create lineage')
                 if stat.S_ISREG(obj.mode) and obj.family not in {
-                        'runtime', 'image', 'original-file', 'lifetime', 'enrollment-witness', 'runtime-query'}:
+                        'runtime', 'image', 'original-file', 'lifetime', 'enrollment-witness', 'runtime-query',
+                        'trusted-kernel-runtime-query'}:
                     require(obj.writer_closed, 'private readonly open before writer settlement')
                 if obj.family == 'resource':
                     require(pid == self.leader and obj.writer_closed and
@@ -543,6 +588,8 @@ class Replay:
                     require(args[1] == '\"\"' and 'AT_EMPTY_PATH' in args[2], 'unmodeled descriptor-relative stat')
                 obj = self.handles.get(fd(args[0]))
                 require(obj is not None, 'stat unknown descriptor')
+                if obj.obj.family == 'trusted-kernel-runtime-query':
+                    require(pid == self.leader and entered == completed, 'native query stat thread/interval')
                 self.bind(obj.obj, call, args)
                 obj.physical_bound = True
             else:
@@ -635,6 +682,9 @@ class Replay:
                 return  # Failed startup query creates neither a handle nor an alias.
             require(handle is not None, 'unknown descriptor effect')
             obj = handle.obj
+            if obj.family == 'trusted-kernel-runtime-query':
+                require(pid == self.leader and entered == completed and call in {'read', 'close', 'fstat', 'newfstatat', 'statx'},
+                        'native query thread/interval/descriptor effect')
             if entered != completed:
                 self.descriptor_intervals.append((entered, completed, obj))
             if number in {self.command, self.ack} and call in {'read', 'write'}:
@@ -670,6 +720,9 @@ class Replay:
             if call == 'close':
                 require(result == '0' and number not in {self.lifetime, self.command, self.ack}, 'unplanned inherited/failed close')
                 require(not handle.directory_seen or handle.directory_eof, 'directory handle closed before complete enumeration')
+                if obj.family == 'trusted-kernel-runtime-query':
+                    require(handle.native_read, 'native query closed without exact single read')
+                    self.native_completed.append(next(iter(obj.names)))
                 if obj.family == 'runtime-query' and next(iter(obj.names)) == f'/proc/self/fdinfo/{self.lifetime}':
                     require(pid == self.leader and handle.physical_bound and handle.query_eof,
                             'source lifetime query closed before bound EOF')
@@ -679,6 +732,17 @@ class Replay:
                 del self.handles[number]
                 return
             if call in FILE_OPS:
+                if obj.family == 'trusted-kernel-runtime-query':
+                    path = next(iter(obj.names))
+                    request = NATIVE_QUERIES[path][0]
+                    require(call == 'read' and not handle.native_read and args[2:] == [str(request)] and
+                            handle.flags == {'O_RDONLY', 'O_CLOEXEC'}, 'native query is not exact single sequential read')
+                    data, count = string(args[1]), positive_result(result)
+                    require(0 < count == len(data) < request and b'\0' not in data and
+                            data.isascii(), 'native query incomplete/excess decoded bytes')
+                    handle.query_bytes = data
+                    handle.native_read = True  # does NOT claim a traced EOF
+                    return
                 if obj.family == 'runtime-query':
                     require(handle.physical_bound, 'query read lacks per-open physical bind')
                     path = next(iter(obj.names))

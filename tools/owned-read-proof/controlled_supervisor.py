@@ -26,9 +26,10 @@ from verify import identity
 from controlled_replay import Replay, LIMIT
 from controlled_contract import require
 from controlled_semantics import authenticate_bootstrap
+from kernel_runtime_queries import KernelRuntimeQueries
 
 REPO = Path(__file__).resolve().parents[2]
-SOURCE = '6f208db363ec5091b42e2e2590fc10c7dbeb025d'
+SOURCE = '557f62fbe86fc8371d48f11ec37bf9db71cac436'
 QUERY_PATHS = ('/proc/self/maps', '/proc/self/cgroup', '/proc/meminfo',
                '/sys/fs/cgroup//memory.max', '/sys/fs/cgroup//memory.high')
 
@@ -114,6 +115,10 @@ def assert_image_sources(image):
     for name, field in [('controlled-child.mjs', 'childSha256'), ('controlled-producer.mjs', 'producerSha256')]:
         require(digest((image / name).read_bytes()) == build[field], 'supervisor retained-original check failed')
     require((image / 'controlled-child.mjs').read_bytes() == (REPO / 'tools/owned-read-proof/controlled-child.mjs').read_bytes(), 'supervisor retained-original check failed')
+    reviewed_child = subprocess.run(['git', 'show', SOURCE + ':tools/owned-read-proof/controlled-child.mjs'],
+                                    cwd=REPO, capture_output=True, check=True, timeout=5).stdout
+    require((image / 'controlled-child.mjs').read_bytes() == reviewed_child,
+            'installed child differs from reviewed producer source')
     for name, expected in build['sources'].items():
         require(digest((REPO / name).read_bytes()) == expected, 'supervisor retained-original check failed')
         # Repository inputs must match the reviewed producer commit. Dependency
@@ -130,7 +135,7 @@ def bootstrap():
     image = root / 'image'
     subprocess.run(['node', str(REPO / 'tools/owned-read-proof/build-controlled.mjs'), str(image)],
                    cwd=REPO, capture_output=True, text=True, check=True, timeout=30)
-    assert_image_sources(image)
+    build = assert_image_sources(image)
     base = root / 'bootstrap'
     base.mkdir(mode=0o700)
     lock = base / 'lifetime.lock'
@@ -195,6 +200,11 @@ def bootstrap():
                          (1, out_write, 'stdio', ['O_WRONLY']), (2, err_write, 'stdio', ['O_WRONLY']),
                          (lifetime, lifetime, 'lifetime', ['O_RDWR']),
                          (command, command, 'command', ['O_RDONLY']), (ack, ack, 'ack', ['O_WRONLY'])]}}
+    provenance = KernelRuntimeQueries()
+    tracer_ready = threading.Event()
+    def launched(process):
+        provenance.own_tracer(process)
+        tracer_ready.set()
     # Original observer/runtime inputs are held outside the child base and are not
     # accepted from any producer report or child-writable plan file.
     retained = root / 'supervisor-originals.json'
@@ -208,6 +218,7 @@ def bootstrap():
     def control():
         try:
             deadline = started + 60
+            require(tracer_ready.wait(max(0, deadline - time.monotonic())), 'owned tracer not observed')
             while True:
                 with trace.open() as f:
                     first = f.readline()
@@ -218,7 +229,15 @@ def bootstrap():
                     raise RuntimeError('initial kernel exec not observed')
                 time.sleep(.01)
             original['leaderPid'] = int(match[1])
-            # The exact retained leader is established before releasing the command.
+            provenance.bind_leader(original['leaderPid'], node, argv)
+            # Retain a completed raw line anchor while the independently pinned
+            # process is alive. The command may already be waiting unfinished.
+            prefix = trace.read_bytes()
+            provenance.value['traceAnchorLine'] = prefix.count(b'\n')
+            provenance.validate_leader(node, argv)
+            provenance.value['verifiedBeforeRelease'] = True
+            original['kernelRuntimeQueries'] = provenance.value
+            # No child-supplied PID or readiness report establishes ownership.
             retained.write_text(encoded(original))
             for phase in phases:
                 require(phase['token'] not in used_tokens, 'supervisor retained-original check failed')
@@ -239,13 +258,15 @@ def bootstrap():
     worker = threading.Thread(target=control, daemon=True)
     worker.start()
     report = {'record': 'controlled-bootstrap-attempt', 'authority': 'none', 'root': str(root),
-              'sourceHead': SOURCE, 'connectedCommandsReleased': False}
+              'sourceHead': SOURCE, 'connectedCommandsReleased': False,
+              'imageProducerSha256': build['producerSha256'], 'imageChildSha256': build['childSha256'],
+              'imageBuildSha256': digest((image / 'controlled-build.json').read_bytes())}
     try:
         result = run_traced(['prlimit', '--fsize=268435456:268435456', '--core=0:0', tracer,
                     '--kill-on-exit', '-f', '-q', '-v', '-x', '-s', '131072', '-o', str(trace), *argv],
                     pass_fds=(lifetime, command, ack), cwd=image,
                     env={'PATH': os.environ['PATH'], 'HOME': str(base), 'TMPDIR': str(base)},
-                    stdout=out_write, stderr=err_write, text=True, timeout=60)
+                    stdout=out_write, stderr=err_write, text=True, timeout=60, on_started=launched)
         original['finishedWallTime'] = time.time()
         os.close(out_write)
         os.close(err_write)
@@ -259,6 +280,7 @@ def bootstrap():
         require(not worker.is_alive() and not errors, errors)
         require(result.returncode == 0 and trace.stat().st_size <= LIMIT, 'supervisor retained-original check failed')
         require(log == [{'event': event, **phase} for phase in phases for event in ('sent', 'received')], 'supervisor retained-original check failed')
+        provenance.validate_mounts()
         for p, expected in plan['inventory'].items():
             require(identity(p) == expected['identity'] and stamp(p) == expected['stamp'], 'supervisor retained-original check failed')
             require(digest(Path(p).read_bytes()) == expected['sha256'], 'supervisor retained-original check failed')
@@ -282,7 +304,9 @@ def bootstrap():
         if not worker.is_alive():
             os.close(receive)
         os.close(lifetime)
+        provenance.close()
         report['phaseLog'] = log
+        retained.write_text(encoded(original))
         (root / 'attempt.json').write_text(encoded(report))
         (root / 'attempt.json').chmod(0o600)
     print(encoded(report), flush=True)

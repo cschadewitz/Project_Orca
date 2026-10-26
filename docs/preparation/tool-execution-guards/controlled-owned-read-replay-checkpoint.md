@@ -1,10 +1,16 @@
 # Controlled bootstrap replay checkpoint — incomplete
 
 This observer-only draft starts from merged main
-`aeb4ffb0e60fb4b553c70af3a4308b8b24a231d1`. The installed producer input pin remains
-`6f208db363ec5091b42e2e2590fc10c7dbeb025d`; the package/builder/child diff between
-those commits was verified empty. Each experiment builds and retains a fresh
-physical image; previous observations never qualify a different image.
+`aeb4ffb0e60fb4b553c70af3a4308b8b24a231d1`. The original published observer checkpoint
+`613847aa64a5e34e7c3115f71ebdd049ad65c27c` is preserved in branch ancestry.
+The current producer input pin is independently reviewed #751
+`557f62fbe86fc8371d48f11ec37bf9db71cac436`, integrated by branch-only merge
+`d816af710d620cd17f6f3317782429fdf30d3632`. Its producer/child bytes are used
+unchanged; `assert_image_sources` compares every repository bundle input and the
+copied child with that source commit. Candidate `verify.py` is unchanged.
+Each experiment builds and retains a fresh physical image; previous observations
+never qualify a different image. The historical evidence/proposals below predate
+the current continuation recorded at the end.
 
 `python3 -B tools/owned-read-proof/controlled_supervisor.py` runs only bootstrap,
 under the unchanged 256 MiB trace and 60-second process limits, using `-s131072`
@@ -194,3 +200,94 @@ Grammar controls reject missing stat, pre-EOF close, oversize, old/broadened
 flags and extra reads after EOF. The suite has 65 passing tests. This is not an
 installed passing run against #751; hosted CI/source integration and a fresh
 reviewed image pin remain prerequisites. No producer child edit was duplicated.
+
+## 26 October continuation: finite trusted kernel runtime queries
+
+`kernel_runtime_queries.py` implements the separately typed
+`trusted-kernel-runtime-query-v1` contract for **only** the four native paths in
+the table above. Supervisor originals are the sole input; no child report can
+select a PID, mount, filesystem or query identity. This remains a draft requiring
+source review and does not complete the broader semantic/effect audit.
+
+Before launch the supervisor retains its actual namespace links and complete
+mountinfo plus readonly descriptors for meminfo and both memory controls. It
+checks real same-FD `fstatfs`, `fstat` and fdinfo mount IDs against the unique
+covering procfs/cgroup2 mount. Component-by-component no-follow resolution refuses
+symlinks, and mount selection refuses nested/covering or stacked bind mounts,
+wrong filesystem/device/mount ID and redirected procfs subtrees. Mount roots are
+retained verbatim; the observed cgroup2 root **`/..` is opaque metadata**, never
+normalized or joined to an application path. Descriptors remain held through
+replay, with namespace/mountinfo, held identity and live path rechecks.
+
+`run_traced` now has an optional owned-launch callback inside its existing cleanup
+scope. The supervisor captures its actual tracer child, then independently checks
+the trace-derived original leader using a pidfd, held proc directory, kernel
+TGID/starttime/UID/parent/tracer/group/session, executable, argv, root and inherited
+namespaces/mountinfo. It opens `/proc/<owned-leader>/cgroup` without following
+symlinks and retains that descriptor's physical/filesystem identity; the
+supervisor's `/proc/self/cgroup` inode is never substituted. These checks repeat
+before releasing the protected bootstrap command. A retained trace-line anchor
+must lie inside that same leader's traced exec-to-settlement lifetime and before
+command completion. The existing command wait suffices; no producer handshake,
+child-supplied PID or Node/libuv instrumentation was introduced.
+
+Replay requires all four exact `O_RDONLY|O_CLOEXEC` opens on the original leader,
+in the observed order before any image JavaScript open. Each has exactly one
+fully decoded, bounded short sequential read (requests 1023, 31, 31 and 4095),
+then close. This finite shape **does not claim an observed EOF**. Repeats, changed
+spelling, wider flags, extra/oversize reads, vector/positional/write/control
+operations and file mappings refuse. If stat is present, device/inode/mode/owner
+and size/link comparisons still apply against the held observation. The physical
+alias table remains shared with all other objects. `/proc/self/maps` and the
+source-owned lifetime fdinfo retain positive-inode per-open physical binding;
+fdinfo also retains bounded sentinel/EOF and actual supervisor flock checks.
+All service/private/credential/lease/publication/control checks remain in place.
+Namespace, mount, chroot and alternate-exec changes refuse, including namespace
+flags on clone. The assumptions remain trusted kernel, stable mounts and a
+cooperative same-UID owned process group, without hostile-root containment.
+
+Validation: **80 Python tests pass** using the command at the top. Controls cover
+wrong filesystem, covering/bind/stacked mounts, redirected targets and a real
+no-follow symlink attempt, wrong PID/TGID/starttime reuse/ownership, changed
+namespace/mountinfo, missing pre-release observation and traced-lifetime
+correlation, widened spelling/flags, excess/truncated/repeated bytes and
+write/vector/positional/mapping/descriptor-control attempts. The wrong-filesystem
+control uses an actual held temporary-file descriptor; covering mounts and
+namespace changes are injected observations, without changing host mounts or
+security settings. Existing maps missing-stat and inode replacement controls
+continue to pass. `git diff --check` passes. These are grammar/negative controls,
+not synthetic acceptance.
+
+### Fresh exact-source bootstrap result: still refused
+
+Final fresh local run: `/tmp/orca-controlled-replay-q3lv_8xz`, Node **24.19.0**,
+producer source **`557f62fbe86fc8371d48f11ec37bf9db71cac436`**. The supervisor
+built a new physical three-file image and checked all reviewed source bytes.
+
+| Evidence | Exact value |
+| --- | --- |
+| Producer image SHA-256 | `c81477f96d56bdc89e56d96aaf35fa8c62c418080406c07c63db9f75b56585fd` |
+| Child image SHA-256 | `a58036e5343fe07dac8625f7d5dfc2a7e0c6bfe660ddb1e96711b5b8d002e35c` |
+| Build manifest SHA-256 | `d1fcc114c726ef11d77c31d9a862e7b407d03bf82b5c195a2270add15b0d0ad0` |
+| Trace SHA-256 | `f2bef1af8e2dce04bc70e785464a1e6e48d5fa6d9b8772b34de7d35d40c4dc69` |
+| Trace bytes / process elapsed | **109615721 / 9.006174950 seconds** |
+| Producer / supervisor exit | **0 / 1 (refusal)** |
+
+The 256 MiB trace/60-second process bounds and source's original 55-second owner
+expiry are unchanged. Kernel replay completed the four native query lifecycles,
+the reviewed fdinfo lifecycles, 12 settled threads and exactly one service pread
+at offset 2, length 4, bytes `73706f73` (`spos`). The first remaining refusal is
+**`RuntimeError: bootstrap expiry outside original bounded execution`**, from
+`controlled_semantics.py`'s existing check that original execution ends before
+expiry and expiry is at most the physical resource birth time plus 55 seconds.
+That semantic condition was not relaxed or repaired in this bounded step.
+
+An earlier fresh run with the same source/image also completed kernel replay and
+refused at that same check: `/tmp/orca-controlled-replay-hi9yqv_f`, 109791682 bytes,
+11.292822106 seconds, trace SHA-256
+`8b8ba224c31f9d62b696a97ee02f699cd177ccee84447e9676818899f214be89`.
+Neither run qualifies bootstrap. The supervisor has no accepting exit or
+connected launch and released no connected token. Raw traces and retained
+originals, including disposable private records, stay local. Parent retains
+source review, CI and merge ownership; the separate main tampered-approval test
+was not edited. Cal identity/assignment is retained on draft #748.

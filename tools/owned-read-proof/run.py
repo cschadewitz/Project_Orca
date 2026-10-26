@@ -93,6 +93,7 @@ def run_traced(args, **kwargs):
     restored after settlement; no system configuration or unrelated processes change.
     """
     timeout = kwargs.pop('timeout', 30)
+    on_started = kwargs.pop('on_started', None)
     libc = ctypes.CDLL(None, use_errno=True)
     previous = ctypes.c_int()
     if libc.prctl(37, ctypes.byref(previous), 0, 0, 0) != 0:  # PR_GET_CHILD_SUBREAPER
@@ -103,6 +104,8 @@ def run_traced(args, **kwargs):
     try:
         process = subprocess.Popen(args, start_new_session=True, **kwargs)
         try:
+            if on_started is not None:
+                on_started(process)
             stdout, stderr = process.communicate(timeout=timeout)
             return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
         finally:
