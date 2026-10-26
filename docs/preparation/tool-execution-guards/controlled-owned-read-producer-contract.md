@@ -206,3 +206,26 @@ contract bounds may need a smaller, fully checked observation encoding; exceedin
 them refuses rather than silently widening or claiming acceptance. No runtime
 acceptance, caller-supplied positive flag or generic private-root exemption is
 being proposed to resolve that work.
+
+
+The producer now snapshots the supervisor's callable capabilities and original
+content/interval before its first await. Its final synchronous owner assertion
+also hashes the actual current sidecar revision, checks the original real lease
+file identity/stamp/bytes and expiry, and rechecks authenticated baseline and
+persistence-record seals. Save refresh updates only the policy revision through
+the actual facade. Fresh automatic capture omits a live target entirely; it cannot
+complete human delivery. These extra real reads must be included in final replay;
+the older measurement is not an exact-final-head I/O specification.
+
+Fixed test designations retained by the parent before launch are run `controlled`,
+workflow `controlled-test`, principals `controlled-test-operator` and
+`controlled-test-reviewer`, instance `controlled-test-boot`, session
+`controlled-session`, step `controlled-step`, attempt `controlled-attempt`, agent
+`controlled-agent`, host `controlled-local-linux`, runner `controlled-runner`, and
+captured generation `controlled-original-ceiling`. Original human turn/invocation
+are `controlled-human-turn` / `controlled-human-invocation`; the fresh automatic
+turn/invocation are `controlled-rule-turn` / `controlled-rule-invocation`.
+Credential IDs, action IDs, approval refs and payload refs are actual fresh values
+from the real stores and are correlated to these predesignated roles. The original
+owner expiry is real wall time plus 55 seconds, below the fence's unchanged
+60-second ceiling. No expiry or default coverage constant was widened.

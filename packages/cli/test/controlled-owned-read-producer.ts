@@ -2,7 +2,8 @@
  * The caller is the designated test supervisor, retaining real physical assertions and phase pipes.
  */
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { join } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -75,15 +76,29 @@ export async function runControlledOwnedReadTest(
   lane: "bootstrap" | "connected",
   supervisor: ControlledReadTestSupervisor,
 ) {
+  // Retain exact original callable capabilities and interval before any await.
+  const content = supervisor.content,
+    offset = supervisor.offset,
+    length = supervisor.length;
+  const assertPhysicalCurrent = supervisor.assertCurrent.bind(supervisor);
+  const bootstrap = supervisor.bootstrap
+    ? Object.freeze({
+        evidenceRef: supervisor.bootstrap.evidenceRef,
+        assertCurrent: supervisor.bootstrap.assertCurrent.bind(supervisor.bootstrap),
+      })
+    : undefined;
+  const phase = supervisor.phase.bind(supervisor),
+    fault = supervisor.fault;
+  const settleOriginalDelivery = supervisor.settleOriginalDelivery?.bind(supervisor);
   assert.equal(process.platform, "linux");
-  assert.equal(supervisor.assertCurrent(), undefined);
-  assert.ok(Buffer.byteLength(supervisor.content) <= 4096);
-  assert.ok(Number.isSafeInteger(supervisor.offset) && supervisor.offset >= 0);
-  assert.ok(Number.isSafeInteger(supervisor.length) && supervisor.length > 0);
-  assert.ok(supervisor.offset + supervisor.length <= Buffer.byteLength(supervisor.content));
+  assert.equal(assertPhysicalCurrent(), undefined);
+  assert.ok(Buffer.byteLength(content) <= 4096);
+  assert.ok(Number.isSafeInteger(offset) && offset >= 0);
+  assert.ok(Number.isSafeInteger(length) && length > 0);
+  assert.ok(offset + length <= Buffer.byteLength(content));
   if (lane === "connected") {
-    assert.ok(supervisor.bootstrap?.evidenceRef);
-    assert.equal(supervisor.bootstrap.assertCurrent(), undefined);
+    assert.ok(bootstrap?.evidenceRef);
+    assert.equal(bootstrap.assertCurrent(), undefined);
   }
   const config = join(base, "workspace"),
     storeDir = join(config, ".orca");
@@ -130,17 +145,17 @@ export async function runControlledOwnedReadTest(
     return credentials.list().find((item) => item.id === actor.credentialId)!;
   };
   const check = (): undefined => {
-    supervisor.assertCurrent();
-    if (lane === "connected") supervisor.bootstrap!.assertCurrent();
+    assert.equal(assertPhysicalCurrent(), undefined);
+    if (lane === "connected") assert.equal(bootstrap!.assertCurrent(), undefined);
     abort.signal.throwIfAborted();
     if (operator) currentCredential(operator);
     if (reviewer) currentCredential(reviewer);
     return undefined;
   };
-  const interval = (offset: number, length: number): undefined => {
+  const interval = (candidateOffset: number, candidateLength: number): undefined => {
     check();
-    assert.equal(offset, supervisor.offset);
-    assert.equal(length, supervisor.length);
+    assert.equal(candidateOffset, offset);
+    assert.equal(candidateLength, length);
     return undefined;
   };
   let owner!: ReturnType<typeof protectedScopedPermissionOwner>;
@@ -149,6 +164,16 @@ export async function runControlledOwnedReadTest(
   let initialRevision = "";
   let initialAction: ActionEvidenceV1 | undefined;
   let baseline: { ref: string; value: unknown } | undefined;
+  let baselineSeal: (() => undefined) | undefined;
+  let leaseBytes: Buffer | undefined;
+  let leaseStamp: string | undefined;
+  const leasePath = join(storeDir, "leases", "run%3Acontrolled.json");
+  const physicalStamp = (path: string) => {
+    const info = fs.lstatSync(path, { bigint: true });
+    return [info.dev, info.ino, info.mode, info.uid, info.gid, info.nlink, info.size, info.mtimeNs, info.ctimeNs].join(
+      ":",
+    );
+  };
   let lease!: Awaited<ReturnType<typeof stores.leases.acquire>>;
   const persistence = new Map<string, { action: ActionEvidenceV1; value: unknown; assertUnchanged(): undefined }>();
   const attestations = new Map<
@@ -309,7 +334,7 @@ export async function runControlledOwnedReadTest(
       lease,
       revision: action.authority.currentPolicyRevision,
       expiresAt: action.expiresAt,
-      plannedInterval: { offset: supervisor.offset, length: supervisor.length },
+      plannedInterval: { offset: offset, length: length },
       executionReview: producer.invocation(capture).reviewProvenance(),
     };
     const ref = await put("controlled-persistence-review-v1", value);
@@ -358,6 +383,17 @@ export async function runControlledOwnedReadTest(
       assert.ok(!lapsed(lease, Date.now()));
       same(action.authority, captured.authority);
       same(action.invocation, captured.invocation);
+      // Final synchronous protected-fact checks follow all asynchronous policy work.
+      assert.equal(
+        createHash("sha256")
+          .update(fs.readFileSync(join(config, "orca.permissions.json")))
+          .digest("hex"),
+        action.authority.currentPolicyRevision,
+      );
+      assert.equal(physicalStamp(leasePath), leaseStamp);
+      assert.ok(leaseBytes && fs.readFileSync(leasePath).equals(leaseBytes));
+      baselineSeal?.();
+      for (const proof of persistence.values()) proof.assertUnchanged();
     },
   });
   const policyFor = (original: typeof snapshot) =>
@@ -425,7 +461,7 @@ export async function runControlledOwnedReadTest(
   let policy!: Awaited<ReturnType<typeof managed.enrollFresh>>;
   let bootstrapRule: StrictPermissionRule | undefined;
   try {
-    await supervisor.phase(lane === "bootstrap" ? "bootstrap" : "save", async () => {
+    await phase(lane === "bootstrap" ? "bootstrap" : "save", async () => {
       policy = await managed.enrollFresh();
       const available = await managed.currentStore();
       assert.ok(available.available);
@@ -440,6 +476,8 @@ export async function runControlledOwnedReadTest(
         secrets: [],
       });
       lease = await stores.leases.acquire({ resource: `run:${runId}`, holder: randomUUID(), ttlMs: 60000 });
+      leaseBytes = fs.readFileSync(leasePath);
+      leaseStamp = physicalStamp(leasePath);
       const issued = await credentials.issue({
         principal: "controlled-test-operator",
         permissions: ["permissions.grant", "inputs.answer"],
@@ -511,12 +549,12 @@ export async function runControlledOwnedReadTest(
       service = createOwnedFileReadServiceForTest({
         enabled: true,
         owner: original,
-        content: supervisor.content,
+        content: content,
         maximumInvocations: 2,
         ...(lane === "connected"
           ? {
               controlledSupervisor: {
-                installedEvidenceRef: supervisor.bootstrap!.evidenceRef,
+                installedEvidenceRef: bootstrap!.evidenceRef,
                 assertCurrent: check,
                 assertInterval: interval,
               },
@@ -527,13 +565,10 @@ export async function runControlledOwnedReadTest(
         },
         respond: async (bytes, signal) => {
           signal.throwIfAborted();
-          same(
-            Buffer.from(bytes),
-            Buffer.from(supervisor.content).subarray(supervisor.offset, supervisor.offset + supervisor.length),
-          );
+          same(Buffer.from(bytes), Buffer.from(content).subarray(offset, offset + length));
         },
       });
-      const parameters = { resourceRef: service.resourceRef, offset: supervisor.offset, length: supervisor.length };
+      const parameters = { resourceRef: service.resourceRef, offset: offset, length: length };
       interval(parameters.offset, parameters.length);
       const strict = policyFor(snapshot);
       if (lane === "bootstrap") {
@@ -586,8 +621,8 @@ export async function runControlledOwnedReadTest(
             signal: abort.signal,
             withOwnership: async (work) => {
               const result = await leases.withOwnership(lease, work);
-              await supervisor.settleOriginalDelivery?.();
-              if (supervisor.fault === "lost-ack") throw Error("Controlled final acknowledgement lost");
+              await settleOriginalDelivery?.();
+              if (fault === "lost-ack") throw Error("Controlled final acknowledgement lost");
               await put("controlled-final-delivery-ack-v1", { requestId: query.requestId, actor: operator });
               return result;
             },
@@ -637,12 +672,18 @@ export async function runControlledOwnedReadTest(
         lease,
         initialRevision,
         profileRef,
-        installedEvidenceRef: supervisor.bootstrap?.evidenceRef ?? null,
-        interval: { offset: supervisor.offset, length: supervisor.length },
+        installedEvidenceRef: bootstrap?.evidenceRef ?? null,
+        interval: { offset: offset, length: length },
         expiresAt: snapshot.expiresAt,
         rules: bootstrapRule ? [bootstrapRule] : [],
       };
       baseline = { ref: await put("controlled-baseline-v1", baselineValue), value: baselineValue };
+      const baselineObservation = await stores.execution.observe!(
+        async () => same(await read(baseline!.ref, "controlled-baseline-v1"), baselineValue),
+        { maxRecords: 32 },
+      );
+      await baselineObservation.verifyUnchanged();
+      baselineSeal = baselineObservation.assertUnchanged!.bind(baselineObservation);
       const evaluation = await invocation.evaluate(abort.signal);
       assert.equal(evaluation.phase, "final");
       if (evaluation.phase !== "final") throw Error("unexpected required execution review");
@@ -659,8 +700,8 @@ export async function runControlledOwnedReadTest(
       assert.equal(evaluation.verdict.outcome, "require-human");
       same(invocation.reviewProvenance(), { result: "unavailable", sourceRefs: [] });
       await attest(token!, invocation.action);
-      if (supervisor.fault === "review-proof") persistence.clear();
-      if (supervisor.fault === "reviewer-revoked") await credentials.revoke(reviewer.credentialId!);
+      if (fault === "review-proof") persistence.clear();
+      if (fault === "reviewer-revoked") await credentials.revoke(reviewer.credentialId!);
       const auth = new Authorizer({
         ownership: new OwnershipStore(),
         resolver: {
@@ -699,12 +740,12 @@ export async function runControlledOwnedReadTest(
       assert.equal(authorizationRefs.length, 0);
       const after = await policy.read();
       assert.equal(after.document.scopedRules.records.length, 1);
-      if (supervisor.fault === "stale-revision")
+      if (fault === "stale-revision")
         snapshot.authority = { ...snapshot.authority, currentPolicyRevision: initialRevision };
     });
     if (lane === "connected") {
-      await supervisor.phase("human-read", async () => {
-        if (supervisor.fault === "cancel") abort.abort();
+      await phase("human-read", async () => {
+        if (fault === "cancel") abort.abort();
         const reviewed = await call("scopedPermissions.review", { target: identity, input: target });
         assert.ok(reviewed.ok, JSON.stringify(reviewed));
         const answer = call("scopedPermissions.choose", {
@@ -731,9 +772,9 @@ export async function runControlledOwnedReadTest(
         assert.equal(await producer.executeHumanDelivery(token!, abort.signal), receipt);
         assert.equal(authorizationRefs.length, 1);
       });
-      await supervisor.phase("rule-read", async () => {
+      await phase("rule-read", async () => {
         check();
-        if (supervisor.fault === "revoke-rule") {
+        if (fault === "revoke-rule") {
           const state = await policy.read(),
             record = state.document.scopedRules.records[0]!;
           const proofRef = randomUUID();
@@ -791,11 +832,11 @@ export async function runControlledOwnedReadTest(
           authority: { ...snapshot.authority, currentPolicyRevision: facts.policyRevision },
         };
         const original = createOriginal(fresh);
-        const offset = supervisor.offset + (supervisor.fault === "wrong-interval" ? 1 : 0);
-        interval(offset, supervisor.length);
+        const captureOffset = offset + (fault === "wrong-interval" ? 1 : 0);
+        interval(captureOffset, length);
         const invocation = service!.capture(
           original,
-          { resourceRef: service!.resourceRef, offset, length: supervisor.length },
+          { resourceRef: service!.resourceRef, offset: captureOffset, length },
           policyFor(fresh),
           evidence,
         );

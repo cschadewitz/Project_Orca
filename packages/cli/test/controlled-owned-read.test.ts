@@ -2,6 +2,7 @@
  * OS reads are independently intercepted by this test; external syscall acceptance is separate.
  */
 import fs from "node:fs";
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -86,12 +87,12 @@ async function supervisor(
     observed: { phase: string; offset: number; length: number; bytes: string }[] = [];
   let phase = "outside";
   const check = (): undefined => {
-    expect(holder.exitCode).toBeNull();
-    expect(fs.readFileSync(`/proc/${holder.pid}/fdinfo/${fd}`, "utf8")).toMatch(/FLOCK\s+ADVISORY\s+WRITE /);
-    for (const [path, stamp] of originals) expect(identity(path)).toBe(stamp);
-    expect(digest(fs.readFileSync(id))).toBe(digest(identityBytes));
-    expect(identity(image.pathname)).toBe(imageStamp);
-    expect(digest(fs.readFileSync(image))).toBe(digest(imageBytes));
+    assert.equal(holder.exitCode, null);
+    assert.match(fs.readFileSync(`/proc/${holder.pid}/fdinfo/${fd}`, "utf8"), /FLOCK\s+ADVISORY\s+WRITE /);
+    for (const [path, stamp] of originals) assert.equal(identity(path), stamp);
+    assert.equal(digest(fs.readFileSync(id)), digest(identityBytes));
+    assert.equal(identity(image.pathname), imageStamp);
+    assert.equal(digest(fs.readFileSync(image)), digest(imageBytes));
     return undefined;
   };
   const originalRead = fs.readSync;
@@ -153,12 +154,13 @@ async function bootstrap() {
     evidenceRef: `test-supervisor-bootstrap:${digest(protectedBytes)}`,
     assertCurrent: (): undefined => {
       s.check();
-      expect(
+      assert.equal(
         digest(
           fs.readFileSync(join(s.base, "workspace/.orca/private-execution", `${encodeURIComponent(ref)}.payload.json`)),
         ),
-      ).toBe(digest(protectedBytes));
-      expect(s.observed).toEqual([{ phase: "bootstrap", offset: 2, length: 4, bytes: "spos" }]);
+        digest(protectedBytes),
+      );
+      assert.deepEqual(s.observed, [{ phase: "bootstrap", offset: 2, length: 4, bytes: "spos" }]);
       return undefined;
     },
   };
@@ -333,6 +335,49 @@ it.each(["reviewer", "proof", "actor"] as const)(
             .find((record) => record.principal === `controlled-test-${fault === "actor" ? "operator" : "reviewer"}`)!;
           expect(await credentials.revoke(target.id)).toBe(true);
         }
+      });
+    await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow();
+    expect(c.observed).toEqual([]);
+  },
+  30000,
+);
+
+it("pins supervisor interval and callable capabilities before Save", async () => {
+  const b = await bootstrap(),
+    c = await supervisor("connected", b.grant);
+  const original = c.options.phase.bind(c.options);
+  c.options.phase = (name, work) =>
+    original(name, async () => {
+      await work();
+      if (name === "save") {
+        Object.assign(c.options, {
+          offset: 3,
+          length: 5,
+          content: "replacement input",
+          assertCurrent: () => {
+            throw new Error("replacement callback");
+          },
+        });
+      }
+    });
+  await runControlledOwnedReadTest(c.base, "connected", c.options);
+  expect(c.observed.map(({ offset, length, bytes }) => ({ offset, length, bytes }))).toEqual([
+    { offset: 2, length: 4, bytes: "spos" },
+    { offset: 2, length: 4, bytes: "spos" },
+  ]);
+}, 30000);
+it.each(["policy", "lease"] as const)(
+  "refuses actual changed protected %s after Save",
+  async (fault) => {
+    const b = await bootstrap(),
+      c = await supervisor("connected", b.grant);
+    const original = c.options.phase.bind(c.options);
+    c.options.phase = (name, work) =>
+      original(name, async () => {
+        await work();
+        if (name !== "save") return;
+        if (fault === "policy") await fs.promises.appendFile(join(c.base, "workspace/orca.permissions.json"), "\n");
+        else await fileStores(join(c.base, "workspace/.orca")).leases.forceRelease("run:controlled");
       });
     await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow();
     expect(c.observed).toEqual([]);
