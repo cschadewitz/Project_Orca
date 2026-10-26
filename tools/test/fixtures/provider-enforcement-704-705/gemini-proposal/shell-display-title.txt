@@ -1,0 +1,6 @@
+    return this.params.command;
+  }
+
+  private getHistory(): readonly Content[] {
+    const clientFromProp = this.context.geminiClient;
+    if (clientFromProp && typeof clientFromProp.getHistory === 'function') {
