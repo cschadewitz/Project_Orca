@@ -1,0 +1,21 @@
+  • useZip is ignored because differential-aware builds always use a 7z payload  target=nsis solution=set differentialPackage: false to get a zip payload
+  • located stored member region for block map  artifact=/tmp/orca639/archive-fixtures/stored/owned-fixture-1.0.0-x64.nsis.7z member=/tmp/orca639/archive-fixtures/app/resources/app.asar offset=32 size=19614226
+  • located stored member region for block map  artifact=/tmp/orca639/archive-fixtures/web-stored/owned-fixture-1.0.0-x64.nsis.7z member=/tmp/orca639/archive-fixtures/app/resources/app.asar offset=32 size=19614226
+  • building embedded block map  file=/tmp/orca639/archive-fixtures/web-stored/owned-fixture-1.0.0-x64.nsis.7z
+[
+  { name: 'default', size: 2503292, blockMapSize: null, regions: 0 },
+  { name: 'zip', size: 3782778, blockMapSize: null, regions: 0 },
+  {
+    name: 'zip-with-differential',
+    size: 2503292,
+    blockMapSize: null,
+    regions: 0
+  },
+  { name: 'stored', size: 19614459, blockMapSize: null, regions: 1 },
+  {
+    name: 'web-stored',
+    size: 19650164,
+    blockMapSize: 35701,
+    regions: 0
+  }
+]

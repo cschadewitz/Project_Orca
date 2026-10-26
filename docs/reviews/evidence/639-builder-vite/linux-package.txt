@@ -1,0 +1,14 @@
+  • electron-builder  version=26.18.0 os=6.18.55
+  • loaded configuration  file=/workspace/Project_Orca/packages/app/electron-builder.yml
+  • packageManager not detected by file, falling back to environment detection  resolvedPackageManager=pnpm detected=/workspace/Project_Orca/packages/app
+  • detected workspace root for project using packageManager field  pm=pnpm config=pnpm@12.4.2 resolved=/workspace/Project_Orca projectDir=/workspace/Project_Orca/packages/app
+  • executing @electron/rebuild  electronVersion=44.9.1 arch=x64 buildFromSource=false workspaceRoot=/workspace/Project_Orca projectDir=./ appDir=./
+  • installing native dependencies  arch=x64
+  • completed installing native dependencies
+  • packaging       platform=linux arch=x64 electron=44.9.1 appOutDir=/tmp/orca639/package/linux-unpacked
+  • using custom unpacked Electron distribution  electronDist=node_modules/electron/dist
+  • copying unpacked Electron  source=/workspace/Project_Orca/packages/app/node_modules/electron/dist destination=/tmp/orca639/package/linux-unpacked
+  • searching for node modules  pm=pnpm searchDir=/workspace/Project_Orca/packages/app
+  • duplicate dependency references  dependencies=["@orca/core@link:../core"]
+  • building        target=tar.gz arch=x64 file=/tmp/orca639/package/ORCA-0.1.0-linux-x64.tar.gz
+  • downloaded      label=7zip-linux-x64.tar.gz progress=100%

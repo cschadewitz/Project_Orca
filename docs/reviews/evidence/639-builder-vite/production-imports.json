@@ -1,0 +1,31 @@
+{
+  "runtime": "v24.19.0",
+  "loaded": [
+    "@orca/core",
+    "@orca/design",
+    "@orca/protocol",
+    "argparse",
+    "builder-util-runtime",
+    "debug",
+    "electron-updater",
+    "fs-extra",
+    "graceful-fs",
+    "js-yaml",
+    "jsonfile",
+    "lazy-val",
+    "lodash.escaperegexp",
+    "lodash.isequal",
+    "ms",
+    "react-dom",
+    "react",
+    "sax",
+    "scheduler",
+    "semver",
+    "tiny-typed-emitter",
+    "universalify",
+    "yaml",
+    "zod"
+  ],
+  "failed": [],
+  "limits": "Cold imports from the extracted packaged production closure under Node; no Electron main/renderer, updater instance, native installation or provider."
+}

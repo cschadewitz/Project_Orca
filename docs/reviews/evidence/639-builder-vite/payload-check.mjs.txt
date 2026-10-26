@@ -1,0 +1,30 @@
+import { createHash, createPublicKey, verify } from 'node:crypto';
+import { readdir, readFile, mkdir, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { join } from 'node:path';
+const root='/tmp/orca639';const a=createRequire('/workspace/Project_Orca/packages/app/package.json');const b=createRequire(a.resolve('electron-builder'));const c=createRequire(b.resolve('app-builder-lib'));const paths=JSON.parse(await readFile(root+'/paths.json'));
+const yaml=a('yaml');const lock=yaml.parseAllDocuments(await readFile('/workspace/Project_Orca/pnpm-lock.yaml','utf8')).at(-1).toJS();
+const names=[['@electron/rebuild','4.2.0','4.2.1',paths.rebuild],['@noble/hashes','2.4.0','1.8.0',paths.hashes],['app-builder-lib','26.15.3','26.18.0',paths.library],['builder-util','26.15.3','26.16.0',paths.util],['dmg-builder','26.15.3','26.18.0',join(c.resolve('dmg-builder/package.json'),'..')],['electron-builder-squirrel-windows','26.15.3','26.18.0',join(c.resolve('electron-builder-squirrel-windows/package.json'),'..')],['electron-builder','26.15.3','26.18.0',paths.builder],['electron-publish','26.15.3','26.18.0',join(c.resolve('electron-publish/package.json'),'..')],['vite','8.3.4','8.3.5',paths.vite]];
+const keys=await(await fetch('https://registry.npmjs.org/-/npm/v1/keys')).json();const rows=[];
+async function* walk(p,prefix=''){for(const e of await readdir(p,{withFileTypes:true})){if(e.name==='node_modules')continue;const rel=prefix+e.name;if(e.isDirectory())yield*walk(join(p,e.name),rel+'/');else yield rel;}}
+for(const [name,old,next,installed]of names){
+ const versions=[];
+ for(const version of [old,next]){
+  const meta=await(await fetch(`https://registry.npmjs.org/${name}/${version}`)).json();
+  const bytes=Buffer.from(await(await fetch(meta.dist.tarball)).arrayBuffer());
+  const sha512='sha512-'+createHash('sha512').update(bytes).digest('base64');const sha1=createHash('sha1').update(bytes).digest('hex');
+  if(sha512!==meta.dist.integrity||sha1!==meta.dist.shasum)throw Error('tarball digest '+name);
+  if(version===next&&lock.packages[`${name}@${version}`]?.resolution.integrity!==sha512)throw Error('lock digest '+name);
+  const signatures=(meta.dist.signatures??[]).map(s=>{const k=keys.keys.find(k=>k.keyid===s.keyid);const ok=verify('sha256',Buffer.from(`${name}@${version}:${sha512}`),createPublicKey({key:Buffer.from(k.key,'base64'),format:'der',type:'spki'}),Buffer.from(s.sig,'base64'));if(!ok)throw Error('registry signature '+name);return {keyid:s.keyid,verified:ok};});
+  if(!signatures.length)throw Error('no signature '+name);
+  const id=name.replaceAll('/','_')+'-'+version;const dir=root+'/payloads/'+id;await mkdir(dir,{recursive:true});await writeFile(dir+'.tgz',bytes);execFileSync('tar',['-xzf',dir+'.tgz','-C',dir]);
+  const pkg=JSON.parse(await readFile(dir+'/package/package.json'));let compared=0;
+  if(version===next)for await(const rel of walk(dir+'/package')){if(!(await readFile(dir+'/package/'+rel)).equals(await readFile(join(installed,rel))))throw Error('installed differs '+name+'/'+rel);compared++;}
+  let provenance=null;
+  if(version===next&&meta.dist.attestations?.url){const bundles=await(await fetch(meta.dist.attestations.url)).json();const statements=[];for(const at of bundles.attestations??[]){if(at.bundle?.dsseEnvelope?.payload){const s=JSON.parse(Buffer.from(at.bundle.dsseEnvelope.payload,'base64'));if(s.predicateType==='https://slsa.dev/provenance/v1'){if(s.subject[0].digest.sha512!==createHash('sha512').update(bytes).digest('hex'))throw Error('statement digest '+name);statements.push(s);}}}provenance={digestMatches:true,cryptographicallyVerified:false,statements};}
+  versions.push({version,sha512,sha1,registrySignatures:signatures,installedFilesCompared:compared,scripts:pkg.scripts??{},dependencies:pkg.dependencies??{},optionalDependencies:pkg.optionalDependencies??{},engines:pkg.engines??{},provenance});
+ }
+ rows.push({name,baseline:versions[0],candidate:versions[1]});console.log('Verified payloads and candidate installed files:',name,versions[1].installedFilesCompared);
+}
+await writeFile(root+'/payload-integrity.json',JSON.stringify(rows,null,2)+'\n');
