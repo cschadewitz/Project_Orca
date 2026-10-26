@@ -276,6 +276,7 @@ const bridge: OrcaBridge = {
     validateInputs: (params) => call("orca:workflows.validateInputs", params),
   },
   agents: { list: (params = {}) => call("orca:agents.list", params) },
+  scopedPermissions: { call: (method, params) => call("orca:scopedPermissions", { method, params }) },
   templates: {
     call: (method, params) => call("orca:templates", { method, params }),
   },

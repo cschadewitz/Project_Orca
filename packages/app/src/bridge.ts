@@ -14,6 +14,7 @@
  * says so. `alerts.update` is the one call in the other direction with nothing to answer:
  * it states what is waiting, and the main process has no verdict to give back.
  */
+import type { ScopedPermissionBridge } from "./scoped-permission-bridge.js";
 import type { TemplateBridge } from "./template-bridge.js";
 import type { WorkflowDraftBridge } from "./workflow-draft-bridge.js";
 import type { DiagnosticsBridge } from "./diagnostics-contract.js";
@@ -420,6 +421,7 @@ export interface OrcaBridge {
   };
   /** Optional until the integration owner registers the typed template IPC dispatcher. */
   templates?: TemplateBridge;
+  scopedPermissions?: ScopedPermissionBridge;
   /** Workflow drafts (#180) for the visual editor. Optional: absent, the workflow viewer stays read-only. */
   workflowDrafts?: WorkflowDraftBridge;
   notifications: {
