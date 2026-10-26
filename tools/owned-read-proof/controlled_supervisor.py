@@ -24,6 +24,7 @@ import uuid
 from run import require_exitkill, run_traced
 from verify import identity
 from controlled_replay import Replay, LIMIT
+from controlled_contract import require
 from controlled_semantics import authenticate_bootstrap
 
 REPO = Path(__file__).resolve().parents[2]
@@ -109,18 +110,18 @@ def runtime_originals(node):
 
 def assert_image_sources(image):
     build = json.loads((image / 'controlled-build.json').read_text())
-    assert build['entry'] == 'controlled-child.mjs' and build['profileRef'] == 'orca-owned-file-read-v1'
+    require(build['entry'] == 'controlled-child.mjs' and build['profileRef'] == 'orca-owned-file-read-v1', 'supervisor retained-original check failed')
     for name, field in [('controlled-child.mjs', 'childSha256'), ('controlled-producer.mjs', 'producerSha256')]:
-        assert digest((image / name).read_bytes()) == build[field]
-    assert (image / 'controlled-child.mjs').read_bytes() == (REPO / 'tools/owned-read-proof/controlled-child.mjs').read_bytes()
+        require(digest((image / name).read_bytes()) == build[field], 'supervisor retained-original check failed')
+    require((image / 'controlled-child.mjs').read_bytes() == (REPO / 'tools/owned-read-proof/controlled-child.mjs').read_bytes(), 'supervisor retained-original check failed')
     for name, expected in build['sources'].items():
-        assert digest((REPO / name).read_bytes()) == expected
+        require(digest((REPO / name).read_bytes()) == expected, 'supervisor retained-original check failed')
         # Repository inputs must match the reviewed producer commit. Dependency
         # bytes remain pinned build inputs, not an independent trust designation.
         if not name.startswith('node_modules/'):
             original = subprocess.run(['git', 'show', SOURCE + ':' + name], cwd=REPO,
                                       capture_output=True, check=True, timeout=5).stdout
-            assert digest(original) == expected
+            require(digest(original) == expected, 'supervisor retained-original check failed')
     return build
 
 
@@ -171,10 +172,17 @@ def bootstrap():
     queries[f'/proc/self/fdinfo/{lifetime}'] = 4096
     query_metadata = {p: [Path(p).stat().st_mode, Path(p).stat().st_uid, Path(p).stat().st_gid]
                       for p in queries}
-    probes = ['/proc/version_signature', '/sys/devices/system/cpu/cpu0/tsc_freq_khz',
-              str(image / 'package.json'), str(root / 'package.json'), '/tmp/package.json']
-    assert all(not Path(p).exists() and not Path(p).is_symlink() for p in probes), 'probe is not originally absent'
+    probes = ['/etc/ld.so.preload', '/proc/version_signature', '/sys/devices/system/cpu/cpu0/tsc_freq_khz',
+              str(image / 'package.json'), str(root / 'package.json'), '/tmp/package.json',
+              str(image / 'node_modules'), str(root / 'node_modules'), '/tmp/node_modules', '/node_modules',
+              str(base / '.node_modules'), str(base / '.node_libraries'), str(Path(node).parent.parent / 'lib/node')]
+    require(all(not Path(p).exists() and not Path(p).is_symlink() for p in probes), 'probe is not originally absent')
     original = {'base': str(base), 'lane': 'bootstrap', 'node': node, 'argv': argv,
+                'supervisorPid': os.getpid(),
+                'readlinks': {p: (os.path.realpath(node) if p == '/proc/self/exe' else
+                    os.readlink(p) if Path(p).is_symlink() else None) for p in (
+                    '/proc/self/exe', '/etc', '/etc/localtime', '/usr', '/usr/share',
+                    '/usr/share/zoneinfo', '/usr/share/zoneinfo/Etc', '/usr/share/zoneinfo/Etc/UTC')},
                 'inheritedUmask': int(re.search(r'^Umask:\s+([0-7]+)$',
                     Path('/proc/self/status').read_text(), re.MULTILINE)[1], 8),
                 'commandFd': command, 'ackFd': ack, 'lifetimeFd': lifetime,
@@ -213,16 +221,16 @@ def bootstrap():
             # The exact retained leader is established before releasing the command.
             retained.write_text(encoded(original))
             for phase in phases:
-                assert phase['token'] not in used_tokens
+                require(phase['token'] not in used_tokens, 'supervisor retained-original check failed')
                 used_tokens.add(phase['token'])
                 data = f"orca-phase:{phase['name']}:{phase['token']}\n".encode()
-                assert os.write(send, data) == len(data)
+                require(os.write(send, data) == len(data), 'supervisor retained-original check failed')
                 log.append({'event': 'sent', **phase})
                 expected = f"orca-done:{phase['name']}:{phase['token']}\n".encode()
                 with selectors.DefaultSelector() as selector:
                     selector.register(receive, selectors.EVENT_READ)
-                    assert selector.select(max(0, deadline - time.monotonic())), 'ack timeout'
-                assert os.read(receive, len(expected)) == expected, 'partial/changed ack'
+                    require(selector.select(max(0, deadline - time.monotonic())), 'ack timeout')
+                require(os.read(receive, len(expected)) == expected, 'partial/changed ack')
                 log.append({'event': 'received', **phase})
         except BaseException as error:
             errors.append(repr(error))
@@ -244,18 +252,18 @@ def bootstrap():
         out_write = err_write = None
         producer_out = os.read(out_read, 65537)
         producer_err = os.read(err_read, 65537)
-        assert len(producer_out) <= 65536 and len(producer_err) <= 65536, 'bounded producer output exceeded'
+        require(len(producer_out) <= 65536 and len(producer_err) <= 65536, 'bounded producer output exceeded')
         report.update(elapsedSeconds=time.monotonic() - started, traceBytes=trace.stat().st_size,
                       returncode=result.returncode, producerStderr=producer_err.decode()[-4000:])
         worker.join(timeout=1)
-        assert not worker.is_alive() and not errors, errors
-        assert result.returncode == 0 and trace.stat().st_size <= LIMIT
-        assert log == [{'event': event, **phase} for phase in phases for event in ('sent', 'received')]
+        require(not worker.is_alive() and not errors, errors)
+        require(result.returncode == 0 and trace.stat().st_size <= LIMIT, 'supervisor retained-original check failed')
+        require(log == [{'event': event, **phase} for phase in phases for event in ('sent', 'received')], 'supervisor retained-original check failed')
         for p, expected in plan['inventory'].items():
-            assert identity(p) == expected['identity'] and stamp(p) == expected['stamp']
-            assert digest(Path(p).read_bytes()) == expected['sha256']
-        assert fd_identity(lifetime) == plan['lifetime']['identity'] == identity(lock)
-        assert re.search(r'FLOCK\s+ADVISORY\s+WRITE ', Path(f'/proc/self/fdinfo/{lifetime}').read_text())
+            require(identity(p) == expected['identity'] and stamp(p) == expected['stamp'], 'supervisor retained-original check failed')
+            require(digest(Path(p).read_bytes()) == expected['sha256'], 'supervisor retained-original check failed')
+        require(fd_identity(lifetime) == plan['lifetime']['identity'] == identity(lock), 'supervisor retained-original check failed')
+        require(re.search(r'FLOCK\s+ADVISORY\s+WRITE ', Path(f'/proc/self/fdinfo/{lifetime}').read_text()), 'supervisor retained-original check failed')
         replay = Replay(original)
         report['kernel'] = replay.run(trace.read_text())
         report['semantic'] = authenticate_bootstrap(replay)

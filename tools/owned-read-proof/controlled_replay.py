@@ -92,6 +92,10 @@ class Handle:
     obj: Object
     flags: set
     position: int = 0
+    directory_seen: set = field(default_factory=set)
+    directory_eof: bool = False
+    query_bytes: bytes = b''
+    physical_bound: bool = False
 
 
 class Replay:
@@ -106,7 +110,9 @@ class Replay:
         self.objects, self.resources, self.marks, self.waits = [], [], [], []
         self.threads, self.settled = {self.leader}, set()
         self.used_paths = set()
+        self.inherited_cloexec = set()
         self.open_intervals, self.descriptor_intervals = [], []
+        self.pending_intervals = []
         self.total_written, self.counts = 0, Counter()
         self.execs = 0
         self.initial = original['immutable']
@@ -204,9 +210,22 @@ class Replay:
             obj.physical = physical
             self.inodes[physical] = obj
         require(obj.physical == physical, 'changed inode/descriptor binding')
+        require(not hasattr(obj, 'directory_inode') or obj.directory_inode == physical[2],
+                'directory-entry inode differs from descriptor identity')
         if stat.S_ISREG(mode):
             require(size == len(obj.data) and links == len(obj.names), 'changed file size/link lineage')
             obj.stats.add(links)
+        if obj.family == 'resource':
+            require(call == 'statx', 'unsupported resource timestamp decoder')
+            times = {}
+            for name in ('mtime', 'ctime', 'btime'):
+                match = re.search(r'stx_' + name + r'=\{tv_sec=(\d+), tv_nsec=(\d+)\}', ', '.join(args))
+                require(match is not None and int(match[2]) < 10**9, 'missing/invalid resource timestamp')
+                times[name] = int(match[1]) * 10**9 + int(match[2])
+            require(not hasattr(obj, 'birth_ns') or obj.birth_ns == times['btime'], 'changed resource birth identity')
+            obj.birth_ns = times['btime']
+            obj.resource_stamps = getattr(obj, 'resource_stamps', set()) | {(
+                os.makedev(*physical[:2]), physical[2], mode, uid, gid, links, size, times['mtime'], times['ctime'])}
 
     def bytes(self, encoded, expected, obj):
         if encoded.endswith('"...'):
@@ -234,6 +253,17 @@ class Replay:
             require(bool(getattr(handle.obj, 'watches', {})) and all(
                 watched.family in {'pipe', 'eventfd'} for watched in handle.obj.watches.values()),
                 'epoll wait on unverified registrations')
+            count = positive_result(record[3])
+            require(count <= 1024, 'epoll wait result exceeds bounded result array')
+            returned = args[1]
+            require(returned.startswith('[') and returned.endswith(']'), 'incomplete epoll result array')
+            entries = list(re.finditer(r'\{events=(EPOLLIN), data=(0x[0-9a-f]+|\d+)\}', returned[1:-1]))
+            require(', '.join(e[0] for e in entries) == returned[1:-1] and len(entries) == count,
+                    'unknown epoll result shape/count')
+            registered = getattr(handle.obj, 'registered_data', {})
+            require(set(registered) == set(handle.obj.watches), 'missing epoll registration data')
+            for entry in entries:
+                require(fd(entry[2]) in registered.values(), 'epoll result data not registered')
             return True
         return False
 
@@ -242,6 +272,7 @@ class Replay:
         records = list(events(text, with_intervals=True))
         for record in records:
             try:
+                self.check_intervals(record)
                 self.event(record)
             except (RuntimeError, KeyError, ValueError, IndexError) as error:
                 raise RuntimeError(f'line {record[4]} {record[1]}: {error}') from error
@@ -367,6 +398,7 @@ class Replay:
                 require(number not in self.handles, 'descriptor factory replacement')
                 obj = Object(family, stat.S_IFIFO | 0o600)
                 obj.watches = {}
+                obj.registered_data = {}
                 self.handles[number] = Handle(obj, set())
             return
         if call == 'openat':
@@ -420,6 +452,9 @@ class Replay:
                         obj = Object(family, meta[0], {path}, uid=meta[1], gid=meta[2])
                         self.query_objects[path] = obj
                 require(obj is not None, 'open without original/create lineage')
+                if stat.S_ISREG(obj.mode) and obj.family not in {
+                        'runtime', 'image', 'original-file', 'lifetime', 'enrollment-witness', 'runtime-query'}:
+                    require(obj.writer_closed, 'private readonly open before writer settlement')
                 if obj.family == 'resource':
                     require(pid == self.leader and obj.writer_closed and
                             flags == {'O_RDONLY', 'O_NONBLOCK', 'O_NOFOLLOW', 'O_CLOEXEC'}, 'resource readonly reopen lineage')
@@ -447,7 +482,7 @@ class Replay:
                 self.paths[path] = obj
                 self.objects.append(obj)
             elif call == 'chmod':
-                require(obj is not None and obj.family == 'credentials-temp' and args[1] == '0600', 'unplanned chmod')
+                require(obj is not None and family == obj.family == 'credentials-temp' and args[1] == '0600', 'unplanned chmod')
             elif call in {'link', 'rename'}:
                 target = self.path(args[1])
                 target_family = self.family(target)
@@ -455,6 +490,7 @@ class Replay:
                     ('sidecar-temp', 'sidecar'), ('credentials-temp', 'credentials'), ('lease-temp', 'lease')}
                 require(obj is not None and (obj.family, target_family) in allowed and obj.writer_closed,
                         'unsupported publication lineage')
+                require(family == obj.family and not obj.published, 'publication source is not the original unpublished temporary')
                 require(str(Path(path).parent) == str(Path(target).parent), 'cross-parent publication')
                 if call == 'link':
                     require(target not in self.paths and (obj.family != 'protected-temp' or obj.synced), 'nonexclusive/unsynced publication')
@@ -465,11 +501,12 @@ class Replay:
                 self.paths[target] = obj
                 obj.names.add(target)
                 obj.published = True
+                obj.publication_entry, obj.publication_completion = entered, completed
                 if call == 'rename':
                     del self.paths[path]
                     obj.names.remove(path)
             elif call == 'unlink':
-                require(obj is not None and obj.family in {'enrollment-witness', 'protected-temp', 'lease-temp', 'lock-token', 'resource'},
+                require(obj is not None and family in {'enrollment-witness', 'protected-temp', 'lease-temp', 'lock-token', 'resource'},
                         'unplanned unlink')
                 if obj.family in {'protected-temp', 'lease-temp'}:
                     require(obj.published and obj.writer_closed and (obj.family != 'protected-temp' or obj.directory_synced),
@@ -488,6 +525,12 @@ class Replay:
         if call in STAT_CALLS:
             if result.startswith('-1 '):
                 require(result.startswith('-1 ENOENT '), 'failed metadata observation')
+                require(not args[0].isdigit(), 'failed descriptor metadata cannot establish physical identity')
+                index = 0 if call in {'stat', 'lstat'} else 1
+                path = self.path(args[index])
+                require(path not in self.paths and path not in self.original['queries'], 'ENOENT contradicts retained/live target')
+                if path not in self.original['absentProbes']:
+                    require(path in self.initial or self.family(path), 'ENOENT target lacks original/planned lineage')
                 return
             require(result == '0', 'unknown metadata result')
             if re.fullmatch(r'\d+', args[0]):
@@ -496,6 +539,7 @@ class Replay:
                 obj = self.handles.get(fd(args[0]))
                 require(obj is not None, 'stat unknown descriptor')
                 self.bind(obj.obj, call, args)
+                obj.physical_bound = True
             else:
                 index = 0 if call in {'stat', 'lstat'} else 1
                 path = self.path(args[index])
@@ -517,11 +561,22 @@ class Replay:
             if args[1] == 'EPOLL_CTL_DEL':
                 require(fd(args[2]) in epoll.obj.watches, 'epoll delete absent registration')
                 del epoll.obj.watches[fd(args[2])]
+                del epoll.obj.registered_data[fd(args[2])]
             else:
+                require((args[1] == 'EPOLL_CTL_ADD' and fd(args[2]) not in epoll.obj.watches) or
+                        (args[1] == 'EPOLL_CTL_MOD' and fd(args[2]) in epoll.obj.watches),
+                        'epoll ADD existing/MOD absent member')
+                registration = re.fullmatch(r'\{events=EPOLLIN, data=(0x[0-9a-f]+|\d+)\}', args[3])
+                require(registration is not None, 'unknown epoll registration shape')
+                data = fd(registration[1])
+                require(data < 2**64 and all(number == fd(args[2]) or value != data
+                        for number, value in epoll.obj.registered_data.items()), 'ambiguous epoll registration data')
                 epoll.obj.watches[fd(args[2])] = target.obj
+                epoll.obj.registered_data[fd(args[2])] = data
             return
         if call == 'epoll_pwait':
-            if entered != completed and self.wait(record):
+            verified = self.wait(record)
+            if entered != completed and verified:
                 self.waits.append(record)
             return
         if call == 'mmap':
@@ -534,6 +589,36 @@ class Replay:
             return
         if call == 'prctl':
             require(args[0] == 'PR_SET_NAME' and result == '0', 'unsupported process control')
+            return
+        if call == 'access':
+            require(args == ['"/etc/ld.so.preload"', 'R_OK'] and
+                    '/etc/ld.so.preload' in self.original['absentProbes'] and
+                    result.startswith('-1 ENOENT '), 'unretained access probe')
+            return
+        if call == 'readlink':
+            path = self.path(args[0])
+            require(path in self.original['readlinks'] and len(args) == 3 and
+                    args[2].isdigit() and 1 <= int(args[2]) <= 8192, 'unretained/unbounded readlink')
+            target = self.original['readlinks'][path]
+            if target is None:
+                require(result.startswith('-1 EINVAL '), 'original nonsymlink readlink changed')
+            else:
+                data = target.encode()
+                require(string(args[1]) == data and result == str(len(data)) and len(data) < int(args[2]),
+                        'original readlink target/count differs')
+            return
+        if call == 'prlimit64':
+            require(len(args) == 4 and args[:1] == ['0'] and args[1] in {
+                    'RLIMIT_STACK', 'RLIMIT_DATA', 'RLIMIT_AS', 'RLIMIT_NOFILE'} and
+                    args[2] == 'NULL' and result == '0' and
+                    re.fullmatch(r'\{rlim_cur=(?:RLIM64_INFINITY|\d+(?:\*1024)?), rlim_max=(?:RLIM64_INFINITY|\d+(?:\*1024)?)\}', args[3]),
+                    'unsupported process limit mutation/query')
+            return
+        if call == 'getcwd':
+            expected = str(Path(self.original['argv'][1]).parent).encode()
+            require(len(args) == 2 and string(args[0]) == expected and args[1].isdigit() and
+                    len(expected) + 1 <= int(args[1]) <= 65536 and result == str(len(expected) + 1),
+                    'changed original cwd/result')
             return
         number = None
         if call in FD_FIRST | {'close'} and args and re.fullmatch(r'(0x[0-9a-f]+|\d+)', args[0]):
@@ -568,6 +653,8 @@ class Replay:
                 if number in {self.lifetime, self.command, self.ack}:
                     require(args[1:] == ['F_SETFD', 'FD_CLOEXEC'] and result == '0' and not self.marks,
                             'unplanned inherited descriptor flag transition')
+                    require(number not in self.inherited_cloexec, 'repeated inherited descriptor flag transition')
+                    self.inherited_cloexec.add(number)
                 else:
                     require(obj.family in {'stdio', 'pipe', 'eventfd', 'epoll'} and args[1] in {'F_GETFL', 'F_SETFD', 'F_SETFL'},
                             'private/resource descriptor control')
@@ -577,12 +664,16 @@ class Replay:
                 return
             if call == 'close':
                 require(result == '0' and number not in {self.lifetime, self.command, self.ack}, 'unplanned inherited/failed close')
+                require(not handle.directory_seen or handle.directory_eof, 'directory handle closed before complete enumeration')
+                if obj.family == 'runtime-query' and next(iter(obj.names)) == f'/proc/self/fdinfo/{self.lifetime}':
+                    self.check_fdinfo(handle.query_bytes)
                 if 'O_WRONLY' in handle.flags:
                     obj.writer_closed = True
                 del self.handles[number]
                 return
             if call in FILE_OPS:
                 if obj.family == 'runtime-query':
+                    require(handle.physical_bound, 'query read lacks per-open physical bind')
                     require(call == 'read' and handle.flags in ({'O_RDONLY', 'O_CLOEXEC'}, {'O_RDONLY'}),
                             'writable/positional query operation')
                     count = positive_result(result)
@@ -591,6 +682,7 @@ class Replay:
                     require(count == len(data) and count <= int(args[2]) <= 65536 and
                             handle.position + count <= limit, 'query bytes/count bound')
                     handle.position += count
+                    handle.query_bytes += data
                     return
                 if obj.family in {'pipe', 'eventfd', 'stdio'}:
                     require(call in {'read', 'write', 'writev'} and (result.startswith('-1 EAGAIN ') or
@@ -600,7 +692,7 @@ class Replay:
                 if call in {'read', 'pread64'}:
                     require('O_RDONLY' in handle.flags, 'read on writer')
                     count = positive_result(result)
-                    offset = int(args[3]) if call == 'pread64' else handle.position
+                    offset = positive_result(args[3]) if call == 'pread64' else handle.position
                     require(count <= int(args[2]), 'read larger than requested')
                     expected = obj.data[offset:offset + int(args[2])]
                     require(count == len(expected), 'read count differs from original bytes')
@@ -613,11 +705,13 @@ class Replay:
                                 'noncanonical resource read')
                         require(len(self.marks) == 1, 'resource read outside bootstrap phase')
                         obj.reads = getattr(obj, 'reads', []) + [expected]
+                        obj.effect_entries = getattr(obj, 'effect_entries', []) + [entered]
                 elif call == 'write':
                     require('O_WRONLY' in handle.flags and not obj.writer_closed and obj.names, 'write without original writer')
                     data = string(args[1])
                     require(args[2] == result == str(len(data)), 'partial/truncated write')
                     obj.data += data
+                    obj.synced = False  # A prior fsync cannot settle later appended bytes.
                     obj.writes += 1
                     self.total_written += len(data)
                     require(len(obj.data) <= 65536 and self.total_written <= 16 * 1024 * 1024, 'mutable byte bound exceeded')
@@ -629,7 +723,11 @@ class Replay:
                             if item.published and any(str(Path(p).parent) in obj.names for p in item.names):
                                 item.directory_synced = True
                 elif call == 'getdents64':
-                    require(stat.S_ISDIR(obj.mode) and result.isdigit(), 'directory enumeration of non-directory')
+                    require(stat.S_ISDIR(obj.mode) and len(obj.names) == 1 and
+                            next(iter(obj.names)).startswith(self.base + '/') and result.isdigit() and
+                            args[2].isdigit() and 0 <= int(result) <= int(args[2]) <= 65536,
+                            'unbounded/unretained directory enumeration')
+                    self.directory_entries(handle, args[1], int(result))
                 elif call == 'lseek':
                     require(obj.family == 'runtime' and args[2] in {'SEEK_SET', 'SEEK_CUR', 'SEEK_END'}, 'unmodeled positional effect')
                     position = int(args[1]) + {'SEEK_SET': 0, 'SEEK_CUR': handle.position, 'SEEK_END': len(obj.data)}[args[2]]
@@ -641,10 +739,109 @@ class Replay:
         # Only these explicitly reviewed non-file/process-namespace syscalls have
         # no descriptor/path action in this replay. Unknown supported effects are
         # not silently inherited from the candidate vocabulary.
-        require(call in {'access', 'arch_prctl', 'brk', 'capget', 'exit', 'exit_group', 'getcwd',
+        require(call in {'arch_prctl', 'brk', 'capget', 'exit', 'exit_group',
                 'getegid', 'geteuid', 'getgid', 'getpid', 'getppid', 'getrandom', 'gettid', 'getuid',
-                'madvise', 'mprotect', 'munmap', 'mremap', 'prlimit64', 'rseq', 'rt_sigaction',
+                'madvise', 'mprotect', 'munmap', 'mremap', 'rseq', 'rt_sigaction',
                 'rt_sigprocmask', 'rt_sigreturn', 'sched_getaffinity', 'sched_getparam',
                 'sched_getscheduler', 'sched_yield', 'set_robust_list', 'set_tid_address',
-                'uname', 'clock_gettime', 'clock_nanosleep', 'nanosleep', 'gettimeofday', 'readlink'},
+                'uname', 'clock_gettime', 'clock_nanosleep', 'nanosleep', 'gettimeofday'},
                 'unclassified supported syscall effect')
+
+    def directory_entries(self, handle, encoded, count):
+        require(encoded.startswith('[') and encoded.endswith(']'), 'truncated directory entries')
+        body = encoded[1:-1]
+        pattern = r'\{d_ino=(\d+), d_off=(\d+), d_reclen=(\d+), d_type=(DT_DIR|DT_REG), d_name=("(?:[^"\\]|\\.)*")\}'
+        entries = list(re.finditer(pattern, body))
+        require(', '.join(e[0] for e in entries) == body and
+                sum(int(e[3]) for e in entries) == count, 'unknown directory entry fields/count')
+        parent = next(iter(handle.obj.names))
+        if count == 0:
+            expected = {'.', '..'} | {Path(p).name for p in self.paths if str(Path(p).parent) == parent}
+            require(handle.directory_seen == expected, 'directory EOF omits retained/created entries')
+            handle.directory_eof = True
+        for entry in entries:
+            name = string(entry[5]).decode()
+            require(name and '/' not in name and name not in handle.directory_seen,
+                    'repeated/noncanonical directory entry')
+            path = parent if name == '.' else str(Path(parent).parent) if name == '..' else parent + '/' + name
+            item = self.paths.get(path)
+            require(item is not None and stat.S_IFMT(item.mode) ==
+                    (stat.S_IFDIR if entry[4] == 'DT_DIR' else stat.S_IFREG), 'directory entry lacks original/create lineage')
+            inode = int(entry[1])
+            require(item.physical is None or item.physical[2] == inode, 'directory entry inode alias')
+            require(not hasattr(item, 'directory_inode') or item.directory_inode == inode, 'changed directory-entry inode')
+            item.directory_inode = inode
+            handle.directory_seen.add(name)
+
+    def check_fdinfo(self, data):
+        text = data.decode('ascii')
+        lifetime = self.handles.get(self.lifetime)
+        require(lifetime is not None and lifetime.obj.family == 'lifetime', 'missing original lifetime descriptor')
+        device_major, device_minor, inode = lifetime.obj.physical
+        expected = (rf'lock:\s+\d+: FLOCK\s+ADVISORY\s+WRITE {self.original["supervisorPid"]} '
+                    rf'{device_major:02x}:{device_minor:02x}:{inode} 0 EOF')
+        require(re.search(rf'^ino:\s+{inode}$', text, re.MULTILINE) and
+                re.search('^' + expected + '$', text, re.MULTILINE), 'fdinfo lacks original supervisor flock/inode')
+        flags = re.search(r'^flags:\s+([0-7]+)$', text, re.MULTILINE)
+        require(flags is not None and int(flags[1], 8) & os.O_ACCMODE == os.O_RDWR and
+                int(flags[1], 8) & os.O_CLOEXEC, 'fdinfo original lifetime flags differ')
+
+    def check_intervals(self, record):
+        """No shared-table entry-order inference across overlapping mutations.
+
+        Track FD numbers even after close, plus current object aliases and exact
+        namespace paths. Unrelated read-only operations may overlap. Persistent
+        epoll waits remain visible and conflict with close/registration changes.
+        """
+        pid, call, args, result, entered, completed = record
+        entities, paths = set(), set()
+        mutating = call in {'close', 'fcntl', 'ioctl', 'write', 'writev', 'read', 'readv',
+                           'lseek', 'epoll_ctl', 'mkdir', 'rmdir', 'unlink', 'link', 'rename', 'chmod'}
+        object_mutating = call in {'write', 'writev', 'mkdir', 'rmdir', 'unlink', 'link', 'rename', 'chmod'}
+        path_mutating = call in {'mkdir', 'rmdir', 'unlink', 'link', 'rename', 'chmod'}
+        if result.startswith('-1 '):
+            object_mutating = path_mutating = False
+        def descriptor(value):
+            number = fd(value)
+            entities.add(('fd', number))
+            if number in self.handles:
+                entities.add(('object', id(self.handles[number].obj)))
+        if call in FD_FIRST | {'close'} and args and re.fullmatch(r'(0x[0-9a-f]+|\d+)', args[0]):
+            descriptor(args[0])
+        if call == 'epoll_ctl':
+            descriptor(args[2])
+        if call == 'mmap' and args[4] != '-1':
+            descriptor(args[4])
+        if call == 'openat':
+            paths.add(self.path(args[1]))
+            path_mutating = not result.startswith('-1 ') and bool(
+                set(args[2].split('|')) & {'O_CREAT', 'O_TRUNC'})
+            object_mutating = path_mutating
+            if result.isdigit():
+                descriptor(result)
+                mutating = True  # Descriptor acquisition, including readonly opens.
+        elif call in {'pipe2', 'eventfd2', 'epoll_create1'} and not result.startswith('-1 '):
+            for value in args[0].strip('[]').split(', ') if call == 'pipe2' else [result]:
+                descriptor(value)
+            mutating = True
+        elif call in {'mkdir', 'rmdir', 'unlink', 'link', 'rename', 'chmod', 'stat', 'lstat', 'readlink', 'access'}:
+            paths.add(self.path(args[0]))
+            if call in {'link', 'rename'}:
+                paths.add(self.path(args[1]))
+        elif call in {'statx', 'newfstatat'} and not args[0].isdigit():
+            paths.add(self.path(args[1]))
+        for path in paths:
+            if path in self.paths:
+                entities.add(('object', id(self.paths[path])))
+        self.pending_intervals = [p for p in self.pending_intervals if p[1] >= entered]
+        for start, end, other_pid, other_mutating, other_object_mutating, other_path_mutating, other_entities, other_paths in self.pending_intervals:
+            related_paths = any(a == b or a.startswith(b + '/') or b.startswith(a + '/')
+                                for a in paths for b in other_paths)
+            shared = entities & other_entities
+            conflict = ((mutating or other_mutating) and any(k[0] == 'fd' for k in shared) or
+                        (object_mutating or other_object_mutating) and any(k[0] == 'object' for k in shared) or
+                        (path_mutating or other_path_mutating) and related_paths)
+            require(not (pid != other_pid and conflict), 'ambiguous shared descriptor/path interval')
+        if completed > entered and (entities or paths):
+            self.pending_intervals.append((entered, completed, pid, mutating, object_mutating,
+                                           path_mutating, entities, paths))

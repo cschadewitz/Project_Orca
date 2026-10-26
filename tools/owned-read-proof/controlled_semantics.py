@@ -4,6 +4,7 @@ from datetime import datetime
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -33,6 +34,18 @@ def decode(name, data, key):
                  f'orca:protected-execution:v1:private-execution:{name}'.encode()))
 
 
+def designated_credentials(credentials):
+    require(type(credentials) is list and len(credentials) == 2, 'expected exactly two credential records')
+    require(all(type(v) is dict and type(v.get('principal')) is str and type(v.get('id')) is str
+                for v in credentials), 'malformed designated credential identity')
+    require(len({v['principal'] for v in credentials}) == 2 and len({v['id'] for v in credentials}) == 2,
+            'duplicate credential principal or ID')
+    actors = {v['principal']: v for v in credentials}
+    require(set(actors) == {'controlled-test-operator', 'controlled-test-reviewer'} and
+            all('revokedAt' not in v for v in credentials), 'wrong designated test credentials')
+    return actors
+
+
 def authenticate_bootstrap(replay):
     original, paths = replay.original, replay.paths
     base = original['base']
@@ -49,12 +62,12 @@ def authenticate_bootstrap(replay):
             require(update['stepRunId'] == 'controlled-step' and update['sessionId'] == 'controlled-session', 'wrong semantic principal scope')
             semantic = parse(update['update']['text'])
             require(semantic['kind'] not in records, 'duplicate bootstrap semantic kind')
-            records[semantic['kind']] = (unquote(Path(path).name[:-13]), semantic['value'])
+            records[semantic['kind']] = (unquote(Path(path).name[:-13]), semantic['value'], obj)
     require(set(records) == {'controlled-baseline-v1', 'controlled-capture-v1',
             'controlled-authorization-v1', 'controlled-producer-observation-v1'}, 'missing/unknown bootstrap semantics')
     baseline = records['controlled-baseline-v1'][1]
     capture = records['controlled-capture-v1'][1]
-    authorization_ref, authorization = records['controlled-authorization-v1']
+    authorization_ref, authorization, authorization_object = records['controlled-authorization-v1']
     action = capture['action']
     require(baseline['originalAction'] == action == authorization['action'], 'original action/authentication binding differs')
     require(action['profileRef'] == action['capturedByBoundaryId'] == 'orca-owned-file-read-v1' and
@@ -69,8 +82,12 @@ def authenticate_bootstrap(replay):
     parameters = parse(capture['bytes'])
     require(len(parameters) == 5 and parameters[0] == 'orca-owned-file-read-v1' and
             parameters[3:] == [original['offset'], original['length']], 'captured original interval differs')
+    uuid = r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
+    require(type(parameters[1]) is str and re.fullmatch('owned-file:' + uuid, parameters[1]) and
+            type(parameters[2]) is str and parameters[2].startswith(parameters[1] + ':'), 'missing original resource prefix')
     physical = parameters[2].removeprefix(parameters[1] + ':').split(':')
-    require(len(physical) == 9 and list(map(int, physical[:7])) ==
+    require(len(physical) == 9 and all(re.fullmatch(r'0|[1-9][0-9]*', part) for part in physical) and
+            tuple(map(int, physical)) in resource.resource_stamps and list(map(int, physical[:7])) ==
             [os.makedev(*resource.physical[:2]), resource.physical[2], resource.mode,
              resource.uid, resource.gid, 0, len(resource.data)], 'captured resource physical identity differs')
     require(action['resources'] == {'state': 'complete', 'value': [
@@ -83,6 +100,17 @@ def authenticate_bootstrap(replay):
     rules = baseline['rules']
     require(len(rules) == 1, 'bootstrap baseline rule count')
     rule = rules[0]
+    expected_match = {key: invocation[key] for key in ('principalRef', 'agentId', 'hostId', 'runnerId')}
+    expected_match.update(operation='fs.readOwnedBytes', profileRef='orca-owned-file-read-v1',
+        coverageId=action['coverage']['coverageId'], effectiveCwd=action['effectiveCwd']['value'],
+        workspaceRef=action['workspaceRef']['value'], resources=action['resources']['value'], environmentAndCredentialRefs=[])
+    require(rule['match'] == expected_match and rule['expiresAt'] == action['expiresAt'] == baseline['expiresAt'],
+            'bootstrap rule applicability/expiry differs')
+    require(baseline['capturedCeiling'] == {'operation': 'fs.readOwnedBytes', 'profileRef': 'orca-owned-file-read-v1',
+            'resourceRef': parameters[1], 'maximumInvocations': 2}, 'wrong original bootstrap ceiling')
+    require(action['bindingRef'] == 'synthetic-read:' + action['actionId'] + ':action' and
+            records['controlled-capture-v1'][0] == 'capture:' + action['bindingRef'] and
+            authorization_ref == 'synthetic-read:' + action['actionId'] + ':evidence', 'wrong original capture/authorization references')
     encoded = json.dumps({k: v for k, v in rule.items() if k != 'ruleRevision'}, separators=(',', ':'), ensure_ascii=False)
     require(rule['ruleId'] == 'controlled-bootstrap-only' and rule['decision'] == 'allow' and
             rule['status'] == 'approved' and rule['ruleRevision'] == hashlib.sha256(encoded.encode()).hexdigest(), 'bootstrap rule binding')
@@ -95,12 +123,23 @@ def authenticate_bootstrap(replay):
             records['controlled-producer-observation-v1'][1] == {'actionId': action['actionId'],
             'authorizationRef': authorization_ref}, 'authorization/effect correlation differs')
     credentials = parse(paths[base + '/credentials.json'].data)['credentials']
-    actors = {v['principal']: v for v in credentials}
-    require(set(actors) == {'controlled-test-operator', 'controlled-test-reviewer'} and
-            len({v['id'] for v in credentials}) == 2 and all('revokedAt' not in v for v in credentials), 'wrong designated test credentials')
+    actors = designated_credentials(credentials)
     actor = baseline['operator']['actor']
     require(actor == {'principalId': 'controlled-test-operator',
             'credentialId': actors['controlled-test-operator']['id']}, 'baseline actor/credential differs')
+    for principal, permissions in [('controlled-test-operator', {'permissions.grant', 'inputs.answer'}),
+                                    ('controlled-test-reviewer', {'permissions.grant'})]:
+        credential = actors[principal]
+        require(type(credential['permissions']) is list and len(credential['permissions']) == len(permissions) and
+                set(credential['permissions']) == permissions and credential['scope'] == {'workflows': '*', 'runs': 'all'},
+                'credential permissions/scope differ from designation')
+        created = datetime.fromisoformat(credential['createdAt'].replace('Z', '+00:00')).timestamp()
+        require(created <= resource.birth_ns / 10**9, 'credential created after original resource')
+        if 'expiresAt' in credential:
+            require(datetime.fromisoformat(credential['expiresAt'].replace('Z', '+00:00')).timestamp() >
+                    original['finishedWallTime'], 'credential expired during original execution')
+    require(baseline['operator']['credential'] == {k: v for k, v in actors['controlled-test-operator'].items()
+            if k != 'secretSha256'}, 'authenticated public credential snapshot differs')
     lease = parse(paths[base + '/workspace/.orca/leases/run%3Acontrolled.json'].data)
     require(lease['host'] == '\0orca-guarded-lease' and lease['ttlMs'] == 9007199254740991 and
             lease['guardedTtlMs'] == 60000 and lease['pid'] == original['leaderPid'],
@@ -109,7 +148,10 @@ def authenticate_bootstrap(replay):
     require(baseline['lease'] == logical_lease, 'authenticated lease differs from actual guarded lease')
     require(not any(path.endswith('controlled.jsonl') for path in paths), 'bootstrap produced live-answer journal')
     expiry = datetime.fromisoformat(action['expiresAt'].replace('Z', '+00:00')).timestamp()
-    require(original['startedWallTime'] <= original['finishedWallTime'] < expiry <= original['startedWallTime'] + 60,
+    require(original['startedWallTime'] <= original['finishedWallTime'] < expiry <= resource.birth_ns / 10**9 + 55,
             'bootstrap expiry outside original bounded execution')
+    require(authorization_object.publication_completion < min(resource.effect_entries) and
+            records['controlled-producer-observation-v1'][2].creation_entry > max(resource.effect_entries),
+            'authorization/effect/observation publication order differs')
     return {'record': 'authenticated-bootstrap-correlations', 'authority': 'none',
             'authorizationRef': authorization_ref, 'actionId': action['actionId'], 'semanticRecords': len(records)}

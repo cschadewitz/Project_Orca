@@ -43,3 +43,15 @@ class AuthenticationControls(unittest.TestCase):
     def test_duplicate_json_keys_refuse(self):
         with self.assertRaisesRegex(RuntimeError, 'duplicate'):
             parse('{"kind":"original","kind":"replacement"}')
+
+class CredentialIdentityControls(unittest.TestCase):
+    def test_exact_two_distinct_designated_credentials(self):
+        from controlled_semantics import designated_credentials
+        original = [{'principal': 'controlled-test-operator', 'id': 'operator'},
+                    {'principal': 'controlled-test-reviewer', 'id': 'reviewer'}]
+        self.assertEqual(len(designated_credentials(original)), 2)
+        for records in [original + [dict(original[0], id='extra')],
+                        [original[0], dict(original[0], id='extra')],
+                        [original[0], dict(original[1], id='operator')], [], original[:1]]:
+            with self.subTest(records=records), self.assertRaises(RuntimeError):
+                designated_credentials(records)

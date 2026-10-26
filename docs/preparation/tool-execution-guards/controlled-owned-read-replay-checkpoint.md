@@ -19,7 +19,7 @@ Python `cryptography` is required for independent AES-GCM record authentication.
 Actual fresh run `/tmp/orca-controlled-replay-plotdte2` returned producer exit 0
 in 3.986750748 seconds, with 108973199 trace bytes and SHA-256
 `f8c46762f1e417b0371d80b3e5fab4c50e08b2adc6e4859221837e87ff91d9f0`.
-The current draft reconstructs one four-byte resource pread at offset 2, bytes
+The prior draft at `9aeb6de` reconstructed one four-byte resource pread at offset 2, bytes
 `73706f73` (`spos`), exclusive writer/readonly reopen/unlink/close, 12 settled
 threads, and the modeled finite private publication sequence. Four protected
 bootstrap records independently decrypt/authenticate and correlate the original
@@ -48,10 +48,42 @@ independent observer readonly/no-follow descriptor plus final name/bytes checks.
 This supplemental physical-observation rule needs source review; it is not a
 producer-supplied inode claim or a generic private-root exception.
 
+## Review follow-up: stricter checks, still no acceptance
+
+The observer now requires exactly two credential records with distinct principals
+and credential IDs. Every epoll wait, including completed one-line records,
+checks its actual epoll object, registrations, result array/count and event data.
+ADD-existing and MOD-absent refuse. Query handles require a successful per-open
+physical stat, even when the exact query path/object was seen earlier. The
+original candidate verifier remains unchanged.
+
+This stricter query rule exposes missing physical observations in the preserved
+actual trace: `/proc/self/cgroup`, `/sys/fs/cgroup//memory.max`,
+`/sys/fs/cgroup//memory.high`, `/proc/meminfo` and some lifetime-fdinfo reads have
+no per-open fstat. Consequently the historical partial result above is **not a
+passing result under the current model**. A producer/observer observation change
+or a separately reviewed query contract is needed; no path-only exception is
+added. The pinned image and all raw traces remain intact. The producer's separate
+review/fix work may change its source pin, so final installed runs must be fresh.
+
+The follow-up suite has 62 passing tests; new synthetic fixtures are grammar or
+negative controls, never service acceptance. Other local audit changes check
+retained readlink/access probes, readonly process
+limit queries, complete known directory entries and EOF, inherited CLOEXEC
+transitions, actual fdinfo supervisor/flock identity, shared FD/path intervals
+including FD-number reuse, and immutable temporary publication source identity.
+Supervisor checks now use unconditional refusals rather than Python `assert`,
+with an optimized-Python negative control. Semantic checks additionally bind rule
+applicability, public credential permissions/scope, full nine-component resource
+identity and prefix, original references, 55-second resource-lifetime ceiling and
+authorization/effect publication order. These rules still need exact-head actual
+coverage and review; they do not release a connected token.
+
 ## Remaining gate — do not use this draft as acceptance
 
-* Finish explicit argument/result validation for currently vocabulary-only
-  `access`, `readlink`, `prlimit64`, process controls and directory enumeration.
+* Finish process-control argument/result auditing and exercise the stricter
+  probe/directory rules against fresh actual evidence once physical query
+  observations are available.
 * Complete shared-descriptor interval/alias audit, failed path-stat handling,
   fdinfo flock-content checks, epoll registration/result correlation and negative
   publication controls. The whole raw trace remains preserved and parsed.
