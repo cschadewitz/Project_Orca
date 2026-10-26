@@ -133,7 +133,9 @@ test asserts that every Claude and cross-provider #713 vector is consumed.
 ## Sanitized evidence format and assessment
 
 Receipts have closed keys (`seq`, `stage`, `level`, `sourceRef`, plus `callRef`,
-`invocationRef`, `outcome`, `reason`, `generation`, `bindingRef`). Every value is a
+`invocationRef`, `outcome`, `reason`, `generation`, `bindingRef`, and since the
+[classification follow-up](#evidence-classification-follow-up) `runRef`, `actionRef`,
+`cwdRef`). Every value is a
 short token matching `^[a-z0-9][a-z0-9:._-]{0,63}$`, and each stage has a closed
 outcome list. Limits: 12 KiB per row, 256 KiB per transport and a 4 KiB hook frame.
 
@@ -147,7 +149,11 @@ The assessor never returns GO:
   run it is only `SYNTHETIC-VIOLATION-DETECTED`.
 - `REVIEW-CANDIDATE` requires all of: every receipt installed-observed, complete
   installed provenance, a checked cached repeat and a blocked post-revocation call.
-  Even then a human must review it.
+  Even then a human must review it. It means structurally reviewable supplied rows,
+  not a completed experiment: "checked" accepts any decision, the rows are not
+  validated and nothing is authenticated, so a deny-only sequence reaches it. See
+  [the follow-up](#evidence-classification-follow-up) for the separate completion
+  outcome.
 - Everything else is `UNKNOWN`, including the empty installed record, mixed-level
   receipts and receipts relabelled as installed without complete provenance. The
   relabelling exists only inside the test, to show that the gate is reachable.
@@ -173,9 +179,13 @@ Each item needs its own explicit authorization (PLAN "Authorization needed later
 6. The PLAN budget (one session, at most ten minutes, three typed then three shell
    actions, one outstanding, two-second checker deadline, no retries). The typed
    row runs first.
-7. Installed receipts written in this format to `installed-observations.json`, with
-   provenance facts promoted to `installed-observed` by reference only. Private
-   values stay in protected storage.
+7. Installed receipts written in this format, inside the
+   `orca.claude-qualification-experiment/1` envelope, to `installed-observations.json`,
+   with provenance facts promoted to `installed-observed` by reference only. Private
+   values stay in protected storage. The run must also record the independent
+   counter's per-call `effect-check` reading, not only the producer's `effect-observed`
+   row, and a way to authenticate those rows has to exist before any of it can count
+   as verified (see below).
 
 Crash, timeout, cancellation and replay negatives need a further bounded
 authorization, and none may run on a production session.
@@ -233,3 +243,153 @@ Not run:
 - Hooks, settings or network judges.
 
 #704 and #705 stay open. #594 unsupported mode and ownership are unchanged.
+
+## Evidence classification follow-up
+
+26 October 2026, on `main` at `890eb71`. The harness, its fixtures and this document
+were unchanged on `main` since #745 (`39ef58c`). The #745 integration note and the
+#704 status comment both said the supplied-reference classifier and the
+`REVIEW-CANDIDATE` assessor are not receipt authentication or a complete experiment
+validator. This follow-up reproduces those limits, keeps the merged meaning, and adds
+a separate, explicit completion outcome. **Claude remains UNKNOWN. Installed
+observations: NONE.** Nothing here installs a hook, launches Claude or authenticates
+anything.
+
+### What the merged code did (reproduced before editing)
+
+A temporary block appended to the merged test file (then removed) printed:
+
+| Input | Merged result |
+| --- | --- |
+| Fifteen installed facts, each `complete` / `installed-observed` with a ref that names no receipt (the installed record has zero) | `classifyProvenance(...).complete === true` |
+| The same, with one shared ref `producer-ok` and `producerSuccess: true` on every fact | `complete === true` |
+| Six installed-labelled rows: a cached call denied, a revocation, a second call denied; no allow and no effect anywhere | `assess` → `REVIEW-CANDIDATE`, no violations |
+| Those rows with an extra key carrying a path (`validReceipt` is false for every row) | `REVIEW-CANDIDATE` |
+| Those rows with the last row replayed | `REVIEW-CANDIDATE` |
+| A third call after revocation that is allowed and produces an effect, with a self-reported `gen-1` | `REVIEW-CANDIDATE`, no violations |
+
+So `installedFact` checks the shape of a supplied reference, not that it is
+authentic, and `REVIEW-CANDIDATE` means "structurally reviewable": a cached dispatch
+reached *some* decision and a later call was blocked. It never meant that the
+allow → cached repeat → revoke experiment completed. Both are kept as they are, and
+the deny-only case is now pinned by a test that names it.
+
+### Four separate questions
+
+| Question | Answered by | Possible answers |
+| --- | --- | --- |
+| Is this source/offline simulation? | `classifyExperiment(...).tier` | `simulation` (every row below installed-observed), `mixed`, `malformed`, `none`, or `supplied-structurally-valid` |
+| Is supplied evidence structurally valid? | The `orca.claude-qualification-experiment/1` envelope plus `validReceipt` on every row | `MALFORMED-EVIDENCE` otherwise |
+| Is the provenance independently verified? | `provenanceAuthenticity(manifest)` | `shape` complete or incomplete; `authenticity` is always `unverified` (`no-receipt-authenticator`) |
+| Did the intended experiment complete? | `classifyExperiment(...).sequence` | `complete`, `incomplete`, `failed` or `inconsistent`, with reasons |
+
+No mechanism in the repository authenticates a supplied Claude receipt or
+installed-fact reference, so **no attestor is invented**. A receipt string, a
+`sourceRef`, a "signed"/"verified" field or a producer success boolean does not count
+as independent proof. Extra fields like these do not fit the closed formats, so they
+are `MALFORMED-EVIDENCE`. The provenance tier "independently verified" therefore
+cannot be reached today.
+
+### The experiment envelope and outcomes
+
+`evidence-format.json` gains an `experiment` section. A run header names `runRef`,
+`provider`, `tool`, `providerVersion`, `adapterVersion`, `actionRef` and `cwdRef`.
+Every receipt carries the header's `runRef`, and dispatch, decision and tool-start
+rows also carry `actionRef` and `cwdRef`. The format also gains an `effect-check`
+stage (`changed`/`unchanged`): the independent counter's per-call reading, kept apart
+from the producer's `effect-observed` row. These additions are additive. Every row
+valid under the merged key and stage sets is still valid, and the 89 merged tests pass
+unchanged. The synthetic emitter now writes the new labels and readings.
+
+`classifyExperiment(record, manifest)` returns one outcome. Every outcome carries
+`route: "UNKNOWN"`, and none of them is a GO or a qualification:
+
+| Outcome | When |
+| --- | --- |
+| `NO-EVIDENCE` | No receipts (the current installed record) |
+| `MALFORMED-EVIDENCE` | Envelope or any row fails the closed format |
+| `SIMULATION-ONLY` | Every row is below installed-observed. `sequence` still describes the synthetic run |
+| `INCONSISTENT-EVIDENCE` | Mixed levels; another run; provider, tool, version, action or cwd mismatch at dispatch or decision; duplicate, replayed or physically reordered rows; a reused invocation; a replay dispatch; extra calls or stages; generations that disagree with the revocation; `synthetic:` rows labelled installed |
+| `EXPERIMENT-FAILED` | Every merged `assess` violation, plus: a start or effect after a denial, an allow after revocation (whatever generation it reports), a counter change the receipts do not report, or a started action/cwd that differs from the checked one |
+| `EXPERIMENT-INCOMPLETE` | A required stage is missing or out of order, with no violation (deny-only is here) |
+| `PROVENANCE-INCOMPLETE` | The sequence is complete, but the installed-fact manifest is not shape-complete |
+| `EXPERIMENT-COMPLETE-PROVENANCE-UNVERIFIED` | Structurally complete supplied experiment with a shape-complete manifest. Still unverified, still UNKNOWN |
+
+The outcomes are checked in the table's order. The merged `assess` result is returned
+alongside as `review`, so a failed experiment keeps its `NO-GO-CANDIDATE` findings for
+human review and is not reported as a success.
+
+A complete sequence must contain exactly this, in order:
+
+1. A first call: a `new` dispatch reaches the hook, ORCA allows it (decision and hook
+   response), native asks once, the tool starts, and both the producer's effect row and
+   the independent counter (`changed`) show the harmless effect.
+2. An identical repeat: a `cached` dispatch with no native ask still reaches the hook,
+   ORCA allows it, and both the effect row and the counter show the effect.
+3. One revocation after the repeat finishes.
+4. One identical `cached` call with no native ask that reaches the hook, where ORCA
+   denies it (decision and hook response) and the counter reads `unchanged`. A block by
+   a fresh native ask, a crashed checker or a missing reading does not count.
+
+Pre-revocation decisions must carry a generation different from the revocation's, and
+the post-revocation decision must carry the revocation's. A counter reading whose
+`sourceRef` equals the decision's or the hook response's is not counted as
+independent. Even a distinct `sourceRef` is only a claim until rows can be
+authenticated.
+
+### Negative controls (synthetic harness rows, not installed behaviour)
+
+Each control relabels the synthetic main experiment's rows as a hypothetical supplied
+record (never persisted), changes one thing, and asserts the outcome and reason. The
+controls are: deny-only; a missing cached repeat; a natively asked repeat; a repeat
+allowed without an effect; an "allow" that was really a hook timeout; a missing
+revocation; a missing post-revocation call; a missing independent reading; a block
+after a fresh native ask; a block by a crashed checker; a counter sharing the
+decision's source; duplicated rows (identical `seq`) and replayed rows (renumbered
+copies); a reused invocation; a replay dispatch; another run's row; provider, tool,
+CLI-version and adapter-version mismatch; action and cwd mismatch; a generation
+disagreement; physically reordered rows; a revocation moved before the repeat; an
+effect moved before its decision; mixed levels; `synthetic:` rows relabelled
+installed; an unscripted stage; an effect after denial; an unreported counter change;
+an allow and effect after revocation under a self-reported new generation; action or
+cwd changed between check and start; a cached repeat that skips the hook; and malformed
+envelopes and rows (unknown key, path value, string `seq`, missing `runRef` or
+binding, missing header key, wrong format, non-list receipts, `null` record or row).
+Every synthetic protocol scenario and failure-matrix case is also asserted to classify
+as `SIMULATION-ONLY`, except the unprotected-configuration preflight, which emits no
+rows and is `NO-EVIDENCE`.
+
+### Red/green
+
+Red: the reproduction table above, on merged `main`. Green:
+`tools/test/claude-qualification-704.test.js` has 140 tests passing (89 merged plus
+51 new). Each temporary mutation below turned the named tests red, and restoring the
+file turned all 140 green again:
+
+| Mutation | Tests that failed |
+| --- | --- |
+| Completion uses the merged "checked" rule (any decision) | Deny-only (pinned and control), repeat without an effect, allow-was-a-timeout (4) |
+| Allow-after-revocation check removed | The self-reported new-generation control (1) |
+| Effect-after-denial check removed | The effect-after-denial control (1) |
+| Synthetic rows classified as supplied | The 16 scenarios that emit rows, all 20 failure-matrix cases and the main-experiment test (37) |
+| Row `runRef` not compared with the header | The another-run control (1) |
+| A shape-complete manifest treated as authenticated | Main experiment, complete supplied sequence, receipt strings (3) |
+| Independent post-revocation reading not required | The missing-reading control (1) |
+| Duplicate stage within a call ignored | The renumbered replay control (1) |
+| Rows not passed through `validReceipt` | Unknown key, path value, string `seq` and the authenticity-claims test (4) |
+
+### Limitations and what the installed experiment still needs
+
+- Everything above runs on synthetic or hypothetical rows. No installed Claude
+  behaviour was observed, and the installed record is still `NONE` (`NO-EVIDENCE`).
+- Row authenticity is not established anywhere. Even a perfect supplied record stops at
+  `EXPERIMENT-COMPLETE-PROVENANCE-UNVERIFIED`. Reaching a verified tier needs a
+  separately designed and reviewed mechanism (for example protected-owner custody of
+  the counter and hook transport) that this follow-up does not invent.
+- Version and tool identity are checked against the candidate pins in the run header.
+  They are not checked against installed artifacts, which remain unknown.
+- `classifyProvenance`/`installedFact` and `assess` keep their merged behaviour and
+  must not be used alone as acceptance.
+- The installed experiment still needs every prerequisite listed above, each under its
+  own authorization. It must also record per-call independent `effect-check`
+  readings and emit the experiment envelope.

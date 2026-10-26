@@ -255,6 +255,244 @@ function assess(receipts, provenanceComplete) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Layered classification. `assess` keeps its merged meaning: REVIEW-CANDIDATE says supplied rows are
+// structurally reviewable (a cached dispatch reached any decision, a later call was blocked). It does
+// not validate rows, authenticate them or say the experiment completed; a deny-only run reaches it.
+// `classifyExperiment` is the separate, explicit answer to "did the intended experiment complete?".
+
+const EXPERIMENT = format.experiment;
+const UNATTRIBUTED_STAGES = new Set(["revocation", "config-mutation"]);
+/** Stages the experiment script can produce for a call; anything else is not this experiment. */
+const CALL_STAGES = new Set([
+  "native-dispatch",
+  "hook-invoked",
+  "hook-response",
+  "orca-decision",
+  "native-ask",
+  "native-continued",
+  "permit-claim",
+  "tool-start",
+  "effect-observed",
+  "effect-check",
+]);
+const IDENTITY_REASONS = {
+  provider: "provider-mismatch",
+  tool: "tool-mismatch",
+  providerVersion: "provider-version-mismatch",
+  adapterVersion: "adapter-version-mismatch",
+};
+const isRecord = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+const hasExactly = (value, keys) =>
+  Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+
+/** The run identity the authorized experiment must carry; versions come from the candidate pins. */
+function expectedRun(tool = scenarios.inputs["typed-a"].tool) {
+  const { native, adapter } = provenance.candidate;
+  return { provider: "claude", tool, providerVersion: native.version, adapterVersion: adapter.version };
+}
+
+/**
+ * Shape completeness is all the manifest can show. Nothing in the repository authenticates an
+ * installed receipt or fact reference, so authenticity is always unverified; no attestor is invented.
+ */
+function provenanceAuthenticity(manifest) {
+  return {
+    shape: classifyProvenance(manifest).complete ? "complete" : "incomplete",
+    authenticity: "unverified",
+    reason: "no-receipt-authenticator",
+  };
+}
+
+function malformedRecord(record) {
+  const token = new RegExp(format.token);
+  const identity = new RegExp(EXPERIMENT.identityToken);
+  if (!isRecord(record) || !hasExactly(record, ["format", "run", "receipts"])) return "record-shape";
+  if (record.format !== EXPERIMENT.format) return "record-format";
+  if (!isRecord(record.run) || !hasExactly(record.run, EXPERIMENT.runKeys)) return "run-shape";
+  for (const [key, value] of Object.entries(record.run)) {
+    const pattern = Object.hasOwn(IDENTITY_REASONS, key) ? identity : token;
+    if (typeof value !== "string" || !pattern.test(value)) return "run-value";
+  }
+  if (!Array.isArray(record.receipts)) return "receipts-shape";
+  if (Buffer.byteLength(JSON.stringify(record)) > format.limits.transportBytes) return "oversize-record";
+  for (const row of record.receipts) {
+    if (!isRecord(row) || !validReceipt(row)) return "invalid-receipt";
+    if (row.runRef === undefined) return "receipt-without-run";
+    if (EXPERIMENT.boundStages.includes(row.stage) && (row.actionRef === undefined || row.cwdRef === undefined))
+      return "receipt-without-binding";
+  }
+}
+
+/**
+ * Checks one run against the experiment script: a harmless allowed effect after a native ask, an
+ * identical repeat the native layer serves from its cache that still reaches ORCA and is allowed and
+ * effected, one revocation, then one identical cached call that ORCA blocks with the independent
+ * counter reading unchanged. Each effect needs both the producer's row and the counter's reading.
+ */
+function experimentFindings({ run, receipts }, expected, review) {
+  const inconsistent = new Set();
+  const failed = new Set(review.violations);
+  const incomplete = new Set();
+  for (const [key, reason] of Object.entries(IDENTITY_REASONS))
+    if (run[key] !== expected[key]) inconsistent.add(reason);
+
+  const calls = new Map();
+  const invocationOwner = new Map();
+  const revocations = [];
+  receipts.forEach((row, index) => {
+    if (index > 0 && row.seq <= receipts[index - 1].seq) inconsistent.add("seq-not-increasing");
+    if (row.runRef !== run.runRef) inconsistent.add("run-mismatch");
+    if (row.level === "installed-observed" && row.sourceRef.startsWith("synthetic:"))
+      inconsistent.add("synthetic-source-labelled-installed");
+    if (row.stage === "revocation") revocations.push(row);
+    if (row.callRef === undefined) {
+      if (!UNATTRIBUTED_STAGES.has(row.stage)) inconsistent.add("unattributed-receipt");
+      return;
+    }
+    if (!CALL_STAGES.has(row.stage)) inconsistent.add("unexpected-stage");
+    if (!calls.has(row.callRef)) calls.set(row.callRef, new Map());
+    const call = calls.get(row.callRef);
+    if (call.has(row.stage)) inconsistent.add("duplicate-stage-in-call");
+    else call.set(row.stage, row);
+    if (row.invocationRef !== undefined) {
+      if (!invocationOwner.has(row.invocationRef)) invocationOwner.set(row.invocationRef, row.callRef);
+      if (invocationOwner.get(row.invocationRef) !== row.callRef) inconsistent.add("invocation-reused");
+      if ([...call.values()].some((other) => other.invocationRef && other.invocationRef !== row.invocationRef))
+        inconsistent.add("invocation-reused");
+    }
+    if (row.stage === "native-dispatch" && row.outcome === "replay") inconsistent.add("replayed-dispatch");
+    if (row.stage === "native-dispatch" || row.stage === "orca-decision") {
+      if (row.actionRef !== run.actionRef) inconsistent.add("action-mismatch");
+      if (row.cwdRef !== run.cwdRef) inconsistent.add("cwd-mismatch");
+    }
+    if (row.stage === "tool-start" && row.outcome === "started") {
+      // What actually started differs from what was checked: a guard failure, not bad bookkeeping.
+      if (row.actionRef !== run.actionRef) failed.add("final-action-mismatch");
+      if (row.cwdRef !== run.cwdRef) failed.add("final-cwd-mismatch");
+    }
+  });
+  if (revocations.length > 1) inconsistent.add("multiple-revocations");
+  const revocation = revocations[0];
+
+  const has = (call, stage, outcome) => call?.get(stage)?.outcome === outcome;
+  for (const call of calls.values()) {
+    const decision = call.get("orca-decision");
+    const check = call.get("effect-check");
+    const effected = call.has("effect-observed") || check?.outcome === "changed";
+    if (decision && decision.outcome !== "allow") {
+      if (has(call, "tool-start", "started")) failed.add("started-after-denial");
+      if (effected) failed.add("effect-after-denial");
+    }
+    // The independent counter saw an effect the producer's receipts do not report.
+    if (check?.outcome === "changed" && !call.has("effect-observed")) failed.add("unreported-effect");
+    if (revocation && decision?.outcome === "allow" && decision.seq > revocation.seq)
+      failed.add("allow-after-revocation");
+    // A sourceRef is only a claim, but a reading sharing the decision's own source is not even that.
+    if (check && [decision, call.get("hook-response")].some((row) => row && row.sourceRef === check.sourceRef))
+      incomplete.add("effect-check-not-independent");
+  }
+
+  const seqs = (call) => [...call.values()].map((row) => row.seq);
+  const ordered = [...calls.values()];
+  const pre = revocation ? ordered.filter((call) => Math.min(...seqs(call)) < revocation.seq) : ordered.slice(0, 2);
+  const post = revocation ? ordered.filter((call) => Math.min(...seqs(call)) > revocation.seq) : ordered.slice(2);
+  if (pre.length > 2 || post.length > 1) inconsistent.add("unexpected-call");
+  const [first, repeat] = pre;
+  const [after] = post;
+  const allowedEffect = (call) =>
+    has(call, "hook-invoked", "invoked") &&
+    has(call, "orca-decision", "allow") &&
+    has(call, "hook-response", "allow") &&
+    has(call, "tool-start", "started") &&
+    has(call, "effect-observed", "observed") &&
+    has(call, "effect-check", "changed");
+
+  if (!first || !has(first, "native-dispatch", "new") || !has(first, "native-ask", "asked") || !allowedEffect(first))
+    incomplete.add("missing-allowed-effect");
+  if (!repeat || !has(repeat, "native-dispatch", "cached")) incomplete.add("missing-cached-repeat");
+  else {
+    if (repeat.has("native-ask")) incomplete.add("cached-repeat-native-asked");
+    if (!has(repeat, "hook-invoked", "invoked") || !repeat.has("orca-decision"))
+      incomplete.add("cached-repeat-not-at-guard");
+    else if (!allowedEffect(repeat)) incomplete.add("cached-repeat-without-effect");
+  }
+  if (!revocation) incomplete.add("missing-revocation");
+  if (!after) incomplete.add("missing-post-revocation-call");
+  else {
+    // A fresh native ask could block on its own; the block has to come from ORCA on a cached dispatch.
+    if (!has(after, "native-dispatch", "cached") || after.has("native-ask"))
+      incomplete.add("post-revocation-not-cached");
+    const decision = after.get("orca-decision");
+    if (
+      !has(after, "hook-invoked", "invoked") ||
+      !decision ||
+      decision.outcome === "allow" ||
+      !has(after, "hook-response", "deny")
+    )
+      incomplete.add("post-revocation-not-blocked-at-guard");
+    if (!has(after, "effect-check", "unchanged")) incomplete.add("missing-independent-block-evidence");
+  }
+  if (
+    revocation &&
+    ordered.some((call) => Math.min(...seqs(call)) < revocation.seq && Math.max(...seqs(call)) > revocation.seq)
+  )
+    incomplete.add("stage-order");
+  if (first && repeat && Math.max(...seqs(first)) > Math.min(...seqs(repeat))) incomplete.add("stage-order");
+  if (revocation) {
+    const generations = (calls) => calls.map((call) => call.get("orca-decision")?.generation).filter(Boolean);
+    if (
+      generations(pre).some((g) => g === revocation.generation) ||
+      generations(post).some((g) => g !== revocation.generation)
+    )
+      inconsistent.add("generation-mismatch");
+  }
+
+  const state = inconsistent.size
+    ? "inconsistent"
+    : failed.size
+      ? "failed"
+      : incomplete.size
+        ? "incomplete"
+        : "complete";
+  const sorted = (set) => [...set].sort();
+  return { state, inconsistent: sorted(inconsistent), failed: sorted(failed), incomplete: sorted(incomplete) };
+}
+
+/**
+ * One explicit outcome per record, separating offline simulation, structurally valid supplied
+ * evidence, provenance (shape only; authenticity always unverified) and experiment completion.
+ * The installed Claude route is UNKNOWN for every outcome: nothing here can establish it.
+ */
+function classifyExperiment(record, manifest, expected = expectedRun()) {
+  const provenanceState = provenanceAuthenticity(manifest);
+  const result = (outcome, tier, details = {}) => ({
+    outcome,
+    tier,
+    route: "UNKNOWN",
+    provenance: provenanceState,
+    ...details,
+  });
+  if (isRecord(record) && Array.isArray(record.receipts) && record.receipts.length === 0)
+    return result("NO-EVIDENCE", "none");
+  const malformed = malformedRecord(record);
+  if (malformed) return result("MALFORMED-EVIDENCE", "malformed", { reasons: [malformed] });
+  const levels = new Set(record.receipts.map((row) => row.level));
+  const installedOnly = levels.size === 1 && levels.has("installed-observed");
+  const review = assess(record.receipts, provenanceState.shape === "complete");
+  const sequence = experimentFindings(record, expected, review);
+  if (levels.has("installed-observed") && !installedOnly)
+    return result("INCONSISTENT-EVIDENCE", "mixed", { review, sequence, reasons: ["mixed-evidence-levels"] });
+  if (!installedOnly) return result("SIMULATION-ONLY", "simulation", { review, sequence });
+  const details = { review, sequence };
+  const tier = "supplied-structurally-valid";
+  if (sequence.state === "inconsistent") return result("INCONSISTENT-EVIDENCE", tier, details);
+  if (sequence.state === "failed") return result("EXPERIMENT-FAILED", tier, details);
+  if (sequence.state === "incomplete") return result("EXPERIMENT-INCOMPLETE", tier, details);
+  if (provenanceState.shape !== "complete") return result("PROVENANCE-INCOMPLETE", tier, details);
+  return result("EXPERIMENT-COMPLETE-PROVENANCE-UNVERIFIED", tier, details);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Protocol harness. Synthetic native model (labelled) -> ORCA checker over actual inactive parts.
 
 /** Closed, documented-shape PreToolUse frame (field names documented, not installed-verified). */
@@ -287,13 +525,21 @@ const SOURCE = {
   revocation: "synthetic:orca-rule-store",
   cancellation: "synthetic:native-model",
   "config-mutation": "synthetic:native-model",
+  "effect-check": "orca:disposable-memory-counter",
 };
+const RUN_REF = "run-1";
 
 async function createHarness(file, scenario) {
   const base = await syntheticReadFixture();
   const receipts = [];
   const emit = (stage, fields) => {
-    const row = { seq: receipts.length + 1, stage, level: "synthetic-protocol-tested", sourceRef: SOURCE[stage] };
+    const row = {
+      seq: receipts.length + 1,
+      stage,
+      level: "synthetic-protocol-tested",
+      sourceRef: SOURCE[stage],
+      runRef: RUN_REF,
+    };
     for (const [key, value] of Object.entries(fields)) if (value !== undefined) row[key] = value;
     receipts.push(row);
   };
@@ -306,6 +552,16 @@ async function createHarness(file, scenario) {
     if (!bindings.has(key)) bindings.set(key, `binding-${bindings.size + 1}`);
     return bindings.get(key);
   };
+  // Separate action and cwd labels so the experiment classifier can name which one moved.
+  const labels = { action: new Map(), cwd: new Map() };
+  const label = (kind, key) => {
+    if (!labels[kind].has(key)) labels[kind].set(key, `${kind}-${labels[kind].size + 1}`);
+    return labels[kind].get(key);
+  };
+  const boundRefs = (tool, input, cwd) => ({
+    actionRef: label("action", JSON.stringify([tool, input])),
+    cwdRef: label("cwd", cwd),
+  });
   const nativeRefs = new Map();
   const nativeRef = (toolUseId) => {
     if (!nativeRefs.has(toolUseId)) nativeRefs.set(toolUseId, `inv-${nativeRefs.size + 1}`);
@@ -442,6 +698,7 @@ async function createHarness(file, scenario) {
         reason,
         generation: generation(),
         bindingRef: call.checkedRef,
+        ...boundRefs(frame.tool_name, frame.tool_input, frame.cwd),
       });
     const invalid = validateFrame(frame, file);
     if (invalid) {
@@ -483,6 +740,20 @@ async function createHarness(file, scenario) {
     return "allow";
   }
 
+  /** The independent counter's reading for one call, emitted apart from the producer's effect row. */
+  async function checkedEffects(ref, body) {
+    const before = effectCount();
+    await body();
+    const call = calls.get(ref);
+    if (call.step.phase === "hook" && !call.executed) return;
+    emit("effect-check", {
+      callRef: ref,
+      invocationRef: nativeRef(call.toolUseId),
+      outcome: effectCount() > before ? "changed" : "unchanged",
+      ...(scenario.row === "shell" ? { sourceRef: "synthetic:native-shell-counter" } : {}),
+    });
+  }
+
   async function nativeCall(step, replayOf) {
     const origin = replayOf ? calls.get(replayOf) : undefined;
     const ref = replayOf ? step.as : step.call;
@@ -509,6 +780,7 @@ async function createHarness(file, scenario) {
       invocationRef,
       outcome: replayOf ? "replay" : cached ? "cached" : "new",
       bindingRef: call.checkedRef,
+      ...boundRefs(spec.tool, spec.input, cwd),
     });
     const hookRuns =
       hookInstalled && source.route !== "unmatched" && !(cached && native.cachedRepeatHook === "skipped");
@@ -554,9 +826,16 @@ async function createHarness(file, scenario) {
 
   async function execute(ref, permitOf) {
     const call = calls.get(ref);
+    call.executed = true;
     const invocationRef = nativeRef(call.toolUseId);
     const finalRef = bindingRef(call.final.tool, call.final.input, call.final.cwd);
-    emit("tool-start", { callRef: ref, invocationRef, outcome: "started", bindingRef: finalRef });
+    emit("tool-start", {
+      callRef: ref,
+      invocationRef,
+      outcome: "started",
+      bindingRef: finalRef,
+      ...boundRefs(call.final.tool, call.final.input, call.final.cwd),
+    });
     if (scenario.row === "shell") {
       // Synthetic native shell: a counter stands in for the effect; the command is never run.
       shellEffects++;
@@ -592,12 +871,13 @@ async function createHarness(file, scenario) {
   }
 
   const typedEffects = () => owners.reduce((sum, entry) => sum + entry.owner.observedReads, 0);
+  const effectCount = () => (scenario.row === "shell" ? shellEffects : typedEffects());
 
   async function run() {
     for (const step of scenario.steps) {
-      if (step.call) await nativeCall(step);
-      else if (step.replay) await nativeCall(step, step.replay);
-      else if (step.execute) await execute(step.execute, step.permitOf);
+      if (step.call) await checkedEffects(step.call, () => nativeCall(step));
+      else if (step.replay) await checkedEffects(step.as, () => nativeCall(step, step.replay));
+      else if (step.execute) await checkedEffects(step.execute, () => execute(step.execute, step.permitOf));
       else if (step.revoke === true) revoke();
       else if (step.mutateConfig === "remove-hook") {
         hookInstalled = false;
@@ -651,6 +931,22 @@ function callReason(receipts, ref) {
       ((r.stage === "orca-decision" && r.outcome !== "allow") ||
         (r.stage === "permit-claim" && r.outcome === "refused")),
   )?.reason;
+}
+
+/** Wraps a run's receipts in the experiment envelope its first call declares. */
+function experimentRecord(receipts, scenario, run = {}) {
+  const first = scenario.steps.find((step) => step.call);
+  return {
+    format: EXPERIMENT.format,
+    run: {
+      runRef: RUN_REF,
+      ...expectedRun(scenarios.inputs[first.input].tool),
+      actionRef: "action-1",
+      cwdRef: "cwd-1",
+      ...run,
+    },
+    receipts,
+  };
 }
 
 function expectSanitized(receipts, file) {
@@ -856,6 +1152,10 @@ describe("protocol scenarios (synthetic-protocol-tested; native behaviour is a s
         result.receipts.some((r) => r.stage === "permit-claim" && r.reason === reason),
         reason,
       ).toBe(true);
+    // Synthetic rows are a simulation whatever their sequence shows; the installed route stays UNKNOWN.
+    const classified = classifyExperiment(experimentRecord(result.receipts, scenario), provenance);
+    expect(classified.outcome).toBe(result.receipts.length ? "SIMULATION-ONLY" : "NO-EVIDENCE");
+    expect(classified.route).toBe("UNKNOWN");
     const assessed = assess(result.receipts, classifyProvenance(provenance).complete);
     expect(assessed).toEqual({
       violations: want.violations,
@@ -892,6 +1192,11 @@ describe("protocol scenarios (synthetic-protocol-tested; native behaviour is a s
     const assessed = assess(result.receipts, false);
     expect(assessed.violations).toEqual(want.violations);
     expect(assessed.decision).toBe(want.decision);
+    expect(classifyExperiment(experimentRecord(result.receipts, scenario), provenance)).toMatchObject({
+      outcome: "SIMULATION-ONLY",
+      route: "UNKNOWN",
+      sequence: { state: expect.not.stringMatching(/^complete$/) },
+    });
     expect(matrix.vectors[mode].length).toBeGreaterThan(0);
   });
 
@@ -999,5 +1304,450 @@ describe("evidence assessment and the later installed record", () => {
   it("reached no child process or network entry point", () => {
     expect(forbidden).toEqual([]);
     expect(fetchCalls).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Layered classification. Every "supplied" record below is built from a synthetic run by relabelling
+// it: a hypothetical used to exercise the classifier, never persisted and never installed evidence.
+
+describe("layered classification of the allow -> cached repeat -> revoke experiment", () => {
+  const MAIN = scenarios.scenarios.find((entry) => entry.id === "allow-cached-revoke");
+  const MAIN_SHELL = scenarios.scenarios.find((entry) => entry.id === "allow-cached-revoke-shell");
+  let mainReceipts;
+  beforeAll(async () => {
+    mainReceipts = (await runScenario(scenarios, MAIN)).receipts;
+  });
+
+  /** Relabels synthetic rows as supplied installed rows. A hypothetical, not evidence. */
+  const supplied = (receipts) =>
+    receipts.map((row) => ({
+      ...row,
+      level: "installed-observed",
+      sourceRef: row.sourceRef.replace(/^(synthetic|orca):/, "supplied:"),
+    }));
+  const renumber = (rows) => rows.map((row, index) => ({ ...row, seq: index + 1 }));
+  const patch = (rows, callRef, stage, fields) =>
+    rows.map((row) => (row.callRef === callRef && row.stage === stage ? { ...row, ...fields } : row));
+  const drop = (rows, keep) => renumber(rows.filter((row) => !keep(row)));
+  const at = (rows, callRef, stage) => rows.findIndex((row) => row.callRef === callRef && row.stage === stage);
+  const insertAfter = (rows, index, ...added) =>
+    renumber([...rows.slice(0, index + 1), ...added, ...rows.slice(index + 1)]);
+  const extra = (callRef, invocationRef, stage, fields = {}) => ({
+    seq: 0,
+    stage,
+    level: "installed-observed",
+    sourceRef: "supplied:handwritten",
+    runRef: RUN_REF,
+    callRef,
+    invocationRef,
+    ...fields,
+  });
+  const record = (rows, run) => experimentRecord(rows, MAIN, run);
+  const complete = () => supplied(mainReceipts);
+  const COMPLETE_MANIFEST = hypotheticalInstalledManifest();
+
+  /** Turns every call into a denial: no allow, no tool start, no effect, counter unchanged. */
+  const denyOnly = (rows) =>
+    renumber(
+      rows
+        .filter((row) => !["tool-start", "permit-claim", "effect-observed"].includes(row.stage))
+        .map((row) => {
+          if (row.stage === "orca-decision" && row.outcome === "allow")
+            return { ...row, outcome: "deny", reason: "no-approved-match" };
+          if (row.stage === "hook-response" && row.outcome === "allow") return { ...row, outcome: "deny" };
+          if (row.stage === "effect-check") return { ...row, outcome: "unchanged" };
+          return row;
+        }),
+    );
+
+  it("the synthetic main experiment completes its sequence but stays SIMULATION-ONLY", async () => {
+    for (const scenario of [MAIN, MAIN_SHELL]) {
+      const { receipts } = await runScenario(scenarios, scenario);
+      const result = classifyExperiment(
+        experimentRecord(receipts, scenario),
+        COMPLETE_MANIFEST,
+        expectedRun(scenarios.inputs[scenario.steps[0].input].tool),
+      );
+      expect(result).toMatchObject({
+        outcome: "SIMULATION-ONLY",
+        tier: "simulation",
+        route: "UNKNOWN",
+        sequence: { state: "complete", inconsistent: [], failed: [], incomplete: [] },
+        provenance: { shape: "complete", authenticity: "unverified" },
+      });
+      // Positive independent readings for the two allowed calls, and unchanged for the revoked one.
+      const checks = receipts.filter((row) => row.stage === "effect-check").map((row) => [row.callRef, row.outcome]);
+      expect(checks).toEqual([
+        ["call-1", "changed"],
+        ["call-2", "changed"],
+        ["call-3", "unchanged"],
+      ]);
+    }
+  });
+
+  it("a complete supplied sequence is never more than complete with unverified provenance", () => {
+    const rows = complete();
+    expect(classifyExperiment(record(rows), COMPLETE_MANIFEST)).toMatchObject({
+      outcome: "EXPERIMENT-COMPLETE-PROVENANCE-UNVERIFIED",
+      tier: "supplied-structurally-valid",
+      route: "UNKNOWN",
+      provenance: { shape: "complete", authenticity: "unverified", reason: "no-receipt-authenticator" },
+      review: { decision: "REVIEW-CANDIDATE", violations: [] },
+    });
+    // The actual manifest has no installed facts, so the same rows stop at provenance.
+    expect(classifyExperiment(record(rows), provenance)).toMatchObject({
+      outcome: "PROVENANCE-INCOMPLETE",
+      route: "UNKNOWN",
+      review: { decision: "UNKNOWN" },
+    });
+  });
+
+  it("receipt strings and producer success values are not independent proof", () => {
+    const manifest = hypotheticalInstalledManifest();
+    for (const name of REQUIRED_INSTALLED_FACTS)
+      Object.assign(manifest.installed[name], {
+        installedRef: "receipt:signed-ok",
+        producerSuccess: true,
+        signature: "verified",
+      });
+    expect(classifyProvenance(manifest).complete).toBe(true); // shape only, as merged
+    expect(provenanceAuthenticity(manifest)).toEqual({
+      shape: "complete",
+      authenticity: "unverified",
+      reason: "no-receipt-authenticator",
+    });
+    const claimed = complete().map((row) => ({ ...row, sourceRef: "attested:producer-ok" }));
+    const result = classifyExperiment(record(claimed), manifest);
+    expect(result.outcome).not.toMatch(/GO|QUALIFIED|VERIFIED$/);
+    expect(result.provenance.authenticity).toBe("unverified");
+    // Extra authenticity claims do not fit the closed formats at all.
+    expect(classifyExperiment({ ...record(complete()), verified: true }, manifest).outcome).toBe("MALFORMED-EVIDENCE");
+    const flagged = complete().map((row, index) => (index === 0 ? { ...row, producerSuccess: "true" } : row));
+    expect(classifyExperiment(record(flagged), manifest).outcome).toBe("MALFORMED-EVIDENCE");
+  });
+
+  it("a deny-only sequence keeps the merged REVIEW-CANDIDATE but is an incomplete experiment", () => {
+    const rows = denyOnly(complete());
+    const result = classifyExperiment(record(rows), COMPLETE_MANIFEST);
+    // The merged label is unchanged: structurally reviewable, nothing more.
+    expect(result.review).toMatchObject({
+      decision: "REVIEW-CANDIDATE",
+      cachedRepeatChecked: true,
+      revocationBlocked: true,
+    });
+    expect(result).toMatchObject({ outcome: "EXPERIMENT-INCOMPLETE", route: "UNKNOWN" });
+    expect(result.sequence.incomplete).toEqual(["cached-repeat-without-effect", "missing-allowed-effect"]);
+    expect(result.sequence.failed).toEqual([]);
+  });
+
+  const changed = (callRef, stage, fields) => record(patch(complete(), callRef, stage, fields));
+  const without = (remove) => record(drop(complete(), remove));
+  const mapped = (fn) => record(complete().map(fn));
+  const STARTED = { outcome: "started", bindingRef: "binding-1", actionRef: "action-1", cwdRef: "cwd-1" };
+  /** call-3's denial is followed by a start and an effect the counter also sees. */
+  const effectAfterDenial = (rows) => {
+    const index = at(rows, "call-3", "native-continued");
+    return insertAfter(
+      patch(rows, "call-3", "effect-check", { outcome: "changed" }),
+      index,
+      extra("call-3", "inv-3", "tool-start", STARTED),
+      extra("call-3", "inv-3", "effect-observed", { outcome: "observed" }),
+    );
+  };
+  const moved = (pick, after) => {
+    const rows = complete();
+    const row = rows.find(pick);
+    const rest = rows.filter((other) => other !== row);
+    return record(insertAfter(rest, after(rest), row));
+  };
+
+  // name -> ["OUTCOME", "list:reason", build]. Every record is a hypothetical relabelled synthetic run.
+  const NEGATIVE = {
+    "deny-only": ["EXPERIMENT-INCOMPLETE", "incomplete:missing-allowed-effect", () => record(denyOnly(complete()))],
+    "cached repeat missing": [
+      "EXPERIMENT-INCOMPLETE",
+      "incomplete:missing-cached-repeat",
+      () => without((r) => r.callRef === "call-2"),
+    ],
+    "cached repeat natively asked": [
+      "EXPERIMENT-INCOMPLETE",
+      "incomplete:cached-repeat-native-asked",
+      () => {
+        const rows = complete();
+        const ask = extra("call-2", "inv-2", "native-ask", { outcome: "asked" });
+        return record(insertAfter(rows, at(rows, "call-2", "hook-response"), ask));
+      },
+    ],
+    "cached repeat allowed without an effect": [
+      "EXPERIMENT-INCOMPLETE",
+      "incomplete:cached-repeat-without-effect",
+      () => {
+        const effect = ["tool-start", "permit-claim", "effect-observed"];
+        const rows = drop(complete(), (r) => r.callRef === "call-2" && effect.includes(r.stage));
+        return record(patch(rows, "call-2", "effect-check", { outcome: "unchanged" }));
+      },
+    ],
+    "revocation missing": [
+      "EXPERIMENT-INCOMPLETE",
+      "incomplete:missing-revocation",
+      () => without((r) => r.stage === "revocation"),
+    ],
+    "post-revocation call missing": [
+      "EXPERIMENT-INCOMPLETE",
+      "incomplete:missing-post-revocation-call",
+      () => without((r) => r.callRef === "call-3"),
+    ],
+    "post-revocation block without an independent reading": [
+      "EXPERIMENT-INCOMPLETE",
+      "incomplete:missing-independent-block-evidence",
+      () => without((r) => r.callRef === "call-3" && r.stage === "effect-check"),
+    ],
+    "post-revocation block after a fresh native ask": [
+      "EXPERIMENT-INCOMPLETE",
+      "incomplete:post-revocation-not-cached",
+      () => changed("call-3", "native-dispatch", { outcome: "new" }),
+    ],
+    "allowed effect after a hook timeout rather than an ORCA allow": [
+      "EXPERIMENT-INCOMPLETE",
+      "incomplete:cached-repeat-without-effect",
+      () => changed("call-2", "hook-response", { outcome: "timeout" }),
+    ],
+    "post-revocation block by a crashed checker rather than an ORCA deny": [
+      "EXPERIMENT-INCOMPLETE",
+      "incomplete:post-revocation-not-blocked-at-guard",
+      () => changed("call-3", "hook-response", { outcome: "crash" }),
+    ],
+    "counter reading shares the decision's source": [
+      "EXPERIMENT-INCOMPLETE",
+      "incomplete:effect-check-not-independent",
+      () => changed("call-3", "effect-check", { sourceRef: "supplied:strict-policy-port" }),
+    ],
+    "duplicated receipt (identical seq)": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:seq-not-increasing",
+      () => {
+        const rows = complete();
+        return record([...rows.slice(0, 5), rows[4], ...rows.slice(5)]);
+      },
+    ],
+    "replayed receipt (renumbered copy)": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:duplicate-stage-in-call",
+      () => {
+        const rows = complete();
+        const index = at(rows, "call-2", "effect-observed");
+        return record(insertAfter(rows, index, rows[index]));
+      },
+    ],
+    "replayed invocation across calls": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:invocation-reused",
+      () => mapped((r) => (r.callRef === "call-3" ? { ...r, invocationRef: "inv-2" } : r)),
+    ],
+    "stage outside the experiment script": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:unexpected-stage",
+      () => {
+        const rows = complete();
+        const cancel = extra("call-2", "inv-2", "cancellation", { outcome: "cancelled" });
+        return record(insertAfter(rows, at(rows, "call-2", "hook-response"), cancel));
+      },
+    ],
+    "replayed native dispatch": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:replayed-dispatch",
+      () => changed("call-3", "native-dispatch", { outcome: "replay" }),
+    ],
+    "receipt from another run": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:run-mismatch",
+      () => changed("call-2", "effect-observed", { runRef: "run-2" }),
+    ],
+    "provider mismatch": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:provider-mismatch",
+      () => record(complete(), { provider: "codex" }),
+    ],
+    "tool mismatch": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:tool-mismatch",
+      () => record(complete(), { tool: "Bash" }),
+    ],
+    "provider version mismatch": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:provider-version-mismatch",
+      () => record(complete(), { providerVersion: "2.1.310" }),
+    ],
+    "adapter version mismatch": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:adapter-version-mismatch",
+      () => record(complete(), { adapterVersion: "0.96.0" }),
+    ],
+    "action mismatch at dispatch": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:action-mismatch",
+      () => changed("call-2", "native-dispatch", { actionRef: "action-2" }),
+    ],
+    "cwd mismatch at decision": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:cwd-mismatch",
+      () => changed("call-1", "orca-decision", { cwdRef: "cwd-2" }),
+    ],
+    "generation labels disagree with the revocation": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:generation-mismatch",
+      () => changed("call-3", "orca-decision", { generation: "gen-0" }),
+    ],
+    "rows physically reordered": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:seq-not-increasing",
+      () => {
+        const rows = complete();
+        const index = at(rows, "call-1", "orca-decision");
+        return record([...rows.slice(0, index - 1), rows[index], rows[index - 1], ...rows.slice(index + 1)]);
+      },
+    ],
+    "revocation reordered before the cached repeat": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:unexpected-call",
+      () =>
+        moved(
+          (r) => r.stage === "revocation",
+          (rest) => rest.findLastIndex((r) => r.callRef === "call-1"),
+        ),
+    ],
+    "effect reordered before its decision": [
+      "EXPERIMENT-FAILED",
+      "failed:effect-without-orca-allow",
+      () =>
+        moved(
+          (r) => r.callRef === "call-1" && r.stage === "effect-observed",
+          (rest) => at(rest, "call-1", "hook-invoked"),
+        ),
+    ],
+    "mixed evidence levels": [
+      "INCONSISTENT-EVIDENCE",
+      "reasons:mixed-evidence-levels",
+      () => mapped((r, i) => (i === 3 ? { ...r, level: "synthetic-protocol-tested" } : r)),
+    ],
+    "synthetic rows relabelled installed": [
+      "INCONSISTENT-EVIDENCE",
+      "inconsistent:synthetic-source-labelled-installed",
+      () => record(mainReceipts.map((r) => ({ ...r, level: "installed-observed" }))),
+    ],
+    "effect after denial": [
+      "EXPERIMENT-FAILED",
+      "failed:effect-after-denial",
+      () => record(effectAfterDenial(complete())),
+    ],
+    "independent counter changed while receipts claim a block": [
+      "EXPERIMENT-FAILED",
+      "failed:unreported-effect",
+      () => changed("call-3", "effect-check", { outcome: "changed" }),
+    ],
+    "allow and effect after revocation under a self-reported new generation": [
+      "EXPERIMENT-FAILED",
+      "failed:allow-after-revocation",
+      () => {
+        let rows = patch(complete(), "call-3", "orca-decision", { outcome: "allow", reason: "rule" });
+        rows = patch(rows, "call-3", "hook-response", { outcome: "allow" });
+        return record(effectAfterDenial(patch(rows, "call-3", "native-continued", { outcome: "continued" })));
+      },
+    ],
+    "action changed between check and start": [
+      "EXPERIMENT-FAILED",
+      "failed:final-action-mismatch",
+      () => changed("call-2", "tool-start", { actionRef: "action-2" }),
+    ],
+    "cwd changed between check and start": [
+      "EXPERIMENT-FAILED",
+      "failed:final-cwd-mismatch",
+      () => changed("call-2", "tool-start", { cwdRef: "cwd-2" }),
+    ],
+    "cached repeat skips the hook": [
+      "EXPERIMENT-FAILED",
+      "failed:cached-repeat-not-checked",
+      () => changed("call-2", "hook-invoked", { outcome: "not-invoked" }),
+    ],
+    "malformed: unknown receipt key": [
+      "MALFORMED-EVIDENCE",
+      "reasons:invalid-receipt",
+      () => mapped((r, i) => (i === 2 ? { ...r, command: "printf x" } : r)),
+    ],
+    "malformed: private path in a value": [
+      "MALFORMED-EVIDENCE",
+      "reasons:invalid-receipt",
+      () => changed("call-1", "orca-decision", { reason: "/fixture/workspace-a" }),
+    ],
+    "malformed: string seq": [
+      "MALFORMED-EVIDENCE",
+      "reasons:invalid-receipt",
+      () => mapped((r, i) => (i === 0 ? { ...r, seq: "1" } : r)),
+    ],
+    "malformed: receipt without runRef": [
+      "MALFORMED-EVIDENCE",
+      "reasons:receipt-without-run",
+      () => mapped(({ runRef, ...r }, i) => (i === 0 ? r : { ...r, runRef })),
+    ],
+    "malformed: dispatch without action binding": [
+      "MALFORMED-EVIDENCE",
+      "reasons:receipt-without-binding",
+      () => mapped(({ actionRef, ...r }) => (r.stage === "native-dispatch" || !actionRef ? r : { ...r, actionRef })),
+    ],
+    "malformed: run header missing a key": [
+      "MALFORMED-EVIDENCE",
+      "reasons:run-shape",
+      () => {
+        const { tool: _tool, ...run } = record(complete()).run;
+        return { ...record(complete()), run };
+      },
+    ],
+    "malformed: wrong envelope format": [
+      "MALFORMED-EVIDENCE",
+      "reasons:record-format",
+      () => ({ ...record(complete()), format: "orca.claude-qualification-installed/1" }),
+    ],
+    "malformed: receipts not a list": [
+      "MALFORMED-EVIDENCE",
+      "reasons:receipts-shape",
+      () => ({ ...record(complete()), receipts: { 0: complete()[0] } }),
+    ],
+    "malformed: not an object": ["MALFORMED-EVIDENCE", "reasons:record-shape", () => null],
+    "malformed: null receipt": ["MALFORMED-EVIDENCE", "reasons:invalid-receipt", () => record([...complete(), null])],
+  };
+
+  it.each(Object.entries(NEGATIVE))("negative control: %s", (_name, [outcome, where, build]) => {
+    const [list, reason] = where.split(":");
+    const result = classifyExperiment(build(), COMPLETE_MANIFEST);
+    expect(result.outcome).toBe(outcome);
+    expect(result.route).toBe("UNKNOWN");
+    expect(list === "reasons" ? result.reasons : result.sequence[list]).toContain(reason);
+  });
+
+  it("a failed supplied experiment stays reviewable with the merged assessor's findings", () => {
+    const rows = patch(complete(), "call-2", "hook-invoked", { outcome: "not-invoked" });
+    const result = classifyExperiment(record(rows), COMPLETE_MANIFEST);
+    expect(result.outcome).toBe("EXPERIMENT-FAILED");
+    expect(result.review).toMatchObject({ decision: "NO-GO-CANDIDATE" });
+    expect(result.review.violations).toEqual([
+      "cached-repeat-not-checked",
+      "dispatch-not-checked",
+      "effect-without-orca-allow",
+    ]);
+    expect(result.sequence.failed).toEqual(expect.arrayContaining(result.review.violations));
+  });
+
+  it("the installed record has no evidence, and the outcomes are exactly the documented set", () => {
+    expect(classifyExperiment(installed, provenance)).toMatchObject({ outcome: "NO-EVIDENCE", route: "UNKNOWN" });
+    const outcomes = new Set([
+      "NO-EVIDENCE",
+      ...Object.values(NEGATIVE).map(([outcome]) => outcome),
+      "SIMULATION-ONLY",
+      "PROVENANCE-INCOMPLETE",
+      "EXPERIMENT-COMPLETE-PROVENANCE-UNVERIFIED",
+    ]);
+    expect([...outcomes].sort()).toEqual(Object.keys(EXPERIMENT.outcomes).sort());
+    expect(Object.keys(EXPERIMENT.outcomes).filter((name) => /(^|-)GO$|QUALIFIED|SUPPORTED/.test(name))).toEqual([]);
   });
 });
