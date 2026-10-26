@@ -1,0 +1,41 @@
+{
+  "advisories": {
+    "1243084": {
+      "findings": [
+        {
+          "version": "20.14.5",
+          "paths": [
+            ".>@vitest/coverage-v8>vitest>happy-dom",
+            ".>happy-dom",
+            ".>vitest>happy-dom"
+          ],
+          "dev": true,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "id": 1243084,
+      "title": "Happy DOM: Incomplete fix for CVE-2026-33943: unsanitized import alias leads to host code execution",
+      "module_name": "happy-dom",
+      "vulnerable_versions": ">=17.0.0 <=21.0.3",
+      "patched_versions": ">=21.0.4",
+      "severity": "high",
+      "cwe": "CWE-94",
+      "github_advisory_id": "GHSA-834v-8h66-3h79",
+      "url": "https://github.com/advisories/GHSA-834v-8h66-3h79"
+    }
+  },
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 1,
+      "critical": 0
+    },
+    "dependencies": 148,
+    "devDependencies": 387,
+    "optionalDependencies": 108,
+    "totalDependencies": 549
+  }
+}

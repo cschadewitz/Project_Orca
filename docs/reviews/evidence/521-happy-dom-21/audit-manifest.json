@@ -1,0 +1,59 @@
+{
+  "baseCommit": "408a21d8b1c93e08f95dd17298800af9df4bde2b",
+  "node": "24.19.0",
+  "pnpm": "12.4.2",
+  "records": [
+    {
+      "path": "baseline-audit-full.json.txt",
+      "sha256": "1489911d04cc3513a224383ad31c400183171c933057a0a88267775f43f68907",
+      "capturedAt": "2026-10-25T23:52:23.179443+00:00",
+      "exitCode": 1,
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 1,
+        "critical": 0
+      }
+    },
+    {
+      "path": "baseline-audit-prod.json.txt",
+      "sha256": "eabfbbeff7f2a3c226ddaa924026140a5fd00c0b11db38044f95b18599e6c67f",
+      "capturedAt": "2026-10-25T23:52:23.623439+00:00",
+      "exitCode": 0,
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0
+      }
+    },
+    {
+      "path": "candidate-audit-full.json.txt",
+      "sha256": "754c3032cdfb7f71d0f76346d8500fc787393926eea3ae127184c4907f936c17",
+      "capturedAt": "2026-10-25T23:54:51.114308+00:00",
+      "exitCode": 0,
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0
+      }
+    },
+    {
+      "path": "candidate-audit-prod.json.txt",
+      "sha256": "eabfbbeff7f2a3c226ddaa924026140a5fd00c0b11db38044f95b18599e6c67f",
+      "capturedAt": "2026-10-25T23:54:51.422305+00:00",
+      "exitCode": 0,
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0
+      }
+    }
+  ]
+}

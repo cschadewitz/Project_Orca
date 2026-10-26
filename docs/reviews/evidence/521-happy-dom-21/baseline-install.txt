@@ -1,0 +1,59 @@
+Scope: all 15 workspace projects
+Update available! 12.4.2 → 12.15.0.
+Changelog: https://pnpm.io/v/12.15.0
+To update, run: curl -fsSL https://get.pnpm.io/install.sh | sh -
+? Verifying lockfile against supply-chain policies (534 entries)...
+Progress: resolved 461, reused 0, downloaded 1, added 0
+Progress: resolved 461, reused 0, downloaded 22, added 0
+Progress: resolved 461, reused 0, downloaded 36, added 32
+Downloading electron-winstaller@5.4.0: 0.00 B/9.14 MB
+Downloading @typescript/typescript-linux-x64@7.0.2: 0.00 B/9.66 MB
+Progress: resolved 461, reused 0, downloaded 68, added 64
+Progress: resolved 461, reused 0, downloaded 95, added 64
+Progress: resolved 461, reused 0, downloaded 122, added 96
+Progress: resolved 461, reused 0, downloaded 138, added 128
+Progress: resolved 461, reused 0, downloaded 162, added 160
+Progress: resolved 461, reused 0, downloaded 192, added 160
+Progress: resolved 461, reused 0, downloaded 214, added 192
+Progress: resolved 461, reused 0, downloaded 232, added 224
+Progress: resolved 461, reused 0, downloaded 265, added 256
+Downloading @rolldown/binding-linux-x64-gnu@1.2.14: 0.00 B/8.27 MB
+Progress: resolved 461, reused 0, downloaded 298, added 288
+Progress: resolved 461, reused 0, downloaded 326, added 320
+Progress: resolved 461, reused 0, downloaded 359, added 352
+Progress: resolved 461, reused 0, downloaded 387, added 384
+Progress: resolved 461, reused 0, downloaded 416, added 384
+Progress: resolved 461, reused 0, downloaded 443, added 416
+✓ Lockfile passes supply-chain policies (534 entries in 23.7s)
+Lockfile is up to date, resolution step is skipped
+Packages: +461 -74
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++------------
+Progress: resolved 461, reused 0, downloaded 461, added 461, done
+.../esbuild@0.28.2/node_modules/esbuild postinstall$ node install.js
+.../esbuild@0.28.2/node_modules/esbuild postinstall: Done
+
+devDependencies:
+- @axe-core/playwright 4.13.0
++ @axe-core/playwright 4.14.0
+- @modelcontextprotocol/client 2.2.0
++ @modelcontextprotocol/client 2.3.1
+- @modelcontextprotocol/core 2.2.0
++ @modelcontextprotocol/core 2.3.1
++ @orca/eslint-config link:tools/eslint-config
+- @playwright/test 1.63.0
++ @playwright/test 1.64.1
+- @types/node 26.6.3
++ @types/node 26.6.5
+- @vitest/coverage-v8 5.0.2
++ @vitest/coverage-v8 5.0.5
+- eslint 10.11.0
++ eslint 10.13.0
++ happy-dom 20.14.5
+- prettier 3.9.9
++ prettier 3.9.10
++ tsx 4.23.15
++ typescript 7.0.2
+- vitest 5.0.2
++ vitest 5.0.5
+
+Done in 24.7s using pnpm v12.4.2

@@ -1,0 +1,7 @@
+{
+  "command": "VITEST_MAX_WORKERS=2 ORCA_RETRY_INTEGRATION=1 pnpm exec vitest run packages/cli/test/admission-retry-wiring.test.ts packages/integrations/test/admission-retry-acp.test.ts",
+  "exitCode": 0,
+  "success": true,
+  "testsPassed": 2,
+  "testsSkipped": 0
+}

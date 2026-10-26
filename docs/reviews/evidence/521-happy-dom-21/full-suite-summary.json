@@ -1,0 +1,232 @@
+{
+  "command": "VITEST_MAX_WORKERS=2 ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm run test:coverage --reporter=default --reporter=json --outputFile.json=/tmp/orca-full-suite.json",
+  "success": true,
+  "exitCode": 0,
+  "filesPassed": 510,
+  "filesSkipped": 5,
+  "filesTotal": 515,
+  "testsPassed": 7948,
+  "testsSkipped": 36,
+  "testsTodo": 1,
+  "testsFailed": 0,
+  "durationSeconds": 988.02,
+  "coverage": {
+    "lines": {
+      "total": 28310,
+      "covered": 26560,
+      "skipped": 0,
+      "pct": 93.81
+    },
+    "statements": {
+      "total": 33455,
+      "covered": 30530,
+      "skipped": 0,
+      "pct": 91.25
+    },
+    "functions": {
+      "total": 7475,
+      "covered": 6971,
+      "skipped": 0,
+      "pct": 93.25
+    },
+    "branches": {
+      "total": 27223,
+      "covered": 23234,
+      "skipped": 0,
+      "pct": 85.34
+    },
+    "branchesTrue": {
+      "total": 0,
+      "covered": 0,
+      "skipped": 0,
+      "pct": 100
+    }
+  },
+  "notPassed": [
+    {
+      "file": "tools/test/ci-shadow-evidence.test.js",
+      "test": "refuses report paths on another Windows drive",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/diagnostics-windows-refusal.test.ts",
+      "test": "repeated actual Windows off/refused attempts and recreation retain no files or key/picker authority",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/first-run-windows.test.ts",
+      "test": "native Windows first-run reviews a missing private child, creates exact samples and preserves the receipt across recreation",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/first-run-windows.test.ts",
+      "test": "native Windows first-run refuses a replaced reviewed parent before creating its child",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/first-run-windows.test.ts",
+      "test": "native Windows first-run refuses hard-linked, reparse and replaced sample assets without changing the receipt",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/first-run-windows.test.ts",
+      "test": "native Windows first-run refuses inherited non-private ACLs and unsafe path namespaces",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/first-run-windows.test.ts",
+      "test": "native Windows first-run refuses physical workspace replacement and uncertified legacy Windows receipts",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/first-run-windows.test.ts",
+      "test": "native Windows first-run releases short recovery locks, refuses competing writers and uses stable native boot identity",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/first-run-windows.test.ts",
+      "test": "native Windows first-run retains a native writer lock across ordinary release and garbage collection",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/first-run.test.ts",
+      "test": "unknown owner identity fails closed",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/guided-launch-adapter.test.ts",
+      "test": "reserved harmless first-run sample binding reports unavailable ownership on Windows without starting the sample",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-fixed-path-native.test.ts",
+      "test": "compiled fixed-path descriptor backend provisions native namespaces once and refuses lost/replaced identity",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-fixed-path-native.test.ts",
+      "test": "compiled fixed-path descriptor backend refuses a missing established journal, unsafe namespace and stale backend",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-fixed-path-native.test.ts",
+      "test": "compiled fixed-path descriptor backend copies and restores the actual protected trees and binary without changing live root inodes",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-fixed-path-native.test.ts",
+      "test": "compiled fixed-path descriptor backend refuses a changed source identity before native destructive restore",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-fixed-path-native.test.ts",
+      "test": "compiled fixed-path descriptor backend retains private modes, internal links and xattrs through the native mutation path",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-fixed-path-native.test.ts",
+      "test": "compiled fixed-path descriptor backend full descriptor flush refuses unsafe/nonprivate handles",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-fixed-path-native.test.ts",
+      "test": "compiled fixed-path descriptor backend a real supervisor SIGKILL after clearing a live root resumes the retained complete pair on the same boot",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path a missing updater root remains unknown without recreating lost recovery authority",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path persists an encrypted >4 KiB identity and keeps fresh bootstrap closed across normal quit",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path refuses competing journal handles, retaining the first owner and durable identity",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path lost before-rename acknowledgement preserves evidence and refuses fresh ordinary startup",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path lost after-rename acknowledgement preserves evidence and refuses fresh ordinary startup",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path refuses ciphertext damage without reset or evidence deletion",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path refuses key damage without reset or evidence deletion",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path refuses symlink damage without reset or evidence deletion",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path refuses hardlink damage without reset or evidence deletion",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path refuses permissions damage without reset or evidence deletion",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path isolates namespaces, refuses evidence removal/export, and fails closed at the 40 KiB envelope bound",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path a root replaced while owned cannot redirect journal writes or reopen that owner",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path a process crash at temp retains closure and releases only its kernel lock",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-replacement-native-storage.test.ts",
+      "test": "disposable native replacement syscall/Node-API path a process crash at committed retains closure and releases only its kernel lock",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/app/test/mac-update-candidates.test.ts",
+      "test": "refuses Windows storage before transport, inspection or owned writes",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/cli/test/admission-retry-wiring.test.ts",
+      "test": "HTTP/WS and legacy start share one real admission, ownership and current authorization",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/integrations/test/admission-retry-acp.test.ts",
+      "test": "ACP metadata keeps retries stable across new sessions and distinguishes intentional new work",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/integrations/test/jev-eval.live.test.ts",
+      "test": "custom:jev-eval against the TypeSafe API (live) records an evaluation artifact from a real answer",
+      "status": "skipped"
+    },
+    {
+      "file": "packages/engine/test/restoration-acceptance.test.ts",
+      "test": "#396 provisional contract bindings: acceptance remains INCOMPLETE [Actual-Cal; final acceptance pending] actual private MCP route inspects and explicitly resumes the agreed permitted plugin",
+      "status": "todo"
+    }
+  ]
+}
