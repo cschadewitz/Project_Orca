@@ -3,7 +3,9 @@
 This is an unregistered command/UI integration under injected owner fixtures. It consumes reviewed
 persistence #731 at `c6157bddec40b438e3425baf52cf65d12355c216`, based on main
 `bc0c57d82925cefa001513b8431355b912e4d462`. Managed design #730 was inspected at
-`9316577892659ee7f758801442adb97913f392d0`; it is not merged into this branch.
+`9316577892659ee7f758801442adb97913f392d0`. Both dependencies are now merged in
+main; this branch non-force merged exact main
+`a4ae53d1d5a8d7945f5c6782da46c833accdb29d` before final integration checks.
 No activation, native provider calls or existing workspace edits occurred.
 
 ## Minimum managed-owner handoff
