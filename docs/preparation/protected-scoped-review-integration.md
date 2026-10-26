@@ -17,10 +17,11 @@ That reviewed fixture is the only inherited app-test change. This slice edits no
 wrapper or app runtime/coverage-test source. Lockfiles, accepted production builds
 and production registration remain unchanged.
 
-Parent subsequently supplied #734
+Parent initially supplied #734
 `c12a2a2aaf5f1f8383aa8a3582d5b4d2dafc4801`. Its actual service source and
 `docs/preparation/tool-execution-guards/owned-read-service-703.md` were inspected
-without incorporating its branch. The handoff below follows its real facade.
+without incorporating its branch at that stage. The handoff below follows its real
+facade. The later reviewed-main integration is recorded below.
 
 ## Canonical provider and lifetime
 
@@ -254,3 +255,47 @@ The original owner/binding/source checks and the verified-per-execution Save gat
 were not modified by this privacy correction. No positive qualified Save evidence
 was manufactured. Final full-suite/global coverage and parent re-review remain
 required before integration acceptance.
+
+## Reviewed-main integration after privacy re-review
+
+Privacy correction `040a00ec4035fdea5e636e91dc22a578f1828cf1` passed independent
+source re-review 5650794546. Parent then authorized non-force integration of main
+`5a58ab7c6944c5a990382e5abcb5a76e4a3af09e`, containing merged #732/#733/#734.
+The local merge completed at `149fa0e84d3d4a2c435efdaa6b422b524e9240e9` with no
+textual conflicts. Its first-parent delta contains only the reviewed owned-read
+service/fence, tests, conformance script and associated documentation/changelog.
+
+Typechecking exposed one semantic integration mismatch: the inherited owned-service
+test qualifier returned provenance without #736's already-required synchronous
+`assertCurrent`. The test adapter now retains its original marker/authority and
+checks cancellation, revocation, authority availability, lease expiry and unchanged
+marker/authority both initially and at the final qualification boundary. Its
+synthetic approval/build assumptions remain explicitly synthetic; this is not an
+accepted protected proof or a verified-per-execution producer.
+
+No public interface was changed for this adaptation. Production engine source is
+byte-identical to reviewed main. The shared agents/provider, CLI gate, daemon,
+store/core/protocol source from `040a00ec` is preserved, including the privacy fix.
+The independent owner-local lifecycle task can retain the existing #736 interfaces.
+Qualification and activation remain unchanged; parent owns targeted re-review and
+final merge.
+
+Validation of the combined tree under `umask 0022`, at most two Vitest workers:
+
+- Focused service/fence/protected-owner/typed-store/bridge/privacy regressions:
+  190 passed across six suites.
+- Affected agents/daemon/CLI/store/core/protocol/engine suites: 4,035 passed,
+  one existing skipped opt-in and one existing restoration-acceptance todo.
+- Explicit CLI/ACP retry integration: two passed, no skips.
+- Root/renderer types, affected engine source/fixture ESLint and Prettier, full
+  TypeScript/Vite build and diff checks passed.
+- Emitted `owned-read-built-conformance.mjs` passed: two real OS reads of ten bytes,
+  two distinct invocations, successful bounded policy refresh, immutable original
+  evidence, close refusal, and no additional reads for repeated dispatch/revocation.
+  Its report remains `qualification: unqualified`, `activation: off`,
+  `coverage: policy-per-ask`, with no installed references. This local report is
+  not accepted build/host qualification or positive daemon Save evidence.
+
+The conformance report's local emitted-build consistency digest was
+`eee9259cc010d6bbc80812b40219d67c521888b10a6b8b7dbc9bef092fe94809`.
+Exact-head hosted CI, global coverage and parent integration re-review remain pending.

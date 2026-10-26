@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import type { OneUsePermitV1, StrictPermissionRule, StrictPermissionState } from "@orca/core";
+import type { ActionEvidenceV1, OneUsePermitV1, StrictPermissionRule, StrictPermissionState } from "@orca/core";
 import { lapsed } from "@orca/store";
 import {
   bindInactiveTypedSidecarOwner,
@@ -12,6 +12,7 @@ import {
   createStrictPolicyPort,
   strictPermissionRuleRevision,
   type TypedCompatibilityMarker,
+  type TypedSidecarSnapshot,
 } from "@orca/agents";
 import {
   createLocalReviewJudge,
@@ -48,27 +49,29 @@ export async function ownedServiceFixture(maximumInvocations = 8) {
       return undefined;
     },
     // Synthetic boot/protected proof assumption. This is NOT service/build qualification.
-    qualify: async () => {
-      const capturedMarker = structuredClone(marker);
-      const authorityRevision = base.state.snapshot.authority.authorityRevision;
+    qualify: async (_snapshot: TypedSidecarSnapshot, _action: ActionEvidenceV1, signal: AbortSignal) => {
+      const originalMarker = structuredClone(marker);
+      const originalAuthority = structuredClone(base.state.snapshot.authority);
+      const assertCurrent = (): undefined => {
+        signal.throwIfAborted();
+        base.abort.signal.throwIfAborted();
+        if (
+          base.state.revoked ||
+          base.state.authorityUnavailable ||
+          lapsed(base.lease, base.clock.now()) ||
+          !isDeepStrictEqual(marker, originalMarker) ||
+          !isDeepStrictEqual(base.state.snapshot.authority, originalAuthority)
+        )
+          throw new Error("test qualification owner/authority/lease changed");
+        return undefined;
+      };
+      assertCurrent();
       return {
         sourceRefs: ["test:protected-record"],
         scopeEvidenceRef: "test:scope",
         approvalRecordRef: "test:approval",
-        authorityRevision,
-        // #736 adds a final synchronous source check. Preserve this fixture's
-        // explicit synthetic proof assumption; this does not qualify its coverage.
-        assertCurrent: (): undefined => {
-          if (
-            !isDeepStrictEqual(marker, capturedMarker) ||
-            base.state.snapshot.authority.authorityRevision !== authorityRevision ||
-            base.state.revoked ||
-            base.state.authorityUnavailable ||
-            lapsed(base.lease, base.clock.now())
-          )
-            throw new Error("test synthetic qualification changed");
-          return undefined;
-        },
+        authorityRevision: originalAuthority.authorityRevision,
+        assertCurrent,
       };
     },
   };
