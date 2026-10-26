@@ -51,6 +51,11 @@ recording completes before consumption. A synchronous last check precedes the on
 claim and registered I/O start, with no intervening await. The I/O promise settles outside
 the mutex. Revocation/current-state providers must share that fence in future production
 integration; this slice provides only synthetic bindings to the existing lease store.
+The fixture's final assertion also checks programmed authority and policy availability.
+An outage beginning during authorization recording leaves the record observed but stops
+before consumption/executor entry, with zero independent reads. Restoring availability
+cannot reopen the same terminal permit. This is fixture hardening of the existing final
+assertion, with no change to engine behavior, policy evaluation or shared contracts.
 
 ## Recording, delivery, dispatch and effect
 
@@ -136,7 +141,7 @@ node tools/eslint-config/bin/check-css-tokens.js packages/app/renderer packages/
 git diff --check
 ```
 
-The focused run passed **8 files / 213 tests**, including **60 engine fence** and
+The focused run passed **8 files / 215 tests**, including **62 engine fence** and
 **10 capture/codec** cases. Root/renderer typechecks, engine/reference package build,
 full repository ESLint and CSS token checks passed. Changed TypeScript formatting and
 diff whitespace checks pass. Full suite/coverage, full renderer build, Electron/native

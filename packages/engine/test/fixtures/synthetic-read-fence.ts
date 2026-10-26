@@ -249,6 +249,7 @@ export async function syntheticReadFixture() {
     mkdirp: () => Promise.reject(new Error("read-only synthetic filesystem")),
   };
   const boundary = new SyntheticReadBoundary({ fs });
+  const policy = new SyntheticPolicy();
   const owner: SyntheticReadOwner = {
     clock,
     signal: abort.signal,
@@ -266,13 +267,14 @@ export async function syntheticReadFixture() {
     assertCurrent(action) {
       if (
         state.revoked ||
+        state.authorityUnavailable ||
+        policy.unavailable ||
         lapsed(lease, clock.now()) ||
         !isDeepStrictEqual(action.invocation, state.snapshot.invocation)
       )
-        throw new Error("synthetic original authority/lease unavailable");
+        throw new Error("synthetic current authority/policy/lease unavailable");
     },
   };
-  const policy = new SyntheticPolicy();
   const executor = {
     codecVersion: boundary.codecVersion,
     capture: (parameters: SyntheticTextRead) => boundary.capture(parameters),

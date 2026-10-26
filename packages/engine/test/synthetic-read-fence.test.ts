@@ -264,6 +264,37 @@ describe("inactive one-use synthetic AgentHost read fence", () => {
     expect(f.reads).toEqual([]);
   });
 
+  it.each(["authority", "policy"] as const)(
+    "%s outage during authorization recording prevents consumption and I/O",
+    async (kind) => {
+      const f = await syntheticReadFixture();
+      const p = await permitted(f);
+      f.state.afterRecord = async () => {
+        if (kind === "authority") f.state.authorityUnavailable = true;
+        else f.policy.unavailable = true;
+      };
+      const receipt = await f.fence.dispatch(p.permit, f.caller.signal);
+      expect(receipt.state).toBe("not-dispatched");
+      expect(f.state.authWrites).toBe(1);
+      expect(f.policy.actions).toHaveLength(3);
+      expect(f.trace).toEqual(["record-authorization"]);
+      expect(f.reads).toEqual([]);
+      expect(f.contents).toEqual([]);
+      const observations = await f.fence.inspect(receipt, f.reader, f.caller.signal);
+      expect(observations.recording.state).toBe("observed");
+      expect(observations.delivery.state).toBe("unknown");
+      expect(observations.dispatch.state).toBe("unknown");
+      expect(observations.effect.state).toBe("unknown");
+      // Availability recovery cannot reopen this recorded, terminal invocation.
+      f.state.authorityUnavailable = false;
+      f.policy.unavailable = false;
+      expect(await f.fence.dispatch(p.permit, new AbortController().signal)).toBe(receipt);
+      expect(f.state.authWrites).toBe(1);
+      expect(f.trace).toEqual(["record-authorization"]);
+      expect(f.reads).toEqual([]);
+    },
+  );
+
   it.each(["capture", "before", "after"] as const)(
     "required record failure at %s cannot authorize/retry an effect",
     async (when) => {
