@@ -2,6 +2,8 @@
 import importlib.util
 import json
 import os
+import selectors
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -180,6 +182,201 @@ class DeploymentTests(unittest.TestCase):
         self.manifest.write_text(json.dumps(self.config))
         with self.assertRaisesRegex(RuntimeError, "inventory"):
             release.Deployment(self.manifest)
+
+    def test_typed_states_refuse_every_effect_and_preserve_existing_journal(self):
+        record = {"previous": str(self.old), "candidate": str(self.new), "token": "retained", "opened": True}
+        release.write_json(self.deployment.pending, record)
+        journal = self.deployment.pending.read_bytes()
+        for state in ("enrolled", "enrollment-pending", "missing", "corrupt", "unknown-build"):
+            observations = []
+            def inspect(action, roles, previous):
+                observations.append((action, roles, previous))
+                raise RuntimeError("typed refused: " + state)
+            self.deployment.typed_inspector = inspect
+            for operation in (lambda: self.deployment.stage("v0.6.2"),
+                              lambda: self.deployment.activate(self.new),
+                              lambda: self.deployment.restore(record),
+                              *(lambda kind=kind: self.deployment.launch(kind, []) for kind in ("cli", "acp", "daemon")),
+                              lambda: self.deployment.exec_release("daemon", [])):
+                with patch.object(release, "run") as run, patch.object(os, "execve") as execute:
+                    with self.assertRaisesRegex(RuntimeError, "typed refused"):
+                        operation()
+                    run.assert_not_called()
+                    execute.assert_not_called()
+                self.assertEqual(self.calls, [])
+                self.assertEqual(self.deployment.pending.read_bytes(), journal)
+                self.assertEqual((self.root / "current").resolve(), self.old)
+            self.assertTrue(all(tuple(role for role, _ in roles) == ("cli", "acp", "daemon")
+                                for _, roles, _ in observations))
+
+    def test_unavailable_stable_bridge_refuses_claims_without_parsing_or_running_selected_code(self):
+        for name in ("typed-workspace", "typed-enrollment.intent", ".orca-typed-workspace"):
+            witness = self.root / name
+            witness.write_bytes(b"corrupt or old typed evidence")
+            with patch.object(os, "execve") as execute:
+                with self.assertRaisesRegex(RuntimeError, "trusted inspection bridge missing"):
+                    self.deployment.launch("daemon", [])
+                with self.assertRaisesRegex(RuntimeError, "trusted inspection bridge missing"):
+                    self.deployment.restore({})
+                execute.assert_not_called()
+            self.assertEqual(witness.read_bytes(), b"corrupt or old typed evidence")
+            self.assertEqual(self.calls, [])
+            witness.unlink()
+
+    def test_previous_root_typed_evidence_refuses_before_restore_even_with_live_legacy(self):
+        record = {"previous": str(self.old), "candidate": str(self.new), "token": "t", "opened": False}
+        release.write_json(self.deployment.pending, record)
+        original = self.deployment.pending.read_bytes()
+        def inspect(action, roles, previous):
+            if str(self.old) in previous:
+                raise RuntimeError("previous root typed; recovery refused")
+            return lambda: None
+        self.deployment.typed_inspector = inspect
+        with self.assertRaisesRegex(RuntimeError, "previous root typed"):
+            self.deployment.restore(record)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.deployment.pending.read_bytes(), original)
+        self.assertEqual((self.root / "current").resolve(), self.old)
+
+    def test_automatic_failure_rollback_cannot_bypass_a_new_typed_refusal(self):
+        refuse = False
+        def inspect(action, roles, previous):
+            if refuse:
+                raise RuntimeError("typed state unavailable; preserve failed candidate")
+            return lambda: None
+        self.deployment.typed_inspector = inspect
+        def health(path):
+            nonlocal refuse
+            if path == self.new:
+                refuse = True
+                raise RuntimeError("synthetic health failure")
+        self.deployment.health = health
+        with self.assertRaisesRegex(RuntimeError, "typed state unavailable"):
+            self.deployment.activate(self.new)
+        self.assertEqual((self.root / "current").resolve(), self.new)
+        self.assertEqual(sum(c[0] == "stop" for c in self.calls), 1)
+        self.assertTrue(self.deployment.pending.exists())
+        self.assertFalse(any(c[0] == "resume" for c in self.calls))
+
+    def test_lost_lifetime_identity_before_intent_preserves_state_and_stops_no_service(self):
+        def health(path):
+            lock = self.root / "typed-lifetime.lock"
+            lock.rename(self.root / "retained-old-lock")
+            lock.write_text("new identity")
+        self.deployment.health = health
+        with self.assertRaisesRegex(RuntimeError, "identity/ownership changed"):
+            self.deployment.activate(self.new)
+        self.assertEqual((self.root / "current").resolve(), self.old)
+        self.assertFalse(self.deployment.pending.exists())
+        self.assertTrue((self.root / "retained-old-lock").exists())
+        self.assertEqual(self.calls, [])
+
+    def test_lost_inspection_refuses_at_final_dispatch_without_spawn(self):
+        calls = 0
+        def inspect(action, roles, previous):
+            def assert_current():
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    raise RuntimeError("retained owner lost")
+            return assert_current
+        self.deployment.typed_inspector = inspect
+        with patch.object(os, "execve") as execute:
+            with self.assertRaisesRegex(RuntimeError, "retained owner lost"):
+                self.deployment.exec_release("cli", ["run"])
+            execute.assert_not_called()
+
+    def test_bool_or_json_cannot_be_inspection_ownership(self):
+        for result in (True, {"state": "enrolled"}, lambda: True):
+            self.deployment.typed_inspector = lambda *args: result
+            with patch.object(os, "execve") as execute:
+                with self.assertRaisesRegex(RuntimeError, "ownership unavailable"):
+                    self.deployment.exec_release("daemon", [])
+                execute.assert_not_called()
+
+    def test_real_paused_daemon_blocks_enrollment_despite_free_admission_lock(self):
+        # A disposable Python fake build executes via the real stable daemon wrapper.
+        script = self.old / "packages/cli/dist/main.js"
+        script.parent.mkdir(parents=True)
+        script.write_text("import os, signal\nprint('held', flush=True)\nos.kill(os.getpid(), signal.SIGSTOP)\nsignal.pause()\n")
+        child = subprocess.Popen([sys.executable, str(Path(__file__).with_name("orca-release.py")),
+                                  "--deployment", str(self.manifest), "daemon"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(child.stdout, selectors.EVENT_READ)
+                self.assertTrue(selector.select(timeout=5), "fake daemon did not reach wrapper exec")
+            self.assertEqual(child.stdout.readline(), b"held\n")
+            _, stopped = os.waitpid(child.pid, os.WUNTRACED)
+            self.assertTrue(os.WIFSTOPPED(stopped))
+            with release.lock(self.root / "admission.lock"):
+                with self.assertRaisesRegex(RuntimeError, "Typed lifetime busy"):
+                    with self.deployment.typed_enrollment_window():
+                        self.fail("paused daemon did not retain lifetime ownership")
+        finally:
+            child.send_signal(signal.SIGCONT)
+            child.terminate()
+            child.communicate(timeout=5)
+
+    def test_surviving_child_retains_lifetime_lock_after_supervisor_exit(self):
+        adapter = str(Path(__file__).with_name("orca-release.py"))
+        code = ("import importlib.util, os, subprocess, sys\n"
+                f"spec=importlib.util.spec_from_file_location('release',{adapter!r})\n"
+                "r=importlib.util.module_from_spec(spec); spec.loader.exec_module(r)\n"
+                f"with r.typed_lifetime_lock(r.Path({str(self.root / 'typed-lifetime.lock')!r})):\n"
+                " subprocess.Popen([sys.executable,'-c','import os,sys; print(os.getpid(),flush=True); sys.stdin.read(1)'],close_fds=False)\n"
+                " os._exit(0)\n")
+        supervisor = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        orphan = None
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(supervisor.stdout, selectors.EVENT_READ)
+                self.assertTrue(selector.select(timeout=5))
+            orphan = int(supervisor.stdout.readline())
+            self.assertEqual(supervisor.wait(timeout=5), 0)
+            with self.assertRaisesRegex(RuntimeError, "Typed lifetime busy"):
+                with self.deployment.typed_enrollment_window():
+                    self.fail("surviving writer lost exclusion")
+            supervisor.stdin.write(b"x")
+            supervisor.stdin.flush()
+            with selectors.DefaultSelector() as selector:
+                selector.register(supervisor.stdout, selectors.EVENT_READ)
+                self.assertTrue(selector.select(timeout=5))
+            self.assertEqual(supervisor.stdout.read(), b"")
+            with self.deployment.typed_enrollment_window():
+                pass
+        finally:
+            if orphan is not None:
+                try:
+                    os.kill(orphan, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            supervisor.stdin.close()
+            supervisor.stdout.close()
+            supervisor.stderr.close()
+            if supervisor.poll() is None:
+                supervisor.kill()
+                supervisor.wait(timeout=5)
+
+    def test_lifetime_identity_replacement_and_alias_refuse_without_removing_evidence(self):
+        path = self.root / "typed-lifetime.lock"
+        with release.typed_lifetime_lock(path) as assertion:
+            retired = self.root / "retired-lifetime.lock"
+            path.rename(retired)
+            path.write_text("replacement")
+            with self.assertRaisesRegex(RuntimeError, "identity/ownership changed"):
+                assertion()
+            self.assertTrue(retired.exists())
+        path.unlink()
+        path.symlink_to(retired)
+        with self.assertRaises(OSError):
+            with release.typed_lifetime_lock(path):
+                self.fail("symlink lock accepted")
+        path.unlink()
+        os.link(retired, path)
+        with self.assertRaisesRegex(RuntimeError, "identity/ownership changed"):
+            with release.typed_lifetime_lock(path):
+                self.fail("hardlink lock accepted")
 
     def test_path_outside_release_directory_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "outside"):

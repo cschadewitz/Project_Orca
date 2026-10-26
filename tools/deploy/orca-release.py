@@ -4,15 +4,19 @@
 Install this adapter outside release directories. All work launchers must use it;
 its shared flock lives for the entire CLI/ACP child lifetime. The managed daemon
 uses the wire admission barrier instead, so an idle service does not block updates.
+An independent typed lifetime lock includes ALL three launch kinds. It is never
+replaced by the admission barrier, process scans, PID checks or lock age.
 """
 import argparse
 import contextlib
 import fcntl
+import functools
 import json
 import os
 from pathlib import Path
 import re
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -75,6 +79,54 @@ def lock(path, exclusive=True):
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, response, code, message, headers, new_url):
         raise RuntimeError("Daemon RPC redirects are refused")
+
+
+@contextlib.contextmanager
+def typed_lifetime_lock(path, exclusive=False):
+    """Stable, no-follow, non-stealable namespace. Descriptor inheritance keeps
+    a surviving exec child protected after its Python supervisor exits.
+    """
+    path = Path(path)
+    if path.parent.resolve(strict=True) != path.parent:
+        raise RuntimeError("Typed lifetime root alias")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        original = os.fstat(fd)
+        def assert_current():
+            named, held = path.lstat(), os.fstat(fd)
+            if (not stat.S_ISREG(held.st_mode) or held.st_nlink != 1 or held.st_uid != os.getuid()
+                    or held.st_mode & 0o077 or (named.st_dev, named.st_ino) != (original.st_dev, original.st_ino)
+                    or (held.st_dev, held.st_ino) != (original.st_dev, original.st_ino)):
+                raise RuntimeError("Typed lifetime identity/ownership changed")
+        assert_current()
+        try:
+            fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("Typed lifetime busy: managed daemon/CLI/ACP ownership retained") from None
+        assert_current()
+        os.set_inheritable(fd, True)
+        yield assert_current
+    finally:
+        os.close(fd)
+
+
+def typed_operation(action):
+    """Updates/recovery participate too: enrollment cannot begin after inspection
+    while a stage/build/stop/restore operation is still in progress.
+    """
+    def decorate(operation):
+        @functools.wraps(operation)
+        def guarded(self, *args, **kwargs):
+            assertion = self.typed_guard(action)
+            with typed_lifetime_lock(self.root / "typed-lifetime.lock") as lifetime:
+                start = len(self._typed_assertions)
+                self._typed_assertions.extend((assertion, lifetime))
+                try:
+                    return operation(self, *args, **kwargs)
+                finally:
+                    del self._typed_assertions[start:]
+        return guarded
+    return decorate
 
 
 def rpc(url, method, params, token_file=None, use_environment=True):
@@ -157,11 +209,13 @@ def select(root, release):
 
 
 class Deployment:
-    def __init__(self, manifest):
+    def __init__(self, manifest, *, typed_inspector=None):
+        # Trusted composition only: never selected from manifest, args or environment.
+        # No production inspector/build map is installed by this default-off change.
+        self.typed_inspector = typed_inspector
+        self._typed_assertions = []
         self.config = json.loads(Path(manifest).read_text())
         self.root = Path(self.config["root"]).resolve()
-        self.root.mkdir(parents=True, exist_ok=True)
-        (self.root / "releases").mkdir(exist_ok=True)
         self.pending = self.root / "activation.json"
         if self.config.get("launchAudit") != "all-cli-acp-and-daemon-launches-migrated":
             raise RuntimeError("Launch inventory is unverified. Inspect wrappers, globs and service manager before bootstrap.")
@@ -171,9 +225,55 @@ class Deployment:
                 raise RuntimeError(f"{key} must be absolute and outside replaceable releases")
         if not self.config["url"].startswith("http://127.0.0.1:"):
             raise RuntimeError("Managed daemon must listen on loopback")
+        self.typed_guard("inspect")()
+        self.root.mkdir(parents=True, exist_ok=True)
+        (self.root / "releases").mkdir(exist_ok=True)
+
+    def typed_dispatch(self, operation, *args, **kwargs):
+        # Every retained assertion is synchronous. No process/await between the
+        # last retained observation and the operation's actual dispatch.
+        for assertion in self._typed_assertions:
+            if assertion() is not None:
+                raise RuntimeError("Typed workspace inspection ownership unavailable")
+        return operation(*args, **kwargs)
+
+    def retain_typed_inspection(self, assertion):
+        self._typed_assertions.append(assertion)
+
+    def typed_guard(self, action, extra_roots=()):
+        """Stable pre-producer boundary. The inspector must resolve every original
+        role and previous/failed root; Python never parses a typed marker/schema.
+        A present claim without the trusted bridge is categorically unavailable.
+        The default legacy adapter cannot enroll a workspace or admit typed code.
+        """
+        roles = tuple((kind, self.config[key]) for kind, key in
+                      (("cli", "cliConfig"), ("acp", "acpConfig"), ("daemon", "daemonConfig")))
+        if self.typed_inspector is not None:
+            assertion = self.typed_inspector(action, roles, tuple(extra_roots))
+            # An inspector returns retained synchronous ownership, never a bool/JSON.
+            if not callable(assertion) or assertion() is not None:
+                raise RuntimeError("Typed workspace inspection ownership unavailable")
+            return assertion
+        claims = [self.root / "typed-workspace", self.root / "typed-enrollment.intent"]
+        for path in (Path(self.config["cwd"]), *(Path(p).parent for _, p in roles), *map(Path, extra_roots)):
+            claims.extend(parent / ".orca-typed-workspace" for parent in (path, *path.parents))
+        if any(os.path.lexists(path) for path in claims):
+            raise RuntimeError("Typed workspace compatibility unavailable: trusted inspection bridge missing; keep enrollment and recovery evidence intact")
+        return lambda: None
+
+    @contextlib.contextmanager
+    def typed_enrollment_window(self):
+        """Internal exclusion mechanism only; not an enrollment command or proof
+        of migrated pre-existing launch inventory. A paused daemon retains its lock.
+        """
+        with typed_lifetime_lock(self.root / "typed-lifetime.lock", exclusive=True) as lifetime:
+            assertion = self.typed_guard("enroll")
+            lifetime()
+            assertion()
+            yield
 
     def systemctl(self, *args):
-        return capture(["systemctl", *(["--user"] if self.config.get("userService", True) else []), *args])
+        return self.typed_dispatch(capture, ["systemctl", *(["--user"] if self.config.get("userService", True) else []), *args])
 
     def health(self, release, url=None, pid=None, token_file=None):
         meta = metadata(release)
@@ -196,48 +296,51 @@ class Deployment:
         return self.config.get("daemonTokenFile") or str(Path(self.config["daemonConfig"]).parent / "auth" / "local-client.token")
 
     def barrier(self, action, token):
-        result = rpc(self.config["url"], "maintenance", {"action": action, "token": token}, token_file=self.token_file())
+        result = self.typed_dispatch(rpc, self.config["url"], "maintenance", {"action": action, "token": token}, token_file=self.token_file())
         if action == "prepare" and not result["ready"]:
             raise RuntimeError("Daemon busy: " + ", ".join(result["active"]))
 
+    @typed_operation("update")
     def stage(self, tag):
+        assertion = self.typed_guard("update")
+        self.retain_typed_inspection(assertion)
         if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
             raise RuntimeError("Use an explicit stable published vX.Y.Z release tag")
         release = self.root / "releases" / tag
         if release.exists():
             raise RuntimeError(f"Release directory already exists: {release}; inspect it rather than overwrite")
-        published = json.loads(capture(["gh", "release", "view", tag, "--repo", self.config["repository"], "--json", "tagName,isDraft,isPrerelease"]))
+        published = json.loads(self.typed_dispatch(capture, ["gh", "release", "view", tag, "--repo", self.config["repository"], "--json", "tagName,isDraft,isPrerelease"]))
         if published["isDraft"] or published["isPrerelease"] or published["tagName"] != tag:
             raise RuntimeError("Target is not a published stable release")
         # Incomplete stages have unique names and are never candidates for activation.
-        stage = Path(tempfile.mkdtemp(prefix=tag + ".staging-", dir=self.root / "releases"))
-        run(["gh", "repo", "clone", self.config["repository"], str(stage), "--", "--branch", tag, "--single-branch", "--depth", "1"])
+        stage = Path(self.typed_dispatch(tempfile.mkdtemp, prefix=tag + ".staging-", dir=self.root / "releases"))
+        self.typed_dispatch(run, ["gh", "repo", "clone", self.config["repository"], str(stage), "--", "--branch", tag, "--single-branch", "--depth", "1"])
         sha = capture(["git", "rev-parse", "HEAD"], cwd=stage)
         manifest = json.loads((stage / "package.json").read_text())
         if manifest["version"] != tag[1:]:
             raise RuntimeError("Published tag and package version disagree")
         contract = json.loads((stage / "release-compatibility.json").read_text())
-        run(["mise", "trust"], cwd=stage)
-        run(["mise", "install"], cwd=stage)
+        self.typed_dispatch(run, ["mise", "trust"], cwd=stage)
+        self.typed_dispatch(run, ["mise", "install"], cwd=stage)
         env = {**os.environ, "ELECTRON_SKIP_BINARY_DOWNLOAD": "1"}
         for args in (["install", "--frozen-lockfile"], ["run", "typecheck"], ["run", "build"]):
-            run(["mise", "exec", "--", "pnpm", *args], cwd=stage, env=env)
+            self.typed_dispatch(run, ["mise", "exec", "--", "pnpm", *args], cwd=stage, env=env)
         node = capture(["mise", "which", "node"], cwd=stage)
         cli = stage / "packages/cli/dist/main.js"
         if capture([node, str(cli), "--version"], cwd=stage) != tag[1:]:
             raise RuntimeError("Built CLI version mismatch")
         # Exercises shipped workflows/templates and the compiled CLI against temporary stores.
         with tempfile.TemporaryDirectory(prefix="orca-validate-") as scratch:
-            run([node, str(cli), "demo", "--dir", scratch], cwd=stage, env=env)
-        write_json(stage / ".orca-release.json", {"version": tag[1:], "sha": sha, "node": node, "compatibility": contract})
+            self.typed_dispatch(run, [node, str(cli), "demo", "--dir", scratch], cwd=stage, env=env)
+        self.typed_dispatch(write_json, stage / ".orca-release.json", {"version": tag[1:], "sha": sha, "node": node, "compatibility": contract})
         for config_key in ("cliConfig", "acpConfig", "daemonConfig"):
-            run([node, str(cli), "--config", self.config[config_key], "validate"],
+            self.typed_dispatch(run, [node, str(cli), "--config", self.config[config_key], "validate"],
                 cwd=self.config["cwd"], env={**env, "ORCA_RELEASE": str(stage)})
         with tempfile.TemporaryDirectory(prefix="orca-health-") as scratch:
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]
-            child = subprocess.Popen([node, str(cli), "--cwd", scratch, "serve", "--port", str(port)],
+            child = self.typed_dispatch(subprocess.Popen, [node, str(cli), "--cwd", scratch, "serve", "--port", str(port)],
                                      cwd=stage, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
                 self.health(stage, f"http://127.0.0.1:{port}", child.pid,
@@ -251,8 +354,8 @@ class Deployment:
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait()
-        os.rename(stage, release)
-        sync_dir(release.parent)
+        self.typed_dispatch(os.rename, stage, release)
+        self.typed_dispatch(sync_dir, release.parent)
         return release.resolve()
 
     def inspect_processes(self):
@@ -284,7 +387,10 @@ class Deployment:
             raise RuntimeError("Managed daemon lacks the persistent admission guard; migrate its launcher first")
         return service_pid
 
+    @typed_operation("update")
     def activate(self, candidate):
+        assertion = self.typed_guard("update", (str(candidate),))
+        self.retain_typed_inspection(assertion)
         with lock(self.root / "admission.lock"):
             if self.pending.exists():
                 raise RuntimeError("Interrupted activation exists. Run recover before another update.")
@@ -300,32 +406,35 @@ class Deployment:
             # The daemon checks this durable admission file before every operation,
             # including after a supervisor restart. Write it BEFORE inspecting activity.
             record = {"previous": str(previous), "candidate": str(candidate), "token": token, "opened": True}
-            write_json(self.pending, record)
+            self.typed_dispatch(write_json, self.pending, record)
             try:
                 self.barrier("prepare", token)
             except Exception as error:
                 if str(error).startswith("Daemon busy:"):
-                    self.pending.unlink()
-                    sync_dir(self.root)
+                    self.typed_dispatch(self.pending.unlink)
+                    self.typed_dispatch(sync_dir, self.root)
                 # An uncertain prepare keeps admission closed for explicit recovery.
                 raise
             record["opened"] = False
-            write_json(self.pending, record)
+            self.typed_dispatch(write_json, self.pending, record)
             try:
                 self.systemctl("stop", self.config["service"])
-                select(self.root, candidate)
+                self.typed_dispatch(select, self.root, candidate)
                 self.systemctl("start", self.config["service"])
                 self.health(candidate)
                 record["opened"] = True
-                write_json(self.pending, record)
+                self.typed_dispatch(write_json, self.pending, record)
                 self.barrier("resume", token)
-                self.pending.unlink()
-                sync_dir(self.root)
+                self.typed_dispatch(self.pending.unlink)
+                self.typed_dispatch(sync_dir, self.root)
             except Exception as error:
                 self.restore(record)
                 raise RuntimeError(f"Activation failed; previous release restored and healthy: {error}") from error
 
+    @typed_operation("rollback")
     def restore(self, record):
+        assertion = self.typed_guard("rollback", tuple(record.get(key, "") for key in ("previous", "candidate")))
+        self.retain_typed_inspection(assertion)
         previous, candidate = Path(record["previous"]), Path(record["candidate"])
         compatible(previous, candidate)
         # Once resume was attempted its outcome can be uncertain (including a crash after
@@ -335,27 +444,37 @@ class Deployment:
             self.barrier("prepare", record["token"])
         # Otherwise every candidate/previous service started closed under this journal.
         self.systemctl("stop", self.config["service"])
-        select(self.root, previous)
+        self.typed_dispatch(select, self.root, previous)
         self.systemctl("start", self.config["service"])
         self.health(previous)
         record["opened"] = True
-        write_json(self.pending, record)
+        self.typed_dispatch(write_json, self.pending, record)
         self.barrier("resume", record["token"])
-        self.pending.unlink()
-        sync_dir(self.root)
+        self.typed_dispatch(self.pending.unlink)
+        self.typed_dispatch(sync_dir, self.root)
 
     def launch(self, kind, args):
-        if kind == "daemon":
-            self.exec_release(kind, args)
-        else:
-            with lock(self.root / "admission.lock", exclusive=False) as lease:
-                if self.pending.exists():
-                    raise RuntimeError("Activation/recovery pending; retry after recovery")
-                # exec preserves the shared lock for the whole process and its children.
-                os.set_inheritable(lease.fileno(), True)
+        # This lock includes the daemon, which must still bypass admission.lock
+        # during a legacy closed update. Keep the descriptor inherited across exec.
+        with typed_lifetime_lock(self.root / "typed-lifetime.lock") as lifetime:
+            lifetime()
+            self.typed_guard("launch")()
+            if kind == "daemon":
                 self.exec_release(kind, args)
+            else:
+                with lock(self.root / "admission.lock", exclusive=False) as lease:
+                    if self.pending.exists():
+                        raise RuntimeError("Activation/recovery pending; retry after recovery")
+                    os.set_inheritable(lease.fileno(), True)
+                    self.exec_release(kind, args)
 
     def exec_release(self, kind, args):
+        # Direct callers get the same lifetime boundary as launch().
+        with typed_lifetime_lock(self.root / "typed-lifetime.lock") as lifetime:
+            self._exec_release(kind, args, lifetime)
+
+    def _exec_release(self, kind, args, lifetime):
+        assertion = self.typed_guard("launch")
         release = (self.root / "current").resolve(strict=True)
         meta = metadata(release)
         env = {**os.environ, "ORCA_RELEASE": str(release)}
@@ -373,6 +492,10 @@ class Deployment:
             if "serve" in args:
                 raise RuntimeError("Use the managed daemon service, not the CLI launcher")
             command += args
+        # No await/process dispatch between the retained assertion and exec.
+        if assertion() is not None:
+            raise RuntimeError("Typed workspace inspection ownership unavailable")
+        lifetime()
         os.execve(meta["node"], command, env)
 
 
@@ -385,6 +508,7 @@ def main():
     deploy = Deployment(options.deployment)
     if options.action in ("cli", "acp", "daemon"):
         return deploy.launch(options.action, options.args)
+    deploy.typed_guard("rollback" if options.action == "recover" else "update")()
     with lock(deploy.root / "update.lock"):
         if options.action == "recover":
             with lock(deploy.root / "admission.lock"):
