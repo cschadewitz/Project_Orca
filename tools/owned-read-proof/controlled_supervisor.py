@@ -100,6 +100,54 @@ def prepare(base, image, lifetime, command, ack, phases):
     return plan
 
 
+def prepare_connected(base, image, lifetime, command, ack, phases, designation):
+    """Prepare association bytes only; never send a command or launch a child.
+
+    The parent must explicitly designate original closed bootstrap evidence in
+    memory. Source/image checks remain mandatory. Complete connected private-I/O
+    replay and authenticated authority/delivery semantics are still pending.
+    """
+    from controlled_connected import ConnectedDesignation
+    require(type(designation) is ConnectedDesignation, 'missing explicit connected designation')
+    designation.check()
+    require(str(image) == designation.image, 'connected image is not original designated image')
+    require(base.is_absolute() and str(base) != designation.bootstrap_base and
+            Path(designation.bootstrap_base) not in base.parents and base not in Path(designation.bootstrap_base).parents,
+            'connected base reuses bootstrap lifetime/root')
+    require(list(base.iterdir()) == [base / 'lifetime.lock'], 'connected base is not fresh')
+    require(stat.S_ISDIR(base.lstat().st_mode), 'connected base is not an original directory')
+    require(fd_identity(lifetime) == identity(base / 'lifetime.lock') and
+            fd_identity(lifetime)[:2] != designation.bootstrap_lifetime[:2],
+            'connected lifetime aliases original bootstrap')
+    require(re.search(r'FLOCK\s+ADVISORY\s+WRITE\s+' + str(os.getpid()) + r'\s+',
+            Path(f'/proc/self/fdinfo/{lifetime}').read_text()), 'connected lifetime has no original supervisor flock')
+    other = os.open(base / 'lifetime.lock', os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        try:
+            fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            raise RuntimeError('connected lifetime exclusion missing')
+    finally:
+        os.close(other)
+    require(len({lifetime, command, ack}) == 3 and all(n > 2 for n in (lifetime, command, ack)) and
+            stat.S_ISFIFO(os.fstat(command).st_mode) and stat.S_ISFIFO(os.fstat(ack).st_mode) and
+            fd_identity(command)[:2] != fd_identity(ack)[:2], 'connected control descriptor aliases')
+    require([p['name'] for p in phases] == ['save', 'human-read', 'rule-read'], 'wrong connected phase order')
+    require(len({p['token'] for p in phases}) == 3 and all(type(p['token']) is str and
+            re.fullmatch(r'[0-9a-f]{64}', p['token']) for p in phases), 'wrong connected phase token')
+    assert_image_sources(image)
+    plan = prepare(base, image, lifetime, command, ack, phases)
+    plan['lane'] = 'connected'
+    plan['bootstrap'] = designation.association(plan['inventory'])
+    plan['originalFiles'][designation.evidence_path] = {
+        'identity': list(designation.proof[0][:5]), 'sha256': digest(designation.proof[1])}
+    (base / 'controlled-plan.json').write_text(encoded(plan))
+    designation.check()
+    return plan
+
+
 def runtime_originals(node):
     # Fixed loader/config/query paths, plus the exact loader-resolved shared
     # libraries of this retained Node binary. No external package-root exemption.

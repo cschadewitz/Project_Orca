@@ -169,10 +169,29 @@ class Replay:
         self.ack = original['ackFd']
         self.lifetime = original['lifetimeFd']
         require(len({self.command, self.ack, self.lifetime}) == 3, 'aliased inherited control descriptors')
+        self.validate_lane()
+
+    def validate_lane(self):
+        original = self.original
         require(original['lane'] == 'bootstrap', 'connected replay is not implemented')
         require(len(original['phases']) == 1 and original['phases'][0]['name'] == 'bootstrap', 'wrong bootstrap phase plan')
         require(re.fullmatch(r'[0-9a-f]{64}', original['phases'][0]['token']) is not None, 'bad retained token')
         require(original['phases'][0]['token'] not in original['usedTokens'], 'replayed retained token')
+
+    def required_marks(self):
+        return 2
+
+    def validate_reads(self, obj):
+        require(len(getattr(obj, 'reads', [])) == 1, 'bootstrap must have exactly one actual service read')
+
+    def read_phase(self, record):
+        require(len(self.marks) == 1, 'resource read outside bootstrap phase')
+
+    def control_phase(self):
+        return self.original['phases'][0], len(self.marks) == 1
+
+    def evidence_record(self):
+        return 'controlled-bootstrap-kernel-evidence'
 
     def add_original(self, path, value, data, family):
         dev, ino, mode, uid, gid = value
@@ -477,7 +496,7 @@ class Replay:
             except (RuntimeError, KeyError, ValueError, IndexError) as error:
                 raise RuntimeError(f'line {record[4]} {record[1]}: {error}') from error
         require(self.execs == 1 and self.threads == self.settled, 'incomplete process settlement')
-        require(len(self.marks) == 2, 'missing bootstrap command/ack')
+        require(len(self.marks) == self.required_marks(), 'missing lane command/ack')
         if self.native_queries:
             require(self.native_completed == list(NATIVE_QUERIES) and self.javascript_opened and
                     self.original['kernelRuntimeQueries']['traceAnchorLine'] < self.marks[0][5],
@@ -494,7 +513,7 @@ class Replay:
         require(obj.names == set() and obj.physical is not None and obj.stats >= {0, 1} and
                 not any(h.obj is obj for h in self.handles.values()), 'unsettled resource lineage')
         require(obj.data == bytes.fromhex(self.original['inputHex']), 'resource content differs')
-        require(len(getattr(obj, 'reads', [])) == 1, 'bootstrap must have exactly one actual service read')
+        self.validate_reads(obj)
         for a, b in self.open_intervals:
             require(not (a <= obj.unlink_completion and b >= obj.creation_entry), 'ambiguous open intersects named resource lifetime')
         for a, b, target in self.descriptor_intervals:
@@ -548,9 +567,9 @@ class Replay:
             if item.published:
                 self.durable_publication(item)
         notification_proofs = self.prove_notifications()
-        return {'record': 'controlled-bootstrap-kernel-evidence', 'authority': 'none',
+        return {'record': self.evidence_record(), 'authority': 'none',
                 'traceSha256': sha(text.encode()), 'traceBytes': len(text.encode()),
-                'settledThreads': len(self.settled), 'serviceReads': 1,
+                'settledThreads': len(self.settled), 'serviceReads': len(obj.reads),
                 'resourcePhysical': list(obj.physical), 'resultHex': obj.reads[0].hex(),
                 'waitIntervalsRetained': len(self.waits), 'syscalls': dict(self.counts),
                 'notificationCounterProofs': notification_proofs}
@@ -904,12 +923,12 @@ class Replay:
             if entered != completed:
                 self.descriptor_intervals.append((entered, completed, obj))
             if number in {self.command, self.ack} and call in {'read', 'write'}:
-                ack = len(self.marks) == 1
-                expected = wire(self.original['phases'][0], ack)
-                require(len(self.marks) < 2 and pid == self.leader and call == ('write' if ack else 'read') and
+                phase, ack = self.control_phase()
+                expected = wire(phase, ack)
+                require(len(self.marks) < self.required_marks() and pid == self.leader and call == ('write' if ack else 'read') and
                         number == (self.ack if ack else self.command) and args[2] == str(len(expected)) and
                         result == str(len(expected)) and string(args[1]) == expected, 'control command/ack differs')
-                require(not self.marks or entered > self.marks[0][5], 'overlapping command/ack')
+                require(not self.marks or entered > self.marks[-1][5], 'overlapping command/ack')
                 self.marks.append(record)
                 return
             if call == 'fcntl':
@@ -1001,7 +1020,7 @@ class Replay:
                         require(call == 'pread64' and pid == self.leader and not obj.names and hasattr(obj, 'reader') and
                                 number == obj.reader and args[2:] == [str(self.original['length']), str(self.original['offset'])],
                                 'noncanonical resource read')
-                        require(len(self.marks) == 1, 'resource read outside bootstrap phase')
+                        self.read_phase(record)
                         obj.reads = getattr(obj, 'reads', []) + [expected]
                         obj.effect_entries = getattr(obj, 'effect_entries', []) + [entered]
                 elif call == 'write':
