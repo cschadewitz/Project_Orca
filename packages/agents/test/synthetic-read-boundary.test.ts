@@ -15,7 +15,7 @@ function fixture() {
     existsMany: (paths) => Promise.resolve(paths.map(() => false)),
     mkdirp: () => Promise.reject(new Error("read-only fixture")),
   };
-  return { boundary: new SyntheticReadBoundary({ fs }), observed };
+  return { boundary: new SyntheticReadBoundary({ fs }), observed, fs };
 }
 
 describe("inactive synthetic AgentHost read capture", () => {
@@ -30,6 +30,14 @@ describe("inactive synthetic AgentHost read capture", () => {
     expect(observed).toEqual(["/synthetic/../exact.txt "]);
     expect(Object.isFrozen(boundary.inspect(captured))).toBe(true);
     expect(() => Object.assign(boundary.inspect(captured), { path: "/changed" })).toThrow();
+  });
+
+  it("retains the original host read capability", async () => {
+    const { boundary, observed, fs } = fixture();
+    const captured = boundary.capture({ path: "/fixture" });
+    fs.readFile = () => Promise.reject(new Error("substituted host"));
+    expect(await boundary.read(captured)).toBe("first\nsecond\nthird\nfourth");
+    expect(observed).toEqual(["/fixture"]);
   });
 
   it.each([
@@ -51,6 +59,33 @@ describe("inactive synthetic AgentHost read capture", () => {
     const foreign = fixture().boundary.capture({ path: "/fixture" });
     await expect(boundary.read(foreign)).rejects.toThrow("Unknown synthetic read capture");
     await expect(boundary.read(structuredClone(boundary.capture({ path: "/fixture" })))).rejects.toThrow();
+    expect(observed).toEqual([]);
+  });
+
+  it("binds omitted, null, explicit undefined, zero and negative zero distinctly", () => {
+    const { boundary } = fixture();
+    // Explicit undefined is outside ACP JSON, but cannot alias an omitted JS field at this internal seam.
+    const parameters = [
+      { path: "/fixture" },
+      { path: "/fixture", line: null },
+      { path: "/fixture", line: undefined } as unknown as Parameters<typeof boundary.capture>[0],
+      { path: "/fixture", line: 0 },
+      { path: "/fixture", line: -0 },
+    ];
+    expect(new Set(parameters.map((value) => boundary.encode(boundary.capture(value)))).size).toBe(5);
+  });
+
+  it("refuses unsupported fields, oversized paths and noninteger parameters before fenced use", () => {
+    const { boundary, observed } = fixture();
+    for (const value of [
+      { path: "/fixture", extra: "unbound" },
+      { path: "x".repeat(4097) },
+      { path: "/fixture", line: NaN },
+      { path: "/fixture", line: Infinity },
+      { path: "/fixture", limit: 1.5 },
+      { path: "/fixture", limit: Number.MAX_SAFE_INTEGER + 1 },
+    ])
+      expect(() => boundary.encode(boundary.capture(value))).toThrow();
     expect(observed).toEqual([]);
   });
 });

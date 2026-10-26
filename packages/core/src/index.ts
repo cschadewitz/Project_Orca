@@ -30,3 +30,6 @@ export * from "./model/revision-input.js";
 export * from "./model/continuation-admission.js";
 
 export * from "./events/event-payload.js";
+
+// Shared #700/#702 vocabulary only; no runtime registration or activation.
+export type * from "./model/tool-execution-guards.js";
