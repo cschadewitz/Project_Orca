@@ -64,6 +64,12 @@ the instantaneous `settled` record. This conservative default covers descriptor
 close/factories, path metadata and process/memory effects, and applies to any new
 supported call without adding a second effect list. A passive wait does not
 establish a phase effect; its record remains available for full replay.
+These timing-call exceptions are framing assumptions, not proof of arbitrary
+output-memory or alias non-effects: clock calls write output pointers, and an
+interrupted sleep can write remainder data. This parser does not model arbitrary
+user memory and makes no blanket claim that memory effects cannot cross a phase
+boundary. The full positive verifier must reject writable resource/private-file
+mappings or aliases and independently account for descriptor and path effects.
 All `futex` crossings refuse, including WAIT forms: PI locking, WAKE_OP and
 unknown opcodes cannot inherit passive status from the syscall name. Whether
 the actual producer needs a precisely decoded nonmutating WAIT form remains

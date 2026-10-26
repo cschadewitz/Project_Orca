@@ -28,6 +28,11 @@ OPEN_FLAGS = ({'O_RDONLY', 'O_CLOEXEC'},
 # A new supported syscall therefore refuses crossing intervals by default.
 # All futex crossings refuse, including WAIT: the syscall name alone does not
 # distinguish nonmutating waits from PI locks, WAKE_OP or unknown opcodes.
+# "Passive" is a timing-call framing assumption, not proof of no memory effects:
+# clock calls write output pointers; interrupted sleeps can write remainder data.
+# This parser models no arbitrary user memory. Full replay must independently
+# account for descriptor/path effects and reject writable resource/private-file
+# mappings or aliases; crossing timing-call records remain available for replay.
 BOUNDARY_PASSIVE = {'clock_gettime', 'clock_nanosleep', 'nanosleep',
                     'gettimeofday', 'sched_yield', 'settled'}
 
