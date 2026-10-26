@@ -1,0 +1,357 @@
+{
+  "format": "orca.claude-qualification-scenarios/1",
+  "execution": "none",
+  "authority": "synthetic-protocol-only",
+  "note": "Native behaviour below is a synthetic hypothesis per scenario, never an observation of Claude. Command strings are data and are never executed.",
+  "inputs": {
+    "typed-a": { "tool": "orca_fixture_mark", "input": { "caseId": "cached-a", "value": "ok" } },
+    "typed-b": { "tool": "orca_fixture_mark", "input": { "caseId": "cached-b", "value": "ok" } },
+    "shell-a": { "tool": "Bash", "input": { "command": "printf 'orca-704\\n'" } },
+    "shell-b": { "tool": "Bash", "input": { "command": "printf 'changed\\n'" } }
+  },
+  "cwds": { "ws-a": "/fixture/workspace-a", "ws-b": "/fixture/workspace-b" },
+  "approved": { "cwd": "ws-a", "inputs": ["typed-a", "typed-b", "shell-a"] },
+  "externallyCovered": {
+    "claude-option-forged": "tools/test/provider-enforcement-source-704-705.test.js"
+  },
+  "scenarios": [
+    {
+      "id": "allow-cached-revoke",
+      "vectors": ["claude-cached", "claude-revoked"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [
+        { "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-a" },
+        { "call": "call-2", "toolUseId": "tu-2", "input": "typed-a", "cwd": "ws-a" },
+        { "revoke": true },
+        { "call": "call-3", "toolUseId": "tu-3", "input": "typed-a", "cwd": "ws-a" }
+      ],
+      "expect": {
+        "counts": { "hookChecks": 3, "nativeAsks": 1, "orcaAllows": 2, "effects": 2 },
+        "calls": { "call-1": "effect", "call-2": "effect", "call-3": "no-effect" },
+        "reasons": { "call-3": "rule-revoked" },
+        "violations": [],
+        "cachedRepeatChecked": true,
+        "revocationBlocked": true,
+        "decision": "UNKNOWN"
+      }
+    },
+    {
+      "id": "allow-cached-revoke-shell",
+      "vectors": ["claude-cached", "claude-revoked"],
+      "row": "shell",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [
+        { "call": "call-1", "toolUseId": "tu-1", "input": "shell-a", "cwd": "ws-a" },
+        { "call": "call-2", "toolUseId": "tu-2", "input": "shell-a", "cwd": "ws-a" },
+        { "revoke": true },
+        { "call": "call-3", "toolUseId": "tu-3", "input": "shell-a", "cwd": "ws-a" }
+      ],
+      "expect": {
+        "counts": { "hookChecks": 3, "nativeAsks": 1, "orcaAllows": 2, "effects": 2 },
+        "calls": { "call-1": "effect", "call-2": "effect", "call-3": "no-effect" },
+        "reasons": { "call-3": "rule-revoked" },
+        "violations": [],
+        "cachedRepeatChecked": true,
+        "revocationBlocked": true,
+        "decision": "UNKNOWN"
+      }
+    },
+    {
+      "id": "cached-hook-skipped-typed",
+      "vectors": ["claude-cached"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "skipped", "failurePolicy": "block" },
+      "steps": [
+        { "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-a" },
+        { "call": "call-2", "toolUseId": "tu-2", "input": "typed-a", "cwd": "ws-a" }
+      ],
+      "expect": {
+        "counts": { "hookChecks": 1, "nativeAsks": 1, "orcaAllows": 1, "effects": 1 },
+        "calls": { "call-1": "effect", "call-2": "no-effect" },
+        "reasons": { "call-2": "no-permit" },
+        "violations": ["cached-repeat-not-checked", "dispatch-not-checked"],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "SYNTHETIC-VIOLATION-DETECTED"
+      }
+    },
+    {
+      "id": "cached-hook-skipped-shell",
+      "vectors": ["claude-cached"],
+      "row": "shell",
+      "native": { "cachedRepeatHook": "skipped", "failurePolicy": "block" },
+      "steps": [
+        { "call": "call-1", "toolUseId": "tu-1", "input": "shell-a", "cwd": "ws-a" },
+        { "call": "call-2", "toolUseId": "tu-2", "input": "shell-a", "cwd": "ws-a" }
+      ],
+      "expect": {
+        "counts": { "hookChecks": 1, "nativeAsks": 1, "orcaAllows": 1, "effects": 2 },
+        "calls": { "call-1": "effect", "call-2": "effect" },
+        "reasons": {},
+        "violations": ["cached-repeat-not-checked", "dispatch-not-checked", "effect-without-orca-allow"],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "SYNTHETIC-VIOLATION-DETECTED"
+      }
+    },
+    {
+      "id": "command-changed-after-check",
+      "vectors": ["claude-command-changed", "claude-later-rewrite"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [{ "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-a", "finalInput": "typed-b" }],
+      "expect": {
+        "counts": { "hookChecks": 1, "nativeAsks": 1, "orcaAllows": 1, "effects": 0 },
+        "calls": { "call-1": "no-effect" },
+        "reasons": { "call-1": "final-binding-mismatch" },
+        "violations": [],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "UNKNOWN"
+      }
+    },
+    {
+      "id": "command-changed-after-check-shell",
+      "vectors": ["claude-command-changed", "claude-later-rewrite"],
+      "row": "shell",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [{ "call": "call-1", "toolUseId": "tu-1", "input": "shell-a", "cwd": "ws-a", "finalInput": "shell-b" }],
+      "expect": {
+        "counts": { "hookChecks": 1, "nativeAsks": 1, "orcaAllows": 1, "effects": 1 },
+        "calls": { "call-1": "effect" },
+        "reasons": {},
+        "violations": ["effect-binding-mismatch"],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "SYNTHETIC-VIOLATION-DETECTED"
+      }
+    },
+    {
+      "id": "cwd-changed-after-check",
+      "vectors": ["claude-cwd-changed"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [{ "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-a", "finalCwd": "ws-b" }],
+      "expect": {
+        "counts": { "hookChecks": 1, "nativeAsks": 1, "orcaAllows": 1, "effects": 0 },
+        "calls": { "call-1": "no-effect" },
+        "reasons": { "call-1": "final-binding-mismatch" },
+        "violations": [],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "UNKNOWN"
+      }
+    },
+    {
+      "id": "cwd-unapproved-at-check",
+      "vectors": ["claude-cwd-changed"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [{ "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-b" }],
+      "expect": {
+        "counts": { "hookChecks": 1, "nativeAsks": 0, "orcaAllows": 0, "effects": 0 },
+        "calls": { "call-1": "no-effect" },
+        "reasons": { "call-1": "no-approved-match" },
+        "violations": [],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "UNKNOWN"
+      }
+    },
+    {
+      "id": "stale-binding-revoked-before-dispatch",
+      "vectors": ["claude-revoked"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [
+        { "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-a", "revoke": "after-decision" }
+      ],
+      "expect": {
+        "counts": { "hookChecks": 1, "nativeAsks": 1, "orcaAllows": 1, "effects": 0 },
+        "calls": { "call-1": "no-effect" },
+        "reasons": { "call-1": "fence-not-dispatched" },
+        "violations": [],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "UNKNOWN"
+      }
+    },
+    {
+      "id": "replayed-invocation",
+      "vectors": ["claude-replay"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [
+        { "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-a" },
+        { "replay": "call-1", "as": "call-1r" },
+        { "execute": "call-1" }
+      ],
+      "expect": {
+        "counts": { "hookChecks": 2, "nativeAsks": 1, "orcaAllows": 1, "effects": 1 },
+        "calls": { "call-1": "effect", "call-1r": "no-effect" },
+        "reasons": { "call-1r": "invocation-already-registered" },
+        "violations": [],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "UNKNOWN"
+      }
+    },
+    {
+      "id": "concurrent-identical-distinct-invocations",
+      "vectors": ["claude-concurrent"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [
+        { "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-a", "phase": "hook" },
+        { "call": "call-2", "toolUseId": "tu-2", "input": "typed-a", "cwd": "ws-a", "phase": "hook" },
+        { "execute": "call-2", "permitOf": "call-1" },
+        { "execute": "call-1" },
+        { "execute": "call-2" }
+      ],
+      "expect": {
+        "counts": { "hookChecks": 2, "nativeAsks": 1, "orcaAllows": 2, "effects": 2 },
+        "calls": { "call-1": "effect", "call-2": "effect" },
+        "reasons": {},
+        "refusals": ["foreign-permit"],
+        "violations": [],
+        "cachedRepeatChecked": true,
+        "revocationBlocked": false,
+        "decision": "UNKNOWN"
+      }
+    },
+    {
+      "id": "cancelled-while-pending",
+      "vectors": ["claude-cancel-late"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [{ "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-a", "cancel": "pending" }],
+      "expect": {
+        "counts": { "hookChecks": 1, "nativeAsks": 0, "orcaAllows": 0, "effects": 0 },
+        "calls": { "call-1": "no-effect" },
+        "reasons": { "call-1": "pending-cancelled" },
+        "violations": [],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "UNKNOWN"
+      }
+    },
+    {
+      "id": "cancelled-before-dispatch",
+      "vectors": ["claude-cancel-late"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [
+        { "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-a", "cancel": "before-dispatch" }
+      ],
+      "expect": {
+        "counts": { "hookChecks": 1, "nativeAsks": 1, "orcaAllows": 1, "effects": 0 },
+        "calls": { "call-1": "no-effect" },
+        "reasons": { "call-1": "fence-not-dispatched" },
+        "violations": [],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "UNKNOWN"
+      }
+    },
+    {
+      "id": "late-response-native-continues",
+      "vectors": ["claude-cancel-late", "claude-outage"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "continue" },
+      "steps": [{ "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-a", "transport": "late" }],
+      "expect": {
+        "counts": { "hookChecks": 1, "nativeAsks": 1, "orcaAllows": 0, "effects": 0 },
+        "calls": { "call-1": "no-effect" },
+        "reasons": { "call-1": "pending-cancelled" },
+        "refusals": ["no-permit"],
+        "violations": ["native-continued-after-hook-failure"],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "SYNTHETIC-VIOLATION-DETECTED"
+      }
+    },
+    {
+      "id": "unprotected-configuration-preflight",
+      "vectors": ["all-config-drift"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "hypothesis": { "protectedOwnership": "agent-writable" },
+      "steps": [{ "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-a" }],
+      "expect": {
+        "preflight": "unsupported:protected-ownership",
+        "counts": { "hookChecks": 0, "nativeAsks": 0, "orcaAllows": 0, "effects": 0 },
+        "calls": {},
+        "reasons": {},
+        "violations": [],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "UNKNOWN"
+      }
+    },
+    {
+      "id": "configuration-mutated-mid-run",
+      "vectors": ["all-config-drift"],
+      "row": "typed",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [
+        { "call": "call-1", "toolUseId": "tu-1", "input": "typed-a", "cwd": "ws-a" },
+        { "mutateConfig": "remove-hook" },
+        { "call": "call-2", "toolUseId": "tu-2", "input": "typed-a", "cwd": "ws-a" }
+      ],
+      "expect": {
+        "counts": { "hookChecks": 1, "nativeAsks": 1, "orcaAllows": 1, "effects": 1 },
+        "calls": { "call-1": "effect", "call-2": "no-effect" },
+        "reasons": { "call-2": "no-permit" },
+        "violations": ["cached-repeat-not-checked", "configuration-mutated", "dispatch-not-checked"],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "SYNTHETIC-VIOLATION-DETECTED"
+      }
+    },
+    {
+      "id": "unmatched-route-shell",
+      "vectors": ["all-bypass"],
+      "row": "shell",
+      "native": { "cachedRepeatHook": "every-dispatch", "failurePolicy": "block" },
+      "steps": [{ "call": "call-1", "toolUseId": "tu-1", "input": "shell-a", "cwd": "ws-a", "route": "unmatched" }],
+      "expect": {
+        "counts": { "hookChecks": 0, "nativeAsks": 1, "orcaAllows": 0, "effects": 1 },
+        "calls": { "call-1": "effect" },
+        "reasons": {},
+        "violations": ["dispatch-not-checked", "effect-without-orca-allow"],
+        "cachedRepeatChecked": false,
+        "revocationBlocked": false,
+        "decision": "SYNTHETIC-VIOLATION-DETECTED"
+      }
+    }
+  ],
+  "failureMatrix": {
+    "vectors": {
+      "unavailable": ["claude-outage", "claude-checker-death"],
+      "crash": ["claude-checker-death"],
+      "timeout": ["claude-outage"],
+      "malformed": ["claude-malformed"],
+      "empty": ["claude-malformed"]
+    },
+    "policies": ["block", "continue"],
+    "rows": ["typed", "shell"],
+    "expect": {
+      "block": {
+        "counts": { "hookChecks": 1, "nativeAsks": 0, "orcaAllows": 0, "effects": 0 },
+        "violations": [],
+        "decision": "UNKNOWN"
+      },
+      "continue-typed": {
+        "counts": { "hookChecks": 1, "nativeAsks": 1, "orcaAllows": 0, "effects": 0 },
+        "violations": ["native-continued-after-hook-failure"],
+        "decision": "SYNTHETIC-VIOLATION-DETECTED"
+      },
+      "continue-shell": {
+        "counts": { "hookChecks": 1, "nativeAsks": 1, "orcaAllows": 0, "effects": 1 },
+        "violations": ["effect-without-orca-allow", "native-continued-after-hook-failure"],
+        "decision": "SYNTHETIC-VIOLATION-DETECTED"
+      }
+    }
+  }
+}
