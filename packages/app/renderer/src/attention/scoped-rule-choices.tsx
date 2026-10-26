@@ -135,7 +135,7 @@ export function ScopedRuleChoices({
   };
 
   return (
-    <div ref={region} tabIndex={-1} aria-label="Scoped permission review">
+    <div ref={region} role="group" tabIndex={-1} aria-label="Scoped permission review">
       <span ref={start}>
         <Button
           disabled={lock.current || phase !== "closed" || cannotWrite !== undefined}

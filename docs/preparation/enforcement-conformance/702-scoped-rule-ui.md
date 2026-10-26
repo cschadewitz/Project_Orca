@@ -49,6 +49,32 @@ Allow once. Ordinary answers cannot reach the rule capability or legacy `always`
 transport path through this form. A successful save requires a fresh authoritative
 read before a separate answer can be offered.
 
+## Persistence checkpoint: still blocked
+
+The parent's persistence checkpoint identifies an existing replacement-writer
+path on baseline `df2e623` that can replace a version-2 sidecar with valid
+version-1 input despite a matching revision. The persistence owner owns the
+upgraded-v1 refusal hardening. Typed writing remains blocked on an enforced
+minimum-writer/no-downgrade policy and whole-root recovery policy. This UI slice
+does not work around that boundary or register a writer.
+
+The owner's candidate persistence-only seam is
+`createScopedRule({ rule, expectedRevision, approvalRecordRef }, authority)`
+returning `{ revision }`, with reads through owner-qualified
+`StrictRuleRead`/`createStrictPermissionSource`. This is a conditional contract,
+not an approved endpoint or a renderer-defined schema. Source checkpoint:
+[#702 comment 6409457524](https://github.com/cschadewitz/Project_Orca/issues/702#issuecomment-6409457524).
+
+For eventual integration, the owner adapter must capture exactly that command in
+the save-only callback, bind its reviewed disclosure to rule/revision/approval
+record, workspace/input/connection generation and authorizer, and qualify the
+returned revision against authoritative state for the exact saved rule before
+mapping to the UI's `confirmed` outcome. Missing or mismatched acknowledgement
+remains uncertain. Refresh should supply the safe rule/revision references through
+#726, not disclose the protected approval record or raw storage material. Neither
+Allow once nor Deny receives any writer capability. No additional persisted or
+wire fields are proposed by this UI seam.
+
 ## Behavior and recovery
 
 Review opens in the existing card shell using its primitives and scroll region.
