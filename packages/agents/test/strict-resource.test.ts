@@ -1,3 +1,4 @@
+/** Canonical resource-kind negatives; no physical or installed-provider qualification. */
 import { describe, expect, it } from "vitest";
 import { evaluateStrictPermission, type ActionResourceV1 } from "@orca/core";
 import { actionFixture, complete, NOW, ruleFixture, stateFixture } from "./strict-permission-fixtures.js";
