@@ -1,0 +1,159 @@
+--- a/packages/core/src/tools/tools.ts
++++ b/packages/core/src/tools/tools.ts
+@@ -108,6 +108,27 @@
+   getPolicyUpdateOptions?(
+     outcome: ToolConfirmationOutcome,
+   ): PolicyUpdateOptions | undefined;
++
++  /**
++   * Returns the exact facts a permission client needs to authorize this call.
++   * Tools that cannot state them exactly do not implement this.
++   */
++  getAuthorizationProjection?(
++    details: ToolCallConfirmationDetails,
++  ): ToolAuthorizationProjection;
++}
++
++/**
++ * Facts projected from the invocation that owns a confirmation. They describe
++ * the request, not the final native dispatch, which the tool still performs.
++ */
++export interface ToolAuthorizationProjection {
++  command: string;
++  dirPath: string | null;
++  resolvedCwd: string;
++  additionalPermissions: Array<
++    import('../services/sandboxManager.js').SandboxPermissions
++  >;
+ }
+
+ /**
+--- a/packages/core/src/tools/shell.ts
++++ b/packages/core/src/tools/shell.ts
+@@ -21,6 +21,7 @@
+   type BackgroundExecutionData,
+   type ToolCallConfirmationDetails,
+   type ToolExecuteConfirmationDetails,
++  type ToolAuthorizationProjection,
+   type PolicyUpdateOptions,
+   type ExecuteOptions,
+   type ForcedToolDecision,
+@@ -253,6 +254,33 @@
+     return this.params.command;
+   }
+
++  getAuthorizationProjection(
++    details: ToolCallConfirmationDetails,
++  ): ToolAuthorizationProjection {
++    // Every grant execute() unions into additionalPermissions, once each.
++    const additionalPermissions = [
++      this.params[PARAM_ADDITIONAL_PERMISSIONS],
++      details.type === 'sandbox_expansion'
++        ? details.additionalPermissions
++        : undefined,
++      this.proactivePermissionsConfirmed,
++    ].filter(
++      (grant, index, all): grant is SandboxPermissions =>
++        grant !== undefined && all.indexOf(grant) === index,
++    );
++    return {
++      // The stored parameter itself; execute() later strips a shell wrapper
++      // and adds a background-PID wrapper, which this does not attest.
++      command: this.params.command,
++      dirPath: this.params.dir_path ?? null,
++      // The same expression execute() uses before validatePathAccess.
++      resolvedCwd: this.params.dir_path
++        ? path.resolve(this.context.config.getTargetDir(), this.params.dir_path)
++        : this.context.config.getTargetDir(),
++      additionalPermissions,
++    };
++  }
++
+   private getHistory(): readonly Content[] {
+     const clientFromProp = this.context.geminiClient;
+     if (clientFromProp && typeof clientFromProp.getHistory === 'function') {
+--- a/packages/cli/src/acp/acpSession.ts
++++ b/packages/cli/src/acp/acpSession.ts
+@@ -743,13 +743,25 @@
+           kind: toAcpToolKind(tool.kind),
+         });
+
++        const options = toPermissionOptions(
++          confirmationDetails,
++          this.context.config,
++          this.settings.merged.security.enablePermanentToolApproval,
++        );
++
++        // Exact facts from the invocation that owns this call. A tool that
++        // cannot state them is reported as unknown, never as an empty scope.
++        const authorization =
++          typeof invocation.getAuthorizationProjection === 'function'
++            ? {
++                status: 'projected',
++                ...invocation.getAuthorizationProjection(confirmationDetails),
++              }
++            : { status: 'unknown' };
++
+         const params: acp.RequestPermissionRequest = {
+           sessionId: this.id,
+-          options: toPermissionOptions(
+-            confirmationDetails,
+-            this.context.config,
+-            this.settings.merged.security.enablePermanentToolApproval,
+-          ),
++          options,
+           toolCall: {
+             toolCallId: callId,
+             status: 'pending',
+@@ -757,21 +769,45 @@
+             content,
+             locations: invocation.toolLocations(),
+             kind: toAcpToolKind(tool.kind),
++            _meta: { authorization },
+           },
+         };
+
++        // A response that arrives after this prompt was cancelled, superseded
++        // or disposed must not confirm the call or change policy.
++        const assertStillPending = () => {
++          if (abortSignal.aborted || this.disposeController.signal.aborted) {
++            throw new Error(
++              `Tool "${fc.name}" was cancelled before its permission response was applied.`,
++            );
++          }
++        };
++
+         const output = RequestPermissionResponseSchema.parse(
+           await this.connection.requestPermission(params),
+         );
++        assertStillPending();
+
+-        const outcome =
+-          output.outcome.outcome === 'cancelled'
+-            ? ToolConfirmationOutcome.Cancel
+-            : z
+-                .nativeEnum(ToolConfirmationOutcome)
+-                .parse(output.outcome.optionId);
++        let outcome: ToolConfirmationOutcome;
++        if (output.outcome.outcome === 'cancelled') {
++          outcome = ToolConfirmationOutcome.Cancel;
++        } else {
++          const selectedOptionId = output.outcome.optionId;
++          const offered = options.find(
++            (option) => option.optionId === selectedOptionId,
++          );
++          if (!offered) {
++            throw new Error(
++              `Permission option was not offered for tool "${fc.name}".`,
++            );
++          }
++          outcome = z
++            .nativeEnum(ToolConfirmationOutcome)
++            .parse(offered.optionId);
++        }
+
+         await confirmationDetails.onConfirm(outcome);
++        assertStillPending();
+
+         // Update policy to enable Always Allow persistence
+         await updatePolicy(

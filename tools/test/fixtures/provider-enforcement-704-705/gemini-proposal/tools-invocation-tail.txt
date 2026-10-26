@@ -1,0 +1,6 @@
+  getPolicyUpdateOptions?(
+    outcome: ToolConfirmationOutcome,
+  ): PolicyUpdateOptions | undefined;
+}
+
+/**
