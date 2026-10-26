@@ -74,6 +74,24 @@ export interface NativeChoiceV1 {
   }>;
 }
 
+/** Exact target identity. Disposable memory is never a physical/installed-path qualification. */
+export type ActionResourceV1 = { readonly operation: string } & (
+  | {
+      readonly physicalTargetRef: string;
+      readonly targetKind?: never;
+      readonly ownerRef?: never;
+      readonly resourceRef?: never;
+      readonly resourceRevision?: never;
+    }
+  | {
+      readonly targetKind: "disposable-memory";
+      readonly ownerRef: string;
+      readonly resourceRef: string;
+      readonly resourceRevision: string;
+      readonly physicalTargetRef?: never;
+    }
+);
+
 export interface ActionEvidenceV1 {
   readonly version: 1;
   readonly actionId: string;
@@ -89,7 +107,7 @@ export interface ActionEvidenceV1 {
   readonly rawDuplicateKeyValidation: FactV1<string>;
   readonly effectiveCwd: FactV1<string>;
   readonly workspaceRef: FactV1<string>;
-  readonly resources: FactV1<readonly { readonly operation: string; readonly physicalTargetRef: string }[]>;
+  readonly resources: FactV1<readonly ActionResourceV1[]>;
   readonly executableAndInterpreter: FactV1<readonly string[]>;
   readonly stdin: FactV1<RepresentationV1>;
   readonly environmentAndCredentialRefs: FactV1<readonly string[]>;

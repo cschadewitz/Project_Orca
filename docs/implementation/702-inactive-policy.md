@@ -68,6 +68,16 @@ model/config/projection identities and oversized reason codes cannot become advi
 fallback. The trusted adapter must attest `judgeVersion`; a matching model echo alone
 does not provide that attestation.
 
+The later [#706 composition repair](../preparation/enforcement-conformance/composition-slice.md)
+retains a completed review for the exact original action object and full immutable action/
+source snapshots. Current preflight and eligibility are rerun on reuse; changed/unavailable
+state or original cancellation/expiry terminally invalidates it, without rejudging,
+rerecording or extending its deadline. Copies receive no retained completion. Active review
+states and source reads are separately bounded, including in-flight work. `PolicyPortV1`
+is unchanged. The agreed memory resource alternative is canonical in core and grants no
+physical/provider qualification. The initial slice's later-acceptance limits below still
+apply outside that bounded synthetic integration.
+
 There is no dispatch fence in this policy port. A verdict is not an execution permit;
 #703 must independently verify provenance and current state under the existing owner
 fence before consuming its retained original action. Recording a candidate verdict is

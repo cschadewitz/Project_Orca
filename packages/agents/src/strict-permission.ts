@@ -17,17 +17,24 @@ import {
   type PolicyVerdictV1,
   type ReviewEligibilityV1,
   type StrictPermissionSource,
+  type StrictPermissionState,
   type StrictPermissionRule,
   type StrictPreflight,
 } from "@orca/core";
 
 interface RetainedReview {
+  originalAction: ActionEvidenceV1;
   action: ActionEvidenceV1;
+  status: "pending" | "binding" | "bound" | "completing" | "completed" | "terminal";
+  verdict?: PolicyVerdictV1;
+  normalizedResult?: JudgeResultV1;
+  recordRef?: string;
   review: ReviewEligibilityV1;
   rule: StrictPermissionRule;
+  state: StrictPermissionState;
   originalSignal: AbortSignal;
   request?: JudgeRequestV1;
-  binding: boolean;
+  cancel(this: void): void;
   dispose(this: void): void;
 }
 
@@ -51,26 +58,51 @@ export interface StrictPolicyOptions {
 /** Internal capability only. Source/approval ports must never be constructed from public request fields. */
 export function createStrictPolicyPort(options: StrictPolicyOptions): PolicyPortV1 {
   const now = options.now ?? Date.now;
+  const readCurrent = options.source.readCurrent.bind(options.source);
+  const authorizeProjection = options.authorizeProjection.bind(options);
+  const recordReview = options.recordReview.bind(options);
   const newReviewId = options.newReviewId ?? randomUUID;
   const maximumPending = options.maximumPending ?? 64;
   if (!Number.isSafeInteger(maximumPending) || maximumPending < 1)
     throw new OrcaError("CONFIG_INVALID", "strict policy pending bound must be positive");
   const pending = new Map<PendingReviewV1, RetainedReview>();
   const bound = new Map<BoundReviewV1, RetainedReview>();
+  // Weak terminal markers cannot reopen the original object and do not retain dead actions.
+  const byAction = new WeakMap<ActionEvidenceV1, RetainedReview | { readonly terminal: PolicyVerdictV1 }>();
+  const active = new Set<RetainedReview>();
+  const busy = new Set<RetainedReview>();
+  let reading = 0; // Independently bound every source read, including completed-review rechecks.
+  const freeze = <T>(value: T): T => {
+    if (value && typeof value === "object") {
+      for (const child of Object.values(value)) freeze(child);
+      Object.freeze(value);
+    }
+    return value;
+  };
   const refuse = () => new OrcaError("RUN_STATE", "strict review is unavailable, changed or already consumed");
   const stopped = (action: ActionEvidenceV1, reason: string): PolicyVerdictV1 => ({
     ...strictDecisionBinding(action),
     outcome: "indeterminate",
     reason,
   });
-  const recheck = async (action: ActionEvidenceV1, signal: AbortSignal, reviewId: string): Promise<StrictPreflight> => {
+  const recheck = async (
+    action: ActionEvidenceV1,
+    signal: AbortSignal,
+    reviewId: string,
+    capture?: (state: StrictPermissionState) => void,
+  ): Promise<StrictPreflight> => {
     if (signal.aborted) return { phase: "final", verdict: stopped(action, "invocation-expired") };
+    if (reading >= maximumPending) return { phase: "final", verdict: stopped(action, "review-capacity") };
+    reading++;
     try {
-      const state = structuredClone(await options.source.readCurrent(structuredClone(action), signal));
+      const state = structuredClone(await readCurrent(structuredClone(action), signal));
       if (signal.aborted) return { phase: "final", verdict: stopped(action, "invocation-expired") };
+      capture?.(state);
       return evaluateStrictPermission(action, state, now(), reviewId);
     } catch {
       return { phase: "final", verdict: stopped(action, "current-policy-unavailable") };
+    } finally {
+      reading--;
     }
   };
   const live = (entry: RetainedReview, signal: AbortSignal) =>
@@ -78,14 +110,41 @@ export function createStrictPolicyPort(options: StrictPolicyOptions): PolicyPort
     !entry.originalSignal.aborted &&
     Number.isFinite(now()) &&
     now() < Date.parse(entry.review.deadlineAt);
+  const isTerminal = (entry: RetainedReview) => entry.status === "terminal";
+  const terminal = (entry: RetainedReview, verdict: PolicyVerdictV1): PolicyVerdictV1 => {
+    if (isTerminal(entry)) return entry.verdict!;
+    entry.status = "terminal";
+    entry.verdict = freeze(structuredClone(verdict));
+    byAction.set(entry.originalAction, Object.freeze({ terminal: entry.verdict }));
+    entry.dispose();
+    if (!busy.has(entry)) active.delete(entry);
+    return entry.verdict;
+  };
   const eligible = async (entry: RetainedReview, signal: AbortSignal): Promise<StrictPreflight> => {
+    if (!isDeepStrictEqual(entry.originalAction, entry.action))
+      return { phase: "final", verdict: stopped(entry.action, "original-action-changed") };
     if (!live(entry, signal)) return { phase: "final", verdict: stopped(entry.action, "review-expired") };
-    const result = await recheck(entry.action, AbortSignal.any([signal, entry.originalSignal]), entry.review.reviewId);
+    let currentState: StrictPermissionState | undefined;
+    const result = await recheck(
+      entry.action,
+      AbortSignal.any([signal, entry.originalSignal]),
+      entry.review.reviewId,
+      (state) => {
+        currentState = state;
+      },
+    );
+    if (isTerminal(entry)) return { phase: "final", verdict: entry.verdict! };
+    if (!live(entry, signal) || !isDeepStrictEqual(entry.originalAction, entry.action))
+      return { phase: "final", verdict: stopped(entry.action, "review-expired-or-changed") };
     if (result.phase === "needs-review") {
       // A fresh evaluation computes a new remaining deadline; it must never extend the retained one.
       const { deadlineAt: _fresh, ...current } = result.review;
       const { deadlineAt: _retained, ...retained } = entry.review;
-      if (!isDeepStrictEqual(current, retained) || !isDeepStrictEqual(result.rule, entry.rule))
+      if (
+        !isDeepStrictEqual(current, retained) ||
+        !isDeepStrictEqual(result.rule, entry.rule) ||
+        !isDeepStrictEqual(currentState, entry.state)
+      )
         return { phase: "final", verdict: stopped(entry.action, "review-eligibility-changed") };
     } else if (result.verdict.outcome === "allow") {
       // Removing/changing delegation requires a new evaluation, never an unreviewed completion.
@@ -96,34 +155,57 @@ export function createStrictPolicyPort(options: StrictPolicyOptions): PolicyPort
   return {
     version: 1,
     async evaluate(action, signal): Promise<PolicyEvaluationV1> {
-      for (const entry of [...pending.values(), ...bound.values()]) {
-        if (!live(entry, entry.originalSignal)) entry.dispose();
+      for (const entry of active) {
+        if (!live(entry, entry.originalSignal)) terminal(entry, stopped(entry.action, "review-expired"));
       }
-      const retainedAction = structuredClone(action); // Before first await.
-      const result = await recheck(retainedAction, signal, newReviewId());
+      const retained = byAction.get(action);
+      if (retained) {
+        if ("terminal" in retained) return { phase: "final", verdict: retained.terminal };
+        if (isTerminal(retained)) return { phase: "final", verdict: retained.verdict! };
+        const current = await eligible(retained, signal);
+        if (isTerminal(retained)) return { phase: "final", verdict: retained.verdict! };
+        if (current.phase === "final") return { phase: "final", verdict: terminal(retained, current.verdict) };
+        if (!live(retained, signal) || !isDeepStrictEqual(action, retained.action))
+          return { phase: "final", verdict: terminal(retained, stopped(retained.action, "review-expired-or-changed")) };
+        if (retained.status === "completed") return { phase: "final", verdict: retained.verdict! };
+        return { phase: "final", verdict: stopped(retained.action, "review-in-progress") };
+      }
+      const retainedAction = freeze(structuredClone(action)); // Before first await.
+      let currentState: StrictPermissionState | undefined;
+      const result = await recheck(retainedAction, signal, newReviewId(), (state) => {
+        currentState = state;
+      });
+      // Concurrent initial reads of the same object may not create competing reviews.
+      if (byAction.has(action)) return { phase: "final", verdict: stopped(retainedAction, "review-in-progress") };
       if (result.phase === "final") return result;
-      if (pending.size + bound.size >= maximumPending)
-        return { phase: "final", verdict: stopped(retainedAction, "review-capacity") };
+      if (active.size >= maximumPending) return { phase: "final", verdict: stopped(retainedAction, "review-capacity") };
       const handle = Object.freeze({}) as PendingReviewV1;
+      const cancel = () => terminal(entry, stopped(entry.action, "review-expired"));
       const entry: RetainedReview = {
+        originalAction: action,
         action: retainedAction,
-        review: structuredClone(result.review),
-        rule: structuredClone(result.rule),
+        status: "pending",
+        review: freeze(structuredClone(result.review)),
+        rule: freeze(structuredClone(result.rule)),
+        state: freeze(structuredClone(currentState!)),
         originalSignal: signal,
-        binding: false,
+        cancel,
         dispose: () => {
           pending.delete(handle);
-          signal.removeEventListener("abort", entry.dispose);
+          signal.removeEventListener("abort", cancel);
         },
       };
+      byAction.set(action, entry);
+      active.add(entry);
       pending.set(handle, entry);
-      signal.addEventListener("abort", entry.dispose, { once: true });
+      signal.addEventListener("abort", cancel, { once: true });
       return { phase: "needs-review", pending: handle, review: structuredClone(result.review) };
     },
     async bindReview(handle, request, signal): Promise<BoundReviewV1> {
       const entry = pending.get(handle);
-      if (!entry || entry.binding) throw refuse();
-      entry.binding = true; // Claim before awaiting while retaining the capacity reservation.
+      if (!entry || entry.status !== "pending") throw refuse();
+      busy.add(entry);
+      entry.status = "binding"; // Claim before awaiting while retaining the capacity reservation.
       try {
         const exactRequest = structuredClone(request);
         const { approvedProjection, ...eligibility } = exactRequest;
@@ -136,88 +218,110 @@ export function createStrictPolicyPort(options: StrictPolicyOptions): PolicyPort
           (approvedProjection.kind !== "utf8-bytes" && approvedProjection.kind !== "parsed-json")
         )
           throw refuse();
-        if ((await eligible(entry, signal)).phase !== "needs-review") throw refuse();
-        await options.authorizeProjection(
+        if ((await eligible(entry, signal)).phase !== "needs-review" || entry.status !== "binding") throw refuse();
+        await authorizeProjection(
           structuredClone(exactRequest),
           structuredClone(entry.action),
           AbortSignal.any([signal, entry.originalSignal]),
         );
-        if ((await eligible(entry, signal)).phase !== "needs-review" || !live(entry, signal)) throw refuse();
+        if (
+          (await eligible(entry, signal)).phase !== "needs-review" ||
+          !live(entry, signal) ||
+          entry.status !== "binding"
+        )
+          throw refuse();
         const registered = Object.freeze({}) as BoundReviewV1;
         entry.dispose();
-        entry.request = exactRequest;
+        entry.request = freeze(exactRequest);
+        entry.status = "bound";
         entry.dispose = () => {
           bound.delete(registered);
-          entry.originalSignal.removeEventListener("abort", entry.dispose);
+          entry.originalSignal.removeEventListener("abort", entry.cancel);
         };
         bound.set(registered, entry);
-        entry.originalSignal.addEventListener("abort", entry.dispose, { once: true });
+        entry.originalSignal.addEventListener("abort", entry.cancel, { once: true });
         return registered;
       } catch {
-        entry.dispose();
+        terminal(entry, stopped(entry.action, "review-registration-failed"));
         throw refuse();
+      } finally {
+        busy.delete(entry);
+        if (isTerminal(entry)) active.delete(entry);
       }
     },
     async completeReview(handle, result, signal): Promise<PolicyVerdictV1> {
       const entry = bound.get(handle);
-      if (!entry || !entry.request) throw refuse();
+      if (!entry || !entry.request || entry.status !== "bound") throw refuse();
       bound.delete(handle); // Completion cannot race/replay, including malformed/stale failures.
-      entry.dispose();
-      let exactResult: JudgeResultV1;
+      entry.status = "completing";
+      busy.add(entry);
       try {
-        exactResult = structuredClone(result);
-      } catch {
-        return stopped(entry.action, "invalid-judge-result");
+        let exactResult: JudgeResultV1;
+        try {
+          exactResult = structuredClone(result);
+        } catch {
+          return terminal(entry, stopped(entry.action, "invalid-judge-result"));
+        }
+        const current = await eligible(entry, signal);
+        if (isTerminal(entry)) return entry.verdict!;
+        if (current.phase === "final") return terminal(entry, current.verdict);
+        if (!live(entry, signal)) return terminal(entry, stopped(entry.action, "review-expired"));
+        const request = entry.request;
+        if (
+          !validResultBinding(exactResult, request) ||
+          exactResult.reviewId !== request.reviewId ||
+          exactResult.judgeVersion !== request.judgeConfigRef ||
+          exactResult.projectionBindingRef !== request.approvedProjection.bindingRef ||
+          typeof exactResult.reasonCode !== "string" ||
+          !exactResult.reasonCode ||
+          exactResult.reasonCode.length > 128 ||
+          (exactResult.execution !== "evaluated" && exactResult.execution !== "unavailable") ||
+          !["fit", "not-fit", "indeterminate"].includes(exactResult.result) ||
+          (exactResult.execution === "unavailable" && exactResult.result !== "indeterminate")
+        )
+          return terminal(entry, stopped(entry.action, "invalid-judge-result"));
+        const delegation = current.rule.delegation!;
+        let verdict: PolicyVerdictV1;
+        if (exactResult.execution === "unavailable") {
+          if (delegation.requirement === "advisory" && delegation.allowWhenUnavailable)
+            verdict = ruleAllow(entry.action, current.rule);
+          else verdict = stopped(entry.action, "judge-unavailable");
+        } else if (exactResult.result === "fit") verdict = ruleAllow(entry.action, current.rule);
+        else
+          verdict = {
+            ...strictDecisionBinding(entry.action),
+            outcome: exactResult.result === "not-fit" ? delegation.onNotFit : delegation.onIndeterminate,
+            reason: exactResult.result === "not-fit" ? "judge-not-fit" : "judge-indeterminate",
+          };
+        let resultRef: string;
+        try {
+          resultRef = await recordReview(
+            structuredClone(entry.action),
+            structuredClone(request),
+            structuredClone(exactResult),
+            structuredClone(verdict),
+            AbortSignal.any([signal, entry.originalSignal]),
+          );
+          if (typeof resultRef !== "string" || !resultRef)
+            return terminal(entry, stopped(entry.action, "review-record-unavailable"));
+        } catch {
+          return terminal(entry, stopped(entry.action, "review-record-unavailable"));
+        }
+        // Recording is a separate await, never an authority reservation or dispatch fence.
+        const afterRecord = await eligible(entry, signal);
+        if (afterRecord.phase === "final") return terminal(entry, afterRecord.verdict);
+        if (!live(entry, signal)) return terminal(entry, stopped(entry.action, "review-expired"));
+        // The reference records actual unavailable/evaluated status; it never implies a successful review.
+        if (isTerminal(entry)) return entry.verdict!;
+        entry.normalizedResult = freeze(exactResult);
+        entry.recordRef = resultRef;
+        entry.verdict = freeze(verdict.outcome === "allow" ? { ...verdict, judgeResultRef: resultRef } : verdict);
+        entry.status = "completed";
+        return entry.verdict;
+      } finally {
+        busy.delete(entry);
+        if (isTerminal(entry)) active.delete(entry);
       }
-      const current = await eligible(entry, signal);
-      if (current.phase === "final") return current.verdict;
-      if (!live(entry, signal)) return stopped(entry.action, "review-expired");
-      const request = entry.request;
-      if (
-        !validResultBinding(exactResult, request) ||
-        exactResult.reviewId !== request.reviewId ||
-        exactResult.judgeVersion !== request.judgeConfigRef ||
-        exactResult.projectionBindingRef !== request.approvedProjection.bindingRef ||
-        typeof exactResult.reasonCode !== "string" ||
-        !exactResult.reasonCode ||
-        exactResult.reasonCode.length > 128 ||
-        (exactResult.execution !== "evaluated" && exactResult.execution !== "unavailable") ||
-        !["fit", "not-fit", "indeterminate"].includes(exactResult.result) ||
-        (exactResult.execution === "unavailable" && exactResult.result !== "indeterminate")
-      )
-        return stopped(entry.action, "invalid-judge-result");
-      const delegation = current.rule.delegation!;
-      let verdict: PolicyVerdictV1;
-      if (exactResult.execution === "unavailable") {
-        if (delegation.requirement === "advisory" && delegation.allowWhenUnavailable)
-          verdict = ruleAllow(entry.action, current.rule);
-        else verdict = stopped(entry.action, "judge-unavailable");
-      } else if (exactResult.result === "fit") verdict = ruleAllow(entry.action, current.rule);
-      else
-        verdict = {
-          ...strictDecisionBinding(entry.action),
-          outcome: exactResult.result === "not-fit" ? delegation.onNotFit : delegation.onIndeterminate,
-          reason: exactResult.result === "not-fit" ? "judge-not-fit" : "judge-indeterminate",
-        };
-      let resultRef: string;
-      try {
-        resultRef = await options.recordReview(
-          structuredClone(entry.action),
-          structuredClone(request),
-          structuredClone(exactResult),
-          structuredClone(verdict),
-          AbortSignal.any([signal, entry.originalSignal]),
-        );
-        if (!resultRef) return stopped(entry.action, "review-record-unavailable");
-      } catch {
-        return stopped(entry.action, "review-record-unavailable");
-      }
-      // Recording is a separate await, never an authority reservation or dispatch fence.
-      const afterRecord = await eligible(entry, signal);
-      if (afterRecord.phase === "final") return afterRecord.verdict;
-      if (!live(entry, signal)) return stopped(entry.action, "review-expired");
-      // The reference records actual unavailable/evaluated status; it never implies a successful review.
-      return verdict.outcome === "allow" ? { ...verdict, judgeResultRef: resultRef } : verdict;
     },
   };
 }
