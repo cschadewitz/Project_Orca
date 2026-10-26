@@ -43,6 +43,8 @@ export interface AnswerRequest {
 }
 
 export interface AnswerCardProps {
+  /** Opt-in reviewed permission form; reuses this shell without ordinary answer shortcuts. */
+  answerForm?: ReactNode;
   /** Previously selected ordinary answer, restored only after current scope/identity verification. */
   retainedAnswer?: AnswerRequest | undefined;
   /** The input's id: the card's DOM id, and what an answer names. */
@@ -86,6 +88,7 @@ export interface AnswerCardProps {
 }
 
 export function AnswerCard({
+  answerForm,
   retainedAnswer,
   id,
   tone,
@@ -204,7 +207,7 @@ export function AnswerCard({
     });
   };
 
-  useCardKeys(bound, focused && !pending, {
+  useCardKeys(bound, focused && !pending && answerForm === undefined, {
     select: (value) => {
       edited.current = true;
       setSelected(value);
@@ -248,127 +251,133 @@ export function AnswerCard({
         {command !== undefined && <div className={`orca-card__cmd ${textClass("mono-log")}`}>{command}</div>}
         {refs}
 
-        {free ? (
-          <label className="orca-attn__free">
-            <Text style="caption">Answer</Text>
-            <input
-              className={`orca-input ${textClass("body")}`}
-              value={text}
-              onChange={(event) => {
-                edited.current = true;
-                setText(event.target.value);
-              }}
-              aria-label="Answer"
-            />
-          </label>
-        ) : null}
+        {answerForm !== undefined ? (
+          answerForm
+        ) : (
+          <>
+            {free ? (
+              <label className="orca-attn__free">
+                <Text style="caption">Answer</Text>
+                <input
+                  className={`orca-input ${textClass("body")}`}
+                  value={text}
+                  onChange={(event) => {
+                    edited.current = true;
+                    setText(event.target.value);
+                  }}
+                  aria-label="Answer"
+                />
+              </label>
+            ) : null}
 
-        <div className="orca-card__options">
-          {bound.map(({ option, digit }) => (
-            <Button
-              key={option.id}
-              size="sm"
-              tone={option.destructive ? "danger" : option.id === selected ? "primary" : "default"}
-              aria-pressed={option.id === selected}
-              disabled={blocked !== undefined}
-              {...(blocked !== undefined ? { disabledReason: blocked } : {})}
-              onClick={() => {
-                edited.current = true;
-                setSelected(option.id);
-              }}
-            >
-              {digit !== undefined && <kbd className={`orca-kbd ${textClass("mono-id")}`}>{digit}</kbd>}
-              {option.label}
-            </Button>
-          ))}
-          <span className="orca-spacer" />
-          <Button
-            size="sm"
-            tone="primary"
-            disabled={submitBlocked !== undefined}
-            {...(submitBlocked !== undefined ? { disabledReason: submitBlocked } : {})}
-            onClick={() => send()}
-          >
-            {pending ? "Answering…" : "Answer"}
-          </Button>
-          {offerAlways && (
-            <>
-              {/* Two buttons and not one, because which way the standing rule goes is the
+            <div className="orca-card__options">
+              {bound.map(({ option, digit }) => (
+                <Button
+                  key={option.id}
+                  size="sm"
+                  tone={option.destructive ? "danger" : option.id === selected ? "primary" : "default"}
+                  aria-pressed={option.id === selected}
+                  disabled={blocked !== undefined}
+                  {...(blocked !== undefined ? { disabledReason: blocked } : {})}
+                  onClick={() => {
+                    edited.current = true;
+                    setSelected(option.id);
+                  }}
+                >
+                  {digit !== undefined && <kbd className={`orca-kbd ${textClass("mono-id")}`}>{digit}</kbd>}
+                  {option.label}
+                </Button>
+              ))}
+              <span className="orca-spacer" />
+              <Button
+                size="sm"
+                tone="primary"
+                disabled={submitBlocked !== undefined}
+                {...(submitBlocked !== undefined ? { disabledReason: submitBlocked } : {})}
+                onClick={() => send()}
+              >
+                {pending ? "Answering…" : "Answer"}
+              </Button>
+              {offerAlways && (
+                <>
+                  {/* Two buttons and not one, because which way the standing rule goes is the
                   client's to state (#160): ORCA will not read an agent's option ids and
                   guess. What they actually wrote comes back on the result. */}
-              <Button
-                size="sm"
-                disabled={alwaysBlocked("allow") !== undefined}
-                {...(alwaysBlocked("allow") !== undefined ? { disabledReason: alwaysBlocked("allow")! } : {})}
-                onClick={() => sendAlways("allow")}
-              >
-                Always allow
-              </Button>
-              <Button
-                size="sm"
-                tone="danger"
-                disabled={alwaysBlocked("deny") !== undefined}
-                {...(alwaysBlocked("deny") !== undefined ? { disabledReason: alwaysBlocked("deny")! } : {})}
-                onClick={() => sendAlways("deny")}
-              >
-                Always deny
-              </Button>
-            </>
-          )}
-        </div>
+                  <Button
+                    size="sm"
+                    disabled={alwaysBlocked("allow") !== undefined}
+                    {...(alwaysBlocked("allow") !== undefined ? { disabledReason: alwaysBlocked("allow")! } : {})}
+                    onClick={() => sendAlways("allow")}
+                  >
+                    Always allow
+                  </Button>
+                  <Button
+                    size="sm"
+                    tone="danger"
+                    disabled={alwaysBlocked("deny") !== undefined}
+                    {...(alwaysBlocked("deny") !== undefined ? { disabledReason: alwaysBlocked("deny")! } : {})}
+                    onClick={() => sendAlways("deny")}
+                  >
+                    Always deny
+                  </Button>
+                </>
+              )}
+            </div>
 
-        {/* The consequences, under the options rather than on them: an option's button is a
+            {/* The consequences, under the options rather than on them: an option's button is a
             row-height control and a clause is a sentence (rule 9). */}
-        {bound.some(({ option }) => option.consequence) && (
-          <ul className="orca-attn__consequences">
-            {bound
-              .filter(({ option }) => option.consequence)
-              .map(({ option }) => (
-                <li key={option.id} className={textClass("caption")}>
-                  <span className="orca-attn__consequence-for">{option.label}</span> — {option.consequence}
-                </li>
-              ))}
-          </ul>
-        )}
+            {bound.some(({ option }) => option.consequence) && (
+              <ul className="orca-attn__consequences">
+                {bound
+                  .filter(({ option }) => option.consequence)
+                  .map(({ option }) => (
+                    <li key={option.id} className={textClass("caption")}>
+                      <span className="orca-attn__consequence-for">{option.label}</span> — {option.consequence}
+                    </li>
+                  ))}
+              </ul>
+            )}
 
-        {noteOpen && (
-          <label className="orca-attn__note">
-            <Text style="caption">
-              Note — recorded with the answer in the run&rsquo;s log. The run branches on the answer alone.
-            </Text>
-            <input
-              ref={noteField}
-              className={`orca-input ${textClass("body")}`}
-              value={note}
-              aria-label="Note"
-              onChange={(event) => {
-                edited.current = true;
-                setNote(event.target.value);
-              }}
-              /* The field's own submit key. The map's `⇧Enter` cannot reach here — a bare
+            {noteOpen && (
+              <label className="orca-attn__note">
+                <Text style="caption">
+                  Note — recorded with the answer in the run&rsquo;s log. The run branches on the answer alone.
+                </Text>
+                <input
+                  ref={noteField}
+                  className={`orca-input ${textClass("body")}`}
+                  value={note}
+                  aria-label="Note"
+                  onChange={(event) => {
+                    edited.current = true;
+                    setNote(event.target.value);
+                  }}
+                  /* The field's own submit key. The map's `⇧Enter` cannot reach here — a bare
                  key in a text entry types rather than dispatching, which is what stops `J`
                  in a query field from moving a list three layers down (`keyboard-map.ts`). */
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  send();
-                }
-              }}
-            />
-          </label>
-        )}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      send();
+                    }
+                  }}
+                />
+              </label>
+            )}
 
-        {outcome !== undefined && (
-          <p className={`orca-card__hint ${textClass("caption")}`} role="status">
-            {outcome}
-          </p>
-        )}
+            {outcome !== undefined && (
+              <p className={`orca-card__hint ${textClass("caption")}`} role="status">
+                {outcome}
+              </p>
+            )}
 
-        <p className={`orca-card__hint ${textClass("caption")}`}>
-          {goToRun
-            ? "1–9 choose · Enter answers · ⇧Enter adds a note · G opens the run"
-            : "1–9 choose · Enter answers · ⇧Enter adds a note"}
-        </p>
+            <p className={`orca-card__hint ${textClass("caption")}`}>
+              {goToRun
+                ? "1–9 choose · Enter answers · ⇧Enter adds a note · G opens the run"
+                : "1–9 choose · Enter answers · ⇧Enter adds a note"}
+            </p>
+          </>
+        )}
       </section>
     </Card>
   );

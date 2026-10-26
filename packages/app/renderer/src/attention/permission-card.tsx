@@ -25,8 +25,12 @@ import type { OpenInputView } from "@orca/protocol";
 import { ObjectId, textClass } from "../ui/index.js";
 import { AnswerCard, type AnswerRequest } from "./answer-card.js";
 import { permissionSubject, waitedLabel } from "./card-model.js";
+import { ScopedRuleChoices } from "./scoped-rule-choices.js";
+import type { ScopedRuleReviewPort } from "./scoped-rule-review.js";
 
 export interface PermissionCardProps {
+  /** Inactive owner-injected seam. No production caller supplies this until integration acceptance. */
+  scopedRuleReview?: ScopedRuleReviewPort | undefined;
   input: OpenInputView;
   placement: "inline" | "inbox";
   cannotWrite?: string | undefined;
@@ -39,7 +43,7 @@ export interface PermissionCardProps {
   cardRef?: Ref<HTMLElement> | undefined;
 }
 
-export function PermissionCard({ input, ...rest }: PermissionCardProps): JSX.Element {
+export function PermissionCard({ input, scopedRuleReview, ...rest }: PermissionCardProps): JSX.Element {
   const subject = permissionSubject(input.context);
   const agent = input.agent;
   return (
@@ -54,22 +58,51 @@ export function PermissionCard({ input, ...rest }: PermissionCardProps): JSX.Ele
           <span className={`orca-attn__age ${textClass("mono-id")}`}>{waitedLabel(input.waitingMs)}</span>
         </>
       }
-      question={input.question}
+      question={scopedRuleReview ? "Review scoped tool permission" : input.question}
       subtitle={
-        <>
-          <span className={`orca-id ${textClass("mono-id")}`}>{agent?.id ?? input.runName}</span>
-          {agent?.hostId ? ` on ${agent.hostId}` : ""}
-          {` · step `}
-          {/* The node's name when the ask carries one; its step's id token when it does not. */}
-          <span className={`orca-id ${textClass("mono-id")}`}>
-            {input.nodeId ?? <ObjectId id={input.stepRunId} kind="step" />}
-          </span>
-        </>
+        scopedRuleReview ? (
+          "Exact scope is available only through the reviewed disclosure."
+        ) : (
+          <>
+            <span className={`orca-id ${textClass("mono-id")}`}>{agent?.id ?? input.runName}</span>
+            {agent?.hostId ? ` on ${agent.hostId}` : ""}
+            {` · step `}
+            {/* The node's name when the ask carries one; its step's id token when it does not. */}
+            <span className={`orca-id ${textClass("mono-id")}`}>
+              {input.nodeId ?? <ObjectId id={input.stepRunId} kind="step" />}
+            </span>
+          </>
+        )
       }
-      command={subject}
+      command={scopedRuleReview ? undefined : subject}
       options={input.options}
       offerAlways
       {...rest}
+      answerForm={
+        scopedRuleReview ? (
+          <ScopedRuleChoices
+            key={JSON.stringify([
+              scopedRuleReview.scopeKey,
+              input.id,
+              input.runId,
+              input.stepRunId,
+              input.live?.target,
+              input.live?.state,
+            ])}
+            port={scopedRuleReview}
+            cannotWrite={
+              rest.cannotWrite ??
+              (rest.pending
+                ? "This input already has a pending answer."
+                : input.kind !== "permission" || input.revisionActionId !== undefined || input.revision !== undefined
+                  ? "Use the explicit input or revision surface for this request."
+                  : input.live?.state !== "pending"
+                    ? "Permission callback is unavailable or no longer pending."
+                    : undefined)
+            }
+          />
+        ) : undefined
+      }
       cannotWrite={
         rest.cannotWrite ??
         (!input.live
