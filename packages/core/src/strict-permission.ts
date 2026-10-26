@@ -1,0 +1,241 @@
+/** Pure opt-in strict policy phases. Legacy policy ordering/defaults and all production wiring stay elsewhere. */
+import type {
+  ActionEvidenceV1,
+  AuthorityStampV1,
+  DecisionBindingV1,
+  PolicyVerdictV1,
+  ReviewEligibilityV1,
+} from "./model/tool-execution-guards.js";
+import type { StrictPermissionRule, StrictPermissionState } from "./model/strict-permission.js";
+
+export type StrictPreflight =
+  | { readonly phase: "final"; readonly verdict: PolicyVerdictV1 }
+  | { readonly phase: "needs-review"; readonly review: ReviewEligibilityV1; readonly rule: StrictPermissionRule };
+
+const AUTHORITY_KEYS = [
+  "capturedGeneration",
+  "currentPolicyRevision",
+  "authorityRevision",
+  "revocationEpoch",
+  "leaseEpoch",
+] as const;
+
+export function sameAuthority(left: AuthorityStampV1, right: AuthorityStampV1): boolean {
+  return AUTHORITY_KEYS.every((key) => left[key] !== "" && left[key] === right[key]);
+}
+
+export function strictDecisionBinding(action: ActionEvidenceV1, authority = action.authority): DecisionBindingV1 {
+  return {
+    version: 1,
+    actionBindingRef: action.bindingRef,
+    authority: { ...authority },
+    coverageId: action.coverage.coverageId,
+  };
+}
+
+export function sameDecisionBinding(left: DecisionBindingV1, right: DecisionBindingV1): boolean {
+  return (
+    left.version === 1 &&
+    right.version === 1 &&
+    left.actionBindingRef === right.actionBindingRef &&
+    left.coverageId === right.coverageId &&
+    sameAuthority(left.authority, right.authority)
+  );
+}
+
+export function ruleAllow(
+  action: ActionEvidenceV1,
+  rule: StrictPermissionRule,
+): Extract<PolicyVerdictV1, { outcome: "allow" }> {
+  return {
+    ...strictDecisionBinding(action),
+    outcome: "allow",
+    authorizedBy: {
+      kind: "rule",
+      ruleId: rule.ruleId,
+      ruleRevision: rule.ruleRevision,
+    },
+  };
+}
+
+function matches(rule: StrictPermissionRule, action: ActionEvidenceV1): boolean {
+  const m = rule.match;
+  return (
+    m.principalRef === action.invocation.principalRef &&
+    m.agentId === action.invocation.agentId &&
+    m.hostId === action.invocation.hostId &&
+    m.runnerId === action.invocation.runnerId &&
+    m.operation === action.operation &&
+    m.profileRef === action.profileRef &&
+    m.coverageId === action.coverage.coverageId &&
+    action.effectiveCwd.state === "complete" &&
+    m.effectiveCwd === action.effectiveCwd.value &&
+    action.workspaceRef.state === "complete" &&
+    m.workspaceRef === action.workspaceRef.value &&
+    action.resources.state === "complete" &&
+    action.resources.value.every((resource) =>
+      m.resources.some(
+        (allowed) =>
+          allowed.operation === resource.operation && allowed.physicalTargetRef === resource.physicalTargetRef,
+      ),
+    ) &&
+    action.environmentAndCredentialRefs.state === "complete" &&
+    action.environmentAndCredentialRefs.value.every((ref) => m.environmentAndCredentialRefs.includes(ref))
+  );
+}
+
+/** No authority, fact or qualification can be supplied by a judge or widened by a saved rule. */
+export function evaluateStrictPermission(
+  action: ActionEvidenceV1,
+  state: StrictPermissionState,
+  now: number,
+  reviewId: string,
+): StrictPreflight {
+  const finish = (outcome: "deny" | "require-human" | "indeterminate", reason: string): StrictPreflight => ({
+    phase: "final",
+    verdict: { ...strictDecisionBinding(action, state.authority), outcome, reason },
+  });
+  for (const [name, fact] of [
+    ["current-authority", state.currentAuthority],
+    ["captured-ceiling", state.capturedCeiling],
+    ["protected-access", state.protectedAccess],
+  ] as const) {
+    if (fact.state === "complete" && !fact.value) return finish("deny", name);
+  }
+  if (
+    ![state.currentAuthority, state.capturedCeiling, state.protectedAccess].every((fact) => fact.state === "complete")
+  )
+    return finish("indeterminate", "authority-unavailable");
+  if (!sameAuthority(action.authority, state.authority)) return finish("indeterminate", "stale-authority");
+  if (
+    action.version !== 1 ||
+    !action.actionId ||
+    !action.bindingRef ||
+    !action.operation ||
+    !action.profileRef ||
+    Object.values(action.invocation).some((value) => !value)
+  )
+    return finish("indeterminate", "incomplete-action-identity");
+  if (!Number.isFinite(now) || !Number.isFinite(Date.parse(action.expiresAt)) || Date.parse(action.expiresAt) <= now)
+    return finish("indeterminate", "action-expired");
+  if (state.coverageAndState.state !== "complete" || !state.coverageAndState.value)
+    return finish("indeterminate", "coverage-or-state-unavailable");
+  if (state.profile.state !== "complete" || state.profile.value.profileRef !== action.profileRef)
+    return finish("indeterminate", "required-profile-unavailable");
+  if (state.rules.state !== "complete") return finish("indeterminate", "required-policy-unavailable");
+  const profile = state.profile.value;
+  const coverage = action.coverage;
+  if (
+    coverage.version !== 1 ||
+    coverage.hostId !== action.invocation.hostId ||
+    coverage.boundaryId !== action.capturedByBoundaryId ||
+    (coverage.level !== "verified-per-execution" && coverage.level !== profile.minimumCoverage) ||
+    coverage.negotiatedHook.state !== "complete" ||
+    coverage.protectedConfiguration.state !== "complete" ||
+    !coverage.negotiatedHook.value ||
+    !coverage.protectedConfiguration.value ||
+    [
+      coverage.coverageId,
+      coverage.boundaryId,
+      coverage.provider,
+      coverage.providerVersion,
+      coverage.adapterVersion,
+      coverage.tool,
+      coverage.toolSchemaVersion,
+      coverage.hostId,
+      coverage.platform,
+    ].some((value) => value === "") ||
+    coverage.evidence.sourceRefs.length === 0 ||
+    (coverage.level === "verified-per-execution" &&
+      (coverage.evidence.installedRefs.length === 0 || !coverage.evidence.independentlyObservedEffects))
+  )
+    return finish("indeterminate", "insufficient-coverage");
+  for (const key of Object.keys(profile.facts) as (keyof typeof profile.facts)[]) {
+    const fact = action[key];
+    if (fact.state !== "complete" && !(fact.state === "absent" && profile.facts[key] === "complete-or-absent"))
+      return finish("indeterminate", `required-fact:${key}`);
+  }
+  const rule = state.rules.value.find((candidate) => matches(candidate, action));
+  if (!rule) return finish("require-human", "no-approved-match");
+  if (rule.status === "revoked") return finish("deny", "rule-revoked");
+  if (
+    rule.status !== "approved" ||
+    !rule.ruleId ||
+    !rule.ruleRevision ||
+    !Number.isFinite(Date.parse(rule.notBefore)) ||
+    !Number.isFinite(Date.parse(rule.expiresAt)) ||
+    Date.parse(rule.notBefore) > now ||
+    Date.parse(rule.expiresAt) <= now
+  )
+    return finish("indeterminate", "rule-not-current");
+  if (rule.decision === "deny") return finish("deny", "rule-deny");
+  if (state.mandatoryHuman.state !== "complete") return finish("indeterminate", "human-ceiling-unavailable");
+  if (state.mandatoryHuman.value || rule.decision === "require-human")
+    return finish("require-human", "mandatory-human");
+  if (rule.decision !== "allow") return finish("indeterminate", "invalid-rule-decision");
+  const delegation = rule.delegation;
+  if (!delegation) return { phase: "final", verdict: ruleAllow(action, rule) };
+  if (
+    !reviewId ||
+    !delegation.judgeConfigRef ||
+    !delegation.projectionPolicyRevision ||
+    !delegation.destinationPolicyRef ||
+    !Number.isFinite(delegation.maximumDurationMs) ||
+    delegation.maximumDurationMs <= 0 ||
+    (delegation.requirement !== "required" && delegation.requirement !== "advisory") ||
+    (delegation.onNotFit !== "deny" && delegation.onNotFit !== "require-human") ||
+    (delegation.onIndeterminate !== "indeterminate" && delegation.onIndeterminate !== "require-human")
+  )
+    return finish("indeterminate", "invalid-delegation");
+  return {
+    phase: "needs-review",
+    rule,
+    review: {
+      ...strictDecisionBinding(action),
+      reviewId,
+      delegation: { ruleId: rule.ruleId, ruleRevision: rule.ruleRevision },
+      requirement: delegation.requirement,
+      projectionPolicyRevision: delegation.projectionPolicyRevision,
+      destinationPolicyRef: delegation.destinationPolicyRef,
+      judgeConfigRef: delegation.judgeConfigRef,
+      deadlineAt: new Date(
+        Math.min(Date.parse(action.expiresAt), Date.parse(rule.expiresAt), now + delegation.maximumDurationMs),
+      ).toISOString(),
+    },
+  };
+}
+
+/** A strict native response is eligible only for a qualified, bounded, original invocation option. */
+export function selectStrictPermissionOption(
+  action: ActionEvidenceV1,
+  verdict: PolicyVerdictV1,
+  now: number,
+): string | undefined {
+  if (
+    verdict.outcome !== "allow" ||
+    !sameDecisionBinding(verdict, strictDecisionBinding(action)) ||
+    !Number.isFinite(now) ||
+    !Number.isFinite(Date.parse(action.expiresAt)) ||
+    Date.parse(action.expiresAt) <= now
+  )
+    return undefined;
+  const ids = action.offeredChoices.map((choice) => choice.optionId);
+  if (new Set(ids).size !== ids.length) return undefined;
+  return action.offeredChoices.find((choice) => {
+    const grant = choice.grantScopeAndLifetime;
+    return (
+      choice.optionId !== "" &&
+      choice.kind === "allow_once" &&
+      choice.effect === "this-invocation" &&
+      choice.qualificationRef.state === "complete" &&
+      choice.qualificationRef.value !== "" &&
+      grant.state === "complete" &&
+      grant.value.scopeRef === action.invocation.invocationId &&
+      grant.value.maximumUses === 1 &&
+      grant.value.expiresAt !== null &&
+      Number.isFinite(Date.parse(grant.value.expiresAt)) &&
+      Date.parse(grant.value.expiresAt) > now &&
+      Date.parse(grant.value.expiresAt) <= Date.parse(action.expiresAt)
+    );
+  })?.optionId;
+}
