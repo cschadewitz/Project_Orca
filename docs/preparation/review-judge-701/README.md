@@ -4,6 +4,8 @@ Status: **offline preparation archive; inactive source adapter now follows the a
 The historical proposal and feedback below describe the pre-review preparation.
 [Source implementation and validation](source-implementation.md) records the scoped
 follow-up using merged #708/#712 and the reviewed canonical type dependency #716.
+[Injected-endpoint transport](endpoint-transport.md) records a separate inactive
+transport seam with a fake provider; it is not a hosted/BYOK implementation.
 This directory is standalone preparation for [#701](https://github.com/cschadewitz/Project_Orca/issues/701),
 coordinated under [#699](https://github.com/cschadewitz/Project_Orca/issues/699).
 It does not complete either issue or define a parallel canonical action schema.

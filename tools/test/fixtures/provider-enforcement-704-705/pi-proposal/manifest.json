@@ -1,0 +1,146 @@
+{
+  "format": "orca.pi-final-authorization-proposal/1",
+  "status": "proposal-only-not-submitted-not-capability-negotiation",
+  "issue": "https://github.com/cschadewitz/Project_Orca/issues/705",
+  "checkedAt": "2026-10-26",
+  "nativePin": {
+    "repository": "earendil-works/pi",
+    "version": "1.4.0",
+    "revision": "4a080252f06caf63a525d7873c5d94d3c23887e0"
+  },
+  "adapterPin": {
+    "repository": "svkozak/pi-acp",
+    "version": "0.0.34",
+    "revision": "b0581c9c1d675e634234674484247008b03d69b4",
+    "nativeCorrespondence": "unknown"
+  },
+  "upstream": [
+    {
+      "id": "pi-bash",
+      "path": "upstream/pi-bash.ts.txt",
+      "repository": "earendil-works/pi",
+      "revision": "4a080252f06caf63a525d7873c5d94d3c23887e0",
+      "upstreamPath": "packages/coding-agent/src/core/tools/bash.ts",
+      "kind": "whole-file-verbatim",
+      "gitBlobSha": "4620e24648b6ba9e8aa4f5083eb99927549ebcaa",
+      "sha256": "de2b54d4f4bfbb844ce6d8077f63d715f7d8e80079dd9689b561e45b6679c81b",
+      "bytes": 15678,
+      "url": "https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/packages/coding-agent/src/core/tools/bash.ts"
+    },
+    {
+      "id": "pi-rpc-mode",
+      "path": "upstream/pi-rpc-mode.ts.txt",
+      "repository": "earendil-works/pi",
+      "revision": "4a080252f06caf63a525d7873c5d94d3c23887e0",
+      "upstreamPath": "packages/coding-agent/src/modes/rpc/rpc-mode.ts",
+      "kind": "whole-file-verbatim",
+      "gitBlobSha": "1c0995d36ec752155f1d13b019728f9343bb263c",
+      "sha256": "d534e0fa1484844a097963d5f4fb4df9397c5a1b5e29e42aed7575ab6f67989b",
+      "bytes": 24168,
+      "url": "https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/packages/coding-agent/src/modes/rpc/rpc-mode.ts"
+    },
+    {
+      "id": "pi-acp-session",
+      "path": "upstream/pi-acp-session.ts.txt",
+      "repository": "svkozak/pi-acp",
+      "revision": "b0581c9c1d675e634234674484247008b03d69b4",
+      "upstreamPath": "src/acp/session.ts",
+      "kind": "whole-file-verbatim",
+      "gitBlobSha": "1c97b24fdcd2eb6f2ad9b23f96ead9e451b8be96",
+      "sha256": "d2ffc844f1e4f079c89cca828b6f12a574aa86281cdad1355117a3844ed69e4f",
+      "bytes": 34962,
+      "url": "https://github.com/svkozak/pi-acp/blob/b0581c9c1d675e634234674484247008b03d69b4/src/acp/session.ts"
+    },
+    {
+      "id": "pi-acp-process",
+      "path": "upstream/pi-acp-process.ts.txt",
+      "repository": "svkozak/pi-acp",
+      "revision": "b0581c9c1d675e634234674484247008b03d69b4",
+      "upstreamPath": "src/pi-rpc/process.ts",
+      "kind": "whole-file-verbatim",
+      "gitBlobSha": "160cc90e0db0bedbbfc1843c210200af13be04b8",
+      "sha256": "5533ec7e269afc65f9be76c1b87cdcdc554032d7e51bd1466cca6f63922efe0e",
+      "bytes": 15264,
+      "url": "https://github.com/svkozak/pi-acp/blob/b0581c9c1d675e634234674484247008b03d69b4/src/pi-rpc/process.ts"
+    },
+    {
+      "id": "license-pi",
+      "path": "license-pi.txt",
+      "repository": "earendil-works/pi",
+      "revision": "4a080252f06caf63a525d7873c5d94d3c23887e0",
+      "upstreamPath": "LICENSE",
+      "kind": "license-verbatim",
+      "gitBlobSha": "b0a8e9b81083294360c69b4ec45d3d39a2b28197",
+      "sha256": "0457f5bcec3b3b211605dfb5d1a49042fd638f3686a410fe099c24a25af13c48",
+      "bytes": 1069,
+      "url": "https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/LICENSE"
+    },
+    {
+      "id": "license-pi-acp",
+      "path": "license-pi-acp.txt",
+      "repository": "svkozak/pi-acp",
+      "revision": "b0581c9c1d675e634234674484247008b03d69b4",
+      "upstreamPath": "LICENSE",
+      "kind": "license-verbatim",
+      "gitBlobSha": "ff42bcda41600ff91e235a3bb2822fe906c3f784",
+      "sha256": "b9e63459a8c046806ee709828fe8cf04a08062c5a99847c9ae2a2be18009fa03",
+      "bytes": 1069,
+      "url": "https://github.com/svkozak/pi-acp/blob/b0581c9c1d675e634234674484247008b03d69b4/LICENSE"
+    }
+  ],
+  "proposed": [
+    {
+      "path": "proposed/pi-bash.diff",
+      "upstreamPath": "packages/coding-agent/src/core/tools/bash.ts",
+      "preImageBlob": "4620e24648b6ba9e8aa4f5083eb99927549ebcaa",
+      "postImageBlob": "cdd2a0d18cf8c0d58be30d351e9f876a2112eb82",
+      "sha256": "87c83a5f8861dc6131a030ff44731fd4bc1ed2613850c33ce246119a3334d920",
+      "bytes": 5578,
+      "evidence": "executed-after-strict-apply",
+      "upstream": "pi-bash"
+    },
+    {
+      "path": "proposed/pi-rpc-mode.diff",
+      "upstreamPath": "packages/coding-agent/src/modes/rpc/rpc-mode.ts",
+      "preImageBlob": "1c0995d36ec752155f1d13b019728f9343bb263c",
+      "postImageBlob": "96e22a84c0a7d9e81ee5caa536012f4820b5b1f8",
+      "sha256": "76de70544885e7054fc811c6e0d5857528bd80825fb1afb99f32b1de5a1d9cb0",
+      "bytes": 4487,
+      "evidence": "pure-parts-executed-after-strict-apply",
+      "upstream": "pi-rpc-mode"
+    },
+    {
+      "path": "proposed/pi-acp-session.diff",
+      "upstreamPath": "src/acp/session.ts",
+      "preImageBlob": "1c97b24fdcd2eb6f2ad9b23f96ead9e451b8be96",
+      "postImageBlob": "de355ab00a6b05851a2ca72fde385806fabf8a33",
+      "sha256": "462df60af2a89e9c44d5634c571230feb843f9c2f19ad3e7662935cf55deff90",
+      "bytes": 4655,
+      "evidence": "handler-parts-executed-after-strict-apply",
+      "upstream": "pi-acp-session"
+    },
+    {
+      "path": "proposed/pi-acp-process.diff",
+      "upstreamPath": "src/pi-rpc/process.ts",
+      "preImageBlob": "160cc90e0db0bedbbfc1843c210200af13be04b8",
+      "postImageBlob": "f58f90e3aad0c9b17bc0e2d5a11443cb51be9937",
+      "sha256": "3d90c59db601236a7cc7421f2b7c445811245abd0de43b9557d00297d752b85d",
+      "bytes": 1381,
+      "evidence": "applies-source-reviewed-only",
+      "upstream": "pi-acp-process"
+    },
+    {
+      "path": "proposed/pi-agent-session.diff",
+      "upstreamPath": "packages/coding-agent/src/core/agent-session.ts",
+      "preImageBlob": "3a9174cf6ea4cdce791c08a84f6ac25b95b6fb01",
+      "postImageBlob": "94b7ceab1f147c613439b0873c33c8823eeef602",
+      "sha256": "2d3836293f30158fcea5a0bc120b74de378c8f9958f1878eb9c907d04a21f2c3",
+      "bytes": 2441,
+      "evidence": "pre-image-pinned-source-reviewed-only"
+    }
+  ],
+  "reusedReadOnly": [
+    "tools/test/fixtures/provider-enforcement-704-705/pi-ui.txt",
+    "docs/preparation/provider-enforcement-704-705/source-pins.json"
+  ]
+}

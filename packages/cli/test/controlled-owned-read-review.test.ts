@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import { fileStores } from "@orca/store";
+import * as agents from "@orca/agents";
+import type { ActionEvidenceV1, PolicyEvaluationV1, StrictPermissionRule } from "@orca/core";
 import { resolveManagedRootBinding } from "../src/typed-workspace-gate.js";
 import { runControlledOwnedReadTest, type ControlledReadTestSupervisor } from "./controlled-owned-read-producer.js";
 
@@ -337,20 +339,105 @@ it("a tampered protected Save approval refuses the fresh rule read but not the d
   expect((await semanticKinds(c.base))["controlled-authorization-v1"]).toBe(1);
 }, 60000);
 
-// Reproduction of a defect observed at 6f208db: the `revoke-rule` fault's own revocation
-// call throws "typed policy transition pending or owner unavailable" (owner.readCaptureFacts
-// re-reads the sidecar inside its write lock), so the saved rule is never revoked and the
-// fault test passes without evaluating a revoked rule. Remove `.fails` once the producer
-// performs a genuine revocation; the property below must then hold.
-it.fails(
-  "revoke-rule fault genuinely revokes the saved rule before the fresh read is refused",
-  async () => {
-    const b = await bootstrap();
-    const c = await supervisor("connected", b.grant, "revoke-rule");
-    const error = await failure(runControlledOwnedReadTest(c.base, "connected", c.options));
-    expect(error.message).not.toContain("typed policy transition pending");
-    expect(sidecarRules(c.base).map((r) => r.rule.status)).toEqual(["revoked"]);
-    expect(c.observed.map((read) => read.phase)).toEqual(["human-read"]);
-  },
-  60000,
-);
+// Cal reconciliation of the original #744 reproduction. Requires the reviewed #749
+// correction: an unrelated fixture exception must fail this ordinary regression.
+it("persisted revocation reaches fresh policy refusal with only the prior human authority and read", async () => {
+  const automatic: { action: ActionEvidenceV1; result: PolicyEvaluationV1 }[] = [];
+  const createPolicy = agents.createStrictPolicyPort;
+  const evaluationSpy = vi.spyOn(agents, "createStrictPolicyPort").mockImplementation((options) => {
+    const policy = createPolicy(options);
+    return {
+      ...policy,
+      evaluate: async (action, signal) => {
+        const result = await policy.evaluate(action, signal);
+        if (action.invocation.invocationId === "controlled-rule-invocation") automatic.push({ action, result });
+        return result;
+      },
+    };
+  });
+  cleanup.push(async () => evaluationSpy.mockRestore());
+  const b = await bootstrap();
+  const c = await supervisor("connected", b.grant, "revoke-rule");
+  const completed: string[] = [];
+  let approvedPolicyRevision = "";
+  let approvedRule: StrictPermissionRule | undefined;
+  const original = c.options.phase.bind(c.options);
+  c.options.phase = (name, work) =>
+    original(name, async () => {
+      await work();
+      completed.push(name);
+      if (name !== "save") return;
+      const bytes = await readFile(join(c.base, "workspace/orca.permissions.json"));
+      approvedPolicyRevision = digest(bytes);
+      const document = JSON.parse(bytes.toString()) as {
+        scopedRules: { records: { rule: StrictPermissionRule }[] };
+      };
+      expect(document.scopedRules.records).toHaveLength(1);
+      approvedRule = document.scopedRules.records[0]!.rule;
+      expect(approvedRule.status).toBe("approved");
+      expect(await events(c.base, "human.answered")).toHaveLength(0);
+      expect(c.observed).toEqual([]);
+    });
+  const error = await failure(runControlledOwnedReadTest(c.base, "connected", c.options));
+  const sidecarBytes = await readFile(join(c.base, "workspace/orca.permissions.json"));
+  const document = JSON.parse(sidecarBytes.toString()) as {
+    scopedRules: { records: { rule: StrictPermissionRule; approvalRecordRef: string }[] };
+  };
+  expect(document.scopedRules.records).toHaveLength(1);
+  const revoked = document.scopedRules.records[0]!;
+  expect(revoked.rule.status).toBe("revoked");
+  expect(approvedRule).toBeDefined();
+  expect(revoked.rule.ruleId).toBe(approvedRule!.ruleId);
+  expect(revoked.rule.ruleRevision).not.toBe(approvedRule!.ruleRevision);
+  expect(revoked.rule.ruleRevision).toBe(agents.strictPermissionRuleRevision(revoked.rule));
+  expect(approvedPolicyRevision).not.toBe("");
+  expect(digest(sidecarBytes)).not.toBe(approvedPolicyRevision);
+  expect(error).toBeInstanceOf(assert.AssertionError);
+  expect(error.message).toContain('result.verdict.outcome === "allow"');
+  expect(automatic).toHaveLength(1);
+  expect(automatic[0]!.result).toMatchObject({
+    phase: "final",
+    verdict: { outcome: "indeterminate", reason: "required-policy-unavailable" },
+  });
+  expect(automatic[0]!.action.authority.currentPolicyRevision).toBe(digest(sidecarBytes));
+  expect(c.phases).toEqual(["save", "human-read", "rule-read"]);
+  expect(completed).toEqual(["save", "human-read"]);
+  expect(c.observed).toEqual([{ phase: "human-read", offset: 2, length: 4, bytes: "spos" }]);
+  expect(await events(c.base, "agent.permission")).toHaveLength(1);
+  expect(await events(c.base, "human.answered")).toHaveLength(1);
+  const stores = fileStores(storeOf(c.base));
+  const [revocationRun, revocationRef] = JSON.parse(revoked.approvalRecordRef) as [string, string];
+  expect(revocationRun).toBe(runId);
+  const proof = (await stores.execution.getPayload(runId, revocationRef, "agent.update")) as {
+    update: { text: string };
+  };
+  expect(JSON.parse(proof.update.text)).toMatchObject({
+    kind: "controlled-rule-revocation-v1",
+    value: {
+      command: {
+        rule: revoked.rule,
+        expectedRevision: approvedPolicyRevision,
+        approvalRecordRef: revoked.approvalRecordRef,
+      },
+    },
+  });
+  const authorizations: string[] = [];
+  for (const name of fs.readdirSync(join(storeOf(c.base), "private-execution"))) {
+    if (!name.startsWith("synthetic-read%3A") || !name.endsWith("%3Aevidence.payload.json")) continue;
+    const ref = decodeURIComponent(name.slice(0, -".payload.json".length));
+    const payload = (await stores.execution.getPayload(runId, ref, "agent.update")) as {
+      update: { text: string };
+    };
+    const record = JSON.parse(payload.update.text) as {
+      kind: string;
+      value: { verdict: { authorizedBy: { kind: string } } };
+    };
+    expect(record.kind).toBe("controlled-authorization-v1");
+    authorizations.push(record.value.verdict.authorizedBy.kind);
+  }
+  expect(authorizations).toEqual(["human"]);
+  const kinds = await semanticKinds(c.base);
+  expect(kinds["controlled-authorization-v1"]).toBe(1);
+  expect(kinds["controlled-producer-observation-v1"]).toBe(1);
+  expect(kinds["controlled-final-delivery-ack-v1"]).toBe(1);
+}, 60000);

@@ -1,0 +1,122 @@
+diff --git a/packages/coding-agent/src/core/tools/bash.ts b/packages/coding-agent/src/core/tools/bash.ts
+index 4620e24648b6ba9e8aa4f5083eb99927549ebcaa..cdd2a0d18cf8c0d58be30d351e9f876a2112eb82 100644
+--- a/packages/coding-agent/src/core/tools/bash.ts
++++ b/packages/coding-agent/src/core/tools/bash.ts
+@@ -107,6 +107,10 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
+ 			} catch {
+ 				throw new Error(`Working directory does not exist: ${cwd}\nCannot execute ${shellName} commands.`);
+ 			}
++			// An abort during the access check must not start the shell.
++			if (signal?.aborted) {
++				throw new Error("aborted");
++			}
+ 
+ 			const commandFromStdin = shellConfig.commandTransport === "stdin";
+ 			const child = spawn(shellConfig.shell, commandFromStdin ? shellConfig.args : [...shellConfig.args, command], {
+@@ -183,6 +187,28 @@ export interface BashSpawnContext {
+ 
+ export type BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext;
+ 
++/** The action after commandPrefix, context cwd and spawnHook, frozen for one execute call. */
++export interface BashFinalAction {
++	readonly toolCallId: string;
++	readonly toolName: string;
++	/** "local" only for pi's own local shell with the shell resolved here; anything else is "custom". */
++	readonly executor: "local" | "custom";
++	readonly shell: Readonly<{ shell: string; args: readonly string[]; commandTransport?: "argv" | "stdin" }> | undefined;
++	readonly command: string;
++	readonly cwd: string;
++	readonly env: Readonly<NodeJS.ProcessEnv>;
++	readonly timeout: number | undefined;
++	readonly transformations: readonly ("commandPrefix" | "contextCwd" | "spawnHook")[];
++}
++
++/** Only an allow naming this exact action object dispatches it. */
++export type BashFinalDecision =
++	| { readonly outcome: "allow"; readonly action: BashFinalAction }
++	| { readonly outcome: "block"; readonly reason: string };
++
++/** Protected check run after every transformation, immediately before dispatch. A throw blocks. */
++export type BashFinalCheck = (action: BashFinalAction, signal: AbortSignal | undefined) => Promise<BashFinalDecision>;
++
+ function resolveSpawnContext(
+ 	command: string,
+ 	cwd: string,
+@@ -222,6 +248,8 @@ export interface BashToolOptions {
+ 	exposeSessionEnvironment?: boolean;
+ 	/** Hook to adjust command, cwd, or env before execution */
+ 	spawnHook?: BashSpawnHook;
++	/** Protected final check, resolved per call by the session owner. Unset keeps the native path. */
++	finalCheck?: () => BashFinalCheck | undefined;
+ }
+ 
+ export type BashRenderState = {
+@@ -249,6 +277,50 @@ export function createShellToolDefinition(
+ 	const commandPrefix = options?.commandPrefix;
+ 	const exposeSessionEnvironment = options?.exposeSessionEnvironment ?? true;
+ 	const spawnHook = options?.spawnHook;
++	const finalCheck = options?.finalCheck;
++
++	/** Freeze the final action, check it, and return exactly what was checked for dispatch. */
++	const checkedDispatch = async (
++		check: BashFinalCheck,
++		toolCallId: string,
++		spawnContext: BashSpawnContext,
++		timeout: number | undefined,
++		contextCwd: boolean,
++		signal: AbortSignal | undefined,
++	): Promise<{ ops: BashOperations; command: string; cwd: string; env: NodeJS.ProcessEnv }> => {
++		if (typeof spawnContext.command !== "string" || typeof spawnContext.cwd !== "string") {
++			throw new Error("Blocked by final action check: command and cwd must be strings");
++		}
++		const resolvedShell = options?.operations ? undefined : getShellConfig(options?.shellPath);
++		const shell = resolvedShell && Object.freeze({ ...resolvedShell, args: Object.freeze([...resolvedShell.args]) });
++		const transformations: ("commandPrefix" | "contextCwd" | "spawnHook")[] = [];
++		if (commandPrefix) transformations.push("commandPrefix");
++		if (contextCwd) transformations.push("contextCwd");
++		if (spawnHook) transformations.push("spawnHook");
++		const action: BashFinalAction = Object.freeze({
++			toolCallId,
++			toolName: config.name,
++			executor: shell ? "local" : "custom",
++			shell,
++			command: spawnContext.command,
++			cwd: spawnContext.cwd,
++			env: Object.freeze({ ...spawnContext.env }),
++			timeout,
++			transformations: Object.freeze(transformations),
++		});
++		const decision = await check(action, signal);
++		if (decision?.outcome !== "allow" || decision.action !== action) {
++			const reason = decision?.outcome === "block" ? decision.reason : "no decision for this action";
++			throw new Error(`Blocked by final action check: ${reason}`);
++		}
++		if (signal?.aborted) {
++			throw new Error("aborted");
++		}
++		const boundOps = shell
++			? createLocalShellOperations(config.shellName, () => ({ ...shell, args: [...shell.args] }))
++			: ops;
++		return { ops: boundOps, command: action.command, cwd: action.cwd, env: { ...action.env } };
++	};
+ 	return {
+ 		name: config.name,
+ 		label: config.label,
+@@ -361,11 +433,15 @@ export function createShellToolDefinition(
+ 			try {
+ 				let exitCode: number | null;
+ 				try {
+-					const result = await ops.exec(spawnContext.command, spawnContext.cwd, {
++					const check = finalCheck?.();
++					const dispatch = check
++						? await checkedDispatch(check, _toolCallId, spawnContext, timeout, Boolean(ctx?.cwd), signal)
++						: { ops, command: spawnContext.command, cwd: spawnContext.cwd, env: spawnContext.env };
++					const result = await dispatch.ops.exec(dispatch.command, dispatch.cwd, {
+ 						onData: handleData,
+ 						signal,
+ 						timeout,
+-						env: spawnContext.env,
++						env: dispatch.env,
+ 					});
+ 					exitCode = result.exitCode;
+ 				} catch (err) {

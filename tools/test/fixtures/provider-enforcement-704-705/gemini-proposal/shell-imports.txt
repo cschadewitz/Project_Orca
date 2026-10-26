@@ -1,0 +1,6 @@
+  type BackgroundExecutionData,
+  type ToolCallConfirmationDetails,
+  type ToolExecuteConfirmationDetails,
+  type PolicyUpdateOptions,
+  type ExecuteOptions,
+  type ForcedToolDecision,

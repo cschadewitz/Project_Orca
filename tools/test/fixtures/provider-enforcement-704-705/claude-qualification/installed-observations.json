@@ -1,0 +1,7 @@
+{
+  "format": "orca.claude-qualification-installed/1",
+  "issue": 704,
+  "installedObservations": "NONE",
+  "authorization": "none: no installed Claude experiment, hook installation or provider launch is authorized for this record",
+  "receipts": []
+}

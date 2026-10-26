@@ -1,5 +1,13 @@
 # Independent review of #742 at `6f208db` — #706
 
+> **Historical review, followed by Cal reconciliation.** The original Claude-authored
+> review below is preserved verbatim from PR #744 head
+> `328174064d416623364fdb19d08505215f3ae89e`, including its observations, severity
+> labels, pinned baseline and reported runs. Those labels are historical assertions,
+> not the current disposition. In particular, the failed-required-judge bypass was
+> **not demonstrated** by that probe. Read the [Cal reconciliation](#cal-reconciliation-2026-10-26)
+> for current conclusions. Claude has not approved this reconciliation.
+
 Reviewer role: independent, non-producing review for #706. This is not an approval or
 merge decision, and not acceptance of any installed, provider or production path. The
 integration owner (Cal) keeps those decisions. Full installed bootstrap and connected
@@ -277,3 +285,83 @@ Two items are not established:
 
 Findings 3–4 overstate evidence rather than authority. Nothing here is installed,
 provider or production acceptance.
+
+
+## Cal reconciliation (2026-10-26)
+
+Author: Cal (`calciferschadewitz`). This addendum reconciles the original review;
+it does not replace the independent reviewer or attribute these conclusions to Claude.
+Source triage: [Cal review 5655430813](https://github.com/cschadewitz/Project_Orca/pull/744#pullrequestreview-5655430813).
+Original #744 head: `328174064d416623364fdb19d08505215f3ae89e`.
+Current main at handoff: `843e2d523a6b51180149eaa8083400321c5a9229`.
+Locally reviewed dependency: #749 `6cbb946f378adeb591adb6341077fc0fd193348c`;
+parent integration and final dependency pin remain separate publication gates.
+
+### Current disposition
+
+| Historical finding | Cal disposition |
+| --- | --- |
+| 1: High failed-required-judge bypass | **Not demonstrated.** The probe changes trusted capture snapshot metadata to `failed`; the actual producer has no configured execution judge, and its separate authenticated persistence attestation retains execution review `unavailable`. This is a contract-consistency/hardening question, not evidence of bypassing a real failed required judge. |
+| 2: revoke-rule fixture bug | **Confirmed.** The original sidecar write-lock re-entry prevents revocation and leaves the rule approved. #749 owns the producer correction and canonical ordinary regression; this companion checks the corrected persisted state and exact refusal independently. |
+| 3: service interval coverage | **Useful direct coverage retained.** #749 carries the same four engine tests byte-for-byte; integration retains a single file, not duplicate additions. |
+| 4–5: callable authority / local interception / persistence attestation | **Disclosed test assumptions.** These establish local composition behavior only. The `test-supervisor-bootstrap:` provenance must remain test-designated and must not become external qualification or an independent human approval. |
+| 6: downstream review provenance | The protected Save record and persistence attestation retain unavailable execution review separately. Future downstream provenance presentation remains a bounded hardening question; flattening refs does not prove an execution-judge bypass. |
+| 7: broad fault exceptions | The revocation regression must be ordinary and specific. Bootstrap/setup errors, unexpected policy results and unrelated fixture failures must fail it. Other useful phase-specific companion assertions are retained. |
+| 8–10: return values, child framing, disclosure/storage | Preserved as the original bounded observations/hypotheses. This reconciliation makes no new runtime change or installed acceptance claim. |
+
+Persistence review is intentionally distinct from execution judgment. The trusted capture
+verifier resolves reviewer, actor and binding from protected references and checks their
+currency; this probe does not show that additional identity parameters are necessary.
+Canonical execution-policy and permit checks remain separate. No runtime semantics are
+changed here. Pending narrow follow-up #750 at
+`34893c37ec32cc56f1d9f27e131ba38d1d76dc36` tests actual bound required-judge
+not-fit/unavailable completion versus separate persistence authority. Its owner reports
+49 tests passing; Cal has not rerun those checks here and source review is pending.
+That proof concerns configured rule delegation, not protected Save acceptance or a
+global mandatory-judge profile ceiling. It does not resolve every policy-design question.
+
+The corrected revocation expectation is precise: a persisted revoked rule with changed
+policy and rule revisions, completed Save and human-read phases, entry into rule-read,
+and one fresh final `indeterminate` / `required-policy-unavailable` evaluation bound to
+the revoked policy revision. This is qualification unavailability after verified
+revocation; it is not evidence of a direct revoked-rule deny verdict. There must be
+exactly the prior human answer, human authorization and physical read, and no subsequent
+rule authorization or read. Protected revocation evidence must decode and match the
+persisted rule. An unrelated exception cannot satisfy these requirements.
+
+Save/no-answer/no-read, lost-ack, tampered approval, inactive-export and direct service
+interval/currentness tests remain useful. Independent observer acceptance, installed
+confinement and production activation remain pending outside this companion. The PR
+stays draft for parent integration; no merge approval is implied.
+
+### Reconciliation validation
+
+Cal ran the following locally with Node v24.19.0 and the preinstalled binaries
+(Vitest 5.0.2, TypeScript 7.0.2, ESLint 10.11.0, Prettier 3.9.9). These are actual
+local versions, not a claim to have reproduced the pinned hosted toolchain.
+
+| Target | Actual result |
+| --- | --- |
+| Original #744 `328174064d416623364fdb19d08505215f3ae89e`, four focused files | 30 passed, 1 expected-fail; exit 0 |
+| Integrated `30c7aa30152b9fa3d24d27e6b56c8aae46e72033`, based on main `843e2d523a6b51180149eaa8083400321c5a9229` plus reviewed #749 `6cbb946f378adeb591adb6341077fc0fd193348c` | 15 files, 401 passed; no expected-fails; exit 0 |
+| Root `tsc -p tsconfig.json --noEmit` | Passed after restoring the missing untracked app `node_modules/yaml` link to the already installed 2.9.1 package; no manifest/lockfile edits |
+| ESLint and Prettier on all three companion test files | Passed |
+| Diff whitespace, document encoding/fences, historical-text comparison | Passed; original review body retained verbatim |
+
+The integrated run includes the four focused files plus the same 11 adjacent
+engine/daemon/cli/agents suites listed in the historical commands section. The four
+engine tests are identical to #749's additions and exist once. The new ordinary
+companion regression requires the specific persisted revocation, protected proof,
+policy result and sole prior human authorization/read described above.
+
+The initial `pnpm exec` attempted an automatic dependency install and failed before
+running tests (`ENOENT` creating `/home/agent/.local/share/pnpm`). Cal used the existing
+`node_modules/.bin` tools directly. The initial root typecheck reported the missing
+app `yaml` link; the corrected local installation passed. These setup failures are not
+test results. No tracked dependency changes were made.
+
+Historical commands and counts above remain the original reviewer's reported results,
+not Cal reruns. The integrated count is focused/adjacent proof only: full suite,
+coverage, build, renderer typecheck, desktop/app smoke, installed replay and external
+observer acceptance were not run here. The implementation came unchanged from the
+reviewed dependency; Cal's authored changes are the review note and companion test.
