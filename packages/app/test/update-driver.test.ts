@@ -82,6 +82,34 @@ it("reports positive non-launch only before quitAndInstall is invoked", async ()
   expect(await updateDriver(true, "win32", "x64")!.install()).toBe("not-launched");
   expect(fake.instance.quitAndInstall).not.toHaveBeenCalled();
 });
+it.each([false, true])("removes only its progress listener after download failure=%s", async (fails) => {
+  const dir = mkdtempSync(join(tmpdir(), "orca-download-listener-fixture-"));
+  try {
+    writeFileSync(join(dir, "token"), "synthetic");
+    vi.stubEnv("ORCA_UPDATE_URL", "https://feed.example/");
+    vi.stubEnv("ORCA_UPDATE_TOKEN_FILE", join(dir, "token"));
+    const progress = vi.fn();
+    let listener!: (value: { percent: number }) => void;
+    fake.instance.on.mockImplementation((event, callback) => {
+      if (event === "download-progress") listener = callback;
+      return fake.instance;
+    });
+    fake.instance.downloadUpdate.mockImplementationOnce(async () => {
+      listener({ percent: 37 });
+      if (fails) throw new Error("synthetic failed download");
+      return [];
+    });
+    const pending = updateDriver(true, "win32", "x64")!.download(progress);
+    if (fails) await expect(pending).rejects.toThrow("synthetic failed download");
+    else await pending;
+    expect(progress).toHaveBeenCalledExactlyOnceWith(37);
+    expect(fake.instance.off).toHaveBeenCalledExactlyOnceWith("download-progress", listener);
+    expect(fake.instance.quitAndInstall).not.toHaveBeenCalled();
+  } finally {
+    fake.instance.on.mockReset();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 it.each(["timeout", "error", "throw"] as const)(
   "treats post-invocation %s as unknown and removes the exact listener",
   async (kind) => {

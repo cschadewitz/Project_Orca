@@ -1,0 +1,11 @@
+{
+  "digestMatches": true,
+  "upstreamCommit": "e2a8604535bdc626bd068ddf5b6afb67bed45725",
+  "workflow": {
+    "ref": "refs/heads/release/v26",
+    "repository": "https://github.com/electron-userland/electron-builder",
+    "path": ".github/workflows/pr-release.yml"
+  },
+  "cryptographicallyVerifiedSLSA": false,
+  "limitation": "Inherited trusted-root refresh HTTP 403; denied endpoint not retried or bypassed."
+}
