@@ -75,10 +75,10 @@ under absent authority, not proof of an independently qualified positive pipelin
 or every individual policy failure. No protected Save, live Allow once, native
 choice or positive service execution is asserted.
 
-The eight controlled executions are baseline; changed emitted image; closed
+The controlled executions are baseline; changed emitted image; closed
 inherited lifetime descriptor; replaced identity inode with identical bytes;
 wrong calibration offset; raw read through a different descriptor; raw injected
-read through the actual retained service descriptor; and an extra process. Each
+read through the actual retained service descriptor; an extra process, and a raw path-alias reopen before unlink. Each
 negative case must fail for its named reason, not merely fail for any reason.
 The raw service fault obtains the real open result through temporary test-only
 instrumentation, issues a raw read and restores the API. The verifier never
@@ -152,7 +152,7 @@ still requires this standalone sequential supervisor to have no unrelated childr
 ## Recorded local run
 
 The [candidate observation record](owned-read-candidate-observations.json) binds the
-test source bytes and records eight controlled executions plus 14 mutation/transfer/cleanup
+test source bytes and records nine controlled executions plus 15 mutation/transfer/cleanup
 tests on Node 24.19.0 / strace 6.13. Baseline observed 11 settled threads and zero
 service reads; its valid action returned `indeterminate / authority-unavailable`.
 These are local candidate observations, not independent review or hosted CI.
@@ -176,5 +176,35 @@ not a service authorization or hostile containment capability.
 The corrected run also rejects successful effects through unknown descriptors,
 tracks pipe/eventfd/epoll descriptor creation, and restricts fcntl/ioctl/process
 control commands. Failed EBADF probes do not establish any descriptor effect.
-All eight installed cases and 14 tests passed; the extra-process launch control
-now refuses at its unsupported socketpair scaffold before its clone is decoded.
+The syscall correction had eight installed cases and 14 tests. With the supported-open
+phase correction, the extra-process launch scaffold refuses even earlier at an
+unclassified post-resource open, before socketpair or clone decoding.
+
+## Supported-open phase correction
+
+Re-review of `84ba472c207c66575aea2b8762f01611a6692e3e` reproduced a second
+incorrect zero-service-read candidate record: an ordinary open/read/close of
+`/./data`, doubled-slash, relative AT_FDCWD, or `/proc/self/root` spellings of the
+still-named inode was not classified as resource access. That head's zero-read
+claim is also withdrawn.
+
+The bounded model now categorically rejects unrelated opens from observed
+exclusive resource creation until unlink. The sole subsequent named-resource
+open must be its exact original path with the previously required read-only
+flags and single retained descriptor. This is a phase rule, not an attempt to
+recognize every filesystem spelling. Noncanonical, relative and unresolved
+spellings refuse; after creation, ordinary opens are limited to the original
+physical image inventory, exact root identity/lifetime metadata and the resource
+directory for cleanup. Other newly opened paths fail before a read. Setup opens
+before the resource exists are explicitly classified as setup, not resource
+conformance; two exact pre-calibration Node cgroup probe spellings containing a
+double slash are supported only in that setup phase. This candidate does not
+verify every setup read or establish OS confinement.
+
+Mutation controls inject relative, dot, doubled-slash, parent-component,
+proc-root, unrelated and extra resource-directory opens before and after unlink.
+An actual installed negative execution intercepts the service's unlink, opens
+`/./fixture`, reads its bytes and closes the alias before completing the real
+unlink. Its trace must reject at the named-resource phase rule. This raw effect
+is not authorized service dispatch. No production or coverage changes accompany
+these decoder restrictions.

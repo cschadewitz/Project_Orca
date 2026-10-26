@@ -152,6 +152,15 @@ if (["changed-image", "lifetime-loss", "root-replacement"].includes(scenario)) {
       if (typeof args[1] === "number" && args[1] & fs.constants.O_NOFOLLOW) faultDescriptor = result;
       return result;
     };
+  const originalUnlink = fs.unlinkSync;
+  if (scenario === "path-alias")
+    fs.unlinkSync = function (path) {
+      // Deliberate raw negative control, while the actual service inode is named.
+      const alias = fs.openSync(path.replace(/\/fixture$/, "/./fixture"), "r");
+      fs.readSync(alias, Buffer.alloc(plan.length), 0, plan.length, plan.offset);
+      fs.closeSync(alias);
+      return Reflect.apply(originalUnlink, this, [path]);
+    };
   const service = createOwnedFileReadServiceForTest({
     enabled: true,
     owner: serviceOwner,
@@ -161,6 +170,7 @@ if (["changed-image", "lifetime-loss", "root-replacement"].includes(scenario)) {
     respond: async () => assert.fail("unexpected delivery"),
   });
   fs.openSync = originalOpen;
+  fs.unlinkSync = originalUnlink;
   assert.equal(service.coverage.level, "policy-per-ask");
   assert.deepEqual(service.coverage.evidence.installedRefs, []);
   assert.equal(service.coverage.evidence.independentlyObservedEffects, false);
@@ -233,6 +243,6 @@ process.stdout.write(
     managedEnrollment: "disposable-only",
     servicePositiveExecution: false,
     policyObservation,
-    rawFaultInjection: ["service-read", "wrong-descriptor"].includes(scenario),
+    rawFaultInjection: ["service-read", "wrong-descriptor", "path-alias"].includes(scenario),
   }) + "\n",
 );

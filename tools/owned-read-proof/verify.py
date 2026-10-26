@@ -242,6 +242,14 @@ def verify_trace(text, plan):
         elif call in ('open', 'openat', 'openat2', 'creat'):
             if call != 'openat':
                 raise RuntimeError('unsupported open variant')
+            path = string(args[1]).decode()
+            live = [r for r in resources if not r['unlinked']]
+            if live and (len(live) != 1 or path != live[0]['path']):
+                raise RuntimeError('unresolved open during named-resource lifetime')
+            startup_probe = not resources and not calibration_started and path in {
+                '/sys/fs/cgroup//memory.max', '/sys/fs/cgroup//memory.high'}
+            if not startup_probe and (not path.startswith('/') or any(part in ('', '.', '..') for part in path.split('/')[1:])):
+                raise RuntimeError('noncanonical or relative open: ' + repr(path))
             if result.startswith('-1 '):
                 continue
             if not re.fullmatch(r'AT_FDCWD(?:<.*>)?', args[0]):
@@ -285,6 +293,16 @@ def verify_trace(text, plan):
                     obj['kind'] = 'calibration'
                     calibration_handles.append(obj)
                     calibration_started = True
+            if resources and obj.get('kind') is None:
+                allowed = (path in plan.get('image', {}) or path in {
+                    str(Path(plan['base']) / 'workspace/.orca/workspace-identity/id'),
+                    f"/proc/self/fdinfo/{plan['lifetimeFd']}"})
+                directory = any(path == str(Path(r['path']).parent) for r in resources) and 'O_DIRECTORY' in flags
+                if not (allowed or directory) or not {'O_RDONLY'} <= flags or flags & {'O_CREAT', 'O_TRUNC', 'O_APPEND', 'O_RDWR', 'O_WRONLY'}:
+                    raise RuntimeError('unclassified post-resource open')
+                obj['kind'] = 'retained-image-or-metadata' if allowed else 'empty-resource-directory'
+            if obj.get('kind') is None:
+                obj['kind'] = 'setup-before-resource'
             table[number] = obj
         elif call == 'unlink' and result == '0':
             path = string(args[0]).decode()

@@ -88,6 +88,18 @@ class ObserverTests(unittest.TestCase):
             with self.subTest(call=call):
                 self.rejects(TRACE.replace(stat_line(0), stat_line(0) + '1 ' + call + '\n'))
 
+    def test_unresolved_resource_opens_refuse_across_all_phases(self):
+        paths = ('/base/arbitrary-private-name/./data', '/base/arbitrary-private-name//data',
+                 '/base/arbitrary-private-name/../arbitrary-private-name/data',
+                 'arbitrary-private-name/data', '/proc/self/root/base/arbitrary-private-name/data',
+                 '/base/unrelated', '/base/arbitrary-private-name/other')
+        for path in paths:
+            alias = ('1 openat(AT_FDCWD, "' + path + '", O_RDONLY|O_CLOEXEC) = 32\n'
+                     '1 read(0x20, 0x123, 0x4) = 0x4\n1 close(32) = 0\n')
+            for marker in (stat_line(1), stat_line(0)):
+                with self.subTest(path=path, marker=marker):
+                    self.rejects(TRACE.replace(marker, marker + alias))
+
     def test_wrong_inode_or_open_flags_refuse(self):
         self.rejects(TRACE.replace(stat_line(0), stat_line(0, 43)))
         self.rejects(TRACE.replace('O_RDONLY|O_NOFOLLOW', 'O_RDWR|O_NOFOLLOW'))

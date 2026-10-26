@@ -153,7 +153,7 @@ def main():
     spec.loader.exec_module(release)
     reports = []
     for scenario in ('baseline', 'changed-image', 'lifetime-loss', 'root-replacement',
-                     'wrong-offset', 'wrong-descriptor', 'service-read', 'extra-process'):
+                     'wrong-offset', 'wrong-descriptor', 'service-read', 'extra-process', 'path-alias'):
         with proof_directory() as directory:
             base = Path(directory)
             installed = base / 'installed'
@@ -224,10 +224,11 @@ def main():
                 else:
                     expected = {'changed-image': 'changed image', 'root-replacement': 'changed root/lifetime',
                                 'lifetime-loss': 'lifetime descriptor closed', 'wrong-offset': 'calibration offset/length',
-                                'wrong-descriptor': 'wrong descriptor positional', 'service-read': 'unexpected service read',
-                                'extra-process': 'unsupported syscall: socketpair'}[scenario]
+                                'wrong-descriptor': 'unclassified post-resource open', 'service-read': 'unexpected service read',
+                                'extra-process': 'unclassified post-resource open',
+                                'path-alias': 'unresolved open during named-resource lifetime'}[scenario]
                     if verification.returncode == 0 or expected not in verification.stderr:
-                        raise RuntimeError('Negative control did not fail for expected reason: ' + verification.stderr[-2000:])
+                        raise RuntimeError('Negative control did not fail for expected reason (' + scenario + '): ' + verification.stderr[-2000:])
                     observed = {'record': 'candidate-negative-control', 'rejected': True,
                                 'reason': verification.stderr.splitlines()[-1]}
                 reports.append({'producer': json.loads(result.stdout), 'observer': observed,
