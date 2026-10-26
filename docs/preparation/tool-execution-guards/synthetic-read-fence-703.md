@@ -29,6 +29,11 @@ existing evaluation/permit/receipt. Different arguments or owner state refuse re
 Another coordinator cannot register the same verified invocation on the same original
 lifetime. New attempts require a fresh owner/invocation binding.
 
+The first evaluation's original caller cancellation signal is also retained across
+authorization and dispatch. Passing a replacement signal cannot revive that invocation.
+Future integration must bind these signals to the original execution/callback lifetime;
+UI disconnection is not execution revocation and must not be substituted for that lifetime.
+
 Only a verdict obtained through the injected `PolicyPortV1` for that retained action can
 reach authorization. Object-shaped actions, verdicts, serialized handles and public IDs
 cannot mint permits. The port is reread at evaluation, authorization and dispatch;
@@ -131,7 +136,7 @@ node tools/eslint-config/bin/check-css-tokens.js packages/app/renderer packages/
 git diff --check
 ```
 
-The focused run passed **8 files / 211 tests**, including **58 engine fence** and
+The focused run passed **8 files / 213 tests**, including **60 engine fence** and
 **10 capture/codec** cases. Root/renderer typechecks, engine/reference package build,
 full repository ESLint and CSS token checks passed. Changed TypeScript formatting and
 diff whitespace checks pass. Full suite/coverage, full renderer build, Electron/native

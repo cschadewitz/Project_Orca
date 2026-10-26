@@ -75,6 +75,7 @@ interface Entry<Capture> {
   capture: Capture;
   bytes: string;
   evidenceRef: string;
+  originalSignal?: AbortSignal;
   evaluation?: Promise<PolicyEvaluationV1>;
   verdict?: PolicyVerdictV1;
   authorization?: Promise<OneUsePermitV1>;
@@ -269,7 +270,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(), remaining);
     timer.unref();
-    const signal = AbortSignal.any([this.owner.signal, caller, timeout.signal]);
+    const signal = AbortSignal.any([this.owner.signal, entry.originalSignal ?? caller, caller, timeout.signal]);
     try {
       return await work(signal);
     } finally {
@@ -279,6 +280,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
 
   evaluate(action: ActionEvidenceV1, signal: AbortSignal): Promise<PolicyEvaluationV1> {
     const entry = this.retained(action);
+    entry.originalSignal ??= signal;
     entry.evaluation ??= this.lifetime(entry, signal, async (active) => {
       this.check(entry, active);
       await abortable(

@@ -159,6 +159,26 @@ describe("inactive one-use synthetic AgentHost read fence", () => {
     expect(f.reads).toHaveLength(1);
   });
 
+  it.each(["after-evaluation", "after-authorization"] as const)(
+    "a replacement signal cannot revive original cancellation %s",
+    async (when) => {
+      const f = await syntheticReadFixture();
+      const action = f.fence.capture({ path: "/synthetic/file" });
+      const evaluated = await f.fence.evaluate(action, f.caller.signal);
+      if (evaluated.phase !== "final" || evaluated.verdict.outcome !== "allow") throw new Error("Expected allow");
+      if (when === "after-evaluation") {
+        f.caller.abort();
+        await expect(f.fence.authorize(action, evaluated.verdict, new AbortController().signal)).rejects.toThrow();
+      } else {
+        const permit = await f.fence.authorize(action, evaluated.verdict, f.caller.signal);
+        f.caller.abort();
+        expect((await f.fence.dispatch(permit, new AbortController().signal)).state).toBe("not-dispatched");
+      }
+      expect(f.reads).toEqual([]);
+      expect(f.state.authWrites).toBe(0);
+    },
+  );
+
   it.each([
     "currentPolicyRevision",
     "authorityRevision",
