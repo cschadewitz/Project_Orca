@@ -1,3 +1,5 @@
+import { callScopedPermission } from "../client/scoped-permission-client.js";
+import type { ScopedPermissionMethod } from "@orca/protocol";
 /**
  * Electron main process. Owns the daemon connection, the preferences file, the application
  * menu and the window; the renderer only sees what the preload bridge exposes.
@@ -469,6 +471,9 @@ handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) =
 // `--read-only` daemon answers both, because a workflow is a file and not a run.
 handle("orca:workflows.list", (params: Parameters<DaemonClient["workflowsList"]>[0]) => client().workflowsList(params));
 handle("orca:workflows.get", (params: Parameters<DaemonClient["workflowsGet"]>[0]) => client().workflowsGet(params));
+handle("orca:scopedPermissions", (command: { method: ScopedPermissionMethod; params: unknown }) =>
+  callScopedPermission(client(), command.method, command.params),
+);
 handle("orca:templates", (command: { method: TemplateMethod; params: unknown }) =>
   callTemplate(client(), command.method, command.params),
 );

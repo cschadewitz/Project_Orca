@@ -26,6 +26,7 @@ import { ObjectId, textClass } from "../ui/index.js";
 import { AnswerCard, type AnswerRequest } from "./answer-card.js";
 import { permissionSubject, waitedLabel } from "./card-model.js";
 import { ScopedRuleChoices } from "./scoped-rule-choices.js";
+import { scopedRulePort } from "./scoped-rule-port.js";
 import type { ScopedRuleReviewPort } from "./scoped-rule-review.js";
 
 export interface PermissionCardProps {
@@ -44,6 +45,10 @@ export interface PermissionCardProps {
 }
 
 export function PermissionCard({ input, scopedRuleReview, ...rest }: PermissionCardProps): JSX.Element {
+  scopedRuleReview ??=
+    input.live && typeof window !== "undefined" && window.orca?.connection
+      ? scopedRulePort(window.orca, input.live.target)
+      : undefined;
   const subject = permissionSubject(input.context);
   const agent = input.agent;
   return (

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
+  SCOPED_PERMISSION_CONTRACTS,
   OPERATOR_METHODS,
   OperatorMutationContracts,
   AGENT_METHODS,
@@ -73,6 +74,7 @@ function everyAnsweredMethod(): string[] {
 describe("the operation inventory", () => {
   it("covers every method the protocol declares and the daemon answers, and nothing else", () => {
     const declared = new Set<string>([
+      ...Object.keys(SCOPED_PERMISSION_CONTRACTS),
       HELLO_METHOD,
       MAINTENANCE_RUNTIME_METHOD,
       ...OPERATOR_METHODS,

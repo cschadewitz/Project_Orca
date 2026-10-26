@@ -1,6 +1,6 @@
 # Owner-bound command bridge checkpoint — Refs #702 / #706
 
-This is an incomplete, unregistered integration checkpoint. It consumes reviewed
+This is an unregistered command/UI integration under injected owner fixtures. It consumes reviewed
 persistence #731 at `c6157bddec40b438e3425baf52cf65d12355c216`, based on main
 `bc0c57d82925cefa001513b8431355b912e4d462`. Managed design #730 was inspected at
 `9316577892659ee7f758801442adb97913f392d0`; it is not merged into this branch.
@@ -38,23 +38,56 @@ Inspection reads the actual store and never retries or reconstructs callbacks.
 Only the existing safe decision projector produces decision output; raw errors and
 private persistence receipts are withheld.
 
-## Remaining work and evidence limits
+## Integrated path and evidence limits
 
-This checkpoint is not the requested complete integration. Protocol result schemas,
-auth operation inventory, managed availability/registration, app IPC/client adapter,
-permission-card connection and bridge-specific acceptance tests remain unfinished.
-The methods are deliberately unregistered; the existing guard would refuse them
-until the operation inventory is reviewed and wired. No UI path is claimed.
-The existing persistence/live-input tests exercise actual disposable stores and
-answer leases, but do not validate this new bridge. A future owner must add the
-requested stale-review/identity/cancellation/expiry/write-fault/acknowledgement
-matrix through authenticated HTTP and the real UI adapter before acceptance.
-Revoke is still provided only by the reviewed typed store, not by this bridge.
+The closed `SCOPED_PERMISSION_CONTRACTS` family validates request and safe result
+schemas. The app main process validates its closed IPC family, preload exposes
+only that family, and `scopedRulePort` creates callbacks bound to opaque handles.
+PermissionCard uses the port only when the current handshake advertises the method.
+It reuses ScopedRuleChoices and the existing safe decision view. Cancel/unmount
+invalidates retained reviews; a pending write cannot be cancelled or replayed.
+A successful save leaves the callback pending; answering requires a separate
+explicit request. Once/deny never pass a standing writer to LiveHumanInput.
+No combined save-and-answer command is exposed. Existing record-before-standing-
+write-before-delivery behavior remains in the original registry, unchanged.
 
-Local verification: existing typed authority/live-input suites passed (21 tests).
-The new bridge passed targeted ESLint and Prettier. Root typecheck initially found
-one bridge error, corrected to use the existing authRequired error factory; the
-remaining error is missing app `yaml` resolution in the supplied installation.
-No dependency policy, lockfile or persistence parser/lock changes were made.
-GitHub REST and GraphQL reads returned Forbidden; the connected GitHub PR tool
-returned Unknown tool. No PR or branch was published by this checkpoint.
+The auth operation inventory is explicit, but **no production daemon registers
+these methods**. The test composition injects the owner and existing Authorizer
+into the method factory. Default CLI/managed startup cannot enable it by flag,
+query or environment. The managed Linux owner, actual protected approval lookup,
+qualification/disclosure and exact-build acceptance remain integration dependencies.
+`prepare` and `assertCurrent` in fixtures are synthetic retained approval owners;
+they certify no installed provider or managed enrollment. Revoke remains available
+only in the reviewed typed store; this family does not implement a revoke UI.
+
+Bridge acceptance tests exercise real disposable sidecars, credential files, leases,
+answer events, actual authenticated HTTP and guarded dispatch. They cover exact
+actor/command binding, separate save/answer, once/deny, stale revision/review,
+expiry, cancellation, workspace mismatch, duplicate requests, revocation across
+awaits and uncertain rename acknowledgement with explicit read-only inspection.
+Existing typed live-input tests separately cover record/write/delivery order,
+uncertain append/publication and restart without callback reconstruction. They
+remain distinct evidence: no native provider/hook or managed build claim is made.
+No end-to-end Electron smoke has been run for this bridge. No automatic replay or
+retry is implemented; all owner exceptions are converted to a fixed public error.
+
+## Setup and access observations
+
+Frozen install completed with unchanged lockfile and the existing supply-chain
+policy check and lifecycle allowlist; Electron download was skipped. Temporary
+PNPM_HOME/XDG paths stayed under /tmp. The supplied pnpm executable reported
+11.19.0 although package.json pins 12.4.2; no package manager pin was changed.
+Root and renderer typechecks and TypeScript/Vite build passed after installation.
+Checks and exact final head are reported in the handoff rather than implying CI.
+
+Only metadata READS failed: GitHub CLI attempted GraphQL at
+`https://api.github.com/graphql` for PR/issue metadata, and REST GET
+`https://api.github.com/repos/cschadewitz/Project_Orca/issues/702`.
+The CLI printed `Forbidden`; it did not expose an HTTP response body/status
+beyond that label, so a more specific 403 reason is unknown. Those routes were
+not retried after the parent's instruction. The connected github.fetch_pr call
+for #731 returned `Unknown tool`. No GitHub API WRITE was attempted or denied.
+The existing configured origin is HTTPS GitHub cschadewitz/Project_Orca, fetch
+and push. Fetch and read-only ls-remote succeeded; ls-remote confirmed the new
+branch absent before publication. No alternative remote, proxy, credentials,
+network settings or security settings were introduced.

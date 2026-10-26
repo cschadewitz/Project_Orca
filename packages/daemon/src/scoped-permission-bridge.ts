@@ -1,7 +1,7 @@
 /** Owner-local reviewed commands. No production bootstrap constructs this test/integration seam. */
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { z } from "zod";
+import type { z } from "zod";
 import { OrcaError, type ActionEvidenceV1, type MutationActor } from "@orca/core";
 import {
   createInactiveTypedSidecarStore,
@@ -10,7 +10,7 @@ import {
   type TypedSidecarSnapshot,
 } from "@orca/agents";
 import type { LiveHumanInput } from "@orca/engine";
-import { LiveDecisionTargetSchema, OperatorTargetSchema, type LiveDecisionTarget } from "@orca/protocol";
+import { SCOPED_PERMISSION_CONTRACTS, ScopedPermissionScopeSchema, type LiveDecisionTarget } from "@orca/protocol";
 import {
   projectGuardDecision,
   type GuardDecisionProjectionInput,
@@ -29,6 +29,9 @@ export interface RetainedScopedReview {
   readonly onceOptionId: string;
   readonly denyOptionId: string;
   readonly projection: GuardDecisionProjectionInput;
+  /** Exact text approved by the trusted destination disclosure owner, never model output. */
+  readonly scope: z.infer<typeof ScopedPermissionScopeSchema>;
+  readonly requiredReview: "passed" | "failed" | "unavailable";
 }
 export interface ScopedPermissionOwner {
   readonly sidecar: InactiveTypedSidecarOwner;
@@ -47,8 +50,9 @@ export interface ScopedPermissionOwner {
 const stale = (): never => {
   throw new OrcaError("CONFIG_STALE", "Scoped review is unavailable; review again.");
 };
-const targetSchema = z.strictObject({ target: OperatorTargetSchema, input: LiveDecisionTargetSchema.strict() });
-const handleSchema = z.strictObject({ target: OperatorTargetSchema, handle: z.uuid() });
+const contracts = SCOPED_PERMISSION_CONTRACTS;
+const targetSchema = contracts["scopedPermissions.review"].params;
+const handleSchema = contracts["scopedPermissions.inspect"].params;
 
 /** Requires real authentication and a validated typed-owner token; no client option enables registration. */
 export function scopedPermissionMethods(
@@ -70,11 +74,11 @@ export function scopedPermissionMethods(
     if (!isDeepStrictEqual(target, identity)) stale();
     return { principal: bound.principal, answer: ctx.liveAnswerAuthority };
   };
-  const current = (entry: Entry) => {
+  const current = (entry: Entry, accepting = false) => {
     if (
       !Number.isFinite(entry.review.reviewUntil) ||
       Date.now() >= entry.review.reviewUntil ||
-      owner.live.inspect(entry.input) !== "pending"
+      !(owner.live.inspect(entry.input) === "pending" || (accepting && owner.live.inspect(entry.input) === "accepting"))
     )
       stale();
     if (owner.assertCurrent(structuredClone(entry.review), { ...entry.actor }) !== undefined) stale();
@@ -85,7 +89,7 @@ export function scopedPermissionMethods(
     if (!entry || !isDeepStrictEqual(entry.actor, call.answer.actor)) stale();
     return { ...call, entry: entry! };
   };
-  return {
+  const table: MethodTable = {
     "scopedPermissions.review": {
       params: targetSchema,
       handle: async (params, ctx) => {
@@ -107,17 +111,22 @@ export function scopedPermissionMethods(
         current(entry);
         await call.answer.authorize(entry.input, true);
         current(entry);
+        for (const [key, value] of retained)
+          if (value.review.reviewUntil <= Date.now() && value.state !== "pending") retained.delete(key);
+        if (retained.size >= 1024) stale();
         const handle = randomUUID();
         retained.set(handle, entry);
         return {
           handle,
           reviewUntil: review.reviewUntil,
+          scope: ScopedPermissionScopeSchema.parse(review.scope),
+          requiredReview: review.requiredReview,
           decision: projectGuardDecision(review.projection, owner.disclosure, Date.now()),
         };
       },
     },
     "scopedPermissions.choose": {
-      params: handleSchema.extend({ choice: z.enum(["save", "allow-once", "deny"]) }),
+      params: contracts["scopedPermissions.choose"].params,
       handle: async (params, ctx) => {
         const { entry, principal, answer } = lookup(ctx, params);
         if (!(entry.state === "ready" || (entry.state === "saved" && params.choice !== "save"))) stale();
@@ -128,6 +137,11 @@ export function scopedPermissionMethods(
           await answer.authorize(entry.input, params.choice === "save");
           current(entry);
           if (params.choice === "save") {
+            if (
+              entry.review.requiredReview !== "passed" ||
+              entry.review.action.coverage.level !== "verified-per-execution"
+            )
+              stale();
             const exact = (command: CreateScopedRule, actor: MutationActor) => {
               current(entry);
               if (!isDeepStrictEqual(command, entry.review.command) || !isDeepStrictEqual(actor, entry.actor)) stale();
@@ -156,7 +170,13 @@ export function scopedPermissionMethods(
                 target: entry.input,
                 optionId: params.choice === "deny" ? entry.review.denyOptionId : entry.review.onceOptionId,
               },
-              answer,
+              {
+                actor: answer.actor,
+                authorize: async (target, standing) => {
+                  await answer.authorize(target, standing);
+                  current(entry, true);
+                },
+              },
             );
             entry.state = result.delivered ? "answered" : "uncertain";
           }
@@ -177,8 +197,10 @@ export function scopedPermissionMethods(
           (r) =>
             isDeepStrictEqual(r.rule, entry.review.command.rule) &&
             r.approvalRecordRef === entry.review.command.approvalRecordRef &&
+            r.scopeEvidenceRef === entry.review.scopeEvidenceRef &&
             isDeepStrictEqual(r.actor, entry.actor),
         );
+        await answer.authorize(entry.input, true);
         return { outcome: entry.state, retainedRule: Boolean(record) };
       },
     },
@@ -192,4 +214,22 @@ export function scopedPermissionMethods(
       },
     },
   };
+  return Object.fromEntries(
+    Object.entries(table).map(([name, method]) => [
+      name,
+      {
+        params: method.params,
+        handle: async (params: unknown, ctx: MethodContext) => {
+          try {
+            return await method.handle(params, ctx);
+          } catch {
+            throw new OrcaError(
+              "CONFIG_STALE",
+              "Scoped review unavailable; inspect current state before another attempt.",
+            );
+          }
+        },
+      },
+    ]),
+  );
 }

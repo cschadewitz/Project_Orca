@@ -33,6 +33,12 @@ export function ScopedRuleChoices({
       if (box?.contains(document.activeElement)) box.parentElement?.focus();
     };
   }, []);
+  useEffect(
+    () => () => {
+      void review?.cancel?.();
+    },
+    [review],
+  );
   const leave = () => {
     if (lock.current && phase !== "settled") return;
     generation.current++;
@@ -59,7 +65,10 @@ export function ScopedRuleChoices({
     setPhase("loading");
     try {
       const result = await port.review();
-      if (token !== generation.current) return;
+      if (token !== generation.current) {
+        void result?.cancel?.();
+        return;
+      }
       setReview(
         result
           ? { ...result, scope: copyScopedReviewScope(result.scope), decision: structuredClone(result.decision) }

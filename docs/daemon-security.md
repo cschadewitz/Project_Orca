@@ -539,3 +539,8 @@ and the raw-configuration migration to
 transfer approved on 9 October; they are not #328 criteria. The
 [9 October bounded contract/evidence review](implementation/m10-security-contract-closure.md)
 maps that split.
+
+| `scopedPermissions.review` | `permissions.grant` | Injected owner review; also requires inputs.answer. |
+| `scopedPermissions.choose` | `inputs.answer` | Opaque retained choice; save separately checks permissions.grant. |
+| `scopedPermissions.inspect` | `permissions.grant` | Read-only reconciliation under original authority. |
+| `scopedPermissions.cancel` | `inputs.answer` | Discard owner-local review handle. |

@@ -1,3 +1,4 @@
+import type { ScopedPermissionBridge } from "./scoped-permission-bridge.js";
 /**
  * The shape of `window.orca` — the only thing the sandboxed renderer can reach. Declared
  * once here so the preload that builds it and the renderer that calls it cannot drift:
@@ -420,6 +421,7 @@ export interface OrcaBridge {
   };
   /** Optional until the integration owner registers the typed template IPC dispatcher. */
   templates?: TemplateBridge;
+  scopedPermissions?: ScopedPermissionBridge;
   /** Workflow drafts (#180) for the visual editor. Optional: absent, the workflow viewer stays read-only. */
   workflowDrafts?: WorkflowDraftBridge;
   notifications: {
