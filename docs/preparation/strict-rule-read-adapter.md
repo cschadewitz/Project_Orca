@@ -58,6 +58,12 @@ The proposal is explicit opt-in typed records in the same sidecar, with old-writ
 and explicit reapproval of typed scope; parent owns whether that compatibility tradeoff is
 acceptable. This PR makes no schema or migration decision and implements no typed writer.
 
+The subsequent [persistence compatibility gate](strict-rule-persistence-compatibility.md)
+reproduces a supported replacement writer overwriting version 2 despite a matching file
+revision. It adds bounded refusal in upgraded v1 replacements, but cannot retrofit old
+binaries. Typed creation remains blocked pending the parent's minimum-writer/downgrade
+and recovery decision; a version bump by itself does not meet the same-sidecar requirement.
+
 `StrictScopedRuleWritePort` is only a proposed internal type seam: its sole method creates an
 explicit scoped rule with a reviewed approval reference and required expected file revision
 (`""` denotes an absent file). Allow once and Deny have no standing-write method. A future
