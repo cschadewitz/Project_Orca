@@ -3,14 +3,7 @@
   "title": "Preparation scenarios only; not a runtime action contract",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "format",
-    "baseline",
-    "integration",
-    "evidenceClass",
-    "syntheticCanaries",
-    "cases"
-  ],
+  "required": ["format", "baseline", "integration", "evidenceClass", "syntheticCanaries", "cases"],
   "properties": {
     "format": {
       "const": "orca.enforcement-preparation-corpus/1"
@@ -25,10 +18,7 @@
       "const": "preparation-only"
     },
     "syntheticCanaries": {
-      "const": [
-        "SYNTHETIC_PRIVATE_CONTEXT_706",
-        "SYNTHETIC_CREDENTIAL_706"
-      ]
+      "const": ["SYNTHETIC_PRIVATE_CONTEXT_706", "SYNTHETIC_CREDENTIAL_706"]
     },
     "cases": {
       "type": "array",
@@ -36,28 +26,14 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "id",
-          "family",
-          "title",
-          "trace",
-          "checks",
-          "variations",
-          "status"
-        ],
+        "required": ["id", "family", "title", "trace", "checks", "variations", "status"],
         "properties": {
           "id": {
             "type": "string",
             "pattern": "^E706-[a-z-]+$"
           },
           "family": {
-            "enum": [
-              "coverage",
-              "lifecycle",
-              "evidence",
-              "bypass",
-              "judge"
-            ]
+            "enum": ["coverage", "lifecycle", "evidence", "bypass", "judge"]
           },
           "title": {
             "type": "string",
@@ -99,16 +75,12 @@
                   "const": "E706-native-shell"
                 }
               },
-              "required": [
-                "id"
-              ]
+              "required": ["id"]
             },
             "then": {
               "properties": {
                 "checks": {
-                  "const": [
-                    "Observe actual dispatch; absent telemetry leaves blocking and execution unknown"
-                  ]
+                  "const": ["Observe actual dispatch; absent telemetry leaves blocking and execution unknown"]
                 }
               }
             }
@@ -120,9 +92,7 @@
                   "const": "E706-remote-custom"
                 }
               },
-              "required": [
-                "id"
-              ]
+              "required": ["id"]
             },
             "then": {
               "properties": {

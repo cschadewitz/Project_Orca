@@ -75,3 +75,15 @@ Follow-up review correction: both affected checks now preserve unknown/unsupport
 coverage. Preparation schema regression checks reject the earlier misleading
 assertions. The 52 scenarios remain unexecuted; the 139-test result above belongs
 to the initial preparation validation and was not rerun for these data/prose edits.
+
+## CI formatting follow-up
+
+CI40258538330 stopped at format:check on the two preparation JSON files. Applied
+repository Prettier 3.9.9 to those files with `--write`; parsed JSON deep equality
+against the pre-format copies passed for both, preserving all 52 `not-run` cases.
+The schema and all seven invalid mutations above pass after formatting.
+`pnpm run format:check` attempted dependency refresh and failed before formatting
+with ENOENT creating `/home/agent/.local/share/pnpm`. No dependency repair was
+performed. The exact repository script payload, `prettier --check .`, was then
+run using `node node_modules/prettier/bin/prettier.cjs --check .` with unchanged
+repository formatting configuration and exclusions. Result: all matched files use Prettier code style, exit 0. No runtime tests or scenarios were executed for this fix.
