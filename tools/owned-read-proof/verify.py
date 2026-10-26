@@ -107,14 +107,14 @@ def fd(value):
     return int(match[1], 16 if match[1].startswith('0x') else 10)
 
 
-def events(text):
+def events(text, with_intervals=False):
     """Reassemble at syscall entry order, including clone before its child's events.
 
     Resource operations are restricted to the one leader below; concurrent
     shared-table resource operations are outside this narrow verifier's model.
     """
     pending, records = {}, []
-    for line in text.splitlines():
+    for line_number, line in enumerate(text.splitlines()):
         match = re.fullmatch(r'(\d+)\s+(.*)', line)
         if not match:
             raise RuntimeError('missing trace PID')
@@ -122,7 +122,7 @@ def events(text):
         if body.endswith(' <unfinished ...>'):
             if pid in pending:
                 raise RuntimeError('duplicate unfinished event')
-            pending[pid] = (body[:-len(' <unfinished ...>')], len(records))
+            pending[pid] = (body[:-len(' <unfinished ...>')], len(records), line_number)
             records.append(None)
             continue
         resumed = re.match(r'<\.\.\. (\w+) resumed>(.*)', body)
@@ -130,14 +130,17 @@ def events(text):
             item = pending.pop(pid, None)
             if item is None or not item[0].startswith(resumed[1] + '('):
                 raise RuntimeError('unmatched resumed event')
-            records[item[1]] = (pid, item[0] + resumed[2])
+            records[item[1]] = (pid, item[0] + resumed[2], item[2], line_number)
         else:
-            records.append((pid, body))
+            if pid in pending:
+                raise RuntimeError('overlapping calls in one thread')
+            records.append((pid, body, line_number, line_number))
     if pending:
         raise RuntimeError('incomplete trace')
-    for pid, body in records:
+    for pid, body, entered, completed in records:
+        interval = (entered, completed) if with_intervals else ()
         if body == '+++ exited with 0 +++':
-            yield pid, 'settled', [], '0'
+            yield (pid, 'settled', [], '0') + interval
         elif body.startswith('--- SIG'):
             raise RuntimeError('unexpected signal')
         else:
@@ -153,7 +156,7 @@ def events(text):
                 args = call[2].split(', ', 1)
             else:
                 args = split_args(call[2])
-            yield pid, call[1], args, call[3]
+            yield (pid, call[1], args, call[3]) + interval
 
 
 FD_FIRST = set(('read readv write writev pread64 pwrite64 preadv preadv2 pwritev pwritev2 '
@@ -192,7 +195,12 @@ def verify_trace(text, plan):
     forbidden = {'fork', 'vfork', 'execveat', 'unshare', 'setns', 'setsid', 'setpgid',
                  'io_uring_setup', 'io_uring_enter', 'io_uring_register', 'open_by_handle_at',
                  'pidfd_getfd', 'sendmsg', 'recvmsg', 'ptrace', 'process_vm_readv', 'process_vm_writev', 'close_range', 'sendfile', 'splice', 'tee', 'copy_file_range'}
-    for pid, call, args, result in events(text):
+    open_intervals, concurrent_descriptor_intervals, resource_windows = [], [], []
+    for pid, call, args, result, entered, completed in events(text, with_intervals=True):
+        if call in ('open', 'openat', 'openat2', 'creat') and entered != completed:
+            open_intervals.append((entered, completed, pid, string(args[1]).decode() if call in ('openat', 'openat2') else string(args[0]).decode()))
+        if pid != leader and call in {'read', 'readv', 'write', 'writev', 'pread64', 'pwrite64', 'preadv', 'pwritev', 'fcntl', 'ioctl', 'close', 'mmap', 'mremap', 'ftruncate'} and entered != completed:
+            concurrent_descriptor_intervals.append((entered, completed, call))
         if call not in SUPPORTED:
             raise RuntimeError('unsupported syscall: ' + call)
         if call == 'execve':
@@ -268,7 +276,7 @@ def verify_trace(text, plan):
                     raise RuntimeError('resource not newly created under disposable private directory')
                 if pid != leader:
                     raise RuntimeError('resource created by unexpected thread')
-                obj.update(kind='resource', writer=number, writes=[], unlinked=False, reader=None,
+                obj.update(kind='resource', creationEntry=entered, creationCompletion=completed, writer=number, writes=[], unlinked=False, reader=None,
                            created=True, writerClosed=False, readerClosed=False, stats=[])
                 resources.append(obj)
             else:
@@ -313,6 +321,7 @@ def verify_trace(text, plan):
                     if obj['reader'] is None or obj['unlinked']:
                         raise RuntimeError('resource unlink lineage')
                     obj['unlinked'] = True
+                    resource_windows.append((obj['creationEntry'], completed, obj['path']))
         elif call in ('fstat', 'newfstatat', 'statx', 'lstat', 'stat'):
             obj = None
             if re.fullmatch(r'[0-9]+', args[0]):
@@ -387,6 +396,19 @@ def verify_trace(text, plan):
                 raise RuntimeError('unsupported descriptor control: ' + args[1])
             if call in ('dup2', 'dup3') and fd(args[1]) in table:
                 raise RuntimeError('descriptor replacement')
+    # Entry-ordered replay cannot account for an open whose kernel completion
+    # crosses creation/unlink. This synchronous resource model refuses it rather
+    # than infer a descriptor/inode from an ambiguous concurrent interval.
+    for start, end, resource_path in resource_windows:
+        for a, b, opener, opened_path in open_intervals:
+            # Only the leader's already validated exclusive creation and one
+            # readonly reopen may span trace scheduling records. The leader's
+            # next syscall cannot begin before these calls complete.
+            modeled = opener == leader and opened_path == resource_path and a >= start and b <= end
+            if a <= end and b >= start and not modeled:
+                raise RuntimeError('ambiguous open interval overlaps resource lifetime')
+        if any(a <= end and b >= start for a, b, _ in concurrent_descriptor_intervals):
+            raise RuntimeError('ambiguous descriptor interval overlaps resource lifetime: ' + repr([call for a, b, call in concurrent_descriptor_intervals if a <= end and b >= start]))
     if execs != 1 or threads != settled:
         raise RuntimeError('incomplete process settlement')
     if lifetime_closed:

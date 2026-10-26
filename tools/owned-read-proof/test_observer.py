@@ -100,6 +100,27 @@ class ObserverTests(unittest.TestCase):
                 with self.subTest(path=path, marker=marker):
                     self.rejects(TRACE.replace(marker, marker + alias))
 
+    def test_unfinished_open_crossing_creation_refuses(self):
+        clone = '1 clone(child_stack=NULL, flags=CLONE_THREAD|CLONE_FILES|CLONE_VM|CLONE_SIGHAND) = 2\n'
+        creator = '1 openat(AT_FDCWD, "/base/arbitrary-private-name/data", O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC, 0400) = 19\n'
+        trace = TRACE.replace('1 fcntl', clone + '1 fcntl')
+        trace = trace.replace(creator, '2 openat(AT_FDCWD, "/base/arbitrary-private-name/data", O_RDONLY|O_CLOEXEC <unfinished ...>\n' + creator)
+        trace = trace.replace(stat_line(1), stat_line(1) + '2 <... openat resumed>) = 32\n2 read(0x20, 0x123, 0x4) = 0x4\n2 close(32) = 0\n')
+        trace = trace.replace('1 exit_group', '2 +++ exited with 0 +++\n1 exit_group')
+        with self.assertRaisesRegex(RuntimeError, 'ambiguous open interval'):
+            verify_trace(trace, PLAN)
+        # An open entered even before the resource namespace exists remains ambiguous.
+        trace = trace.replace('2 openat(AT_FDCWD, "/base/arbitrary-private-name/data", O_RDONLY|O_CLOEXEC <unfinished ...>\n', '')
+        trace = trace.replace('1 mkdir', '2 openat(AT_FDCWD, "/base/arbitrary-private-name/data", O_RDONLY|O_CLOEXEC <unfinished ...>\n1 mkdir')
+        with self.assertRaisesRegex(RuntimeError, 'ambiguous open interval'):
+            verify_trace(trace, PLAN)
+
+    def test_same_thread_overlap_is_impossible_evidence(self):
+        bad = TRACE.replace('1 fcntl', '1 openat(AT_FDCWD, "/base/unrelated", O_RDONLY <unfinished ...>\n1 fcntl')
+        bad += '1 <... openat resumed>) = 32\n'
+        with self.assertRaisesRegex(RuntimeError, 'overlapping calls in one thread'):
+            verify_trace(bad, PLAN)
+
     def test_wrong_inode_or_open_flags_refuse(self):
         self.rejects(TRACE.replace(stat_line(0), stat_line(0, 43)))
         self.rejects(TRACE.replace('O_RDONLY|O_NOFOLLOW', 'O_RDWR|O_NOFOLLOW'))

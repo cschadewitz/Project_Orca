@@ -152,7 +152,7 @@ still requires this standalone sequential supervisor to have no unrelated childr
 ## Recorded local run
 
 The [candidate observation record](owned-read-candidate-observations.json) binds the
-test source bytes and records nine controlled executions plus 15 mutation/transfer/cleanup
+test source bytes and records nine controlled executions plus 18 mutation/transfer/interval/cleanup
 tests on Node 24.19.0 / strace 6.13. Baseline observed 11 settled threads and zero
 service reads; its valid action returned `indeterminate / authority-unavailable`.
 These are local candidate observations, not independent review or hosted CI.
@@ -208,3 +208,33 @@ An actual installed negative execution intercepts the service's unlink, opens
 unlink. Its trace must reject at the named-resource phase rule. This raw effect
 is not authorized service dispatch. No production or coverage changes accompany
 these decoder restrictions.
+
+## Cross-phase interval correction
+
+Re-review of `ed6ba629993bdba6ab79d78974a18da0f8ee0e40` reproduced a third
+incorrect zero-read candidate result: a shared-thread open entered before resource
+creation, completed during its named lifetime, and read the alias afterward.
+Entry-order reassembly had lost the completion boundary and classified that open
+as setup. That head's zero-read claim is withdrawn as well.
+
+The parser now retains syscall entry/completion positions and rejects impossible
+same-thread overlap. After reconstructing the named resource window, verification
+refuses unresolved open intervals that intersect creation through completed unlink.
+The only modeled open intervals are the leader's already validated exact exclusive
+creation and single read-only reopen, wholly inside that window: its next syscall
+cannot enter until its own prior call completes. Cross-thread unfinished payload
+or descriptor-mutation intervals crossing the window also refuse. Readiness waits
+are not payload reads or descriptor factories. No concurrent filesystem simulation
+or inference of an ambiguous inode is added.
+
+Canonical cross-phase alias mutations now refuse, including an open entered even
+before the resource directory exists. A bounded actual Linux FIFO control captures
+a blocking open crossing a separate file's creation and checks retained entry and
+resume positions. This is raw interval-decoder evidence, not a reproduced service
+race or a positive service execution. All existing cooperative/same-UID and
+qualification limits continue to apply.
+
+The interval-corrected source bytes passed all nine installed scenarios and all
+18 tests. The baseline still records a valid-action authority-unavailable refusal
+and zero service reads under the bounded candidate model. Independent re-review
+remains required.
