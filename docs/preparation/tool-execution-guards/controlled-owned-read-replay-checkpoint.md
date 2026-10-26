@@ -101,3 +101,83 @@ coverage and review; they do not release a connected token.
 The original candidate verifier, candidate runner/fixture, engine, daemon and
 protected owner are unchanged. No production trust, real credential/access,
 persistent service, host security, user workspace or Mac change occurred.
+
+## Exact historical query sequences and minimum observation proposal
+
+This extraction uses only preserved trace
+`/tmp/orca-controlled-replay-plotdte2/bootstrap/trace`, SHA-256
+`f8c46762f1e417b0371d80b3e5fab4c50e08b2adc6e4859221837e87ff91d9f0`.
+Locations below are **one-based raw trace line numbers**, including unfinished and
+resumed lines. The trace has no per-call wall-clock timestamps, so no per-query
+seconds are inferred. All listed open/read/close calls run on original leader
+TID/TGID 4708. Every close returns 0.
+
+The copied child script is first opened at line 698 and the producer bundle at
+line 770. Bootstrap command consumption is line 3863; ack write is line 159686.
+Thus all four native probes below finish before either copied JavaScript file is
+opened. Their classification as Node-internal initialization, rather than a
+project callback, follows that ordering and the pinned source search; no native
+stack trace or particular libuv function name is asserted.
+
+| Exact path | Flags | FD | Open → read → close | Requested → returned bytes | Per-open stat |
+| --- | --- | --- | --- | --- | --- |
+| `/proc/self/cgroup` | `O_RDONLY\|O_CLOEXEC` | 20 | 435 → 436 → 437 | 1023 → 5 | None |
+| `/sys/fs/cgroup//memory.max` | `O_RDONLY\|O_CLOEXEC` | 20 | 438 → 439 → 440 | 31 → 12 | None |
+| `/sys/fs/cgroup//memory.high` | `O_RDONLY\|O_CLOEXEC` | 20 | 441 → 442 → 443 | 31 → 4 | None |
+| `/proc/meminfo` | `O_RDONLY\|O_CLOEXEC` | 20 | 446 → 447 → 448 | 4095 → 1447 | None |
+
+Each occurs exactly once, in startup, as one successful open, one sequential read
+and close. The doubled slash in the two cgroup paths is the actual observed
+spelling; this is not permission for other aliases or normalization variants.
+`/proc/self/maps` is a separate case: two startup opens, both with successful
+same-FD fstat before reads. It needs no new missing-stat allowance.
+
+The source-owned query is exactly `/proc/self/fdinfo/3`, where 3 is this run's
+retained lifetime FD, not a general selectable descriptor. The sole literal
+reader in the copied image is `controlled-child.mjs:39`, inside its original
+`check()` callable. It opens **1225 times**, all with `O_RDONLY|O_CLOEXEC` and no
+per-open stat: 2 startup, 1211 bootstrap, 12 after ack. Reader FD is 21 for 158
+opens and 22 for 1067 opens. Every lifecycle reads 99 bytes, then EOF 0, requesting
+8192 bytes for both calls, and closes on leader 4708. Representative lifecycles:
+
+| Position | Open entry/completion | Read entry/completion, then EOF | Close |
+| --- | --- | --- | --- |
+| First startup | 3505/3508 | 3510/3512, then 3513/3515 | 3517 |
+| First bootstrap | 3866/3866 | 3867/3867, then 3868/3868 | 3869 |
+| First post-ack | 159689/159689 | 159690/159690, then 159691/159691 | 159692 |
+| Last | 161043/161043 | 161044/161044, then 161045/161045 | 161046 |
+
+The producer owner is handling the smallest source-owned change: replace that
+one read with readonly open, explicit fstat on the opened query FD, bounded reads
+on that same FD (4096-byte ceiling plus one-byte overflow detection), optional
+same-FD final identity recheck, and finally-close. Keep the existing held-lifetime
+fstat/named identity and actual flock check. Invoke this helper at every existing
+`check()`, including startup and after ack. The query's own procfs `st_ino` is
+**different from** the payload `ino:` naming the actual lifetime file; both
+bindings must remain distinct. No Node/libuv-wide interception is proposed.
+
+For the four native probes only, the proposed separately typed kernel-runtime
+query contract needs prelaunch held-descriptor fstatfs evidence for procfs and
+cgroup2, effective mount namespace/mountinfo, exact target resolution without
+nested bind mounts or symlink redirection, and original leader/TGID/starttime
+binding after launch. A supervisor's `/proc/self/cgroup` inode cannot stand in
+for the child's process-relative object. Retain descriptor evidence and namespace
+checks inside the same supervised execution, not in a separate shell command.
+Reject alternate exec, mount/namespace/chroot changes, unknown query paths or
+flags, mappings, vector/positional/write/control effects and extra/out-of-startup
+invocations. Fully decode and bound all bytes; compare inode observations whenever
+provided. Missing provenance still refuses. These bytes are kernel-generated
+runtime telemetry, never immutable file bytes, a policy grant or qualification.
+Service/private-state descriptor, inode, alias and publication obligations remain
+separate and unchanged.
+
+A **current, read-only feasibility probe**, not historical evidence, confirmed
+fstatfs type `0x9fa0` for procfs nodes and `0x63677270` for cgroup2 nodes. Current
+mountinfo reports `/proc` root `/`, and `/sys/fs/cgroup` root **`/..`**, both with
+readonly mount options. The cgroup root field needs explicit retention/review as
+kernel metadata; it must not be normalized or concatenated as an application
+pathname. No mount/process provenance was captured before the historical run,
+so current metadata cannot retroactively qualify it. This proposal retains the
+trusted-kernel/stable-mount/cooperative same-UID assumptions and adds no path
+exemption or acceptance. Fresh source/image/observations are required after the
+producer owner's child change and the reviewed producer updates.
