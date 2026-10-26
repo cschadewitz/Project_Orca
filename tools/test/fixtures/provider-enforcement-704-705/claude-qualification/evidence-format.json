@@ -5,7 +5,17 @@
   "limits": { "rowBytes": 12288, "transportBytes": 262144, "hookFrameBytes": 4096 },
   "keys": {
     "required": ["seq", "stage", "level", "sourceRef"],
-    "optional": ["callRef", "invocationRef", "outcome", "reason", "generation", "bindingRef"]
+    "optional": [
+      "callRef",
+      "invocationRef",
+      "outcome",
+      "reason",
+      "generation",
+      "bindingRef",
+      "runRef",
+      "actionRef",
+      "cwdRef"
+    ]
   },
   "token": "^[a-z0-9][a-z0-9:._-]{0,63}$",
   "stages": {
@@ -20,9 +30,29 @@
     "effect-observed": ["observed"],
     "revocation": ["revoked"],
     "cancellation": ["cancelled"],
-    "config-mutation": ["hook-removed"]
+    "config-mutation": ["hook-removed"],
+    "effect-check": ["changed", "unchanged"]
   },
-  "opaqueRefs": "callRef, invocationRef, bindingRef and generation are per-run sequence labels (call-1, inv-1, binding-1, gen-1); never hashes or digests of private input.",
+  "opaqueRefs": "callRef, invocationRef, bindingRef, generation, runRef, actionRef and cwdRef are per-run sequence labels (call-1, inv-1, binding-1, gen-1, run-1, action-1, cwd-1); never hashes or digests of private input.",
+  "additions": "runRef, actionRef, cwdRef and the effect-check stage were added by the #704 classification follow-up. They are additive: every row valid under the earlier key and stage sets is still valid. effect-check is the independent counter's per-call reading (changed or unchanged), separate from the producer's effect-observed row.",
+  "experiment": {
+    "format": "orca.claude-qualification-experiment/1",
+    "purpose": "Envelope for one allow -> cached repeat -> revoke experiment run. The run header names what the run claims to be; every receipt must carry the header's runRef.",
+    "runKeys": ["runRef", "provider", "tool", "providerVersion", "adapterVersion", "actionRef", "cwdRef"],
+    "identityToken": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+    "boundStages": ["native-dispatch", "orca-decision", "tool-start"],
+    "authenticity": "unverified: the repository has no mechanism that authenticates supplied installed receipts or installed-fact references. A receipt string, sourceRef or producer success value is a claim, not independent proof. No attestor is defined here.",
+    "outcomes": {
+      "NO-EVIDENCE": "No receipts.",
+      "MALFORMED-EVIDENCE": "The envelope or a receipt fails the closed format.",
+      "SIMULATION-ONLY": "Every receipt is below installed-observed. The sequence result describes the synthetic run only.",
+      "INCONSISTENT-EVIDENCE": "Rows do not belong to one run of the declared experiment: mixed levels, another run, provider/tool/version/action/cwd mismatch, duplicated, replayed or reordered receipts, extra calls or generation labels that disagree.",
+      "EXPERIMENT-FAILED": "Consistent supplied rows show a guard violation, such as an effect after denial or an allow after revocation. Kept for review; never a qualification.",
+      "EXPERIMENT-INCOMPLETE": "Consistent supplied rows without a violation, but a required stage is missing or out of order (for example a deny-only run).",
+      "PROVENANCE-INCOMPLETE": "The supplied sequence is complete but the installed-fact manifest is not shape-complete.",
+      "EXPERIMENT-COMPLETE-PROVENANCE-UNVERIFIED": "Structurally complete supplied experiment with a shape-complete manifest. Provenance is still unverified, so the installed Claude route stays UNKNOWN."
+    }
+  },
   "forbidden": [
     "command strings or tool input values",
     "cwd, workspace or home paths",
