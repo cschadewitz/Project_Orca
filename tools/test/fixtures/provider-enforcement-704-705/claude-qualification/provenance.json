@@ -1,0 +1,111 @@
+{
+  "format": "orca.claude-qualification-provenance/1",
+  "issue": 704,
+  "execution": "none",
+  "installedObservations": "NONE",
+  "candidate": {
+    "evidenceLevel": "source-reviewed",
+    "note": "Research pins copied from the merged #713/#724 packet and re-verified by the test against the repository; not installed identities.",
+    "sourcePins": "docs/preparation/provider-enforcement-704-705/source-pins.json",
+    "publicationMetadata": "docs/preparation/provider-enforcement-704-705/claude-publication-metadata.json",
+    "native": {
+      "package": "@anthropic-ai/claude-code",
+      "version": "2.1.309",
+      "integrity": "sha512-+lBYZRuXOJpiKJcRv/CK7gF+5UFNWyJE7hSxkgGUKDZOWgANl9MAabfTkrJk183Tp3B0Nv4xF/DU1t0BaKXOPw==",
+      "shasum": "f9e48d703c778c2814136cf492918f49f2c4bbfb"
+    },
+    "sdk": {
+      "package": "@anthropic-ai/claude-agent-sdk",
+      "version": "0.3.309",
+      "integrity": "sha512-Tou0fXBkxKJDcgT09v3Iv/Jd7bNgapgfAiHxGPctAADPFQhidfhZbcv7at1cVL0Lon5sbs+OzP/pEOigw2TI0A==",
+      "shasum": "8806fb5d1de8b375e4aea80d806def7570863ce6"
+    },
+    "adapter": {
+      "package": "@agentclientprotocol/claude-agent-acp",
+      "version": "0.95.0",
+      "revision": "ebfbfbdaa9c2a6a8bd9eb0a4965b521009152350"
+    },
+    "sourceExcerpts": ["claude-decode", "claude-callback"]
+  },
+  "installed": {
+    "executablePath": {
+      "state": "unknown",
+      "reason": "no installed artifact inspected; candidate package name is not a resolved executable"
+    },
+    "launcher": {
+      "state": "unknown",
+      "reason": "launcher/wrapper chain and argv not observed"
+    },
+    "platform": {
+      "state": "unknown",
+      "reason": "host OS/arch/libc and selected optional platform package not observed"
+    },
+    "packageIntegrity": {
+      "state": "unknown",
+      "reason": "registry integrity is publication metadata; installed tarball/platform binary digest not observed"
+    },
+    "cliSdkArtifactCorrespondence": {
+      "state": "unknown",
+      "reason": "matching .309 version suffixes do not establish that CLI and SDK platform artifacts share a native implementation"
+    },
+    "effectiveSettingsProvenance": {
+      "state": "unknown",
+      "reason": "managed/user/project/local settings sources and their effective merge not observed"
+    },
+    "protectedOwnership": {
+      "state": "unknown",
+      "reason": "hook, checker and policy files not shown to be outside agent-writable locations"
+    },
+    "hookPrecedence": {
+      "state": "unknown",
+      "reason": "ordering among managed, disabled, overridden and later rewriting hooks not observed"
+    },
+    "hookMatchers": {
+      "state": "unknown",
+      "reason": "matcher coverage for the fixture tool, subagents and MCP routes not observed"
+    },
+    "finalInputBinding": {
+      "state": "unknown",
+      "reason": "no observation that the checked hook input equals the dispatched input after all rewrites"
+    },
+    "finalCwdBinding": {
+      "state": "unknown",
+      "reason": "session cwd is not proof of effective execution cwd"
+    },
+    "failureSemantics": {
+      "state": "unknown",
+      "reason": "installed behaviour for checker unavailable, crash, timeout, malformed and empty output not observed",
+      "modes": {
+        "unavailable": "unknown",
+        "crash": "unknown",
+        "timeout": "unknown",
+        "malformed": "unknown",
+        "empty": "unknown"
+      }
+    },
+    "pendingCancellationOwnership": {
+      "state": "unknown",
+      "reason": "native ownership of a pending hook/permission across cancellation, late response and restart not observed"
+    },
+    "hookDecisionFrame": {
+      "state": "unknown",
+      "reason": "the exact checker output that defers to native permission, versus an allow that bypasses it, is unverified; an empty success can be indistinguishable from a failed checker"
+    },
+    "cachedRepeatHookDispatch": {
+      "state": "unknown",
+      "reason": "whether PreToolUse runs for a natively remembered permission is documented intent only"
+    }
+  },
+  "sourceFunctionTested": [
+    {
+      "fact": "adapter-offered-option-membership",
+      "test": "rejects an unoffered Claude option before applying any synthetic effect",
+      "file": "tools/test/provider-enforcement-source-704-705.test.js"
+    },
+    {
+      "fact": "adapter-post-await-abort",
+      "test": "Claude callback rejects a late answer after abort before decoding or fallback effects",
+      "file": "tools/test/provider-enforcement-source-704-705.test.js"
+    }
+  ]
+}

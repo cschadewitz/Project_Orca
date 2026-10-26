@@ -1,0 +1,34 @@
+{
+  "format": "orca.claude-qualification-receipt/1",
+  "purpose": "Sanitized public receipt rows for the offline harness and the later separately authorized installed experiment.",
+  "evidenceLevels": ["source-reviewed", "source-function-tested", "synthetic-protocol-tested", "installed-observed"],
+  "limits": { "rowBytes": 12288, "transportBytes": 262144, "hookFrameBytes": 4096 },
+  "keys": {
+    "required": ["seq", "stage", "level", "sourceRef"],
+    "optional": ["callRef", "invocationRef", "outcome", "reason", "generation", "bindingRef"]
+  },
+  "token": "^[a-z0-9][a-z0-9:._-]{0,63}$",
+  "stages": {
+    "native-dispatch": ["new", "cached", "replay"],
+    "hook-invoked": ["invoked", "not-invoked"],
+    "hook-response": ["allow", "deny", "unavailable", "crash", "timeout", "malformed", "empty", "late"],
+    "orca-decision": ["allow", "deny", "require-human", "indeterminate", "refused"],
+    "native-ask": ["asked"],
+    "native-continued": ["continued", "blocked"],
+    "permit-claim": ["claimed", "refused"],
+    "tool-start": ["started", "refused"],
+    "effect-observed": ["observed"],
+    "revocation": ["revoked"],
+    "cancellation": ["cancelled"],
+    "config-mutation": ["hook-removed"]
+  },
+  "opaqueRefs": "callRef, invocationRef, bindingRef and generation are per-run sequence labels (call-1, inv-1, binding-1, gen-1); never hashes or digests of private input.",
+  "forbidden": [
+    "command strings or tool input values",
+    "cwd, workspace or home paths",
+    "environment values, credentials or tokens",
+    "transcript text or model output",
+    "payload digests or binding hashes",
+    "host names, user names or private provider context"
+  ]
+}
