@@ -81,6 +81,16 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise RuntimeError("Daemon RPC redirects are refused")
 
 
+class TypedLifetime:
+    """Retained assertion plus the exact descriptor allowed into direct children."""
+    def __init__(self, descriptor, assertion):
+        self.descriptor = descriptor
+        self.assertion = assertion
+
+    def __call__(self):
+        return self.assertion()
+
+
 @contextlib.contextmanager
 def typed_lifetime_lock(path, exclusive=False):
     """Stable, no-follow, non-stealable namespace. Descriptor inheritance keeps
@@ -105,8 +115,10 @@ def typed_lifetime_lock(path, exclusive=False):
             raise RuntimeError("Typed lifetime busy: managed daemon/CLI/ACP ownership retained") from None
         assert_current()
         os.set_inheritable(fd, True)
-        yield assert_current
+        yield TypedLifetime(fd, assert_current)
     finally:
+        # Close only our reference. LOCK_UN would unlock the shared open-file
+        # description in a surviving child on normal OR exceptional unwind.
         os.close(fd)
 
 
@@ -121,9 +133,11 @@ def typed_operation(action):
             with typed_lifetime_lock(self.root / "typed-lifetime.lock") as lifetime:
                 start = len(self._typed_assertions)
                 self._typed_assertions.extend((assertion, lifetime))
+                self._typed_lifetimes.append(lifetime)
                 try:
                     return operation(self, *args, **kwargs)
                 finally:
+                    self._typed_lifetimes.pop()
                     del self._typed_assertions[start:]
         return guarded
     return decorate
@@ -214,6 +228,7 @@ class Deployment:
         # No production inspector/build map is installed by this default-off change.
         self.typed_inspector = typed_inspector
         self._typed_assertions = []
+        self._typed_lifetimes = []
         self.config = json.loads(Path(manifest).read_text())
         self.root = Path(self.config["root"]).resolve()
         self.pending = self.root / "activation.json"
@@ -239,6 +254,14 @@ class Deployment:
 
     def retain_typed_inspection(self, assertion):
         self._typed_assertions.append(assertion)
+
+    def typed_process(self, operation, *args, **kwargs):
+        # subprocess.run and Popen default to close_fds=True. An inheritable bit
+        # alone does not keep the lifetime descriptor. Pass only retained owners,
+        # keeping every unrelated descriptor closed; no blanket FD inheritance.
+        kwargs["close_fds"] = True
+        kwargs["pass_fds"] = tuple(sorted({owner.descriptor for owner in self._typed_lifetimes}))
+        return self.typed_dispatch(operation, *args, **kwargs)
 
     def typed_guard(self, action, extra_roots=()):
         """Stable pre-producer boundary. The inspector must resolve every original
@@ -273,7 +296,7 @@ class Deployment:
             yield
 
     def systemctl(self, *args):
-        return self.typed_dispatch(capture, ["systemctl", *(["--user"] if self.config.get("userService", True) else []), *args])
+        return self.typed_process(capture, ["systemctl", *(["--user"] if self.config.get("userService", True) else []), *args])
 
     def health(self, release, url=None, pid=None, token_file=None):
         meta = metadata(release)
@@ -309,38 +332,38 @@ class Deployment:
         release = self.root / "releases" / tag
         if release.exists():
             raise RuntimeError(f"Release directory already exists: {release}; inspect it rather than overwrite")
-        published = json.loads(self.typed_dispatch(capture, ["gh", "release", "view", tag, "--repo", self.config["repository"], "--json", "tagName,isDraft,isPrerelease"]))
+        published = json.loads(self.typed_process(capture, ["gh", "release", "view", tag, "--repo", self.config["repository"], "--json", "tagName,isDraft,isPrerelease"]))
         if published["isDraft"] or published["isPrerelease"] or published["tagName"] != tag:
             raise RuntimeError("Target is not a published stable release")
         # Incomplete stages have unique names and are never candidates for activation.
         stage = Path(self.typed_dispatch(tempfile.mkdtemp, prefix=tag + ".staging-", dir=self.root / "releases"))
-        self.typed_dispatch(run, ["gh", "repo", "clone", self.config["repository"], str(stage), "--", "--branch", tag, "--single-branch", "--depth", "1"])
-        sha = capture(["git", "rev-parse", "HEAD"], cwd=stage)
+        self.typed_process(run, ["gh", "repo", "clone", self.config["repository"], str(stage), "--", "--branch", tag, "--single-branch", "--depth", "1"])
+        sha = self.typed_process(capture, ["git", "rev-parse", "HEAD"], cwd=stage)
         manifest = json.loads((stage / "package.json").read_text())
         if manifest["version"] != tag[1:]:
             raise RuntimeError("Published tag and package version disagree")
         contract = json.loads((stage / "release-compatibility.json").read_text())
-        self.typed_dispatch(run, ["mise", "trust"], cwd=stage)
-        self.typed_dispatch(run, ["mise", "install"], cwd=stage)
+        self.typed_process(run, ["mise", "trust"], cwd=stage)
+        self.typed_process(run, ["mise", "install"], cwd=stage)
         env = {**os.environ, "ELECTRON_SKIP_BINARY_DOWNLOAD": "1"}
         for args in (["install", "--frozen-lockfile"], ["run", "typecheck"], ["run", "build"]):
-            self.typed_dispatch(run, ["mise", "exec", "--", "pnpm", *args], cwd=stage, env=env)
-        node = capture(["mise", "which", "node"], cwd=stage)
+            self.typed_process(run, ["mise", "exec", "--", "pnpm", *args], cwd=stage, env=env)
+        node = self.typed_process(capture, ["mise", "which", "node"], cwd=stage)
         cli = stage / "packages/cli/dist/main.js"
-        if capture([node, str(cli), "--version"], cwd=stage) != tag[1:]:
+        if self.typed_process(capture, [node, str(cli), "--version"], cwd=stage) != tag[1:]:
             raise RuntimeError("Built CLI version mismatch")
         # Exercises shipped workflows/templates and the compiled CLI against temporary stores.
         with tempfile.TemporaryDirectory(prefix="orca-validate-") as scratch:
-            self.typed_dispatch(run, [node, str(cli), "demo", "--dir", scratch], cwd=stage, env=env)
+            self.typed_process(run, [node, str(cli), "demo", "--dir", scratch], cwd=stage, env=env)
         self.typed_dispatch(write_json, stage / ".orca-release.json", {"version": tag[1:], "sha": sha, "node": node, "compatibility": contract})
         for config_key in ("cliConfig", "acpConfig", "daemonConfig"):
-            self.typed_dispatch(run, [node, str(cli), "--config", self.config[config_key], "validate"],
+            self.typed_process(run, [node, str(cli), "--config", self.config[config_key], "validate"],
                 cwd=self.config["cwd"], env={**env, "ORCA_RELEASE": str(stage)})
         with tempfile.TemporaryDirectory(prefix="orca-health-") as scratch:
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]
-            child = self.typed_dispatch(subprocess.Popen, [node, str(cli), "--cwd", scratch, "serve", "--port", str(port)],
+            child = self.typed_process(subprocess.Popen, [node, str(cli), "--cwd", scratch, "serve", "--port", str(port)],
                                      cwd=stage, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
                 self.health(stage, f"http://127.0.0.1:{port}", child.pid,
