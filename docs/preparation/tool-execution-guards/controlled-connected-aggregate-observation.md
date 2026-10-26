@@ -362,3 +362,8 @@ timing is not the refusal in this new original. Fresh connected effect closure
 and independent aggregate acceptance remain incomplete. No further original
 attempt ran. Final checks pass 268 Python tests (8.442 s), 19 optimized
 notification controls (0.041 s), and `git diff --check`.
+
+The subsequent [finite registration/counter proposal](controlled-registration-counter-overlap.md)
+preserves these original outcomes and reports only offline event/counter analysis.
+It requires independent review before another fresh attempt and grants no
+accepting token or connected release.

@@ -115,13 +115,122 @@ class NotificationRoleControls(unittest.TestCase):
     def counter(self,r,call,value,en,co=None,pid=10):
         self.event(r,call,['19',quoted_counter(value),'1024' if call=='read' else '8'],'8',en,co,pid)
 
-    def test_original_diagnostic_registration_overlap_remains_explicitly_unsupported(self):
-        # Original diagnostic raw intervals: worker write4091..4093 versus
-        # leader ADD4092..4094. No generic success-return ordering inference.
+    def test_original_registration_overlap_is_only_provisional_until_complete_counter_proof(self):
         r=self.replay(registered=False)
         self.counter(r,'write',1,4091,4093,11)
-        with self.assertRaisesRegex(RuntimeError,'ambiguous shared descriptor/path interval'):
-            self.event(r,'epoll_ctl',['16','EPOLL_CTL_ADD','19','{events=EPOLLIN, data=0x13}'],en=4092,co=4094)
+        self.event(r,'epoll_ctl',['16','EPOLL_CTL_ADD','19','{events=EPOLLIN, data=0x13}'],en=4092,co=4094)
+        with self.assertRaisesRegex(RuntimeError,'qualified full-lifetime counter proof'):
+            r.prove_notifications()
+        self.counter(r,'read',1,4100)
+        proof=r.prove_notifications()[0]
+        self.assertEqual(proof['registrationWriteOverlaps'],1)
+        self.assertEqual((proof['unitWrites'],proof['counterReads'],proof['counterFinal'],proof['authority']),(1,1,0,'none'))
+
+    def registration(self, writer_first=True, value=1):
+        r=self.replay(registered=False)
+        if writer_first:
+            self.counter(r,'write',value,5,9,11)
+            self.event(r,'epoll_ctl',['16','EPOLL_CTL_ADD','19','{events=EPOLLIN, data=0x13}'],en=7,co=11)
+        else:
+            self.event(r,'epoll_ctl',['16','EPOLL_CTL_ADD','19','{events=EPOLLIN, data=0x13}'],en=5,co=9)
+            self.counter(r,'write',value,7,11,11)
+        return r
+
+    def test_both_raw_entry_orders_require_settled_registration_before_drain(self):
+        for writer_first in (False,True):
+            r=self.registration(writer_first)
+            self.counter(r,'read',1,13)
+            with self.subTest(writer_first=writer_first):
+                self.assertEqual(r.prove_notifications()[0]['registrationWriteOverlaps'],1)
+
+    def test_registration_overlap_cannot_invent_or_omit_counter_units(self):
+        for count in (2,):
+            r=self.registration()
+            self.counter(r,'read',count,13)
+            with self.assertRaisesRegex(RuntimeError,'eligible unit writes'):
+                r.prove_notifications()
+        r=self.registration();self.counter(r,'read',1,13);self.counter(r,'write',1,15,pid=11)
+        with self.assertRaisesRegex(RuntimeError,'final counter drain'):
+            r.prove_notifications()
+
+    def test_read_second_writer_or_close_cannot_overlap_pending_add(self):
+        for mode in ('read','second-write','target-close','epoll-close','reuse'):
+            r=self.registration()
+            with self.subTest(mode=mode),self.assertRaises(RuntimeError):
+                if mode=='read':self.counter(r,'read',1,10,pid=12)
+                elif mode=='second-write':self.counter(r,'write',1,10,pid=12)
+                elif mode=='target-close':self.event(r,'close',['19'],en=10,pid=12)
+                elif mode=='epoll-close':self.event(r,'close',['16'],en=10,pid=12)
+                else:
+                    del r.handles[19]
+                    self.event(r,'eventfd2',['0','EFD_CLOEXEC|EFD_NONBLOCK'],'19',en=10,pid=12)
+
+    def test_wrong_factory_alias_flags_data_result_writer_and_controls_refuse_candidate(self):
+        for mode in ('factory','epoll-factory','alias','epoll-alias','data','flags','result','control','epoll-control'):
+            r=self.replay(registered=False)
+            obj,epoll=r.handles[19].obj,r.handles[16].obj
+            if mode=='factory':obj.factory_record=(11,*obj.factory_record[1:])
+            elif mode=='epoll-factory':epoll.factory_record=(11,*epoll.factory_record[1:])
+            elif mode=='alias':r.handles[23]=r.handles[19]
+            elif mode=='epoll-alias':r.handles[23]=r.handles[16]
+            elif mode=='control':self.event(r,'fcntl',['19','F_GETFL'],'0x802 (flags O_RDWR|O_NONBLOCK)',en=4)
+            elif mode=='epoll-control':self.event(r,'fcntl',['16','F_GETFL'],'0x2 (flags O_RDWR)',en=4)
+            self.counter(r,'write',1,5,9,11)
+            shape='{events=EPOLLOUT, data=0x13}' if mode=='flags' else '{events=EPOLLIN, data=0x14}' if mode=='data' else '{events=EPOLLIN, data=0x13}'
+            with self.subTest(mode=mode),self.assertRaises(RuntimeError):
+                self.event(r,'epoll_ctl',['16','EPOLL_CTL_ADD','19',shape],'-1 EINVAL (Invalid argument)' if mode=='result' else '0',en=7,co=11)
+
+    def test_candidate_cannot_designate_leader_unknown_or_settled_writer(self):
+        for pid in (10,99,12):
+            r=self.replay(registered=False);r.settled.add(12)
+            registration=(10,'epoll_ctl',['16','EPOLL_CTL_ADD','19','{events=EPOLLIN, data=0x13}'],'0',7,11)
+            write=(pid,'write',['19',quoted_counter(1),'8'],'8',5,9)
+            with self.subTest(pid=pid):self.assertIsNone(r.registration_write_overlap(write,registration))
+
+    def test_registration_overlap_rejects_nonunit_partial_vector_or_non_eventfd_io(self):
+        for mode in ('nonunit','partial','vector','private'):
+            r=self.replay(registered=False)
+            if mode=='private':r.handles[19]=Handle(Object('protected-temp',0o100600,{'/private'}),{'O_WRONLY'})
+            write=(11,'writev' if mode=='vector' else 'write',['19',quoted_counter(2 if mode=='nonunit' else 1),'8'],
+                   '7' if mode=='partial' else '8',5,9)
+            # Candidate test keeps the entire ambiguous record; direct event()
+            # would separately reject some malformed byte/file shapes earlier.
+            r.check_intervals(write)
+            with self.subTest(mode=mode),self.assertRaisesRegex(RuntimeError,'ambiguous shared'):
+                r.check_intervals((10,'epoll_ctl',['16','EPOLL_CTL_ADD','19','{events=EPOLLIN, data=0x13}'],'0',7,11))
+
+    def test_later_registration_mutation_or_descriptor_control_invalidates_domain(self):
+        for mode in ('MOD','DEL','other-epoll','epoll-control','target-control'):
+            r=self.registration();self.counter(r,'read',1,13)
+            with self.subTest(mode=mode),self.assertRaises(RuntimeError):
+                if mode in ('MOD','DEL'):
+                    self.event(r,'epoll_ctl',['16','EPOLL_CTL_'+mode,'19','{events=EPOLLIN, data=0x13}' if mode=='MOD' else 'NULL'],en=15)
+                elif mode=='other-epoll':
+                    self.event(r,'epoll_create1',['EPOLL_CLOEXEC'],'23',en=14)
+                    self.event(r,'epoll_ctl',['23','EPOLL_CTL_ADD','19','{events=EPOLLIN, data=0x13}'],en=15)
+                elif mode=='epoll-control':self.event(r,'fcntl',['16','F_GETFL'],'0x2 (flags O_RDWR)',en=15)
+                else:self.event(r,'fcntl',['19','F_GETFL'],'0x802 (flags O_RDWR|O_NONBLOCK)',en=15)
+
+    def test_original_closed_lifetimes_settle_after_complete_counter_history(self):
+        for close_order in ([19,16],[16,19]):
+            r=self.registration();self.counter(r,'read',1,13)
+            for index,number in enumerate(close_order):self.event(r,'close',[str(number)],en=15+index)
+            with self.subTest(close_order=close_order):
+                self.assertEqual(r.prove_notifications()[0]['registrationWriteOverlaps'],1)
+
+    def test_epoll_close_cannot_intersect_last_counter_completion(self):
+        r=self.registration();self.counter(r,'read',1,13,19)
+        self.event(r,'close',['16'],en=17,pid=12)
+        with self.assertRaisesRegex(RuntimeError,'close intersects original lifetime'):
+            r.prove_notifications()
+
+    def test_live_handle_or_watch_replacement_refuses_full_proof(self):
+        for mode in ('target','epoll','watch'):
+            r=self.registration();self.counter(r,'read',1,13)
+            if mode=='target':r.handles[19]=Handle(Object('eventfd',0o100600),set())
+            elif mode=='epoll':r.handles[16]=Handle(Object('epoll',0o100600),set())
+            else:r.handles[16].obj.registered_data[19]=23
+            with self.subTest(mode=mode),self.assertRaises(RuntimeError):r.prove_notifications()
 
     def test_settled_preregistration_unit_then_registration_and_drain_is_supported(self):
         r=self.replay(registered=False)

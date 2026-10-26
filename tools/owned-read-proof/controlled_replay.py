@@ -111,6 +111,10 @@ class Object:
     notification_role: tuple | None = field(default=None, repr=False)
     notification_tainted: bool = False
     notification_overlaps: list = field(default_factory=list)
+    notification_registration_overlaps: list = field(default_factory=list, repr=False)
+    notification_registration_targets: list = field(default_factory=list, repr=False)
+    epoll_control_records: list = field(default_factory=list, repr=False)
+    close_record: tuple | None = field(default=None, repr=False)
     creation_entry: int | None = None
     creation_path: str | None = None
     removal_entry: int | None = None
@@ -431,10 +435,98 @@ class Replay:
         else:
             require(obj.notification_role is None, 'notification I/O lost original epoll/handle role')
 
+    def registration_write_overlap(self, first, second):
+        """One startup ADD/unit-write pair, pending whole-lifetime proof.
+
+        eventfd_poll installs the waiter before reading count; ep_insert polls
+        current readiness. No counter/readiness order is inferred from entry or
+        success. Read/MOD/DEL/close/reuse and arbitrary I/O receive no exemption.
+        """
+        if {first[1], second[1]} != {'epoll_ctl', 'write'}:
+            return None
+        registration, write = (first, second) if first[1] == 'epoll_ctl' else (second, first)
+        pid, _, args, result, entered, completed = registration
+        if (pid != self.leader or pid in self.settled or result != '0' or len(args) != 4 or
+                args[1] != 'EPOLL_CTL_ADD' or not args[0].isdigit() or not args[2].isdigit() or
+                write[0] == self.leader or write[0] not in self.threads or write[0] in self.settled or
+                max(entered, write[4]) > min(completed, write[5])):
+            return None
+        number, epoll_number = int(args[2]), int(args[0])
+        if len(write[2]) != 3 or write[2][0] != args[2]:
+            return None
+        target, epoll_handle = self.handles.get(number), self.handles.get(epoll_number)
+        if target is None or epoll_handle is None:
+            return None
+        obj, epoll = target.obj, epoll_handle.obj
+        shape = re.fullmatch(r'\{events=EPOLLIN, data=(0x[0-9a-f]+|\d+)\}', args[3])
+        if (shape is None or fd(shape[1]) != number or obj.family != 'eventfd' or epoll.family != 'epoll' or
+                obj.names or epoll.names or obj.notification_tainted or obj.notification_role is not None or
+                obj.notification_registration_overlaps or epoll.notification_registration_targets or
+                epoll.epoll_control_records or obj.factory_handle is not target or
+                epoll.factory_handle is not epoll_handle or
+                sum(h.obj is obj for h in self.handles.values()) != 1 or
+                sum(h.obj is epoll for h in self.handles.values()) != 1):
+            return None
+        for value, call, arguments, descriptor in ((obj, 'eventfd2', ['0', 'EFD_CLOEXEC|EFD_NONBLOCK'], number),
+                (epoll, 'epoll_create1', ['EPOLL_CLOEXEC'], epoll_number)):
+            factory = value.factory_record
+            if (factory is None or factory[:4] != (self.leader, call, arguments, str(descriptor)) or
+                    not factory[5] < min(entered, write[4])):
+                return None
+        try:
+            notification_io(write, self.leader)
+        except (RuntimeError, IndexError, ValueError):
+            return None
+        for handle in self.handles.values():
+            current = handle.obj
+            if current.family != 'epoll':
+                continue
+            for watched, value in current.watches.items():
+                if value is obj and not (current is epoll and watched == number and
+                        current.watch_handles.get(number) is target and
+                        current.registration_records.get(number) == registration and
+                        current.registered_data.get(number) == number):
+                    return None
+        existing = epoll.registration_records.get(number)
+        if existing is not None and existing != registration:
+            return None
+        return obj, epoll_handle, target, registration, write
+
+    def prove_registration_overlap(self, obj, operations):
+        overlaps = obj.notification_registration_overlaps
+        if not overlaps:
+            return
+        require(len(overlaps) == 1, 'registration proof supports one startup overlap only')
+        original, epoll_handle, target, registration, write = overlaps[0]
+        epoll = epoll_handle.obj
+        number, epoll_number = int(registration[2][2]), int(registration[2][0])
+        require(original is obj and target is obj.factory_handle and target.obj is obj and
+                epoll_handle is epoll.factory_handle and obj.notification_role == (epoll, registration[4]) and
+                epoll.notification_registration_targets == [obj] and not epoll.epoll_control_records and
+                any(row == write and handle is target for row, handle in obj.notification_records),
+                'registration proof lost original handle/role/history')
+        require(all(op.entered > registration[5] for op in operations if op.call == 'read'),
+                'registration proof read precedes settled ADD')
+        require(all(not (op.entered <= registration[5] and op.completed >= registration[4]) or
+                    (op.pid, op.call, op.value, op.entered, op.completed) ==
+                    (write[0], 'write', 1, write[4], write[5]) for op in operations),
+                'registration proof has another overlapping counter operation')
+        for value, handle, descriptor in ((obj, target, number), (epoll, epoll_handle, epoll_number)):
+            if value.close_record is None:
+                require(self.handles.get(descriptor) is handle, 'registration proof live handle replaced')
+            else:
+                require(value.close_record[3] == '0' and all(op.completed < value.close_record[4] for op in operations) and
+                        registration[5] < value.close_record[4], 'registration proof close intersects original lifetime')
+        if obj.close_record is None and epoll.close_record is None:
+            require(epoll.watches.get(number) is obj and epoll.watch_handles.get(number) is target and
+                    epoll.registered_data.get(number) == number and
+                    epoll.registration_records.get(number) == registration, 'registration proof final watch changed')
+
     def prove_notifications(self):
         proofs = []
         for obj in getattr(self, 'notification_objects', []):
             if obj.notification_role is None:
+                require(not obj.notification_registration_overlaps, 'registration overlap lacks qualified full-lifetime counter proof')
                 continue
             require(not obj.notification_tainted, 'tainted notification counter history')
             operations, close = [], None
@@ -450,8 +542,10 @@ class Replay:
             require(close is None or all(op.completed < close[4] for op in operations),
                     'notification close overlaps counter operation')
             proof = prove_unit_counter(operations, self.leader)
+            self.prove_registration_overlap(obj, operations)
             proof.update(creationEntry=obj.factory_record[4], epollRegistrationEntry=obj.notification_role[1],
-                         overlapPairs=len(obj.notification_overlaps))
+                         overlapPairs=len(obj.notification_overlaps),
+                         registrationWriteOverlaps=len(obj.notification_registration_overlaps))
             proofs.append(proof)
         return proofs
 
@@ -850,6 +944,9 @@ class Replay:
         if call == 'epoll_ctl':
             epoll = self.handles.get(fd(args[0]))
             target = self.handles.get(fd(args[2]))
+            if target is not None and target.obj.notification_registration_overlaps:
+                require(record == target.obj.notification_registration_overlaps[0][3],
+                        'registration overlap target cannot be re-registered/MOD/DEL')
             if (epoll is not None and epoll.obj.family == 'epoll' and target is not None and
                     fd(args[2]) in {1, 2} and target.obj.family == 'stdio' and
                     stat.S_ISFIFO(target.obj.mode) and args[1] == 'EPOLL_CTL_DEL' and
@@ -936,6 +1033,9 @@ class Replay:
                 return  # Failed startup query creates neither a handle nor an alias.
             require(handle is not None, 'unknown descriptor effect')
             obj = handle.obj
+            if obj.family == 'epoll' and call == 'fcntl':
+                obj.epoll_control_records.append(record)
+                require(not obj.notification_registration_targets, 'registration proof epoll descriptor control')
             if obj.family == 'eventfd':
                 self.record_notification_effect(record, handle)
             if obj.family == 'trusted-kernel-runtime-query':
@@ -975,6 +1075,7 @@ class Replay:
                 return
             if call == 'close':
                 require(result == '0' and number not in {self.lifetime, self.command, self.ack}, 'unplanned inherited/failed close')
+                obj.close_record = record
                 require(not handle.directory_seen or handle.directory_eof, 'directory handle closed before complete enumeration')
                 if obj.family == 'trusted-kernel-runtime-query':
                     require(pid == self.leader and handle.native_read,
@@ -1216,7 +1317,7 @@ class Replay:
                     require(stat.S_ISDIR(parent.mode), 'namespace mutation parent is not a directory')
                     entities.add(('object', id(parent)))
         self.pending_intervals = [p for p in self.pending_intervals if p[1] >= entered]
-        for start, end, other_pid, other_mutating, other_object_mutating, other_path_mutating, other_entities, other_paths, other_watch_change, other_notification in self.pending_intervals:
+        for start, end, other_pid, other_mutating, other_object_mutating, other_path_mutating, other_entities, other_paths, other_watch_change, other_notification, other_record in self.pending_intervals:
             related_paths = any(a == b or a.startswith(b + '/') or b.startswith(a + '/')
                                 for a in paths for b in other_paths)
             shared = entities & other_entities
@@ -1228,10 +1329,15 @@ class Replay:
                 proven_shape = (notification is not None and other_notification is not None and
                                 notification[0] is other_notification[0] and notification[1] is other_notification[1] and
                                 notification[2] == other_notification[2])
-                require(proven_shape, 'ambiguous shared descriptor/path interval')
+                if not proven_shape:
+                    registration = self.registration_write_overlap(record, other_record)
+                    require(registration is not None, 'ambiguous shared descriptor/path interval')
+                    registration[0].notification_registration_overlaps.append(registration)
+                    registration[1].obj.notification_registration_targets.append(registration[0])
+                    continue  # No counter or registration ordering is asserted.
                 obj = notification[0]
                 obj.notification_role = notification[2]
                 obj.notification_overlaps.append((start, end, entered, completed))
         if completed > entered and (entities or paths):
             self.pending_intervals.append((entered, completed, pid, mutating, object_mutating,
-                                           path_mutating, entities, paths, watch_change, notification))
+                                           path_mutating, entities, paths, watch_change, notification, record))
