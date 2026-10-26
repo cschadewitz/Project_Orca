@@ -18,7 +18,8 @@ export function ScopedRuleChoices({
   cannotWrite?: string | undefined;
 }): JSX.Element {
   const [review, setReview] = useState<ScopedRuleReview>();
-  const [phase, setPhase] = useState<"closed" | "loading" | "review" | "confirm" | "settled">("closed");
+  const [phase, setPhase] = useState<"closed" | "loading" | "review" | "confirm" | "saved" | "settled">("closed");
+  const [saved, setSaved] = useState(false);
   const [outcome, setOutcome] = useState("");
   const lock = useRef(false);
   const generation = useRef(0);
@@ -109,14 +110,18 @@ export function ScopedRuleChoices({
       return;
     }
     const action = review[choice];
-    if (!action || (choice === "createRule" && phase !== "confirm")) return;
+    if (!action || (choice === "createRule" && (saved || phase !== "confirm"))) return;
     lock.current = true; // Synchronous latch: repeated clicks before React renders cannot duplicate the intent.
     const token = generation.current;
     setOutcome("Waiting for confirmation.");
     try {
       const result = await action();
       if (token !== generation.current) return;
-      setPhase("settled");
+      if (choice === "createRule" && result === "confirmed") {
+        setSaved(true);
+        lock.current = false;
+        setPhase("saved");
+      } else setPhase("settled");
       const message =
         result === "confirmed"
           ? choice === "createRule"
@@ -138,7 +143,7 @@ export function ScopedRuleChoices({
         "Acknowledgement is uncertain. Refresh authoritative state before taking another action. Do not repeat this choice.",
       );
     } finally {
-      // An uncertain or completed write remains latched until an authoritative parent refresh remounts this scope.
+      // Only a confirmed save opens a fresh separate-answer review. Uncertain outcomes remain latched.
       if (token === generation.current && region.current?.contains(document.activeElement)) region.current.focus();
     }
   };
@@ -213,7 +218,7 @@ export function ScopedRuleChoices({
               {reason && <Text style="caption">{reason}</Text>}
             </>
           )}
-          {phase !== "settled" && (
+          {phase !== "settled" && phase !== "saved" && (
             <div className="orca-card__options">
               {phase === "confirm" ? (
                 <>
@@ -257,19 +262,34 @@ export function ScopedRuleChoices({
                   >
                     Deny
                   </Button>
-                  <Button
-                    disabled={reason !== undefined || !review?.createRule}
-                    disabledReason={reason ?? "Scoped rule creation is unavailable."}
-                    onClick={() => setPhase("confirm")}
-                  >
-                    Create scoped rule
-                  </Button>
+                  {!saved && (
+                    <Button
+                      disabled={reason !== undefined || !review?.createRule}
+                      disabledReason={reason ?? "Scoped rule creation is unavailable."}
+                      onClick={() => setPhase("confirm")}
+                    >
+                      Create scoped rule
+                    </Button>
+                  )}
                 </>
               )}
               <Button disabled={lock.current} disabledReason="A choice is awaiting confirmation." onClick={leave}>
                 Cancel review
               </Button>
             </div>
+          )}
+          {phase === "saved" && (
+            <>
+              <Text style="caption">Review current authority before answering this invocation separately.</Text>
+              <Button
+                disabled={cannotWrite !== undefined}
+                disabledReason={cannotWrite ?? "Current write authority is required."}
+                onClick={() => void load()}
+              >
+                Review separate answer
+              </Button>
+              <Button onClick={leave}>Close review</Button>
+            </>
           )}
           {phase === "loading" && <Text style="caption">Loading reviewed scope…</Text>}
           {outcome && outcome !== reason && <Text style="caption">{outcome}</Text>}

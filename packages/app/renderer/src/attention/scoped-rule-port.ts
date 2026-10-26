@@ -27,8 +27,9 @@ export function scopedRulePort(bridge: OrcaBridge, input: LiveDecisionTarget): S
         if (!isCurrent()) return "stale";
         try {
           const r = await rpc.call("scopedPermissions.choose", { target, handle: review.handle, choice });
+          if (!isCurrent()) return "uncertain";
           return r.ok
-            ? r.result.outcome === "saved" || r.result.outcome === "answered"
+            ? r.result.outcome === (choice === "save" ? "saved" : "answered")
               ? "confirmed"
               : "uncertain"
             : "refused";

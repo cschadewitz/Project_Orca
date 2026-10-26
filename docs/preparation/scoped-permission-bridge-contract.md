@@ -93,3 +93,35 @@ The existing configured origin is HTTPS GitHub cschadewitz/Project_Orca, fetch
 and push. Fetch and read-only ls-remote succeeded; ls-remote confirmed the new
 branch absent before publication. No alternative remote, proxy, credentials,
 network settings or security settings were introduced.
+
+## Confirmed-save continuation correction
+
+Client review reproduced a connected-card blocker at published source
+`5a7e3065de2723f05f39327916554ad4c5021694`: saving left the input pending while
+the choices stayed permanently latched. Closing cancelled the saved handle, and
+there was no separate-answer route. The new connected regression failed against
+that exact renderer source; see [failing-before evidence](scoped-permission-bridge-evidence/saved-flow-before.txt).
+
+Only a **confirmed save** now opens a saved phase. An explicit **Review separate
+answer** loads a fresh owner review and handle; the old handle is cancelled. Save
+stays unavailable for that input. A subsequent Allow once or Deny is a separate
+request, rechecked by the adapter and the existing server/lease authority path.
+Close after a confirmed save also permits reopening a fresh answer-only review.
+A failed fresh review cannot reuse the cancelled saved handle. Uncertain or
+mismatched acknowledgements remain latched, without automatic retry or answer.
+The adapter accepts Saved only for Save, and Answered only for once/deny; a
+connection generation change while awaiting acknowledgement is uncertain.
+
+`packages/app/renderer/test/scoped-rule-port.test.tsx` mounts the actual
+PermissionCard without an injected review port, so it exercises the card's real
+adapter selection and scopedRulePort through a synthetic preload bridge. Its
+closed-contract transport validates request shape and retains synthetic handles;
+it does not authenticate a real transport, persist policy, enroll a managed
+workspace or launch Electron. The approval/disclosure responses are synthetic.
+It covers confirmed save followed by an explicit fresh review and answer,
+close/cancel after save, refusal of a fresh review, lost acknowledgements, stale
+fresh authority and connection binding, duplicate actions, and legal-but-mismatched
+outcomes for all three choices. The separate daemon suites provide the real
+credential/file/lease evidence. Together the affected suites passed 95 tests after
+this correction; root/renderer types, build, affected ESLint, CSS token check and
+changed-file formatting were also run. Production registration remains absent.
