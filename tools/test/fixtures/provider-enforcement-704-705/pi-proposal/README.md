@@ -34,7 +34,7 @@ review.
 | --- | --- |
 | `pi-bash.diff` | Strictly applied to the pinned bytes in the test, post-image blob checked, and the whole patched module executed with stubbed imports |
 | `pi-rpc-mode.diff` | Strictly applied; the pinned one-shot dialog channel plus the proposed parser, request builder, binding and negotiation executed |
-| `pi-acp-session.diff` | Strictly applied; the pinned generic UI handlers and the proposed typed handler executed against synthetic connections |
+| `pi-acp-session.diff` | Strictly applied; the pinned generic UI handlers and the proposed typed handler executed against synthetic connections. Revised after the #705 challenge review so every forwarded field is checked |
 | `pi-acp-process.diff` | Applies to the pinned blob (checked in this session with `git apply --check`); type-only plus one request method, not executed |
 | `pi-agent-session.diff` | Pre-image blob equals the #713 `pi-dispatch` record; applies in this session; the 164 KB file is not vendored, so the test checks only its header |
 

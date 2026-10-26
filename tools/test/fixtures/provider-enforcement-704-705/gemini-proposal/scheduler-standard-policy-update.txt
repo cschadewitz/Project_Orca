@@ -1,0 +1,36 @@
+async function handleStandardPolicyUpdate(
+  tool: AnyDeclarativeTool,
+  outcome: ToolConfirmationOutcome,
+  confirmationDetails: SerializableConfirmationDetails | undefined,
+  messageBus: MessageBus,
+  persistScope?: 'workspace' | 'user',
+  toolInvocation?: AnyToolInvocation,
+  config?: Config,
+  modes?: ApprovalMode[],
+): Promise<void> {
+  if (
+    outcome === ToolConfirmationOutcome.ProceedAlways ||
+    outcome === ToolConfirmationOutcome.ProceedAlwaysAndSave
+  ) {
+    const options: PolicyUpdateOptions =
+      toolInvocation?.getPolicyUpdateOptions?.(outcome) || {};
+
+    if (!options.commandPrefix && confirmationDetails?.type === 'exec') {
+      options.commandPrefix = confirmationDetails.rootCommands;
+    } else if (!options.argsPattern && confirmationDetails?.type === 'edit') {
+      const filePath = config
+        ? makeRelative(confirmationDetails.filePath, config.getTargetDir())
+        : confirmationDetails.filePath;
+      options.argsPattern = buildFilePathArgsPattern(filePath);
+    }
+
+    await messageBus.publish({
+      type: MessageBusType.UPDATE_POLICY,
+      toolName: tool.name,
+      persist: outcome === ToolConfirmationOutcome.ProceedAlwaysAndSave,
+      persistScope,
+      modes,
+      ...options,
+    });
+  }
+}

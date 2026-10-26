@@ -105,7 +105,8 @@ each against the pinned blob named in its `index` line. About 250 added lines in
 - Before asking: refuse (answer `cancelled`) unless the request is fully typed,
   offers exactly Pi's two options with the stated effect, uses Pi's own tool
   call id that pi-acp is tracking as open (never `pi-ui-*`), and the turn is
-  live and not cancelled.
+  live and not cancelled. "Fully typed" covers every forwarded field; the merged
+  version checked only some of them (see the challenge review below).
 - The ACP request uses that original tool call id, kind `execute`, the final
   command/cwd in `rawInput` and fixed option ids.
 - After the await: the same turn, not cancelled, tool call still open, and the
@@ -244,3 +245,67 @@ No upstream issue, PR or contact; no Pi, pi-acp or provider launch; no hooks,
 settings, credentials or access changes; no new dependency or lockfile edit; no
 production support flag, default or activation. #704's cached/revocation proof,
 #705's installed qualification and #594's separate obligations remain open.
+
+## Challenge review (follow-up on #747)
+
+26 October 2026, on `origin/main` `890eb71847e4c38533ab8f5b2d35f14076b8f923`. Nothing here
+changed between #747 and that head. The vendored upstream files, licences and every #713
+record are unchanged. `runner.ts` (`77712e67…`), `agent-session.ts` (`3a9174cf…`) and
+`utils/shell.ts` (`fbe81f96…`) were reread at the Pi pin with `git hash-object` checked.
+**The route stays NO-GO.**
+
+### Fixed in this proposal: the adapter now checks every field it forwards
+
+Section C says the adapter refuses unless the request is "fully typed". The merged
+`finalActionPermissionRequest` checked only the tool call id, command, cwd, executor and
+options. It forwarded `shell`, `envKeys`, `timeout` and `transformations` unchecked, and still
+asked the client when they were missing (`null`), the wrong type, or contradicted the
+executor. Twelve requests the adapter should have refused were put to the client: missing or
+non-string `envKeys`; missing or unknown `transformations`; a string shell; a `local`
+executor with no shell; a `custom` executor naming a shell; non-string shell `args`; an
+unknown `commandTransport`; an extra shell key; a non-numeric `timeout`; a non-string
+`toolName`.
+
+`pi-acp-session.diff` now refuses all of these. A `local` executor must carry exactly Pi's
+`ShellConfig` shape (`shell`, string `args`, optional `argv`/`stdin` transport; utils/shell.ts
+6-10) and a `custom` one must carry `null`. `envKeys` must be strings. `transformations` must
+come from Pi's three. `timeout` must be a finite number or `null`. `toolName` must be a
+string. The forwarded `rawInput` is built from those checked values. The pre-image, every
+other hunk and the other four diffs are unchanged; the manifest records the new digest and
+post-image blob `a4d331f3…`. Every shape Pi's own `finalActionRequest` produces is still
+asked (a positive test). Six mutation probes, each removing one new guard, each turned a test
+red and were reverted.
+
+### Residuals pinned by tests (not fixed; new contract or native change needed)
+
+1. **Environment values are not authorized.** Pi sends names only (question 7). Two final
+   actions differing only in the value of `PATH` or `BASH_ENV` produce identical RPC and ACP
+   requests, so no answer can bind the values. Alternatives: send values, with the privacy
+   cost; send a per-key digest the client can match against a policy it holds; or have strict
+   mode refuse any spawnHook environment change.
+2. **A relative cwd is checked and dispatched as the same unresolved string.** A spawnHook
+   may return `relative/dir`. Check, adapter and `spawn` all see that string, and `spawn`
+   resolves it against Pi's process cwd, not the session cwd. Alternatives: resolve against
+   the session cwd before freezing (changes native dispatch), or refuse a non-absolute cwd in
+   strict mode.
+3. **Negotiation success is unconditional.** `enable_final_action_authorization` replies
+   `success: true` whatever bash tool is active. With `baseToolsOverride`
+   (agent-session.ts 3674-3683) or an extension tool replacing `bash`, the proposed
+   `finalCheck` is not wired, yet the reply is the same (source-reviewed). Until the reply
+   names the covered tool definitions, a client must not treat it as coverage.
+
+Re-checked and holding in the offline scope: binding after `commandPrefix`, context cwd and
+`spawnHook`; mutation of the retained spawn context during the check; concurrent identical
+calls (bound by tool call id and frozen object identity); cancellation during the check and
+during the local cwd await; late, replayed and cross-call replies; generic select/confirm
+never producing a typed authorization; and `custom` executors staying unqualified.
+`ctx.cwd` is a getter for a value fixed at runner construction (runner.ts 412, 901-904).
+Reading it a second time for the `contextCwd` label does not change the cwd. After a reload
+the getter's `assertActive()` throws, which fails closed.
+
+### Challenge validation
+
+`pnpm exec vitest run tools/test/pi-final-authorization-705.test.js`: **67 passed** (51
+before plus 16 new). With the adapter diff and manifest restored to their #747 bytes,
+**12 fail**: exactly the twelve refusal cases. The positive control and the three residual
+tests pass on both.

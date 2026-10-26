@@ -1,5 +1,5 @@
 diff --git a/src/acp/session.ts b/src/acp/session.ts
-index 1c97b24fdcd2eb6f2ad9b23f96ead9e451b8be96..de355ab00a6b05851a2ca72fde385806fabf8a33 100644
+index 1c97b24fdcd2eb6f2ad9b23f96ead9e451b8be96..a4d331f390ebdf7dcc1c1e82ad108960fb1fbd21 100644
 --- a/src/acp/session.ts
 +++ b/src/acp/session.ts
 @@ -919,6 +919,11 @@ export class PiAcpSession {
@@ -48,7 +48,7 @@ index 1c97b24fdcd2eb6f2ad9b23f96ead9e451b8be96..de355ab00a6b05851a2ca72fde385806
    private async requestExtensionPermission(
      id: string,
      ev: PiRpcEvent,
-@@ -1034,6 +1066,64 @@ function stringProp(source: Record<string, unknown>, key: string): string | null
+@@ -1034,6 +1066,90 @@ function stringProp(source: Record<string, unknown>, key: string): string | null
    return typeof value === 'string' ? value : null
  }
  
@@ -64,6 +64,7 @@ index 1c97b24fdcd2eb6f2ad9b23f96ead9e451b8be96..de355ab00a6b05851a2ca72fde385806
 +/** Typed ACP request for pi's final bash action, or null unless every field is typed and pi offered exactly its pair. */
 +function finalActionPermissionRequest(sessionId: string, ev: PiRpcEvent): FinalActionPermissionRequest | null {
 +  const toolCallId = stringProp(ev, 'toolCallId')
++  const toolName = stringProp(ev, 'toolName')
 +  const command = stringProp(ev, 'command')
 +  const cwd = stringProp(ev, 'cwd')
 +  const executor = stringProp(ev, 'executor')
@@ -74,22 +75,31 @@ index 1c97b24fdcd2eb6f2ad9b23f96ead9e451b8be96..de355ab00a6b05851a2ca72fde385806
 +    offered.some(o => o?.optionId === FINAL_ACTION_REJECT && o?.kind === 'reject_once')
 +  if (!toolCallId || toolCallId.startsWith('pi-ui-') || command === null || !cwd || !exactOptions) return null
 +  if (executor !== 'local' && executor !== 'custom') return null
++  // Every forwarded fact is typed too: a local executor names its shell, a custom one names none.
++  const shell = finalActionShell(ev.shell)
++  const envKeys = ev.envKeys
++  const transformations = ev.transformations
++  const timeout = ev.timeout
++  if (toolName === null || shell === undefined || (executor === 'local') !== (shell !== null)) return null
++  if (!Array.isArray(envKeys) || !envKeys.every(key => typeof key === 'string')) return null
++  if (!Array.isArray(transformations) || !transformations.every(t => FINAL_ACTION_TRANSFORMATIONS.includes(t))) return null
++  if (timeout !== null && (typeof timeout !== 'number' || !Number.isFinite(timeout))) return null
 +  return {
 +    sessionId,
 +    toolCall: {
 +      // pi's own tool call id, the one already announced; never a synthetic UI id.
 +      toolCallId,
-+      title: `Run final ${stringProp(ev, 'toolName') ?? 'bash'} command`,
++      title: `Run final ${toolName} command`,
 +      kind: 'execute',
 +      status: 'pending',
 +      rawInput: {
 +        command,
 +        cwd,
 +        executor,
-+        shell: ev.shell ?? null,
-+        envKeys: Array.isArray(ev.envKeys) ? ev.envKeys : null,
-+        timeout: ev.timeout ?? null,
-+        transformations: Array.isArray(ev.transformations) ? ev.transformations : null
++        shell,
++        envKeys,
++        timeout,
++        transformations
 +      }
 +    },
 +    options: [
@@ -97,6 +107,22 @@ index 1c97b24fdcd2eb6f2ad9b23f96ead9e451b8be96..de355ab00a6b05851a2ca72fde385806
 +      { optionId: FINAL_ACTION_REJECT, name: 'Reject', kind: 'reject_once' }
 +    ]
 +  }
++}
++
++const FINAL_ACTION_TRANSFORMATIONS: unknown[] = ['commandPrefix', 'contextCwd', 'spawnHook']
++
++/** pi's resolved shell config exactly, null for none, or undefined when it is anything else. */
++function finalActionShell(value: unknown): { shell: string; args: string[]; commandTransport?: 'argv' | 'stdin' } | null | undefined {
++  if (value === null) return null
++  if (typeof value !== 'object' || Array.isArray(value)) return undefined
++  const shell = value as Record<string, unknown>
++  const transport = shell.commandTransport
++  if (!Object.keys(shell).every(key => key === 'shell' || key === 'args' || key === 'commandTransport')) return undefined
++  if (typeof shell.shell !== 'string' || !Array.isArray(shell.args) || !shell.args.every(arg => typeof arg === 'string')) return undefined
++  if (transport !== undefined && transport !== 'argv' && transport !== 'stdin') return undefined
++  return transport === undefined
++    ? { shell: shell.shell, args: [...shell.args] }
++    : { shell: shell.shell, args: [...shell.args], commandTransport: transport }
 +}
 +
 +/** An offered option for a still-current request, or null. Names and labels never authorize. */

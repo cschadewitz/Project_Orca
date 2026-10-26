@@ -214,7 +214,9 @@ async function run(variant, scenario = {}) {
     disposeController: new AbortController(),
     context,
     settings: { merged: { security: { enablePermanentToolApproval: scenario.permanent ?? false } } },
-    async sendUpdate() {},
+    async sendUpdate(update) {
+      await scenario.onUpdate?.({ controller, session }, update);
+    },
     connection: {
       async requestPermission(params) {
         requests.push(structuredClone(params));
@@ -551,13 +553,16 @@ it("preserves the pinned shell pre-start abort when cancellation lands after the
 // not own Gemini's later shell-wrapper rewrite or dispatch, so the capture owner cannot supply
 // final provenance or cancellation state, and pinned source is not per-execution coverage.
 const unknown = { state: "unknown", reason: "offline fixture: not established" };
-function canonical(projected, { ownedDispatch = false } = {}) {
+// An empty projected list is only the invocation's own grants: the sandbox manager also merges
+// remembered per-command approvals at dispatch, so "no extra resources" needs a separate attestation.
+function canonical(projected, { ownedDispatch = false, noRememberedSandboxScope = false } = {}) {
   const base = actionFixture();
   const known = projected.status === "projected";
   const action = {
     ...base,
     effectiveCwd: known ? complete(projected.resolvedCwd) : unknown,
-    resources: known && projected.additionalPermissions.length === 0 ? base.resources : unknown,
+    resources:
+      known && projected.additionalPermissions.length === 0 && noRememberedSandboxScope ? base.resources : unknown,
     ...(ownedDispatch
       ? {}
       : {
@@ -614,9 +619,171 @@ it.each([
 
 it("synthetic control: the same mapping allows only with synthetic owned coverage and complete facts", async () => {
   const projected = authorization((await run("after", { dirPath: "a", respond: () => cancelled })).requests[0]);
-  const { action, state } = canonical(projected, { ownedDispatch: true });
+  // Both attestations are synthetic: no Gemini source or projection supplies either.
+  const { action, state } = canonical(projected, { ownedDispatch: true, noRememberedSandboxScope: true });
   expect(action.coverage.provider).toBe("synthetic");
   const result = evaluateStrictPermission(action, state, NOW, "test:review");
   expect(result.verdict).toMatchObject({ outcome: "allow" });
   expect(selectStrictPermissionOption(action, result.verdict, NOW)).toBe("once");
+});
+
+// #705 challenge of the merged proposal (#743): what an answer can still reach once the proposal holds.
+async function policyModule() {
+  return pureModule(`
+    const ToolConfirmationOutcome = Object.freeze(${JSON.stringify(outcomes)});
+    const MessageBusType = { UPDATE_POLICY: "update-policy" }; // upstream confirmation-bus/types.ts value
+    // The edit-only branch of handleStandardPolicyUpdate is not reached by these exec cases.
+    const makeRelative = (filePath) => filePath;
+    const buildFilePathArgsPattern = (filePath) => filePath;
+    ${sources.get("policy-utils-escape-regex")}
+    ${sources.get("policy-utils-args-patterns")}
+    ${sources.get("scheduler-standard-policy-update")}
+    // Reduced models: upstream parses with tree-sitter; here a root is the first word of each segment.
+    const stripShellWrapper = (command) => command.trim();
+    const getCommandRoots = (command) =>
+      command.split(/&&|;|\\|/).map((part) => part.trim().split(/\\s+/)[0]).filter(Boolean);
+    const hasRedirection = (command) => /[<>]/.test(command);
+    // An empty base so the pinned \`override\` modifier stays as upstream wrote it.
+    class ReducedBaseInvocation {}
+    export class ReducedPolicyInvocation extends ReducedBaseInvocation {
+      constructor(params, tainted) {
+        super();
+        this.params = params;
+        this.tainted = tainted;
+      }
+      hasTaintedOrBuildFileRisk() {
+        return this.tainted;
+      }
+      ${sources.get("shell-policy-update-options")}
+    }
+    // The pinned Linux sandbox merge of remembered per-command approvals, with its locals supplied.
+    export function sandboxMerge(req, { allowOverrides, commandName, policyManager, modeConfig, isYolo }) {
+      return function () {
+        ${sources.get("sandbox-linux-merge")}
+        return mergedAdditional;
+      }.call({ options: { modeConfig, policyManager } });
+    }
+    export { handleStandardPolicyUpdate }; // buildArgsPatterns is exported by its pinned text
+  `);
+}
+
+it.each([
+  ["proceed_always", false],
+  ["proceed_always_and_save", false],
+  ["proceed_always", true],
+])(
+  "residual: offered %s on an exact projected command is remembered as a root-command prefix (tainted %s)",
+  async (outcome, tainted) => {
+    const command = "git status";
+    const { requests } = await run("after", { command, permanent: true, respond: () => cancelled });
+    const projected = authorization(requests[0]);
+    expect(projected.command).toBe(command);
+    // The projection states the command; nothing in the request states what an always answer remembers.
+    expect(Object.keys(projected).sort()).toEqual([
+      "additionalPermissions",
+      "command",
+      "dirPath",
+      "resolvedCwd",
+      "status",
+    ]);
+    const offered = Object.fromEntries(requests[0].options.map((option) => [option.optionId, option]));
+    expect(offered[outcome]).toBeDefined();
+    expect(offered.proceed_always_and_save.name).toBe("Allow this command for all future sessions");
+
+    const policy = await policyModule();
+    const published = [];
+    await policy.handleStandardPolicyUpdate(
+      { name: "run_shell_command" },
+      outcome,
+      { type: "exec", command, rootCommands: ["git"] },
+      { publish: async (message) => published.push(message) },
+      outcome === "proceed_always_and_save" ? "workspace" : undefined,
+      new policy.ReducedPolicyInvocation({ command }, tainted),
+      undefined,
+      undefined,
+    );
+    // A tainted command makes getPolicyUpdateOptions decline, and the exec fallback restores the prefix.
+    expect(published).toEqual([
+      expect.objectContaining({
+        type: "update-policy",
+        toolName: "run_shell_command",
+        persist: outcome === "proceed_always_and_save",
+        commandPrefix: ["git"],
+      }),
+    ]);
+    const [pattern] = policy.buildArgsPatterns(undefined, published[0].commandPrefix);
+    const rule = new RegExp(pattern);
+    expect(rule.test(JSON.stringify({ command }))).toBe(true);
+    expect(rule.test(JSON.stringify({ command: "git push --force origin main" }))).toBe(true);
+  },
+);
+
+it("residual: a cancellation that lands during updatePolicy still lets the remembered rule commit", async () => {
+  // No check can sit inside updatePolicy; the call itself then stops at the shell pre-start abort.
+  const scenario = { respond: () => selected("proceed_always"), duringPolicy: ({ controller }) => controller.abort() };
+  for (const variant of ["before", "after"]) {
+    const { log, result } = await run(variant, scenario);
+    expect(effects(log)).toEqual(["onConfirm:proceed_always", "updatePolicy:proceed_always", "execute"]);
+    expect(result.result.llmContent).toBe("Command was cancelled by user before it could start.");
+  }
+});
+
+it("cancellation before the request is sent: the client is still asked, and only the proposal ignores its answer", async () => {
+  const scenario = {
+    onUpdate: ({ controller }, update) => update.sessionUpdate === "tool_call" && controller.abort(),
+    respond: () => selected("proceed_always"),
+  };
+  const old = await run("before", scenario);
+  expect(old.requests).toHaveLength(1);
+  expect(effects(old.log)).toEqual(["onConfirm:proceed_always", "updatePolicy:proceed_always", "execute"]);
+  const next = await run("after", scenario);
+  expect(next.requests).toHaveLength(1);
+  expect(effects(next.log)).toEqual([]);
+  expect(next.result).toHaveProperty("thrown");
+});
+
+it.each([
+  [
+    "extra fields beside an offered once",
+    { outcome: { outcome: "selected", optionId: "proceed_once", scope: "always" }, _meta: { remember: true } },
+    "proceed_once",
+  ],
+  ["an option id on a cancelled outcome", { outcome: { outcome: "cancelled", optionId: "proceed_always" } }, "cancel"],
+])("unexpected response fields cannot widen the answer: %s", async (_, response, outcome) => {
+  // Reduced parser: the pinned schema (acpUtils.ts 37-45) is a non-strict z.object, which drops unknown keys.
+  const { log } = await run("after", { permanent: true, respond: () => response });
+  expect(effects(log).slice(0, 2)).toEqual([`onConfirm:${outcome}`, `updatePolicy:${outcome}`]);
+});
+
+it("an empty projected additional scope is not the dispatched sandbox scope", async () => {
+  const { requests, invocation } = await run("after", { command: "npm install", respond: () => cancelled });
+  expect(authorization(requests[0]).additionalPermissions).toEqual([]);
+  // What execute() hands the sandbox for this invocation: its own params and proactive grants, both absent.
+  const fromExecute = {
+    network: invocation.params.additional_permissions?.network || invocation.proactivePermissionsConfirmed?.network,
+    fileSystem: { read: [], write: [] },
+  };
+  const remembered = { network: true, fileSystem: { read: [], write: ["/fixture/home/.npm"] } };
+  const policy = await policyModule();
+  const merged = policy.sandboxMerge(
+    { policy: { additionalPermissions: fromExecute } },
+    {
+      allowOverrides: true,
+      commandName: "npm",
+      policyManager: { getCommandPermissions: (name) => (name === "npm" ? remembered : undefined) },
+      modeConfig: {},
+      isYolo: false,
+    },
+  );
+  expect(merged).toEqual({ network: true, fileSystem: { read: [], write: ["/fixture/home/.npm"] } });
+});
+
+it("an empty projected scope stays an unknown resource fact without a remembered-scope attestation", async () => {
+  const projected = authorization((await run("after", { dirPath: "a", respond: () => cancelled })).requests[0]);
+  expect(projected.additionalPermissions).toEqual([]);
+  const { action, state } = canonical(projected, { ownedDispatch: true });
+  expect(evaluateStrictPermission(action, state, NOW, "test:review").verdict).toMatchObject({
+    outcome: "indeterminate",
+    reason: "required-fact:resources",
+  });
 });

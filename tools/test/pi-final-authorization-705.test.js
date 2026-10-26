@@ -830,3 +830,106 @@ describe("bounded synthetic chain through canonical admission", () => {
     expect(spawns(patchedBash)).toEqual([]);
   });
 });
+
+// #705 challenge of the merged proposal (#747). Each case below names a concrete input; residual
+// cases pin what the proposal does not bind rather than claiming it does.
+describe("challenge: typed request fields and what an answer can bind", () => {
+  const LOCAL_SHELL = { shell: "/fixture/bin/sh", args: ["-c"] };
+  it.each([
+    ["missing environment names", { envKeys: undefined }],
+    ["non-string environment names", { envKeys: ["FIXTURE", 1] }],
+    ["missing transformations", { transformations: undefined }],
+    ["an unknown transformation", { transformations: ["commandPrefix", "rewrite"] }],
+    ["a string shell", { shell: "/fixture/bin/sh" }],
+    ["a local executor with no shell", { shell: null }],
+    ["shell args that are not strings", { shell: { ...LOCAL_SHELL, args: "-c" } }],
+    ["an unknown shell transport", { shell: { ...LOCAL_SHELL, commandTransport: "pty" } }],
+    ["an extra shell field", { shell: { ...LOCAL_SHELL, env: { BASH_ENV: "/fixture/rc" } } }],
+    ["a custom executor naming a local shell", { executor: "custom" }],
+    ["a non-numeric timeout", { timeout: "60" }],
+    ["a non-string tool name", { toolName: 7 }],
+  ])("refuses a request with %s without asking the client", async (_label, overrides) => {
+    const { session, sent, asked } = acpSession(patchedAcp, {
+      requestPermission: () => ({ outcome: { outcome: "selected", optionId: ALLOW } }),
+    });
+    await session.handleExtensionUiRequest(typedEvent(overrides));
+    expect(asked).toEqual([]);
+    expect(sent).toEqual([{ id: "ui-1", cancelled: true }]);
+  });
+
+  it("still asks for every fully typed shape Pi's own request builder produces", async () => {
+    const custom = { ...finalAction(), executor: "custom", shell: undefined, timeout: 30 };
+    const stdin = { ...finalAction(), shell: { shell: "/fixture/bin/bash", args: ["-s"], commandTransport: "stdin" } };
+    const all = { ...finalAction(), transformations: ["commandPrefix", "contextCwd", "spawnHook"] };
+    for (const action of [finalAction(), custom, stdin, all]) {
+      const { session, sent, asked } = acpSession(patchedAcp, {
+        requestPermission: () => ({ outcome: { outcome: "selected", optionId: ALLOW } }),
+      });
+      await session.handleExtensionUiRequest({
+        type: "extension_ui_request",
+        id: "ui-1",
+        ...rpc.finalActionRequest(action),
+      });
+      expect(asked).toHaveLength(1);
+      expect(asked[0].toolCall.rawInput).toMatchObject({
+        executor: action.executor,
+        shell: action.shell ?? null,
+        envKeys: Object.keys(action.env).sort(),
+        timeout: action.timeout ?? null,
+        transformations: action.transformations,
+      });
+      expect(sent).toEqual([{ id: "ui-1", authorization: { toolCallId: "call-a", optionId: ALLOW } }]);
+    }
+  });
+
+  it("residual: environment values are not part of the request, so a PATH or BASH_ENV value change is not visible", async () => {
+    // Pi sends names only by design (review question 7); an answer cannot bind values it never saw.
+    const requests = [];
+    for (const env of [
+      { PATH: "/usr/bin", BASH_ENV: "/fixture/empty" },
+      { PATH: "/fixture/attacker-bin:/usr/bin", BASH_ENV: "/fixture/other-rc" },
+    ]) {
+      const check = recordingCheck((action) => {
+        const { session, asked } = acpSession(patchedAcp, {
+          requestPermission: () => ({ outcome: { outcome: "cancelled" } }),
+        });
+        requests.push({ rpc: rpc.finalActionRequest(action), asked });
+        return session
+          .handleExtensionUiRequest({ type: "extension_ui_request", id: "ui-1", ...rpc.finalActionRequest(action) })
+          .then(() => ({ outcome: "block", reason: "fixture" }));
+      });
+      await expect(
+        runBash(patchedBash, { options: { ...check.options, spawnHook: (context) => ({ ...context, env }) } }),
+      ).rejects.toThrow("Blocked by final action check");
+      expect(check.seen[0].env).toEqual(env);
+    }
+    expect(requests[0].rpc).toEqual(requests[1].rpc);
+    expect(requests[0].asked).toEqual(requests[1].asked);
+    expect(JSON.stringify(requests)).not.toContain("attacker-bin");
+  });
+
+  it("residual: a relative cwd from spawnHook is checked and dispatched as the same unresolved string", async () => {
+    // spawn resolves a relative cwd against Pi's process cwd, not the session cwd the client may assume.
+    const check = recordingCheck((action) => ({ outcome: "allow", action }));
+    await runBash(patchedBash, {
+      options: { ...check.options, spawnHook: (context) => ({ ...context, cwd: "relative/dir" }) },
+    });
+    expect(check.seen[0].cwd).toBe("relative/dir");
+    expect(spawns(patchedBash)[0].cwd).toBe("relative/dir");
+    const { session, asked } = acpSession(patchedAcp, {
+      requestPermission: () => ({ outcome: { outcome: "cancelled" } }),
+    });
+    await session.handleExtensionUiRequest(typedEvent({ cwd: "relative/dir" }));
+    expect(asked[0].toolCall.rawInput.cwd).toBe("relative/dir");
+  });
+
+  it("residual: the negotiation reply is unconditional and says nothing about which bash tool is active", async () => {
+    // Source-reviewed: with baseToolsOverride (agent-session.ts 3674-3683) or an extension tool replacing
+    // bash, the proposed finalCheck is not wired, yet this reply is the same.
+    rpc.host.outputs.length = 0;
+    await rpc.receive({ type: "enable_final_action_authorization", id: "negotiate-2" });
+    expect(rpc.host.outputs).toEqual([
+      { id: "negotiate-2", type: "response", command: "enable_final_action_authorization", success: true },
+    ]);
+  });
+});

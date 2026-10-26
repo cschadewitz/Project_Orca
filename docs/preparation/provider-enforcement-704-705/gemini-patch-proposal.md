@@ -201,3 +201,88 @@ Next proofs, each separately authorized: maintainer review of this diff; an inst
 artifact carrying it; observed cached-grant, revocation and late-answer effects; and the
 every-dispatch, subagent, MCP and client-filesystem exclusions the [#713 matrix](README.md)
 keeps open. None is started here.
+
+## Challenge review (follow-up on #743)
+
+26 October 2026, on `origin/main` `890eb71847e4c38533ab8f5b2d35f14076b8f923`. Nothing in this
+directory or its fixtures changed between #743 and that head. The proposed diff and every
+existing extract, digest and licence byte are unchanged. Upstream text was reread at the same
+`6006c14a…` pin, and each blob was checked with `git hash-object` before it was quoted.
+**The route stays NO-GO.** Each finding below says whether it is pinned-upstream
+behaviour or a defect in this proposal or its fixture.
+
+New pinned extracts, each listed in the [fixture manifest](../../../tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/manifest.json):
+
+| Extract | Upstream lines | Blob |
+| --- | --- | --- |
+| `shell-policy-update-options.txt` | `packages/core/src/tools/shell.ts` 285-305 | `59ec724c…` |
+| `scheduler-standard-policy-update.txt` | `packages/core/src/scheduler/policy.ts` 207-242 | `71c5640d…` |
+| `policy-utils-escape-regex.txt`, `policy-utils-args-patterns.txt` | `packages/core/src/policy/utils.ts` 10-12, 56-90 | `3c7bd4d1…` |
+| `sandbox-linux-merge.txt` | `packages/core/src/sandbox/linux/LinuxSandboxManager.ts` 245-268 | `793ac47b…` |
+
+### Findings
+
+1. **A narrower-looking answer is remembered as a broader grant (upstream behaviour; the
+   proposal does not project it).** For an `exec` request, `toPermissionOptions` offers
+   `proceed_always` ("Allow for this session") and, with permanent approval on,
+   `proceed_always_and_save` ("Allow this command for all future sessions").
+   `getPolicyUpdateOptions` turns either answer into `commandPrefix: <root commands>`, and
+   `handleStandardPolicyUpdate` publishes it. `buildArgsPatterns` then makes an open-prefix
+   rule: approving `git status` stores `"command":"git…`, which also matches
+   `git push --force origin main`. When the command is tainted or touches modified build
+   files, `getPolicyUpdateOptions` returns `undefined`. The exec fallback in
+   `handleStandardPolicyUpdate` then sets `commandPrefix` from the details' `rootCommands`
+   anyway. The proposal's projection states the exact command but says nothing about what
+   an always answer will remember, so a client that reads it as the scope of the grant is
+   misled. Source-reviewed but not tested here: `policy/config.ts` 721-750 turns the message
+   into an `ALLOW` rule. The policy engine (`policy-engine.ts` 215-225, 540-665) matches each
+   compound sub-command separately and applies its own downgrades (redirection, outside
+   workspace, untrusted git, dangerous command). No exploit is claimed: whether a later call then
+   skips confirmation depends on `shouldConfirmExecute` ordering outside these extracts.
+2. **An empty projected `additionalPermissions` does not mean no extra sandbox scope
+   (upstream behaviour; this fixture's canonical mapping was wrong, now fixed).**
+   The projection correctly lists what `execute()` unions. But the Linux sandbox manager's
+   `prepareCommand` also merges `policyManager.getCommandPermissions(commandName)` (the
+   remembered per-command session and persistent approvals) into the dispatched sandbox,
+   alongside the request's `additionalPermissions`. The macOS (116) and Windows (235)
+   managers make the same call at the cited lines; their merges were not extracted here.
+   The test's canonical mapping treated an empty list as complete resources. It now
+   requires a separate synthetic attestation that no remembered sandbox scope applies.
+   Nothing in Gemini source or the projection supplies that attestation.
+3. **A cancel during `updatePolicy` still commits the remembered rule (residual,
+   documented).** The second check sits between `onConfirm` and `updatePolicy`. A cancel
+   that arrives while `updatePolicy` is publishing lets the rule commit, and the call then
+   stops at the shell's pre-start abort. No check can sit inside `updatePolicy`; staging and
+   committing after the last check (question 4) is the alternative.
+4. **Cancellation before the request (covered; client residual).** If the turn is cancelled
+   before `requestPermission` is sent, the client is still asked. Upstream then confirms,
+   updates policy and reaches `execute()`. With the proposal, the answer has no effect.
+5. **Unexpected response fields (covered, reduced parser).** The pinned
+   `RequestPermissionResponseSchema` (`acpUtils.ts` 37-45) is a non-strict `z.object`, which
+   drops unknown keys. With the proposal, extra keys beside an offered `proceed_once`, or an
+   `optionId` on a `cancelled` outcome, cannot widen the answer. Zod itself is not run.
+6. **Late and duplicate answers.** The existing tests cover late answers after cancel,
+   superseding prompt and dispose. A duplicate JSON-RPC response for one request is for
+   the ACP SDK's request map to drop; that code is outside these extracts and untested here.
+   Static option IDs remain the residual described in question 3.
+
+### Alternatives for findings 1-3 (not chosen here; each needs maintainer review)
+
+- Project each offered option's effect next to the action:
+  `_meta.authorization.options[optionId] = { remembers: { toolName, commandPrefix, persist,
+  persistScope } | null }`. Build it from the same `getPolicyUpdateOptions` call plus the
+  exec fallback, so a client can refuse a prefix it did not mean. This is a new upstream
+  contract, not a fix to the current one.
+- Offer only `proceed_once`/`cancel` whenever the client asks for exact-command
+  authorization. This changes native semantics.
+- Keep it on ORCA's side: never select an `allow_always` Gemini option until a reviewed
+  qualification states its grant scope and lifetime. The canonical mapping in this test
+  already sets `grantScopeAndLifetime` to unknown, so admission selects nothing.
+- For finding 2, project `getCommandPermissions(root)` as remembered scope, or report
+  `additionalPermissions` as `unknown` whenever the sandbox is enabled.
+
+### Challenge validation
+
+`pnpm exec vitest run tools/test/gemini-authorization-705.test.js`: **39 passed** (30 before
+plus 9 new). With the mapping fix withheld, 1 fails: the remembered-scope attestation test.
+The other new tests pin pinned-upstream behaviour or proposal coverage and pass on both.
