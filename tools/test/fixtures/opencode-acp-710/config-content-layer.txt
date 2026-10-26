@@ -1,0 +1,9 @@
+        if (process.env.OPENCODE_CONFIG_CONTENT) {
+          const source = "OPENCODE_CONFIG_CONTENT"
+          const next = yield* loadConfig(process.env.OPENCODE_CONFIG_CONTENT, {
+            dir: ctx.directory,
+            source,
+          })
+          yield* merge(source, next, "local")
+          yield* Effect.logDebug("loaded custom config from OPENCODE_CONFIG_CONTENT")
+        }

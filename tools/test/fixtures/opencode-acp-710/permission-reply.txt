@@ -1,0 +1,53 @@
+
+    const reply = Effect.fn("Permission.reply")(function* (input: PermissionV1.ReplyInput) {
+      const { approved, pending } = yield* InstanceState.get(state)
+      const existing = pending.get(input.requestID)
+      if (!existing) return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
+
+      pending.delete(input.requestID)
+      yield* events.publish(Event.Replied, {
+        sessionID: existing.info.sessionID,
+        requestID: existing.info.id,
+        reply: input.reply,
+      })
+
+      if (input.reply === "reject") {
+        yield* Deferred.fail(
+          existing.deferred,
+          input.message
+            ? new PermissionV1.CorrectedError({ feedback: input.message })
+            : new PermissionV1.RejectedError(),
+        )
+
+        for (const [id, item] of pending.entries()) {
+          if (item.info.sessionID !== existing.info.sessionID) continue
+          pending.delete(id)
+          yield* events.publish(Event.Replied, {
+            sessionID: item.info.sessionID,
+            requestID: item.info.id,
+            reply: "reject",
+          })
+          yield* Deferred.fail(item.deferred, new PermissionV1.RejectedError())
+        }
+        return
+      }
+
+      yield* Deferred.succeed(existing.deferred, undefined)
+      if (input.reply === "once") return
+
+      for (const pattern of existing.info.always) {
+        approved.push({
+          permission: existing.info.permission,
+          pattern,
+          action: "allow",
+        })
+      }
+
+      for (const [id, item] of pending.entries()) {
+        if (item.info.sessionID !== existing.info.sessionID) continue
+        const ok = item.info.patterns.every(
+          (pattern) => evaluate(item.info.permission, pattern, approved).action === "allow",
+        )
+        if (!ok) continue
+        pending.delete(id)
+        yield* events.publish(Event.Replied, {

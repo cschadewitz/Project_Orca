@@ -1,0 +1,36 @@
+        const managedDir = ConfigManaged.managedConfigDir()
+        if (existsSync(managedDir)) {
+          for (const file of ["opencode.json", "opencode.jsonc"]) {
+            const source = path.join(managedDir, file)
+            yield* merge(source, yield* loadFile(source), "global")
+          }
+        }
+
+        // macOS managed preferences (.mobileconfig deployed via MDM) override everything
+        const managed = yield* Effect.promise(() => ConfigManaged.readManagedPreferences())
+        if (managed) {
+          result = mergeConfigConcatArrays(
+            result,
+            yield* loadConfig(managed.text, {
+              dir: path.dirname(managed.source),
+              source: managed.source,
+            }),
+          )
+        }
+
+        for (const [name, mode] of Object.entries(result.mode ?? {})) {
+          result.agent = mergeDeep(result.agent ?? {}, {
+            [name]: {
+              ...mode,
+              mode: "primary" as const,
+            },
+          })
+        }
+
+        if (Flag.OPENCODE_PERMISSION) {
+          try {
+            result.permission = mergeDeep(result.permission ?? {}, JSON.parse(Flag.OPENCODE_PERMISSION))
+          } catch (err) {
+            yield* Effect.logWarning("OPENCODE_PERMISSION contains invalid JSON, skipping", { err })
+          }
+        }

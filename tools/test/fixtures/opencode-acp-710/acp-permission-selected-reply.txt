@@ -1,0 +1,5 @@
+function selectedReply(result: RequestPermissionResponse): Reply {
+  if (result.outcome.outcome !== "selected") return "reject"
+  if (result.outcome.optionId === "once" || result.outcome.optionId === "always") return result.outcome.optionId
+  return "reject"
+}

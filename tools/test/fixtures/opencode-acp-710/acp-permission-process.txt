@@ -1,0 +1,39 @@
+  private async process(event: PermissionEvent) {
+    const permission = event.properties
+    const session = await Effect.runPromise(this.input.session.tryGet(permission.sessionID))
+    if (!session) return
+
+    if (!this.input.connection.requestPermission) {
+      await this.reply(permission.id, "reject", session.cwd)
+      return
+    }
+
+    const result = await this.input.connection
+      .requestPermission({
+        sessionId: permission.sessionID,
+        toolCall: await permissionToolCall({
+          toolCallId: permission.tool?.callID ?? permission.id,
+          toolName: permission.permission,
+          input: permission.metadata,
+        }),
+        options: permissionOptions,
+      })
+      .catch(async () => {
+        await this.reply(permission.id, "reject", session.cwd)
+        return undefined
+      })
+
+    if (!result) return
+
+    const reply = selectedReply(result)
+    if (reply !== "once" && reply !== "always") {
+      await this.reply(permission.id, "reject", session.cwd)
+      return
+    }
+
+    if (permission.permission === "edit") {
+      await this.writeProposedEdit(session.id, permission.metadata).catch(() => {})
+    }
+
+    await this.reply(permission.id, reply, session.cwd)
+  }
