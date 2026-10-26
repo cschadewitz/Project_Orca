@@ -3,6 +3,7 @@
  * The CLI, the ACP facade and embedders all go through here.
  */
 import { enterFirstRunWriter } from "@orca/protocol/first-run-fence";
+import { assertNoUnownedTypedWorkspace } from "./typed-workspace-gate.js";
 import {
   enterConfiguredUpdateBootstrap,
   isClosedUpdateBootstrap,
@@ -172,6 +173,7 @@ export async function loadConfig(
   cwd: string,
   configPath?: string,
 ): Promise<{ config: OrcaConfig; configDir: string; configFile?: string }> {
+  assertNoUnownedTypedWorkspace([cwd, ...(configPath ? [dirname(resolve(configPath))] : [])]);
   const file = configPath ?? (await findConfig(cwd));
   if (!file) {
     const config = parseOrcaConfig({}),

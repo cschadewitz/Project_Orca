@@ -297,8 +297,12 @@ export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner
     const revision = hash(bytes);
     const tmp = `${file}.${process.pid}.tmp`;
     let attempted = false;
+    let prepared = false;
     try {
-      await writeFile(tmp, bytes, "utf8");
+      // Private before the first policy byte, independent of the caller's umask.
+      // Refuse existing temporary evidence instead of reusing its access mode.
+      await writeFile(tmp, bytes, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      prepared = true;
       await authorize();
       // There are NO awaits between these trusted current-state assertions and dispatch.
       // A revocation after dispatch cannot recall an irreversible filesystem operation.
@@ -319,7 +323,7 @@ export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner
       throw error;
     } finally {
       // Cleanup failure must not mask an uncertain publication or invite replay.
-      await rm(tmp, { force: true }).catch(() => undefined);
+      if (prepared) await rm(tmp, { force: true }).catch(() => undefined);
     }
     return revision;
   }
