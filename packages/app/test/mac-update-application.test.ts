@@ -1,7 +1,9 @@
 /** Execute actual Mac preload/IPC over a real candidate session; production remains unavailable. */
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
+import { fenceBoot, fenceDirectory, fenceHash } from "@orca/protocol/first-run-fence";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,18 +26,69 @@ const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of closers.splice(0).reverse()) await close();
 });
-async function fixture(enabled = true, closed = false, activationAllowed = true) {
-  const f = await macUpdateRehearsal();
-  const root = await mkdtemp(join(closed ? process.cwd() : tmpdir(), "orca-mac-app-"));
-  let window: ClosedUpdateWindow | undefined;
-  const data = join(root, "data");
-  if (closed) {
-    const control = join(root, "control");
-    await mkdir(data, { mode: 0o700 });
-    await mkdir(control, { mode: 0o700 });
-    await provisionUpdateWindow(control, [data]);
-    window = new ClosedUpdateWindow(control);
+type FixtureLayout = {
+  root: string;
+  control: string;
+  data: string[];
+  rehearsal: Awaited<ReturnType<typeof macUpdateRehearsal>>;
+};
+async function admitFixture(closed: boolean, beforeProvision?: (layout: FixtureLayout) => Promise<void>) {
+  // As in the fixed-path recovery fixture, only initial provisioning may select
+  // another disposable identity. Approval, stop, defer and assertions never retry.
+  for (let attempt = 0; ; attempt++) {
+    const f = await macUpdateRehearsal();
+    let root: string | undefined;
+    let window: ClosedUpdateWindow | undefined;
+    let disposed = false;
+    const close = async () => {
+      if (disposed) return;
+      disposed = true;
+      try {
+        await window?.detach();
+      } finally {
+        try {
+          await f.close();
+        } finally {
+          if (root) await rm(root, { recursive: true, force: true });
+        }
+      }
+    };
+    // Own cleanup before mkdtemp/mkdir/provisioning can fail, including final refusal.
+    closers.push(close);
+    try {
+      root = await mkdtemp(join(closed ? process.cwd() : tmpdir(), "orca-mac-app-"));
+      const data = join(root, "data");
+      if (closed) {
+        const control = join(root, "control");
+        await mkdir(data, { mode: 0o700 });
+        await mkdir(control, { mode: 0o700 });
+        const layout = { root, control, data: [data], rehearsal: f };
+        await beforeProvision?.(layout);
+        try {
+          await provisionUpdateWindow(control, layout.data);
+        } catch (error) {
+          // Provisioning has awaited every partial listener's closure. Dispose the
+          // rehearsal and root before resampling, and never retry cleanup failures.
+          await close();
+          if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt >= 4) throw error;
+          continue;
+        }
+        window = new ClosedUpdateWindow(control);
+      }
+      return { f, root, data, window };
+    } catch (error) {
+      await close();
+      throw error;
+    }
   }
+}
+async function fixture(
+  enabled = true,
+  closed = false,
+  activationAllowed = true,
+  beforeProvision?: (layout: FixtureLayout) => Promise<void>,
+) {
+  const { f, root, data, window } = await admitFixture(closed, beforeProvision);
   const session = new MacCandidateSession(
     {
       root,
@@ -56,9 +109,6 @@ async function fixture(enabled = true, closed = false, activationAllowed = true)
   );
   closers.push(async () => {
     await session.settled();
-    await window?.detach();
-    await f.close();
-    await rm(root, { recursive: true, force: true });
   });
   const resolveWindow = vi.fn(() => window);
   const application = new MacUpdateApplication(
@@ -144,6 +194,118 @@ async function fixture(enabled = true, closed = false, activationAllowed = true)
     },
   };
 }
+
+// Real owned listeners exercise the kernel fence; this mirrors its identity mapping.
+function fixtureSlots(root: string) {
+  const start =
+    20000 +
+    (Number.parseInt(
+      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, fenceDirectory(root)])).slice(0, 8),
+      16,
+    ) %
+      5000) *
+      8;
+  return Array.from({ length: 8 }, (_, slot) => start + slot);
+}
+async function occupy(port: number) {
+  const server = createServer();
+  const close = async () => {
+    if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+  };
+  closers.push(close);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port, exclusive: true, reusePort: false }, () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
+  });
+  return { server, close };
+}
+async function expectAbandoned(layout: FixtureLayout) {
+  await expect(lstat(layout.root)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(layout.rehearsal.downloadEntries()).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(layout.rehearsal.call("hello")).rejects.toThrow();
+}
+// These control cases need the Linux fixture volume, as in fixed-path recovery.
+const fixtureIt = it.skipIf(process.platform !== "linux");
+fixtureIt(
+  "admits a fresh application fixture after real initial contention and releases partial listeners",
+  async () => {
+    const abandoned: FixtureLayout[] = [];
+    let blocker: Awaited<ReturnType<typeof occupy>> | undefined;
+    let slots: number[] = [];
+    const h = await fixture(true, true, true, async (layout) => {
+      if (blocker) {
+        await expectAbandoned(abandoned[0]!);
+        return;
+      }
+      abandoned.push(layout);
+      slots = fixtureSlots(layout.data[0]!);
+      // The last slot forces provisioning to acquire and then release the first seven.
+      blocker = await occupy(slots[7]!);
+    });
+    await expectAbandoned(abandoned[0]!);
+    expect(blocker!.server.listening).toBe(true);
+    expect(h.window!.snapshot.phase).toBe("open");
+    const writer = await enterUpdateWriter(h.data);
+    expect(writer?.check()).toBe(true);
+    await writer?.close();
+    await blocker!.close();
+    for (const port of slots) expect((await occupy(port)).server.listening).toBe(true);
+  },
+);
+fixtureIt("bounds initial application fixture admission and cleans exhausted roots and rehearsals", async () => {
+  const attempted: FixtureLayout[] = [];
+  const slots = new Set<number>();
+  const blockers = new Map<number, Awaited<ReturnType<typeof occupy>>>();
+  const originalFetch = globalThis.fetch;
+  await expect(
+    fixture(true, true, true, async (layout) => {
+      if (attempted.length) await expectAbandoned(attempted.at(-1)!);
+      attempted.push(layout);
+      const range = fixtureSlots(layout.data[0]!);
+      for (const port of range) slots.add(port);
+      const port = range[7]!;
+      if (!blockers.has(port)) blockers.set(port, await occupy(port));
+    }),
+  ).rejects.toMatchObject({ code: "EADDRINUSE" });
+  expect(attempted).toHaveLength(5);
+  expect(new Set(attempted.map(({ root }) => root)).size).toBe(5);
+  expect(new Set(attempted.map(({ rehearsal }) => rehearsal)).size).toBe(5);
+  expect(globalThis.fetch).toBe(originalFetch);
+  for (const layout of attempted) await expectAbandoned(layout);
+  for (const { server } of blockers.values()) expect(server.listening).toBe(true);
+  for (const blocker of blockers.values()) await blocker.close();
+  for (const port of slots) expect((await occupy(port)).server.listening).toBe(true);
+});
+fixtureIt("refuses non-contention provisioning failure without resampling and cleans rehearsal ownership", async () => {
+  const attempted: FixtureLayout[] = [];
+  const originalFetch = globalThis.fetch;
+  await expect(
+    fixture(true, true, true, async (layout) => {
+      attempted.push(layout);
+      layout.data.push(layout.data[0]!); // Real duplicate-root enrollment refusal.
+    }),
+  ).rejects.toThrow("Protected update window unavailable");
+  expect(attempted).toHaveLength(1);
+  await expectAbandoned(attempted[0]!);
+  expect(globalThis.fetch).toBe(originalFetch);
+});
+fixtureIt("does not retry a setup hook EADDRINUSE outside initial provisioning", async () => {
+  const attempted: FixtureLayout[] = [];
+  const failure = Object.assign(new Error("Setup hook failure"), { code: "EADDRINUSE" });
+  const originalFetch = globalThis.fetch;
+  await expect(
+    fixture(true, true, true, async (layout) => {
+      attempted.push(layout);
+      throw failure;
+    }),
+  ).rejects.toBe(failure);
+  expect(attempted).toHaveLength(1);
+  await expectAbandoned(attempted[0]!);
+  expect(globalThis.fetch).toBe(originalFetch);
+});
 
 // Approval downloads the candidate, which requires POSIX private modes. Windows must refuse
 // it, so the cases that approve a download skip Windows.
