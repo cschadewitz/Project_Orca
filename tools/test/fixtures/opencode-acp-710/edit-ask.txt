@@ -1,0 +1,10 @@
+                yield* ctx.ask({
+                  permission: "edit",
+                  patterns: [path.relative(instance.worktree, filePath)],
+                  always: ["*"],
+                  metadata: {
+                    filepath: filePath,
+                    diff,
+                  },
+                })
+                yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))

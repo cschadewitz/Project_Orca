@@ -1,0 +1,34 @@
+export function toToolKind(toolName: string): ToolKind {
+  const tool = toolName.toLocaleLowerCase()
+
+  switch (tool) {
+    case "bash":
+    case "shell":
+      return "execute"
+
+    case "webfetch":
+      return "fetch"
+
+    case "edit":
+    case "apply_patch":
+    case "patch":
+    case "write":
+      return "edit"
+
+    case "grep":
+    case "glob":
+    case "context":
+    case "context7_resolve_library_id":
+    case "context7_get_library_docs":
+      return "search"
+
+    case "read":
+      return "read"
+
+    case "task":
+      return "think"
+
+    default:
+      return "other"
+  }
+}

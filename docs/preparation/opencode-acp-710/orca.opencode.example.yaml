@@ -1,0 +1,65 @@
+# #710 OpenCode native ACP launch profile — INACTIVE PREPARATION, NOT A SUPPORTED AGENT.
+#
+# Nothing loads this file: it is not in examples/, not in a template and not referenced by
+# the app's first-run routing hints. It parses with ORCA's existing `orca.config.yaml` schema
+# (`packages/agents/test/opencode-acp-fixture-710.test.ts` proves that), so copying the agent
+# entry into a reviewed workspace config is the only way it ever runs — and that copy needs
+# the separately authorized installed test in installed-test-plan.md first.
+#
+# Pinned tuple: OpenCode 1.19.4, anomalyco/opencode 148842ef7cb1bc34192b3fff57d0f9721ab9c801,
+# ACP protocol version 1 (provider SDK @agentclientprotocol/sdk 0.21.0; ORCA client SDK
+# 1.8.0). Every `/REPLACE-WITH-…` path is deliberately nonexistent so an unedited copy fails
+# closed at #386 preflight ("Missing") rather than finding an ambient `opencode` on PATH.
+version: 1
+hosts:
+  - id: local
+    type: local
+agents:
+  - id: opencode-acp-710
+    name: OpenCode 1.19.4 (inactive #710 preparation)
+    # The verified platform binary itself (setup-preflight.md step 2), never the npm wrapper's
+    # `bin/opencode.exe` stub and never a bare `opencode` resolved through PATH.
+    command: /REPLACE-WITH-PROFILE-ROOT/opencode-1.19.4/bin/opencode
+    # `--hostname 127.0.0.1 --port 0` pin the internal HTTP server to loopback on a random port
+    # even if some config layer sets `server.*`; `--pure` loads no external plugins.
+    args: [acp, --hostname, 127.0.0.1, --port, "0", --pure, --log-level, WARN]
+    hostId: local
+    roles: []
+    # LocalHost spawns with `{ ...process.env, ...env }`: these values replace inherited ones,
+    # but nothing here can *remove* a variable ORCA itself was started with. An empty string is
+    # used where OpenCode treats empty as unset (source-pins.json: config-*, provider.ts:1641).
+    env:
+      # Global config, auth store, state and cache under one profile root; `~/.opencode` and
+      # `~/.config/opencode` of the real user are then never read.
+      HOME: /REPLACE-WITH-PROFILE-ROOT/home
+      XDG_CONFIG_HOME: /REPLACE-WITH-PROFILE-ROOT/xdg/config
+      XDG_DATA_HOME: /REPLACE-WITH-PROFILE-ROOT/xdg/data
+      XDG_STATE_HOME: /REPLACE-WITH-PROFILE-ROOT/xdg/state
+      XDG_CACHE_HOME: /REPLACE-WITH-PROFILE-ROOT/xdg/cache
+      OPENCODE_CONFIG: /REPLACE-WITH-PROFILE-ROOT/opencode.isolated.json
+      OPENCODE_CONFIG_DIR: ""
+      OPENCODE_CONFIG_CONTENT: ""
+      OPENCODE_DISABLE_PROJECT_CONFIG: "1"
+      OPENCODE_DISABLE_AUTOUPDATE: "1"
+      OPENCODE_PURE: "1"
+      # The last layer OpenCode applies (after managed config and macOS MDM). It must equal
+      # opencode.isolated.json's `permission`; the fixture test fails if the two drift.
+      OPENCODE_PERMISSION: '{"*":"ask","read":"ask","edit":"ask","glob":"ask","grep":"ask","list":"ask","bash":"ask","todowrite":"ask","external_directory":"deny","task":"deny","webfetch":"deny","websearch":"deny","skill":"deny","lsp":"deny","doom_loop":"deny","question":"deny","plan_enter":"deny","plan_exit":"deny"}'
+      # Ambient provider keys would otherwise select a different backend and reach every bash
+      # child's environment. The one reviewed backend authenticates from the isolated auth store.
+      ANTHROPIC_API_KEY: ""
+      OPENAI_API_KEY: ""
+      OPENCODE_API_KEY: ""
+    # No `default:`: ORCA's #140 defaults stay the last layer (in-workspace read/search/edit
+    # answered "once", everything else asked). The two rules below are OpenCode-specific
+    # defence in depth behind the native denies: OpenCode reports its `task` (subagent) ask as
+    # kind `think`, which the #140 defaults would otherwise allow, and a subagent's own asks are
+    # never forwarded over ACP in 1.19.4.
+    permissions:
+      rules:
+        - { match: { kind: think, titlePattern: "^task$" }, decision: deny }
+        - { match: { kind: fetch }, decision: deny }
+    mcpServers: []
+    sessionMode: per-step
+    turnTimeoutMs: 600000
+    cancelGraceMs: 10000
