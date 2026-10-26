@@ -1,5 +1,5 @@
 /** Authenticated, owner-only, write-once execution records. Public history never contains their plaintext. */
-import { constants, type BigIntStats } from "node:fs";
+import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, readdirSync, type BigIntStats } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
@@ -246,7 +246,7 @@ export async function privateJsonNames(dir: string, prefix: string): Promise<str
 export async function observePrivateReads<T>(
   work: () => Promise<T>,
   limits: { maxRecords: number },
-): Promise<{ value: T; verifyUnchanged(): Promise<void> }> {
+): Promise<{ value: T; verifyUnchanged(): Promise<void>; assertUnchanged(): undefined }> {
   if (privateObservation.getStore()) throw observationError(unreadable());
   if (!Number.isSafeInteger(limits.maxRecords) || limits.maxRecords < 0) throw new ObservationLimitError();
   const scope: PrivateObservation = {
@@ -267,6 +267,34 @@ export async function observePrivateReads<T>(
   const enumerations = [...scope.enumerations.values()];
   return {
     value,
+    assertUnchanged() {
+      // Final publication check: bounded chunks, digests/identities only. Re-read key,
+      // inputs, payloads and sensitivity membership; never cache authority or plaintext.
+      try {
+        for (const expected of files) assertPrivateFileUnchanged(expected);
+        for (const expected of enumerations) {
+          let current: NamesObservation = { dir: expected.dir, prefix: expected.prefix, names: [] };
+          try {
+            const stamp = safeDirectory(lstatSync(expected.dir, { bigint: true }));
+            const names = readdirSync(expected.dir)
+              .filter((name) => name.startsWith(expected.prefix) && name.endsWith(".json"))
+              .sort();
+            if (
+              names.length > expected.names.length ||
+              safeDirectory(lstatSync(expected.dir, { bigint: true })) !== stamp
+            )
+              throw unreadable();
+            current = { dir: expected.dir, prefix: expected.prefix, directory: stamp, names };
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+          if (JSON.stringify(current) !== JSON.stringify(expected)) throw unreadable();
+        }
+        return undefined;
+      } catch {
+        throw unreadable();
+      }
+    },
     async verifyUnchanged() {
       try {
         for (const expected of files) {
@@ -282,6 +310,56 @@ export async function observePrivateReads<T>(
       }
     },
   };
+}
+
+function assertPrivateFileUnchanged(expected: FileObservation): void {
+  const path = join(expected.dir, expected.name);
+  const optional = (name: string) => {
+    try {
+      return lstatSync(name, { bigint: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  };
+  const directory = optional(expected.dir);
+  if (!directory) {
+    if (expected.directory !== undefined) throw unreadable();
+    return;
+  }
+  if (safeDirectory(directory) !== expected.directory) throw unreadable();
+  const info = optional(path);
+  if (!info) {
+    if (expected.file !== undefined) throw unreadable();
+    return;
+  }
+  if (safeFile(info) !== expected.file) throw unreadable();
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const chunk = Buffer.allocUnsafe(64 * 1024);
+  try {
+    if (safeFile(fstatSync(fd, { bigint: true })) !== expected.file) throw unreadable();
+    let length = 0n;
+    const hash = createHash("sha256");
+    for (;;) {
+      const count = readSync(fd, chunk, 0, chunk.length, null);
+      if (!count) break;
+      length += BigInt(count);
+      if (length > info.size) throw unreadable();
+      hash.update(chunk.subarray(0, count));
+    }
+    if (
+      length !== info.size ||
+      (expected.name === KEY_FILE && length !== 32n) ||
+      safeFile(fstatSync(fd, { bigint: true })) !== expected.file ||
+      safeFile(lstatSync(path, { bigint: true })) !== expected.file ||
+      safeDirectory(lstatSync(expected.dir, { bigint: true })) !== expected.directory ||
+      hash.digest("hex") !== expected.digest
+    )
+      throw unreadable();
+  } finally {
+    chunk.fill(0);
+    closeSync(fd);
+  }
 }
 
 /** Refuse unsafe existing directories rather than silently changing their access policy. */

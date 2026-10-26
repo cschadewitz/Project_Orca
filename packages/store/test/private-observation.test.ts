@@ -85,10 +85,13 @@ for (const backend of ["memory", "file"] as const) {
         },
         { maxRecords: 100 },
       );
-      expect(Object.keys(observation)).toEqual(["value", "verifyUnchanged"]);
+      expect(Object.keys(observation).sort()).toEqual(["assertUnchanged", "value", "verifyUnchanged"]);
       expect(Object.getOwnPropertySymbols(observation)).toEqual([]);
       expect(JSON.stringify(observation)).toBe('{"value":"public-result"}');
       expect(observation.verifyUnchanged.toString()).not.toContain(SECRET);
+      if (!observation.assertUnchanged) throw new Error("synchronous protected observation unavailable");
+      expect(observation.assertUnchanged.toString()).not.toContain(SECRET);
+      expect(observation.assertUnchanged()).toBeUndefined();
       await expect(observation.verifyUnchanged()).resolves.toBeUndefined();
       expect((await store.getInputs("run"))?.vars.secret).toBe(SECRET);
     });

@@ -104,11 +104,14 @@ export interface TypedSidecarOwnerPorts {
     readonly scopeEvidenceRef: string;
     readonly approvalRecordRef: string;
     readonly authorityRevision: string;
+    /** Original owner checks retained proof/capture/current facts after the store's final awaits. */
+    assertCurrent(this: void): undefined;
   }>;
 }
 
 // JSON, a structural cast or another owner's receipt cannot manufacture this capability.
 const owners = new WeakMap<object, TypedSidecarOwnerPorts>();
+const stores = new WeakMap<object, InactiveTypedSidecarStore>();
 declare const ownerBrand: unique symbol;
 export type InactiveTypedSidecarOwner = { readonly [ownerBrand]: true };
 /** Trusted injection seam ONLY. No normal bootstrap/UI/flag constructs an owner. Activation is incomplete. */
@@ -118,6 +121,25 @@ export function bindInactiveTypedSidecarOwner(ports: TypedSidecarOwnerPorts): In
   const token = Object.freeze({}) as InactiveTypedSidecarOwner;
   owners.set(token, Object.freeze({ ...ports, marker }));
   return token;
+}
+
+/** Internal provider facts from the exact original capability, never parsed-marker reconstruction. */
+export function retainedTypedSidecarOwner(owner: InactiveTypedSidecarOwner) {
+  const ports = owners.get(owner);
+  if (!ports) throw new OrcaError("NOT_SUPPORTED", "typed persistence requires its trusted owner");
+  const { marker, assertCompatibilityCurrent, checkCompatibility } = ports;
+  return Object.freeze({
+    marker: Object.freeze(structuredClone(marker)),
+    checkCurrent: async () => {
+      const current = structuredClone(await checkCompatibility());
+      if (!validMarker(current) || !isDeepStrictEqual(current, marker)) invalid("original owner changed");
+      if (assertCompatibilityCurrent(structuredClone(marker)) !== undefined) invalid("synchronous owner required");
+    },
+    assertCurrent: (): undefined => {
+      if (assertCompatibilityCurrent(structuredClone(marker)) !== undefined) invalid("synchronous owner required");
+      return undefined;
+    },
+  });
 }
 
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -254,9 +276,11 @@ function validateCreate(v: CreateScopedRule): void {
 }
 
 /** No mode flag: only an identity-bound trusted owner capability reaches these inactive methods. */
-export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner) {
+export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner): InactiveTypedSidecarStore {
   const ports = owners.get(owner);
   if (!ports) throw new OrcaError("NOT_SUPPORTED", "typed persistence requires its trusted owner");
+  const existing = stores.get(owner);
+  if (existing) return existing;
   const { file, marker, checkCompatibility, assertCompatibilityCurrent, qualify } = ports;
   if (typeof assertCompatibilityCurrent !== "function") invalid("synchronous compatibility assertion required");
   const lock = { strictOwnership: true, timeoutMs: ports.lockTimeoutMs ?? 10_000 };
@@ -422,7 +446,7 @@ export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner
       return structuredClone({ outcome: "saved", ...record, previousRevision: snapshot.revision, revision });
     });
   }
-  return Object.freeze({
+  const store = Object.freeze({
     read,
     /** Fresh absent file ONLY. Protected marker is already durable. No existing file is converted or repaired. */
     async initializeFresh(): Promise<TypedSidecarSnapshot> {
@@ -456,12 +480,16 @@ export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner
       const original = structuredClone(action);
       try {
         const snapshot = await read();
-        const provenance = structuredClone(await qualify(structuredClone(snapshot), original, signal));
+        const qualification = await qualify(structuredClone(snapshot), original, signal);
+        const { assertCurrent, ...material } = qualification;
+        const provenance = structuredClone(material);
         await check();
         if (signal.aborted) return { state: "unavailable", reason: "invocation-expired" };
         // Avoid qualification racing a revoke/save, including a same-process source used after restart.
         if ((await read()).revision !== snapshot.revision)
           return { state: "unavailable", reason: "typed-sidecar-changed-during-qualification" };
+        if (typeof assertCurrent !== "function" || assertCurrent() !== undefined)
+          invalid("current qualification required");
         const rules = snapshot.document.scopedRules.records.map((r) => r.rule);
         return {
           state: "qualified",
@@ -477,4 +505,22 @@ export function createInactiveTypedSidecarStore(owner: InactiveTypedSidecarOwner
       }
     },
   });
+  stores.set(owner, store);
+  return store;
+}
+
+export interface InactiveTypedSidecarStore {
+  read(this: void): Promise<TypedSidecarSnapshot>;
+  initializeFresh(this: void): Promise<TypedSidecarSnapshot>;
+  createScopedRule(
+    this: void,
+    command: CreateScopedRule,
+    authority: ScopedRuleGrantAuthority,
+  ): Promise<ScopedRuleReceipt>;
+  revokeScopedRule(
+    this: void,
+    command: RevokeScopedRule,
+    authority: ScopedRuleGrantAuthority,
+  ): Promise<ScopedRuleReceipt>;
+  readRules(this: void, action: ActionEvidenceV1, signal: AbortSignal): Promise<StrictRuleRead>;
 }

@@ -8,6 +8,8 @@ import { fileStores } from "@orca/store";
 import { askHumanInput, LiveHumanInput, type HumanInputQuery, type LiveInputBinding } from "@orca/engine";
 import {
   bindInactiveTypedSidecarOwner,
+  managedTypedStoreProvider,
+  retainedTypedSidecarOwner,
   createInactiveTypedSidecarStore,
   strictPermissionRuleRevision,
   type CreateScopedRule,
@@ -215,6 +217,7 @@ async function fixture() {
     credentialOwner,
     issued,
     root,
+    lease,
     file,
     stores,
     policy,
@@ -249,8 +252,9 @@ async function bridgeFixture() {
   let valid = true;
   let deadline = Date.now() + 60000;
   const reviews = new Map<string, RetainedScopedReview>();
+  let provider = managedTypedStoreProvider(f.owner);
   const owner = {
-    sidecar: f.owner,
+    currentStore: () => provider(),
     live: f.port,
     disclosure: { requiredDisclosure: () => "complete" as const, reference: () => undefined },
     prepare: async () => {
@@ -284,6 +288,11 @@ async function bridgeFixture() {
     },
     readAuthorityRevision: async () => "synthetic:authority",
     assertAuthorityRevision: () => undefined,
+    withSaveOwnership: <T>(_review: RetainedScopedReview, _actor: unknown, work: () => Promise<T>) =>
+      f.stores.leases.withOwnership(f.lease, work),
+    recordApproval: async () => {},
+    verifyApproval: async (r: RetainedScopedReview) => ({ scopeEvidenceRef: r.scopeEvidenceRef }),
+    policySaved: async () => {},
   };
   const table = scopedPermissionMethods(owner, identity, f.authorizer);
   const ctx = {
@@ -313,6 +322,20 @@ async function bridgeFixture() {
     ctx,
     call,
     review,
+    replaceBinding: () => {
+      const retained = retainedTypedSidecarOwner(f.owner);
+      provider = managedTypedStoreProvider(
+        bindInactiveTypedSidecarOwner({
+          file: f.file,
+          marker: retained.marker,
+          checkCompatibility: async () => retained.marker,
+          assertCompatibilityCurrent: retained.assertCurrent,
+          qualify: async () => {
+            throw new Error("no qualification");
+          },
+        }),
+      );
+    },
     invalidate: () => {
       valid = false;
     },
@@ -321,7 +344,7 @@ async function bridgeFixture() {
     },
   };
 }
-it("saves exact reviewed bytes without answering, then requires a separate answer", async () => {
+it("saves exact reviewed bytes without answering and retires that handle", async () => {
   const f = await bridgeFixture();
   const handle = await f.review();
   expect(await f.call("scopedPermissions.choose", { target: identity, handle, choice: "save" })).toMatchObject({
@@ -335,10 +358,10 @@ it("saves exact reviewed bytes without answering, then requires a separate answe
     ok: false,
   });
   expect(await f.call("scopedPermissions.choose", { target: identity, handle, choice: "allow-once" })).toMatchObject({
-    ok: true,
-    result: { outcome: "answered" },
+    ok: false,
   });
-  expect(await f.delivered).toBe("once");
+  f.port.close();
+  await f.delivered;
 });
 it.each(["allow-once", "deny"])("%s never persists", async (choice) => {
   const f = await bridgeFixture();
@@ -475,3 +498,27 @@ it.each(["credential-revocation", "input-cancellation"])(
     await f.delivered;
   },
 );
+
+it("refuses a replacement owner with identical bytes/revision while review awaits IO", async () => {
+  const f = await bridgeFixture();
+  faults.readTarget = f.file;
+  faults.afterRead = async () => {
+    f.replaceBinding();
+  };
+  expect(await f.call("scopedPermissions.review", { target: identity, input: f.target })).toMatchObject({ ok: false });
+  expect((await f.policy.read()).document.scopedRules.records).toEqual([]);
+  f.port.close();
+  await f.delivered;
+});
+it("refuses same-byte replacement binding on a later Save without writing or answering", async () => {
+  const f = await bridgeFixture();
+  const handle = await f.review();
+  f.replaceBinding();
+  expect(await f.call("scopedPermissions.choose", { target: identity, handle, choice: "save" })).toMatchObject({
+    ok: false,
+  });
+  expect((await f.policy.read()).document.scopedRules.records).toEqual([]);
+  expect(await f.stores.events.readTypes("run", ["human.answered"])).toEqual([]);
+  f.port.close();
+  await f.delivered;
+});

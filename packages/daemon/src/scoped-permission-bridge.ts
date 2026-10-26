@@ -4,8 +4,9 @@ import { isDeepStrictEqual } from "node:util";
 import type { z } from "zod";
 import { OrcaError, type ActionEvidenceV1, type MutationActor } from "@orca/core";
 import {
-  createInactiveTypedSidecarStore,
-  type InactiveTypedSidecarOwner,
+  assertManagedTypedStoreBinding,
+  type ManagedTypedStoreProvider,
+  type ManagedTypedStoreBinding,
   type CreateScopedRule,
   type TypedSidecarSnapshot,
 } from "@orca/agents";
@@ -34,18 +35,26 @@ export interface RetainedScopedReview {
   readonly requiredReview: "passed" | "failed" | "unavailable";
 }
 export interface ScopedPermissionOwner {
-  readonly sidecar: InactiveTypedSidecarOwner;
+  readonly currentStore: ManagedTypedStoreProvider;
   readonly live: LiveHumanInput;
   readonly disclosure: GuardProjectionDisclosure;
   prepare(
     target: LiveDecisionTarget,
     actor: MutationActor,
     snapshot: TypedSidecarSnapshot,
+    binding: ManagedTypedStoreBinding,
   ): Promise<RetainedScopedReview>;
   /** Exact protected approval/action/scope lookup, synchronous and nonmutating at publication. */
   assertCurrent(review: RetainedScopedReview, actor: MutationActor): undefined;
-  readAuthorityRevision(): Promise<string>;
-  assertAuthorityRevision(revision: string): undefined;
+  readAuthorityRevision(review: RetainedScopedReview, actor: MutationActor): Promise<string>;
+  assertAuthorityRevision(review: RetainedScopedReview, actor: MutationActor, revision: string): undefined;
+  /** Original run lease spans protected Save acceptance AND standing publication. */
+  withSaveOwnership<T>(review: RetainedScopedReview, actor: MutationActor, work: () => Promise<T>): Promise<T>;
+  /** Called only after actual explicit Save authorization; never on review/inspect. */
+  recordApproval(review: RetainedScopedReview, actor: MutationActor): Promise<void>;
+  verifyApproval(review: RetainedScopedReview, actor: MutationActor): Promise<{ readonly scopeEvidenceRef: string }>;
+  /** Confirmed policy change invalidates old decision attempts; no dispatch/retry. */
+  policySaved(review: RetainedScopedReview, actor: MutationActor): Promise<void>;
 }
 const stale = (): never => {
   throw new OrcaError("CONFIG_STALE", "Scoped review is unavailable; review again.");
@@ -60,7 +69,17 @@ export function scopedPermissionMethods(
   identity: { workspaceId: string; instanceId: string },
   authorizer: Authorizer,
 ): MethodTable {
-  const policy = createInactiveTypedSidecarStore(owner.sidecar);
+  const provider = owner.currentStore;
+  let binding: ManagedTypedStoreBinding | undefined;
+  const currentStore = async () => {
+    const available = await provider();
+    if (!available.available || available.contract !== "orca-typed-sidecar-v1") return stale();
+    const candidate = available.binding;
+    assertManagedTypedStoreBinding(candidate);
+    if (candidate.store !== available.store || (binding && candidate !== binding)) stale();
+    binding ??= candidate;
+    return candidate.store;
+  };
   type Entry = {
     review: RetainedScopedReview;
     actor: MutationActor;
@@ -75,6 +94,8 @@ export function scopedPermissionMethods(
     return { principal: bound.principal, answer: ctx.liveAnswerAuthority };
   };
   const current = (entry: Entry, accepting = false) => {
+    if (!binding) return stale();
+    assertManagedTypedStoreBinding(binding);
     if (
       !Number.isFinite(entry.review.reviewUntil) ||
       Date.now() >= entry.review.reviewUntil ||
@@ -95,9 +116,10 @@ export function scopedPermissionMethods(
       handle: async (params, ctx) => {
         const call = context(ctx, params.target);
         await call.answer.authorize(params.input, true);
+        const policy = await currentStore();
         const snapshot = await policy.read();
         const review = structuredClone(
-          await owner.prepare(structuredClone(params.input), { ...call.answer.actor }, snapshot),
+          await owner.prepare(structuredClone(params.input), { ...call.answer.actor }, snapshot, binding!),
         );
         const entry: Entry = {
           review,
@@ -108,6 +130,7 @@ export function scopedPermissionMethods(
         if (review.command.expectedRevision !== snapshot.revision) stale();
         for (const key of ["instanceId", "sessionId", "turnId", "invocationId", "runId", "stepRunId"] as const)
           if (review.action.invocation[key] !== entry.input[key]) stale();
+        await currentStore();
         current(entry);
         await call.answer.authorize(entry.input, true);
         current(entry);
@@ -129,12 +152,14 @@ export function scopedPermissionMethods(
       params: contracts["scopedPermissions.choose"].params,
       handle: async (params, ctx) => {
         const { entry, principal, answer } = lookup(ctx, params);
-        if (!(entry.state === "ready" || (entry.state === "saved" && params.choice !== "save"))) stale();
+        if (entry.state !== "ready") stale();
         current(entry);
         // Claim before any await; even a lost acknowledgement never permits automatic replay.
         entry.state = "pending";
         try {
+          const policy = await currentStore();
           await answer.authorize(entry.input, params.choice === "save");
+          await currentStore();
           current(entry);
           if (params.choice === "save") {
             if (
@@ -147,22 +172,34 @@ export function scopedPermissionMethods(
               if (!isDeepStrictEqual(command, entry.review.command) || !isDeepStrictEqual(actor, entry.actor)) stale();
             };
             const authority = authorizer.scopedRuleGrantAuthority(principal, {
-              readAuthorityRevision: () => owner.readAuthorityRevision(),
+              readAuthorityRevision: async () => {
+                await currentStore();
+                return owner.readAuthorityRevision(entry.review, entry.actor);
+              },
               verifyApproval: async (command, actor) => {
+                await currentStore();
                 exact(command, actor);
-                return { scopeEvidenceRef: entry.review.scopeEvidenceRef };
+                return owner.verifyApproval(entry.review, entry.actor);
               },
               assertCommitCurrent: (command, actor, proof) => {
                 exact(command, actor);
                 if (
                   proof.scopeEvidenceRef !== entry.review.scopeEvidenceRef ||
-                  owner.assertAuthorityRevision(proof.authorityRevision) !== undefined
+                  owner.assertAuthorityRevision(entry.review, entry.actor, proof.authorityRevision) !== undefined
                 )
                   stale();
                 return undefined;
               },
             });
-            await policy.createScopedRule(entry.review.command, authority);
+            await owner.withSaveOwnership(entry.review, entry.actor, async () => {
+              await authority.authorizeGrant();
+              current(entry);
+              await owner.recordApproval(entry.review, entry.actor);
+              current(entry);
+              await policy.createScopedRule(entry.review.command, authority);
+            });
+            await currentStore();
+            await owner.policySaved(entry.review, entry.actor);
             entry.state = "saved";
           } else {
             const result = await owner.live.answer(
@@ -192,6 +229,7 @@ export function scopedPermissionMethods(
       handle: async (params, ctx) => {
         const { entry, answer } = lookup(ctx, params);
         await answer.authorize(entry.input, true);
+        const policy = await currentStore();
         const snapshot = await policy.read();
         const record = snapshot.document.scopedRules.records.find(
           (r) =>
@@ -221,7 +259,9 @@ export function scopedPermissionMethods(
         params: method.params,
         handle: async (params: unknown, ctx: MethodContext) => {
           try {
-            return await method.handle(params, ctx);
+            const result = await method.handle(params, ctx);
+            if (binding) await currentStore();
+            return result;
           } catch {
             throw new OrcaError(
               "CONFIG_STALE",

@@ -20,6 +20,8 @@ import {
   bindInactiveTypedSidecarOwner,
   createInactiveTypedSidecarStore,
   parseTypedCompatibilityMarkerBytes,
+  managedTypedStoreProvider,
+  type ManagedTypedStoreProvider,
   type TypedCompatibilityMarker,
   type TypedSidecarOwnerPorts,
 } from "@orca/agents";
@@ -27,19 +29,8 @@ import { OrcaError } from "@orca/core";
 
 /** Remains empty until the complete installed path has independent qualification. */
 export const ACCEPTED_MANAGED_TYPED_BUILDS: readonly string[] = Object.freeze([]);
-/** Parent passes this provider's result into daemon composition. No wire-visible
- * owner, marker, path or construction parameters are part of the contract. */
-export type ManagedTypedStoreAvailability =
-  | { readonly available: false; readonly reason: "trusted-linux-owner-unavailable" }
-  | {
-      readonly available: true;
-      readonly contract: "orca-typed-sidecar-v1";
-      readonly store: ReturnType<typeof createInactiveTypedSidecarStore>;
-    };
-export type ManagedTypedStoreProvider = () => Promise<ManagedTypedStoreAvailability>;
-/** Default daemon registration can consume this without gaining an owner factory. */
-export const unavailableManagedTypedStore: ManagedTypedStoreProvider = () =>
-  Promise.resolve({ available: false, reason: "trusted-linux-owner-unavailable" });
+export { unavailableManagedTypedStore } from "@orca/agents";
+export type { ManagedTypedStoreAvailability, ManagedTypedStoreProvider } from "@orca/agents";
 
 function fail(reason: string): never {
   throw new OrcaError(
@@ -301,7 +292,14 @@ export function createManagedTypedWorkspace(ports: ManagedTypedOwnerPorts) {
     assertCurrent();
     return { state: "enrolled", marker: confirmed };
   }
+  const boundStores = new Map<
+    string,
+    { store: ReturnType<typeof createInactiveTypedSidecarStore>; provider?: ManagedTypedStoreProvider }
+  >();
   function boundStore(marker: TypedCompatibilityMarker) {
+    const key = JSON.stringify(marker);
+    const existing = boundStores.get(key);
+    if (existing) return existing.store;
     const retained = structuredClone(marker);
     const assertMarker = (): undefined => {
       const current = inspect();
@@ -321,7 +319,12 @@ export function createManagedTypedWorkspace(ports: ManagedTypedOwnerPorts) {
         return assertMarker();
       },
     });
-    return createInactiveTypedSidecarStore(owner);
+    const store = createInactiveTypedSidecarStore(owner);
+    boundStores.set(key, {
+      store,
+      ...(retained.state === "enrolled" ? { provider: managedTypedStoreProvider(owner) } : {}),
+    });
+    return store;
   }
   async function openStore() {
     const state = inspect();
@@ -333,7 +336,10 @@ export function createManagedTypedWorkspace(ports: ManagedTypedOwnerPorts) {
   }
   const currentStore: ManagedTypedStoreProvider = async () => {
     try {
-      return { available: true, contract: "orca-typed-sidecar-v1", store: await openStore() };
+      const state = inspect();
+      if (state.state !== "enrolled") fail("enrollment incomplete");
+      boundStore(state.marker);
+      return await boundStores.get(JSON.stringify(state.marker))!.provider!();
     } catch {
       return { available: false, reason: "trusted-linux-owner-unavailable" };
     }
