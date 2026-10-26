@@ -1,0 +1,55 @@
+Typed sidecar checkpoint — Refs #702 / #699
+Implementation source: c7268ce4ad55723573cca5ecf56611428a99bd70
+Branch: calcifer/702-typed-sidecar
+Base: exact reviewed #728 9e892d56ad3648e512dd7fc6c44bbd2f2fb23f57
+Parent integration main (not incorporated here): bc0c57d82925cefa001513b8431355b912e4d462
+Managed contract inspected: #730 f90c3dbf681f4cb19454767ae558f60a539da086
+
+Environment: Node 24.19.0, pinned pnpm 12.4.2.
+The existing lockfile passed the unchanged supply-chain policy and frozen resolution.
+No lockfile, dependency policy, lifecycle allow-list or sandbox setting changed.
+
+Focused tests:
+pnpm exec vitest run packages/agents/test/typed-sidecar.test.ts packages/daemon/test/typed-sidecar-authority.test.ts packages/daemon/test/typed-sidecar-live-input.test.ts --maxWorkers=2
+Result: 3 files passed; 58 tests passed; 4.18s.
+Includes actual temp-file writes, exact protected synthetic approvals, file-backed
+human.answered records, original-principal authority, repeat/expiry/revoke/restart,
+uncertain append/rename, real subprocess paused writer/aged lock/revoke contention,
+legacy replacement contention, crashed owner and ownership-loss fault injection.
+No installed provider, real credential or managed platform acceptance is implied.
+The final source-only difference after this test was exporting/renaming the owner
+ports interface; exact source c7268ce then passed the root TypeScript check again.
+
+Statics:
+pnpm run typecheck — PASS (root + renderer).
+pnpm exec eslint packages/agents/src/{permission-file,typed-sidecar,permissions,strict-permission-source,index}.ts packages/agents/test/typed-sidecar*.ts packages/daemon/src/auth/guard.ts packages/daemon/test/typed-sidecar*.ts — PASS.
+pnpm exec tsc -p tsconfig.json --noEmit — PASS again on c7268ce.
+pnpm exec eslint packages/agents/src/typed-sidecar.ts — PASS again on c7268ce.
+pnpm run build — PASS (TypeScript project build + renderer; existing large-chunk warning).
+pnpm run format:check — PASS.
+git diff --check — PASS.
+Final full-repository lint/coverage/CI are not claimed by this checkpoint.
+
+Default-off limits:
+- No production constructor caller, CLI/env flag, protocol method, UI grant endpoint,
+  managed enrollment filesystem writer, root resolver or recovery bypass is registered.
+- Explicit pending enrollment owner may initialize only an absent sidecar; ordinary
+  typed access requires a separate enrolled identity-bound owner capability.
+- Managed Linux owner must implement durable enrollment/lifetime exclusion and
+  categorical enrolled update/recovery/retarget/reset refusal, with accepted exact
+  build evidence before activation. Other platforms remain unavailable for typed use.
+- Legacy v1 repair semantics remain unchanged. #728 is not a typed-safe version floor.
+- Strict typed .lock directories never permit age-based takeover. A crashed/unknown
+  owner remains closed; no lock recovery procedure is implemented in this draft.
+- No external per-edit high-water transaction or second policy store is introduced.
+- Saved means persistence only, never answer or dispatch. Live callback failures and
+  uncertain outcomes park/consume the callback; restart does not replay it.
+
+Publication:
+Canonical branch was pushed and its remote commit was read back with git ls-remote.
+GitHub draft-PR creation/assignment to calciferschadewitz remain blocked: gh read APIs
+return Forbidden and gh auth status reports invalid configured GH_TOKEN; the connected
+GitHub tool reports Unknown tool. No credential change or auth bypass was attempted.
+No draft PR was created by those failed tool calls. The earlier contract-only
+calcifer/702-typed-persistence branch is superseded; no force-push/deletion was used.
+Parent owns draft PR creation, review, main integration, exact-head CI and merge.
