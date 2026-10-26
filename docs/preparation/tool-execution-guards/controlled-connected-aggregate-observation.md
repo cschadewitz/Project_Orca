@@ -117,3 +117,58 @@ observations, Save/human/rule correlations and current authority still require a
 complete fresh connected trace under all original bounds, followed by independent
 aggregate review. Raw traces, protected records, phase tokens, credentials and
 process provenance stay local and unpublished.
+
+### Read-only timeout diagnosis
+
+The preserved trace and packets were inspected without another producer launch.
+All packet hashes above remain unchanged. The phase command was sent 2.866628 s
+after the supervisor start sample. Authenticated partial payload bytes identify
+one baseline, one capture and one authorization; there is no producer observation
+payload. The authorization publication finishes its temporary cleanup at raw
+line 125046, about 33.318857 s after the first trace prefix. No completed
+offset-2/length-4 `pread64` signature appears before the cut. These are partial
+diagnostics, not a replacement for complete physical/event replay.
+
+The leader continues successful checks until raw line 154250: `close` of the
+workspace identity read descriptor, result 0, at trace offset 59.988616 s. Its
+preceding calls include image and credential `statx`, lifetime-fdinfo reads, and
+workspace-root/identity checks. At the cut there is no unfinished leader syscall;
+ten workers have unfinished epoll/futex waits. No process-wide settlement or
+phase acknowledgement appears. This is active source currentness work at timeout,
+not evidence of an original callback wait. Bootstrap source does not enter the
+connected human-delivery path. Source checks at producer `check/createOriginal`,
+the installed child's `check`, and the service/fence's final currentness chain
+account for these repeated physical and authority checks; none may be removed to
+fit a timing budget.
+
+The action's authenticated expiry is 61.151280266 s after supervisor launch
+(the source creates it 55 seconds after capture-facts setup). Thus the independent
+60-second process limit fires before the action's own expiry. This does not
+justify extending either limit. The full partial trace contains 112196 completed
+`statx` calls. Throughput drops sharply after about 25 s: over that remaining
+interval, gaps larger than 10 ms between consecutive global trace prefixes total
+about 21.031 s. Individual later gaps exceed a second between leader `statx`
+entries. The earlier roughly 1.989 s gap at command-read startup belongs to the
+supervisor's pre-release provenance/setup interval and is separate.
+
+These entry-only timestamps establish progress and wall-budget exhaustion, but
+cannot separate syscall/ptrace or filesystem stall time from descheduling and
+other environment contention. No original CPU/scheduler samples or syscall
+completion-duration stamps were retained. Current low load and unchanged CPU
+quota are later observations, not proof that the original transient cause has
+been identified or resolved. There is no supported source/orchestration deadlock
+fix from this evidence, and no bounded retry was run merely to obtain a pass.
+
+Cleanup was checked independently before considering a retry: every observed
+trace thread ID is absent from current `/proc`, the original process group has
+no members, and no current Node/strace command matches this attempt. This is a
+later cleanup check, not a reconstruction of original authority or final
+physical proof. The original `run_traced` path had already killed/reaped its
+owned group on timeout without an `OwnedCleanupError`.
+
+The local sanitized diagnostic is
+`/tmp/orca-connected-diagnostics/timeout-diagnosis.json`; its SHA-256 is recorded
+as `2d2d7d018c88c19a6214bcdcf33ced7e5d2c4074bdcb4cf8b4ea054de0379c97`.
+Fresh execution remains pending a justified timing
+diagnosis or a verified resolved transient condition. All bounds, source bytes,
+bootstrap prerequisites and disabled accepting outcome remain unchanged.
