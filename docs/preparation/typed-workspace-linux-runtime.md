@@ -178,3 +178,47 @@ Local evidence on the runtime source committed as
 No global coverage run, physical/native workflow, production bridge acceptance or
 new deployment was performed. Parent owns exact-head CI/source review and deciding
 when the remaining production proof is sufficient.
+
+## Stage lifetime/dispatch review correction
+
+Wrapper review found that the stage guarantee above was incomplete at
+`50418058a40c131155abf40d7f234833b573791e`. Marking the lock descriptor inheritable
+did not preserve it across the default `close_fds=True` used by actual stage
+`subprocess.run` and health `Popen`. The previous synthetic `close_fds=False` test
+proved a kernel mechanism, not those production dispatch sites. A deterministic
+regression against that source failed at **all 15 actual stage child boundaries**
+after supervisor death: release inspection, clone, git revision, mise trust/install,
+pnpm install/typecheck/build, node resolution, candidate version, demo, all three
+configured validates, and the health child.
+
+Correction source: `b86de7e30ede812b7b694b0eb7263560312af1e1`.
+`typed_process` passes only the retained lifetime descriptors with explicit
+`pass_fds`, keeps `close_fds=True`, and invokes the synchronous retained assertions
+before dispatch. Every stage run/capture/Popen uses it, including the formerly raw
+git/mise/candidate-version captures. The service-command helper uses the same
+direct-child dispatch mechanism; this does not transfer ownership through systemd
+to a separately launched daemon, which still requires its own stable launch gate.
+
+Lock-context cleanup remains **close-only** on both normal and exceptional unwind.
+There was no explicit `LOCK_UN` in this owner; adding one would unlock the open-file
+description shared with a surviving child. Tests verify exclusion after both forms
+of parent cleanup and release only after the actual direct child exits.
+
+The stage fixture substitutes executable arguments only, leaving the production
+`run`/`capture`/`subprocess.run`/`Popen` descriptor options untouched. All 15 direct
+children keep real flock exclusion after their supervisor is killed, while an
+unrelated inheritable descriptor is confirmed closed. A bounded pidfd wait confirms
+termination of each disposable producer; PID observation is not used as ownership
+authority. Separate deterministic tests lose ownership immediately before each
+formerly raw capture and verify no such process dispatch, including candidate code.
+
+Final focused validation for this Python-only correction: 29 stdlib tests pass with
+resource warnings treated as errors; the normal Vitest deployment wrapper passes.
+`git diff --check` passes. Existing TypeScript/build/dependency source is unchanged.
+No live service, external tool, real release/build, OS setting or policy is used.
+
+This proof covers the audited **direct subprocesses**, not arbitrary descendants.
+A tool or descendant can close inherited descriptors. Such a process-tree guarantee
+requires its own audited launch/settlement contract and is not claimed here.
+The stable bridge/full inventory proof remains missing; typed activation and the
+accepted real build map remain off/empty.
