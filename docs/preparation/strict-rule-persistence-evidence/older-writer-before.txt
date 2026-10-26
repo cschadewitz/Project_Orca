@@ -1,0 +1,68 @@
+ RUN  v5.0.5 /workspace/Project_Orca
+
+ ❯ packages/agents/test/permission-writer-compatibility.test.ts (14 tests | 6 failed) 62ms
+   ❯ permission writer existing-document compatibility (14)
+     × refuses replacing version 2 (matching revision: false) 13ms
+     × refuses replacing version 2 (matching revision: true) 4ms
+     × preserves an unsupported explicit version 0 3ms
+     × preserves an unsupported explicit version 3 3ms
+     × preserves an unsupported explicit version "2" 3ms
+     × preserves an unsupported explicit version null 3ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 6 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/agents/test/permission-writer-compatibility.test.ts > permission writer existing-document compatibility > refuses replacing version 2 (matching revision: false)
+ FAIL  packages/agents/test/permission-writer-compatibility.test.ts > permission writer existing-document compatibility > refuses replacing version 2 (matching revision: true)
+AssertionError: promise resolved "{ version: 1, agents: {} }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "agents": {},
++   "version": 1,
+  }
+
+ ❯ packages/agents/test/permission-writer-compatibility.test.ts:53:6
+     51|         authorize,
+     52|       }),
+     53|     ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+       |      ^
+     54|     expect(await readFile(file, "utf8")).toBe(bytes);
+     55|     expect(await readdir(root)).toEqual(["orca.permissions.json"]);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯
+
+ FAIL  packages/agents/test/permission-writer-compatibility.test.ts > permission writer existing-document compatibility > preserves an unsupported explicit version 0
+ FAIL  packages/agents/test/permission-writer-compatibility.test.ts > permission writer existing-document compatibility > preserves an unsupported explicit version 3
+ FAIL  packages/agents/test/permission-writer-compatibility.test.ts > permission writer existing-document compatibility > preserves an unsupported explicit version "2"
+ FAIL  packages/agents/test/permission-writer-compatibility.test.ts > permission writer existing-document compatibility > preserves an unsupported explicit version null
+AssertionError: promise resolved "{ version: 1, agents: {} }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "agents": {},
++   "version": 1,
+  }
+
+ ❯ packages/agents/test/permission-writer-compatibility.test.ts:61:97
+     59|   it.each([0, 3, "2", null])("preserves an unsupported explicit versio…
+     60|     const { file, bytes, revision } = await fixture(version);
+     61|     await expect(replacePermissionPolicyFile(file, replacement, { expe…
+       |                                                                                                 ^
+     62|       code: "CONFIG_INVALID",
+     63|     });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  6 failed | 8 passed (14)
+   Start at  06:02:36
+   Duration  792ms (transform 57%, import 32%, tests 10%, worker 1%)

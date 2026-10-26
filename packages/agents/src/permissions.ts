@@ -578,9 +578,37 @@ export async function replacePermissionPolicyFile(
           { file, expectedRevision: expected, actualRevision: actual },
         );
     }
+    await refuseUnsupportedPolicyReplacement(file);
     await writePolicyFile(file, parsed, opts?.authorize);
   });
   return parsed;
+}
+
+/**
+ * Input validation alone does not protect a newer document: a legacy client can send a
+ * valid v1 replacement for bytes it cannot interpret. Refuse explicit incompatible
+ * versions under the shared lock, even for an unconditional replacement. Keep the
+ * existing operator repair path for malformed/empty legacy documents.
+ *
+ * This protects only binaries containing this guard. Earlier replacements never read
+ * the current version; adding this check cannot make those binaries safe to downgrade.
+ */
+async function refuseUnsupportedPolicyReplacement(file: string): Promise<void> {
+  let text: string;
+  try {
+    text = await readFile(file, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw e;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return;
+  }
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && "version" in raw && raw.version !== 1)
+    throw new OrcaError("CONFIG_INVALID", `${file}: refusing to replace an unsupported permission document version`);
 }
 
 /**
