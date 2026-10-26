@@ -1,6 +1,8 @@
 # #704/#705 provider enforcement qualification — offline preparation
 
-26 October 2026; ORCA baseline `32f92cc16b9faf1748059e930c3f77b3934151ae`.
+26 October 2026; original #713 source baseline `32f92cc16b9faf1748059e930c3f77b3934151ae`;
+canonical reconciliation baseline `040fe081731ae636198a283ea70d421428dc328c`.
+The latter main head has combined full CI pending; this packet does not declare it green.
 **GO for source qualification and non-executing fixture preparation only. No
 provider/tool tuple is certified for strict execution or beta acceptance.**
 
@@ -10,8 +12,10 @@ the [merged bridge evidence work](../../implementation/594-command-evidence-v1.m
 and the [current-state path map](../../research/tool-call-safety/current-state.md).
 It does not repeat the client survey or supersede the Codex proposal packet.
 [#700](https://github.com/cschadewitz/Project_Orca/issues/700) owns the canonical
-contract. These independent docs/data propose bindings; they define no runtime
-port, support flag, production default or peer-branch dependency.
+contract, now accepted through [#716](https://github.com/cschadewitz/Project_Orca/pull/716).
+This packet consumes the [canonical core vocabulary](../../../packages/core/src/model/tool-execution-guards.ts)
+and existing [strict admission functions](../../../packages/core/src/strict-permission.ts);
+it defines no parallel runtime port, support flag or production default.
 
 ## Pins and evidence levels
 
@@ -71,29 +75,46 @@ effects beyond the named executor. A hook is not OS confinement. Native sandbox,
 network, filesystem and credential ceilings remain necessary. Never force an ask
 by bypassing permissions, relaxing sandbox policy or introducing broad grants.
 
-## Proposed bindings for #700 review
+## Accepted canonical bindings and offline counterexamples
 
-1. Bind a provider-specific final immutable command/input/cwd/resources snapshot
-   to its native pending closure, toolUseID or typed RPC identity, caller/run/host
-   and connection generation. Re-evaluate after every rewrite; a session cwd is
-   not automatically the command's effective cwd. Never derive authority from
-   titles, arbitrary metadata, a generic UI option kind or model instructions.
-2. Record coverage at the named boundary and exact native/adapter/runner tuple,
-   distinguishing complete, authoritative absence and unknown scope. Excluded
-   paths must fail admission for strict profiles; no permissive fallback checker
-   or remembered native grant may fill a missing hook.
-3. Map only actual offered IDs to source-backed effects/lifetime. A one-use permit
-   binds one unchanged invocation; native session/turn/policy changes need
-   separately authorized scope. Preserve current policy/revocation generation,
-   #594 seven-field ownership/original lease and claim-before-await semantics.
-4. Normalize missing evidence/checker outage/timeout/invalid response as
-   indeterminate with no dispatch authorization; native continuation must be
-   stopped by a proven execution boundary. Cancellation/death/restart/expiry,
-   duplicate/replay, uncertain persistence and lost acknowledgement cannot mint
-   or redeliver a permit. Require bounded pending work and protected configuration.
+The original #713 binding proposals now map to the accepted #700/#716 types.
+No shared-contract change is needed for this slice. The typed
+[canonical-admission fixtures](../../../packages/agents/test/provider-qualification-704-705.test.ts)
+import core types/functions and reuse synthetic policy fixtures. They do not
+implement capture, #702 source projection, #706 view models or enforcement.
 
-These are binding proposals pending the parent's canonical #700 review. No
-production wire types or capability registry are introduced here.
+| Obligation | Accepted vocabulary / rejection seam |
+| --- | --- |
+| Original invocation and final bytes/input | `ActionEvidenceV1.invocation`, `original`, `dispatch`, `bindingRef`, `capturedByBoundaryId`, `transformations`; a changed captured binding invalidates the prior decision |
+| Effective cwd, physical resource targets, executable/interpreter and environment | `FactV1` fields `effectiveCwd`, `resources` (operation + `physicalTargetRef`), `executableAndInterpreter`, `environmentAndCredentialRefs`; required unknown facts return indeterminate |
+| Exact provider/adapter/tool/host boundary | `CoverageV1`, `negotiatedHook`, `protectedConfiguration`, `unsupportedPaths`; source-only observation cannot satisfy verified-per-execution coverage |
+| Actual offered option effects | `NativeChoiceV1.optionId`, `kind`, `effect`, `qualificationRef`, `grantScopeAndLifetime`; `selectStrictPermissionOption` requires an actual bounded this-invocation choice, not an `allow_once` spelling |
+| Hook error policy, cancellation, final provenance, original pending ownership | Trusted capture owner's existing `StrictPermissionState.coverageAndState` precondition; unavailable qualification returns indeterminate, even with an otherwise matching synthetic allow rule |
+| Revocation and callback ownership | `AuthorityStampV1` plus original `InvocationV1`; #594 original lease/seven-field ownership and claim-before-await remain separate dispatch obligations |
+
+Each of the 32 existing [vectors](vectors.json) has a `canonicalAdmission` test
+category. A category selects one negative synthetic input, not a source-derived
+provider action or production qualification result. Even positive source witnesses
+such as Pi block and Gemini pre-start abort cannot establish complete coverage.
+Option cases isolate selection using a synthetic allow verdict; that verdict is
+not an admission result. All other rows exercise `evaluateStrictPermission` and
+assert no allow or selected option. The positive control is explicitly synthetic.
+
+The owner must verify fail-closed hook errors, cancellation, pending ownership and
+absence of later transformations before setting `coverageAndState` complete/true.
+Those details have no independent canonical wire fields; the pure evaluator does
+not discover them from command text. A transformation must be recaptured and
+rebound after all rewrites; the fixture checks a changed binding, not a production
+hasher or freeze mechanism. `EnforcementPortV1` still owns revalidation, retention,
+one-use atomic consumption and actual dispatch. No permit is minted here.
+
+Source/documentation references remain separate from `installedRefs` and observed
+effects. No real provider coverage is promoted to verified-per-execution. The
+source manifest and Claude publication metadata are unchanged: public native/SDK
+artifact linkage remains unavailable, matching suffixes remain insufficient, and
+no installed/runtime receipt is fabricated. Claude remains **UNKNOWN**; the
+existing strict Codex hook/exact-command, Pi early-hook/generic-UI and Gemini
+projected-approval routes remain **NO-GO**. No new source evidence changes them.
 
 ## Offline verification and decision order
 
@@ -101,7 +122,8 @@ production wire types or capability registry are introduced here.
 [vectors.json](vectors.json) supplies non-executing inputs, native observations,
 strict dispositions and the next proof required. They are rehearsal data, not
 certification or a replacement policy engine. The focused test loads digest-checked
-Pi/Claude pure source functions with synthetic dependencies; command strings are
+Pi/Claude source-function excerpts with synthetic dependencies, including the Claude
+post-await abort-before-decode path; command strings are
 never sent to a shell, provider, MCP server or host executor. Codex/Gemini excerpts
 are source-reviewed only; their upstream tests are not claimed as run here.
 
@@ -111,7 +133,7 @@ node node_modules/vitest/vitest.mjs run \
   tools/test/acp-command-evidence-source.test.js --maxWorkers=1
 ```
 
-Priority: (1) reconcile these bindings with #700, (2) resolve the exact Claude
+Priority: (1) review this canonical reconciliation, (2) resolve the exact Claude
 native/SDK/artifact tuple and protected failure contract, (3) seek separately
 scoped authorization for [the bounded Claude experiment](claude-fixture-plan.md),
 (4) review native/adapter changes for remaining no-go rows before any live trial.
@@ -119,4 +141,5 @@ No upstream contact, native process, configuration/hook installation, private
 evidence disclosure, credential/access change, JEV/hosted activation, release,
 deployment or Mac acceptance occurs. #704's actual cached/revocation proof and
 #705's installed qualification remain open. #594 unsupported mode, disabled live
-handoff, installed/actual-Cal/C6b and beta/privacy gates are preserved.
+handoff, installed/actual-Cal/C6b and beta/privacy gates are preserved. #594 actual-Cal/native beta ownership remains
+separate; this is no all-provider release gate.

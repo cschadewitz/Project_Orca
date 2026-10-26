@@ -11,6 +11,7 @@ let pins;
 let vectors;
 let pi;
 let claude;
+let claudeCallback;
 
 async function pureModule(source) {
   // Only digest-checked excerpts plus reviewed scaffolding below; no provider imports.
@@ -46,6 +47,18 @@ beforeAll(async () => {
       const exposeSessionEnvironment = false;
       ${sources.get("pi-resolve")}
       return spawnContext;
+    }
+  `);
+  claudeCallback = await pureModule(`
+    // Entire digest-checked callback excerpt, with synthetic request/fallback seams.
+    export async function callback(signal, decode) {
+      const presentation = {}, permissionOptions = [], permissionSessionId = "test:session";
+      const toolName = "test:tool", parentToolUseId = undefined, sessionId = "test:session";
+      const agentID = "test:agent", toolInput = {}, previewContent = undefined;
+      const toolUseID = "test:invocation", durableChangeSet = undefined, session = {};
+      const decodeClaudePermissionResponse = decode;
+      ${sources.get("claude-callback")}
+      return permissionResult;
     }
   `);
   claude = await pureModule(`
@@ -174,4 +187,63 @@ it("does not equate identical Claude inputs with the same native invocation", ()
     claude.decodeClaudePermissionResponse({ optionId: "offered" }, "Bash", input, id, [{ optionId: "offered" }]);
   }
   expect(claude.effects.slice(-2).map((effect) => effect.context.toolUseID)).toEqual(["distinct-a", "distinct-b"]);
+});
+
+it("Claude callback rejects a late answer after abort before decoding or fallback effects", async () => {
+  const controller = new AbortController();
+  let effects = 0;
+  const owner = {
+    async requestPermissionFromClient() {
+      controller.abort();
+      return { optionId: "test:late" };
+    },
+    sessionModes: {
+      applyPermissionFallback() {
+        effects++;
+      },
+      publishFallbackWarning() {
+        effects++;
+      },
+    },
+  };
+  await expect(
+    claudeCallback.callback.call(owner, controller.signal, () => {
+      effects++;
+    }),
+  ).rejects.toThrow("Tool use aborted");
+  expect(effects).toBe(0);
+});
+
+it("Claude callback positive control reaches decoding and fallback with synthetic effects only", async () => {
+  const effects = [];
+  const owner = {
+    async requestPermissionFromClient() {
+      return { optionId: "test:offered" };
+    },
+    sessionModes: {
+      applyPermissionFallback(_session, permissionResult) {
+        effects.push("fallback");
+        return { permissionResult, fallbackApplied: true };
+      },
+      async publishFallbackWarning() {
+        effects.push("warning");
+      },
+    },
+  };
+  const result = await claudeCallback.callback.call(owner, new AbortController().signal, () => {
+    effects.push("decode");
+    return { permissionResult: { behavior: "allow" } };
+  });
+  expect(effects).toEqual(["decode", "fallback", "warning"]);
+  expect(result).toEqual({ behavior: "allow" });
+});
+
+it("preserves the scoped #713 feasibility classifications without installed evidence", () => {
+  expect(Object.fromEntries(pins.providers.map((provider) => [provider.id, provider.feasibility]))).toEqual({
+    claude: "unknown",
+    codex: "no-go-current-strict-hook-and-exact-command-route",
+    pi: "no-go-current-generic-ui-as-authorization",
+    gemini: "no-go-current-strict-projection",
+  });
+  expect(pins.providers.every((provider) => provider.installed === "unknown")).toBe(true);
 });

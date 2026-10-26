@@ -12,7 +12,8 @@
       "nextProof": "observe second native pre-hook and second effect under same revocable ORCA rule",
       "observationOrRequirement": "PreToolUse documented before permissions; installed callback count unknown",
       "evidenceLevel": "documented-not-installed-tested",
-      "documentation": "https://code.claude.com/docs/en/hooks"
+      "documentation": "https://code.claude.com/docs/en/hooks",
+      "canonicalAdmission": "coverage"
     },
     {
       "id": "claude-revoked",
@@ -22,7 +23,8 @@
       "sourceExcerpt": "claude-callback",
       "nextProof": "observe third hook, current generation and zero third effect",
       "observationOrRequirement": "native cache may still allow; ORCA must deny at every-dispatch hook",
-      "evidenceLevel": "planned-proof"
+      "evidenceLevel": "planned-proof",
+      "canonicalAdmission": "current-authority"
     },
     {
       "id": "claude-command-changed",
@@ -32,7 +34,8 @@
       "sourceExcerpt": "claude-decode",
       "nextProof": "compare final command at dispatch; recheck or refuse",
       "observationOrRequirement": "prior permit does not authorize changed input",
-      "evidenceLevel": "planned-proof"
+      "evidenceLevel": "planned-proof",
+      "canonicalAdmission": "final-provenance"
     },
     {
       "id": "claude-cwd-changed",
@@ -42,7 +45,8 @@
       "sourceExcerpt": "claude-callback",
       "nextProof": "native effective cwd source binding",
       "observationOrRequirement": "session cwd is not proof of effective cwd",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "effectiveCwd"
     },
     {
       "id": "claude-later-rewrite",
@@ -52,7 +56,8 @@
       "sourceExcerpt": "claude-callback",
       "nextProof": "freeze final input after all rewrites",
       "observationOrRequirement": "final-input provenance unknown",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "final-provenance"
     },
     {
       "id": "claude-concurrent",
@@ -62,7 +67,8 @@
       "sourceExcerpt": "claude-decode",
       "nextProof": "separate immutable invocation permits and atomic claim",
       "observationOrRequirement": "one permit cannot authorize both callbacks",
-      "evidenceLevel": "planned-proof"
+      "evidenceLevel": "planned-proof",
+      "canonicalAdmission": "invocation-binding"
     },
     {
       "id": "claude-cancel-late",
@@ -72,7 +78,8 @@
       "sourceExcerpt": "claude-callback",
       "nextProof": "observe no late policy mutation or effect on selected installed tuple",
       "observationOrRequirement": "adapter checks signal.aborted before decoding answer",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "cancelled"
     },
     {
       "id": "claude-option-forged",
@@ -82,7 +89,8 @@
       "sourceExcerpt": "claude-decode",
       "nextProof": "source-function test only; installed closure correspondence unknown",
       "observationOrRequirement": "decoder throws before applying effects",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "option-membership"
     },
     {
       "id": "claude-checker-death",
@@ -93,7 +101,8 @@
       "nextProof": "pin protected onFailure:block support; verify missing process cannot continue",
       "observationOrRequirement": "command/HTTP failure block version/config dependent",
       "evidenceLevel": "documented-not-installed-tested",
-      "documentation": "https://code.claude.com/docs/en/hooks"
+      "documentation": "https://code.claude.com/docs/en/hooks",
+      "canonicalAdmission": "hook-error-policy"
     },
     {
       "id": "claude-outage",
@@ -104,7 +113,8 @@
       "nextProof": "verify exact selected failure mode, bounded pending work and no effect",
       "observationOrRequirement": "SDK callback and command/HTTP timeout behavior differ",
       "evidenceLevel": "documented-not-installed-tested",
-      "documentation": "https://code.claude.com/docs/en/hooks"
+      "documentation": "https://code.claude.com/docs/en/hooks",
+      "canonicalAdmission": "hook-error-policy"
     },
     {
       "id": "claude-malformed",
@@ -115,7 +125,8 @@
       "nextProof": "closed checker framing and observed native refusal",
       "observationOrRequirement": "configured failure block does not make every no-decision success a policy permit",
       "evidenceLevel": "documented-not-installed-tested",
-      "documentation": "https://code.claude.com/docs/en/hooks"
+      "documentation": "https://code.claude.com/docs/en/hooks",
+      "canonicalAdmission": "hook-error-policy"
     },
     {
       "id": "claude-replay",
@@ -125,7 +136,8 @@
       "sourceExcerpt": "claude-decode",
       "nextProof": "preserve #594 seven-field lifetime/original lease; no redelivery",
       "observationOrRequirement": "prior callback cannot authorize another invocation",
-      "evidenceLevel": "planned-proof"
+      "evidenceLevel": "planned-proof",
+      "canonicalAdmission": "cancelled"
     },
     {
       "id": "codex-ask",
@@ -135,7 +147,8 @@
       "sourceExcerpt": "codex-ask-test",
       "nextProof": "native supported fail-closed require-human semantics",
       "observationOrRequirement": "upstream pinned test marks Failed with should_block false",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "hook-error-policy"
     },
     {
       "id": "codex-malformed",
@@ -145,7 +158,8 @@
       "sourceExcerpt": "codex-parser",
       "nextProof": "native failure must stop named dispatch",
       "observationOrRequirement": "parser marks Failed without setting should_block",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "hook-error-policy"
     },
     {
       "id": "codex-exit2-empty",
@@ -155,7 +169,8 @@
       "sourceExcerpt": "codex-parser",
       "nextProof": "control-capable handler and actual enforced deny",
       "observationOrRequirement": "failed hook; not blocking in reviewed parser",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "hook-error-policy"
     },
     {
       "id": "codex-last-rewrite",
@@ -165,7 +180,8 @@
       "sourceExcerpt": "codex-rewrite",
       "nextProof": "check final selected rewrite after all hooks",
       "observationOrRequirement": "latest completion supplies updated input",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "final-provenance"
     },
     {
       "id": "codex-stdin",
@@ -176,7 +192,8 @@
       "nextProof": "separate interactive session executor boundary",
       "observationOrRequirement": "documented no additional PreToolUse",
       "evidenceLevel": "documented-not-installed-tested",
-      "documentation": "https://learn.chatgpt.com/docs/hooks#tool-coverage"
+      "documentation": "https://learn.chatgpt.com/docs/hooks#tool-coverage",
+      "canonicalAdmission": "coverage"
     },
     {
       "id": "codex-hosted",
@@ -187,7 +204,8 @@
       "nextProof": "independent boundary or reject strict profile admission",
       "observationOrRequirement": "documented local-hook exclusions",
       "evidenceLevel": "documented-not-installed-tested",
-      "documentation": "https://learn.chatgpt.com/docs/hooks#tool-coverage"
+      "documentation": "https://learn.chatgpt.com/docs/hooks#tool-coverage",
+      "canonicalAdmission": "coverage"
     },
     {
       "id": "codex-profile",
@@ -198,7 +216,8 @@
       "nextProof": "authoritative native offered one-command effect; no kind-based inference",
       "observationOrRequirement": "source-reviewed #594 mapping grants a turn",
       "evidenceLevel": "source-reviewed-not-installed-tested",
-      "priorResearch": "docs/implementation/594-provider-evidence-contract.md"
+      "priorResearch": "docs/implementation/594-provider-evidence-contract.md",
+      "canonicalAdmission": "option-effect"
     },
     {
       "id": "pi-later-mutation",
@@ -208,7 +227,8 @@
       "sourceExcerpt": "pi-emit",
       "nextProof": "move check after all handlers and native transforms",
       "observationOrRequirement": "runner shares mutable event across handlers",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "final-provenance"
     },
     {
       "id": "pi-block",
@@ -218,7 +238,8 @@
       "sourceExcerpt": "pi-emit",
       "nextProof": "preserve native block seam at final boundary",
       "observationOrRequirement": "runner returns immediately; later handler is not reached",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "coverage"
     },
     {
       "id": "pi-throw",
@@ -228,7 +249,8 @@
       "sourceExcerpt": "pi-dispatch",
       "nextProof": "verify selected custom/native operations preserve block",
       "observationOrRequirement": "runner propagates; AgentSession rethrows to block",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "hook-error-policy"
     },
     {
       "id": "pi-missing-hook",
@@ -238,7 +260,8 @@
       "sourceExcerpt": "pi-emit",
       "nextProof": "protected hook presence/negotiation and fail-closed admission",
       "observationOrRequirement": "no handler yields undefined, no decision",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "negotiatedHook"
     },
     {
       "id": "pi-prefix",
@@ -248,7 +271,8 @@
       "sourceExcerpt": "pi-resolve",
       "nextProof": "bind resolvedCommand before execution",
       "observationOrRequirement": "reviewed command string differs from resolved command",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "final-provenance"
     },
     {
       "id": "pi-spawnhook",
@@ -258,7 +282,8 @@
       "sourceExcerpt": "pi-spawn",
       "nextProof": "check final spawnContext and selected operations",
       "observationOrRequirement": "spawn context may differ after early hook",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "final-provenance"
     },
     {
       "id": "pi-ui-choice",
@@ -268,7 +293,8 @@
       "sourceExcerpt": "pi-ui",
       "nextProof": "typed native action, offered effect and callback binding",
       "observationOrRequirement": "pi-ui identity and kind other; not typed command authorization",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "option-effect"
     },
     {
       "id": "gemini-projection",
@@ -278,7 +304,8 @@
       "sourceExcerpt": "gemini-permission",
       "nextProof": "source-backed complete safe projection from native closure",
       "observationOrRequirement": "request sends title/content/locations/kind",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "final-provenance"
     },
     {
       "id": "gemini-unoffered",
@@ -288,7 +315,8 @@
       "sourceExcerpt": "gemini-permission",
       "nextProof": "membership check before onConfirm/updatePolicy",
       "observationOrRequirement": "enum parser alone does not test actual offered membership",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "option-membership"
     },
     {
       "id": "gemini-late",
@@ -298,7 +326,8 @@
       "sourceExcerpt": "gemini-permission",
       "nextProof": "pending/abort check before policy effects",
       "observationOrRequirement": "onConfirm/updatePolicy called after await; cancellation qualification needed",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "cancelled"
     },
     {
       "id": "gemini-abort",
@@ -308,7 +337,8 @@
       "sourceExcerpt": "gemini-abort",
       "nextProof": "do not infer that canceled shell executes; independently observe effects later",
       "observationOrRequirement": "shell returns canceled before start",
-      "evidenceLevel": "source-reviewed-not-installed-tested"
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "canonicalAdmission": "cancelled"
     },
     {
       "id": "all-bypass",
@@ -318,7 +348,8 @@
       "sourceExcerpt": "pi-dispatch",
       "nextProof": "per-boundary executor qualification; strict admission refusal",
       "observationOrRequirement": "ACP asks do not prove complete mediation",
-      "evidenceLevel": "planned-proof"
+      "evidenceLevel": "planned-proof",
+      "canonicalAdmission": "coverage"
     },
     {
       "id": "all-config-drift",
@@ -328,7 +359,8 @@
       "sourceExcerpt": "claude-callback",
       "nextProof": "protected provenance and invalidate tuple on drift",
       "observationOrRequirement": "source facts no longer describe protected installed boundary",
-      "evidenceLevel": "planned-proof"
+      "evidenceLevel": "planned-proof",
+      "canonicalAdmission": "protectedConfiguration"
     }
   ]
 }
