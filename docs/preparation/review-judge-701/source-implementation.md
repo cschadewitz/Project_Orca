@@ -2,7 +2,9 @@
 
 The follow-up implements the accepted three-phase contract without another policy
 coordinator. Its baseline is main `24a53ccd5e4ed365222071c6f6b5748364535abe`
-with #708 and #712 merged. It consumes independently reviewed #716 at
+with #708 and #712 merged. Fresh main subsequently advanced to
+`95e9efca73299e77e1de89e59b8e9398a001747f` (#715 synthetic-read preparation),
+which was merged without rewriting history before final affected validation. It consumes independently reviewed #716 at
 `9688aa259a37216642ca36a5be144d234306700a`, preserving that commit's ancestry and
 attribution. The canonical vocabulary lives in
 [core](../../../packages/core/src/model/tool-execution-guards.ts); no types are copied.
@@ -103,10 +105,10 @@ was absent. No registry, integrity, frozen-lockfile or lifecycle checks were byp
 
 | Check | Result |
 | --- | --- |
-| `node_modules/.bin/vitest run packages/agents/test --maxWorkers=2` | 316 passed across 14 files, including 80 new adapter cases; none failed/skipped |
+| `node_modules/.bin/vitest run packages/agents/test --maxWorkers=2` | 323 passed across 15 files, including 80 new adapter cases; none failed/skipped |
 | `node --test docs/preparation/review-judge-701/offline.test.mjs` | 79 passed; none failed/skipped/cancelled/TODO |
 | `node_modules/.bin/tsc -b packages/agents/tsconfig.json` | Passed (affected core/agents source build) |
-| `node_modules/.bin/eslint .` | Passed with existing repository configuration |
+| `node_modules/.bin/eslint .` | Passed before the final main merge; final adapter and merged synthetic-read files also pass scoped ESLint |
 | CSS token guard | Passed |
 | Prettier on the two source files and test | Passed |
 | `git diff --check` and scoped Markdown links/encoding/fences | Passed |
