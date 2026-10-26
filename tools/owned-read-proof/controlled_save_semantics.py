@@ -230,7 +230,7 @@ def authenticate_connected_save(replay):
             'Save acceptance outside original authority/rule/lease currency')
     require(publication(replay, captures[0][2])[1] < proofs[0][2].creation_entry and
             publication(replay, proofs[0][2])[1] < obj.creation_entry and
-            publication(replay, proofs[0][2])[1] < locks[1].creation_entry < obj.creation_entry and
+            replay.journal_closes[2] < locks[1].creation_entry and
             replay.journal_closes[2] < policies[1].creation_entry and
             locks[1].removal_completion < proofs[1][2].creation_entry and
             publication(replay, proofs[1][2])[1] < replay.marks[1][4],

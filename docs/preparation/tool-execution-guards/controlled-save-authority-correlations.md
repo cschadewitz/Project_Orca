@@ -107,8 +107,9 @@ The Save verifier requires:
   `writer_closed` cannot substitute for the actual completion index.
   Token bytes must also equal the strict owner's exact compact JSON construction.
 * The original capture settles before the first attestation, which settles before
-  the protected approval. The actual Save journal append closes before saved
-  policy writing; the saved strict lock cycle settles before the refreshed
+  the protected approval. The actual Save journal append closes before the second
+  strict sidecar lock is created, and policy writing follows settled token close;
+  the saved strict lock cycle settles before the refreshed
   attestation, and that attestation settles before the Save phase acknowledgement.
 
 Initial sidecar bytes must be the exact source serialization of empty version-2
@@ -165,8 +166,8 @@ credentials or replaced lease; extra mutable histories; wrong-phase writes;
 physical alias/mode/owner substitution; pending token close; early token/directory
 removal; missing raw observations; and scalar/unknown-field aliases.
 
-The complete Python observer suite passes **244 tests** (6.858 s), including **22
-Save controls**. All 22 Save controls also pass under `python3 -O` (1.779 s).
+The complete Python observer suite passes **246 tests** (9.232 s), including **24
+Save controls**. All 24 Save controls also pass under `python3 -O` (1.145 s).
 `git diff --check` passes. The Node golden control uses only synthetic input and
 the native JSON serializer/hash functions; no actual credential, service or user
 workspace is provisioned. No TypeScript rebuild or provider acceptance is claimed.
@@ -180,3 +181,31 @@ git diff --check
 No producer/provider runtime, accepting gate, credential/access setting, shared
 lockfile, main branch or Mac path is changed. Parent owns independent review and
 integration. Raw traces, protected evidence and secrets remain unpublished.
+
+## Independent-review correction: approval precedes the sidecar mutex
+
+Independent source review found the initial #766 head
+`345384b557edfa2c0669c84574c43a1114391a2c` had reversed the approval/second-lock
+relationship. The bridge awaits `owner.recordApproval()` before calling
+`policy.createScopedRule()` (`scoped-permission-bridge.ts:195–200`). The latter
+acquires the strict policy mutex in `typed-sidecar.ts:375`. In contrast,
+`withSaveOwnership` holds the real lease around those operations; it does not
+acquire the sidecar mutex. The typed sidecar's `read/noPendingWriter` also refuses
+an existing strict lock during the approval's current-facts checks.
+
+The three inspected source files equal exact producer pin `557f62f` byte-for-byte.
+The corrected predicate is actual Save journal close **before** second sidecar
+lock creation. The preceding delivery verifier already requires protected
+approval publication before that journal append. Settled token close must still
+precede policy writing, with all existing write/rename/token-unlink/directory-
+removal checks retained. No successful child flag supplies the ordering.
+
+The source-ordered, reauthenticated positive uses approval publication through
+raw index 470, public append/close at 500/510, second lock creation at 512 and
+policy writer creation at 520. It failed before the correction with
+`Save attestation/approval/journal/policy/refresh causal order differs` and now
+passes with `authority: none`. Separate reauthenticated negatives retain a valid
+strict lock cycle and journal-close-before-policy-write while starting the mutex
+before approval (451) or before public approval closes (507); both refuse. This
+corrects the initial synthetic schedule rather than treating it as source truth.
+It adds no connected release or accepting-path claim.

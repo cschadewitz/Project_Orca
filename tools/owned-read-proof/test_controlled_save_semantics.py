@@ -76,7 +76,7 @@ class SaveFixture(Fixture):
         r.paths[self.path] = self.saved
         r.objects = [self.initial, self.saved]
         self.lock_objects = []
-        for i, times in enumerate([(60, 61, 62, 63, 73, 74), (451, 452, 453, 454, 560, 570)]):
+        for i, times in enumerate([(60, 61, 62, 63, 73, 74), (512, 513, 514, 515, 560, 570)]):
             dc, tc, tw, te, tr, dr = times
             lock = self.path + '.lock'
             directory = Object('lock-directory', stat.S_IFDIR | 0o755, set(), physical=(0, 1, 700+i),
@@ -142,6 +142,32 @@ class SaveAuthorityControls(unittest.TestCase):
         self.assertEqual(result['persistenceReview'], 'distinct-source-designated-reviewer')
         self.assertEqual(result['sidecarPublications'], 2)
         self.assertEqual(result['saveResourceReads'], result['saveAnswers'], 0)
+
+    def test_source_order_approval_completion_precedes_second_sidecar_lock(self):
+        f = SaveFixture()
+        approval = f.objects[uid(42)]
+        lock = f.lock_objects[1][0]
+        self.assertLess(approval.durable_publication_completion, f.replay.journal_entries[2])
+        self.assertLess(f.replay.journal_entries[2], f.replay.journal_closes[2])
+        self.assertLess(f.replay.journal_closes[2], lock.creation_entry)
+        self.assertLess(lock.creation_entry, f.saved.creation_entry)
+        self.assertEqual(self.result(f)['authority'], 'none')
+
+    def test_reversed_or_incomplete_public_approval_order_cannot_start_sidecar_lock(self):
+        for indices in [(451, 452, 453, 454), (507, 508, 509, 511)]:
+            f = SaveFixture()
+            directory, token = f.lock_objects[1]
+            dc, tc, tw, te = indices
+            directory.creation_entry = directory.creation_completion = dc
+            token.creation_entry = token.creation_completion = tc
+            token.last_write_completion = tw
+            token.writer_close_entry = token.writer_close_completion = te
+            # Keep the full strict cycle and journal-close-before-policy-write
+            # relationships valid; only bridge approval/lock ordering is wrong.
+            self.assertLess(te, f.saved.creation_entry)
+            self.assertLess(f.replay.journal_closes[2], f.saved.creation_entry)
+            with self.subTest(indices=indices), self.assertRaisesRegex(RuntimeError, 'Save attestation/approval/journal/policy/refresh'):
+                self.result(f)
 
     def test_preceding_correlation_only_fixture_is_not_valid_save_authority(self):
         with self.assertRaises(RuntimeError):
