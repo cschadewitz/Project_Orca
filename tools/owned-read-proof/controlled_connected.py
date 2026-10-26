@@ -120,7 +120,8 @@ class ConnectedDesignation:
 class ConnectedKernelReplay(Replay):
     """Offline extension only. Full base replay still sees every event/interval.
 
-    It adds only the exact journal family. No root exemption, passive-wait rule,
+    It adds the exact journal family and finite sidecar publication lineage.
+    No root exemption, passive-wait rule,
     notification proof, namespace/physical/clock/byte bound is replaced. This
     does not authenticate Save or make the final-ack diagnostic delivery authority.
     """
@@ -129,6 +130,7 @@ class ConnectedKernelReplay(Replay):
         designation.bind(original)
         self.designation = designation
         self.journal_records, self.journal_closes, self.journal_tokens = [], [], set()
+        self.journal_entries = []
         super().__init__(original)
 
     @property
@@ -198,6 +200,27 @@ class ConnectedKernelReplay(Replay):
             return 'lock-token'
         return super().family(path)
 
+    def fresh_writer(self, path, family, entered):
+        if family != 'sidecar-temp':
+            return super().fresh_writer(path, family, entered)
+        require(path == self.base + '/workspace/orca.permissions.json.' + str(self.leader) + '.tmp' and
+                self.active_phase() == 'save' and path not in self.paths, 'sidecar temporary outside exact Save lineage')
+        final = self.base + '/workspace/orca.permissions.json'
+        previous = [o for o in self.objects if o.publication_path == final]
+        if not previous:
+            return super().fresh_writer(path, family, entered)
+        require(len(previous) == 1, 'more than initial and saved sidecar publications')
+        obj = previous[0]
+        require(obj.physical is not None and obj.names == {final} and self.paths.get(final) is obj and
+                obj.publication_temporary_path == path and obj.publication_method == 'rename' and
+                type(obj.writer_close_completion) is int and type(obj.publication_entry) is int and
+                type(obj.publication_completion) is int and
+                obj.writer_close_completion < obj.publication_entry <= obj.publication_completion < entered,
+                'sidecar temporary reuse before original physical publication settles')
+        # Source uses the same PID temporary basename for initial enrollment and
+        # Save. O_EXCL and base alias checks still create a separate physical inode.
+        return True
+
     def lock_owner(self, before_entry):
         root = self.journal_path + '.lock'
         require(root in self.paths, 'journal append without original lock directory')
@@ -262,7 +285,7 @@ class ConnectedKernelReplay(Replay):
             require(payload['requestId'] == self.journal_records[0]['payload']['requestId'] and payload['answer'] == 'once' and
                     type(payload['actor']) is dict and set(payload['actor']) == {'principalId', 'credentialId'} and
                     payload['actor']['principalId'] == 'controlled-test-operator' and
-                    type(payload['actor']['credentialId']) is str and re.fullmatch(UUID, payload['actor']['credentialId']),
+                    type(payload['actor']['credentialId']) is str and re.fullmatch(r'[A-Za-z0-9_-]{12}', payload['actor']['credentialId']),
                     'answer not original once/operator projection')
         return value
 
@@ -315,6 +338,7 @@ class ConnectedKernelReplay(Replay):
                 value = self.journal_record(string(args[1]))
                 super().event(record)
                 self.journal_records.append(value)
+                self.journal_entries.append(entered)
                 handle.journal_writes += 1
                 return
             require(handle.journal_writes == 1, 'journal append closed without complete record')

@@ -193,6 +193,9 @@ class Replay:
     def evidence_record(self):
         return 'controlled-bootstrap-kernel-evidence'
 
+    def fresh_writer(self, path, family, entered):
+        return path not in self.used_paths
+
     def add_original(self, path, value, data, family):
         dev, ino, mode, uid, gid = value
         obj = Object(family, mode, {path}, data, (os.major(dev), os.minor(dev), ino), uid, gid)
@@ -670,7 +673,7 @@ class Replay:
             number, flags = positive_result(result), set(args[2].split('|'))
             require(number not in self.handles, 'open replaces unclosed descriptor')
             if flags & {'O_WRONLY', 'O_RDWR', 'O_CREAT', 'O_APPEND', 'O_TRUNC'}:
-                require(path not in self.used_paths and family in {'control-record', 'sidecar-temp', 'credentials-temp',
+                require(self.fresh_writer(path, family, entered) and family in {'control-record', 'sidecar-temp', 'credentials-temp',
                         'lease-temp', 'protected-temp', 'lock-token', 'resource'}, 'unknown/nonfresh private writer')
                 exclusive = family not in {'credentials-temp', 'lease-temp'}
                 expected = {'O_WRONLY', 'O_CREAT', 'O_CLOEXEC'} | ({'O_EXCL'} if exclusive else set())

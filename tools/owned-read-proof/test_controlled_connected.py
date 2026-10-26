@@ -29,7 +29,7 @@ def raw(seq):
         {'stepRunId': 'controlled-step', 'sessionId': HUMAN['sessionId'], 'title': 'create a scoped rule',
          'decision': 'scoped-rule-save-accepted', 'scopedApprovalRef': U},
         {'stepRunId': 'controlled-step', 'requestId': 'hi_' + '0' * 26, 'answer': 'once',
-         'actor': {'principalId': 'controlled-test-operator', 'credentialId': U}},
+         'actor': {'principalId': 'controlled-test-operator', 'credentialId': 'operator1234'}},
     ][seq]
     return {'type': ['human.requested', 'step.waiting', 'agent.permission', 'human.answered'][seq],
             'runId': 'controlled', 'payload': copy.deepcopy(payload),
@@ -55,6 +55,7 @@ def replay():
     r.threads, r.settled, r.execs = {10, 11}, set(), 1
     r.counts, r.used_paths, r.total_written = Counter(), set(), 0
     r.journal_records, r.journal_closes, r.journal_tokens = [], [], set()
+    r.journal_entries = []
     r.open_intervals, r.descriptor_intervals, r.pending_intervals = [], [], []
     r.entry_times = {}
     return r
@@ -297,6 +298,14 @@ class JournalControls(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'sequence/type/run'):
             r.journal_record(encoded(raw(3)))
 
+    def test_answer_credential_uses_source_base64url_identity_not_uuid(self):
+        r = self.parser(3)
+        self.assertEqual(r.journal_record(encoded(raw(3)))['payload']['actor']['credentialId'], 'operator1234')
+        value = raw(3)
+        value['payload']['actor']['credentialId'] = U
+        with self.assertRaisesRegex(RuntimeError, 'operator projection'):
+            r.journal_record(encoded(value))
+
     def test_gaps_type_aliases_reorder_extra_fields_and_references_refuse(self):
         for i in range(4):
             changes = [lambda v: v.update(seq=True), lambda v: v.update(seq=float(i)),
@@ -502,6 +511,53 @@ class JournalControls(unittest.TestCase):
             with self.subTest(completion=completion), self.assertRaisesRegex(
                     RuntimeError, 'token close completion must precede journal operation'):
                 self.opening(r, entered=10)
+
+
+class ConnectedSidecarPublicationControls(unittest.TestCase):
+    def previous(self):
+        r = replay()
+        mark(r, 1)
+        final = r.base + '/workspace/orca.permissions.json'
+        temporary = final + '.10.tmp'
+        parent = r.base + '/workspace'
+        r.paths[parent] = Object('original-directory', stat.S_IFDIR | 0o700, {parent})
+        obj = Object('sidecar-temp', stat.S_IFREG | 0o600, {final}, b'initial', physical=(0, 1, 42),
+                     writer_closed=True, writer_close_completion=5, publication_entry=6, publication_completion=7,
+                     publication_path=final, publication_temporary_path=temporary, publication_method='rename')
+        r.paths[final], r.objects = obj, [obj]
+        r.used_paths.add(temporary)
+        return r, obj, temporary
+
+    def opening(self, r, path):
+        r.event((11, 'openat', ['AT_FDCWD', json.dumps(path),
+                 'O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC', '0600'], '20', 10, 10))
+
+    def test_second_source_pid_temporary_creates_distinct_exclusive_lineage(self):
+        r, previous, path = self.previous()
+        self.opening(r, path)
+        self.assertIsNot(r.paths[path], previous)
+        self.assertIs(r.paths[previous.publication_path], previous)
+        self.assertIn('O_EXCL', r.handles[20].flags)
+
+    def test_bootstrap_still_refuses_any_reused_writer_path(self):
+        r, _, path = self.previous()
+        self.assertFalse(Replay.fresh_writer(r, path, 'sidecar-temp', 10))
+
+    def test_third_publication_wrong_phase_missing_physical_and_unfinished_previous_refuse(self):
+        for change in (lambda r, o: r.objects.append(copy.copy(o)),
+                       lambda r, o: mark(r, 3), lambda r, o: setattr(o, 'physical', None),
+                       lambda r, o: setattr(o, 'writer_close_completion', 8),
+                       lambda r, o: setattr(o, 'publication_completion', 11)):
+            r, previous, path = self.previous()
+            change(r, previous)
+            with self.assertRaises(RuntimeError):
+                self.opening(r, path)
+
+    def test_sidecar_reuse_does_not_allow_other_private_temporary_reuse(self):
+        r, _, _ = self.previous()
+        path = r.base + '/credentials.json.10.12345678.tmp'
+        r.used_paths.add(path)
+        self.assertFalse(r.fresh_writer(path, 'credentials-temp', 10))
 
 
 if __name__ == '__main__':
