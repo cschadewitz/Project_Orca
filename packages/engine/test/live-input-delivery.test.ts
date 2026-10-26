@@ -1,6 +1,6 @@
 /** Original callback capability tests. Real registry/lease/event algorithms; no build qualification or execution. */
 import { expect, it } from "vitest";
-import { systemClock } from "@orca/core";
+import { systemClock, type OrcaEventInput } from "@orca/core";
 import { memoryStores } from "@orca/store";
 import { askHumanInput, type HumanInputQuery } from "../src/human-input.js";
 import {
@@ -25,12 +25,12 @@ async function fixture() {
     kind: "permission",
     question: "Read the owned disposable bytes once?",
     options: ["once", "deny"],
-    emit: (event) => stores.events.append({ ...event, runId: "run" }),
+    emit: (event) => stores.events.append({ ...event, runId: "run" } as OrcaEventInput),
     live: {
       identity: { instanceId: "boot", sessionId: "session", turnId: "turn", invocationId: "invocation" },
       signal: abort.signal,
       withOwnership: (work) => stores.leases.withOwnership(lease, work),
-      emitOwned: (event) => stores.events.append({ ...event, runId: "run" }),
+      emitOwned: (event) => stores.events.append({ ...event, runId: "run" } as OrcaEventInput),
     },
     onRequested: (value) => {
       query = value;
