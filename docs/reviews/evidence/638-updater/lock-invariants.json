@@ -1,0 +1,8 @@
+{
+  "base": "32f92cc16b9faf1748059e930c3f77b3934151ae",
+  "reverseSubstitutionReproducesWholeLock": true,
+  "bootstrapDocumentUnchanged": true,
+  "lifecyclePolicyUnchanged": true,
+  "baseLockSHA256": "58aa31de7b8d9c43bf56a2e18fddf31fed88a99d0e2de69bc036bb61b1a37035",
+  "candidateLockSHA256": "232285c4ae83718c82c5513731622ea54e391d74f4dded0bffa8177f449065cd"
+}

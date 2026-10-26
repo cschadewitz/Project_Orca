@@ -93,6 +93,13 @@ export default tseslint.config(
     },
   },
   {
+    // Inactive guard contract consumers have their own no-emit project; retain all type-aware rules.
+    files: ["docs/preparation/tool-execution-guards/*.ts"],
+    languageOptions: {
+      parserOptions: { project: "./docs/preparation/tool-execution-guards/tsconfig.json", tsconfigRootDir: repoRoot },
+    },
+  },
+  {
     // Plain JS tooling, including documentation validators, is outside the TS project.
     files: ["**/*.{js,mjs,cjs}"],
     extends: [tseslint.configs.disableTypeChecked],

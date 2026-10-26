@@ -1,0 +1,42 @@
+[
+  {
+    "url": "https://registry.npmjs.org/@anthropic-ai/claude-code/2.1.309",
+    "checkedAt": "2026-10-26",
+    "name": "@anthropic-ai/claude-code",
+    "version": "2.1.309",
+    "gitHead": null,
+    "integrity": "sha512-+lBYZRuXOJpiKJcRv/CK7gF+5UFNWyJE7hSxkgGUKDZOWgANl9MAabfTkrJk183Tp3B0Nv4xF/DU1t0BaKXOPw==",
+    "shasum": "f9e48d703c778c2814136cf492918f49f2c4bbfb",
+    "optionalDependencies": {
+      "@anthropic-ai/claude-code-linux-x64": "2.1.309",
+      "@anthropic-ai/claude-code-win32-x64": "2.1.309",
+      "@anthropic-ai/claude-code-darwin-x64": "2.1.309",
+      "@anthropic-ai/claude-code-linux-arm64": "2.1.309",
+      "@anthropic-ai/claude-code-win32-arm64": "2.1.309",
+      "@anthropic-ai/claude-code-darwin-arm64": "2.1.309",
+      "@anthropic-ai/claude-code-linux-x64-musl": "2.1.309",
+      "@anthropic-ai/claude-code-linux-arm64-musl": "2.1.309"
+    },
+    "evidence": "metadata only; no tarball or native executable downloaded"
+  },
+  {
+    "url": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/0.3.309",
+    "checkedAt": "2026-10-26",
+    "name": "@anthropic-ai/claude-agent-sdk",
+    "version": "0.3.309",
+    "gitHead": null,
+    "integrity": "sha512-Tou0fXBkxKJDcgT09v3Iv/Jd7bNgapgfAiHxGPctAADPFQhidfhZbcv7at1cVL0Lon5sbs+OzP/pEOigw2TI0A==",
+    "shasum": "8806fb5d1de8b375e4aea80d806def7570863ce6",
+    "optionalDependencies": {
+      "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.309",
+      "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.309",
+      "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.309",
+      "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.309",
+      "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.309",
+      "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.309",
+      "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.309",
+      "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.309"
+    },
+    "evidence": "metadata only; no tarball or native executable downloaded"
+  }
+]

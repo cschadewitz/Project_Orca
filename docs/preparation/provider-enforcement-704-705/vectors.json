@@ -1,0 +1,334 @@
+{
+  "format": "orca.provider-qualification-vectors/1",
+  "execution": "none",
+  "authority": "rehearsal-data-only",
+  "cases": [
+    {
+      "id": "claude-cached",
+      "provider": "claude",
+      "input": "native permission remembered; identical typed call",
+      "strictDisposition": "unknown",
+      "sourceExcerpt": "claude-callback",
+      "nextProof": "observe second native pre-hook and second effect under same revocable ORCA rule",
+      "observationOrRequirement": "PreToolUse documented before permissions; installed callback count unknown",
+      "evidenceLevel": "documented-not-installed-tested",
+      "documentation": "https://code.claude.com/docs/en/hooks"
+    },
+    {
+      "id": "claude-revoked",
+      "provider": "claude",
+      "input": "revoke ORCA rule before third identical call",
+      "strictDisposition": "block",
+      "sourceExcerpt": "claude-callback",
+      "nextProof": "observe third hook, current generation and zero third effect",
+      "observationOrRequirement": "native cache may still allow; ORCA must deny at every-dispatch hook",
+      "evidenceLevel": "planned-proof"
+    },
+    {
+      "id": "claude-command-changed",
+      "provider": "claude",
+      "input": "command changes after policy snapshot",
+      "strictDisposition": "block",
+      "sourceExcerpt": "claude-decode",
+      "nextProof": "compare final command at dispatch; recheck or refuse",
+      "observationOrRequirement": "prior permit does not authorize changed input",
+      "evidenceLevel": "planned-proof"
+    },
+    {
+      "id": "claude-cwd-changed",
+      "provider": "claude",
+      "input": "session cwd A, final execution cwd B",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "claude-callback",
+      "nextProof": "native effective cwd source binding",
+      "observationOrRequirement": "session cwd is not proof of effective cwd",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "claude-later-rewrite",
+      "provider": "claude",
+      "input": "later hook rewrites input after ORCA check",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "claude-callback",
+      "nextProof": "freeze final input after all rewrites",
+      "observationOrRequirement": "final-input provenance unknown",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "claude-concurrent",
+      "provider": "claude",
+      "input": "two identical inputs, distinct toolUseID",
+      "strictDisposition": "block",
+      "sourceExcerpt": "claude-decode",
+      "nextProof": "separate immutable invocation permits and atomic claim",
+      "observationOrRequirement": "one permit cannot authorize both callbacks",
+      "evidenceLevel": "planned-proof"
+    },
+    {
+      "id": "claude-cancel-late",
+      "provider": "claude",
+      "input": "abort while ACP permission await is pending",
+      "strictDisposition": "block",
+      "sourceExcerpt": "claude-callback",
+      "nextProof": "observe no late policy mutation or effect on selected installed tuple",
+      "observationOrRequirement": "adapter checks signal.aborted before decoding answer",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "claude-option-forged",
+      "provider": "claude",
+      "input": "selected option ID absent from offeredOptions",
+      "strictDisposition": "block",
+      "sourceExcerpt": "claude-decode",
+      "nextProof": "source-function test only; installed closure correspondence unknown",
+      "observationOrRequirement": "decoder throws before applying effects",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "claude-checker-death",
+      "provider": "claude",
+      "input": "checker missing or crashed",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "claude-callback",
+      "nextProof": "pin protected onFailure:block support; verify missing process cannot continue",
+      "observationOrRequirement": "command/HTTP failure block version/config dependent",
+      "evidenceLevel": "documented-not-installed-tested",
+      "documentation": "https://code.claude.com/docs/en/hooks"
+    },
+    {
+      "id": "claude-outage",
+      "provider": "claude",
+      "input": "checker unavailable or deadline exceeded",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "claude-callback",
+      "nextProof": "verify exact selected failure mode, bounded pending work and no effect",
+      "observationOrRequirement": "SDK callback and command/HTTP timeout behavior differ",
+      "evidenceLevel": "documented-not-installed-tested",
+      "documentation": "https://code.claude.com/docs/en/hooks"
+    },
+    {
+      "id": "claude-malformed",
+      "provider": "claude",
+      "input": "invalid JSON, empty output or plain text",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "claude-callback",
+      "nextProof": "closed checker framing and observed native refusal",
+      "observationOrRequirement": "configured failure block does not make every no-decision success a policy permit",
+      "evidenceLevel": "documented-not-installed-tested",
+      "documentation": "https://code.claude.com/docs/en/hooks"
+    },
+    {
+      "id": "claude-replay",
+      "provider": "claude",
+      "input": "repeat result after cancellation or owner restart",
+      "strictDisposition": "block",
+      "sourceExcerpt": "claude-decode",
+      "nextProof": "preserve #594 seven-field lifetime/original lease; no redelivery",
+      "observationOrRequirement": "prior callback cannot authorize another invocation",
+      "evidenceLevel": "planned-proof"
+    },
+    {
+      "id": "codex-ask",
+      "provider": "codex",
+      "input": "PreToolUse permissionDecision ask",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "codex-ask-test",
+      "nextProof": "native supported fail-closed require-human semantics",
+      "observationOrRequirement": "upstream pinned test marks Failed with should_block false",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "codex-malformed",
+      "provider": "codex",
+      "input": "malformed JSON or hook runtime error",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "codex-parser",
+      "nextProof": "native failure must stop named dispatch",
+      "observationOrRequirement": "parser marks Failed without setting should_block",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "codex-exit2-empty",
+      "provider": "codex",
+      "input": "exit 2 without nonempty stderr",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "codex-parser",
+      "nextProof": "control-capable handler and actual enforced deny",
+      "observationOrRequirement": "failed hook; not blocking in reviewed parser",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "codex-last-rewrite",
+      "provider": "codex",
+      "input": "two allow rewrites finish in reverse configured order",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "codex-rewrite",
+      "nextProof": "check final selected rewrite after all hooks",
+      "observationOrRequirement": "latest completion supplies updated input",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "codex-stdin",
+      "provider": "codex",
+      "input": "write_stdin sends later interactive input",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "codex-parser",
+      "nextProof": "separate interactive session executor boundary",
+      "observationOrRequirement": "documented no additional PreToolUse",
+      "evidenceLevel": "documented-not-installed-tested",
+      "documentation": "https://learn.chatgpt.com/docs/hooks#tool-coverage"
+    },
+    {
+      "id": "codex-hosted",
+      "provider": "codex",
+      "input": "hosted or specialized tool dispatch",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "codex-parser",
+      "nextProof": "independent boundary or reject strict profile admission",
+      "observationOrRequirement": "documented local-hook exclusions",
+      "evidenceLevel": "documented-not-installed-tested",
+      "documentation": "https://learn.chatgpt.com/docs/hooks#tool-coverage"
+    },
+    {
+      "id": "codex-profile",
+      "provider": "codex",
+      "input": "bridge allow_once selected for profile grant",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "codex-parser",
+      "nextProof": "authoritative native offered one-command effect; no kind-based inference",
+      "observationOrRequirement": "source-reviewed #594 mapping grants a turn",
+      "evidenceLevel": "source-reviewed-not-installed-tested",
+      "priorResearch": "docs/implementation/594-provider-evidence-contract.md"
+    },
+    {
+      "id": "pi-later-mutation",
+      "provider": "pi",
+      "input": "later extension mutates event.input after earlier check",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "pi-emit",
+      "nextProof": "move check after all handlers and native transforms",
+      "observationOrRequirement": "runner shares mutable event across handlers",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "pi-block",
+      "provider": "pi",
+      "input": "earlier tool_call handler returns block true",
+      "strictDisposition": "block",
+      "sourceExcerpt": "pi-emit",
+      "nextProof": "preserve native block seam at final boundary",
+      "observationOrRequirement": "runner returns immediately; later handler is not reached",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "pi-throw",
+      "provider": "pi",
+      "input": "tool_call handler throws",
+      "strictDisposition": "block",
+      "sourceExcerpt": "pi-dispatch",
+      "nextProof": "verify selected custom/native operations preserve block",
+      "observationOrRequirement": "runner propagates; AgentSession rethrows to block",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "pi-missing-hook",
+      "provider": "pi",
+      "input": "no installed tool_call handlers",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "pi-emit",
+      "nextProof": "protected hook presence/negotiation and fail-closed admission",
+      "observationOrRequirement": "no handler yields undefined, no decision",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "pi-prefix",
+      "provider": "pi",
+      "input": "commandPrefix adds text after tool_call",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "pi-resolve",
+      "nextProof": "bind resolvedCommand before execution",
+      "observationOrRequirement": "reviewed command string differs from resolved command",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "pi-spawnhook",
+      "provider": "pi",
+      "input": "spawnHook rewrites command/cwd/env",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "pi-spawn",
+      "nextProof": "check final spawnContext and selected operations",
+      "observationOrRequirement": "spawn context may differ after early hook",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "pi-ui-choice",
+      "provider": "pi",
+      "input": "generic UI select mapped as allow_once",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "pi-ui",
+      "nextProof": "typed native action, offered effect and callback binding",
+      "observationOrRequirement": "pi-ui identity and kind other; not typed command authorization",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "gemini-projection",
+      "provider": "gemini",
+      "input": "shell invocation has native command/cwd not in ACP projection",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "gemini-permission",
+      "nextProof": "source-backed complete safe projection from native closure",
+      "observationOrRequirement": "request sends title/content/locations/kind",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "gemini-unoffered",
+      "provider": "gemini",
+      "input": "valid native enum optionId absent from actual offered set",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "gemini-permission",
+      "nextProof": "membership check before onConfirm/updatePolicy",
+      "observationOrRequirement": "enum parser alone does not test actual offered membership",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "gemini-late",
+      "provider": "gemini",
+      "input": "permission answer arrives after abort",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "gemini-permission",
+      "nextProof": "pending/abort check before policy effects",
+      "observationOrRequirement": "onConfirm/updatePolicy called after await; cancellation qualification needed",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "gemini-abort",
+      "provider": "gemini",
+      "input": "shell signal already aborted at execute entry",
+      "strictDisposition": "block",
+      "sourceExcerpt": "gemini-abort",
+      "nextProof": "do not infer that canceled shell executes; independently observe effects later",
+      "observationOrRequirement": "shell returns canceled before start",
+      "evidenceLevel": "source-reviewed-not-installed-tested"
+    },
+    {
+      "id": "all-bypass",
+      "provider": "all",
+      "input": "client filesystem, alternate MCP, custom tool or subagent bypasses checked path",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "pi-dispatch",
+      "nextProof": "per-boundary executor qualification; strict admission refusal",
+      "observationOrRequirement": "ACP asks do not prove complete mediation",
+      "evidenceLevel": "planned-proof"
+    },
+    {
+      "id": "all-config-drift",
+      "provider": "all",
+      "input": "agent can modify hook/checker/policy or launcher drifts",
+      "strictDisposition": "unsupported",
+      "sourceExcerpt": "claude-callback",
+      "nextProof": "protected provenance and invalidate tuple on drift",
+      "observationOrRequirement": "source facts no longer describe protected installed boundary",
+      "evidenceLevel": "planned-proof"
+    }
+  ]
+}
