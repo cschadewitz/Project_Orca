@@ -111,6 +111,10 @@ class Object:
     notification_role: tuple | None = field(default=None, repr=False)
     notification_tainted: bool = False
     notification_overlaps: list = field(default_factory=list)
+    creation_entry: int | None = None
+    creation_path: str | None = None
+    removal_entry: int | None = None
+    removal_completion: int | None = None
 
 
 @dataclass
@@ -688,6 +692,7 @@ class Replay:
                 obj = Object(family, stat.S_IFREG | (int(mode, 8) & ~self.umask), {path})
                 obj.creation_entry = entered
                 obj.creation_completion = completed
+                obj.creation_path = path
                 self.paths[path] = obj
                 self.objects.append(obj)
                 self.used_paths.add(path)
@@ -750,6 +755,7 @@ class Replay:
                 require(args[1] == ('0700' if family == 'resource-directory' or path.endswith('/private-execution') else '0777'), 'mkdir mode')
                 require(str(Path(path).parent) in self.paths, 'mkdir parent absent')
                 obj = Object(family, stat.S_IFDIR | (int(args[1], 8) & ~self.umask), {path})
+                obj.creation_entry, obj.creation_completion, obj.creation_path = entered, completed, path
                 self.paths[path] = obj
                 self.objects.append(obj)
             elif call == 'chmod':
@@ -791,6 +797,7 @@ class Replay:
                 if obj.family == 'resource':
                     require(pid == self.leader and hasattr(obj, 'reader') and obj.writer_closed, 'resource unlink before readonly open')
                     obj.unlink_completion = completed
+                obj.removal_entry, obj.removal_completion = entered, completed
                 del self.paths[path]
                 obj.names.remove(path)
                 if obj.published and path == obj.publication_temporary_path:
@@ -799,6 +806,7 @@ class Replay:
             else:
                 require(obj is not None and obj.family in {'lock-directory', 'resource-directory'} and
                         not any(p.startswith(path + '/') for p in self.paths), 'rmdir before empty/private settlement')
+                obj.removal_entry, obj.removal_completion = entered, completed
                 del self.paths[path]
                 obj.names.remove(path)
             return
