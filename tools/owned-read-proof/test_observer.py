@@ -69,6 +69,25 @@ class ObserverTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.rejects(TRACE.replace(stat_line(0), stat_line(0) + '1 ' + value + '\n'))
 
+    def test_batched_transfer_untracked_alias_and_unknown_effects_refuse(self):
+        # Reproduced false zero-read result before the default-refusal correction.
+        transfer = ('1 socketpair(AF_UNIX, SOCK_DGRAM, 0, [30, 31]) = 0\n'
+            '1 sendmmsg(30, [{msg_hdr={msg_control=[{cmsg_level=SOL_SOCKET, cmsg_type=SCM_RIGHTS, cmsg_data=[19]}]}}], 1, 0) = 1\n'
+            '1 recvmmsg(31, [{msg_hdr={msg_control=[{cmsg_level=SOL_SOCKET, cmsg_type=SCM_RIGHTS, cmsg_data=[32]}]}}], 1, 0, NULL) = 1\n'
+            '1 read(0x20, 0x123, 0x4) = 0x4\n')
+        self.rejects(TRACE.replace(stat_line(0), stat_line(0) + transfer))
+        for call in ('sendmmsg(30, [], 1, 0) = 1', 'recvmmsg(31, [], 1, 0, NULL) = 1',
+                     'socketpair(AF_UNIX, SOCK_DGRAM, 0, [30, 31]) = 0',
+                     'dup(19) = 32', 'dup3(19, 32, 0) = 32',
+                     'fcntl(30, F_DUPFD_CLOEXEC, 32) = 32',
+                     'sendfile(1, 19, NULL, 4) = 4', 'splice(19, NULL, 30, NULL, 4, 0) = 4',
+                     'copy_file_range(19, NULL, 30, NULL, 4, 0) = 4',
+                     'io_setup(1, [123]) = 0', 'io_submit(123, 1, []) = 1',
+                     'read(0x20, 0x123, 0x4) = 0x4', 'ioctl(30, UNKNOWN_ALIAS_FACTORY, 32) = 0',
+                     'future_descriptor_effect(19, 32) = 0'):
+            with self.subTest(call=call):
+                self.rejects(TRACE.replace(stat_line(0), stat_line(0) + '1 ' + call + '\n'))
+
     def test_wrong_inode_or_open_flags_refuse(self):
         self.rejects(TRACE.replace(stat_line(0), stat_line(0, 43)))
         self.rejects(TRACE.replace('O_RDONLY|O_NOFOLLOW', 'O_RDWR|O_NOFOLLOW'))

@@ -164,11 +164,27 @@ FD_FIRST = set(('read readv write writev pread64 pwrite64 preadv preadv2 pwritev
     'epoll_ctl epoll_wait epoll_pwait epoll_pwait2 timerfd_settime timerfd_gettime').split())
 
 
+# Explicitly supported syscall vocabulary for this cooperative Linux/Node lane.
+# This is decoder scope, not a sandbox policy. A new runtime syscall requires
+# review of its descriptor/effect semantics before it can enter candidate evidence.
+SUPPORTED = set(('access arch_prctl brk capget clone clone3 close epoll_create1 epoll_ctl '
+    'epoll_pwait epoll_wait eventfd2 execve exit exit_group fcntl fstat futex getcwd getegid '
+    'geteuid getgid getpid getppid getrandom gettid getuid io_uring_setup ioctl madvise '
+    'mmap mprotect munmap mremap openat pipe2 prctl pread64 prlimit64 read readlink '
+    'rseq rt_sigaction rt_sigprocmask rt_sigreturn sched_getaffinity sched_getparam sched_getscheduler sched_yield '
+    'set_robust_list set_tid_address statx uname write writev readv lseek getdents64 '
+    'mkdir rmdir unlink rename renameat renameat2 fsync fdatasync ftruncate '
+    'newfstatat lstat stat clock_gettime clock_nanosleep nanosleep gettimeofday '
+    'fcntl64 fstatfs readlinkat faccessat faccessat2 statfs chmod fchmod umask '
+    'membarrier tgkill restart_syscall settled').split())
+
+
 def verify_trace(text, plan):
     """Reconstruct descriptor lineage; filename annotations never establish ownership."""
     if plan['serviceReads'] != 0:
         raise RuntimeError('candidate verifier has no positive authority')
-    table, directories, resources = {}, set(), []
+    table = {n: {'kind': 'inherited'} for n in (0, 1, 2, plan['lifetimeFd'])}
+    directories, resources = set(), []
     threads, settled, leader = set(), set(), None
     calibration, service_reads, execs, calibration_handles = [], [], 0, []
     calibration_started = False
@@ -177,6 +193,8 @@ def verify_trace(text, plan):
                  'io_uring_setup', 'io_uring_enter', 'io_uring_register', 'open_by_handle_at',
                  'pidfd_getfd', 'sendmsg', 'recvmsg', 'ptrace', 'process_vm_readv', 'process_vm_writev', 'close_range', 'sendfile', 'splice', 'tee', 'copy_file_range'}
     for pid, call, args, result in events(text):
+        if call not in SUPPORTED:
+            raise RuntimeError('unsupported syscall: ' + call)
         if call == 'execve':
             execs += 1
             if execs != 1 or string(args[0]).decode() != plan['node'] or result != '0':
@@ -209,6 +227,15 @@ def verify_trace(text, plan):
             threads.add(child)
         elif calibration_started and call in ('rename', 'renameat', 'renameat2', 'link', 'linkat', 'symlink', 'symlinkat', 'chmod', 'fchmod', 'truncate'):
             raise RuntimeError('unsupported post-calibration path mutation')
+        elif call in ('pipe2', 'eventfd2', 'epoll_create1'):
+            if not result.startswith('-1 '):
+                numbers = [int(n) for n in re.findall(r'\d+', args[0])] if call == 'pipe2' else [int(result)]
+                if call == 'pipe2' and (result != '0' or len(numbers) != 2):
+                    raise RuntimeError('ambiguous pipe creation')
+                for number in numbers:
+                    if number in table:
+                        raise RuntimeError('descriptor factory replaced existing descriptor')
+                    table[number] = {'kind': call}
         elif call == 'mkdir' and result == '0':
             if args[1] == '0700':
                 directories.add(string(args[0]).decode())
@@ -301,6 +328,10 @@ def verify_trace(text, plan):
             match = re.fullmatch(r'(0x[0-9a-f]+|[0-9]+)(?:<.*>)?', args[0]) if args and call in FD_FIRST else None
             number = fd(args[0]) if match else None
             obj = table.get(number)
+            if call in ('read', 'readv', 'write', 'writev', 'pread64', 'fcntl', 'ioctl') and obj is None and not result.startswith('-1 EBADF '):
+                raise RuntimeError('unknown descriptor effect: ' + call + repr(args))
+            if call == 'prctl' and args[0] != 'PR_SET_NAME':
+                raise RuntimeError('unsupported process control: ' + args[0])
             if (number == plan['lifetimeFd'] and call not in ('fstat', 'newfstatat', 'statx') and
                     not (call == 'fcntl' and args[1:] == ['F_SETFD', 'FD_CLOEXEC'] and result == '0')):
                 raise RuntimeError('unexpected lifetime operation: ' + call + repr(args))
@@ -332,6 +363,10 @@ def verify_trace(text, plan):
             if call in ('mmap', 'mmap2') and len(args) > 4:
                 if re.match(r'\d+', args[4]) and table.get(fd(args[4]), {}).get('kind') == 'resource':
                     raise RuntimeError('resource mapping')
+            if call == 'ioctl' and args[1] not in ('TCGETS', 'TIOCGWINSZ', 'FIONBIO', 'FIOCLEX'):
+                raise RuntimeError('unsupported ioctl control: ' + args[1])
+            if call in ('fcntl', 'fcntl64') and args[1] not in ('F_GETFD', 'F_SETFD', 'F_GETFL', 'F_SETFL'):
+                raise RuntimeError('unsupported descriptor control: ' + args[1])
             if call in ('dup2', 'dup3') and fd(args[1]) in table:
                 raise RuntimeError('descriptor replacement')
     if execs != 1 or threads != settled:

@@ -10,15 +10,17 @@
     "platform": "Linux"
   },
   "sourceBytes": {
-    "tools/owned-read-proof/run.py": "0301cf3364e8ad704235108d4fb2db0369d4b9fda97788f217e49e940aef93d0",
-    "tools/owned-read-proof/test_observer.py": "92b6b92e11f73830cdf2351caf3d9473ec72f607a7cbfe5b1114e37ef2d576de",
-    "tools/owned-read-proof/verify.py": "c99f7607147481e1977cf348dee44b2296ddd62925ae1e04b8e4f623140deb46",
+    "tools/owned-read-proof/run.py": "31f9a1739bfcce8bb268f786336835a1b8ced23400e2907f00756b73315d10e8",
+    "tools/owned-read-proof/test_observer.py": "0762abd7f11083551bb30c9f64b993b76d5aa1921bf9b489d19e920bc68b335c",
+    "tools/owned-read-proof/verify.py": "ae89cb23325092689ad5ac8b974eee2b49e884474cfbac2ac22502c25b1a947d",
     "tools/owned-read-proof/child.mjs": "fd364a612bdf419e1efdaf0dad1af3c1b1d03d5f43d65402446e34b631572baf",
+    "tools/owned-read-proof/test_batch_transfer.py": "14e2b01fe4157b5f0fe2fffbeb6ca8e4be35c6379265d6866d56fae5bacc5ede",
     "tools/owned-read-proof/test_cleanup.py": "f7bae206a60ab06463b204373ae35f18bc361a19a144aa021e37a3f39bbeed2a"
   },
   "tests": {
-    "mutationAndCleanup": 12,
-    "controlledExecutions": 8
+    "mutationAndCleanup": 14,
+    "controlledExecutions": 8,
+    "actualBatchedDescriptorTransfer": 1
   },
   "observations": [
     {
@@ -87,7 +89,7 @@
       "kernelVerifier": {
         "record": "candidate-negative-control",
         "rejected": true,
-        "reason": "RuntimeError: wrong descriptor positional effect: (['20', '\"spos\"', '4', '2'], {'path': '/tmp/orca-installed-proof-g6iq83xh/decoy', 'flags': {'O_RDONLY', 'O_CLOEXEC'}, 'closed': False})"
+        "reason": "RuntimeError: wrong descriptor positional effect: (['20', '\"spos\"', '4', '2'], {'path': '/tmp/orca-installed-proof-md1h4rx2/decoy', 'flags': {'O_RDONLY', 'O_CLOEXEC'}, 'closed': False})"
       },
       "producerPolicy": {
         "validAction": true,
@@ -117,7 +119,7 @@
       "kernelVerifier": {
         "record": "candidate-negative-control",
         "rejected": true,
-        "reason": "RuntimeError: unexpected process clone"
+        "reason": "RuntimeError: unsupported syscall: socketpair"
       },
       "producerPolicy": {
         "validAction": true,
@@ -133,5 +135,7 @@
     "original test inventory and unverified test owner identity",
     "raw calibration and injected reads are not service dispatch",
     "no positive qualified execution, protected Save, coverage upgrade or acceptance authority"
-  ]
+  ],
+  "supersedesInvalidatedHead": "19744f82572dcb43ff944d0fcafab2811b546d1b",
+  "correction": "Default refusal of unsupported syscalls; unknown descriptor effects and unsupported descriptor-control commands refuse. Actual sendmmsg/recvmmsg SCM_RIGHTS alias read reproduced; observed batched operations now reject."
 }

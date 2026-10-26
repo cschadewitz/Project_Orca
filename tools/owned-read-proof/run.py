@@ -225,7 +225,7 @@ def main():
                     expected = {'changed-image': 'changed image', 'root-replacement': 'changed root/lifetime',
                                 'lifetime-loss': 'lifetime descriptor closed', 'wrong-offset': 'calibration offset/length',
                                 'wrong-descriptor': 'wrong descriptor positional', 'service-read': 'unexpected service read',
-                                'extra-process': 'unexpected process'}[scenario]
+                                'extra-process': 'unsupported syscall: socketpair'}[scenario]
                     if verification.returncode == 0 or expected not in verification.stderr:
                         raise RuntimeError('Negative control did not fail for expected reason: ' + verification.stderr[-2000:])
                     observed = {'record': 'candidate-negative-control', 'rejected': True,

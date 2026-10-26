@@ -152,7 +152,29 @@ still requires this standalone sequential supervisor to have no unrelated childr
 ## Recorded local run
 
 The [candidate observation record](owned-read-candidate-observations.json) binds the
-test source bytes and records eight controlled executions plus 12 mutation/cleanup
+test source bytes and records eight controlled executions plus 14 mutation/transfer/cleanup
 tests on Node 24.19.0 / strace 6.13. Baseline observed 11 settled threads and zero
 service reads; its valid action returned `indeterminate / authority-unavailable`.
 These are local candidate observations, not independent review or hosted CI.
+
+## Unsupported syscall correction
+
+Independent review of `19744f82572dcb43ff944d0fcafab2811b546d1b` found that
+`sendmmsg` / `recvmmsg` fell through the decoder. Replaying a Unix socketpair,
+batched SCM_RIGHTS transfer and ordinary read of the untracked alias reproduced
+an incorrect candidate record with zero service reads. That head's candidate
+record therefore does not establish the claimed absence of unaccounted effects.
+
+The correction uses an explicit supported syscall vocabulary with default refusal.
+Batched transfers, sockets, duplication, alternate copy/splice/AIO paths and unknown
+future calls are outside this decoder's scope. Descriptor controls also require
+supported commands. A real same-process Linux control transfers an actual open
+file descriptor with `sendmmsg` / `recvmmsg` and reads its bytes through the alias;
+replaying each observed batched call now rejects. This tests observation/decoding,
+not a service authorization or hostile containment capability.
+
+The corrected run also rejects successful effects through unknown descriptors,
+tracks pipe/eventfd/epoll descriptor creation, and restricts fcntl/ioctl/process
+control commands. Failed EBADF probes do not establish any descriptor effect.
+All eight installed cases and 14 tests passed; the extra-process launch control
+now refuses at its unsupported socketpair scaffold before its clone is decoded.
