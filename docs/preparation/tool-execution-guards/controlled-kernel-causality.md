@@ -160,3 +160,73 @@ completion precedes pread entry. The provider shape has no identified mismatch
 with #755's additive input contract. The kernel-only draft does not contain or
 alter the semantic owner's files; subsequent integration must retain that owner's
 commit ancestry and establish fresh evidence separately.
+
+## Reviewed observer update and combined consumer validation
+
+Kernel draft [#756](https://github.com/cschadewitz/Project_Orca/pull/756) initially
+published provider commit `a1090d823f1c3f166649471208cf3d8c07d24298` against #748.
+Parent subsequently integrated approved semantic #755 into the draft observer
+branch at `834ddf38be7ca2674a1e439e1fdfd711160531ff`. Separate kernel-branch merge
+`4baa5e11aea06974c316b8184824cd2bc039265f` consumes that reviewed update without
+moving #748, merging a PR or changing main. Both component ancestries are
+preserved. The semantic verifier, its tests and scope document remain
+byte-for-byte identical to approved `aa39c4c5`; kernel code/tests remain the
+provider commit's exact bytes.
+
+The combined control suite passes **126 tests**. `git diff --check` passes. This
+is local control evidence, not an integrated acceptance result or hosted CI pass.
+An earlier local component merge `1cc78ec2e58dc3900de50fd9fc669241b8887c51`
+has identical executable observer bytes; its fresh bounded run
+`/tmp/orca-controlled-replay-0844smhv` produced 112894478 bytes in 11132617238 ns,
+producer exit 0, supervisor exit 1, and refused **`line 4266 read: ambiguous
+shared descriptor/path interval`**. Trace SHA-256:
+`3130f79387513e08f254700352bf11538bd1723934a90ca893b4cc355a80abf5`.
+
+A fresh run of reviewed observer merge `4baa5e11`,
+`/tmp/orca-controlled-replay-bxhnugvl`, produced **112894605** bytes in
+**9375073072 ns**, producer exit **0**, supervisor exit **1**, and refused
+**`line 4063 read: ambiguous shared descriptor/path interval`**. Trace SHA-256:
+`e1989f6b0d7d3e5c0288576d8a1b4369a282e524f412a90143b960e25da49e0e`.
+It did not reach semantic verification. Both use a new physical image of reviewed
+producer `557f62f`, with the unchanged producer/child/build digests. No overlap
+was suppressed, no retry was selected as universal success, and no accepting or
+connected path was added. All original and later traces/private originals remain
+local and preserved.
+
+Read-only combined regression on preserved `23z4v0qu` completes kernel replay and
+provides all required physical durability fields. An **isolated** invocation of
+#755's actual `causal_records` predicate on those AES-GCM-authenticated records,
+actual objects and pread positions passes (seven observed entry-prefix samples).
+This checks the additive provider/consumer interface only; it neither bypasses a
+check in the supervisor nor establishes full semantic acceptance.
+
+The full unmodified semantic consumer still refuses:
+**`baseline/action differs from original managed binding`**
+(`controlled_semantics.py`, `retained_binding`, lines 108–111). Read-only operand
+comparison localizes this separate finding:
+
+| Predicate / source-derived comparison | Actual result |
+| --- | --- |
+| Baseline binding equals reconstructed original managed binding | true |
+| Action environment/credential refs equal complete empty list | true |
+| Action cwd equals managed workspace path | false |
+| Action workspace ref equals managed workspace identity digest | false |
+| Action cwd equals validated original exclusive fixture's parent | true |
+| Action workspace ref equals original resourceRef + `:temporary-tree` | true |
+
+Reviewed `owned-file-read-service.ts` lines 357–362 intentionally construct the
+service-bound snapshot with `cwd: root` and
+`workspaceRef: resourceRef + ':temporary-tree'`, while retaining the original
+owner snapshot separately. Thus the new consumer's expected managed projections
+and the source-defined service-bound action projections need semantic-owner
+review. No predicate or source assumption is loosened here; no semantic file is
+edited to resolve it. This is **not** a provider-field shape incompatibility.
+It is an additional actual semantic refusal, separate from the fresh run's
+unresolved eventfd interval refusal. Neither necessary predicate source approval
+nor the isolated causal check is full canonical-schema or integrated acceptance.
+
+Remaining gates are parent-coordinated kernel review, a separately reviewed
+concurrent eventfd contract if one is proposed, semantic-owner reconciliation of
+these actual projections, and fresh integrated evidence after any corrections.
+The 55-second/60-second/256 MiB bounds and all no-accepting/no-connected restrictions
+remain in force.
