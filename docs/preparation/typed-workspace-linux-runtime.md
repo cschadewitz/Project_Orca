@@ -1,7 +1,9 @@
 # Default-off Linux managed owner checkpoint — Refs #702 / #706
 
-Development base: main `bc0c57d82925cefa001513b8431355b912e4d462`.
-Explicit unmerged dependencies incorporated without rewriting history:
+Development started on main `bc0c57d82925cefa001513b8431355b912e4d462`.
+The following exact reviewed dependencies were incorporated without rewriting
+history, then synchronized to merged main
+`a4ae53d1d5a8d7945f5c6782da46c833accdb29d` (identical dependency tree):
 
 - Persistence #731 `c6157bddec40b438e3425baf52cf65d12355c216`.
 - Accepted managed design #730 `9316577892659ee7f758801442adb97913f392d0`.
@@ -151,3 +153,28 @@ permission change, policy migration/deletion, deployment or native workflow occu
 The dependency lockfile, lifecycle allow/deny policy, signing and sandbox controls
 are unchanged. These synthetic/static checks cannot replace exact-head CI and
 independent ownership/bridge review.
+
+Local evidence on the runtime source committed as
+`33fd8b3a5a506c8952cb20db1e0e02c75c6bdc7d`, synchronized with main by
+`851c8e45da78890f7aa16a04ea6971ba015b13bb` (no source conflict/change):
+
+- Node 24.19.0; pinned pnpm 12.4.2. Frozen install passed the existing 534-entry
+  supply-chain check with Electron download disabled. No dependency/lifecycle edits.
+- Focused managed owner/actual CLI tests: 24 passed. Deployment Python fixtures:
+  26 passed, including real stopped/surviving-child ownership and automatic rollback
+  refusal. The Python fixtures were run with bytecode output disabled for final checks.
+- Affected CLI/agents/daemon run: 131 files passed, one existing opt-in file skipped;
+  2,016 tests passed, one skipped. This run preceded the final removal of an unused
+  availability export and the additional in-test revoke assertion. Focused tests and
+  type/format checks passed after that cleanup; do not interpret the affected run
+  as global coverage or exact-final-head full-suite evidence.
+- Required retry admission lane (`ORCA_RETRY_INTEGRATION=1`): CLI and ACP tests both
+  passed with no skips. All Vitest runs used at most two workers.
+- `pnpm run typecheck`, `pnpm run lint`, `pnpm run format:check`, `pnpm run build`,
+  `git diff --check` passed. Final-source focused ESLint passed. Compiled
+  `node packages/cli/dist/main.js demo` completed successfully in its self-cleaning
+  synthetic workspace. Build retains the existing renderer chunk-size warning.
+
+No global coverage run, physical/native workflow, production bridge acceptance or
+new deployment was performed. Parent owns exact-head CI/source review and deciding
+when the remaining production proof is sufficient.
