@@ -4,6 +4,7 @@ from copy import deepcopy
 import stat
 from pathlib import Path
 from types import SimpleNamespace
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -13,6 +14,7 @@ from controlled_replay import Object
 from controlled_semantics import encoded, parse
 from controlled_save_semantics import pretty
 from controlled_supervisor import ObservedRun, assert_observer, observer_original
+from controlled_observation import observe_new
 from test_controlled_save_semantics import SaveFixture, authority, uid, when
 
 
@@ -154,6 +156,23 @@ class ComposedControls(unittest.TestCase):
 
 
 class OriginalSupervisorControls(unittest.TestCase):
+    def test_refused_bootstrap_cannot_release_connected_commands(self):
+        run = SimpleNamespace(report={}, assert_bootstrap_closed=lambda: (_ for _ in ()).throw(
+            RuntimeError('missing permanently closed original bootstrap')))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'image').mkdir()
+            with patch('controlled_observation.committed_observer', return_value={}), \
+                 patch('controlled_observation.observe', return_value=run) as observe, \
+                 patch('controlled_observation.safe_summary', return_value={'refusal': 'bounded bootstrap refusal'}), \
+                 patch('controlled_observation.ConnectedDesignation') as designation:
+                result = observe_new(root)
+            self.assertEqual(observe.call_count, 1)
+            designation.assert_not_called()
+            self.assertIn('closed original bootstrap', result['refusal'])
+            self.assertFalse(result['productionEligible'])
+            self.assertIsNone(result['acceptingToken'])
+
     def test_report_success_cannot_replace_closed_original_graph(self):
         for closed in (False, True):
             run = ObservedRun({'success': True}, {'lane': 'bootstrap'}, None, Path('/unused'), closed)
