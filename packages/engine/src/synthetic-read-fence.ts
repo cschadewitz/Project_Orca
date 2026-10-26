@@ -1,4 +1,4 @@
-/** Inactive #703 owner-local fixture. No barrel export, ACP wiring, real policy or filesystem confinement. */
+/** Inactive #703 owner-local fence. Qualified memory/file fixtures only; no barrel export or production wiring. */
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -20,6 +20,7 @@ import {
   type PolicyVerdictV1,
 } from "@orca/core";
 import { memoryCaptureQualifier } from "./disposable-memory-read.js";
+import { fileCaptureQualifier } from "./disposable-file-read.js";
 import type { LiveInputBinding } from "./live-input.js";
 
 type Allow = Extract<PolicyVerdictV1, { outcome: "allow" }>;
@@ -48,11 +49,12 @@ export interface SyntheticReadOwner {
 
 /** Only the reviewed fixture codec is admitted. No arbitrary tool registration surface. */
 export interface SyntheticReadExecutor<Parameters, Capture> {
-  readonly codecVersion: "orca-synthetic-acp-read-v1" | "orca-disposable-memory-read-v1";
+  readonly codecVersion:
+    "orca-synthetic-acp-read-v1" | "orca-disposable-memory-read-v1" | "orca-disposable-file-read-v1";
   capture(parameters: Parameters): Capture;
   encode(capture: Capture): string;
   /** Must start the injected read synchronously; the returned promise settles outside ownership. */
-  execute(capture: Capture, action: ActionEvidenceV1, protectedEvidenceRef: string): Promise<void>;
+  execute(capture: Capture, action: ActionEvidenceV1, protectedEvidenceRef: string, signal: AbortSignal): Promise<void>;
 }
 
 export type FenceObservation =
@@ -139,6 +141,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
   readonly version = 1 as const;
   private entry?: Entry<Capture>;
   private readonly memoryQualification: ReturnType<typeof memoryCaptureQualifier>;
+  private readonly fileQualification: ReturnType<typeof fileCaptureQualifier>;
 
   constructor(
     private readonly owner: SyntheticReadOwner,
@@ -147,6 +150,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     private readonly evidence: SyntheticFenceEvidence,
   ) {
     this.memoryQualification = memoryCaptureQualifier(owner, executor);
+    this.fileQualification = fileCaptureQualifier(owner, executor);
     // Retain the original lifetime and registered capabilities. Mutating an injection
     // object after capture must not substitute another executor, policy or record writer.
     this.owner = Object.freeze({
@@ -179,7 +183,8 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
   capture(parameters: Parameters): ActionEvidenceV1 {
     if (
       (this.executor.codecVersion !== "orca-synthetic-acp-read-v1" &&
-        !(this.executor.codecVersion === "orca-disposable-memory-read-v1" && this.memoryQualification)) ||
+        !(this.executor.codecVersion === "orca-disposable-memory-read-v1" && this.memoryQualification) &&
+        !(this.executor.codecVersion === "orca-disposable-file-read-v1" && this.fileQualification)) ||
       this.policy.version !== 1
     )
       throw refused();
@@ -189,7 +194,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 60_000) throw refused();
     const capture = this.executor.capture(parameters);
     const bytes = this.executor.encode(capture);
-    const qualification = this.memoryQualification?.(capture);
+    const qualification = this.memoryQualification?.(capture) ?? this.fileQualification?.(capture);
     if (Buffer.byteLength(bytes, "utf8") > 32_768) throw refused();
     if (this.entry) {
       if (this.entry.bytes !== bytes || !isDeepStrictEqual(this.entry.owner, snapshot)) throw refused();
@@ -451,14 +456,14 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
             entry.consumed = true;
             // No await between final validation/consumption and starting the registered synthetic I/O.
             // Rejection is handled immediately even if the ownership wrapper itself subsequently fails.
-            execution = this.executor.execute(entry.capture, entry.action, entry.evidenceRef);
+            execution = this.executor.execute(entry.capture, entry.action, entry.evidenceRef, active);
             void execution.catch(() => undefined);
           }),
           active,
         );
         if (!execution) throw refused();
         await abortable(execution, active);
-        active.throwIfAborted();
+        this.check(entry, active);
         entry.state = "completed";
       });
     } catch {
