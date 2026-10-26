@@ -18,6 +18,8 @@
  * set, which is what `pnpm --filter @orca/app dev` does to point it at the Vite dev
  * server for hot reload (scripts/dev.js).
  */
+import { callScopedPermission } from "../client/scoped-permission-client.js";
+import type { ScopedPermissionMethod } from "@orca/protocol";
 import { z } from "zod";
 import { createDiagnosticsInitializer } from "./diagnostics/initialize.js";
 import { createManagedMacReplacementStartup } from "./mac-managed-replacement-startup.js";
@@ -469,6 +471,9 @@ handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) =
 // `--read-only` daemon answers both, because a workflow is a file and not a run.
 handle("orca:workflows.list", (params: Parameters<DaemonClient["workflowsList"]>[0]) => client().workflowsList(params));
 handle("orca:workflows.get", (params: Parameters<DaemonClient["workflowsGet"]>[0]) => client().workflowsGet(params));
+handle("orca:scopedPermissions", (command: { method: ScopedPermissionMethod; params: unknown }) =>
+  callScopedPermission(client(), command.method, command.params),
+);
 handle("orca:templates", (command: { method: TemplateMethod; params: unknown }) =>
   callTemplate(client(), command.method, command.params),
 );

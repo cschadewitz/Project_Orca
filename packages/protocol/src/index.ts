@@ -44,3 +44,5 @@ export * from "./operator-host-resources.js";
 export * from "./templates.js";
 export * from "./workflow-drafts.js";
 export * from "./first-run-config.js";
+
+export * from "./scoped-permissions.js";

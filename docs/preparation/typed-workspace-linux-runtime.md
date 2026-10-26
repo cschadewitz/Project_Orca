@@ -1,0 +1,276 @@
+# Default-off Linux managed owner checkpoint — Refs #702 / #706
+
+Development started on main `bc0c57d82925cefa001513b8431355b912e4d462`.
+The following exact reviewed dependencies were incorporated without rewriting
+history, then synchronized to merged main
+`a4ae53d1d5a8d7945f5c6782da46c833accdb29d` (identical dependency tree):
+
+- Persistence #731 `c6157bddec40b438e3425baf52cf65d12355c216`.
+- Accepted managed design #730 `9316577892659ee7f758801442adb97913f392d0`.
+
+This checkpoint implements a disposable-testable filesystem owner and stable wrapper
+refusals. **Production typed access and enrollment remain unavailable.** The accepted
+real build map is empty. It does not complete #702/#706, establish native acceptance,
+or authorize a deployment. Parent owns integration, independent review and merge.
+
+## Concrete owner and handoff
+
+`packages/cli/src/typed-workspace-gate.ts` is an internal module, not a public CLI
+package export or RPC. `createManagedTypedWorkspace(ports)` is trusted composition
+only. It requires original root bindings, genuine retained lifetime ownership,
+exact build verification and the canonical persistence qualifier. There is no
+permissive production implementation of these ports. Returning unchanged parsed
+JSON or a boolean is not a lifecycle or build proof.
+
+`resolveManagedRootBinding` retains config, sidecar and store logical roles, each
+mapped to its covering physical target. Duplicate/descendant physical directories
+collapse; omitted/conflicting roles, aliases, changed identities, a broadened target
+set and control/release/restore overlap refuse. Sidecar placement is fixed at the
+config root's `orca.permissions.json`. The digest binds canonical directory device/
+inode identities, original workspace identity file and directory identity/content,
+and the external control and release-directory relationship. Policy file inode is
+deliberately not retained across its canonical atomic publication.
+
+Metadata reads use bounded no-follow descriptors, regular/single-link and owner/access
+checks, and before/after handle/path identity checks. Inspection does not initialize
+workspace identity. A clone, replaced identity file or reconstructed current root
+set cannot satisfy the original retained binding. The trusted external inventory
+must retain that original binding; a newly calculated digest cannot supply it.
+
+Parent's UI/protocol handoff is `ManagedTypedStoreProvider`, a zero-argument async
+provider returning `ManagedTypedStoreAvailability`. Its available result carries
+only the existing canonical store and contract. `owner.currentStore` implements it
+under the retained owner; `unavailableManagedTypedStore` is the default. False
+availability has the bounded reason `trusted-linux-owner-unavailable`. The daemon
+can receive this provider through trusted composition; clients never provide an
+owner, marker, path, build declaration or construction parameters. The protocol/UI
+worker owns registration/request/response types. No peer routing/schema is edited.
+
+Canonical store operations recheck the same retained lifetime, image, original roots
+and canonical marker before and after awaited IO. The persistence owner's required
+`assertCompatibilityCurrent` runs synchronously. Managed launch dispatch also repeats
+the full enrollment observation in the same call stack immediately before callback
+dispatch, without an intervening await. Failed qualification remains unavailable.
+The protected approval/current-credential dispatch guarantees documented by #731
+remain requirements; this checkpoint adds no approval implementation.
+
+## Enrollment-only durable evidence
+
+The protected control directory must already exist, outside every policy restore
+target and selected release directory. There is deliberately **no startup provision,
+repair or registry-reset command**. Disposable fixtures provision an original
+`never-typed` witness containing exactly the original workspace digest and root
+binding digest, separated by LF. That file is not independent authority: the trusted
+inventory/lifetime/build ports establish its meaning. Missing inventory/witness does
+not become never-typed from missing/v1/corrupt policy bytes.
+
+Under exclusive enrollment ownership, `enrollFresh`:
+
+1. Requires authoritative never-typed state and an absent sidecar.
+2. Removes the never-typed witness and flushes the control directory. A crash here
+   is unavailable, even before the intent exists.
+3. Creates and flushes `intent.json` exclusively, using #731's exact pending marker.
+4. Binds #731's pending owner and calls its `initializeFresh` once.
+5. Creates and flushes `enrolled.json` exclusively, preserving the exact intent refs
+   with state `enrolled`, then confirms the canonical policy read/revision.
+
+`parseTypedCompatibilityMarkerBytes` is the sole marker parser. The two retained
+files use the existing marker type; no Python/schema/parser fork is added. Pending
+ordinary access, enrolled reinitialization, missing/corrupt/mixed evidence and v1
+bytes after enrollment stay closed. Existing policy bytes are never migrated/deleted.
+An exception after transition begins invalidates that in-memory owner's authority.
+Lost confirmation acknowledgement can leave an actually enrolled disk state; it is
+never reported as definitely pending. Only a new current owner may explicitly inspect
+the actual outcome. No automatic initialization retry is provided.
+
+Intent persists across normal edits. Canonical create/revoke owns exact policy byte
+revisions and retained revocations; no external per-policy-edit history is written.
+Enrolled update, rollback, retarget, reset and legacy-write dispatch categorically
+refuse. The checkpoint does not supply recovery or an equality-based restore exception.
+
+## Stable Linux boundary and precise remaining proof
+
+`tools/deploy/orca-release.py` must be installed outside selected release trees, as
+its existing contract requires. A new independent `typed-lifetime.lock` is held in
+shared mode across **daemon, CLI and ACP** exec, separate from `admission.lock`.
+Its descriptor is inherited. Direct `exec_release` callers take the same boundary.
+Stage/activation/recovery also hold shared lifetime ownership, so enrollment cannot
+start after their initial inspection while an effect remains in flight. Exclusive
+`typed_enrollment_window` is an internal mechanism, not an enrollment command.
+No lock-age/PID/idle-based recovery is implemented. The no-follow lock validates
+regular/single-link ownership and its retained inode before dispatch.
+
+Temporary subprocess tests demonstrate a stopped daemon holding this lock while
+the old admission lock is free, and a surviving child retaining it after supervisor
+exit. These prove the implemented kernel mechanism. They do **not** establish that
+all pre-existing incompatible daemons have been migrated into that mechanism.
+The existing launch-audit manifest string and process scans do not establish that
+stronger enrollment proof.
+
+The wrapper's `typed_inspector` injection is trusted test/composition code only,
+never manifest/flag/environment configuration. It receives all three original launch
+roles and recovery's previous/candidate roots, and returns a retained synchronous
+assertion, not JSON/bool. Stable guards run before stage/build, activation journals,
+service stop, pointer selection, recovery and exec; retained assertions run at
+effect dispatch. Automatic rollback re-enters the same guard and preserves evidence
+when refused. The default wrapper refuses surviving `typed-workspace`,
+`typed-enrollment.intent` or `.orca-typed-workspace` claims without parsing them or
+asking selected release code for permission.
+
+**Missing production proof:** no installed stable artifact currently connects that
+wrapper to the canonical parser/owner under original immutable inventory, accepted
+image identity and the inherited lifetime descriptor. No audited transition excludes
+every pre-existing daemon/CLI/ACP writer. Those two integration facts are required
+before enrollment or a positive typed runtime can be constructed. The new lock alone
+does not retrofit old binaries, and test injection is not a production bridge.
+No configured control-path omission can be used as a production never-typed proof.
+The legacy-only adapter retains historical behavior where no typed enrollment is
+supported; it must not be used for a future enrolled deployment whose registry is lost.
+
+CLI config/update bootstrap checks opaque `.orca-typed-workspace` refusal locators
+before ownership, stores, plugins or credentials, including direct bootstrap/auth
+entrypoints and resolved store roots. The locator is never positive authority and
+does not replace the required external stable inventory. Help/version remain usable.
+No enabled typed daemon is composed, so no claim is made that existing daemon legacy
+config/always writers are enabled-safe. Parent must compose their guard/provider
+before any accepted build mapping is added. App/remote/plugin/arbitrary launch
+inventories cannot acquire a production owner. App/Mac/Windows typed activation
+remain unavailable; no Mac hardware or native launch/update path was touched.
+
+## Validation scope
+
+New temporary-root tests cover nested/shared roles, aliases/identity replacement,
+corrupt/missing/pending/reset evidence, fresh enrollment, competing enrollment,
+initialization failure before/after rename, lost confirmation acknowledgement,
+normal policy publication without external witness edits, synchronous assertion
+requirements and ownership/image loss during an awaited policy read. Actual CLI
+argv and direct bootstrap/config/auth calls refuse before producers. Python fake
+build/service tests cover all launch kinds, categorical refusal before effects,
+previous-root recovery, retained journals and real inherited lifetime concurrency.
+
+No live system/service/update operation, real enrollment, operator credential,
+permission change, policy migration/deletion, deployment or native workflow occurs.
+The dependency lockfile, lifecycle allow/deny policy, signing and sandbox controls
+are unchanged. These synthetic/static checks cannot replace exact-head CI and
+independent ownership/bridge review.
+
+Local evidence on the runtime source committed as
+`33fd8b3a5a506c8952cb20db1e0e02c75c6bdc7d`, synchronized with main by
+`851c8e45da78890f7aa16a04ea6971ba015b13bb` (no source conflict/change):
+
+- Node 24.19.0; pinned pnpm 12.4.2. Frozen install passed the existing 534-entry
+  supply-chain check with Electron download disabled. No dependency/lifecycle edits.
+- Focused managed owner/actual CLI tests: 24 passed. Deployment Python fixtures:
+  26 passed, including real stopped/surviving-child ownership and automatic rollback
+  refusal. The Python fixtures were run with bytecode output disabled for final checks.
+- Affected CLI/agents/daemon run: 131 files passed, one existing opt-in file skipped;
+  2,016 tests passed, one skipped. This run preceded the final removal of an unused
+  availability export and the additional in-test revoke assertion. Focused tests and
+  type/format checks passed after that cleanup; do not interpret the affected run
+  as global coverage or exact-final-head full-suite evidence.
+- Required retry admission lane (`ORCA_RETRY_INTEGRATION=1`): CLI and ACP tests both
+  passed with no skips. All Vitest runs used at most two workers.
+- `pnpm run typecheck`, `pnpm run lint`, `pnpm run format:check`, `pnpm run build`,
+  `git diff --check` passed. Final-source focused ESLint passed. Compiled
+  `node packages/cli/dist/main.js demo` completed successfully in its self-cleaning
+  synthetic workspace. Build retains the existing renderer chunk-size warning.
+
+No global coverage run, physical/native workflow, production bridge acceptance or
+new deployment was performed. Parent owns exact-head CI/source review and deciding
+when the remaining production proof is sufficient.
+
+## Stage lifetime/dispatch review correction
+
+Wrapper review found that the stage guarantee above was incomplete at
+`50418058a40c131155abf40d7f234833b573791e`. Marking the lock descriptor inheritable
+did not preserve it across the default `close_fds=True` used by actual stage
+`subprocess.run` and health `Popen`. The previous synthetic `close_fds=False` test
+proved a kernel mechanism, not those production dispatch sites. A deterministic
+regression against that source failed at **all 15 actual stage child boundaries**
+after supervisor death: release inspection, clone, git revision, mise trust/install,
+pnpm install/typecheck/build, node resolution, candidate version, demo, all three
+configured validates, and the health child.
+
+Correction source: `b86de7e30ede812b7b694b0eb7263560312af1e1`.
+`typed_process` passes only the retained lifetime descriptors with explicit
+`pass_fds`, keeps `close_fds=True`, and invokes the synchronous retained assertions
+before dispatch. Every stage run/capture/Popen uses it, including the formerly raw
+git/mise/candidate-version captures. The service-command helper uses the same
+direct-child dispatch mechanism; this does not transfer ownership through systemd
+to a separately launched daemon, which still requires its own stable launch gate.
+
+Lock-context cleanup remains **close-only** on both normal and exceptional unwind.
+There was no explicit `LOCK_UN` in this owner; adding one would unlock the open-file
+description shared with a surviving child. Tests verify exclusion after both forms
+of parent cleanup and release only after the actual direct child exits.
+
+The stage fixture substitutes executable arguments only, leaving the production
+`run`/`capture`/`subprocess.run`/`Popen` descriptor options untouched. All 15 direct
+children keep real flock exclusion after their supervisor is killed, while an
+unrelated inheritable descriptor is confirmed closed. A bounded pidfd wait confirms
+termination of each disposable producer; PID observation is not used as ownership
+authority. Separate deterministic tests lose ownership immediately before each
+formerly raw capture and verify no such process dispatch, including candidate code.
+
+Final focused validation for this Python-only correction: 29 stdlib tests pass with
+resource warnings treated as errors; the normal Vitest deployment wrapper passes.
+`git diff --check` passes. Existing TypeScript/build/dependency source is unchanged.
+No live service, external tool, real release/build, OS setting or policy is used.
+
+This proof covers the audited **direct subprocesses**, not arbitrary descendants.
+A tool or descendant can close inherited descriptors. Such a process-tree guarantee
+requires its own audited launch/settlement contract and is not claimed here.
+The stable bridge/full inventory proof remains missing; typed activation and the
+accepted real build map remain off/empty.
+
+## CI metadata/umask correction
+
+CI run `40293652000`, job `121474435549`, failed 14 managed-owner tests at
+`metadata ownership or size` after canonical fresh publication. Its log did not
+record umask, UID, mode, link count or size; those CI values are not retroactively
+claimed here. The local execution environment used umask `0077`, which masked a
+producer-contract mismatch: canonical typed `publish` used default temporary-file
+creation permissions rather than specifying private mode.
+
+The new bounded disposable child runs the actual managed owner and canonical
+initializer/create/revoke path. Only its own process umask changes; workers and
+operator files are untouched. Before the fix, initial sidecar observations were:
+
+| Child umask | Published mode | UID matches child | nlink | Bytes | Managed outcome |
+| --- | --- | --- | --- | --- | --- |
+| `0022` | `0644` | yes | 1 | 95 | refused |
+| `0002` | `0664` | yes | 1 | 95 | refused |
+| `0077` | `0600` | yes | 1 | 95 | enrolled |
+| `0000` | `0666` | yes | 1 | 95 | refused |
+
+Identity and enrollment metadata remained `0600`, regular, single-link and owned
+by the child in each case. Thus the mode predicate, not UID/link/size, explains the
+reproduced difference. Ordinary `0022` reproduces the CI failure path; the precise
+CI umask was not logged. The independent regression failed three of four cases on
+the pre-correction source, with only the local `0077` case succeeding.
+
+Producer correction `557970ee82b640633dc89c7162f59a7173138dad` is confined to
+canonical typed `publish`: create the temporary file with explicit private `0600`
+mode and `wx`, before any policy bytes are written. Exclusive creation prevents
+reusing an existing temporary file's broader mode. Cleanup removes only a
+successfully prepared file; an existing temporary file (or failed preparation
+evidence) is retained rather than overwritten/deleted. Initializer, create and
+revoke share this one publication function. There is no second writer, schema or
+parser, no chmod/repair of existing policy, and no new retry or recovery path.
+Final authority/approval/owner assertions and uncertainty semantics are unchanged.
+
+Regression observes private temporary-file mode before rename and checks regular,
+single-link, owner-matching bounded `0600` policy after initialize, create and revoke
+under all four masks. Exact revisions advance and enrollment evidence stays
+unchanged. Persistence tests also verify pre-existing temporary evidence and policy
+bytes survive initialization/create/revoke refusal. The managed guard's privacy,
+UID, link, size and root checks are unchanged; failed/pending real enrollment would
+still require explicit inspection rather than initialization retry.
+
+Validation: 77 focused tests passed; the final four-mask probe also passed after
+adding pre-rename observations. Affected CLI/agents/daemon suites run under `0022`:
+2,023 passed, one existing opt-in skipped. Root/renderer type checks, full lint,
+build, focused formatting and diff checks passed. TypeScript policy producer is the
+only runtime source changed; the wrapper lifetime correction and dependency lock/
+lifecycle policy remain byte-identical. No live policy, credentials, service,
+deployment, OS setting or Mac hardware was used. Activation remains off.

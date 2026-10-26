@@ -2,6 +2,9 @@
 import importlib.util
 import json
 import os
+import selectors
+import signal
+import socket
 from pathlib import Path
 import subprocess
 import sys
@@ -180,6 +183,334 @@ class DeploymentTests(unittest.TestCase):
         self.manifest.write_text(json.dumps(self.config))
         with self.assertRaisesRegex(RuntimeError, "inventory"):
             release.Deployment(self.manifest)
+
+    def test_typed_states_refuse_every_effect_and_preserve_existing_journal(self):
+        record = {"previous": str(self.old), "candidate": str(self.new), "token": "retained", "opened": True}
+        release.write_json(self.deployment.pending, record)
+        journal = self.deployment.pending.read_bytes()
+        for state in ("enrolled", "enrollment-pending", "missing", "corrupt", "unknown-build"):
+            observations = []
+            def inspect(action, roles, previous):
+                observations.append((action, roles, previous))
+                raise RuntimeError("typed refused: " + state)
+            self.deployment.typed_inspector = inspect
+            for operation in (lambda: self.deployment.stage("v0.6.2"),
+                              lambda: self.deployment.activate(self.new),
+                              lambda: self.deployment.restore(record),
+                              *(lambda kind=kind: self.deployment.launch(kind, []) for kind in ("cli", "acp", "daemon")),
+                              lambda: self.deployment.exec_release("daemon", [])):
+                with patch.object(release, "run") as run, patch.object(os, "execve") as execute:
+                    with self.assertRaisesRegex(RuntimeError, "typed refused"):
+                        operation()
+                    run.assert_not_called()
+                    execute.assert_not_called()
+                self.assertEqual(self.calls, [])
+                self.assertEqual(self.deployment.pending.read_bytes(), journal)
+                self.assertEqual((self.root / "current").resolve(), self.old)
+            self.assertTrue(all(tuple(role for role, _ in roles) == ("cli", "acp", "daemon")
+                                for _, roles, _ in observations))
+
+    def test_unavailable_stable_bridge_refuses_claims_without_parsing_or_running_selected_code(self):
+        for name in ("typed-workspace", "typed-enrollment.intent", ".orca-typed-workspace"):
+            witness = self.root / name
+            witness.write_bytes(b"corrupt or old typed evidence")
+            with patch.object(os, "execve") as execute:
+                with self.assertRaisesRegex(RuntimeError, "trusted inspection bridge missing"):
+                    self.deployment.launch("daemon", [])
+                with self.assertRaisesRegex(RuntimeError, "trusted inspection bridge missing"):
+                    self.deployment.restore({})
+                execute.assert_not_called()
+            self.assertEqual(witness.read_bytes(), b"corrupt or old typed evidence")
+            self.assertEqual(self.calls, [])
+            witness.unlink()
+
+    def test_previous_root_typed_evidence_refuses_before_restore_even_with_live_legacy(self):
+        record = {"previous": str(self.old), "candidate": str(self.new), "token": "t", "opened": False}
+        release.write_json(self.deployment.pending, record)
+        original = self.deployment.pending.read_bytes()
+        def inspect(action, roles, previous):
+            if str(self.old) in previous:
+                raise RuntimeError("previous root typed; recovery refused")
+            return lambda: None
+        self.deployment.typed_inspector = inspect
+        with self.assertRaisesRegex(RuntimeError, "previous root typed"):
+            self.deployment.restore(record)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.deployment.pending.read_bytes(), original)
+        self.assertEqual((self.root / "current").resolve(), self.old)
+
+    def test_automatic_failure_rollback_cannot_bypass_a_new_typed_refusal(self):
+        refuse = False
+        def inspect(action, roles, previous):
+            if refuse:
+                raise RuntimeError("typed state unavailable; preserve failed candidate")
+            return lambda: None
+        self.deployment.typed_inspector = inspect
+        def health(path):
+            nonlocal refuse
+            if path == self.new:
+                refuse = True
+                raise RuntimeError("synthetic health failure")
+        self.deployment.health = health
+        with self.assertRaisesRegex(RuntimeError, "typed state unavailable"):
+            self.deployment.activate(self.new)
+        self.assertEqual((self.root / "current").resolve(), self.new)
+        self.assertEqual(sum(c[0] == "stop" for c in self.calls), 1)
+        self.assertTrue(self.deployment.pending.exists())
+        self.assertFalse(any(c[0] == "resume" for c in self.calls))
+
+    def test_lost_lifetime_identity_before_intent_preserves_state_and_stops_no_service(self):
+        def health(path):
+            lock = self.root / "typed-lifetime.lock"
+            lock.rename(self.root / "retained-old-lock")
+            lock.write_text("new identity")
+        self.deployment.health = health
+        with self.assertRaisesRegex(RuntimeError, "identity/ownership changed"):
+            self.deployment.activate(self.new)
+        self.assertEqual((self.root / "current").resolve(), self.old)
+        self.assertFalse(self.deployment.pending.exists())
+        self.assertTrue((self.root / "retained-old-lock").exists())
+        self.assertEqual(self.calls, [])
+
+    def test_lost_inspection_refuses_at_final_dispatch_without_spawn(self):
+        calls = 0
+        def inspect(action, roles, previous):
+            def assert_current():
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    raise RuntimeError("retained owner lost")
+            return assert_current
+        self.deployment.typed_inspector = inspect
+        with patch.object(os, "execve") as execute:
+            with self.assertRaisesRegex(RuntimeError, "retained owner lost"):
+                self.deployment.exec_release("cli", ["run"])
+            execute.assert_not_called()
+
+    def test_bool_or_json_cannot_be_inspection_ownership(self):
+        for result in (True, {"state": "enrolled"}, lambda: True):
+            self.deployment.typed_inspector = lambda *args: result
+            with patch.object(os, "execve") as execute:
+                with self.assertRaisesRegex(RuntimeError, "ownership unavailable"):
+                    self.deployment.exec_release("daemon", [])
+                execute.assert_not_called()
+
+    def test_real_paused_daemon_blocks_enrollment_despite_free_admission_lock(self):
+        # A disposable Python fake build executes via the real stable daemon wrapper.
+        script = self.old / "packages/cli/dist/main.js"
+        script.parent.mkdir(parents=True)
+        script.write_text("import os, signal\nprint('held', flush=True)\nos.kill(os.getpid(), signal.SIGSTOP)\nsignal.pause()\n")
+        child = subprocess.Popen([sys.executable, str(Path(__file__).with_name("orca-release.py")),
+                                  "--deployment", str(self.manifest), "daemon"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(child.stdout, selectors.EVENT_READ)
+                self.assertTrue(selector.select(timeout=5), "fake daemon did not reach wrapper exec")
+            self.assertEqual(child.stdout.readline(), b"held\n")
+            _, stopped = os.waitpid(child.pid, os.WUNTRACED)
+            self.assertTrue(os.WIFSTOPPED(stopped))
+            with release.lock(self.root / "admission.lock"):
+                with self.assertRaisesRegex(RuntimeError, "Typed lifetime busy"):
+                    with self.deployment.typed_enrollment_window():
+                        self.fail("paused daemon did not retain lifetime ownership")
+        finally:
+            child.send_signal(signal.SIGCONT)
+            child.terminate()
+            child.communicate(timeout=5)
+
+    def test_surviving_child_retains_lifetime_lock_after_supervisor_exit(self):
+        adapter = str(Path(__file__).with_name("orca-release.py"))
+        code = ("import importlib.util, os, subprocess, sys\n"
+                f"spec=importlib.util.spec_from_file_location('release',{adapter!r})\n"
+                "r=importlib.util.module_from_spec(spec); spec.loader.exec_module(r)\n"
+                f"with r.typed_lifetime_lock(r.Path({str(self.root / 'typed-lifetime.lock')!r})) as owner:\n"
+                " subprocess.Popen([sys.executable,'-c','import os,sys; print(os.getpid(),flush=True); sys.stdin.read(1)'],pass_fds=(owner.descriptor,))\n"
+                " os._exit(0)\n")
+        supervisor = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        orphan = None
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(supervisor.stdout, selectors.EVENT_READ)
+                self.assertTrue(selector.select(timeout=5))
+            orphan = int(supervisor.stdout.readline())
+            self.assertEqual(supervisor.wait(timeout=5), 0)
+            with self.assertRaisesRegex(RuntimeError, "Typed lifetime busy"):
+                with self.deployment.typed_enrollment_window():
+                    self.fail("surviving writer lost exclusion")
+            supervisor.stdin.write(b"x")
+            supervisor.stdin.flush()
+            with selectors.DefaultSelector() as selector:
+                selector.register(supervisor.stdout, selectors.EVENT_READ)
+                self.assertTrue(selector.select(timeout=5))
+            self.assertEqual(supervisor.stdout.read(), b"")
+            with self.deployment.typed_enrollment_window():
+                pass
+        finally:
+            if orphan is not None:
+                try:
+                    os.kill(orphan, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            supervisor.stdin.close()
+            supervisor.stdout.close()
+            supervisor.stderr.close()
+            if supervisor.poll() is None:
+                supervisor.kill()
+                supervisor.wait(timeout=5)
+
+    def test_lifetime_identity_replacement_and_alias_refuse_without_removing_evidence(self):
+        path = self.root / "typed-lifetime.lock"
+        with release.typed_lifetime_lock(path) as assertion:
+            retired = self.root / "retired-lifetime.lock"
+            path.rename(retired)
+            path.write_text("replacement")
+            with self.assertRaisesRegex(RuntimeError, "identity/ownership changed"):
+                assertion()
+            self.assertTrue(retired.exists())
+        path.unlink()
+        path.symlink_to(retired)
+        with self.assertRaises(OSError):
+            with release.typed_lifetime_lock(path):
+                self.fail("symlink lock accepted")
+        path.unlink()
+        os.link(retired, path)
+        with self.assertRaisesRegex(RuntimeError, "identity/ownership changed"):
+            with release.typed_lifetime_lock(path):
+                self.fail("hardlink lock accepted")
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux pidfd/descriptor inheritance fixture")
+    def test_actual_stage_children_retain_exclusion_after_supervisor_death(self):
+        # Actual Deployment.stage -> run/capture/subprocess.run/Popen. Only the
+        # executable is substituted: no test-provided pass_fds/close_fds bypass.
+        targets = ("release-view", "clone", "git-revision", "mise-trust", "mise-install",
+                   "pnpm-install", "pnpm-typecheck", "pnpm-build", "node-path", "candidate-version",
+                   "demo", "validate-cli", "validate-acp", "validate-daemon", "health")
+        fixture = str(Path(__file__).with_name("tests") / "typed-lifetime-child.py")
+        for target in targets:
+            with self.subTest(dispatch=target), tempfile.TemporaryDirectory(dir=self.root) as temporary:
+                root = Path(temporary)
+                config = {**self.config, "root": str(root), "cwd": str(root),
+                          **{role + "Config": str(root / (role + ".yaml")) for role in ("cli", "acp", "daemon")}}
+                (root / "deployment.json").write_text(json.dumps(config))
+                deployment = release.Deployment(root / "deployment.json")
+                with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
+                    notify.bind(str(root / "notify"))
+                    supervisor = subprocess.Popen([sys.executable, "-B", fixture, "stage", str(root), target],
+                                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    producer = producer_fd = None
+                    try:
+                        with selectors.DefaultSelector() as selector:
+                            selector.register(notify, selectors.EVENT_READ)
+                            self.assertTrue(selector.select(timeout=5), "stage did not dispatch " + target)
+                        observed = json.loads(notify.recv(4096))
+                        producer = observed["pid"]
+                        producer_fd = os.pidfd_open(producer)
+                        self.assertEqual(observed["label"], target)
+                        self.assertFalse(observed["unrelated"], "unrelated inheritable FD leaked")
+                        supervisor.kill()
+                        supervisor.wait(timeout=5)
+                        with self.assertRaisesRegex(RuntimeError, "Typed lifetime busy"):
+                            with deployment.typed_enrollment_window():
+                                self.fail("stage producer lost lifetime exclusion: " + target)
+                    finally:
+                        if supervisor.poll() is None:
+                            supervisor.kill()
+                        if producer is not None:
+                            try:
+                                os.kill(producer, signal.SIGTERM)
+                            except ProcessLookupError:
+                                pass
+                        if producer_fd is not None:
+                            with selectors.DefaultSelector() as selector:
+                                selector.register(producer_fd, selectors.EVENT_READ)
+                                self.assertTrue(selector.select(timeout=5), "fixture producer did not stop")
+                            os.close(producer_fd)
+                        supervisor.communicate(timeout=5)
+                    # The real direct producer has stopped; kernel exclusion now releases.
+                    with deployment.typed_enrollment_window():
+                        pass
+
+    def test_normal_and_exceptional_context_cleanup_do_not_unlock_a_surviving_child(self):
+        for exceptional in (False, True):
+            with self.subTest(exceptional=exceptional):
+                children = []
+                @release.typed_operation("update")
+                def start(deployment):
+                    child = deployment.typed_process(subprocess.Popen, [sys.executable, "-c",
+                        "import sys; print('ready',flush=True); sys.stdin.read(1)"],
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    children.append(child)
+                    with selectors.DefaultSelector() as selector:
+                        selector.register(child.stdout, selectors.EVENT_READ)
+                        self.assertTrue(selector.select(timeout=5))
+                    self.assertEqual(child.stdout.readline(), b"ready\n")
+                    if exceptional:
+                        raise RuntimeError("synthetic parent unwind")
+                    return child
+                try:
+                    if exceptional:
+                        with self.assertRaisesRegex(RuntimeError, "synthetic parent unwind"):
+                            start(self.deployment)
+                    else:
+                        start(self.deployment)
+                    # Parent descriptor has closed on both paths. LOCK_UN here
+                    # would drop the shared open-file description in the child.
+                    self.assertEqual(self.deployment._typed_lifetimes, [])
+                    self.assertEqual(self.deployment._typed_assertions, [])
+                    with self.assertRaisesRegex(RuntimeError, "Typed lifetime busy"):
+                        with self.deployment.typed_enrollment_window():
+                            self.fail("parent cleanup unlocked a surviving direct child")
+                    children[0].communicate(b"x", timeout=5)
+                    with self.deployment.typed_enrollment_window():
+                        pass
+                finally:
+                    for child in children:
+                        if child.poll() is None:
+                            child.kill()
+                        child.communicate(timeout=5)
+
+    def test_every_stage_capture_rechecks_ownership_before_dispatch(self):
+        for target in ("git-revision", "node-path", "candidate-version"):
+            with self.subTest(dispatch=target):
+                current, calls = True, []
+                def inspect(*args):
+                    def assertion():
+                        if not current:
+                            raise RuntimeError("synthetic ownership lost before capture")
+                    return assertion
+                self.deployment.typed_inspector = inspect
+                def command(args, **kwargs):
+                    nonlocal current
+                    if args[:3] == ["gh", "repo", "clone"]:
+                        checkout = Path(args[4])
+                        (checkout / "package.json").write_text(json.dumps({"version": "0.6.2"}))
+                        (checkout / "release-compatibility.json").write_text(json.dumps({"storeEpoch": "v1"}))
+                        if target == "git-revision":
+                            current = False
+                    if args[-2:] == ["run", "build"] and target == "node-path":
+                        current = False
+                def capture(args, **kwargs):
+                    nonlocal current
+                    if args[:3] == ["gh", "release", "view"]:
+                        return json.dumps({"tagName": "v0.6.2", "isDraft": False, "isPrerelease": False})
+                    if args[0] == "git":
+                        calls.append("git-revision")
+                        return "a" * 40
+                    if args[:2] == ["mise", "which"]:
+                        calls.append("node-path")
+                        if target == "candidate-version":
+                            current = False
+                        return sys.executable
+                    calls.append("candidate-version")
+                    return "0.6.2"
+                with patch.object(release, "run", side_effect=command), patch.object(release, "capture", side_effect=capture):
+                    with self.assertRaisesRegex(RuntimeError, "ownership lost before capture"):
+                        self.deployment.stage("v0.6.2")
+                self.assertNotIn(target, calls)
+                self.assertFalse((self.root / "releases/v0.6.2").exists())
+                self.assertEqual(self.calls, [])
+                self.assertEqual((self.root / "current").resolve(), self.old)
 
     def test_path_outside_release_directory_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "outside"):

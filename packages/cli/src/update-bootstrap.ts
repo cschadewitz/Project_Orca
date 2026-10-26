@@ -9,6 +9,7 @@ import {
 } from "@orca/protocol/update-window";
 import { resolve, isAbsolute, basename } from "node:path";
 import { createRequire } from "node:module";
+import { assertNoUnownedTypedWorkspace } from "./typed-workspace-gate.js";
 
 const attempt = process.env.ORCA_UPDATE_ATTEMPT;
 const token = process.env.ORCA_UPDATE_LAUNCH;
@@ -66,6 +67,7 @@ export function assertClosedUpdateCommand(command: string, flags: Record<string,
     throw new Error("Closed replacement bootstrap requires authenticated read-only validation");
 }
 export async function enterConfiguredUpdateBootstrap(configDir: string, storeDir: string): Promise<void> {
+  assertNoUnownedTypedWorkspace([configDir, storeDir]);
   if (managedControl || managedAddon) {
     if (
       launch ||
@@ -107,6 +109,7 @@ export async function closedUpdateOwnsConfiguredRoots(configDir: string, storeDi
   return true;
 }
 export async function enterCommandUpdateBootstrap(paths: readonly string[]): Promise<void> {
+  assertNoUnownedTypedWorkspace(paths);
   if (invalid) throw new Error("Closed replacement bootstrap unavailable");
   const roots = configuredUpdateWriterRoots(paths.map((path) => resolve(path)));
   for (const root of roots) {

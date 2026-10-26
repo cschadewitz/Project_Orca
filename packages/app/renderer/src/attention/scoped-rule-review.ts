@@ -24,6 +24,7 @@ export interface ScopedRuleReview {
   readonly requiredReview: "passed" | "failed" | "unavailable";
   /** Owner checks current workspace/input/review/revision and authority before every invocation. */
   readonly isCurrent: () => boolean;
+  readonly cancel?: (() => Promise<void>) | undefined;
   /** Separate owner-supplied capabilities. Ordinary answers cannot call a rule writer. */
   readonly allowOnce?: (() => Promise<ScopedChoiceResult>) | undefined;
   readonly deny?: (() => Promise<ScopedChoiceResult>) | undefined;
