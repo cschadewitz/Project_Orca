@@ -11,14 +11,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { InputsAnswerParamsSchema } from "@orca/protocol";
 import { systemClock, type ActionEvidenceV1 } from "@orca/core";
 import { fileStores, workspaceIdentity, lapsed } from "@orca/store";
-import { askHumanInput, LiveHumanInput, type HumanInputQuery } from "@orca/engine";
+import { askHumanInput, LiveHumanInput, claimOriginalDelivery, type HumanInputQuery } from "@orca/engine";
 import { createStrictPermissionSource, createStrictPolicyPort } from "@orca/agents";
 import { CredentialStore } from "../../daemon/src/auth/credentials.js";
 import { Authorizer, OwnershipStore, authInvalid, bindPrincipal } from "../../daemon/src/auth/index.js";
 import { scopedPermissionMethods } from "../../daemon/src/scoped-permission-bridge.js";
 import { dispatch } from "../../daemon/src/server.js";
 import { protectedScopedPermissionOwner } from "../../daemon/src/protected-scoped-permission-owner.js";
-import { ownedReadScopedCapture } from "../../daemon/src/owned-read-scoped-capture.js";
+import { ownedReadScopedCapture, ownedReadInputOptions } from "../../daemon/src/owned-read-scoped-capture.js";
 import { createOwnedFileReadServiceForTest } from "../../engine/src/owned-file-read-service.js";
 import type { SyntheticReadOwnerSnapshot } from "../../engine/src/synthetic-read-fence.js";
 import { createManagedTypedWorkspace, resolveManagedRootBinding } from "../src/typed-workspace-gate.js";
@@ -99,7 +99,8 @@ async function fixture() {
   const abort = new AbortController();
   const emit = (input: Parameters<typeof stores.events.append>[0]) => stores.events.append(input);
   let query!: HumanInputQuery;
-  let lostAppendAck = false;
+  let lostAppendAck = false,
+    lostOwnershipAck = false;
   const delivered = askHumanInput({
     port: live,
     emit: (input) => emit({ ...input, runId: "run" } as Parameters<typeof emit>[0]),
@@ -112,7 +113,11 @@ async function fixture() {
     live: {
       identity: { instanceId: "boot", sessionId: "session", turnId: "turn", invocationId: "invocation" },
       signal: abort.signal,
-      withOwnership: (work) => stores.leases.withOwnership(lease, work),
+      withOwnership: async (work) => {
+        const result = await stores.leases.withOwnership(lease, work);
+        if (lostOwnershipAck) throw new Error("Synthetic lost ownership acknowledgement");
+        return result;
+      },
       emitOwned: async (input) => {
         const result = await emit({ ...input, runId: "run" } as Parameters<typeof emit>[0]);
         if (lostAppendAck) throw new Error("Synthetic lost append acknowledgement");
@@ -299,6 +304,8 @@ async function fixture() {
     actor,
     target,
     query,
+    onceOptionId: "once",
+    denyOptionId: "deny",
     owner: original,
     parameters: { resourceRef: service.resourceRef, offset: 0, length: 4 },
     policy: strict,
@@ -386,6 +393,9 @@ async function fixture() {
     changeBuild: () => {
       build = false;
     },
+    loseOwnershipAck: () => {
+      lostOwnershipAck = true;
+    },
     loseAck: () => {
       lostAppendAck = true;
     },
@@ -407,6 +417,9 @@ it("retains actual service capture after protected facts, preserving independent
   expect(c.action.coverage.level).toBe("policy-per-ask");
   expect(c.action.coverage.evidence.installedRefs).toEqual([]);
   expect(c.action.offeredChoices).toEqual([]);
+  expect(ownedReadInputOptions(f.captured.token, c.action)).toEqual({ onceOptionId: "once", denyOptionId: "deny" });
+  expect(ownedReadInputOptions({ ...f.captured.token }, c.action)).toBeUndefined();
+  expect(() => ownedReadInputOptions(f.captured.token, { ...c.action, actionId: "forged" })).toThrow();
   expect(await f.producer.port.forAction(structuredClone(c.action), f.active)).toBe(f.captured.token);
   await expect(f.producer.capture(f.input)).rejects.toThrow();
   expect(f.observed).not.toHaveBeenCalled();
@@ -433,6 +446,7 @@ it("real strict source and protected command bridge refuse unqualified review/Sa
 it("actual explicit live delivery reaches the original callback exactly once but supplies no native choice or permit authority", async () => {
   const f = await fixture();
   const before = await readFile(f.sidecar);
+  const delivery = f.live.retainOriginalDelivery(f.input.query);
   const responses = await Promise.all(Array.from({ length: 4 }, () => f.call("operator.answer", { optionId: "once" })));
   expect(responses.filter((result) => result.ok)).toHaveLength(1);
   expect(responses.find((result) => result.ok)).toMatchObject({
@@ -444,6 +458,33 @@ it("actual explicit live delivery reaches the original callback exactly once but
   expect(await f.stores.events.readTypes("run", ["human.answered"])).toHaveLength(1);
   const answer = (await f.stores.events.readTypes("run", ["human.answered"]))[0]!;
   expect(answer.payload).toMatchObject({ actor: f.actor, answer: "once" });
+  const proof = await claimOriginalDelivery(delivery, f.input.query, f.actor, "once", f.captured.invocation.action);
+  expect(proof.acceptedAnswerRef).toBe(JSON.stringify(["run", answer.id]));
+  await expect(
+    claimOriginalDelivery({ ...delivery }, f.input.query, f.actor, "once", f.captured.invocation.action),
+  ).rejects.toThrow();
+  await expect(
+    claimOriginalDelivery(delivery, { ...f.input.query }, f.actor, "once", f.captured.invocation.action),
+  ).rejects.toThrow();
+  await expect(
+    claimOriginalDelivery(
+      delivery,
+      f.input.query,
+      { ...f.actor, credentialId: "other" },
+      "once",
+      f.captured.invocation.action,
+    ),
+  ).rejects.toThrow();
+  await expect(
+    claimOriginalDelivery(delivery, f.input.query, f.actor, "deny", f.captured.invocation.action),
+  ).rejects.toThrow();
+  await expect(
+    claimOriginalDelivery(delivery, f.input.query, f.actor, "once", structuredClone(f.captured.invocation.action)),
+  ).rejects.toThrow();
+  // A genuine delivery capability still cannot promote this unqualified executor.
+  const execution = f.producer.executeHumanDelivery(f.captured.token, f.abort.signal);
+  expect(f.producer.executeHumanDelivery(f.captured.token, f.abort.signal)).toBe(execution);
+  await expect(execution).rejects.toThrow();
   expect(await readFile(f.sidecar)).toEqual(before);
   expect(() => f.producer.port.snapshot(f.captured.token)).toThrow();
   const verdict = {
@@ -463,10 +504,15 @@ it("actual explicit live delivery reaches the original callback exactly once but
 });
 it("lost durable answer acknowledgement never delivers, reopens a callback or creates execution authority", async () => {
   const f = await fixture();
+  const delivery = f.live.retainOriginalDelivery(f.input.query);
   f.loseAck();
   expect((await f.call("operator.answer", { optionId: "once" })).ok).toBe(false);
   await expect(f.delivered).rejects.toThrow("lost append acknowledgement");
   expect(await f.stores.events.readTypes("run", ["human.answered"])).toHaveLength(1);
+  await expect(
+    claimOriginalDelivery(delivery, f.input.query, f.actor, "once", f.captured.invocation.action),
+  ).rejects.toThrow();
+  await expect(f.producer.executeHumanDelivery(f.captured.token, f.abort.signal)).rejects.toThrow();
   expect((await f.call("operator.answer", { optionId: "once" })).ok).toBe(false);
   const restarted = new LiveHumanInput("boot");
   expect(restarted.inspect(f.target)).toBe("expired");
@@ -536,3 +582,43 @@ it("policyChanged refuses unqualified source evaluation and consumes the failed 
   expect(f.observed).not.toHaveBeenCalled();
   expect(f.reads).not.toHaveBeenCalled();
 });
+
+it("callback resolution followed by lost ownership acknowledgement never issues delivery authority", async () => {
+  const f = await fixture();
+  const delivery = f.live.retainOriginalDelivery(f.input.query);
+  f.loseOwnershipAck();
+  expect((await f.call("operator.answer", { optionId: "once" })).ok).toBe(false);
+  expect(await f.delivered).toBe("once");
+  expect(await f.stores.events.readTypes("run", ["human.answered"])).toHaveLength(1);
+  await expect(
+    claimOriginalDelivery(delivery, f.input.query, f.actor, "once", f.captured.invocation.action),
+  ).rejects.toThrow();
+  await expect(f.producer.executeHumanDelivery(f.captured.token, f.abort.signal)).rejects.toThrow();
+  expect(f.evidence.recordAuthorization).not.toHaveBeenCalled();
+  expect(f.reads).not.toHaveBeenCalled();
+});
+it.each(["deny", "cancel", "credential", "binding", "image", "revision", "lease", "expiry", "registry-close"] as const)(
+  "original executor continuation refuses %s after delivery without a permit/read",
+  async (reason) => {
+    const f = await fixture();
+    if (reason === "cancel") {
+      f.abort.abort();
+      expect(await f.delivered).toBeUndefined();
+    } else {
+      expect((await f.call("operator.answer", { optionId: reason === "deny" ? "deny" : "once" })).ok).toBe(true);
+      expect(await f.delivered).toBe(reason === "deny" ? "deny" : "once");
+    }
+    if (reason === "credential") await f.revoke();
+    if (reason === "binding") await f.replaceOwner();
+    if (reason === "image") f.changeBuild();
+    if (reason === "revision") await writeFile(f.sidecar, `${await readFile(f.sidecar, "utf8")}\n`);
+    if (reason === "lease") await f.breakLease();
+    if (reason === "expiry") f.snapshot.expiresAt = new Date(0).toISOString();
+    if (reason === "registry-close") f.live.close();
+    const execution = f.producer.executeHumanDelivery(f.captured.token, f.abort.signal);
+    await expect(execution).rejects.toThrow();
+    expect(f.producer.executeHumanDelivery(f.captured.token, f.abort.signal)).toBe(execution);
+    expect(f.evidence.recordAuthorization).not.toHaveBeenCalled();
+    expect(f.reads).not.toHaveBeenCalled();
+  },
+);

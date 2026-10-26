@@ -1,6 +1,6 @@
 /** Inactive Linux service producer. No transport registration, native choices or qualification. */
 import { isDeepStrictEqual } from "node:util";
-import type { ActionEvidenceV1, MutationActor, PolicyPortV1 } from "@orca/core";
+import type { ActionEvidenceV1, ExecutionReceiptV1, MutationActor, PolicyPortV1 } from "@orca/core";
 import {
   assertManagedTypedStoreBinding,
   type ManagedTypedStoreBinding,
@@ -10,7 +10,12 @@ import {
   type ScopedPermissionCapture,
   type ScopedPermissionCapturePort,
 } from "@orca/agents";
-import type { HumanInputQuery, LiveHumanInput } from "@orca/engine";
+import {
+  assertOriginalDelivery,
+  type HumanInputQuery,
+  type LiveHumanInput,
+  type LiveOriginalDelivery,
+} from "@orca/engine";
 import type { DisposableFileReadParameters } from "../../engine/src/disposable-file-read.js";
 import type {
   createOwnedFileReadServiceForTest,
@@ -30,6 +35,14 @@ const factsOf = (action: Pick<ActionEvidenceV1, "authority">): ScopedCaptureFact
   revocationEpoch: action.authority.revocationEpoch,
   leaseEpoch: action.authority.leaseEpoch,
 });
+// Runtime capability index only; no action JSON can register an owned prompt.
+const ownedPrompts = new WeakMap<
+  ScopedPermissionCapture,
+  (action: ActionEvidenceV1) => { onceOptionId: string; denyOptionId: string }
+>();
+export function ownedReadInputOptions(capture: ScopedPermissionCapture, action: ActionEvidenceV1) {
+  return ownedPrompts.get(capture)?.(action);
+}
 
 /** Retains only facades created here by the actual bounded service, never caller action JSON.
  * The existing live query must already belong to the original callback. Its presentation
@@ -51,6 +64,9 @@ export function ownedReadScopedCapture(options: {
     actor: MutationActor;
     target: ScopedCaptureTarget;
     query: HumanInputQuery;
+    delivery: LiveOriginalDelivery;
+    humanStarted: boolean;
+    execution?: Promise<ExecutionReceiptV1>;
     binding: ManagedTypedStoreBinding;
     blocked: boolean;
     refreshed: boolean;
@@ -69,8 +85,11 @@ export function ownedReadScopedCapture(options: {
   function current(entry: Entry) {
     if (entry.blocked || entry.binding !== binding) refuse();
     assertManagedTypedStoreBinding(entry.binding);
-    live.assertOriginalQuery(entry.query);
-    if (!["pending", "accepting"].includes(live.inspect(entry.target))) refuse();
+    if (entry.humanStarted) assertOriginalDelivery(entry.delivery, entry.query);
+    else {
+      live.assertOriginalQuery(entry.query);
+      if (!["pending", "accepting"].includes(live.inspect(entry.target))) refuse();
+    }
     entry.invocation.assertCurrent();
   }
   function lookup(token: ScopedPermissionCapture) {
@@ -109,8 +128,7 @@ export function ownedReadScopedCapture(options: {
         binding: entry.binding,
         resourceWorkspaceRef: action.workspaceRef.value,
         actor: { ...entry.actor },
-        // This producer has no independently completed required-review provenance.
-        review: { result: "unavailable", sourceRefs: [] },
+        review: entry.invocation.reviewProvenance(),
       };
     },
     assertCurrent(token, authority) {
@@ -146,9 +164,34 @@ export function ownedReadScopedCapture(options: {
       current(entry);
       return entry.invocation;
     },
+    /** Called by the original executor continuation after its explicit answer, never by Save.
+     * Failed/uncertain completion consumes this attempt; duplicates share its exact outcome. */
+    executeHumanDelivery(token: ScopedPermissionCapture, signal: AbortSignal): Promise<ExecutionReceiptV1> {
+      const entry = lookup(token);
+      if (entry.execution) return entry.execution;
+      if (entry.blocked) return Promise.reject(new Error("Original owned read capture unavailable"));
+      entry.humanStarted = true;
+      entry.execution = (async () => {
+        try {
+          await currentBinding();
+          same(await readFacts({ ...entry.actor }), factsOf(entry.invocation.action));
+          await currentBinding();
+          const verdict = await entry.invocation.completeHumanDelivery(signal);
+          current(entry);
+          const permit = await entry.invocation.authorize(entry.invocation.action, verdict, signal);
+          return await entry.invocation.dispatch(permit, signal);
+        } finally {
+          entry.blocked = true;
+        }
+      })();
+      return entry.execution;
+    },
     async capture(input: {
       target: ScopedCaptureTarget;
       query: HumanInputQuery;
+      /** Actual original owned-I/O prompt meaning, supplied by its trusted callback owner. */
+      onceOptionId: string;
+      denyOptionId: string;
       actor: MutationActor;
       owner: SyntheticReadOwner;
       parameters: DisposableFileReadParameters;
@@ -170,7 +213,17 @@ export function ownedReadScopedCapture(options: {
         policy = input.policy,
         evidence = input.evidence;
       const query = input.query;
+      const onceOptionId = input.onceOptionId,
+        denyOptionId = input.denyOptionId;
       live.assertOriginalQuery(query);
+      if (
+        !onceOptionId ||
+        !denyOptionId ||
+        onceOptionId === denyOptionId ||
+        !query.options.some((option) => option.id === onceOptionId) ||
+        !query.options.some((option) => option.id === denyOptionId)
+      )
+        refuse();
       same(
         { ...query.live!.identity, runId: query.runId, stepRunId: query.stepRunId, requestId: query.requestId },
         target,
@@ -198,15 +251,25 @@ export function ownedReadScopedCapture(options: {
       invocation.assertCurrent();
       const token = Object.freeze({}) as ScopedPermissionCapture;
       live.assertOriginalQuery(query);
+      const delivery = live.retainOriginalDelivery(query);
+      invocation.bindHumanInput(delivery, query, actor, onceOptionId);
       entries.set(token, {
         token,
         invocation,
         actor,
         target,
         query,
+        delivery,
+        humanStarted: false,
         binding: active,
         blocked: false,
         refreshed: false,
+      });
+      ownedPrompts.set(token, (candidate) => {
+        const entry = lookup(token);
+        current(entry);
+        same(candidate, entry.invocation.action);
+        return { onceOptionId, denyOptionId };
       });
       return Object.freeze({ token, invocation });
     },
