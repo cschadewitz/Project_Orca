@@ -367,3 +367,8 @@ The subsequent [finite registration/counter proposal](controlled-registration-co
 preserves these original outcomes and reports only offline event/counter analysis.
 It requires independent review before another fresh attempt and grants no
 accepting token or connected release.
+
+After that bounded source review and separate authorization, the
+[fresh gated observation](controlled-connected-fresh-observation.md) completes
+original bootstrap checks, then times out during connected Save. It preserves
+every earlier outcome and remains incomplete, with no accepting token.
