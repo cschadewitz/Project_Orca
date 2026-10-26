@@ -91,7 +91,8 @@ There is no Node API here to seal a general regular file against a hostile
 same-UID/root actor, atomically authorize a syscall against remote revocation,
 or prove immutable content while an external writer races the read. Those
 properties/environments are unsupported. Post-read checks do not undo a read
-that already happened. Nanosecond metadata is change evidence, not a content seal.
+that already happened. JavaScript cancellation cannot interrupt the synchronous
+kernel read; current lifetime/authority is checked again when it returns. Nanosecond metadata is change evidence, not a content seal.
 The fixture does not establish immutable snapshots against hostile writers,
 network-filesystem/kernel behavior, hard-link intake, arbitrary file ownership,
 Windows reparses, macOS/TCC, SSH, descendant processes or arbitrary native syscalls.
