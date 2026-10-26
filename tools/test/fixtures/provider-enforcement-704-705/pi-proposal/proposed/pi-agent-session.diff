@@ -1,0 +1,49 @@
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index 3a9174cf6ea4cdce791c08a84f6ac25b95b6fb01..94b7ceab1f147c613439b0873c33c8823eeef602 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -145,7 +145,7 @@ import {
+ 	type NormalizedBuildSystemPromptOptions,
+ 	normalizeBuildSystemPromptOptions,
+ } from "./system-prompt.ts";
+-import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
++import { type BashFinalCheck, type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
+ import { createAllToolDefinitions } from "./tools/index.ts";
+ import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
+ import { addUsageToTotals, combineUsage, createUsageTotals } from "./usage-totals.ts";
+@@ -306,6 +306,8 @@ export interface ExtensionBindings {
+ 	abortHandler?: () => void;
+ 	shutdownHandler?: ShutdownHandler;
+ 	onError?: ExtensionErrorListener;
++	/** Protected final bash check from the run mode; extensions cannot bind it. Resolved per call. */
++	finalActionCheck?: () => BashFinalCheck | undefined;
+ }
+ 
+ export type QueuedInputDisposition = "handled" | "queued";
+@@ -458,6 +460,7 @@ export class AgentSession {
+ 	private _baseToolsOverride?: Record<string, AgentTool>;
+ 	private _sessionStartEvent: SessionStartEvent;
+ 	private _extensionUIContext?: ExtensionUIContext;
++	private _finalActionCheck?: () => BashFinalCheck | undefined;
+ 	private _extensionMode: ExtensionMode = "print";
+ 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
+ 	private _extensionAbortHandler?: () => void;
+@@ -3334,6 +3337,9 @@ export class AgentSession {
+ 		if (bindings.onError !== undefined) {
+ 			this._extensionErrorListener = bindings.onError;
+ 		}
++		if (bindings.finalActionCheck !== undefined) {
++			this._finalActionCheck = bindings.finalActionCheck;
++		}
+ 
+ 		this._applyExtensionBindings(this._extensionRunner);
+ 		await this._extensionRunner.emit(this._sessionStartEvent);
+@@ -3680,7 +3686,7 @@ export class AgentSession {
+ 				)
+ 			: createAllToolDefinitions(this._cwd, {
+ 					read: { autoResizeImages },
+-					bash: { commandPrefix: shellCommandPrefix, shellPath },
++					bash: { commandPrefix: shellCommandPrefix, shellPath, finalCheck: () => this._finalActionCheck?.() },
+ 				});
+ 
+ 		this._baseToolDefinitions = new Map(

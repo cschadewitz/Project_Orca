@@ -1,0 +1,34 @@
+diff --git a/src/pi-rpc/process.ts b/src/pi-rpc/process.ts
+index 160cc90e0db0bedbbfc1843c210200af13be04b8..f58f90e3aad0c9b17bc0e2d5a11443cb51be9937 100644
+--- a/src/pi-rpc/process.ts
++++ b/src/pi-rpc/process.ts
+@@ -53,6 +53,8 @@ type PiRpcCommand =
+   | { type: 'get_messages'; id?: string }
+   // Commands
+   | { type: 'get_commands'; id?: string }
++  // Typed final bash authorization
++  | { type: 'enable_final_action_authorization'; id?: string }
+ 
+ type PiRpcResponse = {
+   type: 'response'
+@@ -67,6 +69,7 @@ type PiExtensionUiResponse =
+   | { id: string; value: string }
+   | { id: string; confirmed: boolean }
+   | { id: string; cancelled: true }
++  | { id: string; authorization: { toolCallId: string; optionId: string } }
+ 
+ export type PiRpcEvent = Record<string, unknown>
+ 
+@@ -272,6 +275,12 @@ export class PiRpcProcess {
+     return res.data
+   }
+ 
++  /** Opt in to pi's typed final bash authorization; false when this pi does not support it. */
++  async enableFinalActionAuthorization(): Promise<boolean> {
++    const res = await this.request({ type: 'enable_final_action_authorization' })
++    return res.success === true
++  }
++
+   async getAvailableModels(): Promise<unknown> {
+     const res = await this.request({ type: 'get_available_models' })
+     if (!res.success) throw new Error(`pi get_available_models failed: ${res.error ?? JSON.stringify(res.data)}`)
