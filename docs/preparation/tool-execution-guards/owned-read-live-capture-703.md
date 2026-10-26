@@ -143,18 +143,20 @@ human-delivery capability.
 
 ## Dependency and validation scope
 
-Main `5a58ab7c6944c5a990382e5abcb5a76e4a3af09e` contains merged #732/#733/#734.
+Main `dc62e348212cdf4e46b95e696c78641917e2ca27` contains merged #732/#733/#734/#736
+and is incorporated non-force. Its merge left the lifecycle source tree unchanged.
 Corrected #736 `040a00ec4035fdea5e636e91dc22a578f1828cf1` was incorporated first.
 The parent-supplied main-integrated head
 `59ff7a2126d3078ff2ee5fbb193bc093e76bc5c8` is now merged non-force. Its sole
 textual conflict with this branch was the independently added engine fixture contract
 repair; the final file is exactly #736's supplied version, replacing this branch's
-earlier repair. Callback/verdict changes remain separate. Parent reports the privacy
-correction source review and main CI passed; final #736 integration review/CI are
-pending. This does not declare combined acceptance. Parent owns merges. This lifecycle delta does not duplicate or alter the protected-owner privacy fix;
+earlier repair. Callback/verdict changes remain separate. Parent confirmed final #736
+independent review and full hosted CI `40313893347` passed before merging it. This
+new lifecycle delta still needs its own independent review/CI; parent owns merges.
+It does not duplicate or alter the protected-owner privacy fix;
 its separate owned-prompt resolver preserves the installed-coverage gate.
 
 Checks and exact tested head are reported in the handoff. No production accepted
 build entry, live activation, access/credential change, deployment, upstream message,
-Mac test or Apple Silicon acceptance is included. Positive coverage and final
+native Mac test or Apple Silicon acceptance is included. Positive coverage and final
 combined-main acceptance remain explicit independent gates.
