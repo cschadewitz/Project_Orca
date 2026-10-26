@@ -446,11 +446,11 @@ export function createOwnedFileReadServiceForTest(options: {
               entry.human = { delivery, query, actor: immutable(actor), onceOptionId };
               return undefined;
             },
-            completeHumanDelivery: async (signal) => {
-              await facade.evaluate(signal);
+            completeHumanDelivery: (signal) => {
               // A fresh rule-authorized invocation cannot acquire human attribution.
               // Only the original evaluated ask (retained across Save refresh) may do so.
-              if (!entry.humanEligible) throw refuse();
+              // The fence awaits settled original delivery before any fresh evaluation.
+              if (!entry.humanEligible) return Promise.reject(refuse());
               return fence.completeHumanDelivery(action, signal);
             },
             reviewProvenance: () => fence.reviewProvenance(action),

@@ -160,3 +160,27 @@ Checks and exact tested head are reported in the handoff. No production accepted
 build entry, live activation, access/credential change, deployment, upstream message,
 native Mac test or Apple Silicon acceptance is included. Positive coverage and final
 combined-main acceptance remain explicit independent gates.
+
+## Deferred delivery acknowledgement correction
+
+Independent review found a liveness race in head
+`2920e24743ae3348d1e1b24ede23783ef1123e08`: completion evaluated its facade before
+entering the fence's settled-delivery wait. After refresh, that evaluation could
+reach the protected capture's currentness check while the callback had resolved but
+its outer lease acknowledgement was still pending. The two new regression cases
+failed against that head: fresh evaluation count was one instead of zero.
+
+Completion now uses only the eligibility already retained from the original
+`require-human` evaluation. It enters the fence directly, which awaits the genuine
+prebound delivery capability before any fresh policy evaluation. No new evaluation
+is used to manufacture original-human eligibility. Currentness and qualification
+checks remain unchanged.
+
+`owned-file-read-delivery-ack.test.ts` defers the actual original lease wrapper's
+final acknowledgement after callback resolution. Completion stays pending in both
+cases. A successful acknowledgement proceeds to the unchanged unqualified refusal
+gate; a lost acknowledgement rejects terminally. Both perform zero fresh policy
+evaluations, authorization writes and OS reads. This lower-level regression reuses
+#734's existing synthetic source/approval assumptions solely to exercise the actual
+one-time refresh. Coverage stays policy-per-ask, installed refs and native choices
+stay empty, and no positive protected Save/read acceptance is claimed.

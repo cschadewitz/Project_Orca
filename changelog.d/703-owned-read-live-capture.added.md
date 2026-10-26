@@ -3,3 +3,5 @@
   remain refused; disposable tests cover delivery, lost acknowledgement and revocation.
 - Bind human verdict/permit completion to the actual original callback's ephemeral
   delivery capability, retaining separate Save/answer actions and fail-closed installed gates.
+- Await settled original delivery before refreshed policy evaluation, preserving
+  terminal refusal when the final lease acknowledgement is lost.
