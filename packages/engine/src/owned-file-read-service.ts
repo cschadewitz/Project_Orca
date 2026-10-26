@@ -460,7 +460,11 @@ export function createOwnedFileReadServiceForTest(options: {
               return result;
             },
             bindReview: fence.bindReview.bind(fence),
-            completeReview: fence.completeReview.bind(fence),
+            completeReview: async (bound, result, signal) => {
+              const verdict = await fence.completeReview(bound, result, signal);
+              if (verdict.outcome === "require-human") entry.humanEligible = true;
+              return verdict;
+            },
             authorize: fence.authorize.bind(fence),
             dispatch: fence.dispatch.bind(fence),
             inspect: fence.inspect.bind(fence),

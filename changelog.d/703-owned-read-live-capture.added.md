@@ -5,3 +5,5 @@
   delivery capability, retaining separate Save/answer actions and fail-closed installed gates.
 - Await settled original delivery before refreshed policy evaluation, preserving
   terminal refusal when the final lease acknowledgement is lost.
+- Retain original human eligibility when bound required-review completion requests
+  a person, while keeping rule-allow completions ineligible for human attribution.

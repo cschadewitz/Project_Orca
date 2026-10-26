@@ -76,8 +76,8 @@ following its separate explicit answer. Save never calls it. It rechecks origina
 protected facts/binding and invokes the retained service's `completeHumanDelivery`,
 then the existing canonical `authorize` and `dispatch` methods. Duplicate calls share
 one terminal result; failed or uncertain attempts do not reopen. The service retains
-whether this invocation actually evaluated to `require-human`, including across the
-one-time Save refresh. A fresh invocation allowed by an existing rule cannot acquire
+whether this invocation actually reached `require-human` through policy evaluation
+or actual bound required-review completion, including across the one-time Save refresh. A fresh invocation allowed by an existing rule cannot acquire
 human attribution through this method.
 
 `SyntheticReadFence.completeHumanDelivery` claims the original delivery capability,
@@ -184,3 +184,25 @@ evaluations, authorization writes and OS reads. This lower-level regression reus
 #734's existing synthetic source/approval assumptions solely to exercise the actual
 one-time refresh. Coverage stays policy-per-ask, installed refs and native choices
 stay empty, and no positive protected Save/read acceptance is claimed.
+
+
+## Bound review-to-human eligibility correction
+
+Re-review found that original human eligibility followed only `evaluate`, although
+actual bound required-review completion can also produce `require-human`. Against
+`802bcf9ef7e6a7c4f71272ee91232b43090bd9aa`, two actual offline-judge/strict-policy
+indeterminate-completion cases rejected immediately while acknowledgement was
+pending; the three refresh/rule-allow control cases passed.
+
+The facade now retains eligibility when its actual `fence.completeReview` returns
+`require-human`, and never sets it on rule-allow. It neither evaluates again nor
+changes review provenance, currentness, qualification, expiry or cancellation.
+The expanded five-case acknowledgement regression binds a real required review,
+assesses it through the actual offline judge and completes it through strict policy.
+Require-human completion stays pending until original acknowledgement settles;
+success still reaches the unqualified refusal and lost acknowledgement is terminal.
+An evaluated fit completes as rule-allow and remains human-ineligible. Every case
+uses exactly one initial facade evaluation, with zero extra fresh evaluations,
+authorization writes and OS reads. Indeterminate review remains failed review
+provenance and supplies no Save eligibility. Existing synthetic source/approval
+assumptions are unchanged; this is no positive protected Save/permit/read proof.
