@@ -213,14 +213,25 @@ export class ProtectedEventStore implements EventStore {
 
   async append(input: OrcaEventInput): Promise<OrcaEvent> {
     const inputs = await this.execution.getInputs(input.runId);
-    if (input.type === "revision.recorded" || input.type === "continuation.recorded") {
-      // Revision material is always private, including on otherwise non-sensitive runs.
+    if (
+      input.type === "revision.recorded" ||
+      input.type === "continuation.recorded" ||
+      (input.type === "agent.permission" &&
+        (input.payload.scopedApprovalRef !== undefined || input.payload.entry !== undefined))
+    ) {
+      // Journal and explicit scoped Save material are always private, including non-sensitive runs.
       // Runtime boundary setup must promote inputs through the existing protected store.
       if (!inputs || !input.payload.entry) throw unavailable();
+      if (input.type === "agent.permission" && !input.payload.scopedApprovalRef) throw unavailable();
       const executionPayloadRef = randomUUID();
       await this.execution.putPayload(executionPayloadRef, input);
       const { entry: _entry, ...metadata } = input.payload;
-      return this.publicEvents.append({ ...input, payload: metadata, executionPayloadRef } as OrcaEventInput);
+      // The shared permission API accepts free-form metadata, even though the current
+      // scoped producer uses fixed text. Neither strings nor UUID-shaped caller refs
+      // are disclosure authority. Keep their original values in the encrypted payload.
+      const publicMetadata =
+        input.type === "agent.permission" ? redactExecutionValue(metadata, inputs.secrets) : metadata;
+      return this.publicEvents.append({ ...input, payload: publicMetadata, executionPayloadRef } as OrcaEventInput);
     }
     if (!inputs) {
       if (!this.publicOnlyRuns.has(input.runId)) {

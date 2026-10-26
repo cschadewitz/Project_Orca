@@ -38,7 +38,7 @@ export interface ExecutionStore {
   observe?<T>(
     work: () => Promise<T>,
     limits: { maxRecords: number },
-  ): Promise<{ value: T; verifyUnchanged(): Promise<void> }>;
+  ): Promise<{ value: T; verifyUnchanged(): Promise<void>; assertUnchanged?(): undefined }>;
   getGeneration(id: string): Promise<unknown>;
   putGeneration(id: string, snapshot: unknown): Promise<void>;
   getInputs(runId: string): Promise<ExecutionInputs | undefined>;
@@ -80,7 +80,7 @@ export class InMemoryExecutionStore implements ExecutionStore {
   async observe<T>(
     work: () => Promise<T>,
     limits: { maxRecords: number },
-  ): Promise<{ value: T; verifyUnchanged(): Promise<void> }> {
+  ): Promise<{ value: T; verifyUnchanged(): Promise<void>; assertUnchanged(): undefined }> {
     if (this.observation.getStore()) throw unavailable();
     if (!Number.isSafeInteger(limits.maxRecords) || limits.maxRecords < 0) throw observationLimit();
     const scope: NonNullable<ReturnType<typeof this.observation.getStore>> = {
@@ -99,6 +99,14 @@ export class InMemoryExecutionStore implements ExecutionStore {
     const reads = [...scope.reads.values()];
     return {
       value,
+      assertUnchanged() {
+        try {
+          for (const { digest, read } of reads) if (memoryDigest(read()) !== digest) throw unavailable();
+          return undefined;
+        } catch {
+          throw unavailable();
+        }
+      },
       async verifyUnchanged() {
         try {
           for (const { digest, read } of reads) if (memoryDigest(read()) !== digest) throw unavailable();
@@ -200,7 +208,7 @@ export class FileExecutionStore implements ExecutionStore {
   async observe<T>(
     work: () => Promise<T>,
     limits: { maxRecords: number },
-  ): Promise<{ value: T; verifyUnchanged(): Promise<void> }> {
+  ): Promise<{ value: T; verifyUnchanged(): Promise<void>; assertUnchanged(): undefined }> {
     return observePrivateReads(work, limits);
   }
   async getGeneration(id: string): Promise<unknown> {

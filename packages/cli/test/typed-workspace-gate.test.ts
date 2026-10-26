@@ -149,6 +149,17 @@ it("fresh initialization durably confirms enrolled state and exposes only the ca
   const store = await f.owner.enrollFresh();
   expect(f.owner.inspect().state).toBe("enrolled");
   expect((await f.owner.currentStore()).available).toBe(true);
+  const first = await f.owner.currentStore(),
+    second = await f.owner.currentStore();
+  if (!first.available || !second.available) throw new Error("owner unavailable");
+  expect(first.binding).toBe(second.binding);
+  expect(first.store).toBe(store);
+  expect(second.store).toBe(await f.owner.openStore());
+  const newLifetime = createManagedTypedWorkspace(f.ports);
+  const replacement = await newLifetime.currentStore();
+  if (!replacement.available) throw new Error("replacement unavailable");
+  expect(replacement.store).not.toBe(store);
+  expect((await replacement.store.read()).revision).toBe((await store.read()).revision);
   expect((await store.read()).document).toEqual({ version: 2, agents: {}, scopedRules: { version: 1, records: [] } });
   expect(await readdir(f.control)).toEqual(["enrolled.json", "intent.json"]);
   await expect(f.owner.enrollFresh()).rejects.toThrow("fresh exclusive");
