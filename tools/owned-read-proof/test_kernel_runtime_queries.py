@@ -203,6 +203,32 @@ class NativeReplayControls(unittest.TestCase):
             with self.subTest(call=call), self.assertRaises(RuntimeError):
                 self.event(r, call, args, '1')
 
+    def test_known_shared_files_thread_cannot_read_any_native_query(self):
+        for index, path in enumerate(QUERIES):
+            r = self.replay()
+            r.native_completed = list(QUERIES)[:index]
+            r.threads.add(11)  # Known CLONE_THREAD|CLONE_FILES member, same handle table.
+            self.open(r, path)
+            with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, 'native query thread'):
+                self.read(r, path, pid=11)
+            self.assertFalse(r.handles[20].native_read)
+            self.read(r, path)
+
+    def test_known_shared_files_thread_cannot_close_any_native_query(self):
+        for index, path in enumerate(QUERIES):
+            r = self.replay()
+            preceding = list(QUERIES)[:index]
+            r.native_completed = preceding.copy()
+            r.threads.add(11)
+            self.open(r, path)
+            self.read(r, path)
+            with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, 'native query thread'):
+                self.event(r, 'close', ['20'], pid=11)
+            self.assertIn(20, r.handles)
+            self.assertEqual(r.native_completed, preceding)
+            self.event(r, 'close', ['20'])
+            self.assertEqual(r.native_completed, preceding + [path])
+
     def test_present_stat_still_compares_actual_held_inode_and_metadata(self):
         r = self.replay()
         self.open(r)

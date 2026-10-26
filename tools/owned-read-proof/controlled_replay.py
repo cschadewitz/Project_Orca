@@ -721,7 +721,8 @@ class Replay:
                 require(result == '0' and number not in {self.lifetime, self.command, self.ack}, 'unplanned inherited/failed close')
                 require(not handle.directory_seen or handle.directory_eof, 'directory handle closed before complete enumeration')
                 if obj.family == 'trusted-kernel-runtime-query':
-                    require(handle.native_read, 'native query closed without exact single read')
+                    require(pid == self.leader and handle.native_read,
+                            'native query closed by nonleader or without exact single read')
                     self.native_completed.append(next(iter(obj.names)))
                 if obj.family == 'runtime-query' and next(iter(obj.names)) == f'/proc/self/fdinfo/{self.lifetime}':
                     require(pid == self.leader and handle.physical_bound and handle.query_eof,
@@ -735,7 +736,7 @@ class Replay:
                 if obj.family == 'trusted-kernel-runtime-query':
                     path = next(iter(obj.names))
                     request = NATIVE_QUERIES[path][0]
-                    require(call == 'read' and not handle.native_read and args[2:] == [str(request)] and
+                    require(pid == self.leader and call == 'read' and not handle.native_read and args[2:] == [str(request)] and
                             handle.flags == {'O_RDONLY', 'O_CLOEXEC'}, 'native query is not exact single sequential read')
                     data, count = string(args[1]), positive_result(result)
                     require(0 < count == len(data) < request and b'\0' not in data and

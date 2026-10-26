@@ -291,3 +291,89 @@ connected launch and released no connected token. Raw traces and retained
 originals, including disposable private records, stay local. Parent retains
 source review, CI and merge ownership; the separate main tampered-approval test
 was not edited. Cal identity/assignment is retained on draft #748.
+
+## Source-review follow-up: explicit leader effects and expiry operands
+
+The common native-descriptor guard in `7fc8f3e` already required the original
+leader for read/close. The follow-up makes that requirement explicit in each
+native read and close branch as well. Two new negative controls exercise another
+known `CLONE_THREAD|CLONE_FILES` member on **each of the four paths**, verifying
+that a rejected read does not consume the query and a rejected close does not
+remove its handle or advance startup completion. General private/resource
+semantics are unchanged. The current Python suite has **82 passing tests**;
+`git diff --check` passes.
+
+Read-only regression replay of the preserved `q3lv_8xz` image/trace with this
+follow-up completes the same kernel checks and reaches the same semantic refusal.
+This is regression replay of the exact preserved image, not a new fresh bootstrap
+or qualification. Its image and trace hashes remain as recorded above.
+
+The retained operands of `controlled_semantics.py`'s actual predicate are:
+
+| Operand | Actual epoch seconds used by Python |
+| --- | --- |
+| `startedWallTime` | `1793038623.3832116` |
+| `finishedWallTime` | `1793038632.3893685` |
+| authenticated `expiry` | `1793038680.23` |
+| `resource.birth_ns / 1e9` | `1793038625.2270284` |
+| `resource.birth_ns / 1e9 + 55` | `1793038680.2270284` |
+
+Evaluating each conjunct separately gives:
+
+* `startedWallTime <= finishedWallTime`: **true**.
+* `finishedWallTime < expiry`: **true**, with 47.84063148498535 seconds remaining.
+* `expiry <= resource.birth_ns / 1e9 + 55`: **false**, by
+  0.002971649169921875 seconds in the actual floating-point evaluation.
+
+The exact statx birth value is `tv_sec=1793038625`, `tv_nsec=227028421`, or
+`1793038625227028421` integer nanoseconds. All **67** decoded statx birth
+observations for resource device **0:33**, inode **876**, agree; first/last
+one-based raw lines are **23284/160976**. Every returned mask is
+`STATX_ALL|STATX_MNT_ID` (`0x1fff`), including `STATX_BTIME` (`0x0800`), rather
+than a zero/default unreported birth field. The retained effective `/tmp`
+mountinfo entry is tmpfs, device **0:33**, mount ID **106**, and the resource
+statx also reports mount ID `0x6a` (106). This is retained mountinfo/statx evidence,
+not a new resource-descriptor fstatfs measurement after its unlink/close.
+
+Authenticated expiry is `2026-10-26T18:18:00.230Z`; subtracting exactly 55 seconds
+implies the source's millisecond owner clock sample at
+`2026-10-26T18:17:05.230Z`. Hence exact
+`expiry - 55 seconds - btime` is **2,971,579 ns**. The earlier fresh run's same
+quantity is **3,022,489 ns**. These inferred clock samples come from the reviewed
+`Date.now()+55000` source and authenticated expiry, not independent wall-clock
+samples in the trace. Snapshot construction precedes service construction and
+the fixture creation syscall. Source order therefore supports the intended upper
+bound if those timestamp values are directly comparable at the required
+precision; an owner-origin mismatch is **not established** by this evidence.
+The upper bound is against resource birth, not process launch. Expiry being
+56.84678840637207 seconds after launch does not identify the failing conjunct.
+
+Retained supervisor start/finish UTC values are
+`2026-10-26T18:17:03.383212Z` / `2026-10-26T18:17:12.389369Z`.
+Their difference is 9.006156921386719 seconds, versus reported monotonic elapsed
+9.006174950000059 seconds. The phase log has only sent/received event order;
+command consumption and acknowledgement occur at raw lines **3639/161019**.
+**Exact phase wall timestamps were not retained**. The trace has no wall-clock
+prefixes or decoded `clock_gettime`/`gettimeofday` calls establishing the owner
+sample. No historical phase timestamps or clock adjustment conclusions are
+invented from file times.
+
+Coarse inode time is a supported hypothesis, not a proven cause for this run.
+The kernel's [multigrain timestamp documentation](https://docs.kernel.org/filesystems/multigrain-ts.html)
+explains jiffy-based inode stamping. Representative upstream Linux 6.18
+[tmpfs source](https://github.com/torvalds/linux/blob/v6.18/mm/shmem.c) initializes
+birth time from the inode's initial timestamp and returns it with `STATX_BTIME`;
+[`current_time`](https://github.com/torvalds/linux/blob/v6.18/fs/inode.c) obtains a
+coarse clock value before any applicable fine-time handling. These sources are
+context, not attestation of the running kernel binary. A **current read-only**
+probe on the same environment reports kernel release `6.18.55`,
+`clock_getres(CLOCK_REALTIME)=1 ns`, and
+`clock_getres(CLOCK_REALTIME_COARSE)=4 ms`. It does not retroactively measure the
+clock used for the historical inode birth. Nanosecond representation and a valid
+birth-time mask alone do not prove a fine-grained sampling instant.
+
+The expiry predicate, 55-second owner bound, 60-second process timeout, clock
+assumptions and refusing status remain unchanged. No guessed slack, launch-based
+rebasing or circular `expiry-55` acceptance was added. A precision-based correction
+requires separately reviewed evidence; this checkpoint proposes no numerical
+allowance and creates no accepting or connected path.
