@@ -173,7 +173,10 @@ const ruleSchema = z.custom<StrictPermissionRule>(validStrictPermissionRule);
 const recordSchema = z.strictObject({
   version: z.literal(1),
   choice: z.literal("save"),
-  requiredReview: z.literal("passed"),
+  requiredReview: z.enum(["passed", "failed", "unavailable"]),
+  persistenceReview: z
+    .strictObject({ result: z.literal("passed"), sourceRefs: z.array(z.string().min(1)).min(1) })
+    .optional(),
   acceptedAt: z.iso.datetime(),
   credential: credentialFactsSchema,
   lease: LeaseSchema,
@@ -188,7 +191,7 @@ const recordSchema = z.strictObject({
   scope: ScopedPermissionScopeSchema,
   projection: z.record(z.string(), z.unknown()),
   references: z.array(referenceSchema).max(256),
-  reviewSourceRefs: z.array(z.string().min(1)).min(1),
+  reviewSourceRefs: z.array(z.string().min(1)),
 });
 type Approval = z.infer<typeof recordSchema>;
 type Entry = {
@@ -201,6 +204,7 @@ type Entry = {
   reviewSourceRefs: string[];
   state: "review" | "saving" | "approved" | "retired" | "uncertain";
   assertProofCurrent?: () => undefined;
+  assertPersistenceCurrent?: () => undefined;
 };
 export interface ProtectedScopedPermissionOptions {
   readonly currentStore: ManagedTypedStoreProvider;
@@ -241,6 +245,9 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
     forAction: options.captures.forAction.bind(options.captures),
     assertCurrent: options.captures.assertCurrent.bind(options.captures),
     policyChanged: options.captures.policyChanged.bind(options.captures),
+    ...(options.captures.verifyPersistenceReview
+      ? { verifyPersistenceReview: options.captures.verifyPersistenceReview.bind(options.captures) }
+      : {}),
   });
   const approveDisclosure = options.disclosure.approve.bind(options.disclosure);
   const entries = new Map<string, Entry>();
@@ -330,6 +337,12 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
     if (entry.review.action.workspaceRef.state !== "complete") fail();
     same(snapshot.resourceWorkspaceRef, entry.review.action.workspaceRef.value);
     same(snapshot.review, { result: entry.review.requiredReview, sourceRefs: entry.reviewSourceRefs });
+    same(snapshot.persistenceReview, entry.review.persistenceReview);
+    if (
+      entry.review.persistenceReview &&
+      (!entry.assertPersistenceCurrent || entry.assertPersistenceCurrent() !== undefined)
+    )
+      fail();
     same(currentFacts(entry.actor, entry.review.command.expectedRevision, entry.binding), factsOf(snapshot.action));
     if (captures.assertCurrent(entry.capture, snapshot.action.authority) !== undefined) fail();
     return undefined;
@@ -351,7 +364,9 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       return refs.length === 1 ? { id: refs[0]!.id } : undefined;
     },
   });
-  async function readApproval(record: TypedRuleRecord): Promise<Approval> {
+  async function readApproval(
+    record: TypedRuleRecord,
+  ): Promise<Approval & { assertPersistenceCurrent?: (() => undefined) | undefined }> {
     // Locator only. Parsing a reference never restores a capability or confers authority.
     let locator: unknown;
     try {
@@ -410,7 +425,14 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
     if (parsed.command.rule.delegation) fail();
     verified(parsed.action);
     if (parsed.command.rule.ruleRevision !== strictPermissionRuleRevision(parsed.command.rule)) fail();
-    return parsed;
+    let assertPersistenceCurrent: (() => undefined) | undefined;
+    if (parsed.persistenceReview) {
+      if (!captures.verifyPersistenceReview) return fail();
+      const proof = await captures.verifyPersistenceReview(parsed.action, parsed.persistenceReview.sourceRefs);
+      assertPersistenceCurrent = proof.assertCurrent.bind(proof);
+      assertPersistenceCurrent();
+    } else if (parsed.requiredReview !== "passed" || !parsed.reviewSourceRefs.length) fail();
+    return { ...parsed, assertPersistenceCurrent };
   }
   const owner: ScopedPermissionOwner = {
     currentStore: provider,
@@ -432,6 +454,13 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       for (const key of ["instanceId", "sessionId", "turnId", "invocationId", "runId", "stepRunId"] as const)
         same(source.action.invocation[key], target[key]);
       const action = structuredClone(source.action);
+      let assertPersistenceCurrent: (() => undefined) | undefined;
+      if (source.persistenceReview) {
+        if (!captures.verifyPersistenceReview || !source.persistenceReview.sourceRefs.length) return fail();
+        const proof = await captures.verifyPersistenceReview(action, source.persistenceReview.sourceRefs);
+        assertPersistenceCurrent = proof.assertCurrent.bind(proof);
+        assertPersistenceCurrent();
+      }
       const lineageKey = JSON.stringify(targetSchema.parse(target));
       const originalCapture = lineages.get(lineageKey);
       if (originalCapture) {
@@ -506,6 +535,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         projection,
         scope,
         requiredReview: source.review.result,
+        ...(source.persistenceReview ? { persistenceReview: structuredClone(source.persistenceReview) } : {}),
       };
       const entry: Entry = {
         review: structuredClone(review),
@@ -515,6 +545,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         target: structuredClone(target),
         references,
         reviewSourceRefs: [...source.review.sourceRefs],
+        ...(assertPersistenceCurrent ? { assertPersistenceCurrent } : {}),
         state: "review",
       };
       assertEntry(entry);
@@ -589,8 +620,8 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       if (
         held !== entry ||
         entry.state !== "saving" ||
-        review.requiredReview !== "passed" ||
-        !entry.reviewSourceRefs.length ||
+        (review.requiredReview !== "passed" && review.persistenceReview?.result !== "passed") ||
+        (!entry.reviewSourceRefs.length && !review.persistenceReview?.sourceRefs.length) ||
         live.inspect(entry.target) !== "pending"
       )
         fail();
@@ -603,7 +634,8 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       const approval: Approval = recordSchema.parse({
         version: 1,
         choice: "save",
-        requiredReview: "passed",
+        requiredReview: review.requiredReview,
+        ...(review.persistenceReview ? { persistenceReview: review.persistenceReview } : {}),
         acceptedAt: new Date(now()).toISOString(),
         credential: credential(actor),
         lease: observedLease,
@@ -769,7 +801,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         if (!execution.observe) return fail();
         const observation = await execution.observe(
           async () => {
-            const proofs: Approval[] = [];
+            const proofs: Awaited<ReturnType<typeof readApproval>>[] = [];
             for (const record of snapshot.document.scopedRules.records) {
               const proof = await readApproval(record);
               same(proof.binding, identity(active));
@@ -788,7 +820,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         assertCapture();
         signal.throwIfAborted();
         return {
-          sourceRefs: proofs.flatMap((p) => p.reviewSourceRefs),
+          sourceRefs: proofs.flatMap((p) => [...p.reviewSourceRefs, ...(p.persistenceReview?.sourceRefs ?? [])]),
           scopeEvidenceRef: proofs[0]!.scopeEvidenceRef,
           approvalRecordRef: proofs[0]!.command.approvalRecordRef,
           authorityRevision: observed.authorityRevision,
@@ -796,7 +828,10 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
             assertProofs();
             assertManagedTypedStoreBinding(active);
             same(currentFacts(actor, snapshot.revision, active), observed);
-            for (const proof of proofs) credential(proof.actor);
+            for (const proof of proofs) {
+              credential(proof.actor);
+              proof.assertPersistenceCurrent?.();
+            }
             signal.throwIfAborted();
             assertCapture();
             return undefined;

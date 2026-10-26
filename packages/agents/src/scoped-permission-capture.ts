@@ -30,17 +30,26 @@ export interface ScopedPermissionCapturePort {
   forAction(action: ActionEvidenceV1, binding: ManagedTypedStoreBinding): Promise<ScopedPermissionCapture>;
   snapshot(capture: ScopedPermissionCapture): {
     readonly action: ActionEvidenceV1;
-    readonly target: ScopedCaptureTarget;
+    /** Absent for a closed automatic capture; there is no live query or answer target. */
+    readonly target?: ScopedCaptureTarget;
     readonly binding: ManagedTypedStoreBinding;
     /** Original resource workspace; distinct from the managed policy workspace identity. */
     readonly resourceWorkspaceRef: string;
     readonly actor: MutationActor;
     /** Outcome of the actual required review, retained by its owner, never a client/model claim. */
+    /** Distinct authenticated persistence review; never rewrites execution judge provenance. */
+    readonly persistenceReview?: { readonly result: "passed"; readonly sourceRefs: readonly string[] };
     readonly review: {
       readonly result: "passed" | "failed" | "unavailable";
       readonly sourceRefs: readonly string[];
     };
   };
+  /** Optional trusted owner capability, unavailable to RPC/JSON. Authenticate exact saved
+   * persistence attestation using protected records and independently current reviewer authority. */
+  verifyPersistenceReview?(
+    action: ActionEvidenceV1,
+    sourceRefs: readonly string[],
+  ): Promise<{ assertCurrent(): undefined }>;
   /** Synchronous retained executor/attempt/ceiling/expiry/lease assertion. Never deserialize a token. */
   assertCurrent(capture: ScopedPermissionCapture, authority: AuthorityStampV1): undefined;
   /** #734's actual service.refreshPolicyRevision transition: exactly once, only after

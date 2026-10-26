@@ -33,6 +33,7 @@ export interface RetainedScopedReview {
   /** Exact text approved by the trusted destination disclosure owner, never model output. */
   readonly scope: z.infer<typeof ScopedPermissionScopeSchema>;
   readonly requiredReview: "passed" | "failed" | "unavailable";
+  readonly persistenceReview?: { readonly result: "passed"; readonly sourceRefs: readonly string[] };
 }
 export interface ScopedPermissionOwner {
   readonly currentStore: ManagedTypedStoreProvider;
@@ -163,7 +164,7 @@ export function scopedPermissionMethods(
           current(entry);
           if (params.choice === "save") {
             if (
-              entry.review.requiredReview !== "passed" ||
+              (entry.review.requiredReview !== "passed" && entry.review.persistenceReview?.result !== "passed") ||
               entry.review.action.coverage.level !== "verified-per-execution"
             )
               stale();
