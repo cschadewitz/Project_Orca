@@ -1,0 +1,21 @@
+  override getPolicyUpdateOptions(
+    outcome: ToolConfirmationOutcome,
+  ): PolicyUpdateOptions | undefined {
+    if (
+      outcome === ToolConfirmationOutcome.ProceedAlwaysAndSave ||
+      outcome === ToolConfirmationOutcome.ProceedAlways
+    ) {
+      const command = stripShellWrapper(this.params.command);
+      if (this.hasTaintedOrBuildFileRisk()) {
+        return undefined;
+      }
+      const rootCommands = [...new Set(getCommandRoots(command))];
+      const allowRedirection = hasRedirection(command) ? true : undefined;
+
+      if (rootCommands.length > 0) {
+        return { commandPrefix: rootCommands, allowRedirection };
+      }
+      return { commandPrefix: this.params.command, allowRedirection };
+    }
+    return undefined;
+  }

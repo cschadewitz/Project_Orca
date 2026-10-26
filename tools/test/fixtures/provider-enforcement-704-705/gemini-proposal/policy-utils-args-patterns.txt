@@ -1,0 +1,35 @@
+export function buildArgsPatterns(
+  argsPattern?: string,
+  commandPrefix?: string | string[],
+  commandRegex?: string,
+): Array<string | undefined> {
+  if (commandPrefix) {
+    const prefixes = Array.isArray(commandPrefix)
+      ? commandPrefix
+      : [commandPrefix];
+
+    return prefixes.map((prefix) => {
+      // JSON.stringify safely encodes the prefix in quotes.
+      // We remove ONLY the trailing quote to match it as an open prefix string.
+      const encodedPrefix = JSON.stringify(prefix);
+      const openQuotePrefix = encodedPrefix.substring(
+        0,
+        encodedPrefix.length - 1,
+      );
+
+      // Escape the exact JSON literal segment we expect to see
+      const matchSegment = escapeRegex(`"command":${openQuotePrefix}`);
+
+      // We allow [\s], ["], or the specific sequence [\"] (for escaped quotes
+      // in JSON). We do NOT allow generic [\\], which would match "git\status"
+      // -> "gitstatus".
+      return `${matchSegment}(?:[\\s"]|\\\\")`;
+    });
+  }
+
+  if (commandRegex) {
+    return [`"command":"${commandRegex}`];
+  }
+
+  return [argsPattern];
+}

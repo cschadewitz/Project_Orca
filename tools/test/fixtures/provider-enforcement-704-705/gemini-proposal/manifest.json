@@ -84,6 +84,61 @@
       "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/tools/shell.ts#L487-L499",
       "sha256": "1ca393e4ed509611494e00333ad4f861b53128dfb63c517d59e8e4618548d28e",
       "bytes": 561
+    },
+    {
+      "id": "shell-policy-update-options",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/shell-policy-update-options.txt",
+      "upstreamPath": "packages/core/src/tools/shell.ts",
+      "startLine": 285,
+      "endLine": 305,
+      "sourceBlobSha": "59ec724c99fbdd2951a339fc473449878687046f",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/tools/shell.ts#L285-L305",
+      "sha256": "2bc97d98f089999323693057f398e4b5a307e96f8f307baad667895c6acac625",
+      "bytes": 750
+    },
+    {
+      "id": "scheduler-standard-policy-update",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/scheduler-standard-policy-update.txt",
+      "upstreamPath": "packages/core/src/scheduler/policy.ts",
+      "startLine": 207,
+      "endLine": 242,
+      "sourceBlobSha": "71c5640db9bb681b4e1cd34fa0c6fa6595597359",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/scheduler/policy.ts#L207-L242",
+      "sha256": "b05df8a43fe1cc1c6872ba74b4dc61408fd2a40a37140586f5a8ff81f9903d46",
+      "bytes": 1250
+    },
+    {
+      "id": "policy-utils-escape-regex",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/policy-utils-escape-regex.txt",
+      "upstreamPath": "packages/core/src/policy/utils.ts",
+      "startLine": 10,
+      "endLine": 12,
+      "sourceBlobSha": "3c7bd4d16b4704ae978720aa546f71da27fd6f31",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/policy/utils.ts#L10-L12",
+      "sha256": "779debdac98e232b5ed4b7e8c66f43c1b6cbbcee52cf4fe76807c4f1ab04fb62",
+      "bytes": 114
+    },
+    {
+      "id": "policy-utils-args-patterns",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/policy-utils-args-patterns.txt",
+      "upstreamPath": "packages/core/src/policy/utils.ts",
+      "startLine": 56,
+      "endLine": 90,
+      "sourceBlobSha": "3c7bd4d16b4704ae978720aa546f71da27fd6f31",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/policy/utils.ts#L56-L90",
+      "sha256": "8350b294421ba5767e10a7aaa1152e26e728c5c40d416f924152868f1bd28b58",
+      "bytes": 1093
+    },
+    {
+      "id": "sandbox-linux-merge",
+      "path": "tools/test/fixtures/provider-enforcement-704-705/gemini-proposal/sandbox-linux-merge.txt",
+      "upstreamPath": "packages/core/src/sandbox/linux/LinuxSandboxManager.ts",
+      "startLine": 245,
+      "endLine": 268,
+      "sourceBlobSha": "793ac47b7aa9399fa72f21d2fae9dc66e371089e",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/sandbox/linux/LinuxSandboxManager.ts#L245-L268",
+      "sha256": "944023d520892b620f70880b031830b3a1e7d5fcfff13be7992ae91a8af3d608",
+      "bytes": 813
     }
   ],
   "files": [

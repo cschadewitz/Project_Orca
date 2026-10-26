@@ -113,9 +113,9 @@
       "path": "proposed/pi-acp-session.diff",
       "upstreamPath": "src/acp/session.ts",
       "preImageBlob": "1c97b24fdcd2eb6f2ad9b23f96ead9e451b8be96",
-      "postImageBlob": "de355ab00a6b05851a2ca72fde385806fabf8a33",
-      "sha256": "462df60af2a89e9c44d5634c571230feb843f9c2f19ad3e7662935cf55deff90",
-      "bytes": 4655,
+      "postImageBlob": "a4d331f390ebdf7dcc1c1e82ad108960fb1fbd21",
+      "sha256": "f9e1b8c5b950ebe9aea9d5247c07754bc90433fb926014bf539d1284cb8e3c1c",
+      "bytes": 6271,
       "evidence": "handler-parts-executed-after-strict-apply",
       "upstream": "pi-acp-session"
     },
