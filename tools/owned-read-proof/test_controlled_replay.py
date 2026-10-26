@@ -52,6 +52,8 @@ class DraftReplayControls(unittest.TestCase):
             r.wait(event)
         epoll.watches[15] = Object('eventfd', 0)
         epoll.registered_data[15] = 15
+        r.handles[15] = Handle(epoll.watches[15], set())
+        epoll.watch_handles = {15: r.handles[15]}
         self.assertTrue(r.wait(event))
         epoll.watches[21] = Object('resource', 0)
         with self.assertRaisesRegex(RuntimeError, 'unverified registrations'):
@@ -199,6 +201,8 @@ class CheckpointReviewControls(unittest.TestCase):
         epoll.watches = {15: Object('eventfd', 0)}
         epoll.registered_data = {15: 15}
         r.handles[12] = Handle(epoll, set())
+        r.handles[15] = Handle(epoll.watches[15], set())
+        epoll.watch_handles = {15: r.handles[15]}
         return r
 
     def test_completed_epoll_calls_receive_same_full_validation(self):

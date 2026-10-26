@@ -87,6 +87,23 @@ class Object:
     published: bool = False
     directory_synced: bool = False
     stats: set = field(default_factory=set)
+    creation_completion: int | None = None
+    last_write_completion: int | None = None
+    data_sync_entry: int | None = None
+    data_sync_completion: int | None = None
+    writer_close_entry: int | None = None
+    writer_close_completion: int | None = None
+    publication_entry: int | None = None
+    publication_completion: int | None = None
+    publication_method: str | None = None
+    publication_parent: object | None = field(default=None, repr=False)
+    publication_path: str | None = None
+    publication_temporary_path: str | None = None
+    directory_sync_entry: int | None = None
+    directory_sync_completion: int | None = None
+    temporary_cleanup_entry: int | None = None
+    temporary_cleanup_completion: int | None = None
+    durable_publication_completion: int | None = None
 
 
 @dataclass
@@ -251,6 +268,73 @@ class Replay:
         else:
             require(string(encoded) == expected, 'syscall bytes differ from reconstructed original/content')
 
+    def publication_sequence_completion(self, obj):
+        """Additive causal index, unavailable until this exact file settles.
+
+        Indices are raw zero-based completion lines, never wall-clock estimates.
+        A link's temporary unlink completes after the qualifying parent fsync;
+        rename removes the temporary alias atomically before its parent fsync.
+        """
+        if not (obj.published and obj.writer_closed and obj.synced and obj.directory_synced):
+            return None
+        values = [obj.creation_completion, obj.data_sync_entry, obj.data_sync_completion,
+                  obj.writer_close_entry, obj.writer_close_completion, obj.publication_entry,
+                  obj.publication_completion, obj.directory_sync_entry, obj.directory_sync_completion,
+                  obj.temporary_cleanup_entry, obj.temporary_cleanup_completion]
+        if any(value is None for value in values):
+            return None
+        if (getattr(obj, 'creation_entry', None) not in self.entry_times or
+                any(value not in self.entry_times for value in values)):
+            return None
+        last_data = obj.creation_completion if obj.last_write_completion is None else obj.last_write_completion
+        if not (obj.creation_completion <= last_data < obj.data_sync_entry <= obj.data_sync_completion < obj.writer_close_entry <=
+                obj.writer_close_completion < obj.publication_entry <= obj.publication_completion <
+                obj.directory_sync_entry <= obj.directory_sync_completion):
+            return None
+        if obj.publication_method == 'link':
+            if not obj.directory_sync_completion < obj.temporary_cleanup_entry <= obj.temporary_cleanup_completion:
+                return None
+        elif obj.publication_method == 'rename':
+            if (obj.temporary_cleanup_entry, obj.temporary_cleanup_completion) != (
+                    obj.publication_entry, obj.publication_completion):
+                return None
+        else:
+            return None
+        if (obj.publication_parent is None or obj.publication_parent.physical is None or
+                self.paths.get(obj.publication_path) is not obj or obj.names != {obj.publication_path}):
+            return None
+        return max(obj.directory_sync_completion, obj.temporary_cleanup_completion)
+
+    def durable_publication(self, obj):
+        # A complete syscall sequence alone is not a physical publication proof.
+        # Write-only payloads acquire their final physical binding in run().
+        obj.durable_publication_completion = (self.publication_sequence_completion(obj)
+                                               if obj.physical is not None else None)
+
+    def epoll_bindings(self, epoll):
+        watches = getattr(epoll, 'watches', {})
+        bindings = getattr(epoll, 'watch_handles', {})
+        require(set(bindings) == set(watches), 'missing epoll watched-handle binding')
+        for number, watched in watches.items():
+            require(self.handles.get(number) is bindings[number] and bindings[number].obj is watched,
+                    'epoll watched descriptor closed/reused')
+        return bindings
+
+    def invalidate_watched_close(self, obj):
+        # The supported lane has no dup/descriptor transfer. Do not retain event
+        # data once the last supported handle for the watched object disappears.
+        if any(handle.obj is obj for handle in self.handles.values()):
+            return
+        for handle in self.handles.values():
+            epoll = handle.obj
+            if epoll.family != 'epoll':
+                continue
+            for number, watched in list(epoll.watches.items()):
+                if watched is obj:
+                    del epoll.watches[number]
+                    epoll.registered_data.pop(number, None)
+                    epoll.watch_handles.pop(number, None)
+
     def wait(self, record):
         _, call, args, _, _, _ = record
         if call == 'futex':
@@ -268,6 +352,7 @@ class Replay:
             require(bool(getattr(handle.obj, 'watches', {})) and all(
                 watched.family in {'pipe', 'eventfd'} for watched in handle.obj.watches.values()),
                 'epoll wait on unverified registrations')
+            self.epoll_bindings(handle.obj)
             count = positive_result(record[3])
             require(count <= 1024, 'epoll wait result exceeds bounded result array')
             returned = args[1]
@@ -338,6 +423,8 @@ class Replay:
                 require(item.family == 'protected-temp' and item.published and item.synced and
                         item.directory_synced and item.writer_closed and len(item.names) == 1,
                         'missing physical observation without immutable publication lineage')
+                require(self.publication_sequence_completion(item) is not None,
+                        'missing completion-ordered durable publication observation')
                 descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 try:
                     held = os.fstat(descriptor)
@@ -364,6 +451,8 @@ class Replay:
                     'final named inode differs/missing physical observation: ' + path)
             if stat.S_ISREG(item.mode):
                 require(Path(path).read_bytes() == item.data, 'final named file bytes differ')
+            if item.published:
+                self.durable_publication(item)
         return {'record': 'controlled-bootstrap-kernel-evidence', 'authority': 'none',
                 'traceSha256': sha(text.encode()), 'traceBytes': len(text.encode()),
                 'settledThreads': len(self.settled), 'serviceReads': 1,
@@ -425,6 +514,7 @@ class Replay:
                 obj = Object(family, stat.S_IFIFO | 0o600)
                 obj.watches = {}
                 obj.registered_data = {}
+                obj.watch_handles = {}
                 self.handles[number] = Handle(obj, set())
             return
         if call == 'openat':
@@ -472,6 +562,7 @@ class Replay:
                 require(parent is not None and stat.S_ISDIR(parent.mode), 'writer outside retained/created directory')
                 obj = Object(family, stat.S_IFREG | (int(mode, 8) & ~self.umask), {path})
                 obj.creation_entry = entered
+                obj.creation_completion = completed
                 self.paths[path] = obj
                 self.objects.append(obj)
                 self.used_paths.add(path)
@@ -553,13 +644,19 @@ class Replay:
                     previous = self.paths[target]
                     require(previous.family == obj.family or target_family in {'credentials', 'sidecar', 'lease'}, 'publication replaces another family')
                     previous.names.remove(target)
+                    previous.durable_publication_completion = None
                 self.paths[target] = obj
                 obj.names.add(target)
                 obj.published = True
                 obj.publication_entry, obj.publication_completion = entered, completed
+                obj.publication_method = call
+                obj.publication_parent = self.paths.get(str(Path(target).parent))
+                obj.publication_path, obj.publication_temporary_path = target, path
                 if call == 'rename':
                     del self.paths[path]
                     obj.names.remove(path)
+                    obj.temporary_cleanup_entry, obj.temporary_cleanup_completion = entered, completed
+                self.durable_publication(obj)
             elif call == 'unlink':
                 require(obj is not None and family in {'enrollment-witness', 'protected-temp', 'lease-temp', 'lock-token', 'resource'},
                         'unplanned unlink')
@@ -571,6 +668,9 @@ class Replay:
                     obj.unlink_completion = completed
                 del self.paths[path]
                 obj.names.remove(path)
+                if obj.published and path == obj.publication_temporary_path:
+                    obj.temporary_cleanup_entry, obj.temporary_cleanup_completion = entered, completed
+                    self.durable_publication(obj)
             else:
                 require(obj is not None and obj.family in {'lock-directory', 'resource-directory'} and
                         not any(p.startswith(path + '/') for p in self.paths), 'rmdir before empty/private settlement')
@@ -619,6 +719,7 @@ class Replay:
                 require(fd(args[2]) in epoll.obj.watches, 'epoll delete absent registration')
                 del epoll.obj.watches[fd(args[2])]
                 del epoll.obj.registered_data[fd(args[2])]
+                del epoll.obj.watch_handles[fd(args[2])]
             else:
                 require((args[1] == 'EPOLL_CTL_ADD' and fd(args[2]) not in epoll.obj.watches) or
                         (args[1] == 'EPOLL_CTL_MOD' and fd(args[2]) in epoll.obj.watches),
@@ -630,6 +731,7 @@ class Replay:
                         for number, value in epoll.obj.registered_data.items()), 'ambiguous epoll registration data')
                 epoll.obj.watches[fd(args[2])] = target.obj
                 epoll.obj.registered_data[fd(args[2])] = data
+                epoll.obj.watch_handles[fd(args[2])] = target
             return
         if call == 'epoll_pwait':
             verified = self.wait(record)
@@ -735,7 +837,10 @@ class Replay:
                     self.check_fdinfo(handle.query_bytes)
                 if 'O_WRONLY' in handle.flags:
                     obj.writer_closed = True
+                    obj.writer_close_entry, obj.writer_close_completion = entered, completed
+                    self.durable_publication(obj)
                 del self.handles[number]
+                self.invalidate_watched_close(obj)
                 return
             if call in FILE_OPS:
                 if obj.family == 'trusted-kernel-runtime-query':
@@ -796,6 +901,9 @@ class Replay:
                     require(args[2] == result == str(len(data)), 'partial/truncated write')
                     obj.data += data
                     obj.synced = False  # A prior fsync cannot settle later appended bytes.
+                    obj.last_write_completion = completed
+                    obj.data_sync_entry = obj.data_sync_completion = None
+                    obj.durable_publication_completion = None
                     obj.writes += 1
                     self.total_written += len(data)
                     require(len(obj.data) <= 65536 and self.total_written <= 16 * 1024 * 1024, 'mutable byte bound exceeded')
@@ -804,8 +912,15 @@ class Replay:
                     obj.synced = True
                     if stat.S_ISDIR(obj.mode):
                         for item in self.objects:
-                            if item.published and any(str(Path(p).parent) in obj.names for p in item.names):
+                            if (call == 'fsync' and obj.physical is not None and item.published and
+                                    item.publication_parent is obj and item.publication_completion < entered and
+                                    item.directory_sync_completion is None):
                                 item.directory_synced = True
+                                item.directory_sync_entry, item.directory_sync_completion = entered, completed
+                                self.durable_publication(item)
+                    elif 'O_WRONLY' in handle.flags:
+                        obj.data_sync_entry, obj.data_sync_completion = entered, completed
+                        self.durable_publication(obj)
                 elif call == 'getdents64':
                     require(stat.S_ISDIR(obj.mode) and len(obj.names) == 1 and
                             next(iter(obj.names)).startswith(self.base + '/') and result.isdigit() and
@@ -886,6 +1001,7 @@ class Replay:
         entities, paths = set(), set()
         mutating = call in {'close', 'fcntl', 'ioctl', 'write', 'writev', 'read', 'readv',
                            'lseek', 'epoll_ctl', 'mkdir', 'rmdir', 'unlink', 'link', 'rename', 'chmod'}
+        watch_change = call in {'close', 'openat', 'pipe2', 'eventfd2', 'epoll_create1'}
         object_mutating = call in {'write', 'writev', 'mkdir', 'rmdir', 'unlink', 'link', 'rename', 'chmod'}
         path_mutating = call in {'mkdir', 'rmdir', 'unlink', 'link', 'rename', 'chmod'}
         if result.startswith('-1 '):
@@ -895,10 +1011,32 @@ class Replay:
             entities.add(('fd', number))
             if number in self.handles:
                 entities.add(('object', id(self.handles[number].obj)))
+            if call in {'close', 'openat', 'pipe2', 'eventfd2', 'epoll_create1'}:
+                entities.add(('epoll-watch-fd', number))
+                if number in self.handles:
+                    entities.add(('epoll-watch-object', id(self.handles[number].obj)))
+                    entities.add(('epoll-watch-handle', id(self.handles[number])))
+                    if call == 'close':
+                        watched = self.handles[number].obj
+                        for current in self.handles.values():
+                            epoll = current.obj
+                            if epoll.family == 'epoll' and any(obj is watched for obj in epoll.watches.values()):
+                                entities.add(('epoll-watch-registration', id(epoll)))
         if call in FD_FIRST | {'close'} and args and re.fullmatch(r'(0x[0-9a-f]+|\d+)', args[0]):
             descriptor(args[0])
         if call == 'epoll_ctl':
             descriptor(args[2])
+        if call == 'epoll_pwait' and fd(args[0]) in self.handles:
+            epoll = self.handles[fd(args[0])].obj
+            if epoll.family == 'epoll':
+                bindings = self.epoll_bindings(epoll)
+                entities.add(('epoll-watch-registration', id(epoll)))
+                for number, watched in epoll.watches.items():
+                    # Notifications may read/write during waits. Only close or
+                    # handle acquisition/reuse shares these dependency markers.
+                    entities.add(('epoll-watch-fd', number))
+                    entities.add(('epoll-watch-object', id(watched)))
+                    entities.add(('epoll-watch-handle', id(bindings[number])))
         if call == 'mmap' and args[4] != '-1':
             descriptor(args[4])
         if call == 'openat':
@@ -922,15 +1060,21 @@ class Replay:
         for path in paths:
             if path in self.paths:
                 entities.add(('object', id(self.paths[path])))
+            if call in {'link', 'rename', 'unlink', 'mkdir', 'rmdir'}:
+                parent = self.paths.get(str(Path(path).parent))
+                if parent is not None:
+                    require(stat.S_ISDIR(parent.mode), 'namespace mutation parent is not a directory')
+                    entities.add(('object', id(parent)))
         self.pending_intervals = [p for p in self.pending_intervals if p[1] >= entered]
-        for start, end, other_pid, other_mutating, other_object_mutating, other_path_mutating, other_entities, other_paths in self.pending_intervals:
+        for start, end, other_pid, other_mutating, other_object_mutating, other_path_mutating, other_entities, other_paths, other_watch_change in self.pending_intervals:
             related_paths = any(a == b or a.startswith(b + '/') or b.startswith(a + '/')
                                 for a in paths for b in other_paths)
             shared = entities & other_entities
             conflict = ((mutating or other_mutating) and any(k[0] == 'fd' for k in shared) or
                         (object_mutating or other_object_mutating) and any(k[0] == 'object' for k in shared) or
+                        (watch_change or other_watch_change) and any(k[0].startswith('epoll-watch-') for k in shared) or
                         (path_mutating or other_path_mutating) and related_paths)
             require(not (pid != other_pid and conflict), 'ambiguous shared descriptor/path interval')
         if completed > entered and (entities or paths):
             self.pending_intervals.append((entered, completed, pid, mutating, object_mutating,
-                                           path_mutating, entities, paths))
+                                           path_mutating, entities, paths, watch_change))
