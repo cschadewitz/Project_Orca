@@ -530,6 +530,7 @@ class Replay:
                         for h in self.handles.values()), 'unclosed regular file descriptor')
         # Independently compare every final named state file with replayed bytes and
         # its observed physical identity; no child semanticRefs list selects files.
+        self.final_observations = {}
         for path, item in self.paths.items():
             if item.family in {'runtime-query', 'root-query'}:
                 continue
@@ -570,7 +571,16 @@ class Replay:
             require((os.major(info.st_dev), os.minor(info.st_dev), info.st_ino) == item.physical,
                     'final named inode differs/missing physical observation: ' + path)
             if stat.S_ISREG(item.mode):
-                require(Path(path).read_bytes() == item.data, 'final named file bytes differ')
+                actual_bytes = Path(path).read_bytes()
+                require(actual_bytes == item.data, 'final named file bytes differ')
+            else:
+                actual_bytes = None
+            # Same-invocation supervisor observations are retained separately from
+            # child trace fields; later /dev/proc observations cannot replace them.
+            self.final_observations[path] = {'origin': 'original-supervisor-final-named-observation',
+                'identity': [info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid],
+                'nlink': info.st_nlink, 'size': info.st_size, 'mtimeNs': info.st_mtime_ns, 'ctimeNs': info.st_ctime_ns,
+                'sha256': None if actual_bytes is None else sha(actual_bytes)}
             if item.published:
                 self.durable_publication(item)
         notification_proofs = self.prove_notifications()

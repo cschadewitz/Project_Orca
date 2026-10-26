@@ -1,4 +1,4 @@
-"""Bounded disposable bootstrap supervisor. Connected commands are unavailable.
+"""Bounded disposable original supervisor, with an explicitly designated test lane.
 
 Retains original file bytes/identities before launch, keeps the actual flock and
 pipe endpoints through independent replay, and preserves raw traces on failure.
@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 
 from run import require_exitkill, run_traced
 from verify import identity
@@ -33,6 +34,10 @@ REPO = Path(__file__).resolve().parents[2]
 SOURCE = '557f62fbe86fc8371d48f11ec37bf9db71cac436'
 QUERY_PATHS = ('/proc/self/maps', '/proc/self/cgroup', '/proc/meminfo',
                '/sys/fs/cgroup//memory.max', '/sys/fs/cgroup//memory.high')
+OBSERVER_FILES = ('controlled_supervisor.py', 'controlled_observation.py', 'controlled_aggregate.py',
+    'controlled_connected.py', 'controlled_replay.py', 'controlled_contract.py', 'controlled_notifications.py',
+    'controlled_semantics.py', 'controlled_delivery_semantics.py', 'controlled_save_semantics.py',
+    'controlled_timestamps.py', 'kernel_runtime_queries.py', 'run.py', 'verify.py')
 
 
 def encoded(value):
@@ -41,6 +46,14 @@ def encoded(value):
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def file_digest(path):
+    value = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            value.update(chunk)
+    return value.hexdigest()
 
 
 def stamp(path):
@@ -179,13 +192,57 @@ def assert_image_sources(image):
     return build
 
 
-def bootstrap():
-    root = Path(tempfile.mkdtemp(prefix='orca-controlled-replay-'))
-    image = root / 'image'
-    subprocess.run(['node', str(REPO / 'tools/owned-read-proof/build-controlled.mjs'), str(image)],
-                   cwd=REPO, capture_output=True, text=True, check=True, timeout=30)
+def observer_original():
+    directory = Path(__file__).parent
+    return {'gitHead': subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=REPO, check=True,
+        capture_output=True, text=True, timeout=5).stdout.strip(),
+        'files': {name: digest((directory / name).read_bytes()) for name in OBSERVER_FILES}}
+
+
+def assert_observer(original):
+    # No subprocess here: while run_traced owns/reaps its process group the
+    # supervisor must not launch a concurrent git child that could be adopted.
+    directory = Path(__file__).parent
+    require({name: digest((directory / name).read_bytes()) for name in OBSERVER_FILES} == original['files'],
+            'observer implementation changed during original invocation')
+
+
+@dataclass
+class ObservedRun:
+    report: dict
+    original: dict
+    replay: object
+    report_path: Path
+    closed: bool = False
+
+    def assert_bootstrap_closed(self):
+        # This original supervisor retains actual validated objects, not a child
+        # report or a deserialized acceptance flag. Cooperative source trust only.
+        require(self.closed and self.original['lane'] == 'bootstrap' and self.replay is not None,
+                'missing permanently closed original bootstrap')
+        require(self.replay.threads == self.replay.settled and len(self.replay.resources) == 1,
+                'original bootstrap process graph is not settled')
+        resource = self.replay.resources[0]
+        require(resource.names == set() and len(resource.reads) == 1 and not any(
+                h.obj is resource for h in self.replay.handles.values()), 'original bootstrap service is not closed')
+        # Re-run original authenticated correlations, never reconstruct a live
+        # process from current /proc or treat a producer boolean as authority.
+        authenticate_bootstrap(self.replay)
+        assert_observer(self.original['observerImplementation'])
+
+
+def observe(root, image, lane='bootstrap', designation=None, used_tokens=None):
+    """One original bounded test process; no accepting outcome or arbitrary argv."""
+    require(lane in {'bootstrap', 'connected'}, 'unknown controlled observation lane')
+    if lane == 'connected':
+        from controlled_connected import ConnectedDesignation
+        require(type(designation) is ConnectedDesignation, 'missing explicit connected designation')
+        designation.check()
+    else:
+        require(designation is None, 'bootstrap cannot receive connected designation')
+    implementation = observer_original()
     build = assert_image_sources(image)
-    base = root / 'bootstrap'
+    base = root / lane
     base.mkdir(mode=0o700)
     lock = base / 'lifetime.lock'
     lifetime = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -204,13 +261,18 @@ def bootstrap():
     receive, ack = os.pipe()
     out_read, out_write = os.pipe()
     err_read, err_write = os.pipe()
-    phases = [{'name': 'bootstrap', 'token': secrets.token_hex(32)}]
-    used_tokens = set()
-    plan = prepare(base, image, lifetime, command, ack, phases)
+    names = ['bootstrap'] if lane == 'bootstrap' else ['save', 'human-read', 'rule-read']
+    phases = [{'name': name, 'token': secrets.token_hex(32)} for name in names]
+    used_tokens = set() if used_tokens is None else used_tokens
+    require(type(used_tokens) is set and not {p['token'] for p in phases} & used_tokens, 'replayed original phase token')
+    plan = (prepare(base, image, lifetime, command, ack, phases) if lane == 'bootstrap' else
+            prepare_connected(base, image, lifetime, command, ack, phases, designation))
     node, tracer = shutil.which('node'), shutil.which('strace')
     require_exitkill(tracer)
-    trace_clock = probe_clock(tracer, root)
-    argv = [node, str(image / 'controlled-child.mjs'), str(base), 'bootstrap', str(lifetime), str(command), str(ack)]
+    clock_root = root / (lane + '-clock')
+    clock_root.mkdir(mode=0o700)
+    trace_clock = probe_clock(tracer, clock_root)
+    argv = [node, str(image / 'controlled-child.mjs'), str(base), lane, str(lifetime), str(command), str(ack)]
     originals = {p: immutable(p, 'image') for p in plan['inventory']}
     originals.update(runtime_originals(node))
     originals.update({p: immutable(p, 'original-file') for p in plan['originalFiles']})
@@ -232,8 +294,10 @@ def bootstrap():
               str(image / 'node_modules'), str(root / 'node_modules'), '/tmp/node_modules', '/node_modules',
               str(base / '.node_modules'), str(base / '.node_libraries'), str(Path(node).parent.parent / 'lib/node')]
     require(all(not Path(p).exists() and not Path(p).is_symlink() for p in probes), 'probe is not originally absent')
-    original = {'base': str(base), 'lane': 'bootstrap', 'node': node, 'argv': argv,
+    original = {'base': str(base), 'lane': lane, 'node': node, 'argv': argv,
                 'sourceHead': SOURCE, 'controlledBuild': build, 'traceClock': trace_clock,
+                'observerImplementation': implementation,
+                'clockProbePath': str(clock_root / 'clock-probe.trace'),
                 'supervisorPid': os.getpid(),
                 'readlinks': {p: (os.path.realpath(node) if p == '/proc/self/exe' else
                     os.readlink(p) if Path(p).is_symlink() else None) for p in (
@@ -258,7 +322,7 @@ def bootstrap():
         tracer_ready.set()
     # Original observer/runtime inputs are held outside the child base and are not
     # accepted from any producer report or child-writable plan file.
-    retained = root / 'supervisor-originals.json'
+    retained = root / (lane + '-originals.json')
     retained.write_text(encoded(original))
     retained.chmod(0o600)
     trace = base / 'trace'
@@ -292,6 +356,9 @@ def bootstrap():
             # No child-supplied PID or readiness report establishes ownership.
             retained.write_text(encoded(original))
             for phase in phases:
+                assert_observer(implementation)
+                if designation is not None:
+                    designation.check()
                 require(phase['token'] not in used_tokens, 'supervisor retained-original check failed')
                 used_tokens.add(phase['token'])
                 data = f"orca-phase:{phase['name']}:{phase['token']}\n".encode()
@@ -312,10 +379,13 @@ def bootstrap():
             os.close(send)
     worker = threading.Thread(target=control, daemon=True)
     worker.start()
-    report = {'record': 'controlled-bootstrap-attempt', 'authority': 'none', 'root': str(root),
+    report = {'record': 'controlled-' + lane + '-attempt', 'authority': 'none', 'root': str(root),
               'sourceHead': SOURCE, 'connectedCommandsReleased': False,
+              'acceptingToken': None, 'productionEligible': False,
               'imageProducerSha256': build['producerSha256'], 'imageChildSha256': build['childSha256'],
               'imageBuildSha256': digest((image / 'controlled-build.json').read_bytes())}
+    replay = None
+    run = ObservedRun(report, original, None, root / (lane + '-attempt.json'))
     try:
         result = run_traced(['prlimit', '--fsize=268435456:268435456', '--core=0:0', tracer,
                     '--kill-on-exit', '--always-show-pid', OPTION, '-f', '-q', '-v', '-x', '-s', '131072', '-o', str(trace), *argv],
@@ -350,12 +420,23 @@ def bootstrap():
             require(digest(Path(p).read_bytes()) == expected['sha256'], 'supervisor retained-original check failed')
         require(fd_identity(lifetime) == plan['lifetime']['identity'] == identity(lock), 'supervisor retained-original check failed')
         require(re.search(r'FLOCK\s+ADVISORY\s+WRITE ', Path(f'/proc/self/fdinfo/{lifetime}').read_text()), 'supervisor retained-original check failed')
-        replay = Replay(original)
+        assert_observer(implementation)
+        if lane == 'bootstrap':
+            replay = Replay(original)
+        else:
+            from controlled_connected import ConnectedKernelReplay
+            replay = ConnectedKernelReplay(original, designation)
         report['kernel'] = replay.run(trace.read_text())
-        report['semantic'] = authenticate_bootstrap(replay)
+        if lane == 'bootstrap':
+            report['semantic'] = authenticate_bootstrap(replay)
+        else:
+            from controlled_aggregate import compose_connected
+            report['semantic'] = compose_connected(replay)
+        original['finalPhysicalObservations'] = replay.final_observations
         # Semantic authentication/canonical bootstrap correlation is still required;
         # a kernel-only report cannot authorize any connected command.
         report['qualification'] = 'unavailable-effect-audit-and-source-review-pending'
+        run.replay = replay
     except BaseException as error:
         report['refusal'] = type(error).__name__ + ': ' + str(error)
     finally:
@@ -369,12 +450,29 @@ def bootstrap():
             os.close(receive)
         os.close(lifetime)
         provenance.close()
+        run.closed = not worker.is_alive()
         report['phaseLog'] = log
+        report['connectedCommandsReleased'] = lane == 'connected' and any(row['event'] == 'sent' for row in log)
+        if trace.exists():
+            report['traceBytes'] = trace.stat().st_size
+            report['traceSha256'] = file_digest(trace)
+        if replay is not None:
+            original['finalPhysicalObservations'] = getattr(replay, 'final_observations', {})
+        report['observerImplementation'] = implementation
         retained.write_text(encoded(original))
-        (root / 'attempt.json').write_text(encoded(report))
-        (root / 'attempt.json').chmod(0o600)
-    print(encoded(report), flush=True)
-    return report
+        run.report_path.write_text(encoded(report))
+        run.report_path.chmod(0o600)
+    return run
+
+
+def bootstrap():
+    root = Path(tempfile.mkdtemp(prefix='orca-controlled-replay-'))
+    image = root / 'image'
+    subprocess.run(['node', str(REPO / 'tools/owned-read-proof/build-controlled.mjs'), str(image)],
+                   cwd=REPO, capture_output=True, text=True, check=True, timeout=30)
+    result = observe(root, image)
+    print(encoded(result.report), flush=True)
+    return result.report
 
 
 if __name__ == '__main__':
