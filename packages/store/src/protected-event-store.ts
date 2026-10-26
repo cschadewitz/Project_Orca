@@ -213,10 +213,16 @@ export class ProtectedEventStore implements EventStore {
 
   async append(input: OrcaEventInput): Promise<OrcaEvent> {
     const inputs = await this.execution.getInputs(input.runId);
-    if (input.type === "revision.recorded" || input.type === "continuation.recorded") {
-      // Revision material is always private, including on otherwise non-sensitive runs.
+    if (
+      input.type === "revision.recorded" ||
+      input.type === "continuation.recorded" ||
+      (input.type === "agent.permission" &&
+        (input.payload.scopedApprovalRef !== undefined || input.payload.entry !== undefined))
+    ) {
+      // Journal and explicit scoped Save material are always private, including non-sensitive runs.
       // Runtime boundary setup must promote inputs through the existing protected store.
       if (!inputs || !input.payload.entry) throw unavailable();
+      if (input.type === "agent.permission" && !input.payload.scopedApprovalRef) throw unavailable();
       const executionPayloadRef = randomUUID();
       await this.execution.putPayload(executionPayloadRef, input);
       const { entry: _entry, ...metadata } = input.payload;

@@ -220,6 +220,9 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       toolCallId: z.string().optional(),
       title: z.string(),
       decision: z.string(),
+      /** Explicit standing-rule Save acceptance; protected entry is never public or a callback answer. */
+      scopedApprovalRef: z.string().optional(),
+      entry: z.record(z.string(), z.unknown()).optional(),
     }),
   ),
   base(
