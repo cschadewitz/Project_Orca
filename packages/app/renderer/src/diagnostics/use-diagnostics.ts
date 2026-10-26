@@ -26,6 +26,7 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
   const mounted = useRef(false);
   const preparing = useRef(false);
   const pending = useRef(0);
+  const turningOff = useRef(false);
   const pushed = useRef(0);
   const announce = useAnnounce();
 
@@ -232,8 +233,14 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
     cancel,
     enable: () => bridge && runStatus(() => bridge.setEnabled(true, DIAGNOSTICS_SCOPE)),
     off: () => {
+      // Revocation may interrupt any other action, but repeated clicks must not
+      // dispatch another Off or invalidate the first Off's failure feedback.
+      if (bridge === undefined || turningOff.current) return;
+      turningOff.current = true;
       clear();
-      return bridge && runStatus(() => bridge.setEnabled(false, DIAGNOSTICS_SCOPE), true);
+      return runStatus(() => bridge.setEnabled(false, DIAGNOSTICS_SCOPE), true).finally(() => {
+        turningOff.current = false;
+      });
     },
     minutes: (value: number) => bridge && runStatus(() => bridge.setMinutes(value)),
     retryCleanup: () => bridge && runStatus(() => bridge.retryCleanup()),

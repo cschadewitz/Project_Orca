@@ -536,6 +536,88 @@ describe("descriptor-only export and separate local Save", () => {
     },
   );
 
+  it.each(["transport", "refused"] as const)(
+    "coalesces repeated opt-out while pending and permits a deliberate retry after %s failure",
+    async (failure) => {
+      const f = fakeBridge(enabled);
+      await open(f);
+      fireEvent.click(screen.getByRole("button", { name: "Choose destination" }));
+      await screen.findByText("Destination: /local/report.json");
+      const off = deferred<DiagnosticsResult<DiagnosticsStatus>>();
+      vi.mocked(f.bridge.setEnabled).mockImplementationOnce(async () => {
+        await off.promise;
+        if (failure === "transport") throw new Error("PRIVATE transport detail");
+        return { ok: false, code: "refused" };
+      });
+      const button = screen.getByRole("button", { name: "Delete all and turn off" });
+      act(() => {
+        button.click();
+        button.click();
+        button.click();
+      });
+      expect(f.bridge.setEnabled).toHaveBeenCalledTimes(1);
+      expect(f.bridge.setEnabled).toHaveBeenCalledWith(false, 1);
+      expect(screen.queryByRole("region", { name: "Diagnostic export" })).toBeNull();
+      expect(screen.queryByText("Destination: /local/report.json")).toBeNull();
+      expect(f.bridge.cancelExport).toHaveBeenCalledOnce();
+      // A later render must not release the in-flight guard either.
+      fireEvent.click(screen.getByRole("button", { name: "Delete all and turn off" }));
+      expect(f.bridge.setEnabled).toHaveBeenCalledTimes(1);
+      await act(async () => off.resolve({ ok: false, code: "refused" }));
+      await screen.findByText("Revocation could not be confirmed. Local diagnostics may remain on.");
+      expect(document.body.textContent).not.toContain("PRIVATE");
+      expect(screen.getByText("Local diagnostics: On")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Delete all and turn off" }));
+      await screen.findByText("Local diagnostics: Off");
+      expect(f.bridge.setEnabled).toHaveBeenCalledTimes(2);
+      expect(f.bridge.setEnabled.mock.calls.every(([enabled]) => !enabled)).toBe(true);
+      expect(f.bridge.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["save-first", "off-first"] as const)(
+    "admits one opt-out during pending Save with %s settlement and preserves authoritative completion",
+    async (order) => {
+      const f = fakeBridge(enabled);
+      await open(f);
+      fireEvent.click(screen.getByRole("button", { name: "Choose destination" }));
+      await screen.findByText("Destination: /local/report.json");
+      const saved = deferred<DiagnosticsResult<DiagnosticsStatus>>();
+      const off = deferred<DiagnosticsResult<DiagnosticsStatus>>();
+      vi.mocked(f.bridge.save).mockReturnValueOnce(saved.promise);
+      vi.mocked(f.bridge.setEnabled).mockReturnValueOnce(off.promise);
+      fireEvent.click(screen.getByRole("button", { name: "Save report" }));
+      expect(f.bridge.save).toHaveBeenCalledOnce();
+      const button = screen.getByRole("button", { name: "Delete all and turn off" });
+      act(() => {
+        button.click();
+        button.click();
+      });
+      expect(f.bridge.setEnabled).toHaveBeenCalledTimes(1);
+      expect(f.bridge.setEnabled).toHaveBeenCalledWith(false, 1);
+      expect(screen.queryByRole("region", { name: "Diagnostic export" })).toBeNull();
+      const settleSave = () =>
+        act(async () => saved.resolve(ok({ ...defaults, ...enabled, revision: 1, code: "saved" })));
+      const settleOff = () => act(async () => off.resolve(ok({ ...defaults, revision: 2 })));
+      if (order === "save-first") {
+        await settleSave();
+        await settleOff();
+      } else {
+        await settleOff();
+        await settleSave();
+      }
+      await screen.findByText("Local diagnostics: Off");
+      expect(screen.queryByRole("region", { name: "Diagnostic export" })).toBeNull();
+      expect(screen.queryByText("Destination: /local/report.json")).toBeNull();
+      // Only main's later authoritative push can report an admitted Save completion.
+      act(() => f.emit({ ...defaults, revision: 3, lastSaveOutcome: "saved", saveAdmittedBeforeRevocation: true }));
+      expect(screen.getByText(/Save was admitted before revocation and completed/)).toBeTruthy();
+      expect(f.bridge.save).toHaveBeenCalledOnce();
+      expect(f.bridge.chooseDestination).toHaveBeenCalledOnce();
+      expect(screen.getByRole("button", { name: "Enable local diagnostics" }).getAttribute("aria-disabled")).toBeNull();
+    },
+  );
+
   it.each(["transport", "stale_export"] as const)(
     "disposes the view but does not claim Off when revocation is unconfirmed by %s",
     async (failure) => {
