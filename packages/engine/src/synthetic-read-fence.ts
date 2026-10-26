@@ -6,6 +6,10 @@ import {
   type ActionEvidenceV1,
   type AuthorityStampV1,
   type Clock,
+  type BoundReviewV1,
+  type PendingReviewV1,
+  type JudgeRequestV1,
+  type JudgeResultV1,
   type CoverageV1,
   type EnforcementPortV1,
   type ExecutionReceiptV1,
@@ -78,6 +82,9 @@ interface Entry<Capture> {
   originalSignal?: AbortSignal;
   evaluation?: Promise<PolicyEvaluationV1>;
   verdict?: PolicyVerdictV1;
+  pending?: PendingReviewV1;
+  bound?: BoundReviewV1;
+  reviewClaimed?: boolean;
   authorization?: Promise<OneUsePermitV1>;
   permit?: OneUsePermitV1;
   dispatch?: Promise<ExecutionReceiptV1>;
@@ -302,9 +309,51 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
           : { phase: "needs-review", review: immutable(result.review), pending: result.pending };
       this.check(entry, active);
       if (evaluated.phase === "final") entry.verdict = evaluated.verdict;
+      else entry.pending = evaluated.pending;
       return evaluated;
     });
     return entry.evaluation;
+  }
+
+  /** Register only this fence's policy-issued pending handle before scheduling a judge. */
+  async bindReview(pending: PendingReviewV1, request: JudgeRequestV1, signal: AbortSignal): Promise<BoundReviewV1> {
+    const entry = this.entry;
+    if (!entry || entry.pending !== pending || entry.reviewClaimed || entry.terminal || entry.consumed) throw refused();
+    entry.reviewClaimed = true;
+    try {
+      const exact = immutable(request);
+      return await this.lifetime(entry, signal, async (active) => {
+        this.check(entry, active);
+        const bound = await abortable(this.policy.bindReview(pending, exact, active), active);
+        this.check(entry, active);
+        entry.bound = bound;
+        return bound;
+      });
+    } catch {
+      entry.terminal = true;
+      throw refused();
+    }
+  }
+
+  /** Only the registered policy can install the completed decision; handles cannot replay. */
+  async completeReview(bound: BoundReviewV1, result: JudgeResultV1, signal: AbortSignal): Promise<PolicyVerdictV1> {
+    const entry = this.entry;
+    if (!entry || entry.bound !== bound || entry.terminal || entry.consumed) throw refused();
+    delete entry.bound; // Claim before the first await, including concurrent completion.
+    try {
+      const exact = immutable(result);
+      return await this.lifetime(entry, signal, async (active) => {
+        this.check(entry, active);
+        const verdict = immutable(await abortable(this.policy.completeReview(bound, exact, active), active));
+        this.check(entry, active);
+        entry.verdict = verdict;
+        entry.evaluation = Promise.resolve({ phase: "final", verdict });
+        return verdict;
+      });
+    } catch {
+      entry.terminal = true;
+      throw refused();
+    }
   }
 
   private async revalidate(entry: Entry<Capture>, verdict: Allow, signal: AbortSignal): Promise<void> {
@@ -338,7 +387,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
 
   authorize(action: ActionEvidenceV1, verdict: Allow, signal: AbortSignal): Promise<OneUsePermitV1> {
     const entry = this.retained(action);
-    if (entry.verdict !== verdict || verdict.outcome !== "allow") return Promise.reject(refused());
+    if (entry.terminal || entry.verdict !== verdict || verdict.outcome !== "allow") return Promise.reject(refused());
     entry.authorization ??= this.lifetime(entry, signal, (active) =>
       abortable(
         this.owner.withOwnership(async () => {
@@ -380,6 +429,9 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
             await this.revalidate(entry, entry.verdict, active);
             // Failure (including uncertain append) terminates this identity; never reopen it for a write/replay.
             await abortable(this.evidence.recordAuthorization(entry.action, entry.verdict, entry.evidenceRef), active);
+            // Recording can await arbitrary stores. Rerun full current policy afterward;
+            // the final synchronous owner check covers mutations after that last await.
+            await this.revalidate(entry, entry.verdict, active);
             this.check(entry, active);
             entry.consumed = true;
             // No await between final validation/consumption and starting the registered synthetic I/O.
@@ -406,6 +458,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     // Capture is synchronous before this method's first await.
     const action = this.capture(parameters);
     const entry = this.retained(action);
+    if (entry.dispatch) return entry.dispatch;
     try {
       const evaluated = await this.evaluate(action, signal);
       if (evaluated.phase !== "final" || evaluated.verdict.outcome !== "allow") return this.receipt(entry);

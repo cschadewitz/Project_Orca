@@ -567,12 +567,21 @@ describe("retained review registration and completion", () => {
     const evaluation = await evaluating;
     if (evaluation.phase !== "needs-review") throw new Error("fixture");
     expect(evaluation.review.actionBindingRef).toBe(original.bindingRef);
-    const request = { ...evaluation.review, approvedProjection: original.original };
-    const binding = h.port.bindReview(evaluation.pending, request, new AbortController().signal);
+    await expect(
+      h.port.bindReview(
+        evaluation.pending,
+        { ...evaluation.review, approvedProjection: original.original },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow();
+    const fresh = await h.port.evaluate(actionFixture(), new AbortController().signal);
+    if (fresh.phase !== "needs-review") throw new Error("fixture");
+    const request = { ...fresh.review, approvedProjection: original.original };
+    const binding = h.port.bindReview(fresh.pending, request, new AbortController().signal);
     Object.assign(request, { judgeConfigRef: "substituted" });
     const bound = await binding;
     const result: JudgeResultV1 = {
-      ...evaluation.review,
+      ...fresh.review,
       judgeVersion: "judge-1",
       projectionBindingRef: original.original.bindingRef,
       reasonCode: "fixture",
@@ -653,4 +662,119 @@ describe("retained review registration and completion", () => {
     time = NOW + 4001;
     expect(await port.evaluate(actionFixture(), new AbortController().signal)).toMatchObject({ phase: "needs-review" });
   });
+});
+
+it("revalidates an exact completed review without new review identities, writes or deadline extension", async () => {
+  const h = harness(reviewState());
+  const r = await registerReview(h.port);
+  const verdict = await h.port.completeReview(r.bound, r.result, r.signal);
+  expect(Object.isFrozen(verdict)).toBe(true);
+  const recorded = h.recordReview.mock.calls[0];
+  for (let i = 0; i < 3; i++) {
+    expect(await h.port.evaluate(r.action, r.signal)).toEqual({ phase: "final", verdict });
+  }
+  expect(h.recordReview).toHaveBeenCalledTimes(1);
+  expect(h.authorizeProjection).toHaveBeenCalledTimes(1);
+  expect(h.recordReview.mock.calls[0]).toBe(recorded);
+  expect(await h.port.evaluate(structuredClone(r.action), r.signal)).toMatchObject({ phase: "needs-review" });
+  h.setTime(NOW + 4000);
+  expect(await h.port.evaluate(r.action, r.signal)).toMatchObject({ verdict: { outcome: "indeterminate" } });
+  h.setTime(NOW);
+  expect(await h.port.evaluate(r.action, r.signal)).toMatchObject({ verdict: { outcome: "indeterminate" } });
+});
+
+it.each(["action", "source-outage", "rule", "cancel"])(
+  "terminally invalidates completed %s without reopening",
+  async (change) => {
+    const h = harness(reviewState());
+    const r = await registerReview(h.port);
+    await h.port.completeReview(r.bound, r.result, r.signal);
+    const original = structuredClone(r.action);
+    if (change === "action") Object.assign(r.action, { operation: "changed" });
+    if (change === "source-outage") h.readCurrent.mockRejectedValueOnce(new Error("outage"));
+    if (change === "rule") h.setState(reviewState("advisory"));
+    if (change === "cancel") {
+      const cancelled = new AbortController();
+      cancelled.abort();
+      await h.port.evaluate(r.action, cancelled.signal);
+    }
+    expect(await h.port.evaluate(r.action, r.signal)).toMatchObject({
+      phase: "final",
+      verdict: { outcome: "indeterminate" },
+    });
+    Object.assign(r.action, original);
+    h.setState(reviewState());
+    expect(await h.port.evaluate(r.action, r.signal)).toMatchObject({
+      phase: "final",
+      verdict: { outcome: "indeterminate" },
+    });
+    expect(h.recordReview).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("counts completing and completed registrations against capacity until original expiry", async () => {
+  let time = NOW;
+  let release!: () => void;
+  let entered!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const port = createStrictPolicyPort({
+    source: { readCurrent: async () => reviewState() },
+    maximumPending: 1,
+    now: () => time,
+    authorizeProjection: async () => {},
+    recordReview: async () => {
+      entered();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return "record";
+    },
+  });
+  const r = await registerReview(port);
+  const completing = port.completeReview(r.bound, r.result, r.signal);
+  await reached;
+  expect(await port.evaluate(actionFixture(), r.signal)).toMatchObject({ verdict: { reason: "review-capacity" } });
+  release();
+  await completing;
+  expect(await port.evaluate(actionFixture(), r.signal)).toMatchObject({ verdict: { reason: "review-capacity" } });
+  time += 4001;
+  expect(await port.evaluate(actionFixture(), r.signal)).toMatchObject({ phase: "needs-review" });
+  expect(await port.evaluate(r.action, r.signal)).toMatchObject({ verdict: { outcome: "indeterminate" } });
+});
+
+it("invalidates a settled review when an immutable profile reference is incorrectly reused", async () => {
+  const initial = reviewState();
+  const h = harness(initial);
+  const r = await registerReview(h.port);
+  await h.port.completeReview(r.bound, r.result, r.signal);
+  if (initial.profile.state !== "complete") throw new Error("fixture");
+  h.setState({
+    ...initial,
+    profile: complete({
+      ...initial.profile.value,
+      facts: { ...initial.profile.value.facts, resources: "complete-or-absent" },
+    }),
+  });
+  expect(await h.port.evaluate(r.action, r.signal)).toMatchObject({ verdict: { outcome: "indeterminate" } });
+  h.setState(initial);
+  expect(await h.port.evaluate(r.action, r.signal)).toMatchObject({ verdict: { outcome: "indeterminate" } });
+  expect(h.recordReview).toHaveBeenCalledTimes(1);
+});
+
+it("preserves ordinary final policy evaluation when settled review capacity is full", async () => {
+  let current = reviewState();
+  const port = createStrictPolicyPort({
+    source: { readCurrent: async () => current },
+    maximumPending: 1,
+    now: () => NOW,
+    authorizeProjection: async () => {},
+    recordReview: async () => "record",
+  });
+  const r = await registerReview(port);
+  await port.completeReview(r.bound, r.result, r.signal);
+  current = stateFixture();
+  expect(await port.evaluate(actionFixture(), r.signal)).toMatchObject({ verdict: { outcome: "allow" } });
+  expect(await port.evaluate(r.action, r.signal)).toMatchObject({ verdict: { outcome: "indeterminate" } });
 });

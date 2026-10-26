@@ -114,3 +114,74 @@ suite, types, lint, build, physical/native smoke, live provider, installation,
 signing, release, paid benchmark or crash-recovery acceptance is claimed here.
 After implementation, run the composed tests plus actual dependency suites,
 root/renderer types, repository lint and build on the exact integrated head.
+
+## Agreed repair checkpoint and remaining core decision
+
+The parent subsequently authorized a single implementation owner for the repair,
+non-force integration of exact reviewed #719 `7252d22`, and the bounded executable
+harness. #717 is integrated as `d2c8625b79aff218280688304abd22a74dd973c0`.
+The preparation branch also integrates current main
+`1538d34b02eeb6ecbfeeea1464dd26f6fab85b9b`, preserving its #720 lockfiles exactly.
+Normal pinned frozen setup was rerun successfully for those changed inputs;
+existing supply-chain and lifecycle policies remain in force.
+
+The independent review-completion repair now retains an immutable action snapshot,
+original object identity, full strict-source snapshot, rule/eligibility/request,
+normalized result, acknowledged result reference and original deadline. Completed
+reevaluation reruns actual current preflight, returns the frozen settled verdict,
+and performs no second judgment or record write. Changed/unavailable state,
+original cancellation and expiry leave weak terminal markers for that original
+object. Copies do not receive its completion. Active pending/binding/completing/
+completed registrations and concurrent source reads are separately bounded by the
+configured maximum; an uncooperative in-flight operation retains its reservation
+until it settles. Terminal markers do not retain the full review snapshot.
+Ordinary final evaluations still work when retained-review capacity is full.
+
+The fence now registers only its retained pending handle, consumes its own bound
+handle before completion awaits, and installs only the registered policy's returned
+verdict. Repeated or manufactured handles/verdicts cannot install a decision.
+Authorization recording is followed by another full policy revalidation, then the
+existing synchronous final owner check and immediate consumption/executor entry.
+The permit and dispatch lifecycle is never reset by completing a review.
+
+Memory capture remains **pending a core-owned resource decision**. The canonical
+resource and rule predicates currently expose only `physicalTargetRef`. Neither a
+private memory identity nor a memory revision is a physical target. The proposed
+additive core amendment is a discriminated memory alternative in both captured
+resources and approved rule predicates:
+
+```ts
+// Proposal only; no competing declaration is implemented in this checkpoint.
+type Resource =
+  | { operation: string; physicalTargetRef: string }
+  | {
+      operation: string;
+      targetKind: "disposable-memory";
+      ownerRef: string;
+      resourceRef: string;
+      resourceRevision: string;
+    };
+```
+
+The existing physical entries keep their meaning. A memory entry must match all
+four memory fields exactly, never fall back to a physical predicate or use an
+empty/unknown physical target, and carry no physical/installed qualification.
+The core owner must approve concrete semantics before this shape is implemented.
+The later disposable owner will privately own every immutable source/authority/
+resource snapshot and a never-reused monotonic generation; all replacements,
+including availability recovery and restoration of old values, advance it
+synchronously. Its final check must compare generation, original lifetime,
+capability and memory revision after the last await. There is no mutable backing
+state escape. These properties establish only same-process memory behavior.
+
+No memory capture, actual composed harness execution, new corpus pass, provider
+qualification or draft PR is claimed by this intermediate repair checkpoint.
+
+Checkpoint validation on the repair content: **6 files / 297 tests**, zero skips,
+passed for `strict-permission`, `review-judge`, `synthetic-read-boundary`,
+`synthetic-read-fence`, `live-input` and `lease-store`, with at most two workers.
+Root and renderer TypeScript checks, full repository ESLint, CSS token checks,
+root build (including Vite renderer), changed TypeScript formatting, document
+IDs/local links and `git diff --check` passed. The renderer retains its chunk-size
+warning. The lock is byte-identical to current main `1538d34`. These are repair
+and existing module regressions, not actual composed memory-harness acceptance.

@@ -34,7 +34,7 @@ describe("inactive one-use synthetic AgentHost read fence", () => {
     expect(f.reads).toEqual(["/synthetic/../exact.txt "]);
     expect(f.contents).toEqual(["second"]);
     expect(f.trace).toEqual(["record-authorization", "dispatch-start", "effect-read"]);
-    expect(f.policy.actions).toHaveLength(3);
+    expect(f.policy.actions).toHaveLength(4);
     expect(f.policy.actions.every((a) => a === f.policy.actions[0])).toBe(true);
     const action = f.policy.actions[0]!;
     expect(Object.isFrozen(action.invocation)).toBe(true);
@@ -475,7 +475,7 @@ describe("inactive one-use synthetic AgentHost read fence", () => {
       else f.state.read = () => gate.promise;
       const result = f.fence.run({ path: "/synthetic/file" }, f.caller.signal);
       await vi.advanceTimersByTimeAsync(0);
-      expect(f.policy.actions).toHaveLength(where === "policy" ? 1 : 3);
+      expect(f.policy.actions).toHaveLength(where === "policy" ? 1 : 4);
       f.clock.advance(10);
       await vi.advanceTimersByTimeAsync(10);
       const receipt = await result;
@@ -549,7 +549,7 @@ describe("inactive one-use synthetic AgentHost read fence", () => {
     const receipt = await next.fence.run({ path: "/synthetic/exact.txt", line: 2, limit: 1 }, next.caller.signal);
     expect(receipt.state).toBe("completed");
     expect(receipt.actionId).not.toBe(p.action.actionId);
-    expect(next.policy.actions).toHaveLength(3);
+    expect(next.policy.actions).toHaveLength(4);
   });
 
   it("receipt inspection rechecks current exact-run read authority and does not infer effects from delivery", async () => {
