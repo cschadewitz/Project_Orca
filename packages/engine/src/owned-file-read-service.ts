@@ -112,6 +112,13 @@ export function createOwnedFileReadServiceForTest(options: {
   owner: SyntheticReadOwner;
   content: string;
   maximumInvocations: number;
+  /** Internal controlled supervisor capability only, never config/JSON. Default remains unqualified.
+   * The private runner creates this only AFTER independent bootstrap replay, for a NEW service. */
+  controlledSupervisor?: {
+    readonly installedEvidenceRef: string;
+    assertCurrent(): undefined;
+    assertInterval(offset: number, length: number): undefined;
+  };
   observed(action: ActionEvidenceV1, ref: string): Promise<void>;
   respond(bytes: Uint8Array, signal: AbortSignal): Promise<void>;
 }) {
@@ -127,6 +134,15 @@ export function createOwnedFileReadServiceForTest(options: {
     options.maximumInvocations > 128
   )
     throw refuse();
+  const suppliedSupervisor = options.controlledSupervisor;
+  const supervisor = suppliedSupervisor
+    ? Object.freeze({
+        installedEvidenceRef: suppliedSupervisor.installedEvidenceRef,
+        assertCurrent: suppliedSupervisor.assertCurrent.bind(suppliedSupervisor),
+        assertInterval: suppliedSupervisor.assertInterval.bind(suppliedSupervisor),
+      })
+    : undefined;
+  if (supervisor && (!supervisor.installedEvidenceRef || supervisor.assertCurrent() !== undefined)) throw refuse();
   const lifetime = options.owner.signal;
   lifetime.throwIfAborted();
   if (lifetimes.has(lifetime)) throw refuse();
@@ -171,11 +187,11 @@ export function createOwnedFileReadServiceForTest(options: {
       toolSchemaVersion: "1",
       hostId: initialOwner.invocation.hostId,
       platform: `linux-${process.arch}`,
-      level: "policy-per-ask",
+      level: supervisor ? "verified-per-execution" : "policy-per-ask",
       evidence: {
         sourceRefs: ["packages/engine/src/owned-file-read-service.ts", "packages/engine/src/synthetic-read-fence.ts"],
-        installedRefs: [],
-        independentlyObservedEffects: false,
+        installedRefs: supervisor ? [supervisor.installedEvidenceRef] : [],
+        independentlyObservedEffects: !!supervisor,
       },
       negotiatedHook: { state: "complete", value: `${resourceRef}:retained-descriptor` },
       protectedConfiguration: { state: "complete", value: `${resourceRef}:controlled-test-scope` },
@@ -195,6 +211,7 @@ export function createOwnedFileReadServiceForTest(options: {
       ],
     });
     const current = () => {
+      if (supervisor && supervisor.assertCurrent() !== undefined) throw refuse();
       lifetime.throwIfAborted();
       abort.signal.throwIfAborted();
       if (
@@ -278,6 +295,7 @@ export function createOwnedFileReadServiceForTest(options: {
           BigInt(offset + length) > initial.size
         )
           throw refuse();
+        if (supervisor && supervisor.assertInterval(offset, length) !== undefined) throw refuse();
         const bytes = JSON.stringify([codecVersion, resourceRef, resource.physicalTargetRef, offset, length]);
         const key = invocationKey(original);
         const prior = entries.get(key);

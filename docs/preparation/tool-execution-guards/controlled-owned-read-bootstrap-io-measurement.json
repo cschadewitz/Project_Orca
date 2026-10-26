@@ -1,0 +1,757 @@
+{
+  "kind": "unaccepted-bootstrap-measurement-v1",
+  "source": "actual emitted bootstrap strace; not full replay or qualification",
+  "traceBytes": 95814704,
+  "inputHex": "646973706f7361626c652063616e646964617465206279746573",
+  "interval": {
+    "offset": 2,
+    "length": 4
+  },
+  "calls": {
+    "execve": 1,
+    "brk": 215,
+    "mmap": 293,
+    "access": 1,
+    "openat": 5006,
+    "fstat": 52,
+    "close": 5008,
+    "read": 4651,
+    "pread64": 4735,
+    "arch_prctl": 1,
+    "set_tid_address": 1,
+    "set_robust_list": 12,
+    "rseq": 12,
+    "mprotect": 448,
+    "prlimit64": 12,
+    "munmap": 477,
+    "futex": 5384,
+    "getrandom": 3,
+    "getpid": 116,
+    "capget": 16,
+    "getuid": 6540,
+    "geteuid": 81,
+    "getgid": 16,
+    "getegid": 16,
+    "rt_sigprocmask": 64,
+    "rt_sigaction": 63,
+    "fcntl": 32,
+    "ioctl": 9,
+    "prctl": 11,
+    "epoll_create1": 3,
+    "uname": 70,
+    "io_uring_setup": 3,
+    "pipe2": 4,
+    "write": 847,
+    "eventfd2": 3,
+    "clone3": 11,
+    "epoll_ctl": 8,
+    "epoll_pwait": 1590,
+    "madvise": 245,
+    "gettid": 5,
+    "sched_getaffinity": 5,
+    "readlink": 8,
+    "statx": 103734,
+    "getcwd": 1,
+    "sched_getparam": 5,
+    "sched_getscheduler": 5,
+    "clock_nanosleep": 2,
+    "exit": 10,
+    "unlink": 17,
+    "fsync": 22,
+    "mkdir": 23,
+    "rename": 3,
+    "rmdir": 8,
+    "getdents64": 46,
+    "link": 7,
+    "lseek": 1,
+    "chmod": 2,
+    "kill": 60,
+    "lstat": 1,
+    "exit_group": 1
+  },
+  "orderedMutationEntries": [
+    {
+      "thread": "31493",
+      "syscall": "unlink",
+      "entry": "\"B/control/never-typed\") = 0"
+    },
+    {
+      "thread": "31493",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/control/intent.json\", O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, 0600) = 21"
+    },
+    {
+      "thread": "31501",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace\", 0777 <unfinished ...>"
+    },
+    {
+      "thread": "31503",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/orca.permissions.json.lock\", 0777) = 0"
+    },
+    {
+      "thread": "31504",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/orca.permissions.json.lock/owner.31493.a9372d07-d0f4-456c-a3f7-797a6ebb3a14.json\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666 <unfinished ...>"
+    },
+    {
+      "thread": "31502",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/orca.permissions.json.31493.tmp\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600) = 21"
+    },
+    {
+      "thread": "31502",
+      "syscall": "rename",
+      "entry": "\"B/workspace/orca.permissions.json.31493.tmp\", \"B/workspace/orca.permissions.json\") = 0"
+    },
+    {
+      "thread": "31501",
+      "syscall": "unlink",
+      "entry": "\"B/workspace/orca.permissions.json.lock/owner.31493.a9372d07-d0f4-456c-a3f7-797a6ebb3a14.json\") = 0"
+    },
+    {
+      "thread": "31502",
+      "syscall": "rmdir",
+      "entry": "\"B/workspace/orca.permissions.json.lock\") = 0"
+    },
+    {
+      "thread": "31493",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/control/enrolled.json\", O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, 0600) = 21"
+    },
+    {
+      "thread": "31503",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/private-execution\", 0700) = 0"
+    },
+    {
+      "thread": "31503",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/.orca/private-execution/.execution-key.4e549c7f-3fa6-4f75-9eee-c43fd135ab3e.tmp\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600 <unfinished ...>"
+    },
+    {
+      "thread": "31503",
+      "syscall": "link",
+      "entry": "\"B/workspace/.orca/private-execution/.execution-key.4e549c7f-3fa6-4f75-9eee-c43fd135ab3e.tmp\", \"B/workspace/.orca/private-execution/.execution-key\" <unfinished ...>"
+    },
+    {
+      "thread": "31503",
+      "syscall": "unlink",
+      "entry": "\"B/workspace/.orca/private-execution/.execution-key.4e549c7f-3fa6-4f75-9eee-c43fd135ab3e.tmp\" <unfinished ...>"
+    },
+    {
+      "thread": "31501",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/.orca/private-execution/controlled.inputs.json.a8d61271-f8bc-4208-a525-b45cbfc10cfd.tmp\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600) = 21"
+    },
+    {
+      "thread": "31501",
+      "syscall": "link",
+      "entry": "\"B/workspace/.orca/private-execution/controlled.inputs.json.a8d61271-f8bc-4208-a525-b45cbfc10cfd.tmp\", \"B/workspace/.orca/private-execution/controlled.inputs.json\") = 0"
+    },
+    {
+      "thread": "31501",
+      "syscall": "unlink",
+      "entry": "\"B/workspace/.orca/private-execution/controlled.inputs.json.a8d61271-f8bc-4208-a525-b45cbfc10cfd.tmp\") = 0"
+    },
+    {
+      "thread": "31502",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/leases\", 0777 <unfinished ...>"
+    },
+    {
+      "thread": "31503",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock\", 0777 <unfinished ...>"
+    },
+    {
+      "thread": "31504",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock/owner.31493.672e0406-7e47-4d64-93ac-10eaf381da67.json\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666) = 21"
+    },
+    {
+      "thread": "31503",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/leases\", 0777 <unfinished ...>"
+    },
+    {
+      "thread": "31502",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/.orca/leases/run%3Acontrolled.json.31493.d9zcpwesg.tmp\", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666 <unfinished ...>"
+    },
+    {
+      "thread": "31501",
+      "syscall": "link",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.31493.d9zcpwesg.tmp\", \"B/workspace/.orca/leases/run%3Acontrolled.json\") = 0"
+    },
+    {
+      "thread": "31502",
+      "syscall": "unlink",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.31493.d9zcpwesg.tmp\" <unfinished ...>"
+    },
+    {
+      "thread": "31503",
+      "syscall": "unlink",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock/owner.31493.672e0406-7e47-4d64-93ac-10eaf381da67.json\") = 0"
+    },
+    {
+      "thread": "31504",
+      "syscall": "rmdir",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock\" <unfinished ...>"
+    },
+    {
+      "thread": "31493",
+      "syscall": "mkdir",
+      "entry": "\"B\", 0700) = -1 EEXIST (File exists)"
+    },
+    {
+      "thread": "31501",
+      "syscall": "mkdir",
+      "entry": "\"B/credentials.json.lock\", 0777) = 0"
+    },
+    {
+      "thread": "31502",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/credentials.json.lock/owner.31493.dea98f58-ceac-4a84-a8f2-6d53b2b722a0.json\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666 <unfinished ...>"
+    },
+    {
+      "thread": "31493",
+      "syscall": "mkdir",
+      "entry": "\"B\", 0700) = -1 EEXIST (File exists)"
+    },
+    {
+      "thread": "31493",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/credentials.json.31493.3b961941.tmp\", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0600) = 21"
+    },
+    {
+      "thread": "31493",
+      "syscall": "chmod",
+      "entry": "\"B/credentials.json.31493.3b961941.tmp\", 0600) = 0"
+    },
+    {
+      "thread": "31493",
+      "syscall": "rename",
+      "entry": "\"B/credentials.json.31493.3b961941.tmp\", \"B/credentials.json\") = 0"
+    },
+    {
+      "thread": "31501",
+      "syscall": "unlink",
+      "entry": "\"B/credentials.json.lock/owner.31493.dea98f58-ceac-4a84-a8f2-6d53b2b722a0.json\") = 0"
+    },
+    {
+      "thread": "31502",
+      "syscall": "rmdir",
+      "entry": "\"B/credentials.json.lock\") = 0"
+    },
+    {
+      "thread": "31493",
+      "syscall": "mkdir",
+      "entry": "\"B\", 0700) = -1 EEXIST (File exists)"
+    },
+    {
+      "thread": "31503",
+      "syscall": "mkdir",
+      "entry": "\"B/credentials.json.lock\", 0777 <unfinished ...>"
+    },
+    {
+      "thread": "31504",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/credentials.json.lock/owner.31493.d2dae5c4-8f4a-4d3b-9f96-9cb84a5ce415.json\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666 <unfinished ...>"
+    },
+    {
+      "thread": "31493",
+      "syscall": "mkdir",
+      "entry": "\"B\", 0700) = -1 EEXIST (File exists)"
+    },
+    {
+      "thread": "31493",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/credentials.json.31493.0244105e.tmp\", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0600) = 21"
+    },
+    {
+      "thread": "31493",
+      "syscall": "chmod",
+      "entry": "\"B/credentials.json.31493.0244105e.tmp\", 0600) = 0"
+    },
+    {
+      "thread": "31493",
+      "syscall": "rename",
+      "entry": "\"B/credentials.json.31493.0244105e.tmp\", \"B/credentials.json\") = 0"
+    },
+    {
+      "thread": "31503",
+      "syscall": "unlink",
+      "entry": "\"B/credentials.json.lock/owner.31493.d2dae5c4-8f4a-4d3b-9f96-9cb84a5ce415.json\" <unfinished ...>"
+    },
+    {
+      "thread": "31504",
+      "syscall": "rmdir",
+      "entry": "\"B/credentials.json.lock\") = 0"
+    },
+    {
+      "thread": "31493",
+      "syscall": "mkdir",
+      "entry": "\"B/orca-owned-service-qNJzbE\", 0700) = 0"
+    },
+    {
+      "thread": "31493",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/orca-owned-service-qNJzbE/fixture\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0400) = 21"
+    },
+    {
+      "thread": "31493",
+      "syscall": "unlink",
+      "entry": "\"B/orca-owned-service-qNJzbE/fixture\") = 0"
+    },
+    {
+      "thread": "31502",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/private-execution\", 0700) = -1 EEXIST (File exists)"
+    },
+    {
+      "thread": "31504",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/.orca/private-execution/4b28ef89-11b7-4b5c-b869-49cf3f930d24.payload.json.62c1127f-2f14-4dff-aea8-87a75c10790f.tmp\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600) = 22"
+    },
+    {
+      "thread": "31504",
+      "syscall": "link",
+      "entry": "\"B/workspace/.orca/private-execution/4b28ef89-11b7-4b5c-b869-49cf3f930d24.payload.json.62c1127f-2f14-4dff-aea8-87a75c10790f.tmp\", \"B/workspace/.orca/private-execution/4b28ef89-11b7-4b5c-b869-49cf3f930d24.payload.json\") = 0"
+    },
+    {
+      "thread": "31504",
+      "syscall": "unlink",
+      "entry": "\"B/workspace/.orca/private-execution/4b28ef89-11b7-4b5c-b869-49cf3f930d24.payload.json.62c1127f-2f14-4dff-aea8-87a75c10790f.tmp\") = 0"
+    },
+    {
+      "thread": "31501",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/leases\", 0777) = -1 EEXIST (File exists)"
+    },
+    {
+      "thread": "31503",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock\", 0777) = 0"
+    },
+    {
+      "thread": "31504",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock/owner.31493.15bab06a-ea9c-4959-bc6f-96cfc8a9dcdb.json\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666) = 22"
+    },
+    {
+      "thread": "31502",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/private-execution\", 0700) = -1 EEXIST (File exists)"
+    },
+    {
+      "thread": "31504",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/.orca/private-execution/capture%3Asynthetic-read%3A92fff9c0-d8cf-42fc-9d0c-97f6d9f6ebea%3Aaction.payload.json.8ae4fb34-88a3-4c61-b8d2-7e4bd4edf5ec.tmp\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600) = 22"
+    },
+    {
+      "thread": "31504",
+      "syscall": "link",
+      "entry": "\"B/workspace/.orca/private-execution/capture%3Asynthetic-read%3A92fff9c0-d8cf-42fc-9d0c-97f6d9f6ebea%3Aaction.payload.json.8ae4fb34-88a3-4c61-b8d2-7e4bd4edf5ec.tmp\", \"B/workspace/.orca/private-execution/capture%3Asynthetic-read%3A92fff9c0-d8cf-42fc-9d0c-97f6d9f6ebea%3Aaction.payload.json\") = 0"
+    },
+    {
+      "thread": "31502",
+      "syscall": "unlink",
+      "entry": "\"B/workspace/.orca/private-execution/capture%3Asynthetic-read%3A92fff9c0-d8cf-42fc-9d0c-97f6d9f6ebea%3Aaction.payload.json.8ae4fb34-88a3-4c61-b8d2-7e4bd4edf5ec.tmp\") = 0"
+    },
+    {
+      "thread": "31504",
+      "syscall": "unlink",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock/owner.31493.15bab06a-ea9c-4959-bc6f-96cfc8a9dcdb.json\") = 0"
+    },
+    {
+      "thread": "31501",
+      "syscall": "rmdir",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock\" <unfinished ...>"
+    },
+    {
+      "thread": "31504",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/leases\", 0777) = -1 EEXIST (File exists)"
+    },
+    {
+      "thread": "31501",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock\", 0777) = 0"
+    },
+    {
+      "thread": "31503",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock/owner.31493.591cb1d0-724b-484b-b31e-5a53a5a4ba41.json\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666) = 22"
+    },
+    {
+      "thread": "31504",
+      "syscall": "unlink",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock/owner.31493.591cb1d0-724b-484b-b31e-5a53a5a4ba41.json\") = 0"
+    },
+    {
+      "thread": "31503",
+      "syscall": "rmdir",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock\" <unfinished ...>"
+    },
+    {
+      "thread": "31501",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/leases\", 0777) = -1 EEXIST (File exists)"
+    },
+    {
+      "thread": "31504",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock\", 0777 <unfinished ...>"
+    },
+    {
+      "thread": "31503",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock/owner.31493.4df60f33-50de-49d4-ae40-087cd5a57e69.json\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666) = 22"
+    },
+    {
+      "thread": "31502",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/private-execution\", 0700) = -1 EEXIST (File exists)"
+    },
+    {
+      "thread": "31503",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/.orca/private-execution/synthetic-read%3A92fff9c0-d8cf-42fc-9d0c-97f6d9f6ebea%3Aevidence.payload.json.a97bc9c7-cbd1-4be9-bfd7-af3eb215b0ce.tmp\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600 <unfinished ...>"
+    },
+    {
+      "thread": "31503",
+      "syscall": "link",
+      "entry": "\"B/workspace/.orca/private-execution/synthetic-read%3A92fff9c0-d8cf-42fc-9d0c-97f6d9f6ebea%3Aevidence.payload.json.a97bc9c7-cbd1-4be9-bfd7-af3eb215b0ce.tmp\", \"B/workspace/.orca/private-execution/synthetic-read%3A92fff9c0-d8cf-42fc-9d0c-97f6d9f6ebea%3Aevidence.payload.json\") = 0"
+    },
+    {
+      "thread": "31503",
+      "syscall": "unlink",
+      "entry": "\"B/workspace/.orca/private-execution/synthetic-read%3A92fff9c0-d8cf-42fc-9d0c-97f6d9f6ebea%3Aevidence.payload.json.a97bc9c7-cbd1-4be9-bfd7-af3eb215b0ce.tmp\") = 0"
+    },
+    {
+      "thread": "31502",
+      "syscall": "unlink",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock/owner.31493.4df60f33-50de-49d4-ae40-087cd5a57e69.json\" <unfinished ...>"
+    },
+    {
+      "thread": "31503",
+      "syscall": "rmdir",
+      "entry": "\"B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock\" <unfinished ...>"
+    },
+    {
+      "thread": "31503",
+      "syscall": "mkdir",
+      "entry": "\"B/workspace/.orca/private-execution\", 0700) = -1 EEXIST (File exists)"
+    },
+    {
+      "thread": "31503",
+      "syscall": "openat",
+      "entry": "AT_FDCWD, \"B/workspace/.orca/private-execution/daa6b834-b8ef-49c5-a11c-3438575b87d5.payload.json.34f4c219-0e51-4ef9-a151-95ab227833b2.tmp\", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600) = 22"
+    },
+    {
+      "thread": "31503",
+      "syscall": "link",
+      "entry": "\"B/workspace/.orca/private-execution/daa6b834-b8ef-49c5-a11c-3438575b87d5.payload.json.34f4c219-0e51-4ef9-a151-95ab227833b2.tmp\", \"B/workspace/.orca/private-execution/daa6b834-b8ef-49c5-a11c-3438575b87d5.payload.json\") = 0"
+    },
+    {
+      "thread": "31503",
+      "syscall": "unlink",
+      "entry": "\"B/workspace/.orca/private-execution/daa6b834-b8ef-49c5-a11c-3438575b87d5.payload.json.34f4c219-0e51-4ef9-a151-95ab227833b2.tmp\") = 0"
+    },
+    {
+      "thread": "31493",
+      "syscall": "unlink",
+      "entry": "\"B/orca-owned-service-qNJzbE\") = -1 EISDIR (Is a directory)"
+    },
+    {
+      "thread": "31493",
+      "syscall": "rmdir",
+      "entry": "\"B/orca-owned-service-qNJzbE\") = 0"
+    }
+  ],
+  "privateOpenEntries": [
+    {
+      "path": "B/package.json",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B/controlled-plan.json",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B/control/never-typed",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/workspace-identity/id",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC",
+      "count": 1219
+    },
+    {
+      "path": "B/workspace/.orca/workspace-identity/id",
+      "argumentsAfterPath": "O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC <unfinished ...>",
+      "count": 5
+    },
+    {
+      "path": "B/workspace/.orca/workspace-identity/id",
+      "argumentsAfterPath": "O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC",
+      "count": 1183
+    },
+    {
+      "path": "B/control/never-typed",
+      "argumentsAfterPath": "O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/workspace-identity/id",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC <unfinished ...>",
+      "count": 6
+    },
+    {
+      "path": "B/control",
+      "argumentsAfterPath": "O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_DIRECTORY",
+      "count": 3
+    },
+    {
+      "path": "B/control/intent.json",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, 0600",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/orca.permissions.json.lock/owner.31493.a9372d07-d0f4-456c-a3f7-797a6ebb3a14.json",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666 <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/orca.permissions.json.lock/owner.31493.a9372d07-d0f4-456c-a3f7-797a6ebb3a14.json",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC",
+      "count": 2
+    },
+    {
+      "path": "B/control/intent.json",
+      "argumentsAfterPath": "O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC",
+      "count": 295
+    },
+    {
+      "path": "B/workspace/orca.permissions.json",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC",
+      "count": 23
+    },
+    {
+      "path": "B/workspace/orca.permissions.json.31493.tmp",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/orca.permissions.json",
+      "argumentsAfterPath": "O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC",
+      "count": 587
+    },
+    {
+      "path": "B/control/enrolled.json",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, 0600",
+      "count": 1
+    },
+    {
+      "path": "B/control/enrolled.json",
+      "argumentsAfterPath": "O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC",
+      "count": 293
+    },
+    {
+      "path": "B/workspace/orca.permissions.json",
+      "argumentsAfterPath": "O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC",
+      "count": 1
+    },
+    {
+      "path": "B/workspace",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/private-execution",
+      "argumentsAfterPath": "O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY",
+      "count": 19
+    },
+    {
+      "path": "B/workspace/.orca/private-execution/.execution-key.4e549c7f-3fa6-4f75-9eee-c43fd135ab3e.tmp",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600 <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/private-execution",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/private-execution/.execution-key",
+      "argumentsAfterPath": "O_RDONLY|O_NOFOLLOW|O_CLOEXEC",
+      "count": 21
+    },
+    {
+      "path": "B/workspace/.orca/private-execution/controlled.inputs.json.a8d61271-f8bc-4208-a525-b45cbfc10cfd.tmp",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/private-execution",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC",
+      "count": 5
+    },
+    {
+      "path": "B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock/owner.31493.672e0406-7e47-4d64-93ac-10eaf381da67.json",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/leases/run%3Acontrolled.json",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC",
+      "count": 13
+    },
+    {
+      "path": "B/workspace/.orca/leases/run%3Acontrolled.json.31493.d9zcpwesg.tmp",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666 <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B/credentials.json.lock/owner.31493.dea98f58-ceac-4a84-a8f2-6d53b2b722a0.json",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666 <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B/credentials.json.31493.3b961941.tmp",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0600",
+      "count": 1
+    },
+    {
+      "path": "B/credentials.json.lock/owner.31493.d2dae5c4-8f4a-4d3b-9f96-9cb84a5ce415.json",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666 <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B/credentials.json",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC",
+      "count": 1
+    },
+    {
+      "path": "B/credentials.json.31493.0244105e.tmp",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0600",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/orca.permissions.json",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC <unfinished ...>",
+      "count": 7
+    },
+    {
+      "path": "B/control/intent.json",
+      "argumentsAfterPath": "O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B/orca-owned-service-qNJzbE/fixture",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0400",
+      "count": 1
+    },
+    {
+      "path": "B/orca-owned-service-qNJzbE/fixture",
+      "argumentsAfterPath": "O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/private-execution/controlled.inputs.json",
+      "argumentsAfterPath": "O_RDONLY|O_NOFOLLOW|O_CLOEXEC",
+      "count": 11
+    },
+    {
+      "path": "B/workspace/.orca/private-execution/4b28ef89-11b7-4b5c-b869-49cf3f930d24.payload.json.62c1127f-2f14-4dff-aea8-87a75c10790f.tmp",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock/owner.31493.15bab06a-ea9c-4959-bc6f-96cfc8a9dcdb.json",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/private-execution/4b28ef89-11b7-4b5c-b869-49cf3f930d24.payload.json",
+      "argumentsAfterPath": "O_RDONLY|O_NOFOLLOW|O_CLOEXEC <unfinished ...>",
+      "count": 2
+    },
+    {
+      "path": "B/workspace/.orca/private-execution/capture%3Asynthetic-read%3A92fff9c0-d8cf-42fc-9d0c-97f6d9f6ebea%3Aaction.payload.json.8ae4fb34-88a3-4c61-b8d2-7e4bd4edf5ec.tmp",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/private-execution/4b28ef89-11b7-4b5c-b869-49cf3f930d24.payload.json",
+      "argumentsAfterPath": "O_RDONLY|O_NOFOLLOW|O_CLOEXEC",
+      "count": 11
+    },
+    {
+      "path": "B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock/owner.31493.591cb1d0-724b-484b-b31e-5a53a5a4ba41.json",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/leases/run%3Acontrolled.json",
+      "argumentsAfterPath": "O_RDONLY|O_CLOEXEC <unfinished ...>",
+      "count": 4
+    },
+    {
+      "path": "B/workspace/.orca/private-execution/.execution-key",
+      "argumentsAfterPath": "O_RDONLY|O_NOFOLLOW|O_CLOEXEC <unfinished ...>",
+      "count": 4
+    },
+    {
+      "path": "B/workspace/.orca/leases/run%3Acontrolled.json.mutation.lock/owner.31493.4df60f33-50de-49d4-ae40-087cd5a57e69.json",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0666",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/private-execution/controlled.inputs.json",
+      "argumentsAfterPath": "O_RDONLY|O_NOFOLLOW|O_CLOEXEC <unfinished ...>",
+      "count": 2
+    },
+    {
+      "path": "B/workspace/.orca/private-execution/synthetic-read%3A92fff9c0-d8cf-42fc-9d0c-97f6d9f6ebea%3Aevidence.payload.json.a97bc9c7-cbd1-4be9-bfd7-af3eb215b0ce.tmp",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600 <unfinished ...>",
+      "count": 1
+    },
+    {
+      "path": "B/workspace/.orca/private-execution",
+      "argumentsAfterPath": "O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY <unfinished ...>",
+      "count": 3
+    },
+    {
+      "path": "B/workspace/.orca/private-execution/daa6b834-b8ef-49c5-a11c-3438575b87d5.payload.json.34f4c219-0e51-4ef9-a151-95ab227833b2.tmp",
+      "argumentsAfterPath": "O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC, 0600",
+      "count": 1
+    },
+    {
+      "path": "B/orca-owned-service-qNJzbE",
+      "argumentsAfterPath": "O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_DIRECTORY",
+      "count": 1
+    }
+  ],
+  "limits": [
+    "Syscall entry sampling only; unfinished/resumed operations not paired here",
+    "Physical identities/flags/bytes/settlement must still be independently replayed",
+    "Generated PID/UUID/temp names are observations, not preauthorized future paths",
+    "This measurement predates the added exact-original-action baseline binding; rerun final image before acceptance"
+  ]
+}

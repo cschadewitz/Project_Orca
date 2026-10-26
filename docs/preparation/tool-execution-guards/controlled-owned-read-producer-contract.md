@@ -8,11 +8,17 @@ can construct the private test supervisor capability.
 
 ## Entrypoint and original supervisor inputs
 
-The TypeScript producer is `packages/cli/src/controlled-owned-read-test.ts`, emitted
-as `@orca/cli/dist/controlled-owned-read-test.js`. It exports one test runner,
-`runControlledOwnedReadTest`, and is not exported by the package barrel or mounted
-in the daemon. The installed test child imports that physical emitted file; it
-must not use a source loader, source symlink or replacement module.
+The TypeScript producer is `packages/cli/test/controlled-owned-read-producer.ts`.
+Build a new private image with `node tools/owned-read-proof/build-controlled.mjs
+/absolute/new/image`. The builder refuses an existing target. The exact emitted
+entrypoint is `controlled-child.mjs`; it imports `./controlled-producer.mjs`.
+`controlled-build.json` pins the emitted hashes, source-input hashes and profile.
+The producer exports only `runControlledOwnedReadTest` from the test bundle; it is
+not in a production package barrel or daemon mount. The image contains these three
+physical files, with no source loader, source alias or symlink. Bundling preserves
+one shared instance of the actual stores, fence, registry and internal modules.
+Ordinary tsc output was rejected for this lane because existing internal relative
+source imports do not resolve in a package-only installed tree.
 
 The supervisor supplies callable assertions for its retained original image,
 root identities/bytes and real lifetime lock. These assertions are synchronous,
@@ -71,9 +77,9 @@ is the publication grammar, not permission to skip unexplained operations.
 
 | Family | Paths, flags, modes and publication lineage |
 | --- | --- |
-| managed enrollment | `C/intent.json`, `C/enrolled.json`, and `W/orca.permissions.json`; existing managed enrollment performs exclusive private publication and retains original identity/control bytes. The sidecar writer uses `W/orca.permissions.json.<pid>.tmp`, exclusive `wx` 0600, then same-parent rename to the exact sidecar under its strict lock. No identity replacement is permitted. |
+| managed enrollment | `C/intent.json`, `C/enrolled.json`, and `W/orca.permissions.json`; actual enrollment unlinks the exact `C/never-typed` witness, fsyncs `C`, exclusively opens `intent.json` with `O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC` 0600, writes/fsyncs/closes and fsyncs `C`; initializes the sidecar; then publishes `enrolled.json` with that same exclusive sequence. Original identity bytes remain fixed. The sidecar writer uses `W/orca.permissions.json.<pid>.tmp`, exclusive `wx` 0600, then same-parent rename to the exact sidecar under its strict lock. No identity replacement is permitted. |
 | disposable credentials | `B/credentials.json`; lock directory suffix `.lock`; temporary `credentials.json.<pid>.<8hex>.tmp`, private 0600 write/chmod then rename to that exact final file. Only test operator and distinct test persistence reviewer are issued; neither raw token is emitted as semantic evidence. |
-| real lease | `S/leases/run%3Acontrolled.json`; temporary final + `.<pid>.<base36>.tmp`. Initial write → exclusive link to final → unlink temporary; renewal write → rename to same final. Normal lane never steals, breaks or force-releases another lease. Existing store uses ambient 0022 for these files inside the 0700 run root. |
+| real lease | `S/leases/run%3Acontrolled.json`; temporary final + `.<pid>.<base36>.tmp`. Temporary writes use `O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC` 0644 under 0022, and replay requires a fresh previously absent generated path. Initial write → close → exclusive link to final → unlink temporary; renewal write → close → rename to same final. Normal lane never steals, breaks or force-releases another lease. Existing store uses ambient 0022 for these files inside the 0700 run root. |
 | protected execution | `S/private-execution/.execution-key` (32 bytes, 0600), `controlled.inputs.json` and bounded `encodeURIComponent(ref).payload.json`; 0700 directory. Each immutable encrypted record uses exact final + `.<uuid>.tmp`, exclusive `wx` 0600 → write → fsync → close → exclusive hard link to final → directory fsync → unlink temporary. The observer must retain identical source/final inode lineage and decoded authenticated record identity. A link to/from the service resource is forbidden. |
 | actual event journal | `S/runs/controlled.jsonl` and its exact `.lock` directory. Ordinary append uses the existing append handle/read/sequence/append/close protocol; no repair/truncate is expected in the normal lane. Public markers refer to actual encrypted payloads. |
 | locks | Only canonical writer lock directories for the preceding exact files plus the run lease mutation fence. Existing `withFileLock` uses 0755 directories and `owner.<pid>.<uuid>.json` files 0644 under ambient 0022 inside private parents. Each ownership token is exclusively created, inspected and unlinked before its directory is removed; no stale-owner recovery or arbitrary recursive deletion is accepted. |
@@ -130,3 +136,73 @@ Physical identity/currentness, authenticated persistence, genuine Save and live
 delivery, canonical attribution and OS effect reconstruction are checks. Positive
 integration remains pending until the connected producer and independent observer
 actually agree on the exact tested head.
+
+
+## Installed child arguments and retained plan
+
+Invoke `node <image>/controlled-child.mjs B <bootstrap|connected> <lifetimeFd>
+<commandFd> <ackFd>` with actual distinct inherited descriptors greater than 2.
+The parent retains their kernel identities and reserves all fresh tokens before
+launch. It creates `B/controlled-plan.json` with the following association data:
+
+* `version: 1`, `lane`, `inputHex`, `offset`, `length`, ordered `phases: [{name,token}]`.
+* `lifetime: {path,identity}`, `commandIdentity`, `ackIdentity`, and `roots: {path:identity}`.
+  Identities are exact `[dev,ino,mode,uid,gid]`; command/ack must be actual FIFOs.
+* `originalFiles: {path:{identity,sha256}}` for immutable original workspace identity
+  bytes and, on connected runs, the supervisor-retained bootstrap proof file.
+  `enrollmentWitness: {path,identity,sha256}` separately retains `C/never-typed`:
+  the child checks it before work; actual managed enrollment consumes this witness
+  before exclusive intent publication. Replay must match that exact unlink and
+  confirmation lineage, rather than require the consumed witness to remain.
+* `inventory: {path:{identity,sha256,stamp}}` for the same three original physical
+  image files in both runs. `stamp` is `[dev,ino,mode,uid,gid,nlink,size,mtimeNs,ctimeNs]`
+  encoded as decimal strings. Initial bytes are verified, and every synchronous
+  currentness assertion rechecks physical stamps including ctime. Full independent
+  replay must also verify the original hashes. This is cooperative same-UID change
+  detection, not hostile same-UID protection.
+* Connected only: `bootstrap: {evidenceRef,proofPath,proofSha256,installedInventoryDigest}`.
+  The inventory digest is SHA-256 of JS `JSON.stringify(inventory)` preserving its
+  supplied order. The proof must be an original retained file. These values bind
+  associations; **authority comes only from the private parent command channel**
+  after independent bootstrap verification. A candidate report/hash or arbitrary
+  JSON cannot make the parent send the connected Save command.
+
+The parent must not release a connected command following unsuccessful, incomplete
+or unknown bootstrap verification. No accepting supervisor launcher is included in
+this producer patch: the independent observer owner supplies that lane. The three
+image files may be shared across two separate disposable run bases/lifetimes;
+matching source text in a different physical tree is not the same retained image.
+
+
+## Current measured subset and open observer work
+
+[The bootstrap mutation/open measurement](controlled-owned-read-bootstrap-io-measurement.json)
+contains 80 actual mutation syscall entries and 55 private-open path/flag
+combinations from a successful physical bundled bootstrap run. It is explicitly
+unaccepted entry sampling: unfinished/resumed calls are not paired in that file,
+physical lineage and results have not received full independent replay, generated
+names are observations rather than future authorizations, and the final image
+must be rerun. This supplies actual store activity instead of a fabricated fixed
+sequence. The raw bootstrap trace was 95,814,704 bytes and completed in about 24
+seconds under strace. The completed canonical receipt and exact phase ack are
+producer correlations; independent acceptance is still absent.
+
+The connected TypeScript lane now performs actual Save, separately delivered
+Allow once, and a fresh rule read in local tests with real temporary stores,
+credentials, leases and a supervisor-owned flock. Test observation intercepts the
+actual native positional call and checks returned bytes, but does not establish
+external syscall confinement. Tests retain unavailable execution-review provenance
+and separate authenticated persistence review, and cover deferred/lost final ack,
+duplicate completion/dispatch, missing/revoked/tampered review, revoked actor/rule,
+stale revision, wrong interval, root replacement and released physical lifetime.
+
+Outstanding observer work is concrete: construct the two run plans using the
+three-file image; independently replay bootstrap effects/records before sending
+any connected token; add finite replay rules for the measured publication and
+lock families (including read/close/fsync and paired completion), then reconstruct
+all connected phases and semantic records. The connected external trace size and
+runtime have **not** been measured or accepted. The current 256 MiB/60 second
+contract bounds may need a smaller, fully checked observation encoding; exceeding
+them refuses rather than silently widening or claiming acceptance. No runtime
+acceptance, caller-supplied positive flag or generic private-root exemption is
+being proposed to resolve that work.
