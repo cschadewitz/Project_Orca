@@ -26,6 +26,27 @@ setInterval(()=>{},1000);
 
 
 class CleanupTests(unittest.TestCase):
+    def test_reaped_tracer_never_signals_late_group(self):
+        # Deterministic communicate-success model: tracer already reaped, so its
+        # numeric PID/PGID can no longer authorize a group signal.
+        for returncode in (0, -9):
+            with self.subTest(returncode=returncode):
+                with patch('run.subprocess.Popen') as launch, \
+                     patch('run.os.killpg') as kill_group, \
+                     patch('run.os.waitpid', side_effect=ChildProcessError):
+                    process = launch.return_value
+                    process.returncode = None
+                    process.stdout = process.stderr = None
+                    def communicated(timeout):
+                        process.returncode = returncode
+                        return 'output', 'diagnostic'
+                    process.communicate.side_effect = communicated
+                    result = run_traced(['owned-tracer'], timeout=1)
+                    self.assertEqual(result.returncode, returncode)
+                    kill_group.assert_not_called()
+                    process.poll.assert_not_called()
+                    process.wait.assert_not_called()
+
     def test_no_exitkill_fails_closed(self):
         with patch('run.subprocess.run') as command:
             command.return_value.stdout = 'older help'

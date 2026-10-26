@@ -88,7 +88,9 @@ failure cleanup; no claim is made that Python communicate necessarily hangs.
 The corrected sequential supervisor requires advertised `--kill-on-exit` support
 before launching scenarios and passes that option to the real tracer (unsupported
 or rejected execution fails closed). It creates one owned session/process group,
-uses bounded communicate, and always kills that group and waits for the tracer.
+uses bounded communicate, and kills that group only while its tracer leader remains unreaped, then waits
+for the tracer. Once communicate has reaped the tracer, it never signals the old
+numeric group; required EXITKILL and bounded descendant reaping settle that path.
 Process-local Linux subreaper state lets it reap adopted tracees, including ones
 that changed groups, before returning or propagating timeout. It restores the
 previous process-local state afterward; no persistent OS configuration changes.
@@ -104,3 +106,13 @@ both specifically recorded PIDs are absent and a fresh independent descriptor
 successfully takes the exclusive lock, with the directory still present. Missing
 EXITKILL support refuses before scenarios; injected uncertain cleanup preserves
 the disposable directory. These tests cover failure cleanup, not qualification.
+
+Re-review of `800f714e147d10c6bd4058e46ca7dc0218dc2536` found that its unconditional
+post-communicate killpg could signal a reused numeric PGID after the tracer was
+reaped. The correction reads existing `returncode` without poll/wait before its
+signal decision. An unreaped leader pins group identity through the timeout
+signal; an already reaped leader gets no group signal. A deterministic regression
+failed on both successful and killed-tracer communicate outcomes before the fix,
+and now asserts no killpg, poll or wait on either already-reaped path. Real hung
+Node tree and tracer-death settlement tests remain in place. The waitpid(-1) scope
+still requires this standalone sequential supervisor to have no unrelated children.

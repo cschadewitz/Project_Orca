@@ -116,16 +116,19 @@ def run_traced(args, **kwargs):
             return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
         finally:
             try:
-                # Only the group we created, including the original tracer. EXITKILL
-                # additionally covers traced descendants that changed process groups.
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired as error:
-                    raise OwnedCleanupError('Tracer did not settle; disposal unsafe') from error
+                # Do not poll/wait before this decision. An unreaped group leader
+                # pins its PID/PGID, even if it exited just after communicate timed
+                # out. After communicate reaps it, the numeric group may be reused:
+                # never signal it then; required EXITKILL settles its tracees.
+                if process.returncode is None:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired as error:
+                        raise OwnedCleanupError('Tracer did not settle; disposal unsafe') from error
                 # This standalone sequential supervisor launches no other children.
                 # Reap its adopted tracees too, including ones that changed groups.
                 deadline = time.monotonic() + 5
