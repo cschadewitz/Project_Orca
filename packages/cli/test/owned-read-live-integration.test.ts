@@ -298,6 +298,7 @@ async function fixture() {
   const input = {
     actor,
     target,
+    query,
     owner: original,
     parameters: { resourceRef: service.resourceRef, offset: 0, length: 4 },
     policy: strict,
@@ -395,6 +396,8 @@ async function fixture() {
 it("retains actual service capture after protected facts, preserving independent resource workspace and unavailable provenance", async () => {
   const f = await fixture();
   expect(f.readFacts).toHaveBeenCalledWith(f.actor);
+  expect(() => f.live.assertOriginalQuery({ ...f.input.query })).toThrow();
+  expect(f.live.assertOriginalQuery(f.input.query)).toBeUndefined();
   const c = f.producer.port.snapshot(f.captured.token);
   expect(c.action).toBe(f.captured.invocation.action);
   expect(c.binding).toBe(f.active);

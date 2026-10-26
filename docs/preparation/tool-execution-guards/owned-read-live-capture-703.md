@@ -9,7 +9,8 @@ store, UI, rule ledger or executor framework.
 through the existing service. It checks the canonical managed binding, obtains
 `protectedScopedPermissionOwner.readCaptureFacts(originalActor)` **before** calling
 `service.capture`, and compares the original owner's authority stamp and original
-callback identity with those facts. Failed and duplicate input registrations retain
+callback identity with those facts. The live registry also asserts the exact original
+in-process query object; a copied query or target JSON cannot attach a capture. Failed and duplicate input registrations retain
 bounded tombstones. It retains the exact actor, target, binding and facade; a copied
 action is only a lookup key for an already retained capability. Current reads recheck
 actual protected facts across awaits. They do not authorize from supplied stamps.

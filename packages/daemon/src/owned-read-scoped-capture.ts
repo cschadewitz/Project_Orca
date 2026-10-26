@@ -10,7 +10,7 @@ import {
   type ScopedPermissionCapture,
   type ScopedPermissionCapturePort,
 } from "@orca/agents";
-import type { LiveHumanInput } from "@orca/engine";
+import type { HumanInputQuery, LiveHumanInput } from "@orca/engine";
 import type { DisposableFileReadParameters } from "../../engine/src/disposable-file-read.js";
 import type {
   createOwnedFileReadServiceForTest,
@@ -50,6 +50,7 @@ export function ownedReadScopedCapture(options: {
     invocation: TrustedOwnedReadInvocation;
     actor: MutationActor;
     target: ScopedCaptureTarget;
+    query: HumanInputQuery;
     binding: ManagedTypedStoreBinding;
     blocked: boolean;
     refreshed: boolean;
@@ -68,6 +69,7 @@ export function ownedReadScopedCapture(options: {
   function current(entry: Entry) {
     if (entry.blocked || entry.binding !== binding) refuse();
     assertManagedTypedStoreBinding(entry.binding);
+    live.assertOriginalQuery(entry.query);
     if (!["pending", "accepting"].includes(live.inspect(entry.target))) refuse();
     entry.invocation.assertCurrent();
   }
@@ -146,6 +148,7 @@ export function ownedReadScopedCapture(options: {
     },
     async capture(input: {
       target: ScopedCaptureTarget;
+      query: HumanInputQuery;
       actor: MutationActor;
       owner: SyntheticReadOwner;
       parameters: DisposableFileReadParameters;
@@ -166,6 +169,12 @@ export function ownedReadScopedCapture(options: {
       const originalOwner = input.owner,
         policy = input.policy,
         evidence = input.evidence;
+      const query = input.query;
+      live.assertOriginalQuery(query);
+      same(
+        { ...query.live!.identity, runId: query.runId, stepRunId: query.stepRunId, requestId: query.requestId },
+        target,
+      );
       const key = JSON.stringify([
         target.instanceId,
         target.sessionId,
@@ -188,7 +197,17 @@ export function ownedReadScopedCapture(options: {
       const invocation = service.capture(originalOwner, parameters, policy, evidence);
       invocation.assertCurrent();
       const token = Object.freeze({}) as ScopedPermissionCapture;
-      entries.set(token, { token, invocation, actor, target, binding: active, blocked: false, refreshed: false });
+      live.assertOriginalQuery(query);
+      entries.set(token, {
+        token,
+        invocation,
+        actor,
+        target,
+        query,
+        binding: active,
+        blocked: false,
+        refreshed: false,
+      });
       return Object.freeze({ token, invocation });
     },
   });

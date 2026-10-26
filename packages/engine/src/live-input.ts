@@ -61,6 +61,7 @@ export type LiveInputState = "pending" | "accepting" | "expired" | "owner-unavai
 
 interface Pending {
   query: HumanInputQuery;
+  originalQuery: HumanInputQuery;
   binding: LiveInputBinding;
   target: LiveDecisionTarget;
   state: "pending" | "accepting";
@@ -126,6 +127,7 @@ export class LiveHumanInput implements HumanInputPort {
       };
       const entry: Pending = {
         query: { ...query, options: structuredClone(query.options) },
+        originalQuery: query,
         binding,
         target: { ...binding.identity, runId: query.runId, stepRunId: query.stepRunId, requestId: query.requestId },
         state: "pending",
@@ -170,6 +172,22 @@ export class LiveHumanInput implements HumanInputPort {
     if (target.instanceId !== this.instanceId) return "owner-unavailable";
     const entry = this.pending.get(target.requestId);
     return entry && IDENTITY_KEYS.every((key) => entry.target[key] === target[key]) ? entry.state : "expired";
+  }
+
+  /** Internal producer attachment to the exact in-process ask, never a target/JSON proof. */
+  assertOriginalQuery(query: HumanInputQuery): undefined {
+    const entry = this.pending.get(query.requestId);
+    if (
+      !entry ||
+      entry.originalQuery !== query ||
+      query.live !== entry.binding ||
+      query.runId !== entry.target.runId ||
+      query.stepRunId !== entry.target.stepRunId ||
+      this.inspect(entry.target) !== entry.state ||
+      entry.binding.signal.aborted
+    )
+      throw unavailable("owner-unavailable");
+    return undefined;
   }
 
   async answer(
