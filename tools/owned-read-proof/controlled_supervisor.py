@@ -34,7 +34,7 @@ REPO = Path(__file__).resolve().parents[2]
 SOURCE = '557f62fbe86fc8371d48f11ec37bf9db71cac436'
 QUERY_PATHS = ('/proc/self/maps', '/proc/self/cgroup', '/proc/meminfo',
                '/sys/fs/cgroup//memory.max', '/sys/fs/cgroup//memory.high')
-OBSERVER_FILES = ('controlled_supervisor.py', 'controlled_observation.py', 'controlled_aggregate.py',
+OBSERVER_FILES = ('controlled_supervisor.py', 'controlled_observation.py', 'controlled_aggregate.py', 'controlled_diagnostics.py',
     'controlled_connected.py', 'controlled_replay.py', 'controlled_contract.py', 'controlled_notifications.py',
     'controlled_semantics.py', 'controlled_delivery_semantics.py', 'controlled_save_semantics.py',
     'controlled_timestamps.py', 'kernel_runtime_queries.py', 'run.py', 'verify.py')
@@ -231,9 +231,10 @@ class ObservedRun:
         assert_observer(self.original['observerImplementation'])
 
 
-def observe(root, image, lane='bootstrap', designation=None, used_tokens=None):
+def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, diagnostic=False):
     """One original bounded test process; no accepting outcome or arbitrary argv."""
     require(lane in {'bootstrap', 'connected'}, 'unknown controlled observation lane')
+    require(type(diagnostic) is bool, 'diagnostic mode must be an explicit supervisor boolean')
     if lane == 'connected':
         from controlled_connected import ConnectedDesignation
         require(type(designation) is ConnectedDesignation, 'missing explicit connected designation')
@@ -319,6 +320,9 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None):
     tracer_ready = threading.Event()
     def launched(process):
         provenance.own_tracer(process)
+        if diagnostics is not None:
+            diagnostics.bind('tracer', provenance.tracer)
+            diagnostics.start()
         tracer_ready.set()
     # Original observer/runtime inputs are held outside the child base and are not
     # accepted from any producer report or child-writable plan file.
@@ -328,6 +332,11 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None):
     trace = base / 'trace'
     trace.touch(mode=0o600)
     log, errors = [], []
+    diagnostics = None
+    if diagnostic:
+        from controlled_diagnostics import SparseDiagnostics, CONFIG
+        diagnostics = SparseDiagnostics(trace, log)
+        original['diagnosticConfig'] = CONFIG
     start_clock = sample_clock()
     original['startedWallNs'] = start_clock['wallNs']
     original['clockSamples'] = {'start': start_clock, 'phases': []}
@@ -346,6 +355,8 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None):
                 time.sleep(.01)
             original['leaderPid'] = int(match[1])
             provenance.bind_leader(original['leaderPid'], node, argv)
+            if diagnostics is not None:
+                diagnostics.bind('leader', provenance.value['leader'], provenance.procfd, provenance.pidfd)
             # Retain a completed raw line anchor while the independently pinned
             # process is alive. The command may already be waiting unfinished.
             prefix = trace.read_bytes()
@@ -387,11 +398,17 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None):
     replay = None
     run = ObservedRun(report, original, None, root / (lane + '-attempt.json'))
     try:
-        result = run_traced(['prlimit', '--fsize=268435456:268435456', '--core=0:0', tracer,
-                    '--kill-on-exit', '--always-show-pid', OPTION, '-f', '-q', '-v', '-x', '-s', '131072', '-o', str(trace), *argv],
-                    pass_fds=(lifetime, command, ack), cwd=image,
-                    env={'PATH': os.environ['PATH'], 'HOME': str(base), 'TMPDIR': str(base)},
-                    stdout=out_write, stderr=err_write, text=True, timeout=60, on_started=launched)
+        try:
+            result = run_traced(['prlimit', '--fsize=268435456:268435456', '--core=0:0', tracer,
+                        '--kill-on-exit', '--always-show-pid', OPTION, '-f', '-q', '-v', '-x', '-s', '131072', '-o', str(trace), *argv],
+                        pass_fds=(lifetime, command, ack), cwd=image,
+                        env={'PATH': os.environ['PATH'], 'HOME': str(base), 'TMPDIR': str(base)},
+                        stdout=out_write, stderr=err_write, text=True, timeout=60, on_started=launched)
+        finally:
+            # Stop before any full-packet/kernel replay; sampling never reads
+            # those packets or launches another process while run_traced owns one.
+            if diagnostics is not None:
+                diagnostics.stop()
         worker.join(timeout=1)
         require(not worker.is_alive() and not errors, errors)
         finish_clock = sample_clock()
@@ -451,6 +468,15 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None):
         os.close(lifetime)
         provenance.close()
         run.closed = not worker.is_alive()
+        if diagnostics is not None:
+            path = root / (lane + '-diagnostics.json')
+            try:
+                measured = diagnostics.retain_and_close(path)
+                report['diagnostic'] = {'config': measured['config'], 'samples': len(measured['samples']),
+                                        'errors': measured['errors'], 'sha256': file_digest(path)}
+            except BaseException as error:
+                run.closed = False
+                report['diagnosticRefusal'] = type(error).__name__ + ': ' + str(error)
         report['phaseLog'] = log
         report['connectedCommandsReleased'] = lane == 'connected' and any(row['event'] == 'sent' for row in log)
         if trace.exists():

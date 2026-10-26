@@ -252,3 +252,43 @@ retained monotonic trace-progress and cgroup CPU/I/O/memory-event samples plus
 pinned supervisor/tracer/leader scheduler counters. Whole-packet inspection and
 other diagnostic subprocesses should wait until it settles. This would gather
 missing cause evidence; it adds no acceptance prerequisite or production gate.
+
+### One authorized instrumented original investigation
+
+Parent subsequently authorized exactly one diagnostic original run, irrespective
+of the unresolved historical cause. `controlled_observation.diagnose_bootstrap`
+is the fixed entrypoint: fresh private root and exact-source image build, one
+original bootstrap, complete unchanged original checks, sanitized checkpoint,
+then stop regardless of outcome. It never constructs a connected designation.
+This is an investigation, not a success-selected qualification retry. Earlier
+negative packets and diagnostic probes remain intact. Any completed new bootstrap
+is new evidence only; the historical cause and independent acceptance remain
+unresolved. Prior source-only approval does not cover the new instrumentation.
+
+The measured observer inventory now includes `controlled_diagnostics.py` (15
+files total). Diagnostic mode is an explicit in-process supervisor boolean; the
+normal CLI still accepts no provider/command arguments. Exact diagnostic config:
+
+* One-second relative waits, no catch-up bursts, at most 62 samples including an
+  initial sample and a final sample after owned process settlement when budget
+  allows. Actual monotonic before/after brackets record sampling overhead.
+* Progress is trace file size and phase-event count only. It never reads trace
+  contents, phase tokens, protected packets, argv or environment.
+* Supervisor, tracer and original leader use actual pidfds and pinned proc
+  directory descriptors. PID/starttime/parent/group/session must match before
+  reading counters; subsequent opens are relative to those descriptors. Exited
+  pidfds never trigger a lookup of a replacement numeric PID.
+* Fixed process counters are `stat`, `schedstat` and `io`; fixed resource files
+  under the held `/sys/fs/cgroup` directory are `cpu.stat`, `io.stat`,
+  `memory.events` and `memory.current`. Every read is capped at 8192 bytes.
+  Missing/racing counters and sampler errors remain explicit diagnostics.
+* No additional subprocess runs while the owned tracer group is active. Sampling
+  stops before full trace replay and packet processing. Reports, exact config,
+  physical proc pins and raw counter snapshots remain in a separate private
+  `bootstrap-diagnostics.json`; no diagnostic report authorizes execution.
+
+The producer/source/image, 55-second owner expiry, independent 60-second process
+limit, 256 MiB trace cap and all bootstrap physical/authority/notification/clock
+guards are unchanged. No concurrent packet inspection is performed during the
+run. Pre-run validation passed 266 Python tests (6.004 s), nine optimized
+diagnostic controls (0.013 s), and `git diff --check`.
