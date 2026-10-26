@@ -1,81 +1,113 @@
-# Disposable installed-layout observations — #702 / #703 / #706
+# Disposable installed-layout candidate evidence — #702 / #703 / #706
 
-Base: `dc62e348212cdf4e46b95e696c78641917e2ca27`. This separate test-only
-slice does not incorporate or modify #738's live-delivery work. Activation stays
-off and the production accepted-build map stays empty.
+This test-only follow-up starts at reviewed #739
+`4dd2e8f9ff74cb27be3f93cd02a7679ec888007b` (main base
+`dc62e348212cdf4e46b95e696c78641917e2ca27`). It changes no production
+lifecycle, accepted-build map, qualifier, coverage level or activation setting.
+#738 owns live human delivery. Parent owns integration, review and merge. The follow-up was synchronized to merged
+main `afe9387af2f14a24a4c1e218d4cab0a647efb060` before publication.
 
-The smallest honest next step is an observation harness, not a qualification
-producer. `tools/owned-read-proof/run.py` physically copies emitted core/store/
-agents/engine/cli modules and their required external dependency closure into a
-new temporary installation for each case. No source resolver, loader, or symlink
-back to the checkout participates in child module resolution. This is an internal
-module subset, not a packaged application or a supported production installer.
-The compiler output must exist first:
+`tools/owned-read-proof/run.py` copies emitted core/store/agents/engine/cli
+modules and their external dependency closure into a fresh disposable directory.
+No source resolver, loader or symlink to the checkout participates. This is an
+internal module subset, not a packaged application or production installer.
 
 ```sh
-./node_modules/.bin/tsc -b packages/cli/tsconfig.json
-python3 -B tools/owned-read-proof/run.py > /tmp/orca-installed-proof.json
+./node_modules/.bin/tsc -b packages/cli/tsconfig.json --force
+python3 -B tools/owned-read-proof/run.py > /tmp/orca-installed-candidate.json
 python3 -B -m unittest discover -s tools/owned-read-proof -p 'test_*.py'
 ```
 
-The supervisor uses the actual stable wrapper's `typed_lifetime_lock`, exclusively,
-and passes its descriptor to a bounded disposable Node subprocess. A competing
-independent open actually fails kernel flock acquisition. The child's synchronous
-assertion checks the inherited descriptor and named inode, plus its own fdinfo
-kernel WRITE flock record. No other process's proc metadata is read. Its managed
-owner enrolls only newly created disposable roots with a test-created original
-identity/witness. The owner checks actual copied image bytes against an inventory
-retained before child dispatch. This demonstrates physical checks under a trusted
-test supervisor; it does not accept a build or authenticate an external inventory.
+## Retained original and independent verifier
 
-Cases exercise actual canonical enrollment/read and availability refusal after
-mutating emitted owner code, closing the inherited descriptor, or replacing the
-workspace identity inode with identical bytes. Baseline also creates the actual
-closed read service, confirms unchanged unqualified coverage and rejects malformed
-intake. The service owner is deliberately incomplete synthetic test scaffolding;
-this does not demonstrate policy evaluation or qualification refusal for a valid
-action. There is no accepting qualifier, fake approval, saved standing rule,
-human verdict, or positive protected Save/read.
+Before launch the standalone supervisor provisions only new disposable roots,
+identity, input and enrollment witness. It retains the physical copied inventory
+(files, directories, inode/device/mode/owner and file SHA-256), canonical root
+binding, root identities and immutable input bytes, runtime/tracer/Python/verifier/
+supervisor identities, original lifetime descriptor and bounded scenario plan.
+The child compares its canonical root binding with that original. The supervisor
+uses the actual stable wrapper's `typed_lifetime_lock`, and a separate open really
+fails exclusive kernel flock acquisition before each case.
 
-A separate `strace` process observes actual `pread64` syscalls. Each trace must show
-exactly one four-byte positional read from an ordinary calibration file and zero
-positional reads from the service resource. Calibration is a raw OS read, never
-claimed as service execution. Producer callbacks/receipts do not decide these
-counts. Unit negative controls reject absent/short calibration and an injected
-service read. The harness fails if strace is missing or fails; no silent skip.
-Trace contents and installations are removed with their temporary directories;
-the report retains external counts and the copied-file SHA-256 manifest.
+`verify.py` runs as a **separate process** after the existing bounded owned-tree
+settlement returns successfully. Its stdin carries the supervisor's retained
+original; neither the child's JSON nor its mutable plan/inventory files decide
+verification. The verifier independently inventories the physical installation,
+checks root/input/runtime/observer/verifier bindings and the original inherited
+flock, and reconstructs descriptor history from kernel strace records. Producer
+policy assertions remain explicitly separate observations.
 
-## Authority versus report data
+The verifier admits one initial exact executable/argv, one cooperative Linux
+process and explicitly shared-descriptor Node threads. Every observed thread must
+settle with exit zero. Process clones, further exec, group/session changes,
+unsupported asynchronous I/O and incomplete or ambiguous trace fail closed.
+This lane uses Linux statx decoding and strace with required EXITKILL, complete
+strings for bounded payloads and raw decoding for ordinary non-positional read
+buffers. A kernel refusal of io_uring setup creates no asynchronous descriptor;
+a successful setup is unsupported. No kernel or security settings are changed.
 
-The test supervisor, its immutable-in-memory original binding, inherited open-file
-description and kernel flock provide local test lifetime meaning. Canonical owner
-code rechecks physical root and metadata identities. The test image assertion
-compares retained files on every managed assertion; it does not establish an
-immutable filesystem, detect every added file, or defend against hostile same-UID
-or root writers. Inventory files, manifests, child JSON, hashes and stdout reports
-are ordinary mutable test data. None can mint acceptance or upgrade service
-coverage. The trusted observer is separate from the producer, but both run with
-the same UID; no adversarial isolation or containment is claimed.
+Resource recognition uses observed exclusive 0400 creation inside a newly created
+0700 disposable directory, actual writes matching the supervisor input, writer
+close, read-only no-follow/nonblocking open, matching device/inode/owner/mode/size
+stats, unlink, detached stats and reader close. It does not search for a resource
+filename or trust producer-supplied descriptor numbers. Descriptor reuse is
+tracked; unsupported operations, aliasing, mappings and unexpected effects refuse.
+The requested raw calibration slice (offset 2, length 4) must have the exact result
+count and bytes from the supervisor input. Known root-identity positional reads
+are checked against retained original bytes; other unexpected positional reads
+following calibration refuse. Raw calibration is never service dispatch.
 
-Production acceptance would require a separately authorized verifier and protected
-lookup binding an exact independently accepted installed image, Linux runtime/host,
-service tool/profile and original managed lifetime to real observed conformance.
-The verifier must validate observed facts rather than trust a producer report.
-Current safe tools cannot establish that authority decision, fleet-wide exclusion
-of older writers, a production stable-owner bridge, or a genuine current required
-review. Credentials, protected approvals and live callback/permit composition are
-not exercised here. #738 owns callback lineage; this harness does not duplicate it.
+## Valid action and the authority boundary
 
-The bounded decision for parent is whether to commission an independently reviewed,
-controlled-Linux qualification authority/record and verifier for this exact owned-I/O
-profile, with retained inventory/lifetime and external observations. Alternatives
-are to retain this refusal-only evidence gate, or separately design a stronger
-isolated installed environment first. Neither alternative authorizes production
-trust. Only after that decision and actual evidence connection should a separate
-change consider emitting verified coverage and testing protected Save, refresh,
-explicit live Allow once and fresh bounded reads. Do not populate accepted maps or
-weaken existing qualification gates to run those positive branches.
+Baseline constructs the actual closed service and a complete **test-only
+cooperative owner interface** with physical/lifetime checks. Its invocation and
+authority identifiers are explicitly unverified test labels. It captures a valid
+bounded action and evaluates it through the real strict permission-source and
+policy code. Captured ceiling, current authority, protected access, coverage,
+profile and review facts remain unknown; protected rule material is unavailable.
+There is no injected accepting boolean, qualified source or fake approval.
+
+The actual evaluation returns `indeterminate`; authorization rejects. The kernel
+trace independently shows creation/read-only open/unlink/close and zero service
+reads. Coverage remains `policy-per-ask`, installed refs remain empty and
+`independentlyObservedEffects` remains false. This is valid-action observation
+under absent authority, not proof of an independently qualified positive pipeline
+or every individual policy failure. No protected Save, live Allow once, native
+choice or positive service execution is asserted.
+
+The controlled executions are baseline; changed emitted image; closed
+inherited lifetime descriptor; replaced identity inode with identical bytes;
+wrong calibration offset; raw read through a different descriptor; raw injected
+read through the actual retained service descriptor; an extra process, and a raw path-alias reopen before unlink. Each
+negative case must fail for its named reason, not merely fail for any reason.
+The raw service fault obtains the real open result through temporary test-only
+instrumentation, issues a raw read and restores the API. The verifier never
+receives that variable. These are deliberately unauthorized raw test effects,
+not service policy dispatch. Evidence-mutation unit controls separately remove
+trace events and alter bytes, offsets, lengths, descriptors, flags, inodes,
+settlement and process/exec/descriptor operations.
+
+## Meaning and limits
+
+Every report is **candidate evidence only**, with no authority to mint coverage.
+A SHA-256 binds bytes; it does not establish acceptance. Reports retain originals
+and observations but remain ordinary mutable data. Traces and copied layouts are
+disposed only after settlement. No fleet exclusion, hostile containment or
+immutable filesystem is claimed. Supervisor, verifier, observer and cooperative
+producer share a UID; pre/post physical snapshots cannot defeat a hostile same-UID
+or root writer or establish every transient mutation. This is a standalone,
+sequential, single-group test, not a reusable concurrent supervisor.
+
+A positive policy/permit/dispatch pipeline still requires a separately authorized
+qualification authority and protected lookup binding independently reviewed
+conformance to the exact installed image, Linux runtime/host, tool/profile and
+original managed lifetime, together with genuine principal/current authority and
+protected approval/review capabilities. This verifier supplies candidate facts;
+it does not supply those capabilities. Do not populate accepted maps, upgrade
+coverage or weaken the gates to reach positive branches. Fleet exclusion,
+production stable-owner composition and Mac Silicon acceptance remain separate
+prerequisites. No existing workspace, credential, service or OS/network/security
+configuration is touched.
 
 ## Owned trace-process cleanup correction
 
@@ -116,3 +148,93 @@ failed on both successful and killed-tracer communicate outcomes before the fix,
 and now asserts no killpg, poll or wait on either already-reaped path. Real hung
 Node tree and tracer-death settlement tests remain in place. The waitpid(-1) scope
 still requires this standalone sequential supervisor to have no unrelated children.
+
+## Recorded local run
+
+The [candidate observation record](owned-read-candidate-observations.json) binds the
+test source bytes and records nine controlled executions plus 18 mutation/transfer/interval/cleanup
+tests on Node 24.19.0 / strace 6.13. Baseline observed 11 settled threads and zero
+service reads; its valid action returned `indeterminate / authority-unavailable`.
+These are local candidate observations, not independent review or hosted CI.
+
+## Unsupported syscall correction
+
+Independent review of `19744f82572dcb43ff944d0fcafab2811b546d1b` found that
+`sendmmsg` / `recvmmsg` fell through the decoder. Replaying a Unix socketpair,
+batched SCM_RIGHTS transfer and ordinary read of the untracked alias reproduced
+an incorrect candidate record with zero service reads. That head's candidate
+record therefore does not establish the claimed absence of unaccounted effects.
+
+The correction uses an explicit supported syscall vocabulary with default refusal.
+Batched transfers, sockets, duplication, alternate copy/splice/AIO paths and unknown
+future calls are outside this decoder's scope. Descriptor controls also require
+supported commands. A real same-process Linux control transfers an actual open
+file descriptor with `sendmmsg` / `recvmmsg` and reads its bytes through the alias;
+replaying each observed batched call now rejects. This tests observation/decoding,
+not a service authorization or hostile containment capability.
+
+The corrected run also rejects successful effects through unknown descriptors,
+tracks pipe/eventfd/epoll descriptor creation, and restricts fcntl/ioctl/process
+control commands. Failed EBADF probes do not establish any descriptor effect.
+The syscall correction had eight installed cases and 14 tests. With the supported-open
+phase correction, the extra-process launch scaffold refuses even earlier at an
+unclassified post-resource open, before socketpair or clone decoding.
+
+## Supported-open phase correction
+
+Re-review of `84ba472c207c66575aea2b8762f01611a6692e3e` reproduced a second
+incorrect zero-service-read candidate record: an ordinary open/read/close of
+`/./data`, doubled-slash, relative AT_FDCWD, or `/proc/self/root` spellings of the
+still-named inode was not classified as resource access. That head's zero-read
+claim is also withdrawn.
+
+The bounded model now categorically rejects unrelated opens from observed
+exclusive resource creation until unlink. The sole subsequent named-resource
+open must be its exact original path with the previously required read-only
+flags and single retained descriptor. This is a phase rule, not an attempt to
+recognize every filesystem spelling. Noncanonical, relative and unresolved
+spellings refuse; after creation, ordinary opens are limited to the original
+physical image inventory, exact root identity/lifetime metadata and the resource
+directory for cleanup. Other newly opened paths fail before a read. Setup opens
+before the resource exists are explicitly classified as setup, not resource
+conformance; two exact pre-calibration Node cgroup probe spellings containing a
+double slash are supported only in that setup phase. This candidate does not
+verify every setup read or establish OS confinement.
+
+Mutation controls inject relative, dot, doubled-slash, parent-component,
+proc-root, unrelated and extra resource-directory opens before and after unlink.
+An actual installed negative execution intercepts the service's unlink, opens
+`/./fixture`, reads its bytes and closes the alias before completing the real
+unlink. Its trace must reject at the named-resource phase rule. This raw effect
+is not authorized service dispatch. No production or coverage changes accompany
+these decoder restrictions.
+
+## Cross-phase interval correction
+
+Re-review of `ed6ba629993bdba6ab79d78974a18da0f8ee0e40` reproduced a third
+incorrect zero-read candidate result: a shared-thread open entered before resource
+creation, completed during its named lifetime, and read the alias afterward.
+Entry-order reassembly had lost the completion boundary and classified that open
+as setup. That head's zero-read claim is withdrawn as well.
+
+The parser now retains syscall entry/completion positions and rejects impossible
+same-thread overlap. After reconstructing the named resource window, verification
+refuses unresolved open intervals that intersect creation through completed unlink.
+The only modeled open intervals are the leader's already validated exact exclusive
+creation and single read-only reopen, wholly inside that window: its next syscall
+cannot enter until its own prior call completes. Cross-thread unfinished payload
+or descriptor-mutation intervals crossing the window also refuse. Readiness waits
+are not payload reads or descriptor factories. No concurrent filesystem simulation
+or inference of an ambiguous inode is added.
+
+Canonical cross-phase alias mutations now refuse, including an open entered even
+before the resource directory exists. A bounded actual Linux FIFO control captures
+a blocking open crossing a separate file's creation and checks retained entry and
+resume positions. This is raw interval-decoder evidence, not a reproduced service
+race or a positive service execution. All existing cooperative/same-UID and
+qualification limits continue to apply.
+
+The interval-corrected source bytes passed all nine installed scenarios and all
+18 tests. The baseline still records a valid-action authority-unavailable refusal
+and zero service reads under the bounded candidate model. Independent re-review
+remains required.
