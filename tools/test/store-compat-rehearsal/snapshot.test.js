@@ -79,3 +79,25 @@ it("copies only to a destination that does not exist and never touches the sourc
   expect(await readFile(join(existing, "keep"), "utf8")).toBe("operator file");
   expect(compareSnapshots(before, await snapshotRoots({ workspace: root })).equal).toBe(true);
 });
+
+it.skipIf(!posix)("refuses destination links and linked ancestors before writing any outside entry", async () => {
+  const { base, root } = await tree();
+  const outside = join(base, "outside");
+  await mkdir(outside);
+  await writeFile(join(outside, "sentinel"), "keep\n");
+  const before = await snapshotRoots({ outside });
+  await symlink(outside, join(base, "alias"));
+  await symlink(join(outside, "missing"), join(base, "dangling"));
+  for (const destination of [join(base, "alias", "new"), join(base, "alias"), join(base, "dangling")]) {
+    await expect(copyToNew(root, destination)).rejects.toMatchObject({ code: "LINK_REFUSED" });
+    expect(compareSnapshots(before, await snapshotRoots({ outside })).equal).toBe(true);
+  }
+});
+
+it.skipIf(!posix)("refuses aliases back into the source before creating nested destinations", async () => {
+  const { base, root } = await tree();
+  const before = await snapshotRoots({ workspace: root });
+  await symlink(root, join(base, "alias"));
+  await expect(copyToNew(root, join(base, "alias", "nested"))).rejects.toMatchObject({ code: "LINK_REFUSED" });
+  expect(compareSnapshots(before, await snapshotRoots({ workspace: root })).equal).toBe(true);
+});
