@@ -1,4 +1,4 @@
-"""Synthetic unchanged-child read/hash controls, never a traced original attempt.
+"""Synthetic repository-child read/hash controls, never a traced original attempt.
 
 Only the producer is a stub. The exact repository child executes with a real
 supervisor flock and command/ack pipes. No credentials or service are created.
@@ -54,7 +54,7 @@ export async function runControlledOwnedReadTest(base, lane, options) {
 
 
 class BootstrapReceiptChildControls(unittest.TestCase):
-    def child(self, proof_bytes, tamper=None, association=None):
+    def child(self, proof_bytes, tamper=None, association=None, stub=STUB):
         with tempfile.TemporaryDirectory(prefix='orca-receipt-child-control-') as directory:
             root = Path(directory)
             image, base = root / 'image', root / 'connected'
@@ -62,7 +62,7 @@ class BootstrapReceiptChildControls(unittest.TestCase):
             base.mkdir()
             child = image / 'controlled-child.mjs'
             child.write_bytes((REPO / 'tools/owned-read-proof/controlled-child.mjs').read_bytes())
-            (image / 'controlled-producer.mjs').write_text(STUB)
+            (image / 'controlled-producer.mjs').write_text(stub)
             (image / 'controlled-build.json').write_text('{}')
             proof = root / 'association.json'
             proof.write_bytes(proof_bytes)

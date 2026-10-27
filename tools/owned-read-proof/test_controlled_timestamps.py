@@ -2,6 +2,7 @@
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
+import subprocess
 import unittest
 
 from controlled_timestamps import (NS, OWNER_NS, OPTION, KIND, SOURCE, PRODUCER,
@@ -9,13 +10,18 @@ from controlled_timestamps import (NS, OWNER_NS, OPTION, KIND, SOURCE, PRODUCER,
     strip_prefixes, timestamped_events, resource_entry, expiry_bound)
 
 START = 1793030000 * NS
+# Historical grammar fixtures must retain their reviewed bytes when the working
+# child changes. This does not update the observer's reviewed source/image pins.
+REVIEWED_CHILD = subprocess.run(
+    ['git', 'show', SOURCE + ':tools/owned-read-proof/controlled-child.mjs'],
+    cwd=Path(__file__).resolve().parents[2], capture_output=True, check=True, timeout=5).stdout
 
 
 def clock_original():
     def sample(wall):
         return {'wallNs': wall, 'monotonicBeforeNs': wall - 10**18 - 10,
                 'monotonicAfterNs': wall - 10**18 + 10}
-    child = Path(__file__).with_name('controlled-child.mjs').read_bytes()
+    child = REVIEWED_CHILD
     producer = b'synthetic bundle for grammar controls only'
     return {'sourceHead': SOURCE, 'argv': ['/node', '/image/controlled-child.mjs'],
         'immutable': {path: {'family': 'image', 'hex': data.hex(), 'sha256': sha(data)} for path, data in
@@ -117,12 +123,13 @@ class EntryClockControls(unittest.TestCase):
             with self.assertRaises(RuntimeError): expiry_bound(o, bad, c+OWNER_NS)
 
     def test_source_ordering_and_exact_image_binding_are_required(self):
-        for change in ['source', 'producer', 'child', 'image']:
+        for change in ['source', 'producer', 'child', 'image', 'child-bytes']:
             o = clock_original()
             if change == 'source': o['sourceHead'] = 'other'
             elif change == 'producer': o['controlledBuild']['sources'][PRODUCER] = '0'*64
             elif change == 'child': o['controlledBuild']['childSha256'] = '0'*64
-            else: o['immutable']['/image/controlled-producer.mjs']['hex'] = b'redirected'.hex()
+            elif change == 'image': o['immutable']['/image/controlled-producer.mjs']['hex'] = b'redirected'.hex()
+            else: o['immutable']['/image/controlled-child.mjs']['hex'] = b'unreviewed child'.hex()
             with self.subTest(change=change), self.assertRaises(RuntimeError):
                 expiry_bound(o, START+NS, START+NS+OWNER_NS)
 

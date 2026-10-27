@@ -18,19 +18,17 @@ const plan = JSON.parse(fs.readFileSync(join(base, "controlled-plan.json"), "utf
 assert.equal(plan.version, 1);
 assert.equal(plan.lane, lane);
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const identity = (info) => [info.dev, info.ino, info.mode, info.uid, info.gid];
+// Plan identities retain their existing JSON-number representation; full stamps
+// retain exact bigint decimal strings from the same observation.
+const identity = (info) => [info.dev, info.ino, info.mode, info.uid, info.gid].map(Number);
 const actualIdentity = (path) => identity(fs.lstatSync(path));
-const stamp = (path) => {
-  const info = fs.lstatSync(path, { bigint: true });
-  return [info.dev, info.ino, info.mode, info.uid, info.gid, info.nlink, info.size, info.mtimeNs, info.ctimeNs].map(
-    String,
-  );
-};
+const stamp = (info) =>
+  [info.dev, info.ino, info.mode, info.uid, info.gid, info.nlink, info.size, info.mtimeNs, info.ctimeNs].map(String);
 // Initial bytes are associated with the retained original before any authority is used.
 // Current checks use complete physical stamps (including unresettable ctime), not a cached
 // Boolean. Independent replay also rechecks bytes. Cooperative same-UID scope only.
 for (const [path, original] of Object.entries(plan.inventory)) {
-  assert.deepEqual(stamp(path), original.stamp);
+  assert.deepEqual(stamp(fs.lstatSync(path, { bigint: true })), original.stamp);
   assert.equal(hash(fs.readFileSync(path)), original.sha256);
 }
 const check = () => {
@@ -43,13 +41,19 @@ const check = () => {
     assert.equal(hash(fs.readFileSync(path)), original.sha256);
   }
   for (const [path, original] of Object.entries(plan.inventory)) {
-    assert.deepEqual(actualIdentity(path), original.identity);
-    assert.ok(fs.lstatSync(path).isFile());
-    assert.deepEqual(stamp(path), original.stamp);
+    const info = fs.lstatSync(path, { bigint: true });
+    assert.deepEqual(identity(info), original.identity);
+    assert.ok(info.isFile());
+    assert.deepEqual(stamp(info), original.stamp);
   }
-  assert.ok(fs.fstatSync(commandFd).isFIFO() && fs.fstatSync(ackFd).isFIFO());
-  assert.deepEqual(identity(fs.fstatSync(commandFd)), plan.commandIdentity);
-  assert.deepEqual(identity(fs.fstatSync(ackFd)), plan.ackIdentity);
+  for (const [fd, original] of [
+    [commandFd, plan.commandIdentity],
+    [ackFd, plan.ackIdentity],
+  ]) {
+    const info = fs.fstatSync(fd, { bigint: true });
+    assert.ok(info.isFIFO());
+    assert.deepEqual(identity(info), original);
+  }
   return undefined;
 };
 assert.deepEqual(actualIdentity(plan.enrollmentWitness.path), plan.enrollmentWitness.identity);
