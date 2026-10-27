@@ -81,8 +81,12 @@ export function assertControlledLifetimeFdinfo(lifetimeFd: number): undefined {
 export interface ControlledReadTestSupervisor {
   /** Actual retained image/root/identity/lifetime checks, never no-op test substitutions. */
   assertCurrent(): undefined;
+  /** Actual installed-image (and connected retained-proof) check for the managed build port.
+   * The lifetime port separately receives the complete current check; never a no-op. */
+  assertBuildCurrent(): undefined;
   /** Private supervisor capability issued only AFTER separate independent bootstrap replay.
-   * The reference alone has no authority; the callable checks retained original proof/current image. */
+   * The reference alone has no authority; the callable checks the retained original proof.
+   * It is always composed after `assertCurrent`, which checks the current physical image. */
   readonly bootstrap?: { readonly evidenceRef: string; assertCurrent(): undefined };
   readonly content: string;
   readonly offset: number;
@@ -107,6 +111,7 @@ export async function runControlledOwnedReadTest(
     offset = supervisor.offset,
     length = supervisor.length;
   const assertPhysicalCurrent = supervisor.assertCurrent.bind(supervisor);
+  const assertImageCurrent = supervisor.assertBuildCurrent.bind(supervisor);
   const bootstrap = supervisor.bootstrap
     ? Object.freeze({
         evidenceRef: supervisor.bootstrap.evidenceRef,
@@ -126,6 +131,7 @@ export async function runControlledOwnedReadTest(
     assert.ok(bootstrap?.evidenceRef);
     assert.equal(bootstrap.assertCurrent(), undefined);
   }
+  assert.equal(assertImageCurrent(), undefined);
   const config = join(base, "workspace"),
     storeDir = join(config, ".orca");
   const roots = resolveManagedRootBinding(
@@ -176,6 +182,12 @@ export async function runControlledOwnedReadTest(
     abort.signal.throwIfAborted();
     if (operator) currentCredential(operator);
     if (reviewer) currentCredential(reviewer);
+    return undefined;
+  };
+  // The managed owner calls its lifetime port (the complete `check`) and then this build
+  // port back to back; passing `check` to both repeated every observation of that pair.
+  const build = (): undefined => {
+    assert.equal(assertImageCurrent(), undefined);
     return undefined;
   };
   const interval = (candidateOffset: number, candidateLength: number): undefined => {
@@ -311,7 +323,7 @@ export async function runControlledOwnedReadTest(
   const managed = createManagedTypedWorkspace({
     binding: roots,
     lifetime: { mode: "enrollment", assertCurrent: check },
-    assertBuildCurrent: check,
+    assertBuildCurrent: build,
     qualify: async (state, action, signal) => {
       check();
       if (state.document.scopedRules.records.length) return owner.qualify(state, action, signal);

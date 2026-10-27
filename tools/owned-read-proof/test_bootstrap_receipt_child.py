@@ -36,7 +36,9 @@ export async function runControlledOwnedReadTest(base, lane, options) {
     options.assertCurrent();
     options.bootstrap.assertCurrent();
   }
-  assert.equal(reads, 12); // check + bootstrap's check + bootstrap's proof hash, each time
+  // check's original-file hash + the association's own proof hash, each time. The
+  // association no longer repeats the whole check (the reviewed child read it 3x).
+  assert.equal(reads, 8);
   if (process.env.RECEIPT_CHILD_TAMPER === 'bytes') {
     const original = read(proof);
     fs.writeFileSync(proof, Buffer.alloc(original.length, 120));
@@ -44,17 +46,18 @@ export async function runControlledOwnedReadTest(base, lane, options) {
     fs.writeFileSync(proof + '.new', read(proof));
     fs.renameSync(proof + '.new', proof);
   }
+  if (process.env.RECEIPT_CHILD_PROBE === 'association') options.bootstrap.assertCurrent();
   options.assertCurrent();
   options.bootstrap.assertCurrent();
   for (const name of ['save', 'human-read', 'rule-read']) await options.phase(name, async () => {});
-  assert.equal(reads, 21);
+  assert.equal(reads, 16);
   return { syntheticChildOnly: true, proofReads: reads, proofReadBytes: bytes };
 }
 '''
 
 
 class BootstrapReceiptChildControls(unittest.TestCase):
-    def child(self, proof_bytes, tamper=None, association=None, stub=STUB):
+    def child(self, proof_bytes, tamper=None, association=None, stub=STUB, probe=None):
         with tempfile.TemporaryDirectory(prefix='orca-receipt-child-control-') as directory:
             root = Path(directory)
             image, base = root / 'image', root / 'connected'
@@ -90,7 +93,8 @@ class BootstrapReceiptChildControls(unittest.TestCase):
                 result = subprocess.run([shutil.which('node'), str(child), str(base), 'connected',
                     str(lifetime), str(command), str(ack)], pass_fds=(lifetime, command, ack),
                     capture_output=True, timeout=10,
-                    env={**os.environ, 'RECEIPT_CHILD_TAMPER': tamper or ''})
+                    env={**os.environ, 'RECEIPT_CHILD_TAMPER': tamper or '',
+                         'RECEIPT_CHILD_PROBE': probe or ''})
                 return result
             finally:
                 for number in (lifetime, command, send, receive, ack):
@@ -104,17 +108,18 @@ class BootstrapReceiptChildControls(unittest.TestCase):
         self.assertEqual(full.returncode, 0, full.stderr.decode())
         compact, full = json.loads(compact.stdout), json.loads(full.stdout)
         self.assertEqual(compact['proofReads'], full['proofReads'])
-        self.assertEqual(compact['proofReadBytes'], 21 * len(receipt))
-        self.assertEqual(full['proofReadBytes'], 21 * len(full_report))
+        self.assertEqual(compact['proofReadBytes'], 16 * len(receipt))
+        self.assertEqual(full['proofReadBytes'], 16 * len(full_report))
         self.assertLess(compact['proofReadBytes'], full['proofReadBytes'])
 
     def test_child_fresh_hash_and_physical_identity_refuse_tamper(self):
-        for scenario in ('bytes', 'replacement'):
-            with self.subTest(scenario=scenario):
-                result = self.child(b'original immutable synthetic association', scenario)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(b'AssertionError', result.stderr)
-                self.assertEqual(result.stdout, b'')
+        for probe in (None, 'association'):
+            for scenario in ('bytes', 'replacement'):
+                with self.subTest(scenario=scenario, probe=probe):
+                    result = self.child(b'original immutable synthetic association', scenario, probe=probe)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(b'AssertionError', result.stderr)
+                    self.assertEqual(result.stdout, b'')
 
     def test_child_bootstrap_proof_and_inventory_associations_refuse(self):
         for field in ('proofSha256', 'installedInventoryDigest', 'proofPath'):

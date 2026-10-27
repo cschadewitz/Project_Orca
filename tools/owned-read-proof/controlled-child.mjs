@@ -31,6 +31,14 @@ for (const [path, original] of Object.entries(plan.inventory)) {
   assert.deepEqual(stamp(fs.lstatSync(path, { bigint: true })), original.stamp);
   assert.equal(hash(fs.readFileSync(path)), original.sha256);
 }
+const image = () => {
+  for (const [path, original] of Object.entries(plan.inventory)) {
+    const info = fs.lstatSync(path, { bigint: true });
+    assert.deepEqual(identity(info), original.identity);
+    assert.ok(info.isFile());
+    assert.deepEqual(stamp(info), original.stamp);
+  }
+};
 const check = () => {
   assert.deepEqual(identity(fs.fstatSync(lifetimeFd)), plan.lifetime.identity);
   assert.deepEqual(actualIdentity(plan.lifetime.path), plan.lifetime.identity);
@@ -40,12 +48,7 @@ const check = () => {
     assert.deepEqual(actualIdentity(path), original.identity);
     assert.equal(hash(fs.readFileSync(path)), original.sha256);
   }
-  for (const [path, original] of Object.entries(plan.inventory)) {
-    const info = fs.lstatSync(path, { bigint: true });
-    assert.deepEqual(identity(info), original.identity);
-    assert.ok(info.isFile());
-    assert.deepEqual(stamp(info), original.stamp);
-  }
+  image();
   for (const [fd, original] of [
     [commandFd, plan.commandIdentity],
     [ackFd, plan.ackIdentity],
@@ -54,6 +57,16 @@ const check = () => {
     assert.ok(info.isFIFO());
     assert.deepEqual(identity(info), original);
   }
+  return undefined;
+};
+// Fresh retained-proof identity, bytes and inventory association only. The producer
+// composes it after `check`; it no longer repeats that whole physical check itself.
+const association = () => {
+  const original = plan.originalFiles[plan.bootstrap.proofPath];
+  assert.ok(original && original.sha256 === plan.bootstrap.proofSha256);
+  assert.deepEqual(actualIdentity(plan.bootstrap.proofPath), original.identity);
+  assert.equal(hash(fs.readFileSync(plan.bootstrap.proofPath)), original.sha256);
+  assert.equal(plan.bootstrap.installedInventoryDigest, hash(JSON.stringify(plan.inventory)));
   return undefined;
 };
 assert.deepEqual(actualIdentity(plan.enrollmentWitness.path), plan.enrollmentWitness.identity);
@@ -72,20 +85,19 @@ const report = await runControlledOwnedReadTest(base, lane, {
   offset: plan.offset,
   length: plan.length,
   assertCurrent: check,
+  // Managed build port: fresh installed image and, when connected, its retained proof.
+  assertBuildCurrent: () => {
+    image();
+    if (lane === "connected") association();
+    return undefined;
+  },
   ...(lane === "connected"
     ? {
         bootstrap: {
           evidenceRef: plan.bootstrap.evidenceRef,
           // Designation comes from the parent command pipe after its independent bootstrap
           // check. This association check cannot promote a mutable report into authority.
-          assertCurrent: () => {
-            check();
-            const original = plan.originalFiles[plan.bootstrap.proofPath];
-            assert.ok(original && original.sha256 === plan.bootstrap.proofSha256);
-            assert.equal(hash(fs.readFileSync(plan.bootstrap.proofPath)), original.sha256);
-            assert.equal(plan.bootstrap.installedInventoryDigest, hash(JSON.stringify(plan.inventory)));
-            return undefined;
-          },
+          assertCurrent: association,
         },
       }
     : {}),

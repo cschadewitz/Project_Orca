@@ -1,7 +1,9 @@
 """Real child / synthetic producer controls, never a traced original attempt.
 
 Instrumentation starts after the child's initial checks. It calls the same child
-currentness closure repeatedly, including through bootstrap and phase boundaries.
+currentness closure repeatedly, including through phase boundaries, and separately
+calls the retained-proof association and managed build-port callables. Neither of
+those repeats the whole physical check; each observes its own facts freshly.
 """
 import json
 import unittest
@@ -23,6 +25,12 @@ export async function runControlledOwnedReadTest(base, lane, options) {
   const files = Object.keys(plan.inventory);
   const command = Number(process.argv[5]), ack = Number(process.argv[6]);
   const lstat = fs.lstatSync, fstat = fs.fstatSync;
+  const proof = plan.bootstrap.proofPath;
+  let proofReads = 0;
+  fs.readFileSync = function(path, ...args) {
+    if (path === proof) proofReads++;
+    return read.call(this, path, ...args);
+  };
   let paths = [], descriptors = [], injected = null;
   fs.lstatSync = function(path, config) {
     paths.push([path, config?.bigint === true]);
@@ -34,7 +42,7 @@ export async function runControlledOwnedReadTest(base, lane, options) {
     const info = fstat.call(this, fd, config);
     return injected?.fd === fd ? injected.transform(info) : info;
   };
-  let checks = 0, inventoryCalls = 0, fifoCalls = 0;
+  let checks = 0, inventoryCalls = 0, fifoCalls = 0, associations = 0, builds = 0;
   function verifyObservations(count) {
     assert.equal(fdinfoCalls, count);
     // Also retain every noninventory path/lifetime observation per invocation.
@@ -61,9 +69,32 @@ export async function runControlledOwnedReadTest(base, lane, options) {
     work();
     verifyObservations(1);
   }
+  // Retained proof only: one fresh no-follow identity and one fresh byte hash.
+  function observedAssociation(work) {
+    paths = []; descriptors = []; fdinfoCalls = 0; proofReads = 0;
+    assert.equal(work(), undefined);
+    assert.equal(fdinfoCalls, 0);
+    assert.deepEqual(paths, [[proof, false]]);
+    assert.deepEqual(descriptors, []);
+    assert.equal(proofReads, 1);
+    associations++;
+  }
+  // Build port: one fresh bigint stamp per installed image file, then the proof.
+  function observedBuild(work) {
+    paths = []; descriptors = []; fdinfoCalls = 0; proofReads = 0;
+    assert.equal(work(), undefined);
+    assert.equal(fdinfoCalls, 0);
+    assert.deepEqual(paths, [...files.map((file) => [file, true]), [proof, false]]);
+    assert.deepEqual(descriptors, []);
+    assert.equal(proofReads, 1);
+    inventoryCalls += files.length;
+    associations++;
+    builds++;
+  }
   for (let i = 0; i < 4; i++) {
     observedCheck(options.assertCurrent);
-    observedCheck(options.bootstrap.assertCurrent);
+    observedAssociation(options.bootstrap.assertCurrent);
+    observedBuild(options.assertBuildCurrent);
   }
   const scenario = process.env.RECEIPT_CHILD_TAMPER;
   if (scenario) {
@@ -77,6 +108,17 @@ export async function runControlledOwnedReadTest(base, lane, options) {
         : fs.openSync(`/proc/self/fd/${target === 'command' ? ack : command}`,
             target === 'command' ? 'r' : 'w');
       assert.equal(replacement, fd, 'reuse the original descriptor number');
+    } else if (kind === 'proof') {
+      if (target === 'bytes') {
+        const original = read(proof), before = lstat(proof);
+        fs.chmodSync(proof, 0o600);
+        fs.writeFileSync(proof, Buffer.alloc(original.length, 120));
+        fs.chmodSync(proof, before.mode & 0o777);
+        fs.utimesSync(proof, before.atime, before.mtime);
+      } else if (target === 'replacement') {
+        fs.writeFileSync(proof + '.new', read(proof));
+        fs.renameSync(proof + '.new', proof);
+      } else throw new Error('unknown proof mutation');
     } else if (kind === 'file') {
       if (field === 'bytes') {
         const original = read(path), before = lstat(path);
@@ -104,9 +146,12 @@ export async function runControlledOwnedReadTest(base, lane, options) {
         ? {path: files[kind === 'stamp' ? Number(target) : 0], transform}
         : {fd: target === 'command' ? command : ack, transform};
     }
-    // The mutation follows eight successful checks of this exact closure. Any
-    // cached observation/success would incorrectly let this invocation return.
-    options.assertCurrent();
+    // The mutation follows four successful calls of each closure. Any cached
+    // observation/success would incorrectly let the probed invocation return.
+    const probe = process.env.RECEIPT_CHILD_PROBE || 'current';
+    process.stderr.write('PROBING AFTER MUTATION\n');
+    ({current: options.assertCurrent, build: options.assertBuildCurrent,
+      association: options.bootstrap.assertCurrent})[probe]();
     throw new Error('MUTATION WAS ACCEPTED');
   }
   for (const name of ['save', 'human-read', 'rule-read']) {
@@ -114,42 +159,57 @@ export async function runControlledOwnedReadTest(base, lane, options) {
     await options.phase(name, async () => {});
     verifyObservations(2); // before and after the phase work's await
   }
-  assert.equal(checks, 14);
-  return {syntheticChildOnly: true, checks, inventoryCalls, fifoCalls};
+  assert.equal(checks, 10);
+  return {syntheticChildOnly: true, checks, inventoryCalls, fifoCalls, associations, builds};
 }
 '''
 
 
 class ChildStatObservationControls(unittest.TestCase):
-    def child(self, scenario=None):
+    def child(self, scenario=None, probe=None):
         return receipt_controls.BootstrapReceiptChildControls().child(
-            b'synthetic immutable association', tamper=scenario, stub=STUB)
+            b'synthetic immutable association', tamper=scenario, stub=STUB, probe=probe)
 
     def test_one_fresh_bigint_observation_per_object_per_check(self):
         result = self.child()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
+        # Ten complete physical checks (4 direct, 6 at phase boundaries) observe the image
+        # 30 times; four build-port calls observe it 12 more. Association calls never
+        # repeat the physical check (the reviewed child's 4 extra checks are gone).
         self.assertEqual(json.loads(result.stdout), {
             'kind': 'controlled-producer-correlations-v1', 'syntheticChildOnly': True,
-            'checks': 14, 'inventoryCalls': 42, 'fifoCalls': 28})
+            'checks': 10, 'inventoryCalls': 42, 'fifoCalls': 20, 'associations': 8, 'builds': 4})
 
-    def assert_refused(self, scenario):
-        result = self.child(scenario)
+    def assert_refused(self, scenario, probe=None):
+        result = self.child(scenario, probe)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b'AssertionError', result.stderr, result.stderr.decode())
+        # Refusal must come from the probed call after the mutation, not earlier setup.
+        marker = b'PROBING AFTER MUTATION\n'
+        self.assertIn(marker, result.stderr, result.stderr.decode())
+        self.assertIn(b'AssertionError', result.stderr.split(marker, 1)[1], result.stderr.decode())
         self.assertNotIn(b'MUTATION WAS ACCEPTED', result.stderr)
         self.assertEqual(result.stdout, b'')
 
     def test_image_mutation_between_check_invocations(self):
-        for index in range(3):
-            for mutation in ('bytes', 'replacement', 'directory', 'symlink', 'nlink', 'mode'):
-                with self.subTest(index=index, mutation=mutation):
-                    self.assert_refused(f'file:{index}:{mutation}')
+        for probe in ('current', 'build'):
+            for index in range(3):
+                for mutation in ('bytes', 'replacement', 'directory', 'symlink', 'nlink', 'mode'):
+                    with self.subTest(probe=probe, index=index, mutation=mutation):
+                        self.assert_refused(f'file:{index}:{mutation}', probe)
 
     def test_every_exact_stamp_field_is_rechecked(self):
-        for index in range(3):
-            for field in ('dev', 'ino', 'mode', 'uid', 'gid', 'nlink', 'size', 'mtimeNs', 'ctimeNs'):
-                with self.subTest(index=index, field=field):
-                    self.assert_refused(f'stamp:{index}:{field}')
+        for probe in ('current', 'build'):
+            for index in range(3):
+                for field in ('dev', 'ino', 'mode', 'uid', 'gid', 'nlink', 'size', 'mtimeNs', 'ctimeNs'):
+                    with self.subTest(probe=probe, index=index, field=field):
+                        self.assert_refused(f'stamp:{index}:{field}', probe)
+
+    def test_retained_proof_tamper_refuses_each_callable_independently(self):
+        # Association and build calls do not depend on a preceding physical check.
+        for probe in ('association', 'build', 'current'):
+            for mutation in ('bytes', 'replacement'):
+                with self.subTest(probe=probe, mutation=mutation):
+                    self.assert_refused(f'proof:{mutation}:unused', probe)
 
     def test_file_and_fifo_type_predicates_are_preserved(self):
         for target in ('file', 'command', 'ack'):

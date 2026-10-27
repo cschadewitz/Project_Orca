@@ -88,11 +88,24 @@ async function supervisor(
   const phases: string[] = [],
     observed: { phase: string; offset: number; length: number; bytes: string }[] = [];
   let phase = "outside";
+  // Supervisor capability call order, and a switch that refuses only the build port.
+  const calls: string[] = [];
+  const build = { refuse: false };
   const check = (): undefined => {
+    calls.push("current");
     assert.equal(holder.exitCode, null);
     assert.match(fs.readFileSync(`/proc/${holder.pid}/fdinfo/${fd}`, "utf8"), /FLOCK\s+ADVISORY\s+WRITE /);
     for (const [path, stamp] of originals) assert.equal(identity(path), stamp);
     assert.equal(digest(fs.readFileSync(id)), digest(identityBytes));
+    assert.equal(identity(image.pathname), imageStamp);
+    assert.equal(digest(fs.readFileSync(image)), digest(imageBytes));
+    return undefined;
+  };
+  const builds: string[] = [];
+  const checkBuild = (): undefined => {
+    calls.push("build");
+    builds.push(phase);
+    if (build.refuse) throw new Error("synthetic build port refusal");
     assert.equal(identity(image.pathname), imageStamp);
     assert.equal(digest(fs.readFileSync(image)), digest(imageBytes));
     return undefined;
@@ -128,7 +141,18 @@ async function supervisor(
     offset: 2,
     length: 4,
     assertCurrent: check,
-    ...(previous ? { bootstrap: previous } : {}),
+    assertBuildCurrent: checkBuild,
+    ...(previous
+      ? {
+          bootstrap: {
+            evidenceRef: previous.evidenceRef,
+            assertCurrent: (): undefined => {
+              calls.push("bootstrap");
+              return previous.assertCurrent();
+            },
+          },
+        }
+      : {}),
     ...(fault ? { fault } : {}),
     phase: async (name, work) => {
       phases.push(name);
@@ -140,7 +164,21 @@ async function supervisor(
       }
     },
   };
-  return { base, lane, options, phases, observed, check, holder, image, originals, restore: () => spy.mockRestore() };
+  return {
+    base,
+    lane,
+    options,
+    phases,
+    observed,
+    check,
+    builds,
+    calls,
+    build,
+    holder,
+    image,
+    originals,
+    restore: () => spy.mockRestore(),
+  };
 }
 async function bootstrap() {
   const s = await supervisor("bootstrap");
@@ -177,6 +215,12 @@ it("connects actual Save, separately settled original Allow once and fresh rule 
     { phase: "human-read", offset: 2, length: 4, bytes: "spos" },
     { phase: "rule-read", offset: 2, length: 4, bytes: "spos" },
   ]);
+  // The managed build port is consulted on every phase's owner checks, and the retained
+  // proof check never runs without the complete current check immediately before it.
+  expect(new Set(c.builds)).toEqual(new Set(["outside", "save", "human-read", "rule-read"]));
+  const proofs = c.calls.flatMap((call, index) => (call === "bootstrap" ? [index] : []));
+  expect(proofs.length).toBeGreaterThan(c.builds.length);
+  expect(proofs.every((index) => c.calls[index - 1] === "current")).toBe(true);
   expect(result.initialRevision).not.toBe(result.finalRevision);
   const stores = fileStores(join(c.base, "workspace/.orca"));
   const records = await Promise.all(
@@ -294,6 +338,21 @@ it.each(["root", "lifetime"] as const)(
   30000,
 );
 
+it("refuses when only the managed build port changes after Save, without an extra read", async () => {
+  const b = await bootstrap();
+  const c = await supervisor("connected", b.grant);
+  const original = c.options.phase.bind(c.options);
+  c.options.phase = (name, work) =>
+    original(name, async () => {
+      await work();
+      if (name === "save") c.build.refuse = true;
+    });
+  await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow();
+  expect(c.phases).toEqual(["save", "human-read"]);
+  expect(c.builds).toContain("human-read");
+  expect(c.observed).toEqual([]);
+}, 30000);
+
 it.each(["reviewer", "proof", "actor"] as const)(
   "authenticates saved %s again after Save",
   async (fault) => {
@@ -350,6 +409,9 @@ it("pins supervisor interval and callable capabilities before Save", async () =>
           content: "replacement input",
           assertCurrent: () => {
             throw new Error("replacement callback");
+          },
+          assertBuildCurrent: () => {
+            throw new Error("replacement build callback");
           },
         });
       }
