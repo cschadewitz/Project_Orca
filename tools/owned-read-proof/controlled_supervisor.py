@@ -7,6 +7,7 @@ No report, digest or command-line flag constructs a connected capability here.
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -38,6 +39,20 @@ OBSERVER_FILES = ('controlled_supervisor.py', 'controlled_observation.py', 'cont
     'controlled_connected.py', 'controlled_replay.py', 'controlled_contract.py', 'controlled_notifications.py',
     'controlled_semantics.py', 'controlled_delivery_semantics.py', 'controlled_save_semantics.py',
     'controlled_timestamps.py', 'kernel_runtime_queries.py', 'run.py', 'verify.py')
+REPORT_LIMIT = 1024 * 1024
+ORIGINAL_METADATA_LIMIT = 1024 * 1024
+RUNTIME_ASSET_LIMIT = 256 * 1024 * 1024
+MAX_RUNTIME_ASSETS = 32
+ORIGINAL_KEYS = frozenset(('base', 'lane', 'node', 'argv', 'sourceHead', 'controlledBuild', 'traceClock',
+    'observerImplementation', 'clockProbePath', 'supervisorPid', 'readlinks', 'inheritedUmask',
+    'commandFd', 'ackFd', 'lifetimeFd', 'immutable', 'directories', 'queries', 'absentProbes',
+    'queryMetadata', 'phases', 'usedTokens', 'inputHex', 'offset', 'length', 'descriptors',
+    'diagnosticConfig', 'startedWallNs', 'clockSamples', 'leaderPid', 'kernelRuntimeQueries',
+    'finishedWallNs', 'finalPhysicalObservations'))
+REPORT_KEYS = frozenset(('record', 'authority', 'root', 'sourceHead', 'connectedCommandsReleased',
+    'acceptingToken', 'productionEligible', 'imageProducerSha256', 'imageChildSha256', 'imageBuildSha256',
+    'elapsedNanoseconds', 'elapsedSeconds', 'traceBytes', 'traceSha256', 'returncode', 'producerStderr', 'kernel',
+    'semantic', 'qualification', 'refusal', 'diagnostic', 'diagnosticRefusal', 'phaseLog', 'observerImplementation'))
 
 
 def encoded(value):
@@ -48,23 +63,151 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def file_digest(path):
+def file_fingerprint(path, maximum=None):
     value = hashlib.sha256()
+    count = 0
     with Path(path).open('rb') as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+        while True:
+            chunk = stream.read(1024 * 1024 if maximum is None else min(1024 * 1024, maximum + 1 - count))
+            if not chunk:
+                break
+            count += len(chunk)
+            require(maximum is None or count <= maximum, 'evidence grew beyond artifact byte bound')
             value.update(chunk)
-    return value.hexdigest()
+    return value.hexdigest(), count
 
 
-def evidence_seal(path):
+def file_digest(path, maximum=None):
+    return file_fingerprint(path, maximum)[0]
+
+
+def evidence_seal(path, maximum=LIMIT):
     """Fresh full hash and physical stamp, including for large retained traces."""
     p = Path(path)
     before = stamp(p)
-    require(stat.S_ISREG(int(before[2])) and before[5] == '1' and 0 <= int(before[6]) <= LIMIT,
+    require(stat.S_ISREG(int(before[2])) and before[5] == '1' and 0 <= int(before[6]) <= maximum,
             'bootstrap receipt needs bounded unaliased original evidence')
-    value = file_digest(p)
+    value = file_digest(p, maximum=maximum)
     require(stamp(p) == before, 'bootstrap receipt evidence changed during hash')
     return before, value
+
+
+def metadata_bytes(value, maximum):
+    """Bound source-owned JSON before serializing, excluding separately pinned asset hex.
+
+    Limits are refusal conditions, not permission to add fields to source grammar.
+    Kernel mountinfo is the one long metadata string; no retained payload belongs here.
+    """
+    remaining, nodes = maximum, 16384
+
+    def visit(item, depth=0, key=None):
+        nonlocal remaining, nodes
+        nodes -= 1
+        require(nodes >= 0 and depth <= 16, 'packet metadata nesting/count exceeds bound')
+        if type(item) is dict:
+            require(len(item) <= 1024, 'packet metadata object exceeds finite count')
+            remaining -= 2 + max(0, len(item) - 1)
+            for name, child in item.items():
+                require(type(name) is str and len(name) <= 4096, 'packet metadata key exceeds bound')
+                visit(name, depth + 1)
+                remaining -= 1
+                visit(child, depth + 1, name)
+        elif type(item) is list:
+            require(len(item) <= 1024, 'packet metadata array exceeds finite count')
+            remaining -= 2 + max(0, len(item) - 1)
+            for child in item:
+                visit(child, depth + 1)
+        else:
+            if type(item) is str:
+                require(len(item) <= (256 * 1024 if key == 'mountinfo' else 4096),
+                        'packet metadata string exceeds bound')
+            else:
+                require(item is None or type(item) in (bool, int, float), 'unknown packet metadata type')
+                require(type(item) is not int or item.bit_length() <= 128, 'packet metadata integer exceeds bound')
+                require(type(item) is not float or math.isfinite(item), 'nonfinite packet metadata')
+            remaining -= len(encoded(item).encode())
+        require(remaining >= 0, 'packet metadata serialization exceeds bound')
+
+    visit(value)
+    return encoded(value).encode()
+
+
+def bootstrap_asset_pins(original, files):
+    """Finite SOURCE inventory: three image entries, loader-resolved runtime, four originals.
+
+    Live sizes/digests must equal the original closed run, so an added/larger hex
+    entry cannot enlarge its own packet allowance. No packet JSON supplies pins.
+    """
+    base = Path(original['base'])
+    paths = runtime_paths(original['node'])
+    require(len(paths) <= MAX_RUNTIME_ASSETS, 'runtime asset count exceeds finite bound')
+    limits = {p: ('runtime', RUNTIME_ASSET_LIMIT) for p in paths}
+    limits.update({str(base / 'workspace/.orca/workspace-identity/id'): ('original-file', 37),
+                   str(base / 'controlled-plan.json'): ('original-file', 65536),
+                   str(base / 'control/never-typed'): ('enrollment-witness', 130),
+                   str(base / 'lifetime.lock'): ('lifetime', 0)})
+    require(not set(files) & set(limits), 'bootstrap asset inventory aliases image paths')
+    pins = {p: {'identity': list(s[:5]), 'size': len(data), 'sha256': digest(data), 'family': 'image'}
+            for p, (s, data) in files.items()}
+    for path, (family, maximum) in limits.items():
+        p = Path(path)
+        info = p.stat() if family == 'runtime' else p.lstat()
+        before = (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                  info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        regular = stat.S_ISREG(info.st_mode)
+        require((regular and 0 <= info.st_size <= maximum) or
+                (path == '/dev/null' and stat.S_ISCHR(info.st_mode)), 'bootstrap asset type/size exceeds bound')
+        value, size = file_fingerprint(p, maximum=info.st_size) if regular else (digest(b''), 0)
+        require(not regular or size == info.st_size or path == '/sys/devices/system/cpu/online',
+                'bootstrap asset read size differs from pinned regular file')
+        after = p.stat() if family == 'runtime' else p.lstat()
+        require(before == (after.st_dev, after.st_ino, after.st_mode, after.st_uid, after.st_gid,
+                           after.st_nlink, after.st_size, after.st_mtime_ns, after.st_ctime_ns),
+                'bootstrap asset changed during size/digest pin')
+        pins[path] = {'identity': list(before[:5]), 'size': size,
+                      'sha256': value, 'family': family}
+    return pins
+
+
+def originals_packet_limit(original, pins):
+    require(type(original) is dict and set(original) <= ORIGINAL_KEYS, 'unknown originals packet fields')
+    entries = original['immutable']
+    require(type(entries) is dict and set(entries) == set(pins), 'originals asset inventory/count differs')
+    metadata = {**original, 'immutable': {}}
+    hex_size = 0
+    for path, entry in entries.items():
+        require(type(entry) is dict and set(entry) == {'identity', 'hex', 'sha256', 'family'},
+                'unknown originals asset fields')
+        pin = pins[path]
+        require(entry['identity'] == pin['identity'] and type(entry['identity']) is list and
+                all(type(v) is int for v in entry['identity']) and entry['family'] == pin['family'] and
+                entry['sha256'] == pin['sha256'] and type(entry['hex']) is str and
+                len(entry['hex']) == 2 * pin['size'], 'originals asset size/digest/identity differs')
+        value = hashlib.sha256()
+        for offset in range(0, len(entry['hex']), 65536):
+            chunk = entry['hex'][offset:offset + 65536]
+            require(re.fullmatch('[0-9a-f]*', chunk) is not None, 'noncanonical originals asset hex')
+            value.update(bytes.fromhex(chunk))
+        require(value.hexdigest() == pin['sha256'], 'originals asset digest differs')
+        metadata['immutable'][path] = {**entry, 'hex': ''}
+        hex_size += 2 * pin['size']
+    metadata_bytes(metadata, ORIGINAL_METADATA_LIMIT)
+    return hex_size + ORIGINAL_METADATA_LIMIT
+
+
+def packet_matches(path, expected, maximum):
+    """Compare full canonical bytes with bounded reads, without another packet-sized allocation."""
+    require(len(expected) <= maximum, 'canonical packet exceeds artifact bound')
+    offset = 0
+    with Path(path).open('rb') as stream:
+        while True:
+            chunk = stream.read(min(1024 * 1024, maximum + 1 - offset))
+            if not chunk:
+                return offset == len(expected)
+            require(offset + len(chunk) <= maximum, 'packet grew beyond artifact bound')
+            if chunk != expected[offset:offset + len(chunk)]:
+                return False
+            offset += len(chunk)
 
 
 def stamp(path):
@@ -172,14 +315,18 @@ def prepare_connected(base, image, lifetime, command, ack, phases, designation):
     return plan
 
 
-def runtime_originals(node):
+def runtime_paths(node):
     # Fixed loader/config/query paths, plus the exact loader-resolved shared
     # libraries of this retained Node binary. No external package-root exemption.
     result = subprocess.run(['ldd', node], capture_output=True, text=True, check=True, timeout=5)
     paths = set(re.findall(r'(/[^\s()]+)', result.stdout))
     paths |= {node, '/etc/ld.so.cache', '/etc/ssl/openssl.cnf', '/etc/localtime',
               '/sys/devices/system/cpu/online', '/dev/null'}
-    return {p: immutable(p, 'runtime', follow=True) for p in sorted(paths)}
+    return paths
+
+
+def runtime_originals(node):
+    return {p: immutable(p, 'runtime', follow=True) for p in sorted(runtime_paths(node))}
 
 
 def assert_image_sources(image):
@@ -248,7 +395,7 @@ class ObservedRun:
         run and reexecutes its closed-graph assertion and fresh evidence hashes.
         No receipt/report deserializer or success flag can supply that callable.
         """
-        from controlled_connected import ConnectedDesignation, snapshot
+        from controlled_connected import ConnectedDesignation, IMAGE_NAMES, snapshot
         require(self.assert_bootstrap_closed() is None, 'original bootstrap closure assertion returned a flag')
         root = self.report_path.parent
         base = root / 'bootstrap'
@@ -260,6 +407,7 @@ class ObservedRun:
                 'refusal' not in self.report, 'bootstrap receipt belongs to another original run')
         build = assert_image_sources(image)
         require(build == self.original['controlledBuild'], 'bootstrap receipt image build differs')
+        require({p.name for p in image.iterdir()} == IMAGE_NAMES, 'bootstrap receipt image count/paths differ')
         files = {str(p): snapshot(p) for p in sorted(image.iterdir())}
         require(set(files) == {p for p, value in self.original['immutable'].items() if value['family'] == 'image'},
                 'bootstrap receipt image is not original inventory')
@@ -272,9 +420,14 @@ class ObservedRun:
                             ('controlled-build.json', 'imageBuildSha256')]:
             require(self.report[field] == digest(files[str(image / name)][1]), 'bootstrap receipt report image differs')
         originals_path, trace = root / 'bootstrap-originals.json', base / 'trace'
-        report_bytes, original_bytes = encoded(self.report).encode(), encoded(self.original).encode()
-        seals = {str(p): evidence_seal(p) for p in (self.report_path, originals_path, trace)}
-        require(self.report_path.read_bytes() == report_bytes and originals_path.read_bytes() == original_bytes,
+        require(type(self.report) is dict and set(self.report) <= REPORT_KEYS, 'unknown report packet fields')
+        pins = bootstrap_asset_pins(self.original, files)
+        originals_limit = originals_packet_limit(self.original, pins)
+        limits = {str(self.report_path): REPORT_LIMIT, str(originals_path): originals_limit, str(trace): LIMIT}
+        seals = {p: evidence_seal(p, maximum) for p, maximum in limits.items()}
+        report_bytes, original_bytes = metadata_bytes(self.report, REPORT_LIMIT), encoded(self.original).encode()
+        require(packet_matches(self.report_path, report_bytes, REPORT_LIMIT) and
+                packet_matches(originals_path, original_bytes, originals_limit),
                 'bootstrap receipt report/originals differ from original run')
         require(len({tuple(value[0][:2]) for value in seals.values()} |
                     {tuple(map(str, value[0][:2])) for value in files.values()}) == len(seals) + len(files),
@@ -315,10 +468,14 @@ class ObservedRun:
 
         def assert_original_receipt():
             require(self.assert_bootstrap_closed() is None, 'original bootstrap closure assertion returned a flag')
-            require(encoded(self.report).encode() == report_bytes and encoded(self.original).encode() == original_bytes,
+            require(type(self.report) is dict and set(self.report) <= REPORT_KEYS, 'unknown report packet fields')
+            originals_packet_limit(self.original, pins)
+            require(metadata_bytes(self.report, REPORT_LIMIT) == report_bytes and
+                    encoded(self.original).encode() == original_bytes,
                     'bootstrap receipt original run changed')
             for original_path, retained in seals.items():
-                require(evidence_seal(original_path) == retained, 'bootstrap receipt original evidence changed')
+                require(evidence_seal(original_path, limits[original_path]) == retained,
+                        'bootstrap receipt original evidence changed')
             for original_path, retained in files.items():
                 require(snapshot(original_path) == retained, 'bootstrap receipt original image changed')
             require(snapshot(path) == proof, 'bootstrap association receipt changed')

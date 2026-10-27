@@ -14,7 +14,10 @@ from unittest.mock import patch
 from controlled_connected import ConnectedDesignation, ConnectedKernelReplay, HUMAN, SOURCE, snapshot
 from controlled_contract import wire
 from controlled_replay import Handle, Object, Replay, identity, sha
-from controlled_supervisor import ObservedRun, digest, encoded as supervisor_encoded, prepare_connected
+from controlled_supervisor import (ObservedRun, LIMIT, ORIGINAL_METADATA_LIMIT, REPORT_LIMIT,
+    RUNTIME_ASSET_LIMIT, MAX_RUNTIME_ASSETS, bootstrap_asset_pins, digest,
+    encoded as supervisor_encoded, evidence_seal, file_digest, file_fingerprint, metadata_bytes,
+    originals_packet_limit, packet_matches, prepare_connected)
 
 U = '00000000-0000-4000-8000-000000000001'
 START, FINISH = 1793016000000000000, 1793016050000000000
@@ -221,16 +224,32 @@ class DesignationControls(unittest.TestCase):
         trace = self.bootstrap / 'trace'
         trace.write_bytes(b'synthetic trace; no original process launched')
         files = {str(p): snapshot(p) for p in self.image.iterdir()}
-        original = {'lane': 'bootstrap', 'base': str(self.bootstrap), 'sourceHead': SOURCE,
+        node = root / 'synthetic-node'
+        node.write_bytes(b'synthetic runtime asset, never executed')
+        for name, data in [('workspace/.orca/workspace-identity/id', b'0' * 36 + b'\n'),
+                           ('control/never-typed', b'0' * 64 + b'\n' + b'0' * 64 + b'\n'),
+                           ('controlled-plan.json', b'{}')]:
+            path = self.bootstrap / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        other = {str(node): (snapshot(node), 'runtime')}
+        for name, family in [('workspace/.orca/workspace-identity/id', 'original-file'),
+                             ('controlled-plan.json', 'original-file'), ('control/never-typed', 'enrollment-witness'),
+                             ('lifetime.lock', 'lifetime')]:
+            other[str(self.bootstrap / name)] = (snapshot(self.bootstrap / name), family)
+        original = {'lane': 'bootstrap', 'base': str(self.bootstrap), 'node': str(node), 'sourceHead': SOURCE,
                     'controlledBuild': self.build, 'observerImplementation': {'synthetic': True},
                     'immutable': {p: {'family': 'image', 'identity': list(s[:5]),
                                      'hex': data.hex(), 'sha256': sha(data)} for p, (s, data) in files.items()}}
+        original['immutable'].update({p: {'family': family, 'identity': list(s[:5]),
+                                         'hex': data.hex(), 'sha256': sha(data)}
+                                      for p, ((s, data), family) in other.items()})
         report = {'root': str(root), 'sourceHead': SOURCE, 'traceSha256': sha(trace.read_bytes()),
                   'traceBytes': trace.stat().st_size,
                   'kernel': {'traceSha256': sha(trace.read_bytes()), 'traceBytes': trace.stat().st_size},
                   'imageProducerSha256': sha(b'producer'), 'imageChildSha256': sha(b'child'),
                   'imageBuildSha256': sha((self.image / 'controlled-build.json').read_bytes()),
-                  'completeOriginalDiagnostic': 'retained full synthetic detail ' * 2000}
+                  'producerStderr': 's' * 4000}
         resource = SimpleNamespace(names=set(), reads=[b'once'])
         replay = SimpleNamespace(original=original, threads={1}, settled={1}, resources=[resource], handles={})
         run = ObservedRun(report, original, replay, root / 'bootstrap-attempt.json', True)
@@ -240,6 +259,9 @@ class DesignationControls(unittest.TestCase):
             mocked = patch(target)
             mocked.start()
             self.addCleanup(mocked.stop)
+        runtime = patch('controlled_supervisor.runtime_paths', return_value={str(node)})
+        runtime.start()
+        self.addCleanup(runtime.stop)
         return run
 
     def test_compact_receipt_binds_complete_originals_without_changing_them(self):
@@ -484,6 +506,120 @@ class DesignationControls(unittest.TestCase):
         run.report['traceSha256'] = '0' * 64
         with self.assertRaisesRegex(RuntimeError, 'original run changed'):
             d.check()
+
+    def test_valid_originals_packet_just_over_trace_cap_uses_pinned_asset_bound(self):
+        run = self.receipt_run()
+        node = Path(run.original['node'])
+        # One finite runtime asset whose hex alone is two bytes above the TRACE cap.
+        size = LIMIT // 2 + 1
+        with node.open('wb') as stream:
+            stream.truncate(size)
+        entry = run.original['immutable'][str(node)]
+        entry.update(hex='00' * size, sha256=file_digest(node, maximum=size))
+        path = run.report_path.parent / 'bootstrap-originals.json'
+        path.write_text(supervisor_encoded(run.original))
+        files = {str(p): snapshot(p) for p in self.image.iterdir()}
+        pins = bootstrap_asset_pins(run.original, files)
+        maximum = originals_packet_limit(run.original, pins)
+        self.assertEqual(maximum, 2 * sum(pin['size'] for pin in pins.values()) + ORIGINAL_METADATA_LIMIT)
+        self.assertGreater(path.stat().st_size, LIMIT)
+        self.assertLessEqual(path.stat().st_size, maximum)
+        d = run.designate_bootstrap(self.image)
+        self.assertEqual(json.loads(d.proof[1])['originals']['sha256'], file_digest(path, maximum=maximum))
+        # The same artifact is still refused when treated as a trace.
+        with self.assertRaisesRegex(RuntimeError, 'bounded unaliased'):
+            evidence_seal(path)
+
+    def test_oversized_originals_report_and_trace_refuse_before_payload_read(self):
+        run = self.receipt_run()
+        files = {str(p): snapshot(p) for p in self.image.iterdir()}
+        maximum = originals_packet_limit(run.original, bootstrap_asset_pins(run.original, files))
+        for path, bound in ((run.report_path.parent / 'bootstrap-originals.json', maximum),
+                            (run.report_path, REPORT_LIMIT), (self.bootstrap / 'trace', LIMIT)):
+            data = path.read_bytes()
+            with path.open('wb') as stream:
+                stream.truncate(bound + 1)
+            with self.subTest(path=path.name), \
+                 patch('controlled_supervisor.file_digest', wraps=file_digest) as hashed, \
+                 patch('controlled_supervisor.packet_matches') as compared, \
+                 self.assertRaisesRegex(RuntimeError, 'bounded unaliased'):
+                run.designate_bootstrap(self.image)
+            self.assertNotIn(str(path), [str(call.args[0]) for call in hashed.call_args_list])
+            compared.assert_not_called()
+            path.write_bytes(data)
+
+    def test_unknown_originals_or_report_fields_and_excess_metadata_refuse(self):
+        run = self.receipt_run()
+        files = {str(p): snapshot(p) for p in self.image.iterdir()}
+        pins = bootstrap_asset_pins(run.original, files)
+        for field in ('unexpected', 'authority'):
+            changed = copy.deepcopy(run.original)
+            changed[field] = 'x'
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'unknown originals packet fields'):
+                originals_packet_limit(changed, pins)
+        changed = copy.deepcopy(run.original)
+        changed['kernelRuntimeQueries'] = {'mountinfo': 'x' * (256 * 1024),
+                                         'queries': {str(i): 'y' * 4096 for i in range(200)}}
+        with self.assertRaisesRegex(RuntimeError, 'metadata serialization exceeds bound'):
+            originals_packet_limit(changed, pins)
+        with self.assertRaisesRegex(RuntimeError, 'metadata string exceeds bound'):
+            metadata_bytes({'mountinfo': 'x' * (256 * 1024 + 1)}, ORIGINAL_METADATA_LIMIT)
+        run.report['unexpected'] = True
+        with self.assertRaisesRegex(RuntimeError, 'unknown report packet fields'):
+            run.designate_bootstrap(self.image)
+        run.report.pop('unexpected')
+        run.report['semantic'] = {'captures': ['x' * 4096] * 300}
+        with patch('controlled_supervisor.packet_matches') as compared:
+            with self.assertRaisesRegex(RuntimeError, 'metadata serialization exceeds bound'):
+                run.designate_bootstrap(self.image)
+        compared.assert_not_called()
+
+    def test_asset_count_keys_size_digest_and_identity_cannot_enlarge_allowance(self):
+        run = self.receipt_run()
+        files = {str(p): snapshot(p) for p in self.image.iterdir()}
+        pins = bootstrap_asset_pins(run.original, files)
+        node = run.original['node']
+        changes = [lambda x: x['immutable'].update({'/extra': copy.deepcopy(x['immutable'][node])}),
+                   lambda x: x['immutable'].pop(node),
+                   lambda x: x['immutable'][node].update(extra=True),
+                   lambda x: x['immutable'][node].update(hex=x['immutable'][node]['hex'] + '00'),
+                   lambda x: x['immutable'][node].update(hex='00' * pins[node]['size']),
+                   lambda x: x['immutable'][node].update(sha256='0' * 64),
+                   lambda x: x['immutable'][node].update(family='image'),
+                   lambda x: x['immutable'][node].update(identity=[True] * 5)]
+        for change in changes:
+            changed = copy.deepcopy(run.original)
+            change(changed)
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                originals_packet_limit(changed, pins)
+        with patch('controlled_supervisor.runtime_paths', return_value={str(i) for i in range(MAX_RUNTIME_ASSETS + 1)}):
+            with self.assertRaisesRegex(RuntimeError, 'runtime asset count'):
+                bootstrap_asset_pins(run.original, files)
+        path = Path(node)
+        with path.open('wb') as stream:
+            stream.truncate(RUNTIME_ASSET_LIMIT + 1)
+        with patch('controlled_supervisor.file_fingerprint', wraps=file_fingerprint) as hashed:
+            with self.assertRaisesRegex(RuntimeError, 'asset type/size'):
+                bootstrap_asset_pins(run.original, files)
+        self.assertNotIn(str(path), [str(call.args[0]) for call in hashed.call_args_list])
+
+    def test_fixed_runtime_sysfs_asset_pins_read_bytes_instead_of_advertised_size(self):
+        run = self.receipt_run()
+        path = '/sys/devices/system/cpu/online'
+        files = {str(p): snapshot(p) for p in self.image.iterdir()}
+        with patch('controlled_supervisor.runtime_paths', return_value={run.original['node'], path}):
+            pins = bootstrap_asset_pins(run.original, files)
+        data = Path(path).read_bytes()
+        self.assertEqual(pins[path]['size'], len(data))
+        self.assertEqual(pins[path]['sha256'], sha(data))
+
+    def test_streaming_digest_and_comparison_stop_at_artifact_cap(self):
+        path = Path(self.temp.name) / 'growing-packet'
+        path.write_bytes(b'x' * 33)
+        with self.assertRaisesRegex(RuntimeError, 'artifact byte bound'):
+            file_digest(path, maximum=32)
+        with self.assertRaisesRegex(RuntimeError, 'packet grew beyond artifact bound'):
+            packet_matches(path, b'x' * 32, 32)
 
 
 class ConnectedPhaseControls(unittest.TestCase):

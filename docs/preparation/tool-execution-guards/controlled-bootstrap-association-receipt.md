@@ -42,6 +42,52 @@ Exclusive creation refuses receipt replacement on repeated publication. These
 remain cooperative same-UID source assumptions; file mode and hashes grant no
 portable authority or accepting outcome.
 
+## Separate artifact bounds
+
+The trace limit is not an originals-packet limit. The preserved successful
+originals packet is 268635981 bytes: 200525 bytes above the 268435456-byte trace
+cap. Its 14 fixed runtime/image assets contribute 268549682 hex characters before
+the four small originals and JSON metadata. No new run is needed to identify
+that representation mismatch.
+
+| Artifact | Exact bound |
+| --- | ---: |
+| Trace | 268435456 bytes, unchanged |
+| Report | 1048576 serialized bytes |
+| Originals | `2 * sum(exact pinned asset read sizes) + 1048576` bytes |
+| Receipt | 4096 bytes, unchanged |
+
+Originals use the finite bootstrap inventory: exactly three image files; the
+exact loader-resolved Node runtime paths plus the fixed runtime paths, at most
+32 runtime entries; and exactly four bootstrap originals. Image snapshots retain
+their existing 16 MiB bound. Each runtime asset is capped at 256 MiB independently
+of the trace cap. The four other caps are 37 bytes for workspace identity, 65536
+for the plan, 130 for enrollment witness and zero for the lifetime file. Runtime
+sizes and digests are pinned by fresh bounded reads bracketed by physical
+metadata, with the fixed CPU-online sysfs file pinned to its actual read length
+rather than its advertised 4096-byte size. `/dev/null` contributes zero bytes.
+
+Every retained asset must have exactly `identity`, `hex`, `sha256` and `family`;
+the inventory, identity, family, canonical lowercase hex length and freshly
+decoded SHA-256 must match those independent pins. Additional entries or larger
+hex strings cannot grant themselves a larger allowance. Unknown top-level
+originals/report fields refuse. The 1 MiB metadata allowance includes all JSON
+syntax, paths and escaped strings after replacing asset hex with empty strings.
+Before serialization, traversal is capped at depth 16, 16384 nodes, 1024 members
+per container, 4096 characters per key/string and 256 Ki characters for kernel
+mountinfo, with finite numbers and the total serialized-byte budget enforced.
+These are explicit refusal ceilings; they do not replace the original closed-run
+semantic validators or authorize extra metadata fields.
+
+For the supplied 268549682 fixed-asset hex bytes, even using every small-original
+cap gives an upper ceiling of 269729664 bytes. The actual allowance uses exact
+measured small-file sizes and is smaller. This covers the preserved packet
+without changing the trace limit or accepting unbounded metadata. File size is
+checked before packet reads; streamed hash/comparison reads also stop at their
+artifact bound plus one detection byte if a file grows. Canonical serialization
+of the retained in-memory objects follows the asset/metadata checks, and complete
+raw originals remain preserved and independently hashed at supervisor boundaries.
+
 ## Exact currentness path stays intact
 
 The unchanged producer's `check()` calls the child's `check()`, then connected
@@ -76,7 +122,7 @@ At that same count the receipt bound saves at least 8583020 decoded bytes
 or a guarantee that its check count or elapsed time will match. The failed trace
 was 81.53% `statx` entries, so this proposal alone cannot establish a timing pass.
 
-A synthetic closed-run fixture measures a 62605-byte complete report and a
+A synthetic closed-run fixture measures a 4593-byte complete report and a
 1294-byte canonical receipt, while preserving every original file/stamp. A
 separate synthetic control executes the exact unchanged child with a stub
 producer, a real supervisor flock and command/ack pipes. Its 21 instrumented
@@ -93,8 +139,11 @@ flags and copied-report controls. The unchanged child controls reject changed
 proof bytes, physical replacement and wrong proof/inventory association. Injected
 pre-first-snapshot corruption, same-bytes replacement, mode/size changes and
 mutation during the named observation refuse; a positive control confirms the
-original synced writer remains open through first capture. Results:
-294 Python tests, 49 optimized connected controls and three optimized child
+original synced writer remains open through first capture. Additional controls
+exercise a valid originals packet just above the actual 256 MiB trace cap,
+excessive originals/report/trace sizes before reads, excess metadata, altered or
+extra assets/keys/digests, bounded streaming and fixed sysfs read sizes. Results:
+300 Python tests, 55 optimized connected controls and three optimized child
 controls pass. Run:
 
 ```sh
