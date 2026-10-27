@@ -40,6 +40,13 @@ It does **not** change, and only coordinates with, the following:
 
 ## Sources audited
 
+The [private-beta release guidance](../private-beta-release-guidance.md) supplements
+this onboarding with the current-main release checklist, the pending Observer
+acceptance gate and the v0.6.0 upgrade/rollback limitations. It also introduces an
+explicit consent-notice fill-in in the candidate card and coordinator checklist.
+The baseline and validation record below describe the original preparation; they do
+not validate or accept a later candidate.
+
 - [Readiness audit](../../reviews/2026-10-27-release-readiness.md) (#775): the evidence
   vocabulary, R5/R7/R10, C1–C3, C7 and decision D1.
 - [#772](https://github.com/cschadewitz/Project_Orca/issues/772) and its draft

@@ -21,6 +21,7 @@ declare.
 | `{{TESTED_OS_VERSIONS}}` | The OS versions on which **you** ran gates G3–G4 for this candidate. Anything else is "untested" | Coordinator's own runs |
 | `{{ARTIFACT_TABLE}}` | Each file name and its SHA-256, from the candidate manifest (computed twice, independently) | Candidate manifest and the #772 static report |
 | `{{SUPPORT_ROUTE}}` | The private place testers send reports, and who can read it. Not public GitHub | Coordinator / repository owner |
+| `{{CONSENT_NOTICE}}` | The reviewed participation and feedback notice, with its version/date and how to withdraw. Say what optional reports contain, who handles them and how consent is recorded privately; include no participant details in the guide | Coordinator / repository owner; record each tester's agreement outside this repository |
 | `{{RETENTION_POLICY}}` | How long reports are kept, who can see them, and how a tester asks for deletion. The diagnostics retention budgets in #416 are **not** a feedback retention policy | Coordinator / repository owner |
 | `{{COORDINATOR}}` | The name or handle testers know you by | Coordinator |
 
@@ -67,7 +68,10 @@ declare.
   it avoids the warning, and don't pre-unblock files.
 - [ ] **G7 No unsupported claims.** The guide and notes claim no supported provider,
   ReviewJudge, tool-guard rule or MCP-operator use (readiness C6/C7). Provider profiles
-  and ORCA-owned rules stay "inactive preparation".
+  and ORCA-owned rules stay "inactive preparation". Observer is the final planned
+  feature, but has not been accepted. Record its acceptance decision separately before
+  freezing a release candidate; this onboarding exercise cannot accept it. See the
+  [release guidance](../private-beta-release-guidance.md).
 - [ ] **G8 Diagnostics still off.** At `{{CANDIDATE_COMMIT}}`,
   `packages/app/src/diagnostics-contract.ts` still has
   `DIAGNOSTICS_PRODUCTION_ENABLED = false`. If a candidate ever enables capture, stop.
@@ -91,6 +95,11 @@ declare.
     remote access
   - stop at any time
   - have their reports kept as set out in `{{RETENTION_POLICY}}`
+
+  Supply the reviewed `{{CONSENT_NOTICE}}` before agreement. Record its version/date
+  and the tester's explicit response privately; an invitation, download or silence is
+  not consent. Explain withdrawal and how it relates to report deletion under the
+  retention policy. No consent record is created by filling these draft pages.
 
   A tester on a managed or work computer confirms they are allowed to install software
   there; that permission is not yours to give. Agreeing to test is not permission for
