@@ -168,6 +168,21 @@ pnpm exec vitest run tools/test/store-compat-rehearsal
 `$WORK/run/report.json` holds every result above with both commits, versions, manifests and
 Node versions. `pre-upgrade.manifest.json` sits beside it.
 
+The driver now requires an existing canonical, link-free parent for the new `--work`
+directory, disjoint from both checkouts. Copy destinations have the same ancestry check
+before mutation and are claimed exclusively. Use directories you own and keep their
+ancestry stable: these path-based helpers do not provide protection against another
+process concurrently replacing checked ancestors. Links, junction aliases, preexisting
+destinations and overlapping paths are refused before the copy or first binary probe.
+
+`report.json` records `status: "passed"` only when command exits, daemon readiness,
+backup and restore equality, unchanged old-binary validation, and both negative restore
+controls pass. A failure after work-directory creation preserves completed steps and
+failure details with `status: "failed"`; the CLI exits nonzero. Unsafe work paths are
+refused without creating a report there. Before every old-binary validation launch,
+the complete restored tree must equal the pre-upgrade manifest. These checks and their
+disposable sentinel fixtures remain synthetic evidence; they do not add installed proof.
+
 Runs recorded for this document: old `c5c7cd3`, new `7f42c3a`, Node 24.21.0, neither checkout
 modified. The reports stay in the session scratch area and are not committed.
 
