@@ -10,9 +10,9 @@ import {
   lstatSync,
   openSync,
   readSync,
-  realpathSync,
   unlinkSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -60,24 +60,37 @@ export interface ManagedRootBinding {
   readonly rootBindingRef: string;
 }
 
-function canonical(path: string): string {
+/** Fresh no-follow observations local to ONE check invocation: each distinct path is
+ * observed once and every field derives from that observation. Never shared between
+ * invocations; a later or bracketing check always observes again. */
+type Observations = Map<string, Stats>;
+function observe(seen: Observations, path: string): Stats {
+  const known = seen.get(path);
+  if (known) return known;
+  const stat = lstatSync(path);
+  seen.set(path, stat);
+  return stat;
+}
+function canonical(path: string, seen: Observations = new Map()): string {
   if (!isAbsolute(path) || resolve(path) !== path) fail("noncanonical root");
+  // A normalized absolute path whose every component is observed as a non-symlink is
+  // its own realpath; a second realpath walk would re-observe the same components.
   for (let cursor = path; ; cursor = dirname(cursor)) {
-    if (lstatSync(cursor).isSymbolicLink()) fail("root alias");
+    if (observe(seen, cursor).isSymbolicLink()) fail("root alias");
     if (dirname(cursor) === cursor) break;
   }
-  if (realpathSync(path) !== path) fail("root alias");
   return path;
 }
-function directory(path: string): Identity {
-  canonical(path);
-  const stat = lstatSync(path);
+function directory(path: string, seen: Observations = new Map()): Identity {
+  canonical(path, seen);
+  const stat = observe(seen, path);
   if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o022) !== 0) fail("directory ownership");
   return Object.freeze({ path, device: stat.dev, inode: stat.ino });
 }
-/** Bounded, no-follow metadata read. Revalidate path identity after reading the handle. */
-function metadata(path: string): Buffer {
-  canonical(dirname(path));
+/** Bounded, no-follow metadata read. Revalidate path identity after reading the handle;
+ * that post-read observation is always fresh and is returned as `named`. */
+function metadata(path: string, seen: Observations = new Map()): { bytes: Buffer; named: Stats } {
+  canonical(dirname(path), seen);
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = fstatSync(fd);
@@ -109,7 +122,7 @@ function metadata(path: string): Buffer {
       named.isSymbolicLink()
     )
       fail("metadata changed");
-    return bytes;
+    return { bytes, named };
   } finally {
     closeSync(fd);
   }
@@ -129,6 +142,14 @@ export function resolveManagedRootBinding(
   controlPath: string,
   releaseDirectory: string,
 ): ManagedRootBinding {
+  return resolveBinding(inputs, controlPath, releaseDirectory, new Map());
+}
+function resolveBinding(
+  inputs: readonly ManagedRootInput[],
+  controlPath: string,
+  releaseDirectory: string,
+  seen: Observations,
+): ManagedRootBinding {
   if (process.platform !== "linux") fail("unsupported platform");
   const paths = new Map<ManagedRootRole, string>();
   for (const { role, path } of inputs) {
@@ -142,10 +163,10 @@ export function resolveManagedRootBinding(
     store = paths.get("store")!;
   // First path deliberately fixes the sidecar name; it cannot be redirected by a caller.
   if (sidecar !== join(config, "orca.permissions.json")) fail("unsupported sidecar layout");
-  const control = directory(controlPath);
-  const releases = directory(releaseDirectory);
-  const directories = [directory(config), directory(dirname(sidecar)), directory(store)];
-  if (present(sidecar)) metadata(sidecar);
+  const control = directory(controlPath, seen);
+  const releases = directory(releaseDirectory, seen);
+  const directories = [directory(config, seen), directory(dirname(sidecar), seen), directory(store, seen)];
+  if (present(sidecar)) metadata(sidecar, seen);
   const unique = [...new Map(directories.map((d) => [d.path, d])).values()].sort(
     (a, b) => a.path.length - b.path.length || a.path.localeCompare(b.path),
   );
@@ -155,9 +176,8 @@ export function resolveManagedRootBinding(
   if ([control, ...targets].some((d) => inside(releases.path, d.path) || inside(d.path, releases.path)))
     fail("control or workspace overlaps selected releases");
   const idPath = join(store, "workspace-identity", "id"),
-    idDirectory = directory(dirname(idPath));
-  const idBytes = metadata(idPath),
-    idStat = lstatSync(idPath);
+    idDirectory = directory(dirname(idPath), seen);
+  const { bytes: idBytes, named: idStat } = metadata(idPath, seen);
   const workspaceIdentity = Object.freeze({
     path: idPath,
     device: idStat.dev,
@@ -181,10 +201,8 @@ export function resolveManagedRootBinding(
     rootBindingRef: hash(JSON.stringify(value)),
   });
 }
-function assertBinding(binding: ManagedRootBinding): undefined {
-  if (
-    !isDeepStrictEqual(resolveManagedRootBinding(binding.roles, binding.control.path, binding.releases.path), binding)
-  )
+function assertBinding(binding: ManagedRootBinding, seen: Observations): undefined {
+  if (!isDeepStrictEqual(resolveBinding(binding.roles, binding.control.path, binding.releases.path, seen), binding))
     fail("original root identity changed");
   return undefined;
 }
@@ -238,7 +256,7 @@ export function createManagedTypedWorkspace(ports: ManagedTypedOwnerPorts) {
   const sidecar = binding.roles.find((r) => r.role === "sidecar")!.path;
   const storeDir = binding.roles.find((r) => r.role === "store")!.path;
   const identityPath = join(storeDir, "workspace-identity", "id");
-  const originalIdentity = metadata(identityPath).toString("utf8");
+  const originalIdentity = metadata(identityPath).bytes.toString("utf8");
   const identityStat = lstatSync(identityPath);
   const identityDirectory = directory(dirname(identityPath));
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n$/i.test(originalIdentity))
@@ -252,13 +270,15 @@ export function createManagedTypedWorkspace(ports: ManagedTypedOwnerPorts) {
   function assertCurrent(): undefined {
     if (uncertain) fail("uncertain enrollment; explicit inspection required");
     if (assertLifetime() !== undefined || build() !== undefined) fail("asynchronous ownership assertion");
-    assertBinding(binding);
+    // This invocation's own observations; the bracketing inspect() check makes new ones.
+    const seen: Observations = new Map();
+    assertBinding(binding, seen);
     const currentIdentity = lstatSync(identityPath);
     if (
-      metadata(identityPath).toString("utf8") !== originalIdentity ||
+      metadata(identityPath, seen).bytes.toString("utf8") !== originalIdentity ||
       identityStat.ino !== currentIdentity.ino ||
       identityStat.dev !== currentIdentity.dev ||
-      !isDeepStrictEqual(directory(dirname(identityPath)), identityDirectory)
+      !isDeepStrictEqual(directory(dirname(identityPath), seen), identityDirectory)
     )
       fail("original workspace identity changed");
     return undefined;
@@ -272,7 +292,7 @@ export function createManagedTypedWorkspace(ports: ManagedTypedOwnerPorts) {
     rootBindingRef: binding.rootBindingRef,
   };
   function markerAt(path: string): TypedCompatibilityMarker {
-    const marker = parseTypedCompatibilityMarkerBytes(metadata(path));
+    const marker = parseTypedCompatibilityMarkerBytes(metadata(path).bytes);
     for (const key of Object.keys(expectedRefs) as (keyof typeof expectedRefs)[])
       if (marker[key] !== expectedRefs[key]) fail("enrollment binding mismatch");
     return marker;
@@ -281,7 +301,8 @@ export function createManagedTypedWorkspace(ports: ManagedTypedOwnerPorts) {
     { state: "never-typed" } | { state: "enrollment-pending" | "enrolled"; marker: TypedCompatibilityMarker } {
     assertCurrent();
     if (!present(intent)) {
-      if (present(enrolled) || metadata(legacy).toString("utf8") !== legacyBytes) fail("missing enrollment intent");
+      if (present(enrolled) || metadata(legacy).bytes.toString("utf8") !== legacyBytes)
+        fail("missing enrollment intent");
       return { state: "never-typed" };
     }
     const pending = markerAt(intent);
