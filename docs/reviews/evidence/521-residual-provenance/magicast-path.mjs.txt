@@ -1,0 +1,30 @@
+// Bounded probe: which Magicast paths construct the embedded (1.2.1) SourceMapConsumer?
+// Offsets stay small enough that neither copy does meaningful work; this is a validation
+// difference check, not a denial-of-service reproduction.
+import { createRequire } from "node:module";
+const root = process.argv[2];
+const require = createRequire(root + "/package.json");
+const { parseModule, generateCode } = await import(root + "/node_modules/.pnpm/magicast@0.5.5/node_modules/magicast/dist/index.js");
+const smj = require(root + "/node_modules/.pnpm/source-map-js@1.2.2/node_modules/source-map-js");
+const out = {};
+
+// 1. The shape Vitest's threshold auto-update uses: parse config text, generate() with no options.
+const mod = parseModule('import { defineConfig } from "vitest/config";\nexport default defineConfig({ test: {} });\n// __VITEST_COVERAGE_MARKER__');
+const g = mod.generate();
+out.defaultGenerateMap = g.map ?? null;
+
+// 2. Indexed map with a section offset above 1.2.2's MAX_SECTION_OFFSET_LINE (1e7).
+const indexed = { version: 3, sections: [{ offset: { line: 20_000_001, column: 0 }, map: { version: 3, sources: ["a.js"], names: [], mappings: "AAAA" } }] };
+try { new smj.SourceMapConsumer(indexed); out.patched_1_2_2 = "accepted"; } catch (e) { out.patched_1_2_2 = "rejected: " + e.message; }
+
+// 3. Same map reaching Magicast's embedded consumer — only via an explicit opt-in to both options.
+try {
+  const r = generateCode(parseModule("export const a = 1;\n"), { sourceMapName: "out.js.map", inputSourceMap: indexed });
+  out.embedded_via_explicit_inputSourceMap = r.map ? "accepted (composed map returned)" : "no map";
+} catch (e) { out.embedded_via_explicit_inputSourceMap = "rejected: " + e.message; }
+
+// 4. Non-integer offset (also rejected by 1.2.2's isValidOffset).
+const frac = { version: 3, sections: [{ offset: { line: 1.5, column: 0 }, map: { version: 3, sources: ["a.js"], names: [], mappings: "AAAA" } }] };
+try { new smj.SourceMapConsumer(frac); out.patched_fractional = "accepted"; } catch (e) { out.patched_fractional = "rejected: " + e.message; }
+try { generateCode(parseModule("export const a = 1;\n"), { sourceMapName: "o.map", inputSourceMap: frac }); out.embedded_fractional = "accepted"; } catch (e) { out.embedded_fractional = "rejected: " + e.message; }
+console.log(JSON.stringify(out, null, 2));

@@ -1,0 +1,7 @@
+sha256 of packaging outputs and downloads (2026-10-27)
+614577ab5ac3a85b5bd23b6cd3d41c726b1d4578cc79b4fe17906b24c5b24ff8  resources/app.asar (19696035 bytes)
+675e071ff81a60b4ff486aa29e584cf62706f95017f57cca31caed9b70966987  resources/daemon/orca-daemon.mjs
+675e071ff81a60b4ff486aa29e584cf62706f95017f57cca31caed9b70966987  packages/app/dist/daemon/orca-daemon.mjs (build output)
+994bc3664cc3ac55b50c21a58d345cf8322003d37f5439a81801e3267e6145e2  electron-v44.9.1-linux-x64.zip via electron postinstall (@electron/get 5.1.0)
+994bc3664cc3ac55b50c21a58d345cf8322003d37f5439a81801e3267e6145e2  electron-v44.9.1-linux-x64.zip via electron-builder (@electron/get 3.1.0, release-default path)
+994bc3664cc3ac55b50c21a58d345cf8322003d37f5439a81801e3267e6145e2  pinned in electron@44.9.1 checksums.json

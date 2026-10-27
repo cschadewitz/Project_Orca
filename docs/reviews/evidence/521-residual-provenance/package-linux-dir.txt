@@ -1,0 +1,17 @@
+  • electron-builder  version=26.18.0 os=6.18.44-fc-v153
+  • loaded configuration  file=<repo>/packages/app/electron-builder.yml
+  • packageManager not detected by file, falling back to environment detection  resolvedPackageManager=pnpm detected=<repo>/packages/app
+  • detected workspace root for project using packageManager field  pm=pnpm config=pnpm@12.4.2 resolved=<repo> projectDir=<repo>/packages/app
+  • executing @electron/rebuild  electronVersion=44.9.1 arch=x64 buildFromSource=false workspaceRoot=<repo> projectDir=./ appDir=./
+  • installing native dependencies  arch=x64
+  • completed installing native dependencies
+  • packaging       platform=linux arch=x64 electron=44.9.1 appOutDir=<scratch>/pkg/out/linux-unpacked
+2026-10-27T01:18:50.342Z @electron/get:index Checking the cache (undefined) for electron-v44.9.1-linux-x64.zip (https://github.com/electron/electron/releases/download/v44.9.1/electron-v44.9.1-linux-x64.zip)
+2026-10-27T01:18:50.566Z @electron/get:index Cache miss
+2026-10-27T01:18:50.567Z @electron/get:index Downloading https://github.com/electron/electron/releases/download/v44.9.1/electron-v44.9.1-linux-x64.zip to /tmp/electron-download-C5VOwz/electron-v44.9.1-linux-x64.zip with options: {"timeout":{"request":600000},"agent":{"https":{"_events":{},"_eventsCount":2,"options":{},"requests":{},"sockets":{},"freeSockets":{},"keepAliveMsecs":1000,"keepAlive":false,"maxSockets":null,"maxFreeSockets":256,"scheduling":"lifo","maxTotalSockets":null,"totalSocketCount":0,"agentKeepAliveTimeoutBuffer":1000,"proxy":"http://127.0.0.1:36189/","proxyHeaders":{},"connectOpts":{"ALPNProtocols":["http/1.1"],"host":"127.0.0.1","port":36189}}}}
+  • downloaded      label=electron progress=100%
+2026-10-27T01:18:56.491Z @electron/get:index Downloading https://github.com/electron/electron/releases/download/v44.9.1/SHASUMS256.txt to /tmp/electron-download-83nbW5/SHASUMS256.txt with options: {"timeout":{"request":600000},"agent":{"https":{"_events":{},"_eventsCount":2,"options":{},"requests":{},"sockets":{},"freeSockets":{},"keepAliveMsecs":1000,"keepAlive":false,"maxSockets":null,"maxFreeSockets":256,"scheduling":"lifo","maxTotalSockets":null,"totalSocketCount":0,"agentKeepAliveTimeoutBuffer":1000,"proxy":"http://127.0.0.1:36189/","proxyHeaders":{},"connectOpts":{"ALPNProtocols":["http/1.1"],"host":"127.0.0.1","port":36189}}}}
+2026-10-27T01:18:57.574Z @electron/get:cache Moving /tmp/electron-download-C5VOwz/electron-v44.9.1-linux-x64.zip to <scratch>/pkg/xdg/electron/7026fc0e9c42525aa693058e1c6bd07f20c05b97c0aa09df8baabeb3fdd1f7c8/electron-v44.9.1-linux-x64.zip
+  • downloaded electron zip extracted successfully  output=<scratch>/pkg/out/linux-unpacked
+  • searching for node modules  pm=pnpm searchDir=<repo>/packages/app
+  • duplicate dependency references  dependencies=["@orca/core@link:../core"]

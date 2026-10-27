@@ -1,0 +1,17 @@
+source-map-js@1.2.2
+├─┬ magicast@0.5.5
+│ └─┬ @vitest/coverage-v8@5.0.5
+│   ├── orca@0.6.0 (devDependencies)
+│   └─┬ vitest@5.0.5
+│     ├── @vitest/coverage-v8@5.0.5 [circular]
+│     └── orca@0.6.0 (devDependencies)
+└─┬ postcss@8.5.30
+  └─┬ vite@8.3.5
+    ├── @orca/app@0.1.0 (devDependencies)
+    ├─┬ @vitejs/plugin-react@6.1.2
+    │ └── @orca/app@0.1.0 (devDependencies)
+    ├─┬ @vitest/mocker@5.0.5
+    │ └── vitest@5.0.5 [deduped]
+    └── vitest@5.0.5 [deduped]
+
+Found 1 version of source-map-js
