@@ -12,6 +12,7 @@ const scopeFields = [
   "coverage",
 ] as const;
 
+/** `stale` means nothing was sent; `refused` is an owner refusal, which can still follow a claimed handle. */
 export type ScopedChoiceResult = "confirmed" | "refused" | "stale" | "uncertain";
 
 export interface ScopedRuleReview {

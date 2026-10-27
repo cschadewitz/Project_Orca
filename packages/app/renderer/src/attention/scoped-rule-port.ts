@@ -4,6 +4,8 @@ import type { GuardDecisionView } from "../../../../protocol/src/guard-decision-
 import type { LiveDecisionTarget } from "@orca/protocol";
 import type { OrcaBridge } from "../../../src/bridge.js";
 import type { ScopedRuleReviewPort, ScopedChoiceResult } from "./scoped-rule-review.js";
+/** The main process resolves a reply lost after dispatch as one of these; the owner may have acted. */
+const lostReply = new Set(["AGENT_TRANSPORT", "PROTOCOL_MESSAGE"]);
 export function scopedRulePort(bridge: OrcaBridge, input: LiveDecisionTarget): ScopedRuleReviewPort | undefined {
   const snapshot = bridge.connection.read();
   const rpc = bridge.scopedPermissions;
@@ -21,7 +23,12 @@ export function scopedRulePort(bridge: OrcaBridge, input: LiveDecisionTarget): S
       if (!hello.ok || !hello.result.identity || !isCurrent()) return undefined;
       const target = hello.result.identity;
       const result = await rpc.call("scopedPermissions.review", { target, input });
-      if (!result.ok || !isCurrent()) return undefined;
+      if (!result.ok) return undefined;
+      if (!isCurrent()) {
+        // Nothing will ever choose on a handle that arrived late; release it rather than leave it ready.
+        void rpc.call("scopedPermissions.cancel", { target, handle: result.result.handle }).catch(() => undefined);
+        return undefined;
+      }
       const review = result.result;
       const choose = async (choice: "save" | "allow-once" | "deny"): Promise<ScopedChoiceResult> => {
         if (!isCurrent()) return "stale";
@@ -32,7 +39,9 @@ export function scopedRulePort(bridge: OrcaBridge, input: LiveDecisionTarget): S
             ? r.result.outcome === (choice === "save" ? "saved" : "answered")
               ? "confirmed"
               : "uncertain"
-            : "refused";
+            : lostReply.has(r.error.code)
+              ? "uncertain"
+              : "refused";
         } catch {
           return "uncertain";
         }

@@ -14,7 +14,10 @@ import { PERMISSION_ASK } from "./fixtures-inputs.js";
 
 const publicId = "00000000-0000-4000-8000-000000000001";
 const complete = <T,>(value: T) => ({ state: "complete", value });
-function view(patch: Record<string, unknown> = {}) {
+function view(
+  patch: Record<string, unknown> = {},
+  reference: (kind: string) => { id: string } = () => ({ id: publicId }),
+) {
   return projectGuardDecision(
     {
       coverage: {
@@ -42,8 +45,41 @@ function view(patch: Record<string, unknown> = {}) {
       unsupported: complete(false),
       ...patch,
     },
-    { requiredDisclosure: () => "complete", reference: () => ({ id: publicId }) },
+    { requiredDisclosure: () => "complete", reference },
     Date.now(),
+  );
+}
+const ruleIds: Record<string, string> = {
+  coverage: "00000000-0000-4000-8000-0000000000c0",
+  rule: "00000000-0000-4000-8000-0000000000a1",
+  revision: "00000000-0000-4000-8000-0000000000b2",
+};
+/** A stored-rule allow matched by a specific rule revision; every private reference is replaced. */
+function matched(patch: Record<string, unknown> = {}) {
+  const stamp = {
+    capturedGeneration: "g",
+    currentPolicyRevision: "p",
+    authorityRevision: "a",
+    revocationEpoch: "r",
+    leaseEpoch: "l",
+  };
+  return view(
+    {
+      verdict: {
+        version: 1,
+        actionBindingRef: "private-binding",
+        coverageId: "private-coverage",
+        authority: stamp,
+        outcome: "allow",
+        authorizedBy: { kind: "rule", ruleId: "private-rule-SECRET", ruleRevision: "private-revision-SECRET" },
+      },
+      currentAuthority: complete(true),
+      authorityKind: complete("stored-rule"),
+      expiresAt: complete(new Date(Date.now() + 3_600_000).toISOString()),
+      revocation: complete("active"),
+      ...patch,
+    },
+    (kind) => ({ id: ruleIds[kind] ?? publicId }),
   );
 }
 function reviewed(patch: Partial<ScopedRuleReview> = {}): ScopedRuleReview {
@@ -450,5 +486,99 @@ describe("inactive scoped choices in the existing permission card", () => {
     host.change({ scopedRuleReview: port, cannotWrite: "Read-only connection." });
     click("Review permission");
     expect(port.review).not.toHaveBeenCalled();
+  });
+});
+
+describe("scoped choice boundaries", () => {
+  it("shows the matched rule, its revision and the effective scope without private references", async () => {
+    mount(reviewed({ decision: matched() }));
+    await open();
+    const text = document.body.textContent ?? "";
+    expect(text).toMatch(new RegExp(`Matched rule ${ruleIds.rule!}\\s*revision\\s*${ruleIds.revision!}`));
+    expect(text).toContain("stored-rule");
+    expect(text).toContain("/synthetic/reviewed.txt only");
+    expect(text).toContain("temporary workspace; no network");
+    expect(text).not.toMatch(/SECRET|private-|rm -rf/);
+  });
+  it.each([
+    ["revoked", { revocation: complete("revoked") }, "revoked"],
+    ["expired", { expiresAt: complete("2020-01-01T00:00:00Z") }, "expired"],
+  ] as const)("a %s matched rule stays identified but cannot authorize a positive choice", async (_n, patch, word) => {
+    const review = reviewed({ decision: matched(patch) });
+    mount(review);
+    await open();
+    expect(document.body.textContent).toContain(word);
+    expect(screen.getByText("The reviewed grant expired or was revoked.")).toBeTruthy();
+    click("Allow once");
+    click("Create scoped rule");
+    expect(review.allowOnce).not.toHaveBeenCalled();
+    expect(review.createRule).not.toHaveBeenCalled();
+  });
+  it.each(["Allow once", "Deny"] as const)("latches duplicate %s clicks to one owner call", async (name) => {
+    const pending = deferred<ScopedChoiceResult>();
+    const review = reviewed({ allowOnce: vi.fn(() => pending.promise), deny: vi.fn(() => pending.promise) });
+    mount(review);
+    await open();
+    act(() => {
+      click(name);
+      click(name);
+    });
+    click(name === "Deny" ? "Allow once" : "Deny");
+    expect(review.allowOnce).toHaveBeenCalledTimes(name === "Allow once" ? 1 : 0);
+    expect(review.deny).toHaveBeenCalledTimes(name === "Deny" ? 1 : 0);
+    // A pending one-time answer cannot be cancelled or closed away from under the owner.
+    click("Cancel review");
+    act(() => {
+      expect(h.layers.closeTop()).toBe("kept");
+    });
+    await act(async () => {
+      pending.resolve("confirmed");
+    });
+    expect(review.createRule).not.toHaveBeenCalled();
+    expect(
+      (review.allowOnce as ReturnType<typeof vi.fn>).mock.calls.length +
+        (review.deny as ReturnType<typeof vi.fn>).mock.calls.length,
+    ).toBe(1);
+  });
+  it("a stale result (nothing sent) reports it and lets the person review again", async () => {
+    const review = reviewed({ allowOnce: vi.fn(async () => "stale" as const) });
+    const host = mount(review);
+    await open();
+    click("Allow once");
+    await screen.findByText(/Nothing is confirmed; review again/);
+    click("Close review");
+    expect(screen.getByRole("button", { name: "Review permission" }).getAttribute("aria-disabled")).not.toBe("true");
+    await open();
+    expect(host.port.review).toHaveBeenCalledTimes(2);
+    expect(review.allowOnce).toHaveBeenCalledTimes(1);
+  });
+  it("moves focus from a settled choice to the region and back to the trigger on close", async () => {
+    const review = reviewed({ deny: vi.fn(async () => "refused" as const) });
+    mount(review);
+    await open();
+    const deny = screen.getByRole("button", { name: "Deny" });
+    deny.focus();
+    click("Deny");
+    await screen.findByText(/The choice was refused/);
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Scoped permission review");
+    const close = screen.getByRole("button", { name: "Close review" });
+    close.focus();
+    click("Close review");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Review permission" }));
+  });
+  it("unmounting during a pending one-time answer cancels the review and claims nothing late", async () => {
+    const pending = deferred<ScopedChoiceResult>();
+    const cancel = vi.fn(async () => undefined);
+    const review = reviewed({ allowOnce: vi.fn(() => pending.promise), cancel });
+    const host = mount(review);
+    await open();
+    click("Allow once");
+    host.unmount();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      pending.resolve("confirmed");
+    });
+    expect(document.body.textContent).not.toContain("One-time answer recorded");
+    expect(review.createRule).not.toHaveBeenCalled();
   });
 });
