@@ -228,7 +228,11 @@ it("keeps the Windows project commands equivalent to the executed Linux ones, an
     "$ErrorActionPreference = 'Stop'",
     "}",
   ]);
-  const windows = powershell.slice(2, -1).map((line) => line.trim());
+  expect(raw[0]).toContain("if env | grep -q '^GIT_'; then");
+  expect(powershell[2].trim()).toBe(
+    "if (Get-ChildItem Env:GIT_*) { throw 'Stop: inherited GIT_* settings; contact your coordinator.' }",
+  );
+  const windows = powershell.slice(3, -1).map((line) => line.trim());
   const git = (lines) => lines.filter((line) => line.startsWith("git "));
   expect(git(windows)).toEqual(git(linux));
   expect(git(linux)).toHaveLength(5);
@@ -238,6 +242,15 @@ it("keeps the Windows project commands equivalent to the executed Linux ones, an
     'New-Item -ItemType Directory "$env:USERPROFILE\\orca-trial"',
     'New-Item -ItemType Directory "$env:USERPROFILE\\orca-trial\\project"',
   ]);
+});
+
+it("requires manual ownership review for cleanup, including refused or preexisting paths", () => {
+  for (const page of ["linux.md", "windows.md"]) {
+    const cleanup = text(page).split("## After the round")[1];
+    expect(cleanup).not.toMatch(/rm\s+-rf|Remove-Item/);
+    expect(cleanup).toContain("If setup refused a path or it already existed, leave it untouched.");
+    expect(cleanup).toContain("review each folder");
+  }
 });
 
 const temporary = [];
@@ -252,13 +265,20 @@ async function trialHome() {
   const home = join(base, "home");
   await mkdir(home);
   const globalConfig = join(base, "absent-global-gitconfig");
+  // Keep the pasted block free of GIT_* settings; isolate configuration only inside
+  // each fixture Git process, without weakening the block's environment refusal.
+  const gitPath = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  const bin = join(base, "bin");
+  await mkdir(bin);
+  await writeFile(
+    join(bin, "git"),
+    `#!/bin/sh\nGIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL='${globalConfig}' GIT_TERMINAL_PROMPT=0 exec '${gitPath}' "$@"\n`,
+    { mode: 0o700 },
+  );
   const env = {
-    PATH: process.env.PATH,
+    PATH: `${bin}:${process.env.PATH}`,
     HOME: home,
     LANG: "C",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: globalConfig,
-    GIT_TERMINAL_PROMPT: "0",
   };
   const run = () =>
     spawnSync("bash", ["--norc", "--noprofile", "-c", block("first-success-sample.md", "linux-project")], {
@@ -273,6 +293,49 @@ async function trialHome() {
 describe.skipIf(process.platform === "win32" || typeof process.getuid !== "function")(
   "the documented Linux throwaway project",
   () => {
+    it("refuses inherited Git redirection before any write and leaves an unrelated project unchanged", async () => {
+      const { base, home, env, run } = await trialHome();
+      const unrelated = join(base, "unrelated");
+      await mkdir(unrelated);
+      const git = (...args) => execFileSync("git", ["-C", unrelated, ...args], { env, encoding: "utf8" }).trim();
+      git("init", "-b", "sentinel");
+      await writeFile(join(unrelated, "README.txt"), "committed sentinel\n");
+      git("add", "README.txt");
+      git(
+        "-c",
+        "user.name=Sentinel",
+        "-c",
+        "user.email=sentinel@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--no-verify",
+        "-m",
+        "sentinel",
+      );
+      await writeFile(join(unrelated, "README.txt"), "uncommitted sentinel\n");
+      const before = {
+        head: git("rev-parse", "HEAD"),
+        status: git("status", "--porcelain"),
+        diff: git("diff"),
+        staged: git("diff", "--cached"),
+      };
+      env.GIT_DIR = join(unrelated, ".git");
+      env.GIT_WORK_TREE = unrelated;
+      const result = run();
+      expect(result.status, result.stderr).not.toBe(0);
+      expect(await readdir(home)).toEqual([]);
+      expect({
+        head: git("rev-parse", "HEAD"),
+        status: git("status", "--porcelain"),
+        diff: git("diff"),
+        staged: git("diff", "--cached"),
+      }).toEqual(before);
+      expect(await readFile(join(unrelated, "README.txt"), "utf8")).toBe("uncommitted sentinel\n");
+      expect(env.GIT_DIR).toBe(join(unrelated, ".git"));
+      expect(env.GIT_WORK_TREE).toBe(unrelated);
+    });
+
     it("stops before touching an orca-trial folder that already exists", async () => {
       const { home, run } = await trialHome();
       await mkdir(join(home, "orca-trial"));
