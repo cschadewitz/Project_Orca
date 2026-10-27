@@ -1,0 +1,171 @@
+{
+  "record": "fresh-stat-consolidation-observation-incomplete",
+  "authority": "none",
+  "observerHead": "109d1a4eb4b2bdc4bce991ea90bd03a59f142296",
+  "producerSourceHead": "fa25390e8a88e23a33640f40404b6da58938bdb4",
+  "preflightSourceInputs": 386,
+  "observerFiles": 15,
+  "root": "/tmp/orca-706-stat-fresh-q653v741",
+  "attemptCount": 1,
+  "connectedStarted": false,
+  "bootstrapReceiptExists": false,
+  "bootstrapReceiptBytes": null,
+  "acceptingToken": null,
+  "productionEligible": false,
+  "bootstrap": {
+    "producerReturncode": 0,
+    "producerStderrBytes": 0,
+    "processElapsedNanoseconds": 10748672698,
+    "originalRefusal": "RuntimeError: effect crosses phase boundary interval",
+    "offlineRefusalReproduced": "effect crosses phase boundary interval",
+    "phaseLog": [
+      {
+        "event": "sent",
+        "name": "bootstrap"
+      },
+      {
+        "event": "received",
+        "name": "bootstrap"
+      }
+    ],
+    "phaseMonotonicEnclosureNanoseconds": 9624922690,
+    "commandReadResumeToAckEntryPrefixNanoseconds": 9624643494,
+    "phaseClockSamples": [
+      {
+        "event": "before-command-write",
+        "wallNs": 1793066198131249733,
+        "monotonicBeforeNs": 1987788508589,
+        "monotonicAfterNs": 1987788509631
+      },
+      {
+        "event": "after-command-write",
+        "wallNs": 1793066198131270745,
+        "monotonicBeforeNs": 1987788530442,
+        "monotonicAfterNs": 1987788530633
+      },
+      {
+        "event": "after-ack-read",
+        "wallNs": 1793066207756171381,
+        "monotonicBeforeNs": 1997413429736,
+        "monotonicAfterNs": 1997413431279
+      }
+    ],
+    "rawTraceLines": 152882,
+    "decodedRecords": 145494,
+    "statxEntries": 108673,
+    "inventoryNamedNoFollowStatxByFile": {
+      "controlled-build.json": 1226,
+      "controlled-child.mjs": 1228,
+      "controlled-producer.mjs": 1227
+    },
+    "completeOrderedInventoryPassesAfterImports": 1226,
+    "initialInventoryPasses": 1,
+    "currentnessCheckInvocations": 1225,
+    "controlFifoStatxByDescriptorRole": {
+      "command": 1225,
+      "ack": 1225
+    },
+    "boundaryCrossings": [
+      {
+        "call": "futex",
+        "threadRole": "worker",
+        "enteredRawLineZeroBased": 3400,
+        "completedRawLineZeroBased": 3402,
+        "entryPrefixNs": 1793066197504617465,
+        "resumePrefixNs": 1793066197505041106,
+        "boundaries": [
+          {
+            "call": "read",
+            "enteredRawLineZeroBased": 3401,
+            "completedRawLineZeroBased": 3404,
+            "entryPrefixNs": 1793066197504699229,
+            "resumePrefixNs": 1793066198131365402
+          }
+        ],
+        "opcode": "FUTEX_WAKE_PRIVATE",
+        "result": 0
+      }
+    ],
+    "offlinePartialGraph": {
+      "threads": 12,
+      "settled": 12,
+      "serviceObjects": 1,
+      "serviceReads": 1
+    },
+    "finalNamedCheckpointCompleted": false
+  },
+  "diagnostic": {
+    "samples": 12,
+    "errors": [],
+    "samplerStopped": true,
+    "finalAfterOwnedSettlement": true,
+    "finalProcessStatus": {
+      "supervisor": "live-pinned-original",
+      "tracer": "exited-pinned-original",
+      "leader": "exited-pinned-original"
+    },
+    "cpuDelta": {
+      "usage_usec": 10101827,
+      "user_usec": 3165780,
+      "system_usec": 6936048,
+      "nice_usec": 0,
+      "nr_periods": 107,
+      "nr_throttled": 0,
+      "throttled_usec": 0,
+      "nr_bursts": 0,
+      "burst_usec": 0
+    },
+    "memoryEventsDelta": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    }
+  },
+  "cleanup": {
+    "traceThreadIds": 12,
+    "traceThreadIdsAbsent": 12,
+    "allTraceThreadIdsAbsent": true,
+    "tracerPidAbsent": true,
+    "lifetimeLockExclusivelyReacquired": true,
+    "lifetimeLockIdentityMatchesOriginal": true,
+    "remainingServiceDirectories": 0,
+    "remainingLockDirectories": 0,
+    "imageBytesAndRetainedStampsUnchanged": true
+  },
+  "packets": {
+    "bootstrap/trace": {
+      "bytes": 104079017,
+      "sha256": "4ef32094110e8299c2b983f9f649109e8123f207ac6b56bc2601d350b9c430a9"
+    },
+    "bootstrap-attempt.json": {
+      "bytes": 3061,
+      "sha256": "72770ce17cad8a9e30d519512d15bf0b71dea15fcd1b8b2ba7602787fa7c6cca"
+    },
+    "bootstrap-originals.json": {
+      "bytes": 269855863,
+      "sha256": "feb2991f5939c399450bd7ae481ea477f43a9b4883b57469089057c934fc77f4"
+    },
+    "bootstrap-diagnostics.json": {
+      "bytes": 23790,
+      "sha256": "cd8ed0a5fd13e10617570500954ff1fb1c5c133d9fda0818a38fd689a407fe9b"
+    },
+    "sanitized-checkpoint.json": {
+      "bytes": 3048,
+      "sha256": "20d793ddf90b0126d3650c78ee752ce85a47647756c629918febc4793ce42206"
+    },
+    "bootstrap-clock/clock-probe.trace": {
+      "bytes": 2833,
+      "sha256": "20153bdd3dfd643d04e36ff2ff92db0498eb192c2ad7abe9df68d4de35338b1c"
+    }
+  },
+  "limits": {
+    "ownerSeconds": 55,
+    "processSeconds": 60,
+    "traceBytes": 268435456
+  },
+  "launcherRefusal": "RuntimeError: missing permanently closed original bootstrap",
+  "launcherExitCode": 1
+}
