@@ -275,6 +275,109 @@ class DesignationControls(unittest.TestCase):
         self.assertEqual(closed.call_count, 2)
         self.assertEqual(hashed.call_count, 6)
 
+    def test_first_receipt_snapshot_still_has_original_synced_writer_open(self):
+        run = self.receipt_run()
+        synced, captured = [], []
+        sync = os.fsync
+
+        def synced_writer(number):
+            sync(number)
+            synced.append(number)
+
+        def retained(path):
+            value = snapshot(path)
+            if Path(path).name == 'bootstrap-association.json' and not captured:
+                self.assertEqual(len(synced), 1)
+                info = os.fstat(synced[0])
+                self.assertEqual(value[0], (info.st_dev, info.st_ino, info.st_mode, info.st_uid,
+                    info.st_gid, info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+                captured.append(value)
+            return value
+
+        with patch('controlled_supervisor.os.fsync', side_effect=synced_writer), \
+             patch('controlled_connected.snapshot', side_effect=retained):
+            d = run.designate_bootstrap(self.image)
+        self.assertEqual(captured, [d.proof])
+        d.check()
+
+    def test_pre_first_receipt_snapshot_corruption_or_same_bytes_replacement_refuses(self):
+        run = self.receipt_run()
+        for replacement in (False, True):
+            injected = []
+
+            def retained(path):
+                p = Path(path)
+                if p.name == 'bootstrap-association.json' and not injected:
+                    data = p.read_bytes()
+                    if replacement:
+                        other = p.with_suffix('.new')
+                        other.write_bytes(data)
+                        other.chmod(0o400)
+                        other.replace(p)
+                    else:
+                        p.chmod(0o600)
+                        p.write_bytes(data.replace(SOURCE.encode(), b'0' * 40))
+                        p.chmod(0o400)
+                    injected.append(True)
+                return snapshot(path)
+
+            with self.subTest(replacement=replacement), \
+                 patch('controlled_connected.snapshot', side_effect=retained), \
+                 self.assertRaisesRegex(RuntimeError, 'initial bootstrap receipt'):
+                run.designate_bootstrap(self.image)
+            self.assertEqual(injected, [True])
+            (run.report_path.parent / 'bootstrap-association.json').unlink()
+
+    def test_pre_first_receipt_snapshot_mode_or_size_change_refuses(self):
+        run = self.receipt_run()
+        for change_size in (False, True):
+            injected = []
+
+            def retained(path):
+                p = Path(path)
+                if p.name == 'bootstrap-association.json' and not injected:
+                    p.chmod(0o600)
+                    if change_size:
+                        p.write_bytes(b'x' * 4097)
+                        p.chmod(0o400)
+                    injected.append(True)
+                return snapshot(path)
+
+            with self.subTest(change_size=change_size), \
+                 patch('controlled_connected.snapshot', side_effect=retained), \
+                 self.assertRaisesRegex(RuntimeError, 'initial bootstrap receipt'):
+                run.designate_bootstrap(self.image)
+            self.assertEqual(injected, [True])
+            (run.report_path.parent / 'bootstrap-association.json').unlink()
+
+    def test_receipt_writer_stamp_brackets_first_named_snapshot(self):
+        run = self.receipt_run()
+        for replacement in (False, True):
+            injected = []
+
+            def retained(path):
+                value = snapshot(path)
+                p = Path(path)
+                if p.name == 'bootstrap-association.json' and not injected:
+                    if replacement:
+                        other = p.with_suffix('.new')
+                        other.write_bytes(value[1])
+                        other.chmod(0o400)
+                        other.replace(p)
+                    else:
+                        p.chmod(0o600)
+                        p.write_bytes(value[1].replace(SOURCE.encode(), b'0' * 40))
+                        p.chmod(0o400)
+                    injected.append(True)
+                return value
+
+            with self.subTest(replacement=replacement), \
+                 patch('controlled_connected.snapshot', side_effect=retained), \
+                 self.assertRaisesRegex(RuntimeError, 'initial bootstrap receipt'):
+                run.designate_bootstrap(self.image)
+            self.assertEqual(injected, [True])
+            (run.report_path.parent / 'bootstrap-association.json').unlink()
+
     def test_receipt_tamper_same_bytes_replacement_symlink_and_hardlink_refuse(self):
         run = self.receipt_run()
         d = run.designate_bootstrap(self.image)

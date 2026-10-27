@@ -299,7 +299,19 @@ class ObservedRun:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        proof = snapshot(path)
+
+            def writer_stamp():
+                info = os.fstat(stream.fileno())
+                return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                        info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+            before = writer_stamp()
+            require(stat.S_ISREG(before[2]) and stat.S_IMODE(before[2]) == 0o400 and
+                    before[5] == 1 and before[6] == len(data) <= 4096,
+                    'initial bootstrap receipt writer bounds differ')
+            proof = snapshot(path)
+            require(before == proof[0] == writer_stamp() and proof[1] == data and len(proof[1]) <= 4096,
+                    'initial bootstrap receipt differs from original writer/serialized bytes')
 
         def assert_original_receipt():
             require(self.assert_bootstrap_closed() is None, 'original bootstrap closure assertion returned a flag')

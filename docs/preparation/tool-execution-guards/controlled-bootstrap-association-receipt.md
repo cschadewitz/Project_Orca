@@ -15,6 +15,14 @@ run's closed-graph and authenticated bootstrap checks. The existing
 originals packet and raw trace remain in their original files; none is truncated,
 rewritten or added to the child's repeatedly read `originalFiles` inventory.
 
+Initial receipt capture retains the original writer descriptor through flush,
+fsync and the first named snapshot. Full descriptor stamps before and after that
+snapshot must equal its physical stamp; bytes must equal the serialized receipt,
+with mode 0400, a single link and the original size within the 4096-byte cap.
+Corruption or same-bytes replacement before the first snapshot cannot become
+the retained baseline. The descriptor checks also bracket mutation during the
+named observation.
+
 The receipt contains the exact original evidence reference, bootstrap base, pinned
 producer source commit, observer implementation digest, all three image-member
 digests, and paths/digests for the report, originals packet and trace. Its trace
@@ -82,8 +90,11 @@ path and byte substitution; the stub establishes no service or authority result.
 The Python suite includes receipt/report/raw replacement, tamper, source/image/
 report/trace mismatch, wrong run/replay, aliases, original closure loss, success
 flags and copied-report controls. The unchanged child controls reject changed
-proof bytes, physical replacement and wrong proof/inventory association. Results:
-290 Python tests, 45 optimized connected controls and three optimized child
+proof bytes, physical replacement and wrong proof/inventory association. Injected
+pre-first-snapshot corruption, same-bytes replacement, mode/size changes and
+mutation during the named observation refuse; a positive control confirms the
+original synced writer remains open through first capture. Results:
+294 Python tests, 49 optimized connected controls and three optimized child
 controls pass. Run:
 
 ```sh
