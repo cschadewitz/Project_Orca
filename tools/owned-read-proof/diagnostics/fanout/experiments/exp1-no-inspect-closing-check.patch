@@ -1,0 +1,13 @@
+diff --git a/packages/cli/src/typed-workspace-gate.ts b/packages/cli/src/typed-workspace-gate.ts
+index ab40819..3151952 100644
+--- a/packages/cli/src/typed-workspace-gate.ts
++++ b/packages/cli/src/typed-workspace-gate.ts
+@@ -310,7 +310,7 @@ export function createManagedTypedWorkspace(ports: ManagedTypedOwnerPorts) {
+     if (!present(enrolled)) return { state: "enrollment-pending", marker: pending };
+     const confirmed = markerAt(enrolled);
+     if (!isDeepStrictEqual(confirmed, { ...pending, state: "enrolled" })) fail("enrollment confirmation mismatch");
+-    assertCurrent();
++    // EXPERIMENT 1 ONLY (rejected): no closing owner check, even for state returned for use.
+     return { state: "enrolled", marker: confirmed };
+   }
+   const boundStores = new Map<

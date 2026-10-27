@@ -67,7 +67,10 @@ credential, policy, lease, resource, seal, root or final-dispatch check was
 disabled for measurement. This environment traced about 2× slower than the one
 that reported the 24.45-second cap: baseline Save took 48.3 s here. Raw traces
 and census files stayed in the ephemeral session scratchpad and are **not**
-retained evidence.
+retained evidence. The diagnostic tooling and the two experiment patches are in
+[`tools/owned-read-proof/diagnostics/fanout/`](../../../tools/owned-read-proof/diagnostics/fanout/README.md).
+The [handoff notes](controlled-connected-validation-fanout-handoff.md) record the
+full working log.
 
 ## Measured call graph
 

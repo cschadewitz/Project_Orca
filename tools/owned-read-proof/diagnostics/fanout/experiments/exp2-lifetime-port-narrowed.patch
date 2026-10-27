@@ -1,0 +1,62 @@
+diff --git a/packages/cli/test/controlled-owned-read-producer.ts b/packages/cli/test/controlled-owned-read-producer.ts
+index bd2b62c..ddb582f 100644
+--- a/packages/cli/test/controlled-owned-read-producer.ts
++++ b/packages/cli/test/controlled-owned-read-producer.ts
+@@ -112,6 +112,10 @@ export async function runControlledOwnedReadTest(
+     length = supervisor.length;
+   const assertPhysicalCurrent = supervisor.assertCurrent.bind(supervisor);
+   const assertImageCurrent = supervisor.assertBuildCurrent.bind(supervisor);
++  // EXPERIMENT 2 ONLY (rejected): narrower lifetime port supplied by the child.
++  const lifetimeOnly = (supervisor as unknown as { assertLifetimeCurrent(): undefined }).assertLifetimeCurrent.bind(
++    supervisor,
++  );
+   const bootstrap = supervisor.bootstrap
+     ? Object.freeze({
+         evidenceRef: supervisor.bootstrap.evidenceRef,
+@@ -322,7 +326,17 @@ export async function runControlledOwnedReadTest(
+   };
+   const managed = createManagedTypedWorkspace({
+     binding: roots,
+-    lifetime: { mode: "enrollment", assertCurrent: check },
++    lifetime: {
++      mode: "enrollment",
++      // EXPERIMENT 2 ONLY: lifetime facts, cancellation and credentials; no roots, originals or FIFOs.
++      assertCurrent: (): undefined => {
++        assert.equal(lifetimeOnly(), undefined);
++        abort.signal.throwIfAborted();
++        if (operator) currentCredential(operator);
++        if (reviewer) currentCredential(reviewer);
++        return undefined;
++      },
++    },
+     assertBuildCurrent: build,
+     qualify: async (state, action, signal) => {
+       check();
+diff --git a/tools/owned-read-proof/controlled-child.mjs b/tools/owned-read-proof/controlled-child.mjs
+index 632c312..b92571d 100644
+--- a/tools/owned-read-proof/controlled-child.mjs
++++ b/tools/owned-read-proof/controlled-child.mjs
+@@ -39,10 +39,14 @@ const image = () => {
+     assert.deepEqual(stamp(info), original.stamp);
+   }
+ };
+-const check = () => {
++// EXPERIMENT 2 ONLY (rejected): lifetime facts alone for the managed lifetime port.
++const lifetimeOnly = () => {
+   assert.deepEqual(identity(fs.fstatSync(lifetimeFd)), plan.lifetime.identity);
+   assert.deepEqual(actualIdentity(plan.lifetime.path), plan.lifetime.identity);
+   assertControlledLifetimeFdinfo(lifetimeFd);
++};
++const check = () => {
++  lifetimeOnly();
+   for (const [path, original] of Object.entries(plan.roots)) assert.deepEqual(actualIdentity(path), original);
+   for (const [path, original] of Object.entries(plan.originalFiles)) {
+     assert.deepEqual(actualIdentity(path), original.identity);
+@@ -85,6 +89,7 @@ const report = await runControlledOwnedReadTest(base, lane, {
+   offset: plan.offset,
+   length: plan.length,
+   assertCurrent: check,
++  assertLifetimeCurrent: () => (lifetimeOnly(), undefined),
+   // Managed build port: fresh installed image and, when connected, its retained proof.
+   assertBuildCurrent: () => {
+     image();
