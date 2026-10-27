@@ -129,17 +129,24 @@ function refusalsFor(observations, grammar, receiptFormat) {
 
   // Contradictions between labels are ambiguity, not evidence: refuse rather than choose.
   const requestScope = new Map();
+  const answers = new Set();
+  const effects = new Set();
   for (const event of events) {
     if (event.kind === "acp.permission-request") {
       if (requestScope.has(event.inv)) return ["duplicate-permission-request"];
       requestScope.set(event.inv, event.scope);
     }
+    if (["executor.start", "executor.effect"].includes(event.kind)) effects.add(event.inv);
     if (event.kind === "acp.permission-answer") {
+      if (answers.has(event.inv)) return ["duplicate-permission-answer"];
+      if (effects.has(event.inv)) return ["answer-after-execution"];
+      answers.add(event.inv);
       if (!requestScope.has(event.inv)) return ["answer-without-request"];
       if (event.outcome === "allow-always-exact" && requestScope.get(event.inv) !== "exact")
         return ["answer-scope-conflict"];
     }
   }
+  if ([...requestScope.keys()].some((inv) => !answers.has(inv))) return ["missing-permission-answer"];
   return [];
 }
 
@@ -278,6 +285,17 @@ export function collect(
 /** Classifies a collection with the merged classifier; a refused journal has nothing to classify. */
 export function classifyCollection(collection, classifier, manifest = classifier.provenance) {
   if (collection.disposition !== "RECORDED") return { outcome: "NOT-CLASSIFIED", route: "UNKNOWN" };
+  if (collection.stops.length) {
+    const stops = [...collection.stops];
+    return {
+      outcome: "INCONSISTENT-EVIDENCE",
+      tier: "collection-stopped",
+      route: "UNKNOWN",
+      sequence: { state: "inconsistent", inconsistent: stops, failed: [], incomplete: [] },
+      review: { decision: "UNKNOWN", cachedRepeatChecked: false, revocationBlocked: false, violations: stops },
+      stops,
+    };
+  }
   const { outcome, tier, route, provenance, sequence, review, reasons } = classifier.classifyExperiment(
     collection.record,
     manifest,
@@ -292,7 +310,21 @@ export async function main(argv) {
     process.stderr.write("usage: collect-evidence.mjs <observations.json> [--classify]\n");
     return 64;
   }
-  const collection = collect(JSON.parse(readFileSync(args[0], "utf8")));
+  let input;
+  try {
+    input = readFileSync(args[0], "utf8");
+  } catch {
+    process.stderr.write("journal-read-error\n");
+    return 1;
+  }
+  let observations;
+  try {
+    observations = JSON.parse(input);
+  } catch {
+    process.stderr.write("journal-parse-error\n");
+    return 1;
+  }
+  const collection = collect(observations);
   if (argv.includes("--classify")) {
     const { loadMergedClassifier } = await import("./merged-classifier.mjs");
     collection.classification = classifyCollection(collection, loadMergedClassifier());

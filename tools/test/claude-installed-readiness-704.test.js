@@ -617,7 +617,7 @@ describe("failure and negative paths (synthetic; each is preserved, none is a su
     const collection = collect(asInstalled(journal(events)));
     expect(collection.stops).toEqual(["wider-native-grant-offered"]);
     expect(collection.withheld.map((w) => w.callRef)).toEqual(["call-2", "call-3"]);
-    expect(classifyCollection(collection, classifier, hypothetical).outcome).toBe("EXPERIMENT-INCOMPLETE");
+    expect(classifyCollection(collection, classifier, hypothetical).outcome).toBe("INCONSISTENT-EVIDENCE");
   });
 
   it.each(["subagent", "other-mcp", "interactive-stdin", "other-tool"])(
@@ -638,7 +638,7 @@ describe("failure and negative paths (synthetic; each is preserved, none is a su
       expect(collection.stops).toEqual([`unsupported-route:${route}`]);
       const result = classifyCollection(collection, classifier, hypothetical);
       expect(result.outcome).toBe("INCONSISTENT-EVIDENCE");
-      expect(result.sequence.inconsistent).toContain("unexpected-call");
+      expect(result.sequence.inconsistent).toContain(`unsupported-route:${route}`);
     },
   );
 });
@@ -785,5 +785,77 @@ describe("offline and no-success guarantees", () => {
   it("reached neither a child process nor the network", () => {
     expect(forbidden).toEqual([]);
     expect(fetchCalls).toBe(0);
+  });
+});
+
+describe("review regression controls", () => {
+  it("preserves unsupported existing-call collection stops", () => {
+    const events = mainEvents();
+    events.find((event) => event.kind === "acp.tool-call" && event.inv === "inv-2").route = "other-mcp";
+    const collection = collect(asInstalled(journal(events)));
+    expect(collection.stops).toContain("unsupported-route:other-mcp");
+    const result = classifyCollection(collection, classifier, hypothetical);
+    expect(result.sequence.state).toBe("inconsistent");
+    expect(result.review).toMatchObject({ decision: "UNKNOWN", cachedRepeatChecked: false, revocationBlocked: false });
+    expect(classifyCollection(collection, classifier, hypothetical).outcome).toBe("INCONSISTENT-EVIDENCE");
+  });
+  it.each(["subagent", "other-mcp", "interactive-stdin", "other-tool"])(
+    "stops %s with empty receipts independently of classifier result",
+    (route) => {
+      const collection = collect(journal([dispatch("inv-1", { route })], { seals: () => ({}) }));
+      expect(collection).toMatchObject({ disposition: "RECORDED", record: { receipts: [] } });
+      const classifyExperiment = vi.fn(() => {
+        throw new Error("stopped collection must not reach classifier");
+      });
+      const result = classifyCollection(collection, { classifyExperiment }, null);
+      expect(classifyExperiment).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        outcome: "INCONSISTENT-EVIDENCE",
+        tier: "collection-stopped",
+        route: "UNKNOWN",
+        sequence: { state: "inconsistent", inconsistent: [`unsupported-route:${route}`], failed: [], incomplete: [] },
+        review: {
+          decision: "UNKNOWN",
+          cachedRepeatChecked: false,
+          revocationBlocked: false,
+          violations: [`unsupported-route:${route}`],
+        },
+        stops: [`unsupported-route:${route}`],
+      });
+    },
+  );
+  it.each(["duplicate", "late", "missing"])("refuses %s original answer", (mode) => {
+    const events = mainEvents();
+    const index = events.findIndex((event) => event.kind === "acp.permission-answer");
+    const answer = events[index];
+    if (mode === "duplicate") events.splice(index + 1, 0, { ...answer, outcome: "reject" });
+    else {
+      events.splice(index, 1);
+      if (mode === "late") events.push(answer);
+    }
+    const collection = collect(journal(events));
+    expect(collection.disposition).toBe("REFUSED");
+    if (mode === "duplicate") expect(collection.refusals).toEqual(["duplicate-permission-answer"]);
+  });
+  it("sanitizes malformed JSON and read errors without echo", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const dir = await mkdtemp("/tmp/orca-review-");
+    const marker = "DUMMY_SECRET_REVIEW_776";
+    const path = `${dir}/${marker}.json`;
+    await writeFile(path, `{"${marker}":`);
+    const out = [];
+    const err = [];
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation((s) => out.push(String(s)));
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((s) => err.push(String(s)));
+    try {
+      expect(await main([path])).toBe(1);
+      expect(await main([`${path}-missing`])).toBe(1);
+      expect(out.join("") + err.join("")).not.toContain(marker);
+      expect(err.join("")).toBe("journal-parse-error\njournal-read-error\n");
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+      await rm(dir, { recursive: true });
+    }
   });
 });
