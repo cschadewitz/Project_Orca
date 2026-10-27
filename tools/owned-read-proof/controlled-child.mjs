@@ -67,6 +67,22 @@ assert.deepEqual(
 );
 assert.equal(new Set(plan.phases.map((phase) => phase.token)).size, phases.length);
 for (const phase of plan.phases) assert.match(phase.token, /^[0-9a-f]{64}$/);
+const bootstrap =
+  lane === "connected"
+    ? {
+        evidenceRef: plan.bootstrap.evidenceRef,
+        // Designation comes from the parent command pipe after its independent bootstrap
+        // check. This association check cannot promote a mutable report into authority.
+        assertCurrent: () => {
+          assert.equal(check(), undefined);
+          const original = plan.originalFiles[plan.bootstrap.proofPath];
+          assert.ok(original && original.sha256 === plan.bootstrap.proofSha256);
+          assert.equal(hash(fs.readFileSync(plan.bootstrap.proofPath)), original.sha256);
+          assert.equal(plan.bootstrap.installedInventoryDigest, hash(JSON.stringify(plan.inventory)));
+          return undefined;
+        },
+      }
+    : undefined;
 const report = await runControlledOwnedReadTest(base, lane, {
   content: Buffer.from(plan.inputHex, "hex").toString("utf8"),
   offset: plan.offset,
@@ -74,19 +90,13 @@ const report = await runControlledOwnedReadTest(base, lane, {
   assertCurrent: check,
   ...(lane === "connected"
     ? {
-        bootstrap: {
-          evidenceRef: plan.bootstrap.evidenceRef,
-          // Designation comes from the parent command pipe after its independent bootstrap
-          // check. This association check cannot promote a mutable report into authority.
-          assertCurrent: () => {
-            check();
-            const original = plan.originalFiles[plan.bootstrap.proofPath];
-            assert.ok(original && original.sha256 === plan.bootstrap.proofSha256);
-            assert.equal(hash(fs.readFileSync(plan.bootstrap.proofPath)), original.sha256);
-            assert.equal(plan.bootstrap.installedInventoryDigest, hash(JSON.stringify(plan.inventory)));
-            return undefined;
-          },
-        },
+        bootstrap,
+        currentnessComposition: Object.freeze({
+          kind: "connected-physical-bootstrap-v1",
+          physicalAssertion: check,
+          bootstrap,
+          bootstrapAssertion: bootstrap.assertCurrent,
+        }),
       }
     : {}),
   phase: async (name, work) => {

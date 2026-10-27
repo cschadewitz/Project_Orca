@@ -67,6 +67,20 @@ class ReviewedImagePinControls(unittest.TestCase):
         self.assertEqual(supervisor.digest(HISTORICAL_CHILD), HISTORICAL_CHILD_SHA)
         self.assertNotEqual(timestamps.SOURCE, HISTORICAL_SOURCE)
 
+    def test_unreviewed_child_or_producer_input_cannot_select_a_runtime_image(self):
+        # Source implementation and observer repinning are separate review steps.
+        # A preparation build must refuse while either reviewed input still differs.
+        child = self.build['childSha256']
+        producer = self.build['sources'][timestamps.PRODUCER]
+        self.assertEqual(producer, supervisor.digest((REPO / timestamps.PRODUCER).read_bytes()))
+        if child != timestamps.CHILD_SHA or producer != timestamps.PRODUCER_INPUT_SHA:
+            with self.assertRaises(RuntimeError):
+                assert_image_sources(self.image)
+            with self.assertRaises(RuntimeError):
+                timestamps.source_binding({'sourceHead': timestamps.SOURCE, 'controlledBuild': self.build})
+        else:
+            self.assertEqual(assert_image_sources(self.image), self.build)
+
     def test_new_image_retains_physical_inventory_and_proof_associations(self):
         d = self.designation()
         inventory = self.inventory()
