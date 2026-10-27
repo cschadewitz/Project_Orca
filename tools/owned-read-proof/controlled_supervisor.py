@@ -132,11 +132,41 @@ def metadata_bytes(value, maximum):
     return encoded(value).encode()
 
 
-def bootstrap_asset_pins(original, files):
+def consumed_witness_pin(original, replay):
+    """Use the original replay object, never repin a consumed path or packet hex."""
+    require(replay.original is original, 'consumed witness belongs to another original replay')
+    path = str(Path(original['base']) / 'control/never-typed')
+    witnesses = [obj for obj in replay.objects if obj.family == 'enrollment-witness']
+    require(len(witnesses) == 1, 'missing/ambiguous original consumed witness object')
+    obj = witnesses[0]
+    require(type(obj.data) is bytes and len(obj.data) <= 130 and
+            re.fullmatch(b'[0-9a-f]{64}\n[0-9a-f]{64}\n', obj.data) is not None and
+            obj.physical is not None and replay.inodes.get(obj.physical) is obj and
+            stat.S_ISREG(obj.mode) and obj.names == set() and path not in replay.paths and
+            path in replay.used_paths and not any(h.obj is obj for h in replay.handles.values()),
+            'original witness lacks settled consumed lineage')
+    entered, completed = getattr(obj, 'removal_entry', None), getattr(obj, 'removal_completion', None)
+    intent = replay.paths.get(str(Path(original['base']) / 'control/intent.json'))
+    require(type(entered) is int and type(completed) is int and 0 <= entered <= completed and
+            entered in replay.entry_times and completed in replay.entry_times and
+            intent is not None and intent.family == 'control-record' and
+            type(intent.creation_entry) is int and completed < intent.creation_entry,
+            'original witness lacks successful unlink before intent')
+    try:
+        Path(path).lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise RuntimeError('consumed witness pathname resurrected')
+    return {'identity': [os.makedev(*obj.physical[:2]), obj.physical[2], obj.mode, obj.uid, obj.gid],
+            'size': len(obj.data), 'sha256': digest(obj.data), 'family': 'enrollment-witness'}
+
+
+def bootstrap_asset_pins(original, files, replay):
     """Finite SOURCE inventory: three image entries, loader-resolved runtime, four originals.
 
-    Live sizes/digests must equal the original closed run, so an added/larger hex
-    entry cannot enlarge its own packet allowance. No packet JSON supplies pins.
+    Live sizes/digests and the independently replayed consumed witness must equal
+    the original closed run. No packet JSON supplies pins or a larger allowance.
     """
     base = Path(original['base'])
     paths = runtime_paths(original['node'])
@@ -144,11 +174,11 @@ def bootstrap_asset_pins(original, files):
     limits = {p: ('runtime', RUNTIME_ASSET_LIMIT) for p in paths}
     limits.update({str(base / 'workspace/.orca/workspace-identity/id'): ('original-file', 37),
                    str(base / 'controlled-plan.json'): ('original-file', 65536),
-                   str(base / 'control/never-typed'): ('enrollment-witness', 130),
                    str(base / 'lifetime.lock'): ('lifetime', 0)})
     require(not set(files) & set(limits), 'bootstrap asset inventory aliases image paths')
     pins = {p: {'identity': list(s[:5]), 'size': len(data), 'sha256': digest(data), 'family': 'image'}
             for p, (s, data) in files.items()}
+    pins[str(base / 'control/never-typed')] = consumed_witness_pin(original, replay)
     for path, (family, maximum) in limits.items():
         p = Path(path)
         info = p.stat() if family == 'runtime' else p.lstat()
@@ -421,7 +451,7 @@ class ObservedRun:
             require(self.report[field] == digest(files[str(image / name)][1]), 'bootstrap receipt report image differs')
         originals_path, trace = root / 'bootstrap-originals.json', base / 'trace'
         require(type(self.report) is dict and set(self.report) <= REPORT_KEYS, 'unknown report packet fields')
-        pins = bootstrap_asset_pins(self.original, files)
+        pins = bootstrap_asset_pins(self.original, files, self.replay)
         originals_limit = originals_packet_limit(self.original, pins)
         limits = {str(self.report_path): REPORT_LIMIT, str(originals_path): originals_limit, str(trace): LIMIT}
         seals = {p: evidence_seal(p, maximum) for p, maximum in limits.items()}
@@ -468,6 +498,8 @@ class ObservedRun:
 
         def assert_original_receipt():
             require(self.assert_bootstrap_closed() is None, 'original bootstrap closure assertion returned a flag')
+            require(consumed_witness_pin(self.original, self.replay) ==
+                    pins[str(base / 'control/never-typed')], 'original consumed witness changed')
             require(type(self.report) is dict and set(self.report) <= REPORT_KEYS, 'unknown report packet fields')
             originals_packet_limit(self.original, pins)
             require(metadata_bytes(self.report, REPORT_LIMIT) == report_bytes and

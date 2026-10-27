@@ -67,6 +67,18 @@ sizes and digests are pinned by fresh bounded reads bracketed by physical
 metadata, with the fixed CPU-online sysfs file pinned to its actual read length
 rather than its advertised 4096-byte size. `/dev/null` contributes zero bytes.
 
+The enrollment witness is consumed before intent publication. Its pin comes
+from the single original witness object retained by that same completed replay,
+initialized from the supervisor's prelaunch originals. Its retained bytes and
+physical identity supply the size/digest/identity pin; packet hex cannot repin
+it. The replay must retain a successful, completed unlink before intent creation,
+empty names and no live handle, with the witness absent from the replay namespace
+and the current pathname absent under `lstat` (including dangling-symlink
+resurrection). Each later designation boundary rechecks that consumed lineage
+and current absence. The other three small originals keep their fresh live
+pathname size/digest/physical checks. No consumed witness is recreated or read
+from a post-bootstrap pathname.
+
 Every retained asset must have exactly `identity`, `hex`, `sha256` and `family`;
 the inventory, identity, family, canonical lowercase hex length and freshly
 decoded SHA-256 must match those independent pins. Additional entries or larger
@@ -142,8 +154,12 @@ mutation during the named observation refuse; a positive control confirms the
 original synced writer remains open through first capture. Additional controls
 exercise a valid originals packet just above the actual 256 MiB trace cap,
 excessive originals/report/trace sizes before reads, excess metadata, altered or
-extra assets/keys/digests, bounded streaming and fixed sysfs read sizes. Results:
-300 Python tests, 55 optimized connected controls and three optimized child
+extra assets/keys/digests, bounded streaming and fixed sysfs read sizes. The
+consumed-witness fixture executes actual replay original-object/unlink/intent
+creation transitions and removes the pathname before designation; controls reject
+resurrection, wrong packet originals, missing/unfinished/reordered unlink and
+wrong/duplicate/oversize retained objects. Results:
+305 Python tests, 60 optimized connected controls and three optimized child
 controls pass. Run:
 
 ```sh

@@ -15,7 +15,7 @@ from controlled_connected import ConnectedDesignation, ConnectedKernelReplay, HU
 from controlled_contract import wire
 from controlled_replay import Handle, Object, Replay, identity, sha
 from controlled_supervisor import (ObservedRun, LIMIT, ORIGINAL_METADATA_LIMIT, REPORT_LIMIT,
-    RUNTIME_ASSET_LIMIT, MAX_RUNTIME_ASSETS, bootstrap_asset_pins, digest,
+    RUNTIME_ASSET_LIMIT, MAX_RUNTIME_ASSETS, bootstrap_asset_pins, consumed_witness_pin, digest,
     encoded as supervisor_encoded, evidence_seal, file_digest, file_fingerprint, metadata_bytes,
     originals_packet_limit, packet_matches, prepare_connected)
 
@@ -232,6 +232,7 @@ class DesignationControls(unittest.TestCase):
             path = self.bootstrap / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
+            path.chmod(0o600)
         other = {str(node): (snapshot(node), 'runtime')}
         for name, family in [('workspace/.orca/workspace-identity/id', 'original-file'),
                              ('controlled-plan.json', 'original-file'), ('control/never-typed', 'enrollment-witness'),
@@ -250,9 +251,27 @@ class DesignationControls(unittest.TestCase):
                   'imageProducerSha256': sha(b'producer'), 'imageChildSha256': sha(b'child'),
                   'imageBuildSha256': sha((self.image / 'controlled-build.json').read_bytes()),
                   'producerStderr': 's' * 4000}
-        resource = SimpleNamespace(names=set(), reads=[b'once'])
-        replay = SimpleNamespace(original=original, threads={1}, settled={1}, resources=[resource], handles={})
-        run = ObservedRun(report, original, replay, root / 'bootstrap-attempt.json', True)
+        # Exercise actual replay transitions for the one-shot witness: preserve
+        # its original object, successfully unlink, then create/close intent.
+        graph = replay()
+        graph.base, graph.original, graph.initial = str(self.bootstrap), original, original['immutable']
+        original.update(directories={}, queries={}, absentProbes=[])
+        witness_path = str(self.bootstrap / 'control/never-typed')
+        witness = original['immutable'][witness_path]
+        graph.add_original(witness_path, witness['identity'], bytes.fromhex(witness['hex']), 'enrollment-witness')
+        graph.entry_times = {10: START, 11: START, 20: START, 21: START}
+        Replay.event(graph, (10, 'unlink', [json.dumps(witness_path)], '0', 10, 11))
+        Path(witness_path).unlink()
+        control = self.bootstrap / 'control'
+        original['directories'][str(control)] = identity(control)
+        graph.add_original(str(control), identity(control), b'', 'original-directory')
+        intent = str(control / 'intent.json')
+        Replay.event(graph, (10, 'openat', ['AT_FDCWD', json.dumps(intent),
+            'O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC', '0600'], '30', 20, 20))
+        Replay.event(graph, (10, 'close', ['30'], '0', 21, 21))
+        graph.resources = [SimpleNamespace(names=set(), reads=[b'once'])]
+        graph.settled = set(graph.threads)
+        run = ObservedRun(report, original, graph, root / 'bootstrap-attempt.json', True)
         run.report_path.write_text(supervisor_encoded(report))
         (root / 'bootstrap-originals.json').write_text(supervisor_encoded(original))
         for target in ('controlled_supervisor.authenticate_bootstrap', 'controlled_supervisor.assert_observer'):
@@ -519,7 +538,7 @@ class DesignationControls(unittest.TestCase):
         path = run.report_path.parent / 'bootstrap-originals.json'
         path.write_text(supervisor_encoded(run.original))
         files = {str(p): snapshot(p) for p in self.image.iterdir()}
-        pins = bootstrap_asset_pins(run.original, files)
+        pins = bootstrap_asset_pins(run.original, files, run.replay)
         maximum = originals_packet_limit(run.original, pins)
         self.assertEqual(maximum, 2 * sum(pin['size'] for pin in pins.values()) + ORIGINAL_METADATA_LIMIT)
         self.assertGreater(path.stat().st_size, LIMIT)
@@ -533,7 +552,7 @@ class DesignationControls(unittest.TestCase):
     def test_oversized_originals_report_and_trace_refuse_before_payload_read(self):
         run = self.receipt_run()
         files = {str(p): snapshot(p) for p in self.image.iterdir()}
-        maximum = originals_packet_limit(run.original, bootstrap_asset_pins(run.original, files))
+        maximum = originals_packet_limit(run.original, bootstrap_asset_pins(run.original, files, run.replay))
         for path, bound in ((run.report_path.parent / 'bootstrap-originals.json', maximum),
                             (run.report_path, REPORT_LIMIT), (self.bootstrap / 'trace', LIMIT)):
             data = path.read_bytes()
@@ -551,7 +570,7 @@ class DesignationControls(unittest.TestCase):
     def test_unknown_originals_or_report_fields_and_excess_metadata_refuse(self):
         run = self.receipt_run()
         files = {str(p): snapshot(p) for p in self.image.iterdir()}
-        pins = bootstrap_asset_pins(run.original, files)
+        pins = bootstrap_asset_pins(run.original, files, run.replay)
         for field in ('unexpected', 'authority'):
             changed = copy.deepcopy(run.original)
             changed[field] = 'x'
@@ -577,7 +596,7 @@ class DesignationControls(unittest.TestCase):
     def test_asset_count_keys_size_digest_and_identity_cannot_enlarge_allowance(self):
         run = self.receipt_run()
         files = {str(p): snapshot(p) for p in self.image.iterdir()}
-        pins = bootstrap_asset_pins(run.original, files)
+        pins = bootstrap_asset_pins(run.original, files, run.replay)
         node = run.original['node']
         changes = [lambda x: x['immutable'].update({'/extra': copy.deepcopy(x['immutable'][node])}),
                    lambda x: x['immutable'].pop(node),
@@ -594,13 +613,13 @@ class DesignationControls(unittest.TestCase):
                 originals_packet_limit(changed, pins)
         with patch('controlled_supervisor.runtime_paths', return_value={str(i) for i in range(MAX_RUNTIME_ASSETS + 1)}):
             with self.assertRaisesRegex(RuntimeError, 'runtime asset count'):
-                bootstrap_asset_pins(run.original, files)
+                bootstrap_asset_pins(run.original, files, run.replay)
         path = Path(node)
         with path.open('wb') as stream:
             stream.truncate(RUNTIME_ASSET_LIMIT + 1)
         with patch('controlled_supervisor.file_fingerprint', wraps=file_fingerprint) as hashed:
             with self.assertRaisesRegex(RuntimeError, 'asset type/size'):
-                bootstrap_asset_pins(run.original, files)
+                bootstrap_asset_pins(run.original, files, run.replay)
         self.assertNotIn(str(path), [str(call.args[0]) for call in hashed.call_args_list])
 
     def test_fixed_runtime_sysfs_asset_pins_read_bytes_instead_of_advertised_size(self):
@@ -608,10 +627,83 @@ class DesignationControls(unittest.TestCase):
         path = '/sys/devices/system/cpu/online'
         files = {str(p): snapshot(p) for p in self.image.iterdir()}
         with patch('controlled_supervisor.runtime_paths', return_value={run.original['node'], path}):
-            pins = bootstrap_asset_pins(run.original, files)
+            pins = bootstrap_asset_pins(run.original, files, run.replay)
         data = Path(path).read_bytes()
         self.assertEqual(pins[path]['size'], len(data))
         self.assertEqual(pins[path]['sha256'], sha(data))
+
+    def test_consumed_witness_uses_original_replay_object_without_path_read(self):
+        run = self.receipt_run()
+        path = str(self.bootstrap / 'control/never-typed')
+        obj, = [obj for obj in run.replay.objects if obj.family == 'enrollment-witness']
+        self.assertFalse(Path(path).exists())
+        self.assertNotIn(path, run.replay.paths)
+        self.assertEqual(obj.names, set())
+        self.assertEqual((obj.removal_entry, obj.removal_completion), (10, 11))
+        pin = consumed_witness_pin(run.original, run.replay)
+        self.assertEqual(pin['size'], len(obj.data))
+        self.assertEqual(pin['sha256'], sha(obj.data))
+        with patch('controlled_supervisor.file_fingerprint', wraps=file_fingerprint) as read:
+            d = run.designate_bootstrap(self.image)
+            d.check()
+        self.assertNotIn(path, [str(call.args[0]) for call in read.call_args_list])
+
+    def test_consumed_witness_resurrection_refuses_at_creation_and_later_boundary(self):
+        run = self.receipt_run()
+        path = self.bootstrap / 'control/never-typed'
+        obj, = [obj for obj in run.replay.objects if obj.family == 'enrollment-witness']
+        d = run.designate_bootstrap(self.image)
+        path.write_bytes(obj.data)
+        with self.assertRaisesRegex(RuntimeError, 'pathname resurrected'):
+            d.check()
+        with self.assertRaisesRegex(RuntimeError, 'pathname resurrected'):
+            run.designate_bootstrap(self.image)
+        path.unlink()
+        path.symlink_to(path.with_name('missing'))
+        with self.assertRaisesRegex(RuntimeError, 'pathname resurrected'):
+            d.check()
+        path.unlink()
+        d.check()
+
+    def test_consumed_witness_wrong_packet_original_cannot_repin_retained_bytes(self):
+        run = self.receipt_run()
+        path = str(self.bootstrap / 'control/never-typed')
+        pin = consumed_witness_pin(run.original, run.replay)
+        entry = run.original['immutable'][path]
+        entry.update(hex=(b'f' * 64 + b'\n' + b'f' * 64 + b'\n').hex(), sha256=sha(b'f' * 64 + b'\n' + b'f' * 64 + b'\n'))
+        (run.report_path.parent / 'bootstrap-originals.json').write_text(supervisor_encoded(run.original))
+        self.assertEqual(consumed_witness_pin(run.original, run.replay), pin)
+        with self.assertRaisesRegex(RuntimeError, 'asset size/digest/identity'):
+            run.designate_bootstrap(self.image)
+
+    def test_absent_witness_without_original_successful_unlink_cannot_designate(self):
+        run = self.receipt_run()
+        obj, = [obj for obj in run.replay.objects if obj.family == 'enrollment-witness']
+        for completed in (None, True, 20):
+            obj.removal_completion = completed
+            with self.subTest(completed=completed), self.assertRaisesRegex(RuntimeError, 'successful unlink before intent'):
+                run.designate_bootstrap(self.image)
+        obj.removal_completion = 11
+        run.replay.entry_times.pop(11)
+        with self.assertRaisesRegex(RuntimeError, 'successful unlink before intent'):
+            run.designate_bootstrap(self.image)
+        run.replay.entry_times[11] = START
+        obj.names.add(str(self.bootstrap / 'control/never-typed'))
+        with self.assertRaisesRegex(RuntimeError, 'settled consumed lineage'):
+            run.designate_bootstrap(self.image)
+
+    def test_consumed_witness_requires_same_original_unique_bounded_replay_object(self):
+        run = self.receipt_run()
+        obj, = [obj for obj in run.replay.objects if obj.family == 'enrollment-witness']
+        with self.assertRaisesRegex(RuntimeError, 'another original replay'):
+            consumed_witness_pin(copy.deepcopy(run.original), run.replay)
+        run.replay.objects.append(copy.copy(obj))
+        with self.assertRaisesRegex(RuntimeError, 'ambiguous original consumed witness'):
+            run.designate_bootstrap(self.image)
+        run.replay.objects.pop()
+        obj.data += b'x'
+        with self.assertRaisesRegex(RuntimeError, 'settled consumed lineage'):
+            run.designate_bootstrap(self.image)
 
     def test_streaming_digest_and_comparison_stop_at_artifact_cap(self):
         path = Path(self.temp.name) / 'growing-packet'
