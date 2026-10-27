@@ -1,0 +1,85 @@
+{
+  "format": "orca.claude-installed-hook-config/1",
+  "issue": 704,
+  "status": "INACTIVE",
+  "statusNote": "Template only. Never applied or installed, and not usable as written: every <PLACEHOLDER> is filled on the authorized host under the readiness packet's authorizations. Nothing here is written to user, project, local or managed settings files.",
+  "deliveredAs": "ACP session/new params from the ORCA client: mcpServers below, and options below as _meta.claudeCode.options",
+  "row": "typed",
+  "mcpServers": [
+    {
+      "name": "orca-fixture",
+      "command": "<PROTECTED_NODE_ABSOLUTE_PATH>",
+      "args": ["<PROTECTED_FIXTURE_SERVER_ABSOLUTE_PATH>"],
+      "env": []
+    }
+  ],
+  "fixtureTool": "mcp__orca-fixture__orca_fixture_mark",
+  "options": {
+    "settingSources": [],
+    "allowDangerouslySkipPermissions": false,
+    "maxTurns": 8,
+    "maxBudgetUsd": "<AUTHORIZED_BUDGET_USD>",
+    "disallowedTools": [
+      "Bash",
+      "PowerShell",
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "Read",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "Agent",
+      "Task",
+      "Skill"
+    ],
+    "settings": {
+      "disableAllHooks": false,
+      "permissions": { "defaultMode": "default", "allow": [], "ask": [], "deny": [] },
+      "hooks": {
+        "PreToolUse": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<PROTECTED_NODE_ABSOLUTE_PATH>",
+                "args": ["<PROTECTED_CHECKER_ABSOLUTE_PATH>"],
+                "timeout": 2,
+                "onFailure": "block"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "shellRowDelta": {
+    "status": "INACTIVE; only after the typed row passes and the shell row is separately authorized",
+    "fixtureTool": "Bash",
+    "removeFromDisallowedTools": ["Bash"],
+    "settings": { "sandbox": { "enabled": true } },
+    "sandboxNote": "Network, filesystem and fallback sandbox keys for the selected binary are verified against its settings schema before the row is authorized; an unsandboxed fallback is a stop.",
+    "command": "printf 'orca-704\\n' >> orca-704.mark",
+    "commandNote": "Differs from the earlier PLAN's stdout-only command so that the effect is a line the independent counter can read. It needs explicit approval as written."
+  },
+  "checkerContract": {
+    "orcaAllow": "exit 0 and print nothing: the documented no-decision result, so native permission (and its remembered approval) still decides",
+    "orcaDeny": "exit 0 and print {\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"orca: denied\"}}",
+    "otherTools": "deny every tool_name other than fixtureTool, and journal its route",
+    "journalFirst": "append the hook.frame, policy.decision and hook.response rows to the operator journal before writing to stdout; a checker that cannot journal exits 1 so onFailure blocks",
+    "neverEmit": ["permissionDecision allow", "permissionDecision defer", "permissionDecision ask", "updatedInput"]
+  },
+  "forbidden": [
+    "permissionDecision allow (it skips the native prompt, so the native cache is never exercised)",
+    "permissionDecision defer (it ends the turn in -p runs)",
+    "bypassPermissions, acceptEdits, auto, dontAsk or plan mode",
+    "allowDangerouslySkipPermissions true",
+    "bare tool names in allowedTools",
+    "CLAUDE_CODE_EXECUTABLE or CLAUDE_MODEL_CONFIG in the adapter or session environment (the adapter merges CLAUDE_MODEL_CONFIG into settings)",
+    "settings given as a string (the adapter reads it as a file relative to the agent-writable cwd)",
+    "credentials, tokens or API keys in env, settings or args",
+    "any hook, settings or policy file inside the workspace"
+  ]
+}

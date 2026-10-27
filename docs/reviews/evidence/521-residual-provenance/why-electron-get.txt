@@ -1,0 +1,15 @@
+@electron/get@3.1.0
+└─┬ app-builder-lib@26.18.0
+  ├─┬ dmg-builder@26.18.0
+  │ ├── app-builder-lib@26.18.0 [circular]
+  │ └─┬ electron-builder@26.18.0
+  │   └── @orca/app@0.1.0 (devDependencies)
+  ├── electron-builder@26.18.0 [deduped]
+  └─┬ electron-builder-squirrel-windows@26.18.0
+    └── app-builder-lib@26.18.0 [circular]
+
+@electron/get@5.1.0
+└─┬ electron@44.9.1
+  └── @orca/app@0.1.0 (devDependencies)
+
+Found 2 versions of @electron/get

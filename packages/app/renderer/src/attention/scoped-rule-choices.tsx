@@ -121,7 +121,11 @@ export function ScopedRuleChoices({
         setSaved(true);
         lock.current = false;
         setPhase("saved");
-      } else setPhase("settled");
+      } else {
+        // Nothing was sent on a stale result, so the input can be reviewed again; everything else stays latched.
+        if (result === "stale") lock.current = false;
+        setPhase("settled");
+      }
       const message =
         result === "confirmed"
           ? choice === "createRule"
@@ -133,7 +137,7 @@ export function ScopedRuleChoices({
             ? "Acknowledgement is uncertain. Refresh authoritative state before taking another action. Do not repeat this choice."
             : result === "stale"
               ? "The reviewed scope or authority changed. Nothing is confirmed; review again."
-              : "The choice was refused. No success is confirmed; review again.";
+              : "The choice was refused. No success is confirmed. Refresh authoritative state before taking another action.";
       setOutcome(message);
       announce(message);
     } catch {
