@@ -1,0 +1,12 @@
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+
+        parse_arguments::<ExecCommandArgs>(arguments)
+            .ok()
+            .map(|args| PreToolUsePayload {
+                tool_name: HookToolName::bash(),
+                tool_input: serde_json::json!({ "command": args.cmd }),
+            })
+    }

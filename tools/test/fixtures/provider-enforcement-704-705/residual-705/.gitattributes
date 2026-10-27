@@ -1,0 +1,3 @@
+# Upstream excerpts and the proposed diff are pinned by Git blob and SHA-256; keep exact bytes.
+# Unified-diff context lines of tab-indented source start with a space, so skip whitespace checks.
+* text eol=lf -whitespace

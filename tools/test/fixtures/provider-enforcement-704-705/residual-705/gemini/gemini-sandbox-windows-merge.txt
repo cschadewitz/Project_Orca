@@ -1,0 +1,24 @@
+    // Fetch persistent approvals for this command
+    const commandName = await getCommandName(command, args);
+    const persistentPermissions = allowOverrides
+      ? this.options.policyManager?.getCommandPermissions(commandName)
+      : undefined;
+
+    // Merge all permissions
+    const mergedAdditional: SandboxPermissions = {
+      fileSystem: {
+        read: [
+          ...(persistentPermissions?.fileSystem?.read ?? []),
+          ...(req.policy?.additionalPermissions?.fileSystem?.read ?? []),
+        ],
+        write: [
+          ...(persistentPermissions?.fileSystem?.write ?? []),
+          ...(req.policy?.additionalPermissions?.fileSystem?.write ?? []),
+        ],
+      },
+      network:
+        isYolo ||
+        persistentPermissions?.network ||
+        req.policy?.additionalPermissions?.network ||
+        false,
+    };

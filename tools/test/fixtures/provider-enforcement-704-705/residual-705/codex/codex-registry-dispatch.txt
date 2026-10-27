@@ -1,0 +1,54 @@
+        if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
+            match run_pre_tool_use_hooks(
+                &invocation.session,
+                invocation.step_context.as_ref(),
+                invocation.call_id.clone(),
+                &pre_tool_use_payload.tool_name,
+                &pre_tool_use_payload.tool_input,
+            )
+            .or_cancel_tool(&cancellation_token)
+            .await?
+            {
+                PreToolUseHookResult::Blocked(message) => {
+                    if tool.is_builtin_control_tool() {
+                        let mut analytics = ControlToolCallGuard::new(&invocation);
+                        analytics.finish(ControlToolCallStatus::Rejected);
+                    }
+                    let err = FunctionCallError::RespondToModel(message);
+                    dispatch_trace.record_failed(&err);
+                    notify_tool_finish_if_unclaimed(
+                        &invocation,
+                        call_state.as_deref(),
+                        ToolCallOutcome::Blocked,
+                    )
+                    .await;
+                    return Err(err);
+                }
+                PreToolUseHookResult::Continue {
+                    updated_input: Some(updated_input),
+                } => match tool.with_updated_hook_input(invocation.clone(), updated_input) {
+                    Ok(updated_invocation) => {
+                        invocation = updated_invocation;
+                    }
+                    Err(err) => {
+                        if tool.is_builtin_control_tool() {
+                            let mut analytics = ControlToolCallGuard::new(&invocation);
+                            analytics.finish(ControlToolCallStatus::Failed);
+                        }
+                        dispatch_trace.record_failed(&err);
+                        notify_tool_finish_if_unclaimed(
+                            &invocation,
+                            call_state.as_deref(),
+                            ToolCallOutcome::Failed {
+                                handler_executed: false,
+                            },
+                        )
+                        .await;
+                        return Err(err);
+                    }
+                },
+                PreToolUseHookResult::Continue {
+                    updated_input: None,
+                } => {}
+            }
+        }

@@ -1,0 +1,35 @@
+  subscribe<T extends Message>(
+    type: T['type'],
+    listener: (message: T) => void,
+    options?: { signal?: AbortSignal },
+  ): void {
+    if (options?.signal) {
+      const signal = options.signal;
+      if (signal.aborted) return;
+
+      if (this.listenerToAbortCleanup.get(listener)?.has(type)) return;
+
+      const abortHandler = () => {
+        this.off(type, listener);
+        const typeToCleanup = this.listenerToAbortCleanup.get(listener);
+        if (typeToCleanup) {
+          typeToCleanup.delete(type);
+          if (typeToCleanup.size === 0) {
+            this.listenerToAbortCleanup.delete(listener);
+          }
+        }
+      };
+      signal.addEventListener('abort', abortHandler, { once: true });
+
+      let typeToCleanup = this.listenerToAbortCleanup.get(listener);
+      if (!typeToCleanup) {
+        typeToCleanup = new Map<string, () => void>();
+        this.listenerToAbortCleanup.set(listener, typeToCleanup);
+      }
+      typeToCleanup.set(type, () => {
+        signal.removeEventListener('abort', abortHandler);
+      });
+    }
+
+    this.on(type, listener);
+  }

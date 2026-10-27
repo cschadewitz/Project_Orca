@@ -1,0 +1,33 @@
+pub(crate) struct ExecCommandArgs {
+    pub(crate) cmd: String,
+    #[serde(default)]
+    shell: Option<String>,
+    #[serde(default)]
+    login: Option<bool>,
+    #[serde(default = "default_tty")]
+    tty: bool,
+    #[serde(default = "default_exec_yield_time_ms")]
+    yield_time_ms: u64,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    #[serde(default)]
+    max_output_tokens: Option<usize>,
+    #[serde(default)]
+    sandbox_permissions: Option<SandboxPermissions>,
+    #[serde(default)]
+    additional_permissions: Option<AdditionalPermissionProfile>,
+    #[serde(default)]
+    justification: Option<String>,
+    #[serde(default)]
+    prefix_rule: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExecCommandEnvironmentArgs {
+    #[serde(default)]
+    environment_id: Option<String>,
+    // Keep this raw until after environment selection; relative paths must be
+    // resolved against the selected environment cwd, not the process cwd.
+    #[serde(default)]
+    workdir: Option<String>,
+}

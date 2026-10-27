@@ -1,0 +1,81 @@
+  getCommandPermissions(commandName: string): SandboxPermissions {
+    const normalized = normalizeCommand(commandName);
+    if (this.isProtectedKey(normalized)) {
+      return {
+        fileSystem: { read: [], write: [] },
+        network: false,
+      };
+    }
+    const persistent = this.config.commands[normalized];
+    const session = this.sessionApprovals[normalized];
+
+    return {
+      fileSystem: {
+        read: [
+          ...(persistent?.allowed_paths ?? []),
+          ...(session?.fileSystem?.read ?? []),
+        ],
+        write: [
+          ...(persistent?.allowed_paths ?? []),
+          ...(session?.fileSystem?.write ?? []),
+        ],
+      },
+      network: persistent?.allow_network || session?.network || false,
+    };
+  }
+
+  addSessionApproval(
+    commandName: string,
+    permissions: SandboxPermissions,
+  ): void {
+    const normalized = normalizeCommand(commandName);
+    if (this.isProtectedKey(normalized)) {
+      return;
+    }
+    const existing = this.sessionApprovals[normalized] || {
+      fileSystem: { read: [], write: [] },
+      network: false,
+    };
+
+    this.sessionApprovals[normalized] = {
+      fileSystem: {
+        read: deduplicateAbsolutePaths([
+          ...(existing.fileSystem?.read ?? []),
+          ...(permissions.fileSystem?.read ?? []),
+        ]),
+        write: deduplicateAbsolutePaths([
+          ...(existing.fileSystem?.write ?? []),
+          ...(permissions.fileSystem?.write ?? []),
+        ]),
+      },
+      network: existing.network || permissions.network || false,
+    };
+  }
+
+  addPersistentApproval(
+    commandName: string,
+    permissions: SandboxPermissions,
+  ): void {
+    const normalized = normalizeCommand(commandName);
+    if (this.isProtectedKey(normalized)) {
+      return;
+    }
+    const existing = this.config.commands[normalized] || {
+      allowed_paths: [],
+      allow_network: false,
+    };
+
+    const newPathsArray: string[] = [
+      ...(existing.allowed_paths ?? []),
+      ...(permissions.fileSystem?.read ?? []),
+      ...(permissions.fileSystem?.write ?? []),
+    ];
+    const newPaths = new Set(deduplicateAbsolutePaths(newPathsArray));
+
+    this.config.commands[normalized] = {
+      allowed_paths: Array.from(newPaths),
+      allow_network: existing.allow_network || permissions.network || false,
+    };
+
+    this.saveConfig();
+  }

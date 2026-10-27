@@ -1,0 +1,10 @@
+        const network = params.networkApprovalContext;
+        const networkUrl = network?.protocol === "http" || network?.protocol === "https"
+            ? `${network.protocol}://${network.host}`
+            : undefined;
+        const input = {
+            ...(params.command ? {command: stripShellPrefix(params.command)} : {}),
+            ...(params.cwd ? {cwd: params.cwd} : {}),
+            ...(networkUrl ? {url: networkUrl} : {}),
+            ...(params.additionalPermissions ? {additionalPermissions: params.additionalPermissions} : {}),
+        };
