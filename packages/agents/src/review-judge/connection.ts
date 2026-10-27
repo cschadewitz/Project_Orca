@@ -350,15 +350,21 @@ export async function prepareJudgeConnection(
   let inFlight = 0;
   let spent = 0;
 
-  /** The grant must still be at its prepared revision and unexpired, and the call not cancelled. */
-  async function gate(callSignal: AbortSignal): Promise<void> {
+  /** Reads the grant's current state. The checks on it are `admit`'s, run where the state is used. */
+  async function readGrant(callSignal: AbortSignal): Promise<unknown> {
     if (callSignal.aborted) throw refused("cancelled");
-    let state: unknown;
     try {
-      state = await current(grantRef, callSignal);
+      return await current(grantRef, callSignal);
     } catch {
       throw refused(callSignal.aborted ? "cancelled" : "disclosure-revoked");
     }
+  }
+
+  /**
+   * Synchronous on purpose: the grant must be at its prepared revision and unexpired, and the call not cancelled,
+   * in the same turn as the action it admits. No await may come between this and that action.
+   */
+  function admit(state: unknown, callSignal: AbortSignal): void {
     if (callSignal.aborted) throw refused("cancelled");
     if (!record(state) || state.revision !== grantRevision || !live(state.expiresAt))
       throw refused("disclosure-revoked");
@@ -393,15 +399,17 @@ export async function prepareJudgeConnection(
     spent += perCall;
     inFlight++;
     try {
-      await gate(callSignal);
+      admit(await readGrant(callSignal), callSignal);
       let reply: unknown;
-      // Set only by the gate inside the lease, so a sender's own error can never borrow its code.
+      // Set only by the checks inside the lease, so a sender's own error can never borrow its code.
       let gated: SendRefused | undefined;
       try {
         reply = await withCredential(credentialRef, use, callSignal, async (credential) => {
           // The grant can lapse or the call be cancelled while resolution is pending: recheck after it.
           try {
-            await gate(callSignal);
+            // `admit` and the sender call below run in one synchronous turn after the read resumes, so no
+            // queued work can let the grant lapse or the call be cancelled between the check and the send.
+            admit(await readGrant(callSignal), callSignal);
           } catch (error) {
             gated = error as SendRefused;
             throw error;

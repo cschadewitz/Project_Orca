@@ -99,8 +99,9 @@ The prepared transport runs these checks, in order, for every frame the adapter 
    Otherwise the result is `disclosure-revoked`, and no credential is resolved.
 5. **Scoped resolution.** `withCredential` resolves for this one use. This module never
    inspects, copies, serializes or retains the handle.
-6. **Gate before sending.** Inside the lease, after resolution returns and immediately
-   before the sender is called, the cancellation and grant checks of step 4 run again. A
+6. **Gate before sending.** Inside the lease, after resolution returns, the grant is read
+   again. The cancellation, revision and expiry checks of step 4 and the sender call then
+   run in one synchronous turn, so no queued work can land between the check and the send. A
    grant that expires, is revoked or rotates, or a call cancelled while resolution was
    pending, is refused with the same fixed code (`disclosure-revoked` or `cancelled`), and
    the sender is never called. A sender's own error can never carry one of these codes.
@@ -132,7 +133,9 @@ authenticates the handle and evaluates only the delivered synthetic evidence. Th
   requests always reach the endpoint again because there is no cache.
 - Disclosure currentness during a held credential lookup that ignores the abort: expiry
   with the signal still live, revocation, rotation and cancellation all refuse before the
-  sender, while a delayed lookup with a current grant still sends.
+  sender, while a delayed lookup with a current grant still sends. Work queued 0 to 8
+  microtasks after the last read that moves the clock past expiry never lets the sender run
+  on a lapsed grant.
 - Cross-destination reuse of a prepared transport, credential or grant.
 - Projection, concurrency and budget at the send boundary; the bounded refusal list.
 - Prompt injection: injected evidence escalates; a hostile endpoint that echoes the

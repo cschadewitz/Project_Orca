@@ -781,7 +781,42 @@ describe("disclosure currentness while credential resolution is pending", () => 
     expect(connection.refusals()).toEqual([]);
   });
 
-  it("does not let a sender error borrow a gate refusal code", async () => {
+  it.each([0, 1, 2, 3, 4, 5, 6, 7, 8])(
+    "never calls the sender after the grant lapses in work queued %i microtasks after the last read",
+    async (depth) => {
+      const expiresAt = Date.now() + 2_000;
+      const grants = fakeGrants((q) => grantFor(q, { expiresAt: new Date(expiresAt).toISOString() }));
+      const read = grants.current.getMockImplementation()!;
+      let reads = 0;
+      grants.current.mockImplementation(async (grantRef, signal) => {
+        const state = await read(grantRef, signal);
+        // After the read inside the lease, queued work moves the clock past expiry.
+        if (++reads === 2) {
+          let remaining = depth;
+          const step = () => (remaining-- > 0 ? queueMicrotask(step) : vi.setSystemTime(expiresAt + 1));
+          queueMicrotask(step);
+        }
+        return state;
+      });
+      const sentAt: number[] = [];
+      const h = harness({
+        grants,
+        send: (delivery) => {
+          sentAt.push(Date.now());
+          return fakeEndpoint((delivery.credential as FakeCredentialHandle).authorization(), delivery);
+        },
+      });
+      const connection = await prepared(h);
+      await connection.transport
+        .send(frameFor(), new AbortController().signal, descriptor.limits.maxResponseBytes)
+        .catch(() => {});
+      expect(reads).toBe(2);
+      for (const at of sentAt) expect(at).toBeLessThan(expiresAt);
+      expect(connection.refusals()).toEqual(sentAt.length === 0 ? ["disclosure-revoked"] : []);
+    },
+  );
+
+  it("does not let a sender error borrow a refusal code from the grant checks", async () => {
     const h = harness({ send: async () => Promise.reject(new Error("disclosure-revoked")) });
     const connection = await prepared(h);
     await expect(
