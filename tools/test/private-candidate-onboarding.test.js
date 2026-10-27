@@ -218,8 +218,11 @@ it("states timing, installer and diagnostics facts that still match the source",
 
 it("keeps the Windows project commands equivalent to the executed Linux ones, and both stop early", () => {
   const raw = block("first-success-sample.md", "linux-project").split("\n");
-  // Every Linux line but the last chains with &&, so a pasted block stops at the first failure.
-  expect(raw.slice(0, -1).every((line) => line.endsWith(" &&"))).toBe(true);
+  // The inspection runs in a subshell; every following setup line chains with &&.
+  // This preserves caller settings and stops the pasted block at any refusal.
+  const endOfGuard = raw.indexOf(") &&");
+  expect(endOfGuard).toBeGreaterThan(0);
+  expect(raw.slice(endOfGuard, -1).every((line) => line.endsWith(" &&"))).toBe(true);
   const linux = raw.map((line) => line.replace(/ &&$/, ""));
   const powershell = block("first-success-sample.md", "windows-project").split("\n");
   // One script block with a stop preference, so an existing folder halts New-Item and everything after.
@@ -228,7 +231,11 @@ it("keeps the Windows project commands equivalent to the executed Linux ones, an
     "$ErrorActionPreference = 'Stop'",
     "}",
   ]);
-  const windows = powershell.slice(2, -1).map((line) => line.trim());
+  expect(raw[0]).toBe("(");
+  expect(powershell[2].trim()).toBe(
+    "if (Get-ChildItem Env:GIT_*) { throw 'Stop: inherited GIT_* settings; contact your coordinator.' }",
+  );
+  const windows = powershell.slice(3, -1).map((line) => line.trim());
   const git = (lines) => lines.filter((line) => line.startsWith("git "));
   expect(git(windows)).toEqual(git(linux));
   expect(git(linux)).toHaveLength(5);
@@ -238,6 +245,15 @@ it("keeps the Windows project commands equivalent to the executed Linux ones, an
     'New-Item -ItemType Directory "$env:USERPROFILE\\orca-trial"',
     'New-Item -ItemType Directory "$env:USERPROFILE\\orca-trial\\project"',
   ]);
+});
+
+it("requires manual ownership review for cleanup, including refused or preexisting paths", () => {
+  for (const page of ["linux.md", "windows.md"]) {
+    const cleanup = text(page).split("## After the round")[1];
+    expect(cleanup).not.toMatch(/rm\s+-rf|Remove-Item/);
+    expect(cleanup).toContain("If setup refused a path or it already existed, leave it untouched.");
+    expect(cleanup).toContain("review each folder");
+  }
 });
 
 const temporary = [];
@@ -252,27 +268,103 @@ async function trialHome() {
   const home = join(base, "home");
   await mkdir(home);
   const globalConfig = join(base, "absent-global-gitconfig");
+  // Keep the pasted block free of GIT_* settings; isolate configuration only inside
+  // each fixture Git process, without weakening the block's environment refusal.
+  const gitPath = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  const bin = join(base, "bin");
+  await mkdir(bin);
+  await writeFile(
+    join(bin, "git"),
+    `#!/bin/sh\nGIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL='${globalConfig}' GIT_TERMINAL_PROMPT=0 exec '${gitPath}' "$@"\n`,
+    { mode: 0o700 },
+  );
   const env = {
-    PATH: process.env.PATH,
+    PATH: `${bin}:${process.env.PATH}`,
     HOME: home,
     LANG: "C",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: globalConfig,
-    GIT_TERMINAL_PROMPT: "0",
   };
-  const run = () =>
-    spawnSync("bash", ["--norc", "--noprofile", "-c", block("first-success-sample.md", "linux-project")], {
-      cwd: base,
-      env,
-      encoding: "utf8",
-      timeout: 20_000,
-    });
-  return { base, home, globalConfig, env, run };
+  const run = ({ pipefail = false } = {}) =>
+    spawnSync(
+      "bash",
+      [
+        "--norc",
+        "--noprofile",
+        ...(pipefail ? ["-o", "pipefail"] : []),
+        "-c",
+        block("first-success-sample.md", "linux-project"),
+      ],
+      {
+        cwd: base,
+        env,
+        encoding: "utf8",
+        timeout: 20_000,
+      },
+    );
+  return { base, home, globalConfig, env, bin, run };
 }
 
 describe.skipIf(process.platform === "win32" || typeof process.getuid !== "function")(
   "the documented Linux throwaway project",
   () => {
+    it.each([false, true])(
+      "refuses Git redirection with a large environment, pipefail=%s, without changing an unrelated project",
+      async (pipefail) => {
+        const { base, home, env, run } = await trialHome();
+        const unrelated = join(base, "unrelated");
+        await mkdir(unrelated);
+        const git = (...args) => execFileSync("git", ["-C", unrelated, ...args], { env, encoding: "utf8" }).trim();
+        git("init", "-b", "sentinel");
+        await writeFile(join(unrelated, "README.txt"), "committed sentinel\n");
+        git("add", "README.txt");
+        git(
+          "-c",
+          "user.name=Sentinel",
+          "-c",
+          "user.email=sentinel@example.invalid",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "--no-verify",
+          "-m",
+          "sentinel",
+        );
+        await writeFile(join(unrelated, "README.txt"), "uncommitted sentinel\n");
+        const before = {
+          head: git("rev-parse", "HEAD"),
+          status: git("status", "--porcelain"),
+          diff: git("diff"),
+          staged: git("diff", "--cached"),
+        };
+        env.GIT_DIR = join(unrelated, ".git");
+        env.GIT_WORK_TREE = unrelated;
+        for (let index = 0; index < 100; index++) env[`ORCA_TRIAL_FILLER_${index}`] = "x".repeat(4_000);
+        const result = run({ pipefail });
+        expect(result.status, result.stderr).not.toBe(0);
+        expect(result.stderr).toContain("Stop: inherited GIT_* settings;");
+        expect(await readdir(home)).toEqual([]);
+        expect({
+          head: git("rev-parse", "HEAD"),
+          status: git("status", "--porcelain"),
+          diff: git("diff"),
+          staged: git("diff", "--cached"),
+        }).toEqual(before);
+        expect(await readFile(join(unrelated, "README.txt"), "utf8")).toBe("uncommitted sentinel\n");
+        expect(env.GIT_DIR).toBe(join(unrelated, ".git"));
+        expect(env.GIT_WORK_TREE).toBe(unrelated);
+      },
+    );
+
+    it.each([false, true])("refuses environment inspection errors before writes, pipefail=%s", async (pipefail) => {
+      const { home, bin, run } = await trialHome();
+      // An inspection tool may emit partial output before failing. It must never
+      // be interpreted as evidence that the environment is safe.
+      await writeFile(join(bin, "env"), "#!/bin/sh\nprintf 'PATH=/partial-output\\n'\nexit 23\n", { mode: 0o700 });
+      const result = run({ pipefail });
+      expect(result.status, result.stderr).not.toBe(0);
+      expect(result.stderr).toContain("Stop: environment inspection failed;");
+      expect(await readdir(home)).toEqual([]);
+    });
+
     it("stops before touching an orca-trial folder that already exists", async () => {
       const { home, run } = await trialHome();
       await mkdir(join(home, "orca-trial"));
@@ -281,6 +373,15 @@ describe.skipIf(process.platform === "win32" || typeof process.getuid !== "funct
       expect(result.status).not.toBe(0);
       expect(await readdir(join(home, "orca-trial"))).toEqual(["earlier.txt"]);
       expect(await readFile(join(home, "orca-trial", "earlier.txt"), "utf8")).toBe("keep\n");
+    });
+
+    it("permits a large safe environment with caller pipefail enabled", async () => {
+      const { home, env, run } = await trialHome();
+      for (let index = 0; index < 100; index++) env[`ORCA_TRIAL_FILLER_${index}`] = "x".repeat(4_000);
+      const result = run({ pipefail: true });
+      expect(result.status, result.stderr).toBe(0);
+      expect(await readdir(home)).toEqual(["orca-trial"]);
+      expect(result.stdout.trimEnd().split("\n").at(-1)).toMatch(/^[0-9a-f]{7,} Trial project$/);
     });
 
     it("runs without user Git config and passes the production first-run review and prepare", async () => {

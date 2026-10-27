@@ -105,7 +105,12 @@ When your coordinator confirms nothing more is needed:
 - Close ORCA ([stop ORCA](when-something-goes-wrong.md#stop-orca-and-its-bundled-daemon)).
 - Uninstall it from **Settings ▸ Apps ▸ Installed apps ▸ ORCA ▸ Uninstall**. Write down
   whether the uninstaller asked anything unexpected.
-- Delete your throwaway `%USERPROFILE%\orca-trial` folder and the downloaded installer.
+- In File Explorer, review each folder and its contents with your coordinator before
+  deciding whether to remove it. Confirm that this round created the specific
+  `%USERPROFILE%\orca-trial` folder and it contains only this round's disposable files.
+  If setup refused a path or it already existed, leave it untouched.
+  Keep any folder whose origin or contents are uncertain. Review the downloaded installer
+  separately before removing it.
 - ORCA's settings folder in your profile may remain after uninstalling. Leave it unless
   your coordinator asks you to remove it.
 

@@ -130,17 +130,12 @@ Next: the [first-success sample](first-success-sample.md).
 When your coordinator confirms nothing more is needed:
 
 1. Close ORCA ([stop ORCA](when-something-goes-wrong.md#stop-orca-and-its-bundled-daemon)).
-2. Remove only the two folders this test created, and the download. You can use your
-   file manager, or a terminal. In a terminal, check each path before you press Enter.
-   The `-f` lets `rm` remove Git's read-only object files without asking about each one.
-
-   ```sh
-   rm -rf ~/orca-candidate ~/orca-trial
-   rm ~/Downloads/ORCA-<version>-linux-<arch>.tar.gz
-   ```
-
-   If you used the AppImage, remove `~/Downloads/ORCA-<version>-linux-x86_64.AppImage`
-   instead of the tar.gz.
+2. In your file manager, review each folder and its contents with your coordinator before
+   deciding whether to remove it. Confirm that this round created the specific folder
+   (`~/orca-candidate` or `~/orca-trial`) and that it contains only this round's disposable
+   files. If setup refused a path or it already existed, leave it untouched.
+   Keep any folder whose origin or contents are uncertain. Review the exact downloaded
+   tar.gz or AppImage separately before removing it. There is no bulk cleanup command.
 
 3. ORCA's settings folder in your home configuration directory may remain. Leave it
    unless your coordinator asks you to remove it.
