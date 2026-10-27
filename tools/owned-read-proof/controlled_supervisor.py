@@ -56,6 +56,17 @@ def file_digest(path):
     return value.hexdigest()
 
 
+def evidence_seal(path):
+    """Fresh full hash and physical stamp, including for large retained traces."""
+    p = Path(path)
+    before = stamp(p)
+    require(stat.S_ISREG(int(before[2])) and before[5] == '1' and 0 <= int(before[6]) <= LIMIT,
+            'bootstrap receipt needs bounded unaliased original evidence')
+    value = file_digest(p)
+    require(stamp(p) == before, 'bootstrap receipt evidence changed during hash')
+    return before, value
+
+
 def stamp(path):
     s = Path(path).lstat()
     return list(map(str, [s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid, s.st_nlink,
@@ -229,6 +240,79 @@ class ObservedRun:
         # process from current /proc or treat a producer boolean as authority.
         authenticate_bootstrap(self.replay)
         assert_observer(self.original['observerImplementation'])
+
+    def designate_bootstrap(self, image):
+        """Designate a small association, retaining every complete original packet.
+
+        The receipt cannot import authority. Its checker closes over THIS original
+        run and reexecutes its closed-graph assertion and fresh evidence hashes.
+        No receipt/report deserializer or success flag can supply that callable.
+        """
+        from controlled_connected import ConnectedDesignation, snapshot
+        require(self.assert_bootstrap_closed() is None, 'original bootstrap closure assertion returned a flag')
+        root = self.report_path.parent
+        base = root / 'bootstrap'
+        image = Path(image)
+        require(root.is_absolute() and self.report_path == root / 'bootstrap-attempt.json' and
+                self.original['base'] == str(base) and self.replay.original is self.original and
+                self.report['root'] == str(root) and
+                self.original['sourceHead'] == self.report['sourceHead'] == SOURCE and
+                'refusal' not in self.report, 'bootstrap receipt belongs to another original run')
+        build = assert_image_sources(image)
+        require(build == self.original['controlledBuild'], 'bootstrap receipt image build differs')
+        files = {str(p): snapshot(p) for p in sorted(image.iterdir())}
+        require(set(files) == {p for p, value in self.original['immutable'].items() if value['family'] == 'image'},
+                'bootstrap receipt image is not original inventory')
+        for path, (physical, data) in files.items():
+            original = self.original['immutable'][path]
+            require(original['identity'] == list(physical[:5]) and original['hex'] == data.hex() and
+                    original['sha256'] == digest(data), 'bootstrap receipt image differs from original bytes')
+        for name, field in [('controlled-producer.mjs', 'imageProducerSha256'),
+                            ('controlled-child.mjs', 'imageChildSha256'),
+                            ('controlled-build.json', 'imageBuildSha256')]:
+            require(self.report[field] == digest(files[str(image / name)][1]), 'bootstrap receipt report image differs')
+        originals_path, trace = root / 'bootstrap-originals.json', base / 'trace'
+        report_bytes, original_bytes = encoded(self.report).encode(), encoded(self.original).encode()
+        seals = {str(p): evidence_seal(p) for p in (self.report_path, originals_path, trace)}
+        require(self.report_path.read_bytes() == report_bytes and originals_path.read_bytes() == original_bytes,
+                'bootstrap receipt report/originals differ from original run')
+        require(len({tuple(value[0][:2]) for value in seals.values()} |
+                    {tuple(map(str, value[0][:2])) for value in files.values()}) == len(seals) + len(files),
+                'bootstrap receipt originals alias image/evidence')
+        trace_sha = seals[str(trace)][1]
+        require(self.report['traceSha256'] == self.report['kernel']['traceSha256'] == trace_sha and
+                self.report['traceBytes'] == self.report['kernel']['traceBytes'] == trace.stat().st_size,
+                'bootstrap receipt trace differs from original replay')
+        evidence_ref = 'controlled-bootstrap-source-preparation:' + trace_sha
+        value = {'record': 'controlled-bootstrap-association-v1', 'sourceHead': SOURCE,
+                 'evidenceRef': evidence_ref, 'bootstrapBase': str(base),
+                 'observerImplementationSha256': digest(encoded(self.original['observerImplementation']).encode()),
+                 'image': {path: digest(data) for path, (_, data) in files.items()},
+                 'report': {'path': str(self.report_path), 'sha256': seals[str(self.report_path)][1]},
+                 'originals': {'path': str(originals_path), 'sha256': seals[str(originals_path)][1]},
+                 'trace': {'path': str(trace), 'sha256': trace_sha}}
+        path = root / 'bootstrap-association.json'
+        data = encoded(value).encode()
+        require(len(data) <= 4096, 'bootstrap association exceeds compact receipt bound')
+        with path.open('xb') as stream:
+            os.fchmod(stream.fileno(), 0o400)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        proof = snapshot(path)
+
+        def assert_original_receipt():
+            require(self.assert_bootstrap_closed() is None, 'original bootstrap closure assertion returned a flag')
+            require(encoded(self.report).encode() == report_bytes and encoded(self.original).encode() == original_bytes,
+                    'bootstrap receipt original run changed')
+            for original_path, retained in seals.items():
+                require(evidence_seal(original_path) == retained, 'bootstrap receipt original evidence changed')
+            for original_path, retained in files.items():
+                require(snapshot(original_path) == retained, 'bootstrap receipt original image changed')
+            require(snapshot(path) == proof, 'bootstrap association receipt changed')
+
+        return ConnectedDesignation(bootstrap_base=base, evidence_path=path, evidence_ref=evidence_ref,
+                                    image=image, assert_bootstrap_closed=assert_original_receipt)
 
 
 def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, diagnostic=False):

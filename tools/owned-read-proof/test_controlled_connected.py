@@ -7,13 +7,14 @@ import os
 from pathlib import Path
 import stat
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from controlled_connected import ConnectedDesignation, ConnectedKernelReplay, HUMAN, SOURCE, snapshot
 from controlled_contract import wire
 from controlled_replay import Handle, Object, Replay, identity, sha
-from controlled_supervisor import prepare_connected
+from controlled_supervisor import ObservedRun, digest, encoded as supervisor_encoded, prepare_connected
 
 U = '00000000-0000-4000-8000-000000000001'
 START, FINISH = 1793016000000000000, 1793016050000000000
@@ -213,6 +214,173 @@ class DesignationControls(unittest.TestCase):
         self.assertIn(str(self.proof), plan['originalFiles'])
         with self.assertRaisesRegex(RuntimeError, 'not fresh'):
             prepare_connected(base, self.image, lifetime, command, ack, phases, d)
+
+    def receipt_run(self):
+        """Synthetic closed graph only; original authentication is independently mocked."""
+        root = Path(self.temp.name)
+        trace = self.bootstrap / 'trace'
+        trace.write_bytes(b'synthetic trace; no original process launched')
+        files = {str(p): snapshot(p) for p in self.image.iterdir()}
+        original = {'lane': 'bootstrap', 'base': str(self.bootstrap), 'sourceHead': SOURCE,
+                    'controlledBuild': self.build, 'observerImplementation': {'synthetic': True},
+                    'immutable': {p: {'family': 'image', 'identity': list(s[:5]),
+                                     'hex': data.hex(), 'sha256': sha(data)} for p, (s, data) in files.items()}}
+        report = {'root': str(root), 'sourceHead': SOURCE, 'traceSha256': sha(trace.read_bytes()),
+                  'traceBytes': trace.stat().st_size,
+                  'kernel': {'traceSha256': sha(trace.read_bytes()), 'traceBytes': trace.stat().st_size},
+                  'imageProducerSha256': sha(b'producer'), 'imageChildSha256': sha(b'child'),
+                  'imageBuildSha256': sha((self.image / 'controlled-build.json').read_bytes()),
+                  'completeOriginalDiagnostic': 'retained full synthetic detail ' * 2000}
+        resource = SimpleNamespace(names=set(), reads=[b'once'])
+        replay = SimpleNamespace(original=original, threads={1}, settled={1}, resources=[resource], handles={})
+        run = ObservedRun(report, original, replay, root / 'bootstrap-attempt.json', True)
+        run.report_path.write_text(supervisor_encoded(report))
+        (root / 'bootstrap-originals.json').write_text(supervisor_encoded(original))
+        for target in ('controlled_supervisor.authenticate_bootstrap', 'controlled_supervisor.assert_observer'):
+            mocked = patch(target)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+        return run
+
+    def test_compact_receipt_binds_complete_originals_without_changing_them(self):
+        run = self.receipt_run()
+        paths = [run.report_path, run.report_path.parent / 'bootstrap-originals.json', self.bootstrap / 'trace']
+        before = {p: snapshot(p) for p in paths}
+        d = run.designate_bootstrap(self.image)
+        value = json.loads(d.proof[1])
+        self.assertEqual(value['evidenceRef'], d.evidence_ref)
+        self.assertEqual(value['sourceHead'], SOURCE)
+        self.assertEqual(value['bootstrapBase'], str(self.bootstrap))
+        for field, path in zip(('report', 'originals', 'trace'), paths):
+            self.assertEqual(value[field], {'path': str(path), 'sha256': sha(before[path][1])})
+        self.assertEqual(value['image'], {p: sha(data) for p, (_, data) in d.files.items()})
+        self.assertEqual(value['observerImplementationSha256'], digest(supervisor_encoded(run.original['observerImplementation']).encode()))
+        self.assertEqual(Path(d.evidence_path).stat().st_mode & 0o777, 0o400)
+        self.assertLessEqual(len(d.proof[1]), 4096)
+        self.assertLess(len(d.proof[1]), len(before[run.report_path][1]))
+        self.assertEqual({p: snapshot(p) for p in paths}, before)
+        d.check()
+        # Publishing a receipt a second time refuses exclusive creation.
+        with self.assertRaises(FileExistsError):
+            run.designate_bootstrap(self.image)
+
+    def test_receipt_closure_rehashes_original_packets_on_every_check(self):
+        run = self.receipt_run()
+        d = run.designate_bootstrap(self.image)
+        from controlled_supervisor import file_digest
+        with patch('controlled_supervisor.file_digest', wraps=file_digest) as hashed, \
+             patch.object(run, 'assert_bootstrap_closed', wraps=run.assert_bootstrap_closed) as closed:
+            d.check()
+            d.check()
+        self.assertEqual(closed.call_count, 2)
+        self.assertEqual(hashed.call_count, 6)
+
+    def test_receipt_tamper_same_bytes_replacement_symlink_and_hardlink_refuse(self):
+        run = self.receipt_run()
+        d = run.designate_bootstrap(self.image)
+        path = Path(d.evidence_path)
+        replacement = path.with_suffix('.replacement')
+        replacement.write_bytes(d.proof[1])
+        replacement.replace(path)
+        with self.assertRaisesRegex(RuntimeError, 'receipt changed'):
+            d.check()
+        # Fresh designation construction must not turn any mutated receipt into authority.
+        path.unlink()
+        d = run.designate_bootstrap(self.image)
+        path.chmod(0o600)
+        path.write_bytes(d.proof[1].replace(SOURCE.encode(), b'0' * 40))
+        with self.assertRaisesRegex(RuntimeError, 'receipt changed'):
+            d.check()
+        path.unlink()
+        d = run.designate_bootstrap(self.image)
+        alias = path.with_suffix('.alias')
+        os.link(path, alias)
+        with self.assertRaisesRegex(RuntimeError, 'unaliased'):
+            d.check()
+        alias.unlink()
+        path.unlink()
+        path.symlink_to(run.report_path)
+        with self.assertRaisesRegex(RuntimeError, 'unaliased'):
+            d.check()
+
+    def test_receipt_closure_refuses_changed_raw_report_originals_trace_and_image(self):
+        run = self.receipt_run()
+        for path in (run.report_path, run.report_path.parent / 'bootstrap-originals.json',
+                     self.bootstrap / 'trace', self.image / 'controlled-child.mjs'):
+            d = run.designate_bootstrap(self.image)
+            data = path.read_bytes()
+            path.write_bytes(data + b'changed')
+            with self.subTest(path=path.name), self.assertRaisesRegex(RuntimeError, 'original (evidence|image) changed'):
+                d.check()
+            path.write_bytes(data)
+            # The original physical stamp is immutable even after bytes are restored.
+            with self.assertRaises(RuntimeError):
+                d.check()
+            Path(d.evidence_path).unlink()
+
+    def test_receipt_closure_refuses_same_bytes_raw_replacement_and_alias(self):
+        run = self.receipt_run()
+        for path in (run.report_path, run.report_path.parent / 'bootstrap-originals.json', self.bootstrap / 'trace'):
+            d = run.designate_bootstrap(self.image)
+            replacement = path.with_suffix('.new')
+            replacement.write_bytes(path.read_bytes())
+            replacement.replace(path)
+            with self.subTest(path=path.name), self.assertRaisesRegex(RuntimeError, 'original evidence changed'):
+                d.check()
+            Path(d.evidence_path).unlink()
+            d = run.designate_bootstrap(self.image)
+            os.link(path, replacement)
+            with self.assertRaisesRegex(RuntimeError, 'unaliased'):
+                d.check()
+            replacement.unlink()
+            Path(d.evidence_path).unlink()
+
+    def test_receipt_refuses_wrong_run_source_image_report_or_replay_digest(self):
+        run = self.receipt_run()
+        changes = [lambda: run.original.update(base=str(self.bootstrap / 'other')),
+                   lambda: run.original.update(sourceHead='0' * 40),
+                   lambda: setattr(run.replay, 'original', copy.deepcopy(run.original)),
+                   lambda: run.report.update(imageChildSha256='0' * 64),
+                   lambda: run.report['kernel'].update(traceSha256='0' * 64),
+                   lambda: run.report.update(traceBytes=0),
+                   lambda: run.original['immutable'][str(self.image / 'controlled-child.mjs')].update(hex='00')]
+        original, report = copy.deepcopy(run.original), copy.deepcopy(run.report)
+        for change in changes:
+            run.original, run.report = copy.deepcopy(original), copy.deepcopy(report)
+            run.replay.original = run.original
+            change()
+            run.report_path.write_text(supervisor_encoded(run.report))
+            (run.report_path.parent / 'bootstrap-originals.json').write_text(supervisor_encoded(run.original))
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                run.designate_bootstrap(self.image)
+            self.assertFalse((run.report_path.parent / 'bootstrap-association.json').exists())
+
+    def test_receipt_cannot_outlive_original_closed_graph_or_import_copied_report(self):
+        run = self.receipt_run()
+        d = run.designate_bootstrap(self.image)
+        run.closed = False
+        with self.assertRaisesRegex(RuntimeError, 'closed original bootstrap'):
+            d.check()
+        copied = ObservedRun(copy.deepcopy(run.report), copy.deepcopy(run.original), None, run.report_path, True)
+        with self.assertRaisesRegex(RuntimeError, 'closed original bootstrap'):
+            copied.designate_bootstrap(self.image)
+
+    def test_receipt_never_swallows_a_closure_success_flag(self):
+        run = self.receipt_run()
+        with patch.object(run, 'assert_bootstrap_closed', return_value=True):
+            with self.assertRaisesRegex(RuntimeError, 'returned a flag'):
+                run.designate_bootstrap(self.image)
+        d = run.designate_bootstrap(self.image)
+        with patch.object(run, 'assert_bootstrap_closed', return_value=True):
+            with self.assertRaisesRegex(RuntimeError, 'returned a flag'):
+                d.check()
+
+    def test_receipt_refuses_later_changes_to_original_in_memory_objects(self):
+        run = self.receipt_run()
+        d = run.designate_bootstrap(self.image)
+        run.report['traceSha256'] = '0' * 64
+        with self.assertRaisesRegex(RuntimeError, 'original run changed'):
+            d.check()
 
 
 class ConnectedPhaseControls(unittest.TestCase):

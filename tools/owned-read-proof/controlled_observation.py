@@ -68,9 +68,7 @@ def observe_new(root=None, diagnostic=False):
         # Failure cannot import a designation from the report. This assertion
         # inspects the original supervisor's independently replayed closed graph.
         bootstrap.assert_bootstrap_closed()
-        designation = ConnectedDesignation(bootstrap_base=root / 'bootstrap', evidence_path=bootstrap.report_path,
-            evidence_ref='controlled-bootstrap-source-preparation:' + bootstrap.report['traceSha256'],
-            image=image, assert_bootstrap_closed=bootstrap.assert_bootstrap_closed)
+        designation = bootstrap.designate_bootstrap(image)
         connected = observe(root, image, 'connected', designation, used, diagnostic)
         checkpoint['attempts'].append(safe_summary(connected, root))
         require(connected.replay is not None, 'connected original observation refused; inspect retained first refusal')
