@@ -1,0 +1,31 @@
+impl Hooks {
+    /// Bind this session's hook runtime and output files to its thread, rejecting unloadable
+    /// required managed hooks.
+    pub fn new(
+        config: HooksConfig,
+        thread_id: ThreadId,
+        mcp_executor: Arc<dyn HookMcpExecutor>,
+    ) -> anyhow::Result<(Self, Receiver<codex_protocol::protocol::HookCompletedEvent>)> {
+        let (result_sender, result_receiver) = async_channel::unbounded();
+        let environment = Arc::new(std::env::vars_os().collect());
+        let hooks = Self::from_config(config, mcp_executor, Arc::clone(&environment), |shell| {
+            CommandHookRuntime::new(shell, environment, thread_id, result_sender)
+        });
+        let required_load_errors = hooks.engine.required_load_errors();
+        if !required_load_errors.is_empty() {
+            anyhow::bail!(
+                "failed to load required managed hooks: {}",
+                required_load_errors.join("; ")
+            );
+        }
+        Ok((hooks, result_receiver))
+    }
+
+    /// Preserve in-flight background hooks while applying a refreshed configuration.
+    pub fn reconfigured(&self, config: HooksConfig) -> Self {
+        Self::from_config(
+            config,
+            Arc::clone(&self.engine.mcp_executor),
+            Arc::clone(&self.environment),
+            |shell| self.engine.command_runtime.reconfigured(shell),
+        )

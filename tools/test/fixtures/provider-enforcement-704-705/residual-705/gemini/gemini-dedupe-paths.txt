@@ -1,0 +1,17 @@
+export function deduplicateAbsolutePaths(paths?: string[] | null): string[] {
+  if (!paths || paths.length === 0) return [];
+
+  const uniquePathsMap = new Map<string, string>();
+  for (const p of paths) {
+    if (!path.isAbsolute(p)) {
+      throw new Error(`Path must be absolute: ${p}`);
+    }
+
+    const key = toPathKey(p);
+    if (!uniquePathsMap.has(key)) {
+      uniquePathsMap.set(key, p);
+    }
+  }
+
+  return Array.from(uniquePathsMap.values());
+}

@@ -1,0 +1,73 @@
+  async publish(message: Message): Promise<void> {
+    if (this.debug) {
+      debugLogger.debug(`[MESSAGE_BUS] publish: ${safeJsonStringify(message)}`);
+    }
+    try {
+      if (!this.isValidMessage(message)) {
+        throw new Error(
+          `Invalid message structure: ${safeJsonStringify(message)}`,
+        );
+      }
+
+      if (message.type === MessageBusType.TOOL_CONFIRMATION_REQUEST) {
+        const { decision: policyDecision } = await this.policyEngine.check(
+          message.toolCall,
+          message.serverName,
+          message.toolAnnotations,
+          message.subagent,
+        );
+
+        // Only trust forcedDecision if it comes from a trusted bus
+        const decision =
+          (this.isTrusted ? message.forcedDecision : undefined) ??
+          policyDecision;
+
+        switch (decision) {
+          case PolicyDecision.ALLOW:
+            // Directly emit the response instead of recursive publish
+            this.emitMessage({
+              type: MessageBusType.TOOL_CONFIRMATION_RESPONSE,
+              correlationId: message.correlationId,
+              confirmed: true,
+            });
+            break;
+          case PolicyDecision.DENY:
+            // Emit both rejection and response messages
+            this.emitMessage({
+              type: MessageBusType.TOOL_POLICY_REJECTION,
+              toolCall: message.toolCall,
+            });
+            this.emitMessage({
+              type: MessageBusType.TOOL_CONFIRMATION_RESPONSE,
+              correlationId: message.correlationId,
+              confirmed: false,
+            });
+            break;
+          case PolicyDecision.ASK_USER:
+            // Pass through to UI for user confirmation if any listeners exist.
+            // If no listeners are registered (e.g., headless/ACP flows),
+            // immediately request user confirmation to avoid long timeouts.
+            if (
+              this.listenerCount(MessageBusType.TOOL_CONFIRMATION_REQUEST) > 0
+            ) {
+              this.emitMessage(message);
+            } else {
+              this.emitMessage({
+                type: MessageBusType.TOOL_CONFIRMATION_RESPONSE,
+                correlationId: message.correlationId,
+                confirmed: false,
+                requiresUserConfirmation: true,
+              });
+            }
+            break;
+          default:
+            throw new Error(`Unknown policy decision: ${decision}`);
+        }
+      } else {
+        // For all other message types, just emit them
+        this.emitMessage(message);
+      }
+    } catch (error) {
+      this.emit('error', error);
+    }
+  }

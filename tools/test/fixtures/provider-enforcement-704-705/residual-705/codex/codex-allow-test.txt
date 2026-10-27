@@ -1,0 +1,42 @@
+    #[test]
+    fn permission_decision_allow_without_updated_input_fails_open() {
+        let stdout = r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","additionalContext":"preserved"}}"#;
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(0), stdout, ""),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            PreToolUseHandlerData {
+                should_block: false,
+                block_reason: None,
+                additional_contexts_for_model: Vec::new(),
+                updated_input: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: "PreToolUse hook returned unsupported permissionDecision:allow".to_string(),
+            }]
+        );
+
+        let async_handler = handler_with_async(/*async*/ true);
+        let parsed = parse_completed(
+            &async_handler,
+            run_result(Some(0), stdout, ""),
+            Some("turn-1".to_string()),
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Context,
+                text: "preserved".to_string(),
+            }],
+        );
+    }

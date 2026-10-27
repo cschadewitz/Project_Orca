@@ -1,0 +1,6 @@
+export function normalizeCommand(commandName: string): string {
+  // Split by both separators and get the last non-empty part
+  const parts = commandName.split(/[\\/]/).filter(Boolean);
+  const base = parts.length > 0 ? parts[parts.length - 1] : '';
+  return base.toLowerCase().replace(/\.exe$/, '');
+}

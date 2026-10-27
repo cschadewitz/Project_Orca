@@ -1,0 +1,24 @@
+diff --git a/packages/coding-agent/src/core/tools/bash.ts b/packages/coding-agent/src/core/tools/bash.ts
+index cdd2a0d18cf8c0d58be30d351e9f876a2112eb82..0a7d9f9eff1aa0f369416d22e0c89a56f0bf7706 100644
+--- a/packages/coding-agent/src/core/tools/bash.ts
++++ b/packages/coding-agent/src/core/tools/bash.ts
+@@ -1,6 +1,7 @@
+ import { constants } from "node:fs";
+ import { access as fsAccess } from "node:fs/promises";
+ import { constants as osConstants } from "node:os";
++import { isAbsolute, normalize } from "node:path";
+ import type { AgentTool } from "@earendil-works/pi-agent-core";
+ import { spawn } from "child_process";
+ import { type Static, Type } from "typebox";
+@@ -291,6 +292,11 @@ export function createShellToolDefinition(
+ 		if (typeof spawnContext.command !== "string" || typeof spawnContext.cwd !== "string") {
+ 			throw new Error("Blocked by final action check: command and cwd must be strings");
+ 		}
++		// spawn would resolve a relative cwd against the process cwd, and normalizing ".." here could
++		// name a different directory than the kernel reaches through a symlink, so neither is frozen.
++		if (!isAbsolute(spawnContext.cwd) || normalize(spawnContext.cwd) !== spawnContext.cwd) {
++			throw new Error("Blocked by final action check: cwd must be an absolute normalized path");
++		}
+ 		const resolvedShell = options?.operations ? undefined : getShellConfig(options?.shellPath);
+ 		const shell = resolvedShell && Object.freeze({ ...resolvedShell, args: Object.freeze([...resolvedShell.args]) });
+ 		const transformations: ("commandPrefix" | "contextCwd" | "spawnHook")[] = [];

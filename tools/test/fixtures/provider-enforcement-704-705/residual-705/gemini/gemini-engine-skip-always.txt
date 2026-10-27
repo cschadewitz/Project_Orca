@@ -1,0 +1,4 @@
+    for (const rule of this.rules) {
+      if (this.disableAlwaysAllow && this.isAlwaysAllowRule(rule)) {
+        continue;
+      }

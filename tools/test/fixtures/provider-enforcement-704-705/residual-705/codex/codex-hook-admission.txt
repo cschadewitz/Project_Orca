@@ -1,0 +1,10 @@
+            });
+            if enabled
+                && (source.bypass_hook_trust
+                    || (source.plugin_content_hash.is_none() && plugin_trust.is_some())
+                    || matches!(
+                        trust_status,
+                        HookTrustStatus::Managed | HookTrustStatus::Trusted
+                    ))
+            {
+                handlers.push(ConfiguredHandler {
