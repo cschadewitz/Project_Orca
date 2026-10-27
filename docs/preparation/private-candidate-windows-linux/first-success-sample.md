@@ -41,6 +41,8 @@ just for this test:
 - The commands set a throwaway commit author for this one commit only. They don't change
   your Git settings, add a remote, or contact the internet. If you have set up global Git
   hooks, those may still run; they are your own configuration.
+- Both blocks refuse any inherited `GIT_*` environment variable before creating folders.
+  If refused, stop and tell your coordinator; leave your session settings unchanged.
 - Paste each block as a whole. If `orca-trial` already exists, the block stops before
   touching anything, so an existing folder is never reused. If it reports that the folder
   exists, or shows any other error, **stop**.
@@ -49,6 +51,7 @@ just for this test:
 
 <!-- validate: linux-project -->
 ```sh
+if env | grep -q '^GIT_'; then printf '%s\n' 'Stop: inherited GIT_* settings; contact your coordinator.' >&2; false; else true; fi &&
 mkdir ~/orca-trial &&
 mkdir ~/orca-trial/project ~/orca-trial/workspace &&
 cd ~/orca-trial/project &&
@@ -72,6 +75,7 @@ git log --oneline
 ```powershell
 & {
   $ErrorActionPreference = 'Stop'
+  if (Get-ChildItem Env:GIT_*) { throw 'Stop: inherited GIT_* settings; contact your coordinator.' }
   New-Item -ItemType Directory "$env:USERPROFILE\orca-trial"
   New-Item -ItemType Directory "$env:USERPROFILE\orca-trial\project"
   Set-Location "$env:USERPROFILE\orca-trial\project"
