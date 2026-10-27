@@ -350,7 +350,21 @@ export async function prepareJudgeConnection(
   let inFlight = 0;
   let spent = 0;
 
-  /** Rechecks the projection, budget and grant before resolving the credential for exactly this one send. */
+  /** The grant must still be at its prepared revision and unexpired, and the call not cancelled. */
+  async function gate(callSignal: AbortSignal): Promise<void> {
+    if (callSignal.aborted) throw refused("cancelled");
+    let state: unknown;
+    try {
+      state = await current(grantRef, callSignal);
+    } catch {
+      throw refused(callSignal.aborted ? "cancelled" : "disclosure-revoked");
+    }
+    if (callSignal.aborted) throw refused("cancelled");
+    if (!record(state) || state.revision !== grantRevision || !live(state.expiresAt))
+      throw refused("disclosure-revoked");
+  }
+
+  /** Rechecks the projection, budget and grant, then the grant again once the credential resolves, for one send. */
   async function deliver(frame: string, callSignal: AbortSignal, maxResponseBytes: number): Promise<string> {
     if (callSignal.aborted) throw refused("cancelled");
     let sent: unknown;
@@ -379,21 +393,23 @@ export async function prepareJudgeConnection(
     spent += perCall;
     inFlight++;
     try {
-      let state: unknown;
-      try {
-        state = await current(grantRef, callSignal);
-      } catch {
-        throw refused(callSignal.aborted ? "cancelled" : "disclosure-revoked");
-      }
-      if (callSignal.aborted) throw refused("cancelled");
-      if (!record(state) || state.revision !== grantRevision || !live(state.expiresAt))
-        throw refused("disclosure-revoked");
+      await gate(callSignal);
       let reply: unknown;
+      // Set only by the gate inside the lease, so a sender's own error can never borrow its code.
+      let gated: SendRefused | undefined;
       try {
-        reply = await withCredential(credentialRef, use, callSignal, (credential) =>
-          send({ frame, credential, signal: callSignal, maxResponseBytes }),
-        );
+        reply = await withCredential(credentialRef, use, callSignal, async (credential) => {
+          // The grant can lapse or the call be cancelled while resolution is pending: recheck after it.
+          try {
+            await gate(callSignal);
+          } catch (error) {
+            gated = error as SendRefused;
+            throw error;
+          }
+          return send({ frame, credential, signal: callSignal, maxResponseBytes });
+        });
       } catch {
+        if (gated) throw gated;
         throw refused(callSignal.aborted ? "cancelled" : "transport-failed");
       }
       // A reply that arrives after cancellation or timeout is dropped here, not only by the adapter.

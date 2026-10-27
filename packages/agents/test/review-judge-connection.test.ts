@@ -333,7 +333,8 @@ describe("authorized end-to-end advice through the unchanged #746 adapter", () =
     const f = fixture(connection.configRef, evidence(a, c, i));
     const output = await judgeFor(connection).assess(f.request, f.payload, f.signal);
     expect(output).toMatchObject({ execution: "evaluated", result, reasonCode, judgeVersion: connection.configRef });
-    expect(h.grants.current).toHaveBeenCalledTimes(1);
+    // Once before resolution and once after it, immediately before the sender.
+    expect(h.grants.current).toHaveBeenCalledTimes(2);
     expect(h.credentials.withCredential).toHaveBeenCalledTimes(1);
     expect(h.credentials.withCredential.mock.calls[0]![1]).toEqual({
       purpose: JUDGE_DISCLOSURE_PURPOSE,
@@ -696,8 +697,97 @@ describe("stale advice and revoked disclosure", () => {
     await judge.assess(f.request, f.payload, f.signal);
     await judge.assess(f.request, f.payload, f.signal);
     expect(h.sender.send).toHaveBeenCalledTimes(2);
-    expect(h.grants.current).toHaveBeenCalledTimes(2);
+    expect(h.grants.current).toHaveBeenCalledTimes(4);
     expect(h.credentials.withCredential).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("disclosure currentness while credential resolution is pending", () => {
+  /** Holds the next resolution, then calls back without checking the abort itself, so only the gate can refuse. */
+  function holdResolution(h: ReturnType<typeof harness>) {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.credentials.withCredential.mockImplementationOnce(async (_ref, _use, _signal, consume) => {
+      await held;
+      return consume(Object.freeze({ authorization: () => h.secret }));
+    });
+    return () => release();
+  }
+  async function pending(h: ReturnType<typeof harness>) {
+    const connection = await prepared(h);
+    const release = holdResolution(h);
+    const f = fixture(connection.configRef);
+    // A long request deadline keeps the adapter's own deadline out of the way of the grant's.
+    const request = { ...f.request, deadlineAt: new Date(Date.now() + 600_000).toISOString() };
+    const outcome = createEndpointReviewJudge({
+      manifest: connection.manifest,
+      transport: connection.transport,
+      limits: { ...connection.limits, maxTimeoutMs: 600_000 },
+    });
+    const ref = endpointJudgeConfigRef(connection.manifest, { ...connection.limits, maxTimeoutMs: 600_000 });
+    const result = outcome.assess({ ...request, judgeConfigRef: ref }, f.payload, f.signal);
+    await settle();
+    expect(h.credentials.withCredential).toHaveBeenCalledTimes(1);
+    expect(h.sender.send).not.toHaveBeenCalled();
+    return { connection, release, result, controller: f.controller };
+  }
+
+  it("refuses to send when the grant expires during the lookup, with the signal still live", async () => {
+    const h = harness({
+      grants: fakeGrants((q) => grantFor(q, { expiresAt: new Date(Date.now() + 2_000).toISOString() })),
+    });
+    const { connection, release, result, controller } = await pending(h);
+    vi.setSystemTime(Date.now() + 3_000);
+    release();
+    expect(await result).toMatchObject({ execution: "unavailable", result: "indeterminate" });
+    expect(controller.signal.aborted).toBe(false);
+    expect(h.sender.send).not.toHaveBeenCalled();
+    expect(connection.refusals()).toEqual(["disclosure-revoked"]);
+  });
+
+  it.each([
+    ["revoked", null],
+    ["rotated", { revision: "grant-revision:2", expiresAt: "2999-01-01T00:00:00.000Z" }],
+  ])("refuses to send when the grant is %s during the lookup", async (_name, next) => {
+    const h = harness();
+    const { connection, release, result } = await pending(h);
+    h.grants.state.set(`grant:${DESTINATION}`, next);
+    release();
+    expect(await result).toMatchObject(unavailable("transport-failed"));
+    expect(h.sender.send).not.toHaveBeenCalled();
+    expect(connection.refusals()).toEqual(["disclosure-revoked"]);
+  });
+
+  it("refuses to send when cancelled during the lookup", async () => {
+    const h = harness();
+    const { connection, release, result, controller } = await pending(h);
+    controller.abort();
+    release();
+    expect(await result).toMatchObject(unavailable("cancelled"));
+    await settle();
+    expect(h.sender.send).not.toHaveBeenCalled();
+    expect(connection.refusals()).toEqual(["cancelled"]);
+  });
+
+  it("still sends after a delayed lookup while the grant stays current", async () => {
+    const h = harness();
+    const { connection, release, result } = await pending(h);
+    release();
+    expect(await result).toMatchObject({ execution: "evaluated", result: "fit" });
+    expect(h.sender.send).toHaveBeenCalledTimes(1);
+    expect(h.grants.current).toHaveBeenCalledTimes(2);
+    expect(connection.refusals()).toEqual([]);
+  });
+
+  it("does not let a sender error borrow a gate refusal code", async () => {
+    const h = harness({ send: async () => Promise.reject(new Error("disclosure-revoked")) });
+    const connection = await prepared(h);
+    await expect(
+      connection.transport.send(frameFor(), new AbortController().signal, descriptor.limits.maxResponseBytes),
+    ).rejects.toThrow(/^transport-failed$/);
+    expect(connection.refusals()).toEqual(["transport-failed"]);
   });
 });
 

@@ -97,9 +97,14 @@ The prepared transport runs these checks, in order, for every frame the adapter 
    still have been billed. When the budget is exhausted the result is `budget-exhausted`.
 4. **Grant recheck.** `current(grantRef)` must return the same revision, not expired.
    Otherwise the result is `disclosure-revoked`, and no credential is resolved.
-5. **Scoped resolution.** `withCredential` resolves for this one use and passes the handle
-   straight to the sender. This module never inspects, copies, serializes or retains it.
-6. **Late reply.** A reply that arrives after cancellation or timeout is dropped as
+5. **Scoped resolution.** `withCredential` resolves for this one use. This module never
+   inspects, copies, serializes or retains the handle.
+6. **Gate before sending.** Inside the lease, after resolution returns and immediately
+   before the sender is called, the cancellation and grant checks of step 4 run again. A
+   grant that expires, is revoked or rotates, or a call cancelled while resolution was
+   pending, is refused with the same fixed code (`disclosure-revoked` or `cancelled`), and
+   the sender is never called. A sender's own error can never carry one of these codes.
+7. **Late reply.** A reply that arrives after cancellation or timeout is dropped as
    `cancelled`. The adapter drops it independently as well.
 
 Every failure throws an error whose message is one fixed code, with no cause and no text
@@ -125,6 +130,9 @@ authenticates the handle and evaluates only the delivered synthetic evidence. Th
   request cannot use. Pinning against caller mutation after preparation.
 - Stale advice: delivery stops once the grant is revoked, rotated or expired, and identical
   requests always reach the endpoint again because there is no cache.
+- Disclosure currentness during a held credential lookup that ignores the abort: expiry
+  with the signal still live, revocation, rotation and cancellation all refuse before the
+  sender, while a delayed lookup with a current grant still sends.
 - Cross-destination reuse of a prepared transport, credential or grant.
 - Projection, concurrency and budget at the send boundary; the bounded refusal list.
 - Prompt injection: injected evidence escalates; a hostile endpoint that echoes the
