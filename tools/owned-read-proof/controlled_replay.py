@@ -46,6 +46,24 @@ def positive_result(value):
     return int(value)
 
 
+def zero_private_wake_record(record):
+    """Exact legacy private wake selecting no waiter, not memory/quiescence proof.
+
+    Kernel bookkeeping may still run. Under the trusted kernel contract this
+    syscall does not dereference the userspace word. Return an immutable full
+    record identity; event() must separately establish the original thread is
+    known and unsettled before retaining it.
+    """
+    pid, call, args, result, entered, completed = record
+    if (call != 'futex' or len(args) != 3 or args[1:] != ['FUTEX_WAKE_PRIVATE', '1'] or
+            result != '0' or re.fullmatch(r'0x[0-9a-f]+', args[0]) is None):
+        return None
+    address = int(args[0], 16)
+    if address == 0 or address % 4:
+        return None
+    return pid, call, tuple(args), result, entered, completed
+
+
 def physical_fields(call, args):
     text = ', '.join(args)
     if call == 'statx':
@@ -148,6 +166,7 @@ class Replay:
         self.native_completed = []
         self.javascript_opened = False
         self.objects, self.resources, self.marks, self.waits = [], [], [], []
+        self.zero_private_wakes = set()
         self.threads, self.settled = {self.leader}, set()
         self.used_paths = set()
         self.inherited_cloexec = set()
@@ -581,6 +600,16 @@ class Replay:
             return True
         return False
 
+    def check_phase_boundaries(self, records):
+        wait_entries = {r[4] for r in self.waits}
+        mark_entries = {r[4] for r in self.marks}
+        for record in records:
+            if record[4] in mark_entries or record[1] in BOUNDARY_PASSIVE or record[4] in wait_entries:
+                continue
+            crossing = any(record[4] <= m[5] and record[5] >= m[4] for m in self.marks)
+            require(not crossing or zero_private_wake_record(record) in self.zero_private_wakes,
+                    'effect crosses phase boundary interval')
+
     def run(self, text):
         require(len(text.encode()) <= LIMIT, 'trace exceeds 256 MiB bound')
         records, self.entry_times = timestamped_events(text, self.original)
@@ -602,13 +631,7 @@ class Replay:
             require(self.native_completed == list(NATIVE_QUERIES) and self.javascript_opened and
                     self.original['kernelRuntimeQueries']['traceAnchorLine'] < self.marks[0][5],
                     'native observations not correlated before phase release')
-        wait_entries = {r[4] for r in self.waits}
-        mark_entries = {r[4] for r in self.marks}
-        for record in records:
-            if record[4] in mark_entries or record[1] in BOUNDARY_PASSIVE or record[4] in wait_entries:
-                continue
-            require(not any(record[4] <= m[5] and record[5] >= m[4] for m in self.marks),
-                    'effect crosses phase boundary interval')
+        self.check_phase_boundaries(records)
         require(len(self.resources) == 1, 'missing/ambiguous service resource')
         obj = self.resources[0]
         require(obj.names == set() and obj.physical is not None and obj.stats >= {0, 1} and
@@ -716,11 +739,18 @@ class Replay:
             require(args == [str(self.leader), '0'] and result == '0', 'not original zero-signal liveness probe')
             return
         if call == 'futex':
-            # Non-boundary WAKE is normal Node synchronization. Mutating/unknown
+            # WAKE remains subject to phase auditing; only an exact retained zero
+            # result can receive the narrow crossing classification. Mutating/unknown
             # PI/WAKE_OP commands never inherit a syscall-name exception.
             require(args[1] in {'FUTEX_WAKE_PRIVATE', 'FUTEX_WAIT_PRIVATE',
                     'FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME', 'FUTEX_WAIT_BITSET|FUTEX_CLOCK_REALTIME'},
                     'unknown/mutating futex opcode')
+            zero_wake = zero_private_wake_record(record)
+            if zero_wake is not None:
+                # The original known/unsettled-thread guard above has run. This
+                # classification belongs only to these complete args/result and
+                # raw entry/completion lines, never to an address or thread.
+                self.zero_private_wakes.add(zero_wake)
             if entered != completed and self.wait(record):
                 self.waits.append(record)
             return
