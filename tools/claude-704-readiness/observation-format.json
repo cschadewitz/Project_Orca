@@ -1,0 +1,123 @@
+{
+  "format": "orca.claude-installed-observations/1",
+  "issue": 704,
+  "purpose": "Closed input grammar for the #704 installed-readiness evidence collector. One journal per run, written by the operator-owned journal process outside the agent's reach. Every value is a per-run label; the journal compares raw native input, cwd and identifiers locally and writes only the labels below.",
+  "labels": ["synthetic", "installed"],
+  "topKeys": ["format", "label", "authorizationRef", "run", "sources", "seals", "events"],
+  "requiredTopKeys": ["format", "label", "run", "sources", "seals", "events"],
+  "runKeys": ["runRef", "provider", "tool", "providerVersion", "adapterVersion", "actionRef", "cwdRef"],
+  "sourceNames": ["acp", "hook", "guard", "policy", "executor", "counter"],
+  "sealable": ["acp", "hook", "counter"],
+  "independentSources": ["counter"],
+  "token": "^[a-z0-9][a-z0-9:._-]{0,63}$",
+  "identityToken": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+  "labelPatterns": {
+    "inv": "^inv-[1-9][0-9]{0,3}$",
+    "generation": "^gen-[0-9]{1,4}$",
+    "binding": "^binding-[1-9][0-9]{0,3}$"
+  },
+  "forbiddenPatterns": {
+    "digest": "[0-9a-f]{32,}",
+    "longNumber": "[0-9]{12,}"
+  },
+  "values": {
+    "action": ["fixture", "changed"],
+    "cwd": ["fixture", "changed"],
+    "route": ["fixture", "subagent", "other-mcp", "interactive-stdin", "other-tool"],
+    "scope": ["exact", "wider", "none"]
+  },
+  "limits": { "events": 256, "transportBytes": 262144 },
+  "kinds": {
+    "acp.tool-call": {
+      "required": ["inv", "route", "action", "cwd"],
+      "optional": ["binding"],
+      "stage": "native-dispatch",
+      "note": "ACP tool_call announced for this invocation; binding is the journal's label for the announced input and cwd. The outcome (new or cached) is derived, never supplied."
+    },
+    "acp.permission-request": {
+      "required": ["inv", "scope"],
+      "optional": [],
+      "stage": "native-ask",
+      "outcomes": ["asked"],
+      "note": "session/request_permission reached the ORCA client. scope says whether the offered remembered grant names only this fixture."
+    },
+    "acp.permission-answer": {
+      "required": ["inv", "outcome"],
+      "optional": [],
+      "stage": null,
+      "outcomes": ["allow-once", "allow-always-exact", "reject", "cancelled"],
+      "note": "The operator's answer. Emits no receipt; an allow-always-exact answer is what lets a later dispatch be derived as cached."
+    },
+    "acp.cancel": {
+      "required": ["inv"],
+      "optional": [],
+      "stage": "cancellation",
+      "outcomes": ["cancelled"]
+    },
+    "hook.frame": {
+      "required": ["inv"],
+      "optional": ["action", "cwd"],
+      "stage": "hook-invoked",
+      "outcomes": ["invoked"],
+      "note": "The protected PreToolUse checker received a frame. Its absence is derived as not-invoked only inside a sealed hook log."
+    },
+    "hook.response": {
+      "required": ["inv", "outcome"],
+      "optional": [],
+      "stage": "hook-response",
+      "outcomes": ["allow", "deny"],
+      "note": "What the checker emitted. allow means the documented no-decision pass-through (exit 0, no output), never permissionDecision allow."
+    },
+    "guard.hook-failure": {
+      "required": ["inv", "outcome"],
+      "optional": [],
+      "stage": "hook-response",
+      "outcomes": ["unavailable", "crash", "timeout", "malformed", "empty", "late"],
+      "note": "Observed by the supervisor that owns the checker process, not by the checker itself."
+    },
+    "guard.native-continued": {
+      "required": ["inv", "outcome"],
+      "optional": [],
+      "stage": "native-continued",
+      "outcomes": ["continued", "blocked"]
+    },
+    "guard.config-mutation": {
+      "required": ["outcome"],
+      "optional": [],
+      "stage": "config-mutation",
+      "outcomes": ["hook-removed"]
+    },
+    "policy.decision": {
+      "required": ["inv", "outcome", "action", "cwd"],
+      "optional": ["generation", "binding"],
+      "stage": "orca-decision",
+      "outcomes": ["allow", "deny", "require-human", "indeterminate", "refused"]
+    },
+    "policy.revocation": {
+      "required": [],
+      "optional": ["generation"],
+      "stage": "revocation",
+      "outcomes": ["revoked"]
+    },
+    "executor.start": {
+      "required": ["inv", "outcome", "action", "cwd"],
+      "optional": ["binding"],
+      "stage": "tool-start",
+      "outcomes": ["started", "refused"],
+      "note": "The fixture executor's own entry, with the binding it recomputed from what actually ran."
+    },
+    "executor.effect": {
+      "required": ["inv"],
+      "optional": [],
+      "stage": "effect-observed",
+      "outcomes": ["observed"]
+    },
+    "counter.reading": {
+      "required": ["inv", "outcome"],
+      "optional": [],
+      "stage": "effect-check",
+      "outcomes": ["changed", "unchanged"],
+      "note": "The independent mark counter's per-call reading. Used only inside a sealed counter log."
+    }
+  }
+}
