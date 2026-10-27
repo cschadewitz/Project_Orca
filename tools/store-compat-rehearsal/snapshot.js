@@ -11,8 +11,8 @@
  */
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { cp, lstat, opendir, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { chmod, cp, lstat, mkdir, opendir, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 const posix = process.platform !== "win32";
 
@@ -33,6 +33,49 @@ const stamp = (info) => `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${
 function assertRoot(path) {
   if (typeof path !== "string" || !isAbsolute(path) || resolve(path) !== path || path === resolve("/"))
     throw new SnapshotRefusal("ROOT_INVALID", String(path));
+}
+
+/** Check every existing component, including dangling links, without following it. */
+async function canonicalAncestors(path) {
+  const root = parse(path).root;
+  let current = root;
+  for (const part of ["", ...relative(root, path).split(sep)]) {
+    current = join(current, part);
+    let info;
+    try {
+      info = await lstat(current);
+    } catch (error) {
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+    if (info.isSymbolicLink() || (await realpath(current)) !== current)
+      throw new SnapshotRefusal("LINK_REFUSED", current);
+    if (!info.isDirectory()) throw new SnapshotRefusal("ROOT_INVALID", current);
+  }
+}
+
+/**
+ * Preflight before any write or launch. Parents must already exist and be canonical,
+ * link-free directories. Callers must own and keep this ancestry stable for the operation;
+ * path-based Node APIs cannot defend against another process swapping checked ancestors.
+ */
+export async function preflightNewDirectory(path, disjointFrom = []) {
+  assertRoot(path);
+  await canonicalAncestors(path);
+  for (const other of disjointFrom) {
+    assertRoot(other);
+    await canonicalAncestors(other);
+    const physical = await realpath(other);
+    if (inside(physical, path) || inside(path, physical)) throw new SnapshotRefusal("ROOT_OVERLAP", path);
+  }
+  await lstat(dirname(path));
+  try {
+    await lstat(path);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  throw new SnapshotRefusal("DESTINATION_EXISTS", path);
 }
 
 async function hashFile(path, before) {
@@ -61,6 +104,7 @@ export async function snapshotRoots(roots) {
   const manifest = { version: 1, posixModes: posix, roots: {} };
   for (const id of ids) {
     const root = roots[id];
+    await canonicalAncestors(root);
     const info = await lstat(root, { bigint: true });
     if (info.isSymbolicLink() || (await realpath(root)) !== root) throw new SnapshotRefusal("LINK_REFUSED", root);
     if (!info.isDirectory()) throw new SnapshotRefusal("ROOT_INVALID", root);
@@ -139,21 +183,21 @@ export async function copyToNew(source, destination) {
   assertRoot(destination);
   if (inside(source, destination) || inside(destination, source))
     throw new SnapshotRefusal("ROOT_OVERLAP", destination);
-  try {
-    await lstat(destination);
-    throw new SnapshotRefusal("DESTINATION_EXISTS", destination);
-  } catch (error) {
-    if (error instanceof SnapshotRefusal) throw error;
-    if (error.code !== "ENOENT") throw error;
-  }
+  await preflightNewDirectory(destination, [source]);
   const expected = await snapshotRoots({ tree: source });
-  await cp(source, destination, {
-    recursive: true,
-    errorOnExist: true,
-    force: false,
-    preserveTimestamps: true,
-    verbatimSymlinks: true,
-  });
+  // Recheck after the read, then claim the leaf exclusively: cp may not adopt an
+  // existing destination or follow a destination link introduced before mkdir.
+  await preflightNewDirectory(destination, [source]);
+  await mkdir(destination, { mode: 0o700 });
+  for await (const child of await opendir(source))
+    await cp(join(source, child.name), join(destination, child.name), {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+      preserveTimestamps: true,
+      verbatimSymlinks: true,
+    });
+  if (posix) await chmod(destination, expected.roots.tree.mode);
   const observed = await snapshotRoots({ tree: destination });
   const comparison = compareSnapshots(expected, observed);
   if (!comparison.equal) throw new SnapshotRefusal("COPY_MISMATCH", destination);
