@@ -52,6 +52,27 @@ export async function runControlledOwnedReadTest(base, lane, options) {
 }
 '''
 
+# Run the exact child's declared composition repeatedly, with one physical
+# traversal and the unchanged separate proof association hash each time.
+COMPOSED_STUB = STUB.replace(
+    '    options.assertCurrent();\n    options.bootstrap.assertCurrent();',
+    '    options.currentnessComposition.bootstrapAssertion.call(options.bootstrap);'
+).replace(
+    '  options.assertCurrent();\n  options.bootstrap.assertCurrent();',
+    '  options.currentnessComposition.bootstrapAssertion.call(options.bootstrap);'
+).replace('assert.equal(reads, 12)', 'assert.equal(reads, 8)').replace(
+    'assert.equal(reads, 21)', 'assert.equal(reads, 16)'
+).replace(
+    '  const proof = plan.bootstrap.proofPath;',
+    '''  const proof = plan.bootstrap.proofPath;
+  const composition = options.currentnessComposition;
+  assert.ok(Object.isFrozen(composition));
+  assert.equal(composition.kind, 'connected-physical-bootstrap-v1');
+  assert.equal(composition.physicalAssertion, options.assertCurrent);
+  assert.equal(composition.bootstrap, options.bootstrap);
+  assert.equal(composition.bootstrapAssertion, options.bootstrap.assertCurrent);'''
+)
+
 
 class BootstrapReceiptChildControls(unittest.TestCase):
     def child(self, proof_bytes, tamper=None, association=None, stub=STUB):
@@ -120,6 +141,32 @@ class BootstrapReceiptChildControls(unittest.TestCase):
         for field in ('proofSha256', 'installedInventoryDigest', 'proofPath'):
             with self.subTest(field=field):
                 result = self.child(b'original immutable synthetic association', association=field)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b'AssertionError', result.stderr)
+                self.assertEqual(result.stdout, b'')
+
+    def test_real_child_declares_exact_frozen_roles_and_one_fresh_traversal(self):
+        proof = b'original immutable synthetic association'
+        result = self.child(proof, stub=COMPOSED_STUB)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        report = json.loads(result.stdout)
+        self.assertEqual(report['proofReads'], 16)
+        self.assertEqual(report['proofReadBytes'], 16 * len(proof))
+
+    def test_composed_success_does_not_survive_proof_mutation_or_replacement(self):
+        for scenario in ('bytes', 'replacement'):
+            with self.subTest(scenario=scenario):
+                result = self.child(b'original immutable synthetic association',
+                                    tamper=scenario, stub=COMPOSED_STUB)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b'AssertionError', result.stderr)
+                self.assertEqual(result.stdout, b'')
+
+    def test_composed_bootstrap_associations_still_refuse(self):
+        for field in ('proofSha256', 'installedInventoryDigest', 'proofPath'):
+            with self.subTest(field=field):
+                result = self.child(b'original immutable synthetic association',
+                                    association=field, stub=COMPOSED_STUB)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(b'AssertionError', result.stderr)
                 self.assertEqual(result.stdout, b'')

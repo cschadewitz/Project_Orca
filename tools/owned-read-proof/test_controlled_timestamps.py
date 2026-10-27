@@ -15,6 +15,9 @@ START = 1793030000 * NS
 # bound to the newly reviewed source. Neither is a runtime trust selector.
 HISTORICAL_SOURCE = '557f62fbe86fc8371d48f11ec37bf9db71cac436'
 HISTORICAL_CHILD_SHA = 'a58036e5343fe07dac8625f7d5dfc2a7e0c6bfe660ddb1e96711b5b8d002e35c'
+HISTORICAL_PRODUCER_INPUT_SHA = 'c9d4a7185bdb07d05b7f0ca192e65fc6efa574141862f3994c8cc35bbd584e86'
+PREVIOUS_SOURCE = 'fa25390e8a88e23a33640f40404b6da58938bdb4'
+PREVIOUS_CHILD_SHA = '9c3e6236a9007647142d5ca1d9a15cbb5209f344d9d47241ffea2e83d8d13e8b'
 
 
 def reviewed_child(source):
@@ -25,9 +28,10 @@ def reviewed_child(source):
 
 REVIEWED_CHILD = reviewed_child(SOURCE)
 HISTORICAL_CHILD = reviewed_child(HISTORICAL_SOURCE)
+PREVIOUS_CHILD = reviewed_child(PREVIOUS_SOURCE)
 
 
-def _clock_original(source, child, child_sha):
+def _clock_original(source, child, child_sha, producer_input_sha):
     def sample(wall):
         return {'wallNs': wall, 'monotonicBeforeNs': wall - 10**18 - 10,
                 'monotonicAfterNs': wall - 10**18 + 10}
@@ -36,7 +40,7 @@ def _clock_original(source, child, child_sha):
         'immutable': {path: {'family': 'image', 'hex': data.hex(), 'sha256': sha(data)} for path, data in
                       [('/image/controlled-child.mjs', child), ('/image/controlled-producer.mjs', producer)]},
         'controlledBuild': {'childSha256': child_sha, 'producerSha256': sha(producer),
-                            'sources': {PRODUCER: PRODUCER_INPUT_SHA}},
+                            'sources': {PRODUCER: producer_input_sha}},
         'startedWallNs': START, 'finishedWallNs': START + 10 * NS,
         'clockSamples': {'start': sample(START), 'finish': sample(START + 10 * NS)},
         'traceClock': {'kind': KIND, 'clock': 'CLOCK_REALTIME', 'option': OPTION,
@@ -52,11 +56,17 @@ def _clock_original(source, child, child_sha):
 
 
 def clock_original():
-    return _clock_original(SOURCE, REVIEWED_CHILD, CHILD_SHA)
+    return _clock_original(SOURCE, REVIEWED_CHILD, CHILD_SHA, PRODUCER_INPUT_SHA)
 
 
 def historical_clock_original():
-    return _clock_original(HISTORICAL_SOURCE, HISTORICAL_CHILD, HISTORICAL_CHILD_SHA)
+    return _clock_original(HISTORICAL_SOURCE, HISTORICAL_CHILD, HISTORICAL_CHILD_SHA,
+                           HISTORICAL_PRODUCER_INPUT_SHA)
+
+
+def previous_clock_original():
+    return _clock_original(PREVIOUS_SOURCE, PREVIOUS_CHILD, PREVIOUS_CHILD_SHA,
+                           HISTORICAL_PRODUCER_INPUT_SHA)
 
 
 def prefix(value):
@@ -72,11 +82,18 @@ class EntryClockControls(unittest.TestCase):
             source_binding(old)
         self.assertIsNone(source_binding(clock_original()))
 
+    def test_previous_stat_fixture_is_unchanged_and_not_current_authority(self):
+        previous = previous_clock_original()
+        self.assertEqual(sha(json.dumps(previous, sort_keys=True, separators=(',', ':')).encode()),
+                         'b489c4fdea308cc4803aafe4a12e1656a6eda30cf2210735fe9779f2419853f2')
+        with self.assertRaises(RuntimeError):
+            source_binding(previous)
+
     def test_mixed_historical_and_current_source_child_bindings_refuse(self):
-        old, current = historical_clock_original(), clock_original()
-        for source in (HISTORICAL_SOURCE, SOURCE):
-            for child_sha in (HISTORICAL_CHILD_SHA, CHILD_SHA):
-                for child in (old, current):
+        old, previous, current = historical_clock_original(), previous_clock_original(), clock_original()
+        for source in (HISTORICAL_SOURCE, PREVIOUS_SOURCE, SOURCE):
+            for child_sha in (HISTORICAL_CHILD_SHA, PREVIOUS_CHILD_SHA, CHILD_SHA):
+                for child in (old, previous, current):
                     value = deepcopy(current)
                     value['sourceHead'] = source
                     value['controlledBuild']['childSha256'] = child_sha
@@ -89,6 +106,12 @@ class EntryClockControls(unittest.TestCase):
                         else:
                             with self.assertRaises(RuntimeError):
                                 source_binding(value)
+
+    def test_old_producer_input_is_not_current_authority(self):
+        value = clock_original()
+        value['controlledBuild']['sources'][PRODUCER] = HISTORICAL_PRODUCER_INPUT_SHA
+        with self.assertRaises(RuntimeError):
+            source_binding(value)
 
     def test_exact_integer_unix_and_iso_fractional_rollover(self):
         self.assertEqual(unix_ns('1793030001.000000000') - unix_ns('1793030000.999999999'), 1)

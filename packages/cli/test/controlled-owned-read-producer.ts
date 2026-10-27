@@ -84,6 +84,14 @@ export interface ControlledReadTestSupervisor {
   /** Private supervisor capability issued only AFTER separate independent bootstrap replay.
    * The reference alone has no authority; the callable checks retained original proof/current image. */
   readonly bootstrap?: { readonly evidenceRef: string; assertCurrent(): undefined };
+  /** Optional source-reviewed child composition, never inferred from names or paths.
+   * Identity binds the declared roles; independent source/image review proves inclusion. */
+  readonly currentnessComposition?: Readonly<{
+    kind: "connected-physical-bootstrap-v1";
+    physicalAssertion: ControlledReadTestSupervisor["assertCurrent"];
+    bootstrap: NonNullable<ControlledReadTestSupervisor["bootstrap"]>;
+    bootstrapAssertion: () => undefined;
+  }>;
   readonly content: string;
   readonly offset: number;
   readonly length: number;
@@ -106,13 +114,32 @@ export async function runControlledOwnedReadTest(
   const content = supervisor.content,
     offset = supervisor.offset,
     length = supervisor.length;
-  const assertPhysicalCurrent = supervisor.assertCurrent.bind(supervisor);
-  const bootstrap = supervisor.bootstrap
-    ? Object.freeze({
-        evidenceRef: supervisor.bootstrap.evidenceRef,
-        assertCurrent: supervisor.bootstrap.assertCurrent.bind(supervisor.bootstrap),
-      })
-    : undefined;
+  // Identity must remain unbound; Reflect.apply below retains the original receiver.
+  // eslint-disable-next-line @typescript-eslint/unbound-method
+  const originalPhysicalAssertion = supervisor.assertCurrent;
+  const originalBootstrap = supervisor.bootstrap;
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- Retained with originalBootstrap as receiver.
+  const originalBootstrapAssertion = originalBootstrap?.assertCurrent;
+  const bootstrapEvidenceRef = originalBootstrap?.evidenceRef;
+  const composition = supervisor.currentnessComposition;
+  if (composition !== undefined) {
+    assert.equal(lane, "connected", "currentness composition requires connected lane");
+    assert.ok(composition && typeof composition === "object" && Object.isFrozen(composition));
+    const descriptors = Object.getOwnPropertyDescriptors(composition);
+    assert.deepEqual(
+      Reflect.ownKeys(descriptors).sort(),
+      ["kind", "physicalAssertion", "bootstrap", "bootstrapAssertion"].sort(),
+    );
+    for (const descriptor of Object.values(descriptors)) assert.ok("value" in descriptor);
+    assert.equal(composition.kind, "connected-physical-bootstrap-v1");
+    assert.equal(composition.physicalAssertion, originalPhysicalAssertion);
+    assert.equal(composition.bootstrap, originalBootstrap);
+    assert.equal(composition.bootstrapAssertion, originalBootstrapAssertion);
+    assert.equal(typeof originalPhysicalAssertion, "function");
+    assert.ok(originalBootstrap && typeof originalBootstrapAssertion === "function");
+  }
+  const assertPhysicalCurrent = () => Reflect.apply(originalPhysicalAssertion, supervisor, []);
+  const assertBootstrapCurrent = () => Reflect.apply(originalBootstrapAssertion!, originalBootstrap, []);
   const phase = supervisor.phase.bind(supervisor),
     fault = supervisor.fault;
   const settleOriginalDelivery = supervisor.settleOriginalDelivery?.bind(supervisor);
@@ -123,8 +150,8 @@ export async function runControlledOwnedReadTest(
   assert.ok(Number.isSafeInteger(length) && length > 0);
   assert.ok(offset + length <= Buffer.byteLength(content));
   if (lane === "connected") {
-    assert.ok(bootstrap?.evidenceRef);
-    assert.equal(bootstrap.assertCurrent(), undefined);
+    assert.ok(bootstrapEvidenceRef);
+    assert.equal(assertBootstrapCurrent(), undefined);
   }
   const config = join(base, "workspace"),
     storeDir = join(config, ".orca");
@@ -171,8 +198,13 @@ export async function runControlledOwnedReadTest(
     return credentials.list().find((item) => item.id === actor.credentialId)!;
   };
   const check = (): undefined => {
-    assert.equal(assertPhysicalCurrent(), undefined);
-    if (lane === "connected") assert.equal(bootstrap!.assertCurrent(), undefined);
+    // Only the exact reviewed child declaration includes the original physical
+    // assertion. No fallback after validation/execution failure and no saved success.
+    if (composition !== undefined) assert.equal(assertBootstrapCurrent(), undefined);
+    else {
+      assert.equal(assertPhysicalCurrent(), undefined);
+      if (lane === "connected") assert.equal(assertBootstrapCurrent(), undefined);
+    }
     abort.signal.throwIfAborted();
     if (operator) currentCredential(operator);
     if (reviewer) currentCredential(reviewer);
@@ -580,7 +612,7 @@ export async function runControlledOwnedReadTest(
         ...(lane === "connected"
           ? {
               controlledSupervisor: {
-                installedEvidenceRef: bootstrap!.evidenceRef,
+                installedEvidenceRef: bootstrapEvidenceRef!,
                 assertCurrent: check,
                 assertInterval: interval,
               },
@@ -698,7 +730,7 @@ export async function runControlledOwnedReadTest(
         lease,
         initialRevision,
         profileRef,
-        installedEvidenceRef: bootstrap?.evidenceRef ?? null,
+        installedEvidenceRef: bootstrapEvidenceRef ?? null,
         interval: { offset: offset, length: length },
         expiresAt: snapshot.expiresAt,
         rules: bootstrapRule ? [bootstrapRule] : [],

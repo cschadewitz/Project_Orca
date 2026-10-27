@@ -17,7 +17,8 @@ import controlled_supervisor as supervisor
 import controlled_timestamps as timestamps
 from controlled_connected import ConnectedDesignation, snapshot
 from controlled_supervisor import REPO, assert_image_sources
-from test_controlled_timestamps import HISTORICAL_CHILD, HISTORICAL_CHILD_SHA, HISTORICAL_SOURCE
+from test_controlled_timestamps import (HISTORICAL_CHILD, HISTORICAL_CHILD_SHA, HISTORICAL_SOURCE,
+    PREVIOUS_CHILD, PREVIOUS_CHILD_SHA, PREVIOUS_SOURCE, HISTORICAL_PRODUCER_INPUT_SHA)
 
 
 class ReviewedImagePinControls(unittest.TestCase):
@@ -60,12 +61,29 @@ class ReviewedImagePinControls(unittest.TestCase):
     def test_source_pins_and_rebuilt_input_correspondence_are_coherent(self):
         self.assertEqual(supervisor.SOURCE, connected.SOURCE)
         self.assertEqual(supervisor.SOURCE, timestamps.SOURCE)
-        self.assertEqual(timestamps.SOURCE, 'fa25390e8a88e23a33640f40404b6da58938bdb4')
+        self.assertEqual(timestamps.SOURCE, '3fce8bcc9afd381cd07c0e06051921307d6322b3')
         self.assertEqual(self.build['childSha256'], timestamps.CHILD_SHA)
         self.assertEqual(self.build['sources'][timestamps.PRODUCER], timestamps.PRODUCER_INPUT_SHA)
+        retained = json.loads((REPO / 'docs/preparation/tool-execution-guards/'
+            'controlled-currentness-composition-frozen-build.json').read_bytes())
+        self.assertEqual(self.build, retained)
         self.assertEqual(assert_image_sources(self.image), self.build)
         self.assertEqual(supervisor.digest(HISTORICAL_CHILD), HISTORICAL_CHILD_SHA)
         self.assertNotEqual(timestamps.SOURCE, HISTORICAL_SOURCE)
+
+    def test_unreviewed_child_or_producer_input_cannot_select_a_runtime_image(self):
+        # Source implementation and observer repinning are separate review steps.
+        # A preparation build must refuse while either reviewed input still differs.
+        child = self.build['childSha256']
+        producer = self.build['sources'][timestamps.PRODUCER]
+        self.assertEqual(producer, supervisor.digest((REPO / timestamps.PRODUCER).read_bytes()))
+        if child != timestamps.CHILD_SHA or producer != timestamps.PRODUCER_INPUT_SHA:
+            with self.assertRaises(RuntimeError):
+                assert_image_sources(self.image)
+            with self.assertRaises(RuntimeError):
+                timestamps.source_binding({'sourceHead': timestamps.SOURCE, 'controlledBuild': self.build})
+        else:
+            self.assertEqual(assert_image_sources(self.image), self.build)
 
     def test_new_image_retains_physical_inventory_and_proof_associations(self):
         d = self.designation()
@@ -102,7 +120,11 @@ class ReviewedImagePinControls(unittest.TestCase):
                 'identity': list(physical[:5]), 'hex': data.hex(), 'sha256': supervisor.digest(data)}
         d.bind(original)
         changes = [lambda o: o.update(sourceHead=HISTORICAL_SOURCE),
+                   lambda o: o.update(sourceHead=PREVIOUS_SOURCE),
                    lambda o: o['controlledBuild'].update(childSha256=HISTORICAL_CHILD_SHA),
+                   lambda o: o['controlledBuild'].update(childSha256=PREVIOUS_CHILD_SHA),
+                   lambda o: o['controlledBuild']['sources'].update({
+                       timestamps.PRODUCER: HISTORICAL_PRODUCER_INPUT_SHA}),
                    lambda o: o['controlledBuild'].update(producerSha256='0' * 64),
                    lambda o: o['immutable'][str(self.proof)].update(hex='00'),
                    lambda o: o['immutable'][str(self.image / 'controlled-child.mjs')].update(
@@ -118,8 +140,8 @@ class ReviewedImagePinControls(unittest.TestCase):
 
     def test_old_child_or_old_manifest_and_mixed_pairs_refuse(self):
         current_child = (self.master / 'controlled-child.mjs').read_bytes()
-        for child in (HISTORICAL_CHILD, current_child):
-            for declared_hash in (HISTORICAL_CHILD_SHA, timestamps.CHILD_SHA):
+        for child in (HISTORICAL_CHILD, PREVIOUS_CHILD, current_child):
+            for declared_hash in (HISTORICAL_CHILD_SHA, PREVIOUS_CHILD_SHA, timestamps.CHILD_SHA):
                 if child == current_child and declared_hash == timestamps.CHILD_SHA:
                     continue
                 (self.image / 'controlled-child.mjs').write_bytes(child)

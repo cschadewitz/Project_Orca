@@ -119,6 +119,14 @@ export async function runControlledOwnedReadTest(base, lane, options) {
 }
 '''
 
+COMPOSED_STUB = STUB.replace(
+    '    observedCheck(options.assertCurrent);\n    observedCheck(options.bootstrap.assertCurrent);',
+    '    observedCheck(options.currentnessComposition.bootstrapAssertion);'
+).replace('    options.assertCurrent();',
+          '    options.currentnessComposition.bootstrapAssertion();').replace(
+    'assert.equal(checks, 14)', 'assert.equal(checks, 10)'
+)
+
 
 class ChildStatObservationControls(unittest.TestCase):
     def child(self, scenario=None):
@@ -167,6 +175,20 @@ class ChildStatObservationControls(unittest.TestCase):
             for field in ('dev', 'ino', 'mode', 'uid', 'gid'):
                 with self.subTest(target=target, field=field):
                     self.assert_refused(f'identity:{target}:{field}')
+
+
+class ComposedChildStatObservationControls(ChildStatObservationControls):
+    """Same complete freshness controls through the real child's composition."""
+    def child(self, scenario=None):
+        return receipt_controls.BootstrapReceiptChildControls().child(
+            b'synthetic immutable association', tamper=scenario, stub=COMPOSED_STUB)
+
+    def test_one_fresh_bigint_observation_per_object_per_check(self):
+        result = self.child()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(json.loads(result.stdout), {
+            'kind': 'controlled-producer-correlations-v1', 'syntheticChildOnly': True,
+            'checks': 10, 'inventoryCalls': 30, 'fifoCalls': 20})
 
 
 if __name__ == '__main__':
