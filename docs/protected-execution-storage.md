@@ -16,6 +16,13 @@ values are scrubbed. Identifiers, enum tags and counters retain their schema
 meaning; coincidental short/numeric/boolean matches must not corrupt the graph.
 An unrepresentable public projection fails before any public append.
 
+ORCA's own renderings can move a value past literal scrubbing: a template formats an
+object as YAML, a function transforms it, the 400-character prompt preview cuts it.
+For a run with sensitive names the public `promptPreview` is therefore `[REDACTED]`
+(its `promptHash` stays), and a sensitive `itemWorkflow` value read from vars is
+withheld from launch provenance. A port that shows a human question to a person, such
+as the terminal prompt, shows the published `human.requested` text.
+
 Child-only sensitive defaults propagate upward before exact child state returns.
 The parent is promoted using its original admission vars plus append-only encrypted
 sensitivity overlays. Already-created logger scopes consult the updated sensitivity
