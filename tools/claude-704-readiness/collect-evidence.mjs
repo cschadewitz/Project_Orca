@@ -292,11 +292,19 @@ export function classifyCollection(collection, classifier, manifest = classifier
   );
   return {
     outcome: collection.stops.length ? "INCONSISTENT-EVIDENCE" : outcome,
-    tier,
+    tier: collection.stops.length ? "collection-stopped" : tier,
     route,
     provenance,
-    sequence,
-    review,
+    sequence: collection.stops.length
+      ? {
+          ...sequence,
+          state: "inconsistent",
+          inconsistent: [...new Set([...sequence.inconsistent, ...collection.stops])].sort(),
+        }
+      : sequence,
+    review: collection.stops.length
+      ? { ...review, decision: "UNKNOWN", cachedRepeatChecked: false, revocationBlocked: false }
+      : review,
     ...(reasons ? { reasons } : {}),
     ...(collection.stops.length ? { stops: collection.stops } : {}),
   };

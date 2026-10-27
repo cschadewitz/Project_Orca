@@ -794,18 +794,23 @@ describe("review regression controls", () => {
     events.find((event) => event.kind === "acp.tool-call" && event.inv === "inv-2").route = "other-mcp";
     const collection = collect(asInstalled(journal(events)));
     expect(collection.stops).toContain("unsupported-route:other-mcp");
+    const result = classifyCollection(collection, classifier, hypothetical);
+    expect(result.sequence.state).toBe("inconsistent");
+    expect(result.review).toMatchObject({ decision: "UNKNOWN", cachedRepeatChecked: false, revocationBlocked: false });
     expect(classifyCollection(collection, classifier, hypothetical).outcome).toBe("INCONSISTENT-EVIDENCE");
   });
   it.each(["duplicate", "late", "missing"])("refuses %s original answer", (mode) => {
     const events = mainEvents();
     const index = events.findIndex((event) => event.kind === "acp.permission-answer");
     const answer = events[index];
-    if (mode === "duplicate") events.splice(index + 1, 0, { ...answer, outcome: "deny" });
+    if (mode === "duplicate") events.splice(index + 1, 0, { ...answer, outcome: "reject" });
     else {
       events.splice(index, 1);
       if (mode === "late") events.push(answer);
     }
-    expect(collect(journal(events)).disposition).toBe("REFUSED");
+    const collection = collect(journal(events));
+    expect(collection.disposition).toBe("REFUSED");
+    if (mode === "duplicate") expect(collection.refusals).toEqual(["duplicate-permission-answer"]);
   });
   it("sanitizes malformed JSON and read errors without echo", async () => {
     const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
