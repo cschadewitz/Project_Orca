@@ -1,0 +1,214 @@
+{
+  "format": "orca.claude-installed-observations/1",
+  "label": "synthetic",
+  "run": {
+    "runRef": "run-1",
+    "provider": "claude",
+    "tool": "orca_fixture_mark",
+    "providerVersion": "2.1.309",
+    "adapterVersion": "0.95.0",
+    "actionRef": "action-1",
+    "cwdRef": "cwd-1"
+  },
+  "sources": {
+    "acp": "acp-journal",
+    "hook": "hook-journal",
+    "guard": "guard-journal",
+    "policy": "policy-journal",
+    "executor": "executor-journal",
+    "counter": "counter-journal"
+  },
+  "seals": {
+    "hook": {
+      "from": 1,
+      "to": 22
+    },
+    "counter": {
+      "from": 1,
+      "to": 22
+    }
+  },
+  "events": [
+    {
+      "seq": 1,
+      "source": "acp",
+      "kind": "acp.tool-call",
+      "inv": "inv-1",
+      "route": "fixture",
+      "action": "fixture",
+      "cwd": "fixture",
+      "binding": "binding-1"
+    },
+    {
+      "seq": 2,
+      "source": "hook",
+      "kind": "hook.frame",
+      "inv": "inv-1",
+      "action": "fixture",
+      "cwd": "fixture"
+    },
+    {
+      "seq": 3,
+      "source": "policy",
+      "kind": "policy.decision",
+      "inv": "inv-1",
+      "outcome": "allow",
+      "generation": "gen-0",
+      "binding": "binding-1",
+      "action": "fixture",
+      "cwd": "fixture"
+    },
+    {
+      "seq": 4,
+      "source": "hook",
+      "kind": "hook.response",
+      "inv": "inv-1",
+      "outcome": "allow"
+    },
+    {
+      "seq": 5,
+      "source": "acp",
+      "kind": "acp.permission-request",
+      "inv": "inv-1",
+      "scope": "exact"
+    },
+    {
+      "seq": 6,
+      "source": "acp",
+      "kind": "acp.permission-answer",
+      "inv": "inv-1",
+      "outcome": "allow-always-exact"
+    },
+    {
+      "seq": 7,
+      "source": "executor",
+      "kind": "executor.start",
+      "inv": "inv-1",
+      "outcome": "started",
+      "binding": "binding-1",
+      "action": "fixture",
+      "cwd": "fixture"
+    },
+    {
+      "seq": 8,
+      "source": "executor",
+      "kind": "executor.effect",
+      "inv": "inv-1"
+    },
+    {
+      "seq": 9,
+      "source": "counter",
+      "kind": "counter.reading",
+      "inv": "inv-1",
+      "outcome": "changed"
+    },
+    {
+      "seq": 10,
+      "source": "acp",
+      "kind": "acp.tool-call",
+      "inv": "inv-2",
+      "route": "fixture",
+      "action": "fixture",
+      "cwd": "fixture",
+      "binding": "binding-1"
+    },
+    {
+      "seq": 11,
+      "source": "hook",
+      "kind": "hook.frame",
+      "inv": "inv-2",
+      "action": "fixture",
+      "cwd": "fixture"
+    },
+    {
+      "seq": 12,
+      "source": "policy",
+      "kind": "policy.decision",
+      "inv": "inv-2",
+      "outcome": "allow",
+      "generation": "gen-0",
+      "binding": "binding-1",
+      "action": "fixture",
+      "cwd": "fixture"
+    },
+    {
+      "seq": 13,
+      "source": "hook",
+      "kind": "hook.response",
+      "inv": "inv-2",
+      "outcome": "allow"
+    },
+    {
+      "seq": 14,
+      "source": "executor",
+      "kind": "executor.start",
+      "inv": "inv-2",
+      "outcome": "started",
+      "binding": "binding-1",
+      "action": "fixture",
+      "cwd": "fixture"
+    },
+    {
+      "seq": 15,
+      "source": "executor",
+      "kind": "executor.effect",
+      "inv": "inv-2"
+    },
+    {
+      "seq": 16,
+      "source": "counter",
+      "kind": "counter.reading",
+      "inv": "inv-2",
+      "outcome": "changed"
+    },
+    {
+      "seq": 17,
+      "source": "policy",
+      "kind": "policy.revocation",
+      "generation": "gen-1"
+    },
+    {
+      "seq": 18,
+      "source": "acp",
+      "kind": "acp.tool-call",
+      "inv": "inv-3",
+      "route": "fixture",
+      "action": "fixture",
+      "cwd": "fixture",
+      "binding": "binding-1"
+    },
+    {
+      "seq": 19,
+      "source": "hook",
+      "kind": "hook.frame",
+      "inv": "inv-3",
+      "action": "fixture",
+      "cwd": "fixture"
+    },
+    {
+      "seq": 20,
+      "source": "policy",
+      "kind": "policy.decision",
+      "inv": "inv-3",
+      "outcome": "deny",
+      "generation": "gen-1",
+      "binding": "binding-1",
+      "action": "fixture",
+      "cwd": "fixture"
+    },
+    {
+      "seq": 21,
+      "source": "hook",
+      "kind": "hook.response",
+      "inv": "inv-3",
+      "outcome": "deny"
+    },
+    {
+      "seq": 22,
+      "source": "counter",
+      "kind": "counter.reading",
+      "inv": "inv-3",
+      "outcome": "unchanged"
+    }
+  ]
+}

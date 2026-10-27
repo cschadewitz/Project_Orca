@@ -1,0 +1,190 @@
+{
+  "format": "orca.claude-installed-readiness-pins/1",
+  "issue": 704,
+  "checkedAt": "2026-10-27",
+  "execution": "none",
+  "installedObservations": "NONE",
+  "evidenceLevel": "source-reviewed",
+  "note": "Registry metadata, published tarball contents and official documentation read on 2026-10-27 without installing or running anything. These are candidate identities for the experiment route, not installed facts.",
+  "route": {
+    "summary": "ORCA ACP client -> @agentclientprotocol/claude-agent-acp 0.95.0 -> @anthropic-ai/claude-agent-sdk 0.3.309 -> the SDK's own platform binary",
+    "executableSelection": "claudeCliPath() resolves @anthropic-ai/claude-agent-sdk-<platform>[-musl]/claude unless CLAUDE_CODE_EXECUTABLE is set; the experiment requires it unset",
+    "cliPackageRole": "@anthropic-ai/claude-code 2.1.309 is the version reference only. It is not on the adapter route, and its platform binary is not shown to be the SDK's."
+  },
+  "artifacts": {
+    "adapter": {
+      "package": "@agentclientprotocol/claude-agent-acp",
+      "version": "0.95.0",
+      "publishedAt": "2026-10-23T20:00:57.929Z",
+      "integrity": "sha512-9ocOKHfeGrSwXshLdaweYvRSdzy5fltbk+WiG2t7bQXW+882hiyrvZzUOhZ9k8ItwdLfpXcnytVlyDbjMdHDIA==",
+      "shasum": "70bc2a15aadf4ca95d07ce85de2a1895a00f29d4",
+      "gitHead": "ebfbfbdaa9c2a6a8bd9eb0a4965b521009152350",
+      "tag": { "name": "v0.95.0", "commit": "ebfbfbdaa9c2a6a8bd9eb0a4965b521009152350" },
+      "dependencies": {
+        "@anthropic-ai/claude-agent-sdk": "0.3.309",
+        "@agentclientprotocol/sdk": "2.0.1",
+        "zod": "4.6.7",
+        "diff": "9.0.0"
+      },
+      "attestation": "the registry lists an SLSA provenance v1 attestation; it was not verified"
+    },
+    "sdk": {
+      "package": "@anthropic-ai/claude-agent-sdk",
+      "version": "0.3.309",
+      "publishedAt": "2026-10-22T20:35:53.699Z",
+      "integrity": "sha512-Tou0fXBkxKJDcgT09v3Iv/Jd7bNgapgfAiHxGPctAADPFQhidfhZbcv7at1cVL0Lon5sbs+OzP/pEOigw2TI0A==",
+      "shasum": "8806fb5d1de8b375e4aea80d806def7570863ce6",
+      "tarballDigestRecomputed": true,
+      "attestation": "none listed",
+      "manifest": {
+        "file": "manifest.json",
+        "version": "2.1.309",
+        "commit": "1ce7e4ff2da8d4b0f5c15b291e4a9b54716970c2",
+        "buildDate": "2026-10-22T19:32:59Z",
+        "manifestSignatureEnforcement": "flag",
+        "signature": "not verified; the enforcement field is recorded, not interpreted"
+      }
+    },
+    "sdkPlatform": {
+      "linux-x64": {
+        "package": "@anthropic-ai/claude-agent-sdk-linux-x64",
+        "version": "0.3.309",
+        "integrity": "sha512-96G8/uTArlvTTg0qGtiP36W76Ug/YT0gMBh8KX7J2RigdOTrk6QkHtUeCzrw6yff5hEIzecN7EWNw6uh9USo4A==",
+        "shasum": "cc1cac4584dba49e82c0d5b69ebdf34163793ed2",
+        "libc": "glibc",
+        "binarySha256": "4d704a8aecbe038affa3000f498ae17c1b4f753add8facb8764120affc99b658",
+        "binarySize": 293469552
+      },
+      "darwin-arm64": {
+        "package": "@anthropic-ai/claude-agent-sdk-darwin-arm64",
+        "version": "0.3.309",
+        "integrity": "sha512-qC93iDGEioaXqWsYazcZzNv3hd8d4VHkCFgb+AzvbkCWOzZHnRu1EqF4Iz5kCTLDs4VdMvCa1NkzlUwtTedBVw==",
+        "shasum": "8232ca40399e98e03fae7ddb48684b1258afc2c4",
+        "libc": null,
+        "binarySha256": "5eadc0009cdcdbc0d06e58110d7b2baf88ced6088b1c33a60a21217fe410619c",
+        "binarySize": 275923296
+      }
+    },
+    "cli": {
+      "package": "@anthropic-ai/claude-code",
+      "version": "2.1.309",
+      "publishedAt": "2026-10-22T20:34:13.713Z",
+      "integrity": "sha512-+lBYZRuXOJpiKJcRv/CK7gF+5UFNWyJE7hSxkgGUKDZOWgANl9MAabfTkrJk183Tp3B0Nv4xF/DU1t0BaKXOPw==",
+      "shasum": "f9e48d703c778c2814136cf492918f49f2c4bbfb",
+      "tarballDigestRecomputed": true,
+      "contents": "bin/claude.exe placeholder, cli-wrapper.cjs and install.cjs; no native manifest",
+      "platform": {
+        "linux-x64": "sha512-36D6kMC0fWdWLwBA8XYaJTSTXEWvw0Kc3WQYqterieKDtplIfUsE5jurZAYilhzOeF+uNL9SNn4DkwhQmUrRMg==",
+        "darwin-arm64": "sha512-7ZVUH/WyxWpFfkV90tJBUSnFTQo8wwRxHNOLNj+q8eYp5DNoCU8KOVC3OiNDmo832BrfQImH0XmpWjGqKPulDg=="
+      }
+    }
+  },
+  "newerAvailable": {
+    "cli": "2.1.311",
+    "sdk": "0.3.311",
+    "adapter": "0.97.0, which depends on SDK 0.3.310 rather than 0.3.311",
+    "relevantChanges": "2.1.310 fixed Windows PreToolUse/PermissionRequest hooks letting a call through when Git Bash is missing and the hook command is only quoted strings; 2.1.309 fixed Windows PowerShell hooks failing open without Git for Windows.",
+    "decision": "Pins unchanged. The merged classifier compares the run header with the 2.1.309/0.95.0 candidate, and adapter 0.95.0 depends on SDK 0.3.309 exactly. Moving pins needs a reviewed update of the merged provenance. Windows hosts are excluded."
+  },
+  "adapterSource": {
+    "repository": "agentclientprotocol/claude-agent-acp",
+    "revision": "ebfbfbdaa9c2a6a8bd9eb0a4965b521009152350",
+    "files": {
+      "src/acp-agent.ts": "0d112d62ccb0465f1b2d305b67caa649b3ab5e3e1bfca074f4d9021ffb78695f",
+      "src/permissions/effects.ts": "b7f442e622e720a26a5e4a573eb04e63ca15541277ef4947f49b41123e3bbd03",
+      "src/permissions/normalization.ts": "e32bf225e68d663026275c1da77f7ca9e7fc5708d1b91a878f08a5ac01f32365",
+      "src/permissions/response.ts": "32bd41ff08068140116773f79737335dbeb73274b2bc0e4ff9ffcb1810143ed2"
+    },
+    "findings": [
+      "acp-agent.ts:2080 claudeCliPath() prefers CLAUDE_CODE_EXECUTABLE, then the SDK platform package matching the runtime libc.",
+      "acp-agent.ts:11487 sets settingSources [user, project, local] before spreading the client's _meta.claudeCode.options, so the client can replace it.",
+      "acp-agent.ts:11551-11583 merges the client's hooks with the adapter's own PreToolUse callbacks (subagent configuration on the RFD form, Edit|Write preview on v2). Callbacks cannot cross JSON-RPC, so ORCA's hook must arrive as a command hook in settings.",
+      "effects.ts:68-77 and 161-175: for Bash and mcp__ tools, 'allow with updates' applies the native CLI's own permission_suggestions, so the breadth and destination of the remembered rule are decided natively.",
+      "The merged claude-decode excerpt (response.ts lines 6-36) still matches this revision byte for byte (sha256 97856957...bfc10e)."
+    ]
+  },
+  "documentation": [
+    {
+      "url": "https://code.claude.com/docs/en/hooks.md",
+      "sha256": "86de346e7bfcfac466578190c46e003b5f0b17796855166f23806c8da26b6a0d",
+      "relied": [
+        "PreToolUse permissionDecision allow skips the permission prompt; deny and ask rules are still evaluated.",
+        "Exit code 0 with no output means no decision: the call continues through the normal permission flow.",
+        "PreToolUse hooks run before every tool call; PermissionRequest hooks run only when Claude Code is about to ask, or would auto-deny a call that cannot prompt.",
+        "onFailure block (v2.1.295+) turns a hook that cannot start, times out, exits other than 0 or 2, or prints invalid output into a block; unset, those failures continue.",
+        "Multiple PreToolUse decisions resolve deny > defer > ask > allow; defer ends the turn and needs -p.",
+        "Hooks from settings, managed policy and plugins also run inside subagents; MCP tools appear as mcp__<server>__<tool>.",
+        "Direct edits to hooks in settings files are normally picked up by the file watcher."
+      ]
+    },
+    {
+      "url": "https://code.claude.com/docs/en/agent-sdk/permissions.md",
+      "sha256": "939b3406cdef01555a879cfe9957c1d71245c5aa147d6b45924693a5f0db9a27",
+      "relied": [
+        "Evaluation order: hooks, deny rules, ask rules, permission mode, allow rules, canUseTool.",
+        "Auto-approved tools never reach canUseTool; an allow rule skips the callback.",
+        "For checks that must run on every tool call, use a PreToolUse hook."
+      ]
+    },
+    {
+      "url": "https://code.claude.com/docs/en/agent-sdk/hooks.md",
+      "sha256": "fd0706dee09c3cdeb76c21a68723e0184e50e2eb4fac48dd3f2ae1a08e4f3b92",
+      "relied": ["Read for SDK callback-hook context only; the experiment uses a settings command hook."]
+    },
+    {
+      "url": "https://code.claude.com/docs/en/changelog.md",
+      "sha256": "cf3aa231d70f5f5efd98c56819b79d0bc4ed4ef3a07be296af9f84fce9c06b95",
+      "relied": ["2.1.309 to 2.1.311 hook and sandbox entries summarized under newerAvailable."]
+    },
+    {
+      "url": "sdk.d.ts in @anthropic-ai/claude-agent-sdk 0.3.309",
+      "sha256": null,
+      "relied": [
+        "settingSources [] disables filesystem settings (SDK isolation mode).",
+        "settings is the flag tier and carries hooks.",
+        "managedSettings from a parent is filtered restrictive-only and dropped when an admin managed tier exists; whether hooks survive that filter is not stated."
+      ]
+    }
+  ],
+  "linkage": [
+    {
+      "claim": "adapter 0.95.0 was built from ebfbfbda",
+      "basis": "npm gitHead equals the v0.95.0 tag commit",
+      "level": "source-reviewed"
+    },
+    {
+      "claim": "adapter 0.95.0 runs SDK 0.3.309",
+      "basis": "exact dependency in the published package.json",
+      "level": "source-reviewed"
+    },
+    {
+      "claim": "SDK 0.3.309 carries native 2.1.309 from commit 1ce7e4ff",
+      "basis": "manifest.json in the SDK tarball, whose sha512 was recomputed and matches the registry integrity",
+      "level": "source-reviewed"
+    },
+    {
+      "claim": "the binary that runs is the SDK platform binary named in the manifest",
+      "basis": "requires hashing the resolved executable on the host",
+      "level": "unknown"
+    },
+    {
+      "claim": "CLI 2.1.309 and SDK 0.3.309 share a native implementation",
+      "basis": "different packages and integrities, no manifest in the CLI package; a shared .309 suffix is not evidence",
+      "level": "unknown"
+    }
+  ],
+  "unknowns": [
+    "resolved executable, launcher chain, OS/arch/libc and installed binary sha256 on the authorized host",
+    "whether any admin managed-settings tier exists on the host, and what it sets",
+    "whether hooks in the flag-tier settings option are in force before the first tool call on this route",
+    "whether the adapter's own PreToolUse callbacks return a decision that interacts with ORCA's",
+    "the native permission_suggestions offered for the fixture tool: exact rule or wider, and its destination",
+    "where a remembered rule lives when settingSources is empty, and whether it is read back in the same session",
+    "whether exit 0 with no output is the only pass-through the selected binary treats as no decision",
+    "onFailure block behaviour for unavailable, crash, timeout, malformed and empty on the selected binary",
+    "PreToolUse invocation for a natively remembered permission (the cached repeat) on the selected binary",
+    "final input and effective cwd at execution compared with the checked frame",
+    "pending hook ownership across cancellation, late answers and restart",
+    "authenticity of any journal or receipt: no authenticator exists"
+  ]
+}
