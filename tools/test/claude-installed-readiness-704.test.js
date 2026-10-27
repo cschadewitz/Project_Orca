@@ -638,7 +638,7 @@ describe("failure and negative paths (synthetic; each is preserved, none is a su
       expect(collection.stops).toEqual([`unsupported-route:${route}`]);
       const result = classifyCollection(collection, classifier, hypothetical);
       expect(result.outcome).toBe("INCONSISTENT-EVIDENCE");
-      expect(result.sequence.inconsistent).toContain("unexpected-call");
+      expect(result.sequence.inconsistent).toContain(`unsupported-route:${route}`);
     },
   );
 });
@@ -799,6 +799,31 @@ describe("review regression controls", () => {
     expect(result.review).toMatchObject({ decision: "UNKNOWN", cachedRepeatChecked: false, revocationBlocked: false });
     expect(classifyCollection(collection, classifier, hypothetical).outcome).toBe("INCONSISTENT-EVIDENCE");
   });
+  it.each(["subagent", "other-mcp", "interactive-stdin", "other-tool"])(
+    "stops %s with empty receipts independently of classifier result",
+    (route) => {
+      const collection = collect(journal([dispatch("inv-1", { route })], { seals: () => ({}) }));
+      expect(collection).toMatchObject({ disposition: "RECORDED", record: { receipts: [] } });
+      const classifyExperiment = vi.fn(() => {
+        throw new Error("stopped collection must not reach classifier");
+      });
+      const result = classifyCollection(collection, { classifyExperiment }, null);
+      expect(classifyExperiment).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        outcome: "INCONSISTENT-EVIDENCE",
+        tier: "collection-stopped",
+        route: "UNKNOWN",
+        sequence: { state: "inconsistent", inconsistent: [`unsupported-route:${route}`], failed: [], incomplete: [] },
+        review: {
+          decision: "UNKNOWN",
+          cachedRepeatChecked: false,
+          revocationBlocked: false,
+          violations: [`unsupported-route:${route}`],
+        },
+        stops: [`unsupported-route:${route}`],
+      });
+    },
+  );
   it.each(["duplicate", "late", "missing"])("refuses %s original answer", (mode) => {
     const events = mainEvents();
     const index = events.findIndex((event) => event.kind === "acp.permission-answer");

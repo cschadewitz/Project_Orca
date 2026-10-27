@@ -285,29 +285,23 @@ export function collect(
 /** Classifies a collection with the merged classifier; a refused journal has nothing to classify. */
 export function classifyCollection(collection, classifier, manifest = classifier.provenance) {
   if (collection.disposition !== "RECORDED") return { outcome: "NOT-CLASSIFIED", route: "UNKNOWN" };
+  if (collection.stops.length) {
+    const stops = [...collection.stops];
+    return {
+      outcome: "INCONSISTENT-EVIDENCE",
+      tier: "collection-stopped",
+      route: "UNKNOWN",
+      sequence: { state: "inconsistent", inconsistent: stops, failed: [], incomplete: [] },
+      review: { decision: "UNKNOWN", cachedRepeatChecked: false, revocationBlocked: false, violations: stops },
+      stops,
+    };
+  }
   const { outcome, tier, route, provenance, sequence, review, reasons } = classifier.classifyExperiment(
     collection.record,
     manifest,
     classifier.expectedRun(collection.record.run.tool),
   );
-  return {
-    outcome: collection.stops.length ? "INCONSISTENT-EVIDENCE" : outcome,
-    tier: collection.stops.length ? "collection-stopped" : tier,
-    route,
-    provenance,
-    sequence: collection.stops.length
-      ? {
-          ...sequence,
-          state: "inconsistent",
-          inconsistent: [...new Set([...sequence.inconsistent, ...collection.stops])].sort(),
-        }
-      : sequence,
-    review: collection.stops.length
-      ? { ...review, decision: "UNKNOWN", cachedRepeatChecked: false, revocationBlocked: false }
-      : review,
-    ...(reasons ? { reasons } : {}),
-    ...(collection.stops.length ? { stops: collection.stops } : {}),
-  };
+  return { outcome, tier, route, provenance, sequence, review, ...(reasons ? { reasons } : {}) };
 }
 
 export async function main(argv) {
