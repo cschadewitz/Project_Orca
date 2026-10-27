@@ -47,11 +47,17 @@ just for this test:
   touching anything, so an existing folder is never reused. If it reports that the folder
   exists, or shows any other error, **stop**.
 
-**Linux** (terminal):
+**Linux** (Bash terminal):
 
 <!-- validate: linux-project -->
-```sh
-if env | grep -q '^GIT_'; then printf '%s\n' 'Stop: inherited GIT_* settings; contact your coordinator.' >&2; false; else true; fi &&
+```bash
+(
+  orca_trial_environment=$(env) || { printf '%s\n' 'Stop: environment inspection failed; contact your coordinator.' >&2; exit 1; }
+  if [[ $'\n'"$orca_trial_environment" == *$'\n'GIT_*=* ]]; then
+    printf '%s\n' 'Stop: inherited GIT_* settings; contact your coordinator.' >&2
+    exit 1
+  fi
+) &&
 mkdir ~/orca-trial &&
 mkdir ~/orca-trial/project ~/orca-trial/workspace &&
 cd ~/orca-trial/project &&
