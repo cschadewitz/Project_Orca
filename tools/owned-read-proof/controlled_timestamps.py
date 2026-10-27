@@ -22,10 +22,10 @@ OWNER_NS = 55 * NS
 RUN_NS = 60 * NS
 OPTION = '--absolute-timestamps=format:unix,precision:ns'
 KIND = 'strace-6.13-unix-entry-nanoseconds-v1'
-SOURCE = 'fa25390e8a88e23a33640f40404b6da58938bdb4'
+SOURCE = '3fce8bcc9afd381cd07c0e06051921307d6322b3'
 PRODUCER = 'packages/cli/test/controlled-owned-read-producer.ts'
-PRODUCER_INPUT_SHA = 'c9d4a7185bdb07d05b7f0ca192e65fc6efa574141862f3994c8cc35bbd584e86'
-CHILD_SHA = '9c3e6236a9007647142d5ca1d9a15cbb5209f344d9d47241ffea2e83d8d13e8b'
+PRODUCER_INPUT_SHA = '61d62d01d32057036ea3cd638fa6a04abcf3f0b04be9973ae3c1c24ee44295a8'
+CHILD_SHA = '17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13'
 PREFIX = re.compile(r'([1-9][0-9]*)\s+([1-9][0-9]*\.[0-9]{9})\s+(\S.*)')
 
 
