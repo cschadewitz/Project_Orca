@@ -3,30 +3,39 @@ from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
+import json
 import unittest
 
 from controlled_timestamps import (NS, OWNER_NS, OPTION, KIND, SOURCE, PRODUCER,
     PRODUCER_INPUT_SHA, CHILD_SHA, sha, unix_ns, iso_ns, clock_samples, validate_clock,
-    strip_prefixes, timestamped_events, resource_entry, expiry_bound)
+    strip_prefixes, timestamped_events, resource_entry, expiry_bound, source_binding)
 
 START = 1793030000 * NS
-# Historical grammar fixtures must retain their reviewed bytes when the working
-# child changes. This does not update the observer's reviewed source/image pins.
-REVIEWED_CHILD = subprocess.run(
-    ['git', 'show', SOURCE + ':tools/owned-read-proof/controlled-child.mjs'],
-    cwd=Path(__file__).resolve().parents[2], capture_output=True, check=True, timeout=5).stdout
+# Retain the original fixture unchanged; current controls use a separate fixture
+# bound to the newly reviewed source. Neither is a runtime trust selector.
+HISTORICAL_SOURCE = '557f62fbe86fc8371d48f11ec37bf9db71cac436'
+HISTORICAL_CHILD_SHA = 'a58036e5343fe07dac8625f7d5dfc2a7e0c6bfe660ddb1e96711b5b8d002e35c'
 
 
-def clock_original():
+def reviewed_child(source):
+    return subprocess.run(
+        ['git', 'show', source + ':tools/owned-read-proof/controlled-child.mjs'],
+        cwd=Path(__file__).resolve().parents[2], capture_output=True, check=True, timeout=5).stdout
+
+
+REVIEWED_CHILD = reviewed_child(SOURCE)
+HISTORICAL_CHILD = reviewed_child(HISTORICAL_SOURCE)
+
+
+def _clock_original(source, child, child_sha):
     def sample(wall):
         return {'wallNs': wall, 'monotonicBeforeNs': wall - 10**18 - 10,
                 'monotonicAfterNs': wall - 10**18 + 10}
-    child = REVIEWED_CHILD
     producer = b'synthetic bundle for grammar controls only'
-    return {'sourceHead': SOURCE, 'argv': ['/node', '/image/controlled-child.mjs'],
+    return {'sourceHead': source, 'argv': ['/node', '/image/controlled-child.mjs'],
         'immutable': {path: {'family': 'image', 'hex': data.hex(), 'sha256': sha(data)} for path, data in
                       [('/image/controlled-child.mjs', child), ('/image/controlled-producer.mjs', producer)]},
-        'controlledBuild': {'childSha256': CHILD_SHA, 'producerSha256': sha(producer),
+        'controlledBuild': {'childSha256': child_sha, 'producerSha256': sha(producer),
                             'sources': {PRODUCER: PRODUCER_INPUT_SHA}},
         'startedWallNs': START, 'finishedWallNs': START + 10 * NS,
         'clockSamples': {'start': sample(START), 'finish': sample(START + 10 * NS)},
@@ -42,11 +51,45 @@ def clock_original():
                       'traceSha256': 'c'*64}}}
 
 
+def clock_original():
+    return _clock_original(SOURCE, REVIEWED_CHILD, CHILD_SHA)
+
+
+def historical_clock_original():
+    return _clock_original(HISTORICAL_SOURCE, HISTORICAL_CHILD, HISTORICAL_CHILD_SHA)
+
+
 def prefix(value):
     return f'{value // NS}.{value % NS:09d}'
 
 
 class EntryClockControls(unittest.TestCase):
+    def test_historical_fixture_is_unchanged_and_not_current_authority(self):
+        old = historical_clock_original()
+        self.assertEqual(sha(json.dumps(old, sort_keys=True, separators=(',', ':')).encode()),
+                         '53bfcaef92557acfea26c147ca1e1f1584e4541409fd071cff761c4b62eeb2f8')
+        with self.assertRaises(RuntimeError):
+            source_binding(old)
+        self.assertIsNone(source_binding(clock_original()))
+
+    def test_mixed_historical_and_current_source_child_bindings_refuse(self):
+        old, current = historical_clock_original(), clock_original()
+        for source in (HISTORICAL_SOURCE, SOURCE):
+            for child_sha in (HISTORICAL_CHILD_SHA, CHILD_SHA):
+                for child in (old, current):
+                    value = deepcopy(current)
+                    value['sourceHead'] = source
+                    value['controlledBuild']['childSha256'] = child_sha
+                    value['immutable']['/image/controlled-child.mjs'] = deepcopy(
+                        child['immutable']['/image/controlled-child.mjs'])
+                    coherent = source == SOURCE and child_sha == CHILD_SHA and child is current
+                    with self.subTest(source=source, child_sha=child_sha, coherent=coherent):
+                        if coherent:
+                            self.assertIsNone(source_binding(value))
+                        else:
+                            with self.assertRaises(RuntimeError):
+                                source_binding(value)
+
     def test_exact_integer_unix_and_iso_fractional_rollover(self):
         self.assertEqual(unix_ns('1793030001.000000000') - unix_ns('1793030000.999999999'), 1)
         self.assertEqual(iso_ns('2026-10-27T00:00:00.000Z') - iso_ns('2026-10-26T23:59:59.999Z'), 1_000_000)

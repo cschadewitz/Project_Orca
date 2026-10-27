@@ -32,7 +32,7 @@ from kernel_runtime_queries import KernelRuntimeQueries
 from controlled_timestamps import OPTION, NS, RUN_NS, probe_clock, sample_clock, clock_namespaces, sha as clock_sha, validate_clock
 
 REPO = Path(__file__).resolve().parents[2]
-SOURCE = '557f62fbe86fc8371d48f11ec37bf9db71cac436'
+SOURCE = 'fa25390e8a88e23a33640f40404b6da58938bdb4'
 QUERY_PATHS = ('/proc/self/maps', '/proc/self/cgroup', '/proc/meminfo',
                '/sys/fs/cgroup//memory.max', '/sys/fs/cgroup//memory.high')
 OBSERVER_FILES = ('controlled_supervisor.py', 'controlled_observation.py', 'controlled_aggregate.py', 'controlled_diagnostics.py',

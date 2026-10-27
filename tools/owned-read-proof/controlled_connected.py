@@ -15,7 +15,7 @@ from controlled_replay import Handle, Object, Replay, UUID, fd, identity, sha, s
 from controlled_semantics import parse, same_json
 from controlled_timestamps import iso_ns
 
-SOURCE = '557f62fbe86fc8371d48f11ec37bf9db71cac436'
+SOURCE = 'fa25390e8a88e23a33640f40404b6da58938bdb4'
 PROFILE = 'orca-owned-file-read-v1'
 IMAGE_NAMES = {'controlled-build.json', 'controlled-child.mjs', 'controlled-producer.mjs'}
 HUMAN = {'instanceId': 'controlled-test-boot', 'sessionId': 'controlled-session',

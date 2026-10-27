@@ -98,3 +98,65 @@ physical image, and recheck unchanged producer semantics and expiry ordering at
 the exact reviewed head. Historical traces and receipts retain their old pins.
 Fresh bootstrap replay and connected acceptance remain outstanding; this patch
 grants no accepting token or connected command release.
+
+## Reviewed source and disposable observer repinning
+
+The initial preparation above remains a historical record of the candidate before
+source review. Independent source review subsequently approved exactly
+`fa25390e8a88e23a33640f40404b6da58938bdb4` within the fresh-stat consolidation
+scope. This follow-up changes only these disposable test-observer pins:
+
+| Location | Old value | New value |
+| --- | --- | --- |
+| `controlled_supervisor.py` `SOURCE` | `557f62fbe86fc8371d48f11ec37bf9db71cac436` | `fa25390e8a88e23a33640f40404b6da58938bdb4` |
+| `controlled_connected.py` `SOURCE` | `557f62fbe86fc8371d48f11ec37bf9db71cac436` | `fa25390e8a88e23a33640f40404b6da58938bdb4` |
+| `controlled_timestamps.py` `SOURCE` | `557f62fbe86fc8371d48f11ec37bf9db71cac436` | `fa25390e8a88e23a33640f40404b6da58938bdb4` |
+| `controlled_timestamps.py` `CHILD_SHA` | `a58036e5343fe07dac8625f7d5dfc2a7e0c6bfe660ddb1e96711b5b8d002e35c` | `9c3e6236a9007647142d5ca1d9a15cbb5209f344d9d47241ffea2e83d8d13e8b` |
+
+The producer input pin remains
+`c9d4a7185bdb07d05b7f0ca192e65fc6efa574141862f3994c8cc35bbd584e86`.
+No child or producer code changes in this follow-up. No production accepted-build
+registry, credential, OS setting, timer, trace bound or release gate changes.
+
+A new isolated image was built at `/tmp/orca-706-repinned-image` using the
+unchanged builder and Node 24.21.0. The image was not executed. Its exact emitted
+[complete build manifest](controlled-child-repinned-build.json) is retained here
+for parent review, without reformatting. All 386 input hashes (194 repository
+inputs and 192 dependency inputs) and emitted producer bytes match the prior
+candidate build exactly. The three-file candidate image, including the manifest,
+is byte-for-byte identical to the prior prepared candidate image:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `controlled-child.mjs` | 5426 | `9c3e6236a9007647142d5ca1d9a15cbb5209f344d9d47241ffea2e83d8d13e8b` |
+| `controlled-producer.mjs` | 2183299 | `d0ad8d81a7980364a4b6ae80c0876cce951104fb3323e7d1fc3fc2c01a21ec92` |
+| `controlled-build.json` | 47911 | `9e37d858e04764d939642cdeb3d980091b7ec622a219e4e07a5eedf898386cd6` |
+
+The historical timestamp fixture remains available through
+`historical_clock_original()` with its original source, child bytes and declared
+hash. Its canonical sorted-JSON SHA-256 remains
+`53bfcaef92557acfea26c147ca1e1f1584e4541409fd071cff761c4b62eeb2f8`.
+Current synthetic controls use a separate fixture bound to the new reviewed
+source. The current observer refuses the entire historical pair as well as all
+seven mixed/noncurrent combinations of source, declared child hash and retained
+child bytes. There is no historical fallback in runtime trust selection. Existing
+historical traces, receipts and evidence files are unchanged.
+
+`test_controlled_image_pins.py` builds a real three-file image and calls the actual
+source checker and retained designation checks without mocking them. Controls
+cover consistent repinned source/input correspondence, old and mixed child/build
+pairs, bundle tamper, image/proof tamper and same-byte inode replacement. Connected
+originals must retain the exact source, build, physical inventory bytes, proof and
+bootstrap plan association; all seven targeted association mutations refuse.
+The closure used in these synthetic association tests is explicitly synthetic,
+not an observed bootstrap or authority to release a command.
+
+Validation: **319 Python tests pass**, including existing compact-receipt,
+authentication, clock/expiry, kernel, Save, delivery, child-call-count and tamper
+controls. `git diff --check` passes. The earlier 40 producer/fdinfo results remain
+applicable to the identical child/producer sources; no producer behavior changed.
+The actual rebuilt image passes `assert_image_sources` at the new reviewed pin.
+Image/file/input byte comparisons and manifest hashing pass. Parent review of
+this exact manifest remains required before any fresh traced attempt. No fresh
+trace, bootstrap designation from a real run, connected command, accepting token
+or production eligibility is asserted by this repinning.
