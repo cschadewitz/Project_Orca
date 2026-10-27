@@ -1,0 +1,450 @@
+{
+  "record": "controlled-connected-validation-fanout-diagnostics-v1",
+  "authority": "none",
+  "acceptingToken": null,
+  "productionEligible": false,
+  "observerAttempt": false,
+  "startCommit": "6a4d30dda73be89b90b7684a821d18768dcc2e14",
+  "startTree": "1584948cf2add6891575506cc57f0e73f25ff42b",
+  "reviewedObserverSource": "fa25390e8a88e23a33640f40404b6da58938bdb4",
+  "environment": {
+    "node": "24.21.0",
+    "pnpm": "12.4.2 frozen lockfile",
+    "acpSdk": "1.8.0",
+    "zod": "4.6.7",
+    "kernel": "Linux 6.18.44",
+    "tracer": "strace 6.8 (observer requires 6.13; no --always-show-pid)",
+    "observerPreflight": "RuntimeError: unreviewed tracer version for entry clock provenance (before any child launch)"
+  },
+  "method": {
+    "driver": "diagnostic, outside the observer; observer prepare()/prepare_connected(); real flock and pipes",
+    "designation": "synthetic closure returning None; synthetic 1167-byte receipt; not bootstrap authority",
+    "candidateImageCheck": "assert_image_sources bypassed in the driver only, for candidate images",
+    "traceFlags": "--absolute-timestamps=format:unix,precision:ns -f -q -v -x -s 131072 (observer flags minus --always-show-pid)",
+    "enforcedLimitRun": "prlimit --fsize=268435456:268435456 --core=0:0, strace --kill-on-exit, 60 s whole-process deadline",
+    "unchangedLimits": {
+      "ownerExpirySeconds": 55,
+      "leaseTtlSeconds": 60,
+      "traceCapBytes": 268435456
+    },
+    "rawEvidenceRetained": false
+  },
+  "images": {
+    "start-reviewed": {
+      "controlled-child.mjs": "9c3e6236a9007647142d5ca1d9a15cbb5209f344d9d47241ffea2e83d8d13e8b",
+      "controlled-producer.mjs": "d0ad8d81a7980364a4b6ae80c0876cce951104fb3323e7d1fc3fc2c01a21ec92",
+      "controlled-build.json": "9e37d858e04764d939642cdeb3d980091b7ec622a219e4e07a5eedf898386cd6"
+    },
+    "93ac60d-A": {
+      "controlled-child.mjs": "9c3e6236a9007647142d5ca1d9a15cbb5209f344d9d47241ffea2e83d8d13e8b",
+      "controlled-producer.mjs": "6c4a97b5a40aaffa121ef5d00aff5fa4fd73dc73358e6ce508eda3e244a4c98a",
+      "controlled-build.json": "61ece65d3071b842d62b4d768c380e9b269f98a7157bd1032e0838b2e1c40a93"
+    },
+    "ec1f91a-A+D1+D2": {
+      "controlled-child.mjs": "7729c6faa7cca7436c0d7ab3008fd4532e3ed3d11e9c4ec01e98c04004782b13",
+      "controlled-producer.mjs": "58574f725e5094bda1d9c666bcfca8715330693ccbac634470136ab0659e08bc",
+      "controlled-build.json": "9baee9f3ffad9afa12c28ab002413def0909f0c783528e2e5a1eecf9319ebb0a"
+    },
+    "7c478c2-A+D1+D2+B": {
+      "controlled-child.mjs": "7729c6faa7cca7436c0d7ab3008fd4532e3ed3d11e9c4ec01e98c04004782b13",
+      "controlled-producer.mjs": "ef9e795eb1d79f7b211cee737e14feed517aee10503c15a7cb4dc28c1e098909",
+      "controlled-build.json": "51fc0c8b831bb0d842e03ea48fefa92de7d46e20d6aa60c988593701c78a6580"
+    }
+  },
+  "manifest": {
+    "inputs": 386,
+    "repositoryInputs": 194,
+    "dependencyInputs": 192,
+    "candidateDependencyInputsIdenticalToReviewed": true,
+    "candidateChangedRepositoryInputs": [
+      "packages/cli/src/typed-workspace-gate.ts",
+      "packages/cli/test/controlled-owned-read-producer.ts"
+    ]
+  },
+  "unitSyscalls": {
+    "resolveManagedRootBinding": {
+      "baselineStatx": 96,
+      "candidateStatx": 16
+    },
+    "neverTypedInspect": {
+      "baselineStatx": 141,
+      "candidateStatx": 30
+    },
+    "childCheckConnected": {
+      "statx": 18,
+      "openat": 3,
+      "read": 4,
+      "close": 3
+    },
+    "producerCheckConnectedBaselineStatx": 41,
+    "managedAssertBaselineStatx": 209
+  },
+  "censusConnected": {
+    "baseline": {
+      "childChecks": 18430,
+      "producerChecks": 9212,
+      "managedOwnerChecks": 3955
+    },
+    "candidate": {
+      "childChecks": 3451,
+      "producerChecks": 3445,
+      "managedOwnerChecks": 2143
+    },
+    "baselineShares": {
+      "producerChecksFromManagedAssert": 0.859,
+      "producerChecksUnderReadCaptureFacts": 0.408,
+      "sameTurnAdjacentProducerCheckPairsA+D1+D2WorkingBuildBeforeEntryReorder": 0.693
+    }
+  },
+  "straceCount": {
+    "baseline": {
+      "bootstrap": {
+        "statx": 108682,
+        "openat": 5128,
+        "read": 4883,
+        "close": 5129,
+        "pread64": 4735,
+        "futex": 5119,
+        "total": 145525
+      },
+      "connectedSavePlusPartialHumanRead": {
+        "statx": 466748,
+        "openat": 41567,
+        "read": 45538,
+        "close": 41567,
+        "pread64": 15466,
+        "futex": 10329,
+        "total": 653398
+      }
+    },
+    "candidate": {
+      "bootstrap": {
+        "statx": 21523,
+        "openat": 2617,
+        "read": 2308,
+        "close": 2618,
+        "pread64": 3145,
+        "futex": 4896,
+        "total": 46301
+      },
+      "connectedComplete": {
+        "statx": 193923,
+        "openat": 30681,
+        "read": 29231,
+        "close": 30681,
+        "pread64": 20790,
+        "futex": 16813,
+        "total": 367586
+      }
+    }
+  },
+  "fullTraces": {
+    "start-reviewed": {
+      "bootstrap": {
+        "returncode": 0,
+        "elapsedSeconds": 18.57,
+        "phasesAcknowledged": ["bootstrap"],
+        "traceBytes": 109846057,
+        "byPhase": {
+          "init": {
+            "bytes": 1635795,
+            "statx": 186
+          },
+          "bootstrap": {
+            "bytes": 108210262,
+            "statx": 108499
+          }
+        }
+      },
+      "connected": {
+        "returncode": 1,
+        "elapsedSeconds": 59.48,
+        "phasesAcknowledged": ["save"],
+        "traceBytes": 357423358,
+        "byPhase": {
+          "init": {
+            "bytes": 1658420,
+            "statx": 209
+          },
+          "save": {
+            "bytes": 287751696,
+            "statx": 276647
+          },
+          "human-read": {
+            "bytes": 68013242,
+            "statx": 65203
+          }
+        }
+      }
+    },
+    "93ac60d-A": {
+      "bootstrap": {
+        "returncode": 0,
+        "elapsedSeconds": 10.14,
+        "phasesAcknowledged": ["bootstrap"],
+        "traceBytes": 46055641,
+        "byPhase": {
+          "init": {
+            "bytes": 1562824,
+            "statx": 102
+          },
+          "bootstrap": {
+            "bytes": 44492817,
+            "statx": 42730
+          }
+        }
+      },
+      "connected": {
+        "returncode": 1,
+        "elapsedSeconds": 57.66,
+        "phasesAcknowledged": ["save"],
+        "traceBytes": 299786842,
+        "byPhase": {
+          "init": {
+            "bytes": 1585538,
+            "statx": 125
+          },
+          "save": {
+            "bytes": 165277268,
+            "statx": 150272
+          },
+          "human-read": {
+            "bytes": 132924036,
+            "statx": 119789
+          }
+        }
+      }
+    },
+    "ec1f91a-A+D1+D2": {
+      "bootstrap": {
+        "returncode": 0,
+        "elapsedSeconds": 8.64,
+        "phasesAcknowledged": ["bootstrap"],
+        "traceBytes": 36396345,
+        "byPhase": {
+          "init": {
+            "bytes": 1547281,
+            "statx": 105
+          },
+          "bootstrap": {
+            "bytes": 34849064,
+            "statx": 32773
+          }
+        }
+      },
+      "connected": {
+        "returncode": 1,
+        "elapsedSeconds": 57.01,
+        "phasesAcknowledged": ["save", "human-read"],
+        "traceBytes": 276412202,
+        "byPhase": {
+          "init": {
+            "bytes": 1558879,
+            "statx": 113
+          },
+          "save": {
+            "bytes": 93794734,
+            "statx": 82569
+          },
+          "human-read": {
+            "bytes": 146382297,
+            "statx": 126846
+          },
+          "rule-read": {
+            "bytes": 34676292,
+            "statx": 30189
+          }
+        }
+      }
+    },
+    "7c478c2-A+D1+D2+B": {
+      "bootstrap": {
+        "returncode": 0,
+        "elapsedSeconds": 5.97,
+        "phasesAcknowledged": ["bootstrap"],
+        "traceBytes": 24824699,
+        "byPhase": {
+          "init": {
+            "bytes": 1566806,
+            "statx": 105
+          },
+          "bootstrap": {
+            "bytes": 23257893,
+            "statx": 21418
+          }
+        }
+      },
+      "connected": {
+        "returncode": 0,
+        "elapsedSeconds": 45.81,
+        "phasesAcknowledged": ["save", "human-read", "rule-read"],
+        "traceBytes": 226838882,
+        "byPhase": {
+          "init": {
+            "bytes": 1587369,
+            "statx": 113
+          },
+          "save": {
+            "bytes": 65673033,
+            "statx": 57034
+          },
+          "human-read": {
+            "bytes": 100639989,
+            "statx": 86522
+          },
+          "rule-read": {
+            "bytes": 58938491,
+            "statx": 50254
+          }
+        }
+      }
+    },
+    "7c478c2-A+D1+D2+B-enforced-limits": {
+      "bootstrap": {
+        "returncode": 0,
+        "elapsedSeconds": 5.99,
+        "phasesAcknowledged": ["bootstrap"],
+        "traceBytes": 24821975,
+        "byPhase": {
+          "init": {
+            "bytes": 1566114,
+            "statx": 105
+          },
+          "bootstrap": {
+            "bytes": 23255861,
+            "statx": 21418
+          }
+        }
+      },
+      "connected": {
+        "returncode": 0,
+        "elapsedSeconds": 46.4,
+        "phasesAcknowledged": ["save", "human-read", "rule-read"],
+        "traceBytes": 226808468,
+        "byPhase": {
+          "init": {
+            "bytes": 1576130,
+            "statx": 113
+          },
+          "save": {
+            "bytes": 65669603,
+            "statx": 57031
+          },
+          "human-read": {
+            "bytes": 100616407,
+            "statx": 86519
+          },
+          "rule-read": {
+            "bytes": 58946328,
+            "statx": 50257
+          }
+        }
+      }
+    },
+    "experiment-no-inspect-bracket": {
+      "bootstrap": {
+        "returncode": 0,
+        "elapsedSeconds": 5.72,
+        "phasesAcknowledged": ["bootstrap"],
+        "traceBytes": 23579543,
+        "byPhase": {
+          "init": {
+            "bytes": 1560304,
+            "statx": 105
+          },
+          "bootstrap": {
+            "bytes": 22019239,
+            "statx": 20222
+          }
+        }
+      },
+      "connected": {
+        "returncode": 0,
+        "elapsedSeconds": 43.45,
+        "phasesAcknowledged": ["save", "human-read", "rule-read"],
+        "traceBytes": 217864643,
+        "byPhase": {
+          "init": {
+            "bytes": 1565164,
+            "statx": 113
+          },
+          "save": {
+            "bytes": 63281898,
+            "statx": 54883
+          },
+          "human-read": {
+            "bytes": 96398229,
+            "statx": 82795
+          },
+          "rule-read": {
+            "bytes": 56619352,
+            "statx": 48202
+          }
+        }
+      }
+    },
+    "experiment-lifetime-port-narrowed": {
+      "bootstrap": {
+        "returncode": 0,
+        "elapsedSeconds": 6.96,
+        "phasesAcknowledged": ["bootstrap"],
+        "traceBytes": 28743526,
+        "byPhase": {
+          "init": {
+            "bytes": 1552299,
+            "statx": 105
+          },
+          "bootstrap": {
+            "bytes": 27191227,
+            "statx": 25064
+          }
+        }
+      },
+      "connected": {
+        "returncode": 0,
+        "elapsedSeconds": 53.62,
+        "phasesAcknowledged": ["save", "human-read", "rule-read"],
+        "traceBytes": 250243558,
+        "byPhase": {
+          "init": {
+            "bytes": 1570956,
+            "statx": 113
+          },
+          "save": {
+            "bytes": 71553649,
+            "statx": 63203
+          },
+          "human-read": {
+            "bytes": 111642415,
+            "statx": 96280
+          },
+          "rule-read": {
+            "bytes": 65476538,
+            "statx": 55834
+          }
+        }
+      }
+    }
+  },
+  "refusals": {
+    "start-reviewed": "human-read scopedPermissions.choose returned outcome uncertain (cause not isolated; timing consistent with expiry)",
+    "93ac60d-A": "synthetic read fence lifetime timer at the 55 s expiresAt, in human-read",
+    "ec1f91a-A+D1+D2": "synthetic read fence lifetime timer at the 55 s expiresAt, in rule-read"
+  },
+  "tests": {
+    "vitestAt7c478c2": {
+      "passed": 119
+    },
+    "pythonAt7c478c2": {
+      "run": 329,
+      "passed": 323,
+      "byDesignPinRefusals": 4,
+      "environmentalErrors": 2
+    },
+    "pythonAtStartCommit": {
+      "run": 328,
+      "passed": 326,
+      "environmentalErrors": 2
+    }
+  }
+}
