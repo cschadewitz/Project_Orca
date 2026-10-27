@@ -1,0 +1,22 @@
+# marker scan over packages/app/dist shipped-candidate JS (excluding *.map, *.d.ts, dist/release)
+Section offsets must be ordered => none
+IndexedSourceMapConsumer => none
+Support for url field in sections => none
+SourceMapConsumer => none
+MagicastError => none
+ELECTRON_GET_USE_PROXY => none
+GotDownloader => none
+electron_config_cache => none
+GLOBAL_AGENT => none
+ROARR_LOG => none
+sprintf => none
+max-stale => none
+CachePolicy => none
+cacheable-request => none
+# positive controls (same grep, against the dependency payloads)
+Section offsets must be ordered in magicast@0.5.5/node_modules/magicast/dist => 1 file(s)
+Section offsets must be ordered in source-map-js@1.2.2/node_modules/source-map-js/lib => 1 file(s)
+ELECTRON_GET_USE_PROXY in @electron+get@3.1.0_supports-color@7.2.0/node_modules/@electron/get/dist => 6 file(s)
+GotDownloader in @electron+get@3.1.0_supports-color@7.2.0/node_modules/@electron/get/dist => 14 file(s)
+GLOBAL_AGENT in global-agent@3.0.0/node_modules/global-agent/dist => 12 file(s)
+max-stale in http-cache-semantics@4.3.0/node_modules/http-cache-semantics => 1 file(s)

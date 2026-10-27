@@ -1,0 +1,3 @@
+audited 549 packages
+
+549 packages have verified registry signatures

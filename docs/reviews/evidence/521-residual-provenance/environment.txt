@@ -1,0 +1,15 @@
+Examined commit: 4d5176c8d57c37f974517900935e6e28ea234082 (origin/main at 2026-10-27T01:10Z, rechecked unchanged before writing)
+pnpm-lock.yaml blob: 4889f406d1b232f2e9959e95aa71154549214f46
+Node: v24.21.0; pnpm: 12.4.2; OS: Linux x64 6.18.44-fc-v153
+(Default PATH node in this container is v22.22.0; every command below used /opt/node24/bin first on PATH.)
+
+Environment variables relevant to the legacy proxy path (names; values summarized):
+  ELECTRON_GET_USE_PROXY=1
+  GLOBAL_AGENT_HTTP_PROXY=unset
+  GLOBAL_AGENT_HTTPS_PROXY=set (sandbox loopback egress proxy)
+  GLOBAL_AGENT_NO_PROXY=set (sandbox loopback egress proxy)
+  ROARR_LOG=unset
+  ELECTRON_MIRROR=unset
+  ELECTRON_BUILDER_CACHE=unset
+  ELECTRON_DOWNLOAD_CACHE_MODE=unset
+  HTTPS_PROXY=set (sandbox loopback egress proxy)

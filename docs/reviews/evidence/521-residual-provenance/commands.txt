@@ -1,0 +1,66 @@
+Commands actually run for docs/reviews/2026-10-27-521-residual-provenance.md.
+Paths: <repo> is the checkout, <scratch> a session scratch directory outside it.
+PATH had /opt/node24/bin (Node 24.21.0, pnpm 12.4.2) first. All times UTC, 2026-10-27.
+
+Install (repository lifecycle policy unchanged; only esbuild/electron builds allowed):
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --frozen-lockfile --store-dir=<scratch>/store
+
+Audits (01:12:03Z):
+pnpm audit --json
+pnpm audit --prod --json
+pnpm audit signatures
+
+Graph:
+pnpm why -r magicast
+pnpm why -r @electron/get
+pnpm why -r source-map-js
+pnpm why -r http-cache-semantics global-agent sprintf-js roarr got
+
+Primary advisory sources (01:15:47Z):
+curl https://api.github.com/advisories/<GHSA>      # denied, HTTP 403: session bound to configured repositories
+curl -X POST https://registry.npmjs.org/-/npm/v1/security/advisories/bulk   # exact affected and installed versions
+WebFetch https://github.com/advisories/GHSA-68fv-2mgg-jv7q
+WebFetch https://github.com/advisories/GHSA-ch52-4w7c-c8xp
+WebFetch https://github.com/advisories/GHSA-hp3w-g68c-fv3c
+
+Registry metadata and payloads:
+curl https://registry.npmjs.org/{magicast,@electron%2Fget,app-builder-lib,@vitest%2Fcoverage-v8}
+curl https://registry.npmjs.org/magicast/-/magicast-0.5.5.tgz
+curl https://registry.npmjs.org/@electron/get/-/get-3.1.0.tgz
+openssl dgst -sha512 -binary <tgz> | base64 ; sha256sum <tgz>
+tar -xzf <tgz> -C <scratch>/tarballs/<name>/x ; diff -r <extracted>/package <repo>/node_modules/.pnpm/<pkg>/node_modules/<name>
+curl https://registry.npmjs.org/-/npm/v1/attestations/magicast@0.5.5
+node <scratch>/probe/verify-sigstore.cjs <attestations.json> <tgz>   # one attempt; TUF refresh 403; not retried
+
+Source inspection (read-only): grep/sed over the installed magicast, source-map-js 1.2.2,
+@vitest/coverage-v8, vitest cli-api chunk, app-builder-lib 26.18.0 (util/electronGet.js,
+electron/ElectronFramework.js, toolsets/*), builder-util 26.16.0, @electron/get 3.1.0
+(index.js, proxy.js, GotDownloader.js), got 11.8.6, global-agent 3.0.0, roarr 2.15.4;
+ORCA vitest.config.ts, packages/app/electron-builder.yml, .github/workflows/*.yml.
+
+Bounded behavior probe (in-process, small offsets, no external input):
+node <scratch>/probe/magicast-path.mjs <repo>
+
+Build and packaging:
+pnpm run build
+pnpm --filter @orca/app run build:daemon
+grep -rlF <markers> packages/app/dist   (plus positive controls against dependency payloads)
+NODE_USE_ENV_PROXY=1 electron_config_cache=<scratch>/pkg/electron-cache node packages/app/node_modules/electron/install.js
+sha256sum electron-v44.9.1-linux-x64.zip ; compared with packages/app/node_modules/electron/checksums.json
+DEBUG='@electron/get*' XDG_CACHE_HOME=<scratch>/pkg/xdg ELECTRON_BUILDER_CACHE=<scratch>/pkg/builder-cache \
+  electron_config_cache=<scratch>/pkg/xdg/electron \
+  pnpm --filter @orca/app exec electron-builder --linux dir --x64 --publish never --config.directories.output=<scratch>/pkg/out
+node -e '<@electron/asar listPackage/extractAll over resources/app.asar>' ; grep -rlF <markers> over the extracted ASAR and resources/daemon
+sha256sum resources/app.asar resources/daemon/orca-daemon.mjs packages/app/dist/daemon/orca-daemon.mjs
+
+Not run: tests/coverage (no executable change), Electron launch, Mac/Windows packaging,
+signing, installer builds, release-asset download, CI dispatch.
+
+Document/source-reference checks:
+node -e '<every relative link and cited evidence filename in the review resolves; every
+  abbreviated digest and every quoted SHA/time/count is present in the evidence files>'
+  -> passed; the only non-matches are the upstream file names `package.json` and
+     `checksums.json`, which name files inside packages, not evidence.
+git cat-file -e 1538d34b02eeb6ecbfeeea1464dd26f6fab85b9b ; test -f for each cited repository file
+npx prettier --check docs/reviews/evidence/521-residual-provenance   (Markdown is prettier-ignored)
+git diff --check

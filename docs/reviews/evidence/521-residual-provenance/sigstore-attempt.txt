@@ -1,0 +1,2 @@
+NOT VERIFIED: TUF_REFRESH_METADATA_ERROR error refreshing TUF metadata
+cause: Failed to download 403

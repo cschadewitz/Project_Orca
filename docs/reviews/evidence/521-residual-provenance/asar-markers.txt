@@ -1,0 +1,12 @@
+# marker scan over extracted app.asar + resources/daemon
+Section offsets must be ordered => none
+IndexedSourceMapConsumer => none
+SourceMapConsumer => none
+MagicastError => none
+ELECTRON_GET_USE_PROXY => none
+GotDownloader => none
+GLOBAL_AGENT => none
+ROARR_LOG => none
+sprintf => none
+max-stale => none
+cacheable-request => none

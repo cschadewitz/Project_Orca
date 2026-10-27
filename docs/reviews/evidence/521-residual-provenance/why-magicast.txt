@@ -1,0 +1,8 @@
+magicast@0.5.5
+└─┬ @vitest/coverage-v8@5.0.5
+  ├── orca@0.6.0 (devDependencies)
+  └─┬ vitest@5.0.5
+    ├── @vitest/coverage-v8@5.0.5 [circular]
+    └── orca@0.6.0 (devDependencies)
+
+Found 1 version of magicast

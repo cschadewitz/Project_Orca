@@ -1,0 +1,12 @@
+// One attempt at independent Sigstore verification of the npm SLSA bundle for magicast@0.5.5.
+// Uses npm's bundled sigstore client; no trust root override, no retry, no TLS changes.
+const path = "/opt/node24/lib/node_modules/npm/node_modules/sigstore";
+const sigstore = require(path);
+const fs = require("fs");
+const [att, tgz] = process.argv.slice(2);
+const j = JSON.parse(fs.readFileSync(att));
+const b = j.attestations.find((a) => a.predicateType === "https://slsa.dev/provenance/v1").bundle;
+sigstore
+  .verify(b, { certificateIssuer: "https://token.actions.githubusercontent.com" })
+  .then(() => console.log("VERIFIED"))
+  .catch((e) => { console.log("NOT VERIFIED:", e.code || "", e.message); if (e.cause) console.log("cause:", e.cause.message, e.cause.statusCode || ""); process.exitCode = 2; });
