@@ -344,10 +344,20 @@ export class ProtectedEventStore implements EventStore {
       for (const key of ["kind", "toolCallId", "status", "toolKind"] as const)
         if (Object.hasOwn(input.payload.update, key)) update[key] = input.payload.update[key];
     }
+    if (input.type === "agent.turn.started" && inputs.sensitiveNames.length)
+      // A rendered prompt can hold a sensitive value transformed (a YAML-formatted object,
+      // function output) or cut by the preview bound, which literal scrubbing cannot see.
+      // The digest still identifies the exact prompt; the encrypted original keeps the text.
+      publicPayload.promptPreview = "[REDACTED]";
     if (input.type === "run.created") {
       const workspace = publicPayload.workspace as Record<string, unknown>;
       workspace.hostId = input.payload.workspace.hostId;
       if (input.payload.workspace.provider !== undefined) workspace.provider = input.payload.workspace.provider;
+      // launchProvenance copies vars.itemWorkflow as the dispatch default. When that input is
+      // sensitive its value is withheld; an explicit override is a selection and stays visible.
+      const item = input.payload.provenance?.itemWorkflow;
+      if (item && item.source !== "run.overrides.itemWorkflow" && inputs.sensitiveNames.includes("itemWorkflow"))
+        publicPayload.provenance = { ...input.payload.provenance, itemWorkflow: { ...item, value: "[REDACTED]" } };
     }
     if (input.type === "step.scheduled" && input.payload.viaEdge) {
       const viaEdge = publicPayload.viaEdge as Record<string, unknown>;
