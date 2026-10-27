@@ -82,7 +82,14 @@ your card's file table.
    no extra options.
 
    ```sh
-   cd '<app folder from P4>'
+   cd ~/orca-candidate
+   ls
+   ```
+
+   If `ls` shows `orca` and `resources`, you're already in the app folder. Otherwise run
+   `cd` followed by the name of the single folder `ls` showed. Then start ORCA:
+
+   ```sh
    ./orca
    ```
 
@@ -131,6 +138,9 @@ When your coordinator confirms nothing more is needed:
    rm -rf ~/orca-candidate ~/orca-trial
    rm ~/Downloads/ORCA-<version>-linux-<arch>.tar.gz
    ```
+
+   If you used the AppImage, remove `~/Downloads/ORCA-<version>-linux-x86_64.AppImage`
+   instead of the tar.gz.
 
 3. ORCA's settings folder in your home configuration directory may remain. Leave it
    unless your coordinator asks you to remove it.

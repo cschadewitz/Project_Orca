@@ -20,7 +20,8 @@ useful result, not a mistake on your part.
 | Git for Windows 2.28 or newer is already installed | In PowerShell: `git --version` | Stop. Installing Git is your own decision and outside these instructions |
 | ORCA was never installed for this user account | **Settings ▸ Apps ▸ Installed apps** lists no "ORCA" | Stop and tell your coordinator. Don't uninstall or delete anything to make room |
 | No ORCA environment variables are set | In PowerShell: `Get-ChildItem Env:ORCA_*` prints nothing | Stop and tell your coordinator. Don't change settings someone else made |
-| Your user folder is on a local fixed drive (usually `C:`) | In PowerShell: `$env:USERPROFILE` shows a path starting with a drive letter, such as `C:\Users\…` | Stop. The sample can't use network, removable or redirected locations |
+| Your user folder is on a local, fixed NTFS drive (normally `C:`) | In PowerShell: `$env:USERPROFILE` shows a path starting with a drive letter, such as `C:\Users\…`. This is a first check only; setup itself refuses non-NTFS, network, removable and redirected locations | Stop if it isn't a drive-letter path. The sample can't use network, removable or redirected locations |
+| You will use a normal PowerShell window | Don't use **Run as administrator** for anything in this guide | — |
 
 The sample creates its folders directly inside your user folder. Don't put them in
 OneDrive, Dropbox or another synced folder, in Temp, on a network share, or on a USB or

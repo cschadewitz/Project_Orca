@@ -1,9 +1,9 @@
 /** Offline checks for the Windows/Linux private-candidate tester pages: fill-ins, format, links,
  * every quoted UI string against source, and the documented throwaway project against the
  * production first-run setup. No ORCA process, daemon, network, provider or credential. */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { mkdtemp, readdir, realpath, rm, stat, access } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -121,7 +121,11 @@ const QUOTED = [
       "Review same-boot recovery",
       "Mark previous session ended",
       "Reconcile same-boot ownership",
+      "Review saved configuration for reopening",
       "Writer ownership is unknown",
+      "The exact owned daemon is still running",
+      "Local startup ownership requires reconciliation",
+      "Project setup could not verify its saved selection. Choose directories again.",
       "Sample files prepared. Connect the selected local workspace when ready.",
       "Selected workspace connected. Open Launch work and choose the harmless sample; review permissions before launching.",
       "Create the displayed new private folder and sample files. Existing parent and project permissions stay unchanged.",
@@ -138,7 +142,6 @@ const QUOTED = [
       "Review selection",
     ],
   ],
-  ["packages/app/src/main/first-run/directories.ts", ["Choose owned writable directories with verifiable identity"]],
   ["packages/app/renderer/src/config/configuration-studio-surface.tsx", ["Launch work"]],
   ["packages/app/renderer/src/guided-launch/launch-route.tsx", ["Choose harmless launch smoke check"]],
   [
@@ -152,6 +155,7 @@ const QUOTED = [
       "Permission review",
       "Recover original launch",
       "Restore protected launch",
+      "Connection settings",
       "I reviewed the configured permission policy. This work may execute commands in the prepared checkout; permission requests still require their own confirmation.",
     ],
   ],
@@ -159,7 +163,7 @@ const QUOTED = [
     "packages/app/renderer/src/diagnostics/diagnostics-section.tsx",
     ["Local diagnostics", "production capture is unavailable"],
   ],
-  ["packages/app/renderer/src/chrome/status-bar.tsx", ["orca-daemon "]],
+  ["packages/app/renderer/src/chrome/status-bar.tsx", ["orca-daemon ", "Connect to a daemon…"]],
   ["packages/app/src/main/app-menu.ts", ["Open a store…", "Connect to a daemon…"]],
   [
     "packages/app/src/first-run-sample.ts",
@@ -212,15 +216,25 @@ it("states timing, installer and diagnostics facts that still match the source",
   expect(Buffer.byteLength(Object.values(FIRST_RUN_SAMPLE_FILES).join(""))).toBeLessThan(5_500);
 });
 
-it("keeps the Windows project commands equivalent to the executed Linux ones", () => {
-  const linux = block("first-success-sample.md", "linux-project").split("\n");
-  const windows = block("first-success-sample.md", "windows-project").split("\n");
+it("keeps the Windows project commands equivalent to the executed Linux ones, and both stop early", () => {
+  const raw = block("first-success-sample.md", "linux-project").split("\n");
+  // Every Linux line but the last chains with &&, so a pasted block stops at the first failure.
+  expect(raw.slice(0, -1).every((line) => line.endsWith(" &&"))).toBe(true);
+  const linux = raw.map((line) => line.replace(/ &&$/, ""));
+  const powershell = block("first-success-sample.md", "windows-project").split("\n");
+  // One script block with a stop preference, so an existing folder halts New-Item and everything after.
+  expect([powershell[0], powershell[1].trim(), powershell.at(-1)]).toEqual([
+    "& {",
+    "$ErrorActionPreference = 'Stop'",
+    "}",
+  ]);
+  const windows = powershell.slice(2, -1).map((line) => line.trim());
   const git = (lines) => lines.filter((line) => line.startsWith("git "));
   expect(git(windows)).toEqual(git(linux));
   expect(git(linux)).toHaveLength(5);
   const readme = linux.find((line) => line.startsWith("printf "))?.match(/^printf '(.*)\\n' > README\.txt$/)?.[1];
   expect(windows).toContain(`Set-Content -Path README.txt -Value "${readme}"`);
-  expect(windows.filter((line) => line.startsWith("New-Item "))).toEqual([
+  expect(windows.slice(0, 2)).toEqual([
     'New-Item -ItemType Directory "$env:USERPROFILE\\orca-trial"',
     'New-Item -ItemType Directory "$env:USERPROFILE\\orca-trial\\project"',
   ]);
@@ -231,30 +245,49 @@ afterEach(async () => {
   for (const path of temporary.splice(0)) await rm(path, { recursive: true, force: true });
 });
 
+/** A throwaway HOME with no user or system Git config, and the documented block run as pasted (no `set -e`). */
+async function trialHome() {
+  const base = await realpath(await mkdtemp(join(tmpdir(), "orca-onboarding-")));
+  temporary.push(base);
+  const home = join(base, "home");
+  await mkdir(home);
+  const globalConfig = join(base, "absent-global-gitconfig");
+  const env = {
+    PATH: process.env.PATH,
+    HOME: home,
+    LANG: "C",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: globalConfig,
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  const run = () =>
+    spawnSync("bash", ["--norc", "--noprofile", "-c", block("first-success-sample.md", "linux-project")], {
+      cwd: base,
+      env,
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+  return { base, home, globalConfig, env, run };
+}
+
 describe.skipIf(process.platform === "win32" || typeof process.getuid !== "function")(
   "the documented Linux throwaway project",
   () => {
+    it("stops before touching an orca-trial folder that already exists", async () => {
+      const { home, run } = await trialHome();
+      await mkdir(join(home, "orca-trial"));
+      await writeFile(join(home, "orca-trial", "earlier.txt"), "keep\n");
+      const result = run();
+      expect(result.status).not.toBe(0);
+      expect(await readdir(join(home, "orca-trial"))).toEqual(["earlier.txt"]);
+      expect(await readFile(join(home, "orca-trial", "earlier.txt"), "utf8")).toBe("keep\n");
+    });
+
     it("runs without user Git config and passes the production first-run review and prepare", async () => {
-      const base = await realpath(await mkdtemp(join(tmpdir(), "orca-onboarding-")));
-      temporary.push(base);
-      const home = join(base, "home");
-      execFileSync("mkdir", [home]);
-      const globalConfig = join(base, "absent-global-gitconfig");
-      const env = {
-        PATH: process.env.PATH,
-        HOME: home,
-        LANG: "C",
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_GLOBAL: globalConfig,
-        GIT_TERMINAL_PROMPT: "0",
-      };
-      const script = block("first-success-sample.md", "linux-project");
-      const output = execFileSync("bash", ["--norc", "--noprofile", "-euo", "pipefail", "-c", script], {
-        cwd: base,
-        env,
-        encoding: "utf8",
-        timeout: 20_000,
-      });
+      const { base, home, globalConfig, env, run } = await trialHome();
+      const result = run();
+      expect(result.status, result.stderr).toBe(0);
+      const output = result.stdout;
       const project = join(home, "orca-trial", "project");
       const workspace = join(home, "orca-trial", "workspace");
       const git = (...args) => execFileSync("git", ["-C", project, ...args], { env, encoding: "utf8" }).trim();

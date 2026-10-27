@@ -115,7 +115,8 @@ above, and what these pages do about each:
 5. **Windows support statements are out of date.**
    - The first-run README (`packages/app/src/main/first-run/README.md`) still says
      "Windows ownership is unavailable here … fails closed".
-   - The `beta-feedback` README says no Windows installation flow exists.
+   - The `beta-feedback` README invents no Windows flow and leaves tested Windows
+     instructions to the coordinator.
    - The #605 delta added native SID/NTFS support (`win32` branches in `directories.ts`,
      `ownership.ts`, `setup.ts`), and the acceptance record's refusal is historical.
    - **Here:** the source-built behaviour is used and labelled as such. The package
@@ -137,12 +138,16 @@ above, and what these pages do about each:
 8. **The installer and folder details need hands-on confirmation.**
    - `oneClick: false` with `perMachine: false` is expected to show NSIS's install-mode
      page, so P5 says **Only for me**.
-   - Windows first-run requires a drive-letter path on a fixed NTFS volume, an ancestry
-     that untrusted principals can't write to, and current-user ownership. The receipt
-     used harness-made private folders; the pages use ordinary folders under
+   - Windows first-run requires a drive-letter path on a fixed NTFS volume, and an
+     ancestry that untrusted principals can't write to. Only the project (and the
+     workspace ORCA creates) must be owned by the current user; the parent need not be.
+   - The receipt used a harness-made private project and a plain parent under Documents.
+     These pages use ordinary folders made in a non-elevated PowerShell under
      `%USERPROFILE%`.
+   - The receipt's probe clicked Connect on reopen. F10's automatic reconnect at startup
+     (`ipc.ts` `startFirstRunWorkspace`) comes from the source alone.
    - The tar.gz top-level folder name isn't fixed in source.
-   - All three go to gate G4 rather than being asserted.
+   - All of these go to gate G4 rather than being asserted.
 
 ## Candidate-bound hands-on testing still required
 
@@ -176,7 +181,7 @@ change. The dependencies were installed with `pnpm install --frozen-lockfile` an
 
 ### The test (`npx vitest run tools/test/private-candidate-onboarding.test.js`)
 
-**7 passed.** It checks:
+**8 passed.** It checks:
 
 - Page set and format: UTF-8, LF, final newline, no trailing whitespace or tabs,
   balanced fences, one title per page.
@@ -188,7 +193,11 @@ change. The dependencies were installed with `pnpm install --frozen-lockfile` an
 - Pinned facts: `DIAGNOSTICS_PRODUCTION_ENABLED = false`, the 10-second shutdown
   deadline, the 30-second start and 5-second stop timeouts, `oneClick`/`perMachine`, and
   the artifact name pattern.
-- The Windows F1 commands are equivalent to the Linux ones.
+- The Windows F1 commands are equivalent to the Linux ones. Both F1 blocks are guarded:
+  the Linux lines are `&&`-chained, and the PowerShell commands run in one script block
+  with a stop preference.
+- Run as pasted (no `set -e`), the Linux block exits non-zero and leaves an existing
+  `~/orca-trial` exactly as it was.
 - The documented Linux F1 block runs under `bash` in a temporary `HOME` with no user or
   system Git config. Then the production `FirstRunSetup` reviews and prepares it with
   the real filesystem and Git:
@@ -199,8 +208,23 @@ change. The dependencies were installed with `pnpm install --frozen-lockfile` an
   - the project's `HEAD`, status and file list are unchanged
   - no Git config file is created
 
-A mutation check confirmed the test catches drift. Renaming a quoted button in a page,
-or dropping `-b trial` from F1, made the test fail. Both changes were reverted.
+A mutation check confirmed the test catches drift. Each of these made it fail: renaming
+a quoted button in a page, dropping `-b trial` from F1, or turning F1's first `mkdir`
+into `mkdir -p`. All of these changes were reverted.
+
+An independent read-only review compared the pages against the source before this record
+was finalised. Its findings were applied:
+
+- removed a refusal message testers never see
+- recovery-signal buttons that are actually always present
+- the folder stop rule on Windows
+- unguarded F1 blocks and elevated PowerShell ownership
+- the coordinator's Windows walk-through under the W1 trust decision
+- the Linux `cd` placeholder
+- the NTFS requirement
+- the Windows daemon stop being direct
+- extra connection controls to avoid
+- the AppImage process and clean-up
 
 ### Other checks
 
@@ -222,7 +246,7 @@ or dropping `-b trial` from F1, made the test fail. Both changes were reverted.
 - **Renderer** `first-run.test.tsx` and `guided-launch-route.test.tsx`: 29 passed. This
   focused run had coverage thresholds disabled.
 - **`npx vitest run tools/test`**, after `pnpm exec tsc -b tsconfig.build.json`: 36
-  files, 1,194 passed, 1 pre-existing skip. Before the build, 4 `m10-owned-plugin` cases
+  files, 1,195 passed, 1 pre-existing skip. Before the build, 4 `m10-owned-plugin` cases
   failed only because they need compiled `dist/` output.
 - **`beta-feedback`'s own documented link/format script:** passes with the superseding
   notes (6 documents, 26 local links).

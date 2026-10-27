@@ -28,7 +28,8 @@ stop and tell your coordinator. Don't try a different file.
 ## What you are agreeing to
 
 - Install or extract the candidate on your own computer, under your own user account.
-- Make two new, empty, throwaway folders and use only those with ORCA.
+- Make a new throwaway folder, `orca-trial`, with a tiny throwaway Git project in it.
+  Use only that folder with ORCA.
 - Run one built-in sample. It starts no AI agent, needs no account and no internet, and
   leaves its throwaway project unchanged.
 - Optionally send a short text report through the route on your card.
@@ -74,10 +75,11 @@ at all.
 - your operating system, browser or antivirus shows a security warning, or blocks the file
 - an installer asks for administrator rights
 - ORCA asks you to sign in, enter a key or token, pay, or pick an AI agent
-- a folder ORCA shows you is not one of your two throwaway folders
+- a folder ORCA shows you is outside your throwaway `orca-trial` folder
 - anything asks you to turn off a protection: sandbox, SmartScreen, antivirus, or a
   permission
-- files outside your throwaway folders change, or you think data could be lost
+- files change outside `orca-trial` and the folder you put the app in, or you think data
+  could be lost
 - you're unsure whether something already happened. Don't repeat it to find out.
 - you're uncomfortable for any reason
 

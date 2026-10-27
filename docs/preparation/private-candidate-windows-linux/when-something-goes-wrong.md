@@ -1,8 +1,8 @@
 # When something goes wrong
 
 Part of the [Windows/Linux candidate guide](tester-guide.md). Everything here affects
-only ORCA and your two throwaway folders. Never use these steps on a real project or on
-another program.
+only ORCA and the throwaway folders this test made: `orca-trial`, and on Linux
+`orca-candidate`. Never use these steps on a real project or on another program.
 
 ## Stop ORCA and its bundled daemon
 
@@ -10,18 +10,22 @@ another program.
 menu; its wording depends on the platform. On Windows and Linux, closing the last window
 quits ORCA. ORCA then stops the background daemon it started:
 
-1. it asks the daemon to stop
-2. it forces it after a few seconds if needed
-3. it exits within about 10 seconds, even if something is stuck
+- On Linux it asks the daemon to stop, and forces it after a few seconds if needed.
+- On Windows it ends the daemon process directly.
 
-There is no separate daemon control, and you should not need one.
+Either way, ORCA itself exits within about 10 seconds, even if something is stuck. There
+is no separate daemon control, and you should not need one.
 
 After about 30 seconds, check that nothing is left:
 
 - **Windows:** in **Task Manager ▸ Details**, no `ORCA.exe` is listed. The daemon also
   runs as `ORCA.exe`.
-- **Linux:** `pgrep -a -f orca-daemon` and `pgrep -a -x orca` print nothing. Their output
-  includes folder paths, so keep it to yourself.
+- **Linux:** each of these prints nothing:
+  - `pgrep -a -f orca-daemon`
+  - `pgrep -a -x orca`
+  - `pgrep -a -f orca-candidate` (this also catches the AppImage's own process)
+
+  Their output includes folder paths, so keep it to yourself.
 
 **If something is still running after 30 seconds, that is a finding.** Write down what
 it was (the name only) and how long you waited. Then end it:
@@ -41,7 +45,7 @@ Only end processes from this test.
 | ORCA closed or crashed while creating files (F5) | Reopen ORCA and open **Config**. If the status bar reads **● connected**, or setup offers **Connect selected local workspace**, continue at F6. If setup refuses, don't edit or delete the half-made workspace. On Linux, make a new empty folder `~/orca-trial/workspace-2` and select it in F3. On Windows, select the same parent again; ORCA makes a new private folder. Mention the interruption in your report |
 | ORCA closed before it said connected (F6) | Reopen ORCA and wait 30 seconds; it may reconnect to your reviewed folders by itself. If not, choose **Connect selected local workspace** once. If it still doesn't connect, see [failed startup](#failed-startup) |
 | You chose **Launch** (F7) and aren't sure anything happened | **Don't choose Launch again.** Open **Runs**. If a run is listed, continue at F8. If not, after 30 seconds close ORCA, reopen it, connect as in F10, and look at **Runs** again. If there is still no run, report it. Don't use **Recover original launch** or **Restore protected launch** unless your coordinator asks |
-| The computer restarted, crashed or lost power while ORCA was open | On the next launch, setup may show "The last session ended without closing cleanly, before this computer restarted." It may also show **Mark previous session ended**, **Review same-boot recovery**, **Reconcile same-boot ownership**, or "Writer ownership is unknown…". **Don't choose any of them on your own.** Write down which message appeared, close ORCA and report it. Your coordinator decides whether you continue or start again with new folders |
+| The computer restarted, crashed or lost power while ORCA was open, or a setup message mentions recovery or ownership | On the next launch, setup may show one of these:<br>• "The last session ended without closing cleanly, before this computer restarted."<br>• "Local startup ownership requires reconciliation…"<br>• "Writer ownership is unknown…"<br>• "The exact owned daemon is still running…"<br>It may also offer **Mark previous session ended** or **Reconcile same-boot ownership**. **Don't choose any of these on your own**, and don't choose **Review same-boot recovery** either. That button is always on the card once files exist, and it isn't needed in this round. Write down which message appeared, close ORCA and report it. Your coordinator decides whether you continue or start again with new folders |
 
 ## Failed startup
 
@@ -56,7 +60,8 @@ Only end processes from this test.
 While troubleshooting, **don't**:
 
 - set `ORCA_*` environment variables
-- use **File ▸ Open a store…** or **File ▸ Connect to a daemon…**
+- use **File ▸ Open a store…**, **File ▸ Connect to a daemon…**, the status bar's
+  **Connect to a daemon…** button, or **Connection settings** in Launch work
 - edit `orca.config.yaml`, or delete `.orca` or ORCA's settings folder
 - reinstall over an existing install
 - run ORCA as administrator or root
@@ -64,9 +69,11 @@ While troubleshooting, **don't**:
 
 ## Setup refused
 
-ORCA refuses folders it can't verify, and leaves existing files as they were. Messages
-include "Choose owned writable directories with verifiable identity…" and "Setup was
-refused. Check directory ownership, writable access and Git…". The source checks for:
+ORCA refuses folders it can't verify, and leaves existing files as they were. The card
+then shows "Setup was refused. Check directory ownership, writable access and Git…". If
+it says "Project setup could not verify its saved selection. Choose directories again.",
+the folders saved from an earlier step no longer verify. Report that too. The source
+checks for:
 
 - **The project:** the top folder of a Git repository with at least one commit, on a
   branch (not a detached HEAD), owned by you. Git must be findable by ORCA (on your
@@ -74,16 +81,23 @@ refused. Check directory ownership, writable access and Git…". The source chec
 - **Linux, the app workspace:** an empty folder you own that is separate from the
   project. It can't be inside the project, can't contain it, and can't be your home folder
   itself. A symbolic link is refused.
-- **Windows, the parent and the project:** on a local fixed drive, under a normal
-  drive-letter path such as `C:\Users\…`. They can't be reached through a junction or
-  link, or sit in a location other users can modify. The project must be owned by you.
-  The sample was proven with source-built folders made by a test harness. Folders you make
-  yourself under `%USERPROFILE%` are expected to pass the same checks, but no tester has
-  tried this yet.
+- **Windows, the parent and the project:**
+  - on a local, fixed NTFS drive (the usual `C:` drive), under a normal drive-letter path
+    such as `C:\Users\…`
+  - not reached through a junction or link
+  - not inside a folder that other users can modify
+  - the project (not the parent) must be owned by your own account. A folder made from an
+    administrator PowerShell window is owned by the Administrators group instead, and
+    is refused.
+
+  The source-built receipt used a harness-made private project folder and a plain parent
+  folder under Documents. By the source, ordinary folders you make under `%USERPROFILE%`
+  are expected to pass the same checks, but no tester has tried this yet.
 
 Don't change folder permissions, take ownership, or run anything as administrator to get
-past a refusal. You may try **once** with new folders made exactly as in F1, under a new
-name such as `orca-trial-2`. Report the refusal message and which folder you chose.
+past a refusal. You may try **once** with new folders: repeat F1 with every `orca-trial`
+in the block replaced by `orca-trial-2`. Check each replacement before you press Enter.
+Report the refusal message and which folder you chose.
 
 ## Collect details safely
 

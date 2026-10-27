@@ -12,10 +12,11 @@ project it is pointed at.** Completing it shows that ORCA can be set up, connect
 own background daemon and run one piece of work on your computer. It does not test
 coding, agents, diagnostics or updates.
 
-The expected results below come from the source. They also match a passing
-**source-built** Windows x64 run (the [first-run receipt](../../implementation/m21-windows-first-run.md)).
-They have **not yet been observed on a packaged candidate**. Write down anything that
-differs, even if it seems minor.
+The expected results below come from the source. F3–F8 follow the same sequence as a
+passing **source-built** Windows x64 run (the [first-run receipt](../../implementation/m21-windows-first-run.md)).
+F10's automatic reconnect comes from the source alone. None of this has **yet been
+observed on a packaged candidate**. Write down anything that differs, even if it seems
+minor.
 
 ## What it uses, and how to stop it
 
@@ -35,39 +36,52 @@ undone. Leave the throwaway folders as they are until you've written your report
 ## F1: make the throwaway project
 
 ORCA's setup needs an existing Git project to point the sample at. Make a new, empty one
-just for this test. The commands below set a throwaway commit author for this one commit
-only. They don't change your Git settings, add a remote, or contact the internet. If the
-first command says the folder already exists, **stop**. Don't reuse it.
+just for this test:
+
+- The commands set a throwaway commit author for this one commit only. They don't change
+  your Git settings, add a remote, or contact the internet. If you have set up global Git
+  hooks, those may still run; they are your own configuration.
+- Paste each block as a whole. If `orca-trial` already exists, the block stops before
+  touching anything, so an existing folder is never reused. If it reports that the folder
+  exists, or shows any other error, **stop**.
 
 **Linux** (terminal):
 
 <!-- validate: linux-project -->
 ```sh
-mkdir ~/orca-trial
-mkdir ~/orca-trial/project ~/orca-trial/workspace
-cd ~/orca-trial/project
-git init -b trial
-printf 'Throwaway ORCA trial project. Safe to delete.\n' > README.txt
-git add README.txt
-git -c "user.name=ORCA trial" -c "user.email=trial@example.invalid" -c commit.gpgsign=false commit --no-verify -m "Trial project"
-git status --short
+mkdir ~/orca-trial &&
+mkdir ~/orca-trial/project ~/orca-trial/workspace &&
+cd ~/orca-trial/project &&
+git init -b trial &&
+printf 'Throwaway ORCA trial project. Safe to delete.\n' > README.txt &&
+git add README.txt &&
+git -c "user.name=ORCA trial" -c "user.email=trial@example.invalid" -c commit.gpgsign=false commit --no-verify -m "Trial project" &&
+git status --short &&
 git log --oneline
 ```
 
-**Windows** (PowerShell). There is no `workspace` folder here: on Windows, ORCA creates a
-new private workspace folder itself in F5.
+**Windows:**
+
+- Use a normal PowerShell window, **not** one opened with **Run as administrator**.
+  Folders made from an elevated window are owned by the Administrators group, and setup
+  refuses a project you don't own.
+- There is no `workspace` folder here. On Windows, ORCA creates a new private workspace
+  folder itself in F5.
 
 <!-- validate: windows-project -->
 ```powershell
-New-Item -ItemType Directory "$env:USERPROFILE\orca-trial"
-New-Item -ItemType Directory "$env:USERPROFILE\orca-trial\project"
-Set-Location "$env:USERPROFILE\orca-trial\project"
-git init -b trial
-Set-Content -Path README.txt -Value "Throwaway ORCA trial project. Safe to delete."
-git add README.txt
-git -c "user.name=ORCA trial" -c "user.email=trial@example.invalid" -c commit.gpgsign=false commit --no-verify -m "Trial project"
-git status --short
-git log --oneline
+& {
+  $ErrorActionPreference = 'Stop'
+  New-Item -ItemType Directory "$env:USERPROFILE\orca-trial"
+  New-Item -ItemType Directory "$env:USERPROFILE\orca-trial\project"
+  Set-Location "$env:USERPROFILE\orca-trial\project"
+  git init -b trial
+  Set-Content -Path README.txt -Value "Throwaway ORCA trial project. Safe to delete."
+  git add README.txt
+  git -c "user.name=ORCA trial" -c "user.email=trial@example.invalid" -c commit.gpgsign=false commit --no-verify -m "Trial project"
+  git status --short
+  git log --oneline
+}
 ```
 
 **Expected:** `git status --short` prints nothing. `git log --oneline` prints exactly
@@ -76,14 +90,20 @@ one line ending in `Trial project`. Keep this window open; you'll use it again i
 ## F2: open project setup
 
 In ORCA, choose **Config** in the navigation, and find the **Dedicated project setup**
-card. If the card shows recovery buttons instead, stop: see
-[interruptions](when-something-goes-wrong.md#interruptions). Those buttons are **Review
-same-boot recovery**, **Mark previous session ended** and **Reconcile same-boot ownership**.
+card. On a first run it offers **Choose project and empty workspace**. If it instead says
+"The last session ended without closing cleanly…", or offers **Mark previous session
+ended** or **Reconcile same-boot ownership**, stop: see
+[interruptions](when-something-goes-wrong.md#interruptions).
+
+Two buttons appear on the card normally, and you won't need either one in this round:
+**Review saved configuration for reopening**, and from F5 on, **Review same-boot
+recovery**. Don't choose them.
 
 ## F3: choose the two folders (nothing is written yet)
 
-Choose **Choose project and empty workspace**. Two folder dialogs open, one after the
-other. In each one, select the folder and choose **Review selection**.
+Choose **Choose project and empty workspace**. A folder dialog opens. Select the folder
+and choose **Review selection**. If ORCA accepts the project, a second dialog opens for
+the workspace. If ORCA refuses the project, the second dialog doesn't open.
 
 | Dialog title | Linux: select | Windows: select |
 | --- | --- | --- |
@@ -92,8 +112,8 @@ other. In each one, select the folder and choose **Review selection**.
 
 Cancelling either dialog keeps the previous selection and writes nothing. If ORCA refuses
 the selection, don't change any folder permissions; see
-[setup refused](when-something-goes-wrong.md#setup-refused). Refusal messages include
-"Choose owned writable directories with verifiable identity…" and "Setup was refused…".
+[setup refused](when-something-goes-wrong.md#setup-refused). A refusal shows "Setup was
+refused. Check directory ownership, writable access and Git…".
 
 ## F4: review
 

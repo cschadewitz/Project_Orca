@@ -38,19 +38,25 @@ declare.
     decision inside that disposable VM. It is never passed on to testers.
   - keep their evidence
 - [ ] **G4 Walk this guide yourself.** Do every P-step and F1–F10 once per offered
-  combination, in a disposable environment, exactly as written. Correct the pages wherever
-  the candidate differs. Known points to confirm:
-  - **First launch.** Does it open **disconnected** for setup (`packages/app/src/main/index.ts`)
-    or start a daemon (`desktop.yml`'s launch expectation, noted in #779)?
-  - **Linux tar.gz.** The top-level folder layout.
-  - **Linux sandbox.** Whether the Chromium sandbox starts on each tested distribution
-    without changing settings.
-  - **Windows installer.** The NSIS install-mode page and the default location.
-  - **Windows folders.** Whether folders made in Explorer or PowerShell under
-    `%USERPROFILE%` pass first-run's ACL and ownership checks. The source-built receipt
-    used harness-made private folders.
-  - **Launch and shutdown.** Connection time, the run result, and shutdown within about
-    10 seconds with nothing left running.
+  combination, in a disposable environment, exactly as written. Correct the pages
+  wherever the candidate differs.
+  - On Windows, P4 stops at SmartScreen by design. Do P5–P9 and F1–F10 only in the G3 VM,
+    under your own recorded W1 trust decision. Still record what a tester would see at
+    P1/P4.
+  - Known points to confirm:
+    - **First launch.** Does it open **disconnected** for setup
+      (`packages/app/src/main/index.ts`) or start a daemon (`desktop.yml`'s launch
+      expectation, noted in #779)?
+    - **Linux tar.gz.** The top-level folder layout.
+    - **Linux sandbox.** Whether the Chromium sandbox starts on each tested distribution
+      without changing settings.
+    - **Windows installer.** The NSIS install-mode page and the default location.
+    - **Windows folders.** Whether folders made in a normal PowerShell window under
+      `%USERPROFILE%` pass first-run's ACL and ownership checks. The source-built
+      receipt used a harness-made private project and a plain parent under Documents.
+    - **Launch and shutdown.** Connection time, the run result, F10's automatic
+      reconnect (source-only so far), and shutdown within about 10 seconds with nothing
+      left running.
 - [ ] **G5 Unsigned statement.** The release notes say the desktop builds are unsigned
   (readiness R10, with the D1 wording), and the tester pages' warnings agree with it.
 - [ ] **G6 Windows warning decision.** The unsigned installer is expected to trigger
