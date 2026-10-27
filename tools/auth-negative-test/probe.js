@@ -13,8 +13,8 @@
  *   explicitly and confirmed with a phrase that repeats the port. No proxy, no redirect.
  * - Retry. Each request is sent once; the first result that is not the expected refusal
  *   stops the run, and an unreachable daemon is a stop, not a reason to try again.
- * - Keep a response body it did not expect. An unexpected body is reduced to its length and
- *   SHA-256, so an accidental success cannot copy run data into the evidence.
+ * - Keep a response body it did not expect. A complete unexpected body is reduced to its
+ *   length and SHA-256; a body over the cap is terminated and explicitly marked truncated.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync } from "node:fs";
@@ -122,49 +122,66 @@ export function sendOnce(endpoint, probe, id, timeoutMs = TIMEOUT_MS) {
   };
   return new Promise((resolve) => {
     let settled = false;
+    let response;
+    let partial;
     const done = (value) => {
       if (settled) return;
       settled = true;
+      clearTimeout(deadline);
+      response?.destroy();
+      req.destroy();
       resolve(value);
     };
+    const fail = (code) => done({ ...partial, transportError: code });
+    // One elapsed-time deadline, including connection, headers and body. Incoming traffic
+    // must not extend it (ClientRequest.setTimeout is only an inactivity timeout).
+    const deadline = setTimeout(() => fail("ETIMEDOUT"), timeoutMs);
     // agent:false - a fresh connection, no keep-alive pool and no proxy.
     const req = request(
       { hostname: endpoint.hostname, port: endpoint.port, path: "/rpc", method: "POST", headers, agent: false },
       (res) => {
+        response = res;
         const chunks = [];
         let size = 0;
+        const metadata = {
+          status: res.statusCode,
+          headers: {
+            "www-authenticate": res.headers["www-authenticate"],
+            connection: res.headers.connection,
+            "content-type": res.headers["content-type"],
+          },
+        };
+        partial = { ...metadata, bodyState: "unavailable", size };
         res.on("data", (chunk) => {
+          if (settled) return;
           size += chunk.length;
-          if (size <= MAX_BODY) chunks.push(chunk);
+          partial.size = size;
+          if (size > MAX_BODY) {
+            chunks.length = 0;
+            done({ ...metadata, bodyState: "truncated", size });
+            return;
+          }
+          chunks.push(chunk);
         });
-        res.on("end", () =>
+        res.on("end", () => {
+          if (settled) return;
           done({
-            status: res.statusCode,
-            headers: {
-              "www-authenticate": res.headers["www-authenticate"],
-              connection: res.headers.connection,
-              "content-type": res.headers["content-type"],
-            },
-            body: size <= MAX_BODY ? Buffer.concat(chunks) : undefined,
+            ...metadata,
+            bodyState: "complete",
+            body: Buffer.concat(chunks),
             size,
-          }),
-        );
-        res.on("error", (e) => done({ transportError: e.code ?? "ERESPONSE" }));
+          });
+        });
+        res.on("error", (e) => fail(e.code ?? "ERESPONSE"));
       },
     );
-    req.setTimeout(timeoutMs, () => {
-      req.destroy();
-      done({ transportError: "ETIMEDOUT" });
-    });
-    req.on("error", (e) => done({ transportError: e.code ?? "EREQUEST" }));
+    req.on("error", (e) => fail(e.code ?? "EREQUEST"));
     req.end(body);
   });
 }
 
 function digest(bytes) {
-  return createHash("sha256")
-    .update(bytes ?? Buffer.alloc(0))
-    .digest("hex");
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 /**
@@ -178,20 +195,27 @@ function digest(bytes) {
  * - `unexpected-access`: anything 2xx or `ok: true`. A stop, and the most serious one.
  */
 export function classify(probe, response) {
-  if (response.transportError) return { verdict: "unreachable", stop: true, error: response.transportError };
+  const successfulStatus = response.status >= 200 && response.status < 300;
+  // A received 2xx is unexpected access even if its body later stalls or breaks.
+  if (response.transportError && !successfulStatus)
+    return { verdict: "unreachable", stop: true, error: response.transportError };
+  const bodyState = response.bodyState ?? (Buffer.isBuffer(response.body) ? "complete" : "unavailable");
+  const complete = bodyState === "complete" && Buffer.isBuffer(response.body);
   let parsed;
   try {
-    parsed = response.body ? JSON.parse(response.body.toString("utf8")) : undefined;
+    parsed = complete ? JSON.parse(response.body.toString("utf8")) : undefined;
   } catch {
     parsed = undefined;
   }
   const record = {
     status: response.status,
     bodyBytes: response.size,
-    bodySha256: digest(response.body),
+    bodyState: complete ? "complete" : bodyState === "truncated" ? "truncated" : "unavailable",
+    bodyBytesExact: complete,
+    bodySha256: complete ? digest(response.body) : null,
+    ...(response.transportError ? { error: response.transportError } : {}),
   };
-  if ((response.status >= 200 && response.status < 300) || parsed?.ok === true)
-    return { verdict: "unexpected-access", stop: true, ...record };
+  if (successfulStatus || parsed?.ok === true) return { verdict: "unexpected-access", stop: true, ...record };
   const expected = {
     kind: "response",
     id: 0,

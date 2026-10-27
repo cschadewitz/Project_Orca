@@ -107,13 +107,23 @@ Why these are not credentials and not a brute-force attempt:
   `http://[::1]:<port>/rpc`: IP literal, explicit port, exact path, no query, fragment or
   userinfo. There is no default. `--confirm` must repeat it: `auth-negative-392@127.0.0.1:<port>`.
 - **Fixed count, no retry.** Three requests at most, sequentially, each on a fresh connection
-  with no keep-alive pool and no proxy, 5-second timeout. No loop sends anything twice.
+  with no keep-alive pool and no proxy. One absolute 5-second deadline covers connection,
+  headers and body; traffic cannot extend it. Timeout destroys the request and response.
+  No loop sends anything twice.
 - **Stop on the first surprise.** Any 2xx or `ok: true` is `unexpected-access` (exit 3). A
   403 is `rejected-at-transport-gate` (exit 2). Any other non-matching response is
   `unexpected-response` (exit 2). A refused or silent connection is `unreachable` (exit 4).
   After a stop, no further request is sent.
-- **Sanitized evidence.** An unexpected body is kept only as its length and SHA-256. The
-  fixture values themselves are not written to the evidence; it records probe names.
+- **Sanitized, bounded evidence.** A complete unexpected body of at most 4096 bytes is
+  reduced to `bodyBytes` and `bodySha256`, with `bodyState: complete` and
+  `bodyBytesExact: true`. On the first chunk exceeding that cap, the connection is destroyed
+  immediately rather than drained. No body is retained; `bodyState: truncated`,
+  `bodyBytesExact: false` and `bodySha256: null` mean the byte count is only an observed lower
+  bound and no full-body digest is available. Other unavailable body evidence is marked
+  `bodyState: unavailable`, also with no digest. Only an actually complete empty body gets
+  SHA-256(empty). Truncated bodies cannot count as credential refusals; 2xx still means
+  `unexpected-access`, including when its body later times out or fails. The fixture values
+  themselves are not written to the evidence; it records probe names.
 - **One run, one directory.** `--evidence-dir` must not exist; it is created `0700`, and
   `evidence.json` is written `0600` with the helper's own SHA-256. `--approval-ref` must link
   the GitHub comment recording the permission.
@@ -242,6 +252,34 @@ any of them.
   evidence for either.
 
 ## Source-tested versus live-unverified
+
+### PR #774 bounded correction (27 October 2026)
+
+The [blocking source review](https://github.com/cschadewitz/Project_Orca/pull/774#pullrequestreview-5661266113)
+of preparation head `16486f0354413d451cca123c51251e01ea5d856c` identified an
+inactivity timeout that slow-drip responses could extend indefinitely, unbounded
+oversized-body draining, and SHA-256(empty) being recorded for a dropped body.
+The correction above replaces that timeout with one elapsed-time deadline,
+destroys the request/response on settlement, and marks incomplete digest evidence
+explicitly. Target, consent, fixed fixtures, no retries, stop decisions, audit
+correlation and private evidence-file safeguards remain in place.
+
+The initial six regression cases failed against that preparation head (three
+timeouts and three evidence assertions). After correction, seven regression cases
+and the existing non-daemon controls pass: 21 tests passed, three daemon-backed
+tests deliberately excluded. The command was:
+
+```sh
+node_modules/.bin/vitest run tools/test/auth-negative-probe.test.js --maxWorkers=1 -t '^(?!.*(?:against the real daemon|is written once)).*'
+```
+
+These checks used Node 24.19.0 and the existing Vitest 5.0.2 installation with
+synthetic ephemeral loopback HTTP listeners only. No daemon was launched, no live
+credential was read or used, and no operator run or live acceptance is claimed.
+The blocking review still requires reviewer reassessment of the correction.
+
+The following ledger retains the original preparation's source-evidence claims;
+its daemon-backed cases were not rerun for this correction.
 
 | Claim | Status |
 | --- | --- |
