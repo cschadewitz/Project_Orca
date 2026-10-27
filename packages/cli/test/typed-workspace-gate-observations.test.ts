@@ -162,15 +162,22 @@ it("observes each distinct root and ancestor once per resolution, without a seco
   expect(second).toEqual(first);
 });
 
-it("observes every root again in each owner check invocation; nothing crosses invocations", async () => {
+it("checks each current fact once per assertion and twice for an inspected enrolled state", async () => {
   const f = await enrolled();
-  const once = await recorded(() => f.active.assertCurrent());
-  expect(once.realpath).toBe(0);
-  expect(once.lstat.get(f.releases)).toBeGreaterThan(0);
+  // releases is in no marker path, so its count isolates owner check invocations.
+  const assertion = await recorded(() => f.active.assertCurrent());
+  expect(assertion.realpath).toBe(0);
+  expect(assertion.lstat.get(f.releases)).toBe(1);
+  expect(f.lifetime.mock.calls.length).toBeGreaterThan(0);
+  const before = [f.lifetime.mock.calls.length, f.build.mock.calls.length];
+  const inspected = await recorded(() => expect(f.owner.inspect().state).toBe("enrolled"));
+  expect(inspected.lstat.get(f.releases)).toBe(2);
+  expect([f.lifetime.mock.calls.length - before[0]!, f.build.mock.calls.length - before[1]!]).toEqual([2, 2]);
+  // Repeated assertions observe again every time.
   const repeated = await recorded(() => {
     for (let i = 0; i < 5; i++) f.active.assertCurrent();
   });
-  for (const [path, count] of once.lstat) expect(repeated.lstat.get(path), path).toBe(5 * count);
+  for (const [path, count] of assertion.lstat) expect(repeated.lstat.get(path), path).toBe(5 * count);
 });
 
 it.each(["ancestor", "control", "releases", "config", "store", "identity directory"] as const)(
@@ -255,3 +262,26 @@ it.each(["lifetime", "build", "replaced root", "mode", "identity bytes", "sideca
     expect(() => f.owner.inspect()).toThrow();
   },
 );
+
+it("an assertion observes ownership once, before its marker reads; read-for-use inspect re-checks after", async () => {
+  const f = await enrolled();
+  const enrolledMarker = join(f.control, "enrolled.json");
+  // Read-for-use: a change made while the confirmed marker is open is refused by the
+  // same inspect() call, because the returned state is used after these reads.
+  probe.openTarget = enrolledMarker;
+  probe.afterOpen = () => {
+    f.state.owned = false;
+  };
+  expect(() => f.owner.inspect()).toThrow("synthetic lifetime lost");
+  f.state.owned = true;
+  f.active.assertCurrent();
+  // Assertion only: its single ownership observation precedes the marker reads, as in
+  // any one check invocation. The next invocation observes the change and refuses.
+  probe.afterOpen = () => {
+    f.state.owned = false;
+  };
+  expect(f.active.assertCurrent()).toBeUndefined();
+  expect(probe.afterOpen).toBeUndefined();
+  expect(() => f.active.assertCurrent()).toThrow("synthetic lifetime lost");
+  expect((await f.owner.currentStore()).available).toBe(false);
+});

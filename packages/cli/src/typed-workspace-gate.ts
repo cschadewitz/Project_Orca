@@ -297,8 +297,10 @@ export function createManagedTypedWorkspace(ports: ManagedTypedOwnerPorts) {
       if (marker[key] !== expectedRefs[key]) fail("enrollment binding mismatch");
     return marker;
   }
-  function inspect():
-    { state: "never-typed" } | { state: "enrollment-pending" | "enrolled"; marker: TypedCompatibilityMarker } {
+  type EnrollmentState =
+    { state: "never-typed" } | { state: "enrollment-pending" | "enrolled"; marker: TypedCompatibilityMarker };
+  /** Enrollment evidence read after one complete current-ownership check. */
+  function enrollment(): EnrollmentState {
     assertCurrent();
     if (!present(intent)) {
       if (present(enrolled) || metadata(legacy).bytes.toString("utf8") !== legacyBytes)
@@ -310,8 +312,13 @@ export function createManagedTypedWorkspace(ports: ManagedTypedOwnerPorts) {
     if (!present(enrolled)) return { state: "enrollment-pending", marker: pending };
     const confirmed = markerAt(enrolled);
     if (!isDeepStrictEqual(confirmed, { ...pending, state: "enrolled" })) fail("enrollment confirmation mismatch");
-    assertCurrent();
     return { state: "enrolled", marker: confirmed };
+  }
+  /** Enrolled state is returned for use, so ownership is checked again after its reads. */
+  function inspect(): EnrollmentState {
+    const state = enrollment();
+    if (state.state === "enrolled") assertCurrent();
+    return state;
   }
   const boundStores = new Map<
     string,
@@ -322,8 +329,10 @@ export function createManagedTypedWorkspace(ports: ManagedTypedOwnerPorts) {
     const existing = boundStores.get(key);
     if (existing) return existing.store;
     const retained = structuredClone(marker);
+    // Assertion only: the markers read are compared with the retained one and never
+    // returned, so each current fact is observed once per invocation, as in a check.
     const assertMarker = (): undefined => {
-      const current = inspect();
+      const current = enrollment();
       if (current.state === "never-typed" || !isDeepStrictEqual(current.marker, retained)) fail("enrollment changed");
       return undefined;
     };
