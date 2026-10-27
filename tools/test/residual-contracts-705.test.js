@@ -707,6 +707,10 @@ function envVerdict(binding, policy, key) {
   if (binding.status !== "bound") return "indeterminate:environment-unbound";
   const extra = binding.names.filter((name) => !(name in policy.expected));
   if (extra.length > 0) return `indeterminate:unexpected:${extra.join(",")}`;
+  const missing = Object.keys(policy.expected)
+    .filter((name) => !binding.names.includes(name))
+    .sort();
+  if (missing.length > 0) return `indeterminate:missing:${missing.join(",")}`;
   const expected = envBinding(policy.expected, key);
   for (const name of binding.names) {
     if (binding.digests[name] !== expected.digests[name]) return `deny:value-mismatch:${name}`;
@@ -727,6 +731,24 @@ describe("Pi: environment value binding versus privacy (proposed contract, refer
     expect(envVerdict(envBinding({ ...base, BASH_ENV: "/fixture/x.sh" }, key), policy, key)).toBe(
       "indeterminate:unexpected:BASH_ENV",
     );
+  });
+
+  it.each([{}, { PATH: base.PATH }, { HOME: base.HOME }])("requires every expected environment key (%j)", (env) => {
+    const verdict = envVerdict(envBinding(env, key), policy, key);
+    expect(verdict).toMatch(/^indeterminate:missing:/);
+    const action = {
+      ...actionFixture(),
+      environmentAndCredentialRefs: verdict === "complete" ? complete([]) : unknown,
+    };
+    expect(evaluateStrictPermission(action, stateFixture(action), NOW, "test:review").verdict).toMatchObject({
+      outcome: "indeterminate",
+      reason: "required-fact:environmentAndCredentialRefs",
+    });
+  });
+
+  it("accepts the exact required keyset regardless of insertion order and an explicitly empty contract", () => {
+    expect(envVerdict(envBinding({ HOME: base.HOME, PATH: base.PATH }, key), policy, key)).toBe("complete");
+    expect(envVerdict(envBinding({}, key), { expected: {} }, key)).toBe("complete");
   });
 
   it("an unkeyed digest leaks low-entropy values to anyone with a guess list; a keyed one does not", () => {
