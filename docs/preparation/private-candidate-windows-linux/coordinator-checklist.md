@@ -5,6 +5,26 @@ round is a small, trusted group. **Nothing here has been decided or done by this
 preparation.** Every box starts unchecked, and testers are **not unblocked** until all
 of them are checked for the specific candidate.
 
+## Evidence reconciliation (30 October 2026)
+
+[#790](https://github.com/cschadewitz/Project_Orca/pull/790) merged this preparation;
+[#789](https://github.com/cschadewitz/Project_Orca/pull/789) merged the source/offline/synthetic
+store rehearsal. Neither supplies installed candidate acceptance. The
+[readiness matrix and unbound candidate ledger](../../reviews/2026-10-27-release-readiness.md#candidate-evidence-ledger-unbound-preparation)
+record the verified main reference and the remaining evidence per possible combination.
+No platform set, artifact identity, OS version, support route, retention policy or date has
+been selected. All gates and candidate fill-ins below remain open.
+
+When a combination is offered, link its own immutable manifest and separate static,
+installation, launch, onboarding, update and offline-restore receipts into that ledger.
+A rebuild creates a new identity. Source-built Windows receipts and a green main CI do
+not satisfy G2–G4. The preparation issue may be complete while these gates stay unchecked.
+For existing installs, use the
+[store-rehearsal installed prerequisites](../store-compatibility-rehearsal/README.md#5-installed-windowslinux-rehearsal-prerequisites-and-expected-evidence):
+backup must precede the first candidate open, including read-only opens that can write;
+rollback requires complete matching pre-upgrade state plus binary/toolchain. Installed
+upgrade and restore remain unverified. No manual migration procedure is chosen here.
+
 ## 1. Fill-in decisions
 
 Each placeholder below appears in the tester pages. Replace each one in the private copies
