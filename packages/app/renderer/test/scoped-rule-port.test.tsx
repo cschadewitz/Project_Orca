@@ -60,7 +60,15 @@ const target = {
   workspaceId: "11111111-1111-4111-8111-111111111111",
   instanceId: "22222222-2222-4222-8222-222222222222",
 };
-function fixture() {
+function fixture(
+  standingReview?: "available" | "unavailable",
+  prerequisites: {
+    requiredReview?: "passed" | "failed" | "unavailable";
+    saveEligibility?: "eligible" | "unavailable";
+    pendingExecutionIntent?: true;
+    executionWindowMs?: number;
+  } = {},
+) {
   const fake = fakeBridge({
     connection: {
       state: "live",
@@ -109,7 +117,13 @@ function fixture() {
             coverage: "Synthetic verified boundary",
           },
           reviewUntil: Date.now() + 60000,
-          requiredReview: "passed",
+          requiredReview: prerequisites.requiredReview ?? "passed",
+          ...(prerequisites.saveEligibility ? { saveEligibility: prerequisites.saveEligibility } : {}),
+          ...(prerequisites.pendingExecutionIntent ? { pendingExecutionIntent: true } : {}),
+          ...(prerequisites.executionWindowMs !== undefined
+            ? { executionWindowMs: prerequisites.executionWindowMs }
+            : {}),
+          ...(standingReview ? { standingReview } : {}),
           decision: view(),
         }),
       };
@@ -207,6 +221,86 @@ async function save() {
   click("Save scoped rule");
   await screen.findByText(/Scoped rule saved/);
 }
+it("an unavailable standing reviewer disables Save and preserves the one-time answer", async () => {
+  const f = fixture("unavailable");
+  await open();
+  expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).toBe("true");
+  expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).not.toBe("true");
+  click("Allow once");
+  await waitFor(() => expect(f.calls.some((call) => call.params.choice === "allow-once")).toBe(true));
+  expect(f.calls.some((call) => call.params.choice === "save")).toBe(false);
+});
+
+it("confirms a persistence-only Save without enabling or sending an execution answer", async () => {
+  const f = fixture("available", { requiredReview: "unavailable", saveEligibility: "eligible" });
+  await open();
+  expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).toBe("true");
+  expect(screen.getByRole("button", { name: "Deny" }).getAttribute("aria-disabled")).not.toBe("true");
+  expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).not.toBe("true");
+  click("Allow once");
+  click("Create scoped rule");
+  click("Save scoped rule");
+  await screen.findByText(/Scoped rule saved/);
+  expect(
+    f.calls.filter((call) => call.method === "scopedPermissions.choose").map((call) => call.params.choice),
+  ).toEqual(["save"]);
+  expect(f.onAnswer).not.toHaveBeenCalled();
+});
+
+it("carries the pending intent projection but sends only the owner's opaque one-time choice", async () => {
+  const f = fixture("available", {
+    requiredReview: "unavailable",
+    pendingExecutionIntent: true,
+    executionWindowMs: 55000,
+  });
+  await open();
+  expect(screen.getByText(/execution window starts after approval and current checks/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).not.toBe("true");
+  click("Allow once");
+  await screen.findByText(/One-time answer recorded.*Execution is not confirmed/);
+  const choices = f.calls.filter((call) => call.method === "scopedPermissions.choose");
+  expect(choices).toHaveLength(1);
+  expect(choices[0]!.params.choice).toBe("allow-once");
+  expect(Object.keys(choices[0]!.params).sort()).toEqual(["choice", "handle", "target"]);
+  expect(f.onAnswer).not.toHaveBeenCalled();
+});
+
+it.each([{ pendingExecutionIntent: true as const }, { executionWindowMs: 55000 }])(
+  "an incomplete pending projection cannot enable execution: %j",
+  async (projection) => {
+    const f = fixture("available", { requiredReview: "unavailable", ...projection });
+    await open();
+    expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).toBe("true");
+    click("Allow once");
+    expect(f.calls.some((call) => call.params.choice === "allow-once")).toBe(false);
+  },
+);
+
+it.each([
+  ["available", "unavailable", "unavailable"],
+  ["unavailable", "unavailable", "eligible"],
+  ["available", "unavailable", undefined],
+  ["available", "failed", "eligible"],
+] as const)(
+  "blocks Save for reviewer %s, execution review %s, Save projection %s",
+  async (standing, required, eligibility) => {
+    const f = fixture(standing, { requiredReview: required, ...(eligibility ? { saveEligibility: eligibility } : {}) });
+    await open();
+    expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).toBe("true");
+    click("Create scoped rule");
+    expect(f.calls.some((call) => call.params.choice === "save")).toBe(false);
+    expect(f.onAnswer).not.toHaveBeenCalled();
+  },
+);
+
+it("rejects unknown Save eligibility projections in the strict protocol schema", () => {
+  const projection = SCOPED_PERMISSION_CONTRACTS["scopedPermissions.review"].result.shape.saveEligibility;
+  expect(projection.safeParse(undefined).success).toBe(true);
+  expect(projection.safeParse("eligible").success).toBe(true);
+  expect(projection.safeParse("passed").success).toBe(false);
+  expect(projection.safeParse({ authority: true }).success).toBe(false);
+});
+
 it("confirms save only, then loads a fresh handle for a separately selected answer", async () => {
   const f = fixture();
   await save();

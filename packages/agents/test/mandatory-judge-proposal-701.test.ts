@@ -57,7 +57,7 @@ const floorOf = (setting: FloorSetting, patch: Partial<ProposedJudgeFloor> = {})
         allowWhenUnavailable: setting === "advisory-fallback",
         ...patch,
       };
-const ruleWith = (setting: RuleSetting, patch: Partial<StrictPermissionRule> = {}): StrictPermissionRule => {
+const ruleWith = (setting: RuleSetting, patch: Partial<ReturnType<typeof ruleFixture>> = {}): StrictPermissionRule => {
   const d = delegation(setting);
   return { ...ruleFixture(), ...(d ? { delegation: d } : {}), ...patch };
 };

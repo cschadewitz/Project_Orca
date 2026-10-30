@@ -32,6 +32,7 @@ import {
   type LiveInputBinding,
 } from "./live-input.js";
 import type { HumanInputQuery } from "./human-input.js";
+import { attachDeferredHumanDelivery, type DeferredHumanDelivery } from "./deferred-human-delivery.js";
 
 type Allow = Extract<PolicyVerdictV1, { outcome: "allow" }>;
 
@@ -367,6 +368,7 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
     actor: MutationActor,
     onceOptionId: string,
     scope: object,
+    deferred?: DeferredHumanDelivery,
   ): undefined {
     const entry = this.retained(action);
     if (
@@ -384,7 +386,9 @@ export class SyntheticReadFence<Parameters, Capture> implements EnforcementPortV
       if (query.live?.identity[key] !== action.invocation[key]) throw refused();
     if (query.runId !== action.invocation.runId || query.stepRunId !== action.invocation.stepRunId) throw refused();
     this.check(entry, this.owner.signal);
-    bindOriginalDelivery(delivery, query, scope);
+    if (deferred)
+      attachDeferredHumanDelivery(deferred, delivery, query, actor, onceOptionId, scope, action, entry.bytes);
+    else bindOriginalDelivery(delivery, query, scope);
     entry.human = { query, delivery, actor: immutable(actor), onceOptionId, scope };
     return undefined;
   }
