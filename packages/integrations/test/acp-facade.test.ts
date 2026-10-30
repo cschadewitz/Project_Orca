@@ -257,7 +257,7 @@ describe("ORCA as an ACP agent", () => {
 });
 
 describe("session config options (#188)", () => {
-  type Ctx = { request: acp.ClientSideConnection["request"] };
+  type Ctx = Pick<acp.ClientContext, "request">;
   async function drive<T>(
     clientCapabilities: acp.ClientCapabilities,
     body: (ctx: Ctx, updates: acp.SessionUpdate[]) => Promise<T>,
