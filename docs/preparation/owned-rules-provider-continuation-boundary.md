@@ -54,6 +54,10 @@ expiry. Keeping a rule valid does not revive an expired action.
 ## Durable ownership that is still needed
 
 The existing `resumeSessionId` option can load provider context when supported.
+Main's #801 adds opt-in `requireContextRecovery`, which refuses missing IDs,
+unsupported loading, failed loading and timed-out loading without opening a fresh
+session. This is protocol-level recovery support, not proof of native context
+completeness or a durable permission-intent implementation.
 The interface supplies no pending-request identifier or contract for restoring an
 old JSON-RPC permission callback. The orchestrator's sealed durable continuation
 boundary explicitly refuses live callback identities; it must not be widened by
@@ -114,7 +118,7 @@ than the normal outcome of a timeout, disconnection or restart. This does not cl
 that every installed provider can recover context today. Capability-checked
 `session/load` can restore supported provider context; it cannot restore a dead
 permission callback. The current orchestrator does not supply `resumeSessionId`;
-the adapter's existing fresh-session fallback is not proof of context recovery.
+the adapter's optional fresh-session fallback is not proof of context recovery.
 The durable path must not silently discard context or label a fresh session as a
 restored conversation.
 
