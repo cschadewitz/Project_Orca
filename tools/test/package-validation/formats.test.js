@@ -64,9 +64,32 @@ describe("tar.gz", () => {
     expect(() => readTarGz(gzipSync(raw))).toThrow(/tar_header_invalid/);
     expect(() => readTarGz(Buffer.from("not gzip"))).toThrow(/tar_gzip_invalid/);
   });
+  it.each([{ linkpath: "../../outside" }, { path: "../outside" }, { size: "0" }, { mtime: "0" }])(
+    "refuses unsupported global PAX attributes %j",
+    (globalPax) => {
+      const bytes = makeTarGz([{ name: "safe/link", kind: "symlink", linkName: "payload" }], { globalPax });
+      expect(() => readTarGz(bytes)).toThrow(/tar_global_pax_unsupported/);
+    },
+  );
 });
 
 describe("zip", () => {
+  it.each(["../evilxx", "different-length/name", "SAFE/name"])(
+    "refuses a local filename %j that differs from the central filename",
+    (localName) => {
+      expect(() => readZip(makeZip([{ name: "safe/name", localName, body: "x" }]))).toThrow(
+        /zip_local_header_mismatch/,
+      );
+    },
+  );
+  it.each([
+    [6, 1],
+    [8, 0],
+  ])("refuses a local flag/method mismatch at offset %s", (offset, value) => {
+    const zip = makeZip([{ name: "safe/name", body: "x" }]);
+    zip.writeUInt16LE(value, offset);
+    expect(() => readZip(zip)).toThrow(/zip_local_header_mismatch/);
+  });
   it("inflates and CRC-checks members", () => {
     const entries = readZip(makeZip([{ name: "a/b.txt", body: "hello" }, { name: "dir/" }]));
     expect(entries.map((e) => [e.name, e.kind, e.body.toString()])).toEqual([
@@ -84,11 +107,16 @@ describe("zip", () => {
 });
 
 describe("asar", () => {
+  it("interprets nested ASAR links relative to the archive root", () => {
+    expect(() => readAsar(makeAsar({ "extra/link": { link: "../outside" } }))).toThrow(/asar_link_escapes/);
+    const asar = readAsar(makeAsar({ "root.js": "root", "extra/link": { link: "root.js" } }));
+    expect(asar.files.get("extra/link").link).toBe("root.js");
+  });
   it("reads bodies by path and verifies recorded integrity", () => {
-    const asar = readAsar(makeAsar({ "package.json": "{}", "dist/a.js": "a", "dist/link": { link: "a.js" } }));
+    const asar = readAsar(makeAsar({ "package.json": "{}", "dist/a.js": "a", "dist/link": { link: "dist/a.js" } }));
     expect(asar.read("dist/a.js").toString()).toBe("a");
     expect(asar.files.get("dist").kind).toBe("directory");
-    expect(asar.files.get("dist/link")).toEqual({ kind: "symlink", link: "a.js" });
+    expect(asar.files.get("dist/link")).toEqual({ kind: "symlink", link: "dist/a.js" });
     expect(checkAsarIntegrity(asar)).toBe(2);
   });
   it("refuses tampered bodies, escaping links and invalid headers", () => {
@@ -120,6 +148,13 @@ describe("executables", () => {
 });
 
 describe("update metadata and blockmap", () => {
+  it.each(["files:\n", "files: []\n", '"files": []\n', "releaseDate: again\n", '"version": 1.2.3\n'])(
+    "refuses duplicate or alternate YAML mapping keys: %j",
+    (suffix) => {
+      const metadata = updateMetadata("1.2.3", "x64", Buffer.from("x"));
+      expect(() => readUpdateMetadata(metadata + suffix)).toThrow(/update_metadata_invalid/);
+    },
+  );
   it("parses the flat electron-builder 26 shape", () => {
     const installer = Buffer.from("installer bytes");
     expect(readUpdateMetadata(updateMetadata("1.2.3", "x64", installer))).toMatchObject({

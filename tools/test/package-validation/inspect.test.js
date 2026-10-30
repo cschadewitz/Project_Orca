@@ -180,6 +180,89 @@ describe("content refusals", () => {
       ? { [linux]: linuxArchive(VERSION, "x64", { extra }) }
       : { [windows]: windowsArchive(VERSION, "x64", source, { extra }) };
 
+  it("refuses global PAX linkpath overrides in an otherwise consistent Linux archive", () => {
+    const report = run({
+      [linux]: linuxArchive(VERSION, "x64", {
+        globalPax: { linkpath: "../../outside" },
+        extra: [{ name: "link", kind: "symlink", linkName: "safe" }],
+      }),
+    });
+    expect(report.status).toBe("refused");
+    expect(refusal(report, linux)).toMatch(/tar_global_pax_unsupported/);
+  });
+
+  it("refuses archive-root-relative ASAR link escapes in a packaged application", () => {
+    const report = run({
+      [linux]: linuxArchive(VERSION, "x64", { asar: appAsar(VERSION, { "extra/link": { link: "../outside" } }) }),
+    });
+    expect(refusal(report, linux)).toMatch(/asar_link_escapes/);
+  });
+
+  it.each(["orca.EXE", "ORCA.exe.", "ORCA.exe ", "file:stream", "NUL", "dir/CON.txt", "SAFEFO~1/file", "extra/é"])(
+    "refuses Windows duplicate or ambiguous destination %j",
+    (name) => {
+      const report = run(archive("win", [{ name, body: "x" }]));
+      expect(report.status).toBe("refused");
+      expect(refusal(report, windows)).toMatch(/archive_(?:duplicate_entry|windows_path_invalid)/);
+    },
+  );
+
+  it("indexes Windows case aliases in member and raw link-target ancestors, in either order", () => {
+    const cases = [
+      [
+        { name: "a", kind: "symlink", linkName: "." },
+        { name: "A/b", kind: "symlink", linkName: ".." },
+      ],
+      [
+        { name: "a", body: "x" },
+        { name: "A/b", body: "x" },
+      ],
+      [
+        { name: "a", kind: "symlink", linkName: "." },
+        { name: "b", kind: "symlink", linkName: "A/../safe" },
+      ],
+      [
+        { name: "safe/file", body: "x" },
+        { name: "SAFE/FILE", body: "y" },
+      ],
+    ];
+    for (const entries of cases) {
+      for (const extra of [entries, [...entries].reverse()]) {
+        const report = run(archive("win", extra));
+        expect(refusal(report, windows)).toMatch(/archive_(?:ancestor_not_directory|duplicate_entry)/);
+      }
+    }
+    expect(
+      run(
+        archive("linux", [
+          { name: "a", body: "x" },
+          { name: "A/b", body: "y" },
+        ]),
+      ).status,
+    ).toBe("consistent");
+  });
+
+  it.each(["a./../safe", "a /payload", "file:stream", "NUL.txt", "SAFEFO~1/payload"])(
+    "refuses ambiguous Windows link target %j",
+    (linkName) => {
+      const report = run(archive("win", [{ name: "link", kind: "symlink", linkName }]));
+      expect(refusal(report, windows)).toMatch(/archive_windows_path_invalid/);
+    },
+  );
+
+  it("refuses divergent ZIP filenames before inspecting the application tree", () => {
+    const report = run(archive("win", [{ name: "safe/name", localName: "../evilxx", body: "x" }]));
+    expect(refusal(report, windows)).toMatch(/zip_local_header_mismatch/);
+  });
+
+  it("refuses duplicate files mapping keys even with a complete update trio", () => {
+    const set = fullSet();
+    set["latest-x64.yml"] += "files:\n";
+    const report = run(set);
+    expect(report.status).toBe("refused");
+    expect(refusal(report, "latest-x64.yml")).toMatch(/update_metadata_invalid/);
+  });
+
   it.each(["linux", "win"])("refuses drive and UNC link targets in %s archives", (platform) => {
     for (const linkName of ["C:/outside", "c:outside", "./C:/outside", "//server/share", "\\\\server\\share"]) {
       const report = run(archive(platform, [{ name: "link", kind: "symlink", linkName }]));

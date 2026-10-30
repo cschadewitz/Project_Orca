@@ -39,8 +39,8 @@ export function containedPath(name) {
   return trimmed.split("/").every((part) => part && part !== "." && part !== "..");
 }
 
-/** Lexical containment only; archive inspection must also reject non-directory ancestors. */
-export function containedLink(member, target) {
+/** Tar/ZIP links are member-relative; ASAR links are root-relative. Ancestors need a separate check. */
+export function containedLink(member, target, { rootRelative = false } = {}) {
   if (
     !containedPath(member) ||
     typeof target !== "string" ||
@@ -52,7 +52,7 @@ export function containedLink(member, target) {
     target.split("/").some((part) => /^[A-Za-z]:/.test(part))
   )
     return false;
-  const resolved = posix.normalize(posix.join(posix.dirname(member), target));
+  const resolved = posix.normalize(posix.join(rootRelative ? "." : posix.dirname(member), target));
   return resolved !== ".." && !resolved.startsWith("../") && !posix.isAbsolute(resolved);
 }
 
@@ -124,7 +124,9 @@ export function readTarGz(compressed) {
       pax = paxRecords(body);
       continue;
     }
-    if (type === "g") continue;
+    // Ignoring a global linkpath/path/size changes the meaning of later members.
+    // Global PAX is outside this bounded reader's supported subset, even if benign.
+    if (type === "g") fail("tar_global_pax_unsupported");
     const prefix = header.subarray(257, 263).toString("ascii").startsWith("ustar") ? cString(header, 345, 155) : "";
     const stored = cString(header, 0, 100);
     const name = pax.path ?? longName ?? (prefix ? `${prefix}/${stored}` : stored);
@@ -181,13 +183,24 @@ export function readZip(bytes) {
     const madeBy = bytes.readUInt16LE(offset + 4) >> 8;
     const external = bytes.readUInt32LE(offset + 38);
     const local = bytes.readUInt32LE(offset + 42);
-    const name = bytes.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
+    if (offset + 46 + nameLength + extraLength + commentLength > directoryOffset + directorySize)
+      fail("zip_directory_invalid");
+    const nameBytes = bytes.subarray(offset + 46, offset + 46 + nameLength);
+    const name = nameBytes.toString("utf8");
     offset += 46 + nameLength + extraLength + commentLength;
     if ([compressedSize, size, local].includes(0xffffffff)) fail("zip64_unsupported");
     if (flags & 0x1) fail("zip_encrypted_unsupported", name);
     if (method !== 0 && method !== 8) fail("zip_method_unsupported", `${method} at ${JSON.stringify(name)}`);
     if (local + 30 > bytes.length || bytes.readUInt32LE(local) !== 0x04034b50) fail("zip_local_header_invalid", name);
-    const dataStart = local + 30 + bytes.readUInt16LE(local + 26) + bytes.readUInt16LE(local + 28);
+    const localNameLength = bytes.readUInt16LE(local + 26);
+    const dataStart = local + 30 + localNameLength + bytes.readUInt16LE(local + 28);
+    if (
+      dataStart > directoryOffset ||
+      !bytes.subarray(local + 30, local + 30 + localNameLength).equals(nameBytes) ||
+      bytes.readUInt16LE(local + 6) !== flags ||
+      bytes.readUInt16LE(local + 8) !== method
+    )
+      fail("zip_local_header_mismatch", name);
     if (dataStart + compressedSize > bytes.length) fail("zip_truncated", name);
     expanded += size;
     if (expanded > MAX_EXPANDED_BYTES) fail("zip_too_large");
@@ -237,7 +250,7 @@ export function readAsar(bytes) {
         files.set(path, { kind: "directory" });
         walk(child, path, depth + 1);
       } else if (child && typeof child.link === "string") {
-        if (!containedLink(path, child.link)) fail("asar_link_escapes", path);
+        if (!containedLink(path, child.link, { rootRelative: true })) fail("asar_link_escapes", path);
         files.set(path, { kind: "symlink", link: child.link });
       } else if (child && Number.isSafeInteger(child.size) && child.size >= 0) {
         if (child.unpacked) {
@@ -348,23 +361,35 @@ export function readUpdateMetadata(text) {
   // `files:` is a list of flat maps: `  - url: …` then `    key: …`, ending at the next
   // unindented key. Each entry is parsed from its own lines only.
   const files = [];
+  const keys = new Set();
   let current;
   let inFiles = false;
   for (const line of text.split("\n")) {
-    if (/^files:\s*$/.test(line)) {
-      inFiles = true;
+    if (/^\S/.test(line)) {
+      // This is a flat, deliberately limited YAML subset. Refuse quoted/flow/merge
+      // keys or unknown structure rather than disagree with the updater's parser.
+      const key = /^(version|path|sha512|files|releaseDate):(?: |$)/.exec(line)?.[1];
+      if (!key) fail("update_metadata_invalid", "unsupported top-level mapping");
+      if (keys.has(key)) fail("update_metadata_invalid", `${key} must appear once (duplicate ${key})`);
+      keys.add(key);
+      inFiles = key === "files";
+      if (inFiles && line !== "files:") fail("update_metadata_invalid", "files must be a block list");
+      current = undefined;
       continue;
     }
-    if (!inFiles) continue;
+    if (!inFiles) {
+      if (line.trim()) fail("update_metadata_invalid", "unexpected indented line");
+      continue;
+    }
     const start = /^ {2}- (\w+): (.*)$/.exec(line);
     const more = /^ {4}(\w+): (.*)$/.exec(line);
     if (start) files.push((current = { [start[1]]: unquote(start[2]) }));
     else if (more && current) {
       if (more[1] in current) fail("update_metadata_invalid", `duplicate ${more[1]}`);
       current[more[1]] = unquote(more[2]);
-    } else if (/^\S/.test(line)) inFiles = false;
-    else if (line.trim()) fail("update_metadata_invalid", "unexpected files[] line");
+    } else if (line.trim()) fail("update_metadata_invalid", "unexpected files[] line");
   }
+  if (!keys.has("files")) fail("update_metadata_invalid", "files must appear once");
   for (const file of files) {
     file.size = Number(file.size);
     if (!file.url || !file.sha512 || !Number.isSafeInteger(file.size)) fail("update_metadata_invalid", "files[] entry");

@@ -121,6 +121,18 @@ It refuses, rather than skips, when:
 | Installer, metadata, blockmap | All three counterparts required; PE image; Authenticode table *absent → unsigned* or *present → unverified*; `latest-ARCH.yml` (stable) or `prerelease-ARCH.yml` channel, version, path, SHA-512 and size equal the supplied installer; blockmap chunks cover the installer exactly |
 | AppImage | ELF runtime for x64 and a squashfs payload marker; contents not inspected |
 
+The supported format subset is conservative. Global PAX headers are refused rather than
+ignored. ZIP local filenames, flags and methods must agree with their central directory
+records. ASAR link targets are checked relative to the archive root. Update metadata must
+use the flat `version`, `files`, `path`, `sha512` and optional `releaseDate` mapping; duplicate
+keys, quoted/flow mapping keys and unsupported structure are refused.
+
+Windows archive destinations are indexed case-insensitively for duplicates and ancestors.
+Member paths and link targets must use printable ASCII without reserved device names,
+alternate data streams, trailing dots/spaces or `~` short-name aliases. This deliberately
+refuses uncertain spellings rather than guessing a target filesystem's Unicode or 8.3
+configuration. Linux destination indexing remains case-sensitive.
+
 Recorded, not judged: entry counts, ASAR and header digests, daemon digests per artifact
 (Linux vs Windows builds come from different runners and may legitimately differ),
 `app-update.yml` feed URL and whether `publisherName` is present, the Linux
@@ -194,13 +206,18 @@ environment, or real workspace contents.
 - **Prerequisites:** a display (`xvfb-run`) and unprivileged user namespaces available as
   provisioned (`unshare --user --map-root-user true` succeeds). If they are not, record
   blocked; do not add `--no-sandbox` or change sysctls.
+  The same tarball must pass S. Before extraction, use `readTarGz` from
+  `tools/package-validation/formats.js` to prepare and retain a separate SHA-256 inventory
+  of the three members named in step 1, hashing their bytes in memory. The static report
+  emits ASAR and daemon digests but does not emit an executable digest.
 - **Effects:** extracts into a new directory; creates one profile directory and one
   workspace directory; starts the app and its daemon child; writes only inside those
   directories and the disposable `HOME`.
 - **Steps:**
   1. `mkdir -p "$RUN/app" "$RUN/profile" "$RUN/workspace"`, extract the tarball into
      `$RUN/app`, and record `sha256sum` of `orca`, `resources/app.asar` and
-     `resources/daemon/orca-daemon.mjs`. They must equal the static report's digests.
+     `resources/daemon/orca-daemon.mjs`. They must equal the retained tar-member inventory;
+     also cross-check `asarSha256` and `daemonSha256` in the static report.
   2. **First launch, no workspace set:** `setsid xvfb-run -a "$RUN/app/<root>/orca"
      --user-data-dir="$RUN/profile" >"$EVIDENCE/app-first.log" 2>&1 &`. Record whether the
      window opens on first-run setup (disconnected) or starts the bundled daemon.

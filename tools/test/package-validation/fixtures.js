@@ -161,18 +161,27 @@ function tarHeader(name, { type = "0", size = 0, mode = 0o644, linkName = "" }) 
 
 const pad = (body) => Buffer.concat([body, Buffer.alloc((512 - (body.length % 512)) % 512)]);
 
+const paxRecord = (value) => {
+  let length = Buffer.byteLength(value) + 3;
+  while (Buffer.byteLength(`${length} ${value}\n`) !== length) length = Buffer.byteLength(`${length} ${value}\n`);
+  return `${length} ${value}\n`;
+};
+
 /** A gzip tar. Names over 100 bytes use a pax `path` record, as GNU tar and node-tar do. */
-export function makeTarGz(entries) {
+export function makeTarGz(entries, { globalPax } = {}) {
   const blocks = [];
+  if (globalPax) {
+    const body = Buffer.from(
+      Object.entries(globalPax)
+        .map(([key, value]) => paxRecord(`${key}=${value}`))
+        .join(""),
+    );
+    blocks.push(tarHeader("GlobalPaxHeader", { type: "g", size: body.length }), pad(body));
+  }
   for (const entry of entries) {
     const body = entry.body ? Buffer.from(entry.body) : Buffer.alloc(0);
     if (Buffer.byteLength(entry.name) > 99) {
-      const record = (value) => {
-        let length = value.length + 3;
-        while (`${length} ${value}\n`.length !== length) length = `${length} ${value}\n`.length;
-        return `${length} ${value}\n`;
-      };
-      const pax = Buffer.from(record(`path=${entry.name}`));
+      const pax = Buffer.from(paxRecord(`path=${entry.name}`));
       blocks.push(tarHeader("PaxHeader", { type: "x", size: pax.length }), pad(pax));
     }
     const type = { file: "0", directory: "5", symlink: "2", hardlink: "1" }[entry.kind ?? "file"];
@@ -192,6 +201,7 @@ export function makeZip(entries, { corruptCrc } = {}) {
   let offset = 0;
   for (const entry of entries) {
     const name = Buffer.from(entry.name);
+    const localName = Buffer.from(entry.localName ?? entry.name);
     const body = Buffer.from(entry.kind === "symlink" ? entry.linkName : (entry.body ?? ""));
     const data = deflateRawSync(body);
     const crc = (crc32(body) ^ (corruptCrc === entry.name ? 1 : 0)) >>> 0;
@@ -202,7 +212,7 @@ export function makeZip(entries, { corruptCrc } = {}) {
     local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(data.length, 18);
     local.writeUInt32LE(body.length, 22);
-    local.writeUInt16LE(name.length, 26);
+    local.writeUInt16LE(localName.length, 26);
     const record = Buffer.alloc(46);
     record.writeUInt32LE(0x02014b50, 0);
     record.writeUInt16LE(3 * 256 + 20, 4);
@@ -214,9 +224,9 @@ export function makeZip(entries, { corruptCrc } = {}) {
     record.writeUInt32LE(body.length, 24);
     record.writeUInt16LE(name.length, 28);
     record.writeUInt32LE(offset, 42);
-    locals.push(local, name, data);
+    locals.push(local, localName, data);
     central.push(record, name);
-    offset += 30 + name.length + data.length;
+    offset += 30 + localName.length + data.length;
   }
   const directory = Buffer.concat(central);
   const end = Buffer.alloc(22);
@@ -273,19 +283,22 @@ export function windowsNative(source, arch, { addonArch = arch } = {}) {
 export function linuxArchive(
   version,
   arch,
-  { asar = appAsar(version), daemonBody = daemon(version), extra = [] } = {},
+  { asar = appAsar(version), daemonBody = daemon(version), extra = [], globalPax } = {},
 ) {
   const top = `ORCA-${version}`;
   const runtime = ["resources.pak", "icudtl.dat", "v8_context_snapshot.bin", "libffmpeg.so", "locales/en-US.pak"];
-  return makeTarGz([
-    { name: `${top}/`, kind: "directory", mode: 0o755 },
-    { name: `${top}/orca`, body: makeElf(arch), mode: 0o755 },
-    { name: `${top}/chrome-sandbox`, body: makeElf(arch), mode: 0o755 },
-    ...runtime.map((name) => ({ name: `${top}/${name}`, body: `placeholder ${name}` })),
-    { name: `${top}/resources/app.asar`, body: asar },
-    { name: `${top}/resources/daemon/orca-daemon.mjs`, body: daemonBody },
-    ...extra,
-  ]);
+  return makeTarGz(
+    [
+      { name: `${top}/`, kind: "directory", mode: 0o755 },
+      { name: `${top}/orca`, body: makeElf(arch), mode: 0o755 },
+      { name: `${top}/chrome-sandbox`, body: makeElf(arch), mode: 0o755 },
+      ...runtime.map((name) => ({ name: `${top}/${name}`, body: `placeholder ${name}` })),
+      { name: `${top}/resources/app.asar`, body: asar },
+      { name: `${top}/resources/daemon/orca-daemon.mjs`, body: daemonBody },
+      ...extra,
+    ],
+    { globalPax },
+  );
 }
 
 /** A Windows zip tree at the archive root, as electron-builder's win zip target lays it out. */

@@ -274,12 +274,12 @@ function inspectAsar(bytes, source, expectedVersion) {
  * Check the complete member index so archive order cannot hide an ancestor. Missing
  * directory entries are normal. This deliberately does not follow a link graph.
  */
-function checkArchiveAncestors(byName) {
+function checkArchiveAncestors(byName, destination = (name) => name) {
   const check = (parts, member) => {
     const prefix = [];
     for (const part of parts) {
       const ancestor = prefix.join("/");
-      const entry = byName.get(ancestor);
+      const entry = byName.get(destination(ancestor));
       if (entry && entry.kind !== "directory") fail("archive_ancestor_not_directory", `${member}: ${ancestor}`);
       if (part === "..") {
         if (!prefix.length) fail("archive_link_escapes", member);
@@ -287,26 +287,51 @@ function checkArchiveAncestors(byName) {
       } else if (part && part !== ".") prefix.push(part);
     }
   };
-  for (const [name, entry] of byName) {
+  for (const entry of byName.values()) {
+    const name = entry.name.replace(/\/$/, "");
     check(entry.name.split("/"), name);
     if (entry.kind === "symlink") check([...name.split("/").slice(0, -1), ...entry.linkName.split("/")], name);
     else if (entry.kind === "hardlink") check(entry.linkName.split("/"), name);
   }
 }
 
+/**
+ * Supported Windows destinations use printable ASCII with no Win32 trimming,
+ * device names, ADS or short-name aliases. Reject uncertain spellings instead of
+ * guessing the target filesystem's Unicode/case/8.3 configuration.
+ */
+function windowsDestination(name) {
+  return name.split("/").every((part) => {
+    if (part === "." || part === ".." || part === "") return true;
+    return (
+      !/[^\x20-\x7e]|[<>:"|?*~\\]|[. ]$/.test(part) &&
+      !/^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|CLOCK\$|COM[0-9]|LPT[0-9])$/i.test(part.split(".")[0].trimEnd())
+    );
+  });
+}
+
 /** One packaged application tree, from either a Linux tar.gz or a Windows zip. */
 function inspectTree(entries, { platform, arch }, source, version, scratch) {
   const byName = new Map();
+  const destinations = new Map();
+  const destination = (name) => (platform === "win" ? name.toLowerCase() : name);
   for (const entry of entries) {
     if (!containedPath(entry.name)) fail("archive_path_escapes", JSON.stringify(entry.name));
     if (entry.linkName !== undefined && entry.kind === "symlink" && !containedLink(entry.name, entry.linkName))
       fail("archive_link_escapes", entry.name);
     if (entry.kind === "hardlink" && !containedPath(entry.linkName)) fail("archive_link_escapes", entry.name);
+    if (
+      platform === "win" &&
+      (!windowsDestination(entry.name) || (entry.linkName !== undefined && !windowsDestination(entry.linkName)))
+    )
+      fail("archive_windows_path_invalid", entry.name);
     const key = entry.name.replace(/\/$/, "");
-    if (byName.has(key)) fail("archive_duplicate_entry", key);
+    const target = destination(key);
+    if (destinations.has(target)) fail("archive_duplicate_entry", key);
+    destinations.set(target, entry);
     byName.set(key, entry);
   }
-  checkArchiveAncestors(byName);
+  checkArchiveAncestors(destinations, destination);
   const roots = [...byName.keys()].filter((name) => /^(?:[^/]+\/)?resources\/app\.asar$/.test(name));
   if (roots.length !== 1) fail("archive_layout_unexpected", `${roots.length} app.asar candidates`);
   const prefix = roots[0].slice(0, -"resources/app.asar".length);
