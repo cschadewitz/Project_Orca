@@ -95,10 +95,10 @@ most 60 seconds and was clipped to current lease and credential lifetimes.
 The separate outer worker allowed 900 seconds for capture, replay and cleanup;
 the five-minute capture bound did not govern the whole replay operation.
 
-| Lane | Capture seconds | Trace bytes | SHA-256 |
-| --- | ---: | ---: | --- |
-| Bootstrap | 20.496959480 | 106,305,818 | `e1aa73c1ef0ebc692e27155168a4e4dda463a03a3066747ff3758c29094892f5` |
-| Connected | 195.635255591 | 775,348,997 | `65364b2cae3972684639c371903f4b524cff8f2a1d4be86c726b2df3411a2873` |
+| Lane      | Capture seconds | Trace bytes | SHA-256                                                            |
+| --------- | --------------: | ----------: | ------------------------------------------------------------------ |
+| Bootstrap |    20.496959480 | 106,305,818 | `e1aa73c1ef0ebc692e27155168a4e4dda463a03a3066747ff3758c29094892f5` |
+| Connected |   195.635255591 | 775,348,997 | `65364b2cae3972684639c371903f4b524cff8f2a1d4be86c726b2df3411a2873` |
 
 The original supervisor's kernel replay and composed semantic/effect inventory
 returned without refusal. Save performed zero resource reads and zero execution
