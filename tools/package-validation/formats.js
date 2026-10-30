@@ -39,9 +39,19 @@ export function containedPath(name) {
   return trimmed.split("/").every((part) => part && part !== "." && part !== "..");
 }
 
-/** A link target, resolved against its own member, that still lands inside the root. */
+/** Lexical containment only; archive inspection must also reject non-directory ancestors. */
 export function containedLink(member, target) {
-  if (typeof target !== "string" || !target || target.startsWith("/") || target.includes("\\")) return false;
+  if (
+    !containedPath(member) ||
+    typeof target !== "string" ||
+    !target ||
+    target.length > 4096 ||
+    target.includes("\0") ||
+    target.startsWith("/") ||
+    target.includes("\\") ||
+    target.split("/").some((part) => /^[A-Za-z]:/.test(part))
+  )
+    return false;
   const resolved = posix.normalize(posix.join(posix.dirname(member), target));
   return resolved !== ".." && !resolved.startsWith("../") && !posix.isAbsolute(resolved);
 }

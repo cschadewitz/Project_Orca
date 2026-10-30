@@ -269,6 +269,31 @@ function inspectAsar(bytes, source, expectedVersion) {
   };
 }
 
+/**
+ * Refuse traversal through stored links or files, including before a `..` component.
+ * Check the complete member index so archive order cannot hide an ancestor. Missing
+ * directory entries are normal. This deliberately does not follow a link graph.
+ */
+function checkArchiveAncestors(byName) {
+  const check = (parts, member) => {
+    const prefix = [];
+    for (const part of parts) {
+      const ancestor = prefix.join("/");
+      const entry = byName.get(ancestor);
+      if (entry && entry.kind !== "directory") fail("archive_ancestor_not_directory", `${member}: ${ancestor}`);
+      if (part === "..") {
+        if (!prefix.length) fail("archive_link_escapes", member);
+        prefix.pop();
+      } else if (part && part !== ".") prefix.push(part);
+    }
+  };
+  for (const [name, entry] of byName) {
+    check(entry.name.split("/"), name);
+    if (entry.kind === "symlink") check([...name.split("/").slice(0, -1), ...entry.linkName.split("/")], name);
+    else if (entry.kind === "hardlink") check(entry.linkName.split("/"), name);
+  }
+}
+
 /** One packaged application tree, from either a Linux tar.gz or a Windows zip. */
 function inspectTree(entries, { platform, arch }, source, version, scratch) {
   const byName = new Map();
@@ -281,6 +306,7 @@ function inspectTree(entries, { platform, arch }, source, version, scratch) {
     if (byName.has(key)) fail("archive_duplicate_entry", key);
     byName.set(key, entry);
   }
+  checkArchiveAncestors(byName);
   const roots = [...byName.keys()].filter((name) => /^(?:[^/]+\/)?resources\/app\.asar$/.test(name));
   if (roots.length !== 1) fail("archive_layout_unexpected", `${roots.length} app.asar candidates`);
   const prefix = roots[0].slice(0, -"resources/app.asar".length);
@@ -439,10 +465,28 @@ function crossCheck(results, version) {
     );
   }
   for (const installer of results.filter((r) => r.kind === "windows-installer" && r.status === "consistent")) {
+    const metadataName = `${prerelease ? "prerelease" : "latest"}-${installer.arch}.yml`;
+    const metadata = byName.get(metadataName);
+    record(
+      `${installer.file}:metadata-supplied`,
+      metadata?.kind === "update-metadata" &&
+        metadata.status === "consistent" &&
+        metadata.observations.path === installer.file,
+      metadataName,
+    );
     const map = byName.get(`${installer.file}.blockmap`);
     record(`${installer.file}:blockmap-supplied`, map?.status === "consistent");
     if (map?.status === "consistent")
       record(`${installer.file}:blockmap-covers-installer`, map.observations.coveredBytes === installer.size);
+  }
+  for (const map of results.filter((r) => r.kind === "blockmap" && r.status === "consistent")) {
+    const installerName = map.file.slice(0, -".blockmap".length);
+    const installer = byName.get(installerName);
+    record(
+      `${map.file}:installer-supplied`,
+      installer?.kind === "windows-installer" && installer.status === "consistent",
+      installerName,
+    );
   }
   // One runner builds one daemon: the Linux job's tarballs and the standalone daemon are a
   // single build, as are the Windows job's two zips. Across runners, report rather than require.

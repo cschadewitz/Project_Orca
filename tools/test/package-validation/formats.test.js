@@ -27,6 +27,13 @@ describe("containment", () => {
     expect(containedLink("a/link", "../../c")).toBe(false);
     expect(containedLink("a/link", "/usr/lib/x")).toBe(false);
   });
+  it.each(["C:/outside", "c:outside", "./C:/outside", "//server/share", "\\\\server\\share", "a\0b"])(
+    "refuses nonportable link target %j, including in ASAR",
+    (target) => {
+      expect(containedLink("dir/link", target)).toBe(false);
+      expect(() => readAsar(makeAsar({ "dir/link": { link: target } }))).toThrow(/asar_link_escapes/);
+    },
+  );
 });
 
 describe("tar.gz", () => {

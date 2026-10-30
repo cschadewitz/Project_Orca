@@ -192,7 +192,7 @@ export function makeZip(entries, { corruptCrc } = {}) {
   let offset = 0;
   for (const entry of entries) {
     const name = Buffer.from(entry.name);
-    const body = entry.body ? Buffer.from(entry.body) : Buffer.alloc(0);
+    const body = Buffer.from(entry.kind === "symlink" ? entry.linkName : (entry.body ?? ""));
     const data = deflateRawSync(body);
     const crc = (crc32(body) ^ (corruptCrc === entry.name ? 1 : 0)) >>> 0;
     const local = Buffer.alloc(30);
@@ -205,7 +205,8 @@ export function makeZip(entries, { corruptCrc } = {}) {
     local.writeUInt16LE(name.length, 26);
     const record = Buffer.alloc(46);
     record.writeUInt32LE(0x02014b50, 0);
-    record.writeUInt16LE(20, 4);
+    record.writeUInt16LE(3 * 256 + 20, 4);
+    if (entry.kind === "symlink") record.writeUInt32LE(0o120777 * 65536, 38);
     record.writeUInt16LE(20, 6);
     record.writeUInt16LE(8, 10);
     record.writeUInt32LE(crc, 16);

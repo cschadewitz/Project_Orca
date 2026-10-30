@@ -92,6 +92,9 @@ newer checkout passed a `--source` at the candidate commit. Exit status 0 is
 only the report and a temporary copy of the Windows native-addon files (deleted on exit)
 so the packaging hook's own manifest check can run unchanged.
 
+The report's `complete` field describes manifest coverage only. A supplied installer or
+blockmap with a missing counterpart is `refused`, even if every manifest entry was supplied.
+
 It refuses, rather than skips, when:
 
 - the checkout is not exactly the manifest commit, or has local changes under
@@ -100,20 +103,22 @@ It refuses, rather than skips, when:
   a bundled/standalone daemon's version stamp differ;
 - a supplied file is not named in the manifest, its SHA-256 differs, or a manifest file is
   not supplied (unless `--allow-partial`);
-- update metadata names an installer or blockmap that was not supplied;
+- any installer, blockmap or update metadata lacks its required counterparts for the
+  candidate version, architecture and channel (even when omitted from the manifest, or
+  when `--allow-partial` is set);
 - a file name is a macOS artifact or anything else it does not recognise.
 
 | Requirement | Static check (report `checks` names) |
 | --- | --- |
 | Artifact-to-commit identity | Manifest SHA-256 for every file; source at manifest commit; version agreement across manifest, source, ASAR and daemon |
-| Archive contents | Every tar/zip member and link contained in the archive root; one `resources/app.asar`; Linux `orca` ELF / Windows `ORCA.exe` PE for the named architecture |
+| Archive contents | Every tar/zip member and link contained in the archive root; drive-prefixed/UNC link targets and traversal through stored link or file ancestors refused regardless of entry order; one `resources/app.asar`; Linux `orca` ELF / Windows `ORCA.exe` PE for the named architecture |
 | ASAR contents | Recorded per-file SHA-256 integrity; `asar-has:*` entrypoints; `asar-excludes:*` source maps, `.d.ts`, build state, `dist/daemon|release|diagnostics-native`, native addons, development packages; `asar-dependency:*` for each declared production dependency |
 | Native dependencies and resources | `electron-runtime:*` presence; Windows `native-diagnostics:*` — exactly three `.node` PE32+ DLLs for the architecture plus a manifest that passes the packaging hook's closed check against the source; Linux has no `resources/native` |
 | Bundled daemon | Exactly one file under `resources/daemon/`, at `orca-daemon.mjs`, with one version stamp equal to the candidate; byte-identical across one runner's outputs (Linux tarballs and the standalone `.mjs`; the two Windows zips) |
 | Fonts | Every `packages/design/fonts/*.woff2` byte-identical in the packaged renderer, and no extra faces |
 | CSP | Packaged `index.html` CSP equal to the source's, no `unsafe-*` or wildcard, no inline or remote script, every local reference present |
 | Window hardening | `contextIsolation: true` and `sandbox: true` present in packaged main — static text only |
-| Installer, metadata, blockmap | PE image; Authenticode table *absent → unsigned* or *present → unverified*; `latest-ARCH.yml` channel, version, path, SHA-512 and size equal the supplied installer; blockmap chunks cover the installer exactly |
+| Installer, metadata, blockmap | All three counterparts required; PE image; Authenticode table *absent → unsigned* or *present → unverified*; `latest-ARCH.yml` (stable) or `prerelease-ARCH.yml` channel, version, path, SHA-512 and size equal the supplied installer; blockmap chunks cover the installer exactly |
 | AppImage | ELF runtime for x64 and a squashfs payload marker; contents not inspected |
 
 Recorded, not judged: entry counts, ASAR and header digests, daemon digests per artifact
@@ -281,16 +286,21 @@ expected protocol. Retain its output.
 
 ### W2 — Windows clean install and uninstall
 
-- **Prerequisites:** W1 on the same VM.
+- **Prerequisites:** W1 on the same VM and the same-architecture zip that passed S.
+  Prepare and retain a separate SHA-256 inventory of the zip members listed below, using
+  `readZip` from `tools/package-validation/formats.js` and hashing each member's bytes in
+  memory. The inspector report emits ASAR and daemon hashes, but does not emit executable
+  or native-addon hashes; those comparisons require this separate inventory.
 - **Effects:** a per-user NSIS install (no elevation expected): the install directory
   (default `%LOCALAPPDATA%\Programs\ORCA`), an uninstall key under `HKCU`, Start menu
   shortcut(s) with AppUserModelID `dev.orca.desktop`. Uninstall removes them.
 - **Observations:**
   1. No UAC prompt. Default and changed install directories both offered.
   2. Hash the installed `ORCA.exe`, `resources\app.asar`, `resources\daemon\orca-daemon.mjs`
-     and `resources\native\diagnostics\win32-<arch>\*` and compare with the same-arch zip's
-     static report (`asarSha256`, `daemonSha256`). Equality ties the installer payload to the
-     inspected zip; a difference is a finding to explain, not to ignore.
+     and `resources\native\diagnostics\win32-<arch>\*` and compare with the retained zip
+     member inventory (also cross-check `asarSha256` and `daemonSha256` in S). Equality ties
+     the installer payload to the inspected zip; a difference is a finding to explain,
+     not to ignore.
   3. `reg export` the uninstall key to the evidence directory.
   4. After W3–W5, uninstall from Settings. Expected: install directory and uninstall key
      removed; record whether `%APPDATA%\ORCA` (profile) remains; the synthetic workspace is

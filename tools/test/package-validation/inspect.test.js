@@ -59,7 +59,13 @@ function fullSet(overrides = {}) {
 
 function run(artifacts, options = {}) {
   const dir = scratch();
-  const { manifestPath, paths } = writeCandidate(dir, options.commit ?? source.commit, VERSION, artifacts, options);
+  const { manifestPath, paths } = writeCandidate(
+    dir,
+    options.commit ?? source.commit,
+    options.version ?? VERSION,
+    artifacts,
+    options,
+  );
   return inspect({
     candidatePath: manifestPath,
     sourceRoot: options.sourceRoot ?? source.root,
@@ -169,6 +175,79 @@ describe("identity refusals", () => {
 describe("content refusals", () => {
   const linux = `ORCA-${VERSION}-linux-x64.tar.gz`;
   const windows = `ORCA-${VERSION}-win-x64.zip`;
+  const archive = (platform, extra) =>
+    platform === "linux"
+      ? { [linux]: linuxArchive(VERSION, "x64", { extra }) }
+      : { [windows]: windowsArchive(VERSION, "x64", source, { extra }) };
+
+  it.each(["linux", "win"])("refuses drive and UNC link targets in %s archives", (platform) => {
+    for (const linkName of ["C:/outside", "c:outside", "./C:/outside", "//server/share", "\\\\server\\share"]) {
+      const report = run(archive(platform, [{ name: "link", kind: "symlink", linkName }]));
+      expect(report.status).toBe("refused");
+      expect(report.artifacts[0].refusal).toMatch(/archive_link_escapes/);
+    }
+  });
+
+  it.each(["linux", "win"])("refuses composed link and file ancestors in %s, in either order", (platform) => {
+    const cases = [
+      [
+        { name: "a", kind: "symlink", linkName: "." },
+        { name: "a/b", kind: "symlink", linkName: ".." },
+      ],
+      [
+        { name: "a", kind: "symlink", linkName: "." },
+        { name: "a/payload", body: "x" },
+      ],
+      [
+        { name: "a", body: "file" },
+        { name: "a/payload", body: "x" },
+      ],
+      [
+        { name: "a", kind: "symlink", linkName: "." },
+        { name: "b", kind: "symlink", linkName: "a/../.." },
+      ],
+      [
+        { name: "a", body: "file" },
+        { name: "b", kind: "symlink", linkName: "a/../safe" },
+      ],
+      [
+        { name: "a", kind: "symlink", linkName: "." },
+        { name: "b", kind: "symlink", linkName: "a/../safe" },
+      ],
+    ];
+    if (platform === "linux") {
+      cases.push(
+        [
+          { name: "a", kind: "hardlink", linkName: "resources.pak" },
+          { name: "a/payload", body: "x" },
+        ],
+        [
+          { name: "a", kind: "symlink", linkName: "." },
+          { name: "b", kind: "hardlink", linkName: "a/payload" },
+        ],
+      );
+    }
+    for (const entries of cases) {
+      for (const extra of [entries, [...entries].reverse()]) {
+        const report = run(archive(platform, extra));
+        expect(report.status).toBe("refused");
+        expect(report.artifacts[0].refusal).toMatch(/archive_(?:ancestor_not_directory|link_escapes)/);
+      }
+    }
+  });
+
+  it.each(["linux", "win"])("preserves implicit directories and ordinary sibling links in %s", (platform) => {
+    const report = run(
+      archive(platform, [
+        { name: "safe/", kind: "directory" },
+        { name: "safe/nested/payload", body: "x" },
+        { name: "safe/link", kind: "symlink", linkName: "nested/payload" },
+        { name: "safe/nested/up", kind: "symlink", linkName: "../link" },
+        { name: "safe/nested/lexical", kind: "symlink", linkName: "../nested/../link" },
+      ]),
+    );
+    expect(report.status).toBe("consistent");
+  });
   const cases = [
     ["app version", linux, linuxArchive(VERSION, "x64", { asar: appAsar("0.1.0") }), /asar_version_mismatch/],
     [
@@ -315,6 +394,49 @@ describe("content refusals", () => {
     expect(run(set).crossChecks.failures).toContain(`ORCA-${VERSION}-win-x64.exe:blockmap-supplied`);
     const short = run(fullSet({ [`ORCA-${VERSION}-win-x64.exe.blockmap`]: blockmap(10) }));
     expect(short.crossChecks.failures).toContain(`ORCA-${VERSION}-win-x64.exe:blockmap-covers-installer`);
+  });
+
+  it.each([
+    ["x64", VERSION],
+    ["arm64", VERSION],
+    ["x64", `${VERSION}-rc.1`],
+    ["arm64", `${VERSION}-rc.1`],
+  ])("requires all three update counterparts for %s version %s", (arch, version) => {
+    const candidateSource = version === VERSION ? source : makeSource(version);
+    if (candidateSource !== source) cleanup.push(candidateSource.root);
+    const options = { version, sourceRoot: candidateSource.root, commit: candidateSource.commit };
+    const installer = makePe("x86");
+    const trio = {
+      [`ORCA-${version}-win-${arch}.exe`]: installer,
+      [`ORCA-${version}-win-${arch}.exe.blockmap`]: blockmap(installer.length),
+      [`${version.includes("-") ? "prerelease" : "latest"}-${arch}.yml`]: updateMetadata(version, arch, installer),
+    };
+    const names = Object.keys(trio);
+    for (let mask = 1; mask <= 7; mask++) {
+      const only = names.filter((_name, i) => mask & (1 << i));
+      const subset = Object.fromEntries(only.map((name) => [name, trio[name]]));
+      // Missing from the manifest as well as missing from an explicit partial input.
+      for (const report of [run(subset, options), run(trio, { ...options, only, allowPartial: true })]) {
+        expect(report.status, only.join(", ")).toBe(mask === 7 ? "consistent" : "refused");
+        expect(report.crossChecks.failures.length > 0).toBe(mask !== 7);
+      }
+    }
+  });
+
+  it("does not borrow update counterparts from another architecture or a refused file", () => {
+    const set = fullSet();
+    delete set["latest-x64.yml"];
+    set["latest-arm64.yml"] = updateMetadata(VERSION, "arm64", makePe("x86"));
+    expect(run(set).crossChecks.failures).toContain(`ORCA-${VERSION}-win-x64.exe:metadata-supplied: latest-x64.yml`);
+    set["latest-x64.yml"] = "malformed";
+    expect(run(set).crossChecks.failures).toContain(`ORCA-${VERSION}-win-x64.exe:metadata-supplied: latest-x64.yml`);
+    const badInstaller = run({
+      [`ORCA-${VERSION}-win-x64.exe`]: "bad",
+      [`ORCA-${VERSION}-win-x64.exe.blockmap`]: blockmap(3),
+    });
+    expect(badInstaller.crossChecks.failures).toContain(
+      `ORCA-${VERSION}-win-x64.exe.blockmap:installer-supplied: ORCA-${VERSION}-win-x64.exe`,
+    );
   });
 
   it("refuses a standalone daemon that differs from the same runner's bundled daemon", () => {
