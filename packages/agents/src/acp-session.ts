@@ -51,6 +51,14 @@ export interface OpenSessionOptions {
   askPermission?: (req: acp.RequestPermissionRequest, invocation?: PermissionInvocation) => Promise<string | undefined>;
   /** Explicit opt-in only. Loading context never restores a pending tool callback. */
   resumeSessionId?: string;
+  /**
+   * Require an explicit session/load to succeed; never fall back to session/new.
+   * This checks protocol load success, not the completeness or identity of native
+   * persisted context. It neither restores a permission callback nor authorizes a prompt.
+   * A refused, failed or timed-out load has a sanitized details.contextRecoveryReason;
+   * startup cleanup closes the connection and attempts bounded owned-process termination.
+   */
+  requireContextRecovery?: boolean;
   onSessionContinuity?: (state: SessionContinuity) => void;
   /**
    * Permission sidecars to layer under the agent's configured rules (ADR 0009), in
@@ -95,6 +103,21 @@ export interface SessionContinuity {
 
 export const ORCA_CLIENT_INFO = { name: "orca", version: "0.1.0" } as const;
 
+/** Provider errors can contain private context; report only the failed recovery boundary. */
+function contextRecoveryFailure(reason: "missing-session-id" | "load-unsupported" | "load-failed" | "load-timeout") {
+  const failures = {
+    "missing-session-id": ["CONFIG_INVALID", "Required agent context recovery needs a nonempty resumeSessionId."],
+    "load-unsupported": [
+      "NOT_SUPPORTED",
+      "The agent does not advertise session loading required for context recovery.",
+    ],
+    "load-failed": ["AGENT_PROTOCOL", "Required agent context could not be loaded; no fresh session was opened."],
+    "load-timeout": ["AGENT_TRANSPORT", "Required agent context loading timed out; no fresh session was opened."],
+  } as const;
+  const [code, message] = failures[reason];
+  return new OrcaError(code, message, { contextRecoveryReason: reason });
+}
+
 function withinRoots(path: string, roots: string[]): boolean {
   if (!isAbsolute(path)) return false;
   return roots.some((root) => {
@@ -104,6 +127,7 @@ function withinRoots(path: string, roots: string[]): boolean {
 }
 
 export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSession> {
+  if (opts.requireContextRecovery && !opts.resumeSessionId?.trim()) throw contextRecoveryFailure("missing-session-id");
   const logger = (opts.logger ?? silentLogger).child({ agent: opts.agent.id, host: opts.host.id });
   const clock = opts.clock ?? systemClock;
   const roots = [opts.cwd, ...(opts.additionalDirectories ?? [])];
@@ -287,11 +311,14 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   };
   const handshakeTimeout = opts.handshakeTimeoutMs ?? 30_000;
 
-  const withTimeout = <T>(p: Promise<T>, ms: number, what: string): Promise<T> =>
+  const withTimeout = <T>(p: Promise<T>, ms: number, what: string, timeoutFailure?: Error): Promise<T> =>
     new Promise<T>((resolve, reject) => {
       const t = setTimeout(
         () =>
-          reject(new OrcaError("AGENT_TRANSPORT", `${what} timed out after ${ms}ms`, { stderr: proc.stderrTail() })),
+          reject(
+            timeoutFailure ??
+              new OrcaError("AGENT_TRANSPORT", `${what} timed out after ${ms}ms`, { stderr: proc.stderrTail() }),
+          ),
         ms,
       );
       // Forward settlement without adopting the still-pending request: adoption would
@@ -339,20 +366,26 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     if (opts.resumeSessionId) {
       continuity = { mode: "fresh", reason: "load-unsupported" };
       if (init.agentCapabilities?.loadSession) {
+        const timeoutFailure = opts.requireContextRecovery ? contextRecoveryFailure("load-timeout") : undefined;
         try {
           const restored = await withTimeout(
             conn.agent.request(acp.methods.agent.session.load, { ...newSession, sessionId: opts.resumeSessionId }),
             handshakeTimeout,
             "session/load",
+            timeoutFailure,
           );
           acpSessionId = opts.resumeSessionId;
           configOptions = normalizeSessionConfig(restored);
           loaded = true;
           continuity = { mode: "loaded", reason: "load-supported" };
-        } catch {
+        } catch (error) {
+          if (opts.requireContextRecovery) {
+            if (timeoutFailure && error === timeoutFailure) throw timeoutFailure;
+            throw contextRecoveryFailure("load-failed");
+          }
           continuity = { mode: "fresh", reason: "load-failed" };
         }
-      }
+      } else if (opts.requireContextRecovery) throw contextRecoveryFailure("load-unsupported");
     }
     if (!loaded) {
       const created = await withTimeout(
