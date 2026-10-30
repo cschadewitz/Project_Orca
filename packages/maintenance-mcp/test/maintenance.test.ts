@@ -363,7 +363,7 @@ describe("SDK transport and package boundary", () => {
   });
   it("has no workspace runtime dependency, generic transport or automatic activation hook", async () => {
     const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-    expect(pkg.dependencies).toEqual({ "@modelcontextprotocol/server": "2.3.1", zod: "4.6.7" });
+    expect(pkg.dependencies).toEqual({ "@modelcontextprotocol/server": "2.4.0", zod: "4.6.7" });
     expect(pkg.bin).toBeUndefined();
     expect(pkg.scripts.start).toBeUndefined();
     const directory = new URL("../src/", import.meta.url);
