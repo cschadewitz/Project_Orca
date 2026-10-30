@@ -1,0 +1,8 @@
+
+ RUN  v5.0.5 /workspace/Project_Orca
+
+
+ Test Files  4 passed (4)
+      Tests  77 passed (77)
+   Start at  18:33:55
+   Duration  1.88s (transform 50%, tests 26%, import 23%, worker 1%)

@@ -1,0 +1,30 @@
+# Run from the repository root with pnpm 12.4.2 and Node 24.19.0.
+# The checked executable changes are the app Electron floor and Electron lock entry.
+pnpm --filter @orca/app add -D 'electron@^44.10.0' --lockfile-only --ignore-scripts
+# Restored pnpm's unrelated yaml/zod property reorder before validation.
+pnpm install --frozen-lockfile
+pnpm run typecheck
+pnpm run lint
+pnpm run build
+pnpm run design:check
+pnpm exec prettier --check packages/app/package.json docs/reviews/evidence/electron-44-maintenance/scope.json
+git diff --check
+
+# The nonexistent admission-intents.test.ts selector below matched no file.
+# Native smoke/admission-intents.spec.ts was not selected or run.
+VITEST_MAX_WORKERS=2 pnpm exec vitest run packages/app/test/daemon-process.test.ts packages/app/test/daemon-connection-preload.test.ts packages/app/test/diagnostics-preload.test.ts packages/app/test/diagnostics-native-package.test.ts packages/app/test/diagnostics-native-clock.test.ts packages/app/test/diagnostics-native-storage.test.ts packages/app/test/admission-intents.test.ts packages/app/test/update-driver.test.ts packages/app/test/updates.test.ts tools/test/electron-updater.test.js tools/test/desktop-targets.test.js tools/test/desktop-identity.test.js tools/test/bundled-daemon-probe.test.js tools/test/release-workflow.test.js
+VITEST_MAX_WORKERS=2 pnpm exec vitest run packages/app/test/admission-retry-intents.test.ts packages/app/test/guided-intents.test.ts packages/app/test/runtime-auth.test.ts packages/app/test/runtime-auth-startup.test.ts
+
+# Binary installation succeeded with the session proxy and a writable cache:
+NODE_USE_ENV_PROXY=1 electron_config_cache=/tmp/orca-electron44-cache node packages/app/node_modules/electron/install.js
+ELECTRON_RUN_AS_NODE=1 packages/app/node_modules/electron/dist/electron -p 'JSON.stringify({electron:process.versions.electron,node:process.versions.node,chrome:process.versions.chrome,v8:process.versions.v8,modules:process.versions.modules,napi:process.versions.napi})'
+pnpm --filter @orca/app run build:daemon
+node tools/probe-bundled-daemon.js
+
+# An exploratory invocation failed EARLY_EXIT because this helper strips the
+# Electron run-as-Node setting from its child. It is not product-launch proof:
+ELECTRON_RUN_AS_NODE=1 packages/app/node_modules/electron/dist/electron tools/probe-bundled-daemon.js
+
+# Product launch under the embedded runtime passed using the archived one-off
+# runtime-probe.mjs.txt copied to /tmp/orca-electron44-runtime-probe.mjs:
+node /tmp/orca-electron44-runtime-probe.mjs

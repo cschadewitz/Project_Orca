@@ -1,0 +1,32 @@
+{
+  "base": "5bc414941275545d136e47409e42cf738a98c97b",
+  "from": "44.9.1",
+  "to": "44.10.0",
+  "semverChange": "minor within maintained major 44",
+  "pnpm": "12.4.2",
+  "checkNode": "24.19.0",
+  "pnpmToolchainDocumentUnchanged": true,
+  "onlyElectronVersionAndIntegrityChanged": true,
+  "allTransitiveDependenciesUnchanged": true,
+  "manifestOnlyElectronChanged": true,
+  "focused": {
+    "files": 17,
+    "passed": 226,
+    "skipped": 0
+  },
+  "embeddedRuntime": {
+    "electron": "44.10.0",
+    "node": "24.22.1",
+    "chrome": "152.0.7977.169",
+    "v8": "15.2.124.45-electron.0",
+    "modules": "149",
+    "napi": "10"
+  },
+  "notRun": [
+    "full suite / coverage",
+    "Electron GUI smoke / type proof",
+    "packaged artifact validation",
+    "Windows/macOS native and installed acceptance"
+  ],
+  "noReleaseGateChanges": true
+}
