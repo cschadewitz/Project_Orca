@@ -228,11 +228,18 @@ again as well as these populated-state cases before claiming update support.
 | Case | Procedure | Required evidence / outcome |
 | --- | --- | --- |
 | VM-U0: prepare N | Install the retained N package in the clean guest. Populate a synthetic workspace through that version's supported UI/scripted fixture. Inventory run IDs/statuses, visible artifacts, configuration, project Git state and profile paths. Stop, take snapshots and independent backup, and prove restore. | N actually produced the state; record exact fixture steps. Backup/restore equality and N reopening its restored state pass before N+1 opens anything. |
-| VM-U1: Windows N→N+1 | Only with an independently authorized disposable HTTPS feed/token setup: check, download, exit without installing, relaunch, then explicitly restart to install. Follow UPDATING.md and #772 U-runs. | Download alone and ordinary exit do not install. Explicit restart replaces the package; N+1 launches its matching daemon and reopens the existing synthetic workspace. Record actual driver, version/protocol and old-run/artifact comparisons. A manual NSIS replacement is a separate case and does not prove in-app updating. |
+| VM-U1: Windows N→N+1 | Only with an independently authorized disposable HTTPS feed/token setup: check, download, exit without installing, relaunch and verify N is still installed. Then check again, download again and wait for ready before explicitly restarting to install. Follow UPDATING.md and #772 U-runs. | Download alone and ordinary exit do not install. Relaunch does not retain the app's ready state; the new check/download cycle must complete even if cached bytes can be reused. Explicit restart then replaces the package; N+1 launches its matching daemon and reopens the existing synthetic workspace. Record actual driver, version/protocol and old-run/artifact comparisons. A manual NSIS replacement is a separate case and does not prove in-app updating. |
 | VM-U2: Linux N→N+1 | No desktop updater exists. Stop N, extract verified N+1 into a separate app directory, and open the same backed-up synthetic workspace/profile using the approved selection path. Retain N unchanged. | N+1's package/daemon identity, old runs and artifacts, expected state changes, new harmless sample, reopen and shutdown all recorded; no shared-file overwrite used as a rollback mechanism. |
 | VM-U3: blocked/interrupted Windows update | Separate reset per case: offline/401, corrupt download, signature/trust rejection when signing is enabled, unsaved drafts, active owned run, and installer failure/timeout. Use reviewed fixtures; no live credential or protection changes. | Compare each result with the driver in N. Expected refusals preserve state. For a #660-capable N, ambiguous installer outcome keeps admission closed and does not reconnect/start another writer. Preserve journals and evidence when outcome is unknown. |
 | VM-U4: independent offline restore | Stop N+1 and all writers. Keep upgraded state aside. Restore the complete pre-upgrade backup to original paths with permissions/account context; compare before launching N. Reinstall/use the retained matching N package and verify its saved state. | Full manifest/ACL equality before old startup; N opens the restored runs/artifacts under the same account. Record whether Windows permits package replacement; if blocked, report blocked and use a reviewed clean-baseline restore route rather than forcing it. List post-backup writes separately. |
 | VM-U5: incomplete/mixed backup controls | On sacrificial backup copies only, omit one synthetic file or mix one upgraded file. Compare offline; never launch either binary on those copies. | Verification detects both incomplete and mixed state. Reuse the rehearsal's synthetic controls for portable hashes; add native permission/profile verification for the actual guest. |
+
+For VM-U1, [the app state machine](../../../packages/app/src/main/updates.ts) initializes
+`downloaded = false` for each new process and refuses restart until a download completes.
+[The Windows driver](../../../packages/app/src/main/update-driver.ts) disables automatic
+download and installation on ordinary quit. Retained installer bytes alone do not restore
+the app's ready state. Record the exit/relaunch observation and the subsequent
+check/download/restart cycle separately; do not restart directly after relaunch.
 
 A read-only open can write initialization/authentication state. **Backup precedes every
 first N+1 open**, including browsing an old store. Only one writer may own a fixture;
@@ -323,7 +330,7 @@ backup or restore was performed for this plan. Official Proxmox documentation wa
 through its source repository because the rendered documentation endpoints were
 unavailable during preparation. Recheck version-specific settings on the actual host.
 
-The standalone documentation check passed for both changed documents (23 local links
+The standalone documentation check passed for both changed documents (25 local links
 and fragments). The existing onboarding test file was also attempted with only its
 page-format/link cases selected, but the suite failed to load because this checkout
 could not resolve `yaml` imported by first-run setup; no test cases ran. Dependencies
