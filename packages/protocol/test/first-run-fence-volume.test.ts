@@ -2,7 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const statfs = vi.hoisted(() => vi.fn());
-vi.mock("node:fs", async (importOriginal) => ({ ...(await importOriginal<typeof import("node:fs")>()), statfsSync: statfs }));
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  statfsSync: statfs,
+}));
 
 import { assertFenceVolume } from "../src/first-run-fence.js";
 
