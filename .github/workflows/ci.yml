@@ -18,6 +18,8 @@ concurrency:
 jobs:
   # Chooses where `check` runs: the homelab runners when one is idle, GitHub-hosted
   # otherwise. Any failure to ask (DNS, timeout, non-200, bad JSON) counts as zero.
+  # Set the repository variable CI_FORCE_HOSTED to `true` to skip the homelab runners
+  # (e.g. when a job queued on them); re-run the workflow to apply it.
   runner:
     name: pick runner
     runs-on: ubuntu-slim
@@ -28,8 +30,15 @@ jobs:
       pnpm_cache: ${{ steps.pick.outputs.pnpm_cache }}
     steps:
       - id: pick
+        shell: bash
+        env:
+          FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
         run: |
-          idle=$(curl -fsS --max-time 5 https://runners.theroses.dev/health | jq -r '.Project_Orca // 0' 2>/dev/null || echo 0)
+          idle=0
+          # Check curl's own status: a timeout after partial output must not count
+          if [[ "$FORCE_HOSTED" != "true" ]] && body=$(curl -fsS --max-time 5 https://runners.theroses.dev/health); then
+            idle=$(jq -r '.Project_Orca // 0' <<<"$body" 2>/dev/null) || idle=0
+          fi
           [[ "$idle" =~ ^[0-9]+$ ]] || idle=0
           if (( idle > 0 )); then
             echo 'labels=["self-hosted","linux","x64","tyler"]' >> "$GITHUB_OUTPUT"
