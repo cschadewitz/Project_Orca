@@ -98,7 +98,8 @@ export function actionFixture(): ActionEvidenceV1 {
   };
 }
 
-export function ruleFixture(action = actionFixture()): StrictPermissionRule {
+export type FiniteRuleFixture = Extract<StrictPermissionRule, { expiresAt: string }>;
+export function ruleFixture(action = actionFixture()): FiniteRuleFixture {
   return {
     ruleId: "rule-1",
     ruleRevision: "revision-1",

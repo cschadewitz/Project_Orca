@@ -30,6 +30,35 @@ async function prepared(delegated = false, maximum = 8) {
 }
 
 describe.skipIf(process.platform !== "linux")("stable owned file read service", () => {
+  it("permanently retires an original live facade without refreshing or reading", async () => {
+    const f = await fixture();
+    const bound = await f.binding();
+    const original = bound.capture();
+    const action = structuredClone(original.action);
+    expect((await original.evaluate(f.base.caller.signal)).phase).toBe("final");
+    expect(() => original.assertCurrent()).not.toThrow();
+    expect(f.service.retireInvocation(original)).toBeUndefined();
+    expect(f.service.retireInvocation(original)).toBeUndefined();
+    expect(() => original.assertCurrent()).toThrow();
+    expect(() => bound.capture()).toThrow();
+    expect(() => f.service.refreshPolicyRevision(original)).toThrow();
+    await expect(f.run(original)).rejects.toThrow();
+    expect(original.action).toEqual(action);
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it("pending scope checks preserve physical bounds without capturing an executable action", async () => {
+    const f = await fixture();
+    const parameters = { ...f.parameters };
+    expect(f.service.assertPendingResource(parameters)).toBeUndefined();
+    f.base.clock.advance(60001);
+    expect(f.service.assertPendingResource(parameters)).toBeUndefined();
+    expect(() => f.service.assertPendingResource({ ...parameters, length: 4097 })).toThrow();
+    expect(reads).not.toHaveBeenCalled();
+    f.service.close();
+    expect(() => f.service.assertPendingResource(parameters)).toThrow();
+    expect(reads).not.toHaveBeenCalled();
+  });
   it.each([false, true])(
     "one exact persisted rule matches separate invocations (required judge=%s)",
     async (delegated) => {

@@ -31,12 +31,11 @@ export interface StrictRuleDelegation {
 }
 
 /** Exact predicates only. No ACP title/kind/prefix heuristic is promoted to execution evidence. */
-export interface StrictPermissionRule {
+interface StrictPermissionRuleFields {
   readonly ruleId: string;
   readonly ruleRevision: string;
   readonly status: "approved" | "revoked";
   readonly notBefore: string;
-  readonly expiresAt: string;
   readonly match: {
     readonly principalRef: string;
     readonly agentId: string;
@@ -53,6 +52,12 @@ export interface StrictPermissionRule {
   readonly decision: "allow" | "deny" | "require-human";
   readonly delegation?: StrictRuleDelegation;
 }
+
+/** Legacy finite grants retain their original meaning. Version 2 is explicitly
+ * until revoked; null is never accepted without that discriminator. Action and
+ * permit expiries remain separate and always finite. */
+export type StrictPermissionRule = StrictPermissionRuleFields &
+  ({ readonly version?: never; readonly expiresAt: string } | { readonly version: 2; readonly expiresAt: null });
 
 /** Owner supplies fresh verified state from existing authorities/config/sidecars on every phase. */
 export interface StrictPermissionState {
