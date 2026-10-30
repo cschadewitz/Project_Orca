@@ -98,22 +98,58 @@ atomically. Merely leaving the old attention card visible or bypassing the curre
 continuation validator would not create a safe resumption path. This document does
 not select new timeout, retry, sibling-step or run-status behavior.
 
-## Concrete decisions for the first durable iteration
+## Decided starting behavior and remaining lifecycle choices
 
 Casey's decisions already establish that ordinary authorized workspace reads do
 not need approval, cancelling a run cancels its pending requests, saved rules last
 until revoked, and a human wait must not consume a later execution window. The
-remaining choices concern a request whose original agent turn has ended:
+initial behavior for a request whose original agent turn has ended is now decided:
+approval records the decision, and **Approved — Continue** requires a separate
+explicit Continue before a new invocation can start. This is a product requirement;
+durable post-turn recovery is not implemented by the current live-intent work.
 
-| Choice | Concrete example | Proposed starting behavior, not implemented |
-| --- | --- | --- |
-| Does a late answer start the agent? | An approval arrives an hour after the agent stopped. Should answering immediately start a new turn, or show **Approved — Continue**? | Require explicit Continue initially. Approval records intent; Continue separately starts a newly authorized invocation. Automatic continuation would need an explicit policy and disclosure. |
-| What if provider context cannot be restored? | The provider does not support `session/load`, rejects it, or the stored session has disappeared. | Clearly distinguish restored context from a new session. Require an explicit choice before starting a new session from approved run context; do not claim the previous callback or conversation resumed. |
-| How long should an unanswered request be kept? | The agent is gone, the approval is still unanswered, and its protected scope may contain private information. | Keep it pending until answered or explicitly cancelled while its run remains recoverable, rather than reusing the action's one-minute expiry. Agree separately on disposal/retention after terminal run state or abandonment; no new retention duration is selected here. |
+Recoverable agent context is also a product durability requirement. Losing that
+context should be exceptional, with an explicit reason and recovery path, rather
+than the normal outcome of a timeout, disconnection or restart. This does not claim
+that every installed provider can recover context today. Capability-checked
+`session/load` can restore supported provider context; it cannot restore a dead
+permission callback. The current orchestrator does not supply `resumeSessionId`;
+the adapter's existing fresh-session fallback is not proof of context recovery.
+The durable path must not silently discard context or label a fresh session as a
+restored conversation.
+
+The investigation and acceptance checklist are tracked in the existing recovery
+issue [#357](https://github.com/cschadewitz/Project_Orca/issues/357#issuecomment-6514920391),
+coordinating with scoped approvals rather than reopening completed live-callback
+work. No release date is committed. The remaining choices are:
+
+| Choice                                         | Concrete example                                                                                              | Proposed starting behavior, not implemented                                                                                                                                                                          |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| What if provider context cannot be restored?   | The provider does not support `session/load`, rejects it, or the stored session has disappeared.              | Clearly distinguish restored context from a new session. Require an explicit choice before starting a new session from approved run context; do not claim the previous callback or conversation resumed.             |
+| How long should an unanswered request be kept? | The agent is gone, the approval is still unanswered, and its protected scope may contain private information. | Undecided. Agree on pending-request lifetime and private context disposal after terminal state or abandonment. Do not infer indefinite retention, reuse the action's one-minute expiry or silently delete a request. |
 
 Run parking and recovery must also settle how unrelated step failures and parallel
 siblings interact with the retained request. The existing root-decision resume
 contract does not answer that for an interrupted agent step.
+
+## Next safe implementation steps
+
+1. Inventory supported provider/adapter versions and verify context persistence,
+   protected session references, capability negotiation, restart recovery and
+   missing-session behavior. Distinguish verified, unsupported and unverified
+   recovery; use the existing session ports where possible.
+2. Review a versioned run-owned non-executing intent and context-reference contract
+   with exact scope, private provenance, fenced storage, idempotence, cancellation
+   tombstones and one-use consumption. Resolve parking, sibling-step behavior and
+   unanswered-request retention before enabling the affected lifecycle.
+3. Record approval independently from explicit Continue. Continue must claim a
+   single eligible attempt, recover supported context honestly and revalidate
+   current authority before capturing the new actual invocation. Missing context
+   must retain history and report an actionable recovery choice.
+4. Test timeout, disconnect, restart, duplicate Continue, competing owners,
+   cancellation, scope drift, revocation, expiry, uncertain effects and private
+   context projection. Provider-free controls and installed-provider recovery
+   acceptance remain separate evidence.
 
 Regardless of these choices, **Allow once** must remain one-use. The later actual
 invocation must match the protected canonical scope and pass fresh current checks;
