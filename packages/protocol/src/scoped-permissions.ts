@@ -62,6 +62,9 @@ export const SCOPED_PERMISSION_CONTRACTS = {
       standingReview: z.enum(["available", "unavailable"]).optional(),
       // Presentation only: eligibility to request fresh Save checks, not authority.
       saveEligibility: z.enum(["eligible", "unavailable"]).optional(),
+      // Request fresh checks after approval; this is never an execution permit.
+      pendingExecutionIntent: z.literal(true).optional(),
+      executionWindowMs: z.number().int().min(1).max(60000).optional(),
       decision: GuardDecisionViewSchema,
     }),
   },

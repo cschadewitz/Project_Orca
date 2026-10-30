@@ -259,6 +259,8 @@ type Entry = {
   assertStandingCurrent?: () => undefined;
   standingReview?: import("@orca/agents").StandingGrantReview;
   pendingGrant?: PendingScopedGrant;
+  pendingExecution?: import("@orca/agents").PendingScopedExecution;
+  assertPendingExecutionReviewCurrent?: () => undefined;
   intent?: StandingGrantIntent;
   saveAuthority?: ScopedSaveAuthority;
   intentReview?: StandingIntentReview;
@@ -304,6 +306,9 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
     policyChanged: options.captures.policyChanged.bind(options.captures),
     ...(options.captures.verifyPersistenceReview
       ? { verifyPersistenceReview: options.captures.verifyPersistenceReview.bind(options.captures) }
+      : {}),
+    ...(options.captures.verifyPendingExecutionReview
+      ? { verifyPendingExecutionReview: options.captures.verifyPendingExecutionReview.bind(options.captures) }
       : {}),
     ...(options.captures.reviewStandingGrant
       ? { reviewStandingGrant: options.captures.reviewStandingGrant.bind(options.captures) }
@@ -407,6 +412,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       !["pending", "accepting"].includes(live.inspect(entry.target))
     )
       fail();
+    if (entry.pendingExecution) assertPendingExecutionEntry(entry);
     if (entry.pendingGrant) {
       entry.pendingGrant.signal.throwIfAborted();
       if (live.inspect(entry.target) !== "pending") fail();
@@ -430,7 +436,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       if (live.inspect(entry.target) !== "pending") fail();
       return undefined;
     }
-    return assertCaptureEntry(entry);
+    return entry.pendingExecution ? assertPendingExecutionEntry(entry) : assertCaptureEntry(entry);
   }
   /** Original capture checks shared with ordinary answer acceptance. A retained
    * standing intent never substitutes for this finite execution authority. */
@@ -450,6 +456,22 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       fail();
     same(currentFacts(entry.actor, entry.review.command.expectedRevision, entry.binding), factsOf(snapshot.action));
     if (captures.assertCurrent(entry.capture, snapshot.action.authority) !== undefined) fail();
+    return undefined;
+  }
+  /** A reserved future action is not the expired preview. Preserve its exact
+   * protected historical proof and every non-expiry source predicate instead. */
+  function assertPendingExecutionEntry(entry: Entry): undefined {
+    const pending = entry.pendingExecution;
+    if (!pending || !entry.assertPendingExecutionReviewCurrent) fail();
+    pending.signal.throwIfAborted();
+    if (!["pending", "accepting"].includes(live.inspect(entry.target))) fail();
+    assertManagedTypedStoreBinding(entry.binding);
+    same(currentFacts(entry.actor, entry.review.command.expectedRevision, entry.binding), factsOf(entry.review.action));
+    if (pending.assertCurrent() !== undefined || entry.assertPendingExecutionReviewCurrent() !== undefined) fail();
+    assertManagedTypedStoreBinding(entry.binding);
+    same(currentFacts(entry.actor, entry.review.command.expectedRevision, entry.binding), factsOf(entry.review.action));
+    pending.signal.throwIfAborted();
+    if (!["pending", "accepting"].includes(live.inspect(entry.target))) fail();
     return undefined;
   }
   function assertSaveEntry(entry: Entry): undefined {
@@ -726,12 +748,13 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       const observed = await facts(actor, snapshot.revision, active);
       const reusable = [...entries.values()].find(
         (entry) =>
-          entry.pendingGrant &&
+          (entry.pendingGrant || entry.pendingExecution) &&
           entry.state === "review" &&
           isDeepStrictEqual(entry.target, target) &&
           isDeepStrictEqual(entry.actor, actor),
       );
       reusable?.pendingGrant?.assertCurrent();
+      reusable?.pendingExecution?.assertCurrent();
       const capture =
         reusable?.capture ?? (await captures.read(structuredClone(target), active, structuredClone(observed)));
       const source = reusable
@@ -746,6 +769,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
                 : fail(),
             review: { result: reusable.review.requiredReview, sourceRefs: reusable.reviewSourceRefs },
             persistenceReview: reusable.review.persistenceReview,
+            ...(reusable.pendingExecution ? { pendingExecution: reusable.pendingExecution } : {}),
           }
         : captures.snapshot(capture);
       if (source.binding !== active) fail();
@@ -758,12 +782,50 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       for (const key of ["instanceId", "sessionId", "turnId", "invocationId", "runId", "stepRunId"] as const)
         same(source.action.invocation[key], target[key]);
       const action = structuredClone(source.action);
+      let pendingExecution = reusable?.pendingExecution;
+      let assertPendingExecutionReviewCurrent = reusable?.assertPendingExecutionReviewCurrent;
+      if (source.pendingExecution && !reusable) {
+        const descriptors = Object.getOwnPropertyDescriptors(source.pendingExecution);
+        const signal = descriptors.signal,
+          window = descriptors.executionWindowMs,
+          check = descriptors.assertCurrent;
+        if (
+          !signal ||
+          !Object.hasOwn(signal, "value") ||
+          !(signal.value instanceof AbortSignal) ||
+          !window ||
+          !Object.hasOwn(window, "value") ||
+          typeof window.value !== "number" ||
+          !Number.isSafeInteger(window.value) ||
+          window.value < 1 ||
+          window.value > 60000 ||
+          !check ||
+          !Object.hasOwn(check, "value") ||
+          typeof check.value !== "function" ||
+          !source.persistenceReview ||
+          !captures.verifyPendingExecutionReview
+        )
+          fail();
+        pendingExecution = Object.freeze({
+          signal: signal.value,
+          executionWindowMs: window.value,
+          assertCurrent: check.value.bind(source.pendingExecution),
+        });
+        pendingExecution.assertCurrent();
+        const proof = await captures.verifyPendingExecutionReview(action, source.persistenceReview.sourceRefs);
+        const descriptor = Object.getOwnPropertyDescriptor(proof, "assertCurrent");
+        if (!descriptor || !Object.hasOwn(descriptor, "value") || typeof descriptor.value !== "function") fail();
+        assertPendingExecutionReviewCurrent = (descriptor.value as () => undefined).bind(proof);
+        assertPendingExecutionReviewCurrent();
+        pendingExecution.assertCurrent();
+      }
+      if (pendingExecution && (!source.pendingExecution || !assertPendingExecutionReviewCurrent)) fail();
       // A refreshed disclosure retains the same authenticated historical proof.
       // Its finite-action checker is used only by ordinary answer acceptance;
       // refreshing an intent does not revive the original action for Save.
       let assertPersistenceCurrent = reusable?.assertPersistenceCurrent;
-      if (source.persistenceReview && reusable && !assertPersistenceCurrent) fail();
-      if (source.persistenceReview && !reusable) {
+      if (source.persistenceReview && reusable && !pendingExecution && !assertPersistenceCurrent) fail();
+      if (source.persistenceReview && !reusable && !pendingExecution) {
         if (!captures.verifyPersistenceReview || !source.persistenceReview.sourceRefs.length) return fail();
         const proof = await captures.verifyPersistenceReview(action, source.persistenceReview.sourceRefs);
         assertPersistenceCurrent = proof.assertCurrent.bind(proof);
@@ -781,7 +843,8 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
       const pendingSupported = Boolean(
         captures.retainGrantIntent && captures.reviewStandingIntent && captures.verifyStandingIntentReview,
       );
-      const ends = pendingSupported ? now() + 60000 : Math.min(Date.parse(action.expiresAt), now() + 60000);
+      const ends =
+        pendingSupported || pendingExecution ? now() + 60000 : Math.min(Date.parse(action.expiresAt), now() + 60000);
       if (!Number.isFinite(ends) || ends <= now()) fail();
       const once = action.offeredChoices.find(
         (choice) =>
@@ -902,6 +965,9 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         standingReviewAvailable:
           pendingSupported || Boolean(captures.reviewStandingGrant && captures.verifyStandingGrantReview),
         ...(pendingGrant ? { pendingGrantIntent: true as const } : {}),
+        ...(pendingExecution
+          ? { pendingExecutionIntent: true as const, executionWindowMs: pendingExecution.executionWindowMs }
+          : {}),
       };
       const entry: Entry = {
         review: structuredClone(review),
@@ -913,6 +979,9 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         reviewSourceRefs: [...source.review.sourceRefs],
         ...(assertPersistenceCurrent ? { assertPersistenceCurrent } : {}),
         ...(pendingGrant && intent ? { pendingGrant, intent } : {}),
+        ...(pendingExecution && assertPendingExecutionReviewCurrent
+          ? { pendingExecution, assertPendingExecutionReviewCurrent }
+          : {}),
         state: "review",
       };
       assertEntry(entry);
@@ -952,6 +1021,10 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
     },
     assertAnswerCurrent(review, actor) {
       const entry = entryFor(review, actor);
+      if (entry.pendingExecution) {
+        if (now() >= entry.review.reviewUntil) fail();
+        return assertPendingExecutionEntry(entry);
+      }
       if (
         now() >= entry.review.reviewUntil ||
         now() >= Date.parse(entry.review.action.expiresAt) ||

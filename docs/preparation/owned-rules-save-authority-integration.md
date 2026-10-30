@@ -55,17 +55,15 @@ acknowledged human approval can authorize a new read under its own fresh window.
 Cancellation invalidates pending work; uncertain publication consumes its attempt
 and does not trigger an automatic retry.
 
-This is not yet a complete separation of waiting and execution for every choice.
-The initial combined Save/Allow-once card still binds Allow once to its originally
-captured action. Once that action expires, answering it cannot execute that old
-action. The tested fresh-window read uses a separately reserved deferred query.
-Supporting a long wait followed by Allow once on the initial card requires an
-explicit intent-first composition at query creation, separating historical Save
-scope from a deferred execution reservation. It must obtain fresh current
-authority after the original acknowledgement, capture exactly one new action and
-permanently refuse old capture/permit replay; rebinding the existing delivery is
-not an acceptable shortcut. This is an outstanding implementation gap, distinct
-from durable approval after provider termination.
+The separate initial-query candidate now reserves the original callback before
+creating a review-only preview. That preview cannot authorize or dispatch. A
+long-wait Allow once uses the exact private reservation, awaits the original final
+acknowledgement and obtains fresh current authority for one new action. Ordinary
+capture cannot redeem a reserved lineage, and old preview methods cannot execute
+or reopen it. Legacy captures retain their original finite execution semantics.
+See [initial approval intent](owned-rules-initial-approval-intent.md) for the
+opt-in scope, cleanup requirements and evidence boundaries. This does not provide
+durable approval after provider termination.
 
 ## Integration and evidence boundaries
 

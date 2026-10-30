@@ -11,6 +11,7 @@ import {
   type ScopedPermissionCapturePort,
   type CreateScopedRule,
   type PendingScopedGrant,
+  type PendingScopedExecution,
 } from "@orca/agents";
 import {
   assertOriginalDelivery,
@@ -22,6 +23,9 @@ import type { DisposableFileReadParameters } from "../../engine/src/disposable-f
 import type {
   createOwnedFileReadServiceForTest,
   TrustedOwnedReadInvocation,
+  OwnedReadReviewPreview,
+  PreparedOwnedRead,
+  PrepareHumanRead,
 } from "../../engine/src/owned-file-read-service.js";
 import type { SyntheticFenceEvidence, SyntheticReadOwner } from "../../engine/src/synthetic-read-fence.js";
 
@@ -46,6 +50,18 @@ export function ownedReadInputOptions(capture: ScopedPermissionCapture, action: 
   return ownedPrompts.get(capture)?.(action);
 }
 
+interface CaptureInput {
+  target: ScopedCaptureTarget;
+  query: HumanInputQuery;
+  onceOptionId: string;
+  denyOptionId: string;
+  actor: MutationActor;
+  owner: SyntheticReadOwner;
+  parameters: DisposableFileReadParameters;
+  policy: PolicyPortV1;
+  evidence: SyntheticFenceEvidence;
+}
+
 /** Retains only facades created here by the actual bounded service, never caller action JSON.
  * The existing live query must already belong to the original callback. Its presentation
  * options do not become native action choices, review provenance or execution authority.
@@ -60,9 +76,8 @@ export function ownedReadScopedCapture(options: {
     live = options.live;
   const currentStore = options.currentStore.bind(options);
   const readFacts = options.readCaptureFacts.bind(options);
-  type Entry = {
+  type EntryBase = {
     token: ScopedPermissionCapture;
-    invocation: TrustedOwnedReadInvocation;
     actor: MutationActor;
     target: ScopedCaptureTarget;
     query: HumanInputQuery;
@@ -77,6 +92,17 @@ export function ownedReadScopedCapture(options: {
     ownerSignal: AbortSignal;
     pendingGrant?: { command: CreateScopedRule; capability: PendingScopedGrant };
   };
+  type Entry = EntryBase &
+    (
+      | { kind: "legacy"; invocation: TrustedOwnedReadInvocation }
+      | {
+          kind: "intent";
+          invocation: OwnedReadReviewPreview;
+          prepared: PreparedOwnedRead;
+          pendingExecution: PendingScopedExecution;
+          previewReview: ReturnType<OwnedReadReviewPreview["reviewProvenance"]>;
+        }
+    );
   const entries = new Map<ScopedPermissionCapture, Entry>();
   const targets = new Set<string>(); // Lifetime tombstones; no callback replay or replacement.
   let binding: ManagedTypedStoreBinding | undefined;
@@ -96,12 +122,81 @@ export function ownedReadScopedCapture(options: {
       live.assertOriginalQuery(entry.query);
       if (!["pending", "accepting"].includes(live.inspect(entry.target))) refuse();
     }
-    entry.invocation.assertCurrent();
+    if (entry.kind === "intent") entry.pendingExecution.assertCurrent();
+    else entry.invocation.assertCurrent();
   }
   function lookup(token: ScopedPermissionCapture) {
     const entry = entries.get(token);
     if (!entry) return refuse();
     return entry;
+  }
+  async function intake(input: CaptureInput) {
+    const target = structuredClone(input.target),
+      actor = { ...input.actor };
+    const keys = ["resourceRef", "offset", "length"] as const;
+    if (!input.parameters || Reflect.ownKeys(input.parameters).length !== keys.length) refuse();
+    const parameters = Object.fromEntries(
+      keys.map((key) => {
+        const property = Object.getOwnPropertyDescriptor(input.parameters, key);
+        if (!property || !Object.hasOwn(property, "value")) return refuse();
+        return [key, property.value as unknown];
+      }),
+    ) as unknown as DisposableFileReadParameters;
+    const originalOwner = input.owner,
+      policy = input.policy,
+      evidence = input.evidence;
+    const clock = originalOwner.clock.now.bind(originalOwner.clock);
+    const ownerSignal = originalOwner.signal;
+    const query = input.query;
+    const onceOptionId = input.onceOptionId,
+      denyOptionId = input.denyOptionId;
+    live.assertOriginalQuery(query);
+    if (
+      !onceOptionId ||
+      !denyOptionId ||
+      onceOptionId === denyOptionId ||
+      !query.options.some((option) => option.id === onceOptionId) ||
+      !query.options.some((option) => option.id === denyOptionId)
+    )
+      refuse();
+    same(
+      { ...query.live!.identity, runId: query.runId, stepRunId: query.stepRunId, requestId: query.requestId },
+      target,
+    );
+    const key = JSON.stringify([
+      target.instanceId,
+      target.sessionId,
+      target.turnId,
+      target.invocationId,
+      target.runId,
+      target.stepRunId,
+    ]);
+    if (targets.size >= 128 || targets.has(key)) refuse();
+    targets.add(key); // Claim before the first await, retaining failures as tombstones.
+    const active = await currentBinding();
+    const facts = await readFacts(actor); // MUST precede immutable service action capture.
+    await currentBinding();
+    const snapshot = originalOwner.snapshot();
+    same(factsOf(snapshot), facts);
+    same(snapshot.invocation.principalRef, actor.principalId);
+    for (const field of ["instanceId", "sessionId", "turnId", "invocationId", "runId", "stepRunId"] as const)
+      same(snapshot.invocation[field], target[field]);
+    if (live.inspect(target) !== "pending") refuse();
+    return {
+      target,
+      actor,
+      parameters,
+      originalOwner,
+      policy,
+      evidence,
+      clock,
+      ownerSignal,
+      query,
+      onceOptionId,
+      denyOptionId,
+      active,
+      snapshot,
+    };
   }
   const port = Object.freeze<ScopedPermissionCapturePort>({
     async read(target, active, facts) {
@@ -117,6 +212,8 @@ export function ownedReadScopedCapture(options: {
     async forAction(action, active) {
       await currentBinding();
       const entry = [...entries.values()].find((e) => isDeepStrictEqual(e.invocation.action, action)) ?? refuse();
+      // Historical previews never register an executable action for qualification.
+      if (entry.kind === "intent") refuse();
       if (entry.binding !== active) refuse();
       same(await readFacts({ ...entry.actor }), factsOf(entry.invocation.action));
       await currentBinding();
@@ -134,7 +231,8 @@ export function ownedReadScopedCapture(options: {
         binding: entry.binding,
         resourceWorkspaceRef: action.workspaceRef.value,
         actor: { ...entry.actor },
-        review: entry.invocation.reviewProvenance(),
+        review: entry.kind === "intent" ? structuredClone(entry.previewReview) : entry.invocation.reviewProvenance(),
+        ...(entry.kind === "intent" ? { pendingExecution: entry.pendingExecution } : {}),
       };
     },
     assertCurrent(token, authority) {
@@ -189,7 +287,9 @@ export function ownedReadScopedCapture(options: {
         },
         retire: (): undefined => {
           entry.blocked = true;
-          return service.retireInvocation(entry.invocation);
+          return entry.kind === "intent"
+            ? service.retirePreparedHumanRead(entry.prepared)
+            : service.retireInvocation(entry.invocation);
         },
       });
       capability.assertCurrent();
@@ -198,6 +298,7 @@ export function ownedReadScopedCapture(options: {
     },
     async policyChanged(token, facts) {
       const entry = lookup(token);
+      if (entry.kind === "intent") refuse();
       if (entry.blocked || entry.refreshed) refuse();
       // An uncertain transition cannot reopen this token, even if its acknowledgement is lost.
       entry.blocked = true;
@@ -207,6 +308,7 @@ export function ownedReadScopedCapture(options: {
       const previous = factsOf(entry.invocation.action);
       same({ ...facts, policyRevision: previous.policyRevision }, previous);
       if (facts.policyRevision === previous.policyRevision || live.inspect(entry.target) !== "pending") refuse();
+      if (entry.kind !== "legacy") return refuse();
       const fresh = service.refreshPolicyRevision(entry.invocation);
       same(factsOf(fresh.action), facts);
       fresh.assertCurrent();
@@ -221,12 +323,15 @@ export function ownedReadScopedCapture(options: {
     retire(token: ScopedPermissionCapture): undefined {
       const entry = lookup(token);
       entry.blocked = true;
-      return service.retireInvocation(entry.invocation);
+      return entry.kind === "intent"
+        ? service.retirePreparedHumanRead(entry.prepared)
+        : service.retireInvocation(entry.invocation);
     },
     /** Trusted execution owner retrieves the exact retained facade after policyChanged. */
     invocation(token: ScopedPermissionCapture) {
       const entry = lookup(token);
       current(entry);
+      if (entry.kind === "intent") refuse();
       return entry.invocation;
     },
     /** Called by the original executor continuation after its explicit answer, never by Save.
@@ -239,6 +344,7 @@ export function ownedReadScopedCapture(options: {
       entry.execution = (async () => {
         try {
           await currentBinding();
+          if (entry.kind === "intent") return await service.executePreparedHumanRead(entry.prepared, signal);
           same(await readFacts({ ...entry.actor }), factsOf(entry.invocation.action));
           await currentBinding();
           const verdict = await entry.invocation.completeHumanDelivery(signal);
@@ -251,69 +357,21 @@ export function ownedReadScopedCapture(options: {
       })();
       return entry.execution;
     },
-    async capture(input: {
-      target: ScopedCaptureTarget;
-      query: HumanInputQuery;
-      /** Actual original owned-I/O prompt meaning, supplied by its trusted callback owner. */
-      onceOptionId: string;
-      denyOptionId: string;
-      actor: MutationActor;
-      owner: SyntheticReadOwner;
-      parameters: DisposableFileReadParameters;
-      policy: PolicyPortV1;
-      evidence: SyntheticFenceEvidence;
-    }) {
-      const target = structuredClone(input.target),
-        actor = { ...input.actor };
-      const keys = ["resourceRef", "offset", "length"] as const;
-      if (!input.parameters || Reflect.ownKeys(input.parameters).length !== keys.length) refuse();
-      const parameters = Object.fromEntries(
-        keys.map((key) => {
-          const property = Object.getOwnPropertyDescriptor(input.parameters, key);
-          if (!property || !Object.hasOwn(property, "value")) return refuse();
-          return [key, property.value as unknown];
-        }),
-      ) as unknown as DisposableFileReadParameters;
-      const originalOwner = input.owner,
-        policy = input.policy,
-        evidence = input.evidence;
-      const clock = originalOwner.clock.now.bind(originalOwner.clock);
-      const ownerSignal = originalOwner.signal;
-      const query = input.query;
-      const onceOptionId = input.onceOptionId,
-        denyOptionId = input.denyOptionId;
-      live.assertOriginalQuery(query);
-      if (
-        !onceOptionId ||
-        !denyOptionId ||
-        onceOptionId === denyOptionId ||
-        !query.options.some((option) => option.id === onceOptionId) ||
-        !query.options.some((option) => option.id === denyOptionId)
-      )
-        refuse();
-      same(
-        { ...query.live!.identity, runId: query.runId, stepRunId: query.stepRunId, requestId: query.requestId },
+    async capture(input: CaptureInput) {
+      const {
         target,
-      );
-      const key = JSON.stringify([
-        target.instanceId,
-        target.sessionId,
-        target.turnId,
-        target.invocationId,
-        target.runId,
-        target.stepRunId,
-      ]);
-      if (targets.size >= 128 || targets.has(key)) refuse();
-      targets.add(key); // Claim before the first await, retaining failures as tombstones.
-      const active = await currentBinding();
-      const facts = await readFacts(actor); // MUST precede immutable service action capture.
-      await currentBinding();
-      const snapshot = originalOwner.snapshot();
-      same(factsOf(snapshot), facts);
-      same(snapshot.invocation.principalRef, actor.principalId);
-      for (const field of ["instanceId", "sessionId", "turnId", "invocationId", "runId", "stepRunId"] as const)
-        same(snapshot.invocation[field], target[field]);
-      if (live.inspect(target) !== "pending") refuse();
+        actor,
+        parameters,
+        originalOwner,
+        policy,
+        evidence,
+        clock,
+        ownerSignal,
+        query,
+        onceOptionId,
+        denyOptionId,
+        active,
+      } = await intake(input);
       const invocation = service.capture(originalOwner, parameters, policy, evidence);
       invocation.assertCurrent();
       const token = Object.freeze({}) as ScopedPermissionCapture;
@@ -321,6 +379,7 @@ export function ownedReadScopedCapture(options: {
       const delivery = live.retainOriginalDelivery(query);
       invocation.bindHumanInput(delivery, query, actor, onceOptionId);
       entries.set(token, {
+        kind: "legacy",
         token,
         invocation,
         actor,
@@ -342,6 +401,112 @@ export function ownedReadScopedCapture(options: {
         return { onceOptionId, denyOptionId };
       });
       return Object.freeze({ token, invocation });
+    },
+    /** Reserve the original callback before exposing a non-executable preview.
+     * The trusted source supplies all non-expiry currentness checks formerly
+     * performed by its finite owner, including actual policy/lease observations. */
+    async captureIntent(
+      input: CaptureInput & {
+        executionWindowMs: number;
+        authorizeExecution: PrepareHumanRead["authorizeExecution"];
+        registerInvocation: PrepareHumanRead["registerInvocation"];
+        assertIntentCurrent(): undefined;
+      },
+    ) {
+      const window = input.executionWindowMs;
+      const authorize = input.authorizeExecution.bind(input);
+      const register = input.registerInvocation.bind(input);
+      const assertIntent = input.assertIntentCurrent.bind(input);
+      const {
+        target,
+        actor,
+        parameters,
+        originalOwner,
+        policy,
+        evidence,
+        clock,
+        ownerSignal,
+        query,
+        onceOptionId,
+        denyOptionId,
+        active,
+        snapshot,
+      } = await intake(input);
+      if (assertIntent() !== undefined) refuse();
+      live.assertOriginalQuery(query);
+      const delivery = live.retainOriginalDelivery(query);
+      const { expiresAt: _oldExpiry, ...intent } = structuredClone(snapshot);
+      const prepared = service.prepareHumanRead({
+        intent,
+        parameters,
+        delivery,
+        query,
+        actor,
+        onceOptionId,
+        executionWindowMs: window,
+        authorizeExecution: authorize,
+        registerInvocation: register,
+      });
+      const preview = service.reviewPreparedHumanRead(prepared, originalOwner, policy, evidence);
+      preview.assertCurrent();
+      const previewReview = structuredClone(preview.reviewProvenance());
+      const token = Object.freeze({}) as ScopedPermissionCapture;
+      const signal = AbortSignal.any([
+        service.lifetimeSignal,
+        ownerSignal,
+        query.live!.signal,
+        ...(query.signal ? [query.signal] : []),
+      ]);
+      const pendingExecution = Object.freeze<PendingScopedExecution>({
+        signal,
+        executionWindowMs: window,
+        assertCurrent: (): undefined => {
+          signal.throwIfAborted();
+          if (
+            entry.blocked ||
+            entry.humanStarted ||
+            entry.binding !== binding ||
+            !["pending", "accepting"].includes(live.inspect(target))
+          )
+            refuse();
+          assertManagedTypedStoreBinding(active);
+          live.assertOriginalQuery(query);
+          service.assertPreparedHumanRead(prepared);
+          if (assertIntent() !== undefined) refuse();
+          assertManagedTypedStoreBinding(active);
+          service.assertPreparedHumanRead(prepared);
+          signal.throwIfAborted();
+          if (entry.blocked || entry.humanStarted || !["pending", "accepting"].includes(live.inspect(target))) refuse();
+          return undefined;
+        },
+      });
+      const entry: Extract<Entry, { kind: "intent" }> = {
+        kind: "intent",
+        token,
+        invocation: preview,
+        prepared,
+        pendingExecution,
+        previewReview,
+        actor,
+        target,
+        query,
+        delivery,
+        humanStarted: false,
+        binding: active,
+        blocked: false,
+        refreshed: false,
+        parameters,
+        clock,
+        ownerSignal,
+      };
+      pendingExecution.assertCurrent();
+      entries.set(token, entry);
+      ownedPrompts.set(token, (candidate) => {
+        current(entry);
+        same(candidate, preview.action);
+        return { onceOptionId, denyOptionId };
+      });
+      return Object.freeze({ token, preview });
     },
   });
 }

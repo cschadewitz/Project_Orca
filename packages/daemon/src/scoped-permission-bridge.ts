@@ -38,6 +38,10 @@ export interface RetainedScopedReview {
   readonly standingReviewAvailable?: boolean;
   /** Runtime owner record only: displayed-handle lifetime is not Save execution authority. */
   readonly pendingGrantIntent?: true;
+  /** Describes a source-owned reservation. The owner retains its real capability;
+   * this projection cannot authorize a future action or revive a preview. */
+  readonly pendingExecutionIntent?: true;
+  readonly executionWindowMs?: number;
 }
 export interface ScopedPermissionOwner {
   readonly currentStore: ManagedTypedStoreProvider;
@@ -172,6 +176,9 @@ export function scopedPermissionMethods(
             review.action.coverage.level === "verified-per-execution"
               ? "eligible"
               : "unavailable",
+          ...(review.pendingExecutionIntent
+            ? { pendingExecutionIntent: true as const, executionWindowMs: review.executionWindowMs }
+            : {}),
           decision: projectGuardDecision(review.projection, owner.disclosure, Date.now()),
         };
       },

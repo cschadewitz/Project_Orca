@@ -1,10 +1,11 @@
 /** In-place opt-in choices inside AnswerCard. No registration, transport, storage or authority creation. */
 import { useEffect, useLayoutEffect, useRef, useState, type JSX } from "react";
-import { Button, KeyValueList, ObjectId, Text } from "../ui/index.js";
+import { Button, counted, KeyValueList, ObjectId, Text } from "../ui/index.js";
 import { useTransientLayer } from "../layers-context.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import {
   copyScopedReviewScope,
+  scopedPendingExecutionWindow,
   scopedReviewUnavailable,
   scopedSaveReviewUnavailable,
   type ScopedRuleReview,
@@ -95,6 +96,7 @@ export function ScopedRuleChoices({
         : undefined);
   const reason = commonReason ?? (review ? scopedReviewUnavailable(review, Date.now()) : undefined);
   const saveReason = commonReason ?? (review ? scopedSaveReviewUnavailable(review, Date.now()) : undefined);
+  const executionWindow = review ? scopedPendingExecutionWindow(review) : undefined;
   const choose = async (choice: "allowOnce" | "deny" | "createRule") => {
     if (lock.current || cannotWrite || !review || phase === "settled") return;
     // Denial does not require positive scope/coverage, but still requires the owner's current capability.
@@ -204,6 +206,12 @@ export function ScopedRuleChoices({
                 }}
               />
               <Text style="caption">Reported coverage does not establish installed support or confirm execution.</Text>
+              {executionWindow !== undefined && (
+                <Text style="caption">
+                  The execution window starts after approval and current checks. Execution then has up to{" "}
+                  {counted(executionWindow / 1000, "second")}. Current checks may refuse this request.
+                </Text>
+              )}
               {review.decision.coverage.reference && (
                 <Text style="caption">
                   Coverage reference <ObjectId id={review.decision.coverage.reference.id} variant="full" />

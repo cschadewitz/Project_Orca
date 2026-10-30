@@ -22,6 +22,15 @@ export interface PendingScopedGrant {
   assertCurrent(): undefined;
   retire(): undefined;
 }
+/** Exact source-owned reservation for a future action, never current execution
+ * authority. Its checks bind the original query, resource and live owner;
+ * protected historical review is authenticated separately by the owner below.
+ * This cannot restore an ended provider callback or be reconstructed from JSON. */
+export interface PendingScopedExecution {
+  readonly signal: AbortSignal;
+  readonly executionWindowMs: number;
+  assertCurrent(): undefined;
+}
 export interface StandingGrantIntent {
   readonly version: 1;
   readonly intentId: string;
@@ -93,6 +102,7 @@ export interface ScopedPermissionCapturePort {
     /** Outcome of the actual required review, retained by its owner, never a client/model claim. */
     /** Distinct authenticated persistence review; never rewrites execution judge provenance. */
     readonly persistenceReview?: { readonly result: "passed"; readonly sourceRefs: readonly string[] };
+    readonly pendingExecution?: PendingScopedExecution;
     readonly review: {
       readonly result: "passed" | "failed" | "unavailable";
       readonly sourceRefs: readonly string[];
@@ -101,6 +111,16 @@ export interface ScopedPermissionCapturePort {
   /** Optional trusted owner capability, unavailable to RPC/JSON. Authenticate exact saved
    * persistence attestation using protected records and independently current reviewer authority. */
   verifyPersistenceReview?(
+    action: ActionEvidenceV1,
+    sourceRefs: readonly string[],
+  ): Promise<{ assertCurrent(): undefined }>;
+  /** Opt-in initial-query path only. Authenticate the exact original protected
+   * persistence review while its preview is live. The returned checker retains
+   * its record seals and current reviewer/credential/revocation checks across
+   * the human wait, without reusing the old action expiry as present authority.
+   * This historical check never creates a verdict, permit or execution action.
+   * Missing support refuses pending execution; legacy verification is unchanged. */
+  verifyPendingExecutionReview?(
     action: ActionEvidenceV1,
     sourceRefs: readonly string[],
   ): Promise<{ assertCurrent(): undefined }>;

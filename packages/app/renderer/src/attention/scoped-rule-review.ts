@@ -26,6 +26,9 @@ export interface ScopedRuleReview {
   /** Non-authorizing server projection of retained Save prerequisites. A fresh
    * protected standing review is still required after explicit Save choice. */
   readonly saveEligibility?: "eligible" | "unavailable" | undefined;
+  /** Describes an owner-held intent. Approval requests fresh checks; this projection is not authority. */
+  readonly pendingExecutionIntent?: true | undefined;
+  readonly executionWindowMs?: number | undefined;
   /** Owner checks current workspace/input/review/revision and authority before every invocation. */
   readonly isCurrent: () => boolean;
   readonly cancel?: (() => Promise<void>) | undefined;
@@ -78,12 +81,29 @@ function scopedReviewCommonUnavailable(review: ScopedRuleReview, now: number): s
   return undefined;
 }
 
-/** Ordinary execution answers retain the required execution-review gate. */
+/** A coherent descriptive pair only; never an execution capability or review result. */
+export function scopedPendingExecutionWindow(review: ScopedRuleReview): number | undefined {
+  const window = review.executionWindowMs;
+  return review.pendingExecutionIntent === true &&
+    typeof window === "number" &&
+    Number.isSafeInteger(window) &&
+    window >= 1 &&
+    window <= 60_000
+    ? window
+    : undefined;
+}
+
+/** An intent may request fresh execution checks, but cannot override a failed review or common veto. */
 export function scopedReviewUnavailable(review: ScopedRuleReview, now: number): string | undefined {
-  return (
-    scopedReviewCommonUnavailable(review, now) ??
-    (review.requiredReview !== "passed" ? "Required review is unavailable or did not pass." : undefined)
-  );
+  const common = scopedReviewCommonUnavailable(review, now);
+  if (common) return common;
+  if (review.requiredReview === "failed") return "Required review is unavailable or did not pass.";
+  const window = scopedPendingExecutionWindow(review);
+  if ((review.pendingExecutionIntent !== undefined || review.executionWindowMs !== undefined) && window === undefined)
+    return "The post-approval execution window is unavailable. Review again.";
+  return review.requiredReview === "passed" || window !== undefined
+    ? undefined
+    : "Required review is unavailable or did not pass.";
 }
 
 /** Save has independent persistence prerequisites; this remains a presentation

@@ -65,6 +65,8 @@ function fixture(
   prerequisites: {
     requiredReview?: "passed" | "failed" | "unavailable";
     saveEligibility?: "eligible" | "unavailable";
+    pendingExecutionIntent?: true;
+    executionWindowMs?: number;
   } = {},
 ) {
   const fake = fakeBridge({
@@ -117,6 +119,10 @@ function fixture(
           reviewUntil: Date.now() + 60000,
           requiredReview: prerequisites.requiredReview ?? "passed",
           ...(prerequisites.saveEligibility ? { saveEligibility: prerequisites.saveEligibility } : {}),
+          ...(prerequisites.pendingExecutionIntent ? { pendingExecutionIntent: true } : {}),
+          ...(prerequisites.executionWindowMs !== undefined
+            ? { executionWindowMs: prerequisites.executionWindowMs }
+            : {}),
           ...(standingReview ? { standingReview } : {}),
           decision: view(),
         }),
@@ -240,6 +246,35 @@ it("confirms a persistence-only Save without enabling or sending an execution an
   ).toEqual(["save"]);
   expect(f.onAnswer).not.toHaveBeenCalled();
 });
+
+it("carries the pending intent projection but sends only the owner's opaque one-time choice", async () => {
+  const f = fixture("available", {
+    requiredReview: "unavailable",
+    pendingExecutionIntent: true,
+    executionWindowMs: 55000,
+  });
+  await open();
+  expect(screen.getByText(/execution window starts after approval and current checks/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).not.toBe("true");
+  click("Allow once");
+  await screen.findByText(/One-time answer recorded.*Execution is not confirmed/);
+  const choices = f.calls.filter((call) => call.method === "scopedPermissions.choose");
+  expect(choices).toHaveLength(1);
+  expect(choices[0]!.params.choice).toBe("allow-once");
+  expect(Object.keys(choices[0]!.params).sort()).toEqual(["choice", "handle", "target"]);
+  expect(f.onAnswer).not.toHaveBeenCalled();
+});
+
+it.each([{ pendingExecutionIntent: true as const }, { executionWindowMs: 55000 }])(
+  "an incomplete pending projection cannot enable execution: %j",
+  async (projection) => {
+    const f = fixture("available", { requiredReview: "unavailable", ...projection });
+    await open();
+    expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).toBe("true");
+    click("Allow once");
+    expect(f.calls.some((call) => call.params.choice === "allow-once")).toBe(false);
+  },
+);
 
 it.each([
   ["available", "unavailable", "unavailable"],

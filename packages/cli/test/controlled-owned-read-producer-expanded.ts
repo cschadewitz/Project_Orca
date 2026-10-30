@@ -31,6 +31,7 @@ import {
   createOwnedFileReadServiceForTest,
   type TrustedOwnedReadInvocation,
   type OwnedReadCurrentCapture,
+  type OwnedReadReviewPreview,
   type PostApprovalReadAuthority,
 } from "../../engine/src/owned-file-read-service.js";
 import type {
@@ -188,6 +189,9 @@ export interface ControlledReadTestSupervisor {
   readonly waitAfterSaveExpiry?: true;
   /** Test composition for non-executable pending Save intent; never a runtime JSON option. */
   readonly pendingSaveIntent?: true;
+  /** Separate initial-card intent composition; never an observer/profile switch. */
+  readonly initialApprovalIntent?: true;
+  readonly initialAnswerChoice?: "allow-once" | "deny" | "save";
   beforeSaveChoice?(): Promise<void>;
   beforeStandingIntentReview?(authority: Readonly<{ issuedAt: number; expiresAt: number }>): Promise<void>;
   afterStandingIntentWrite?(): Promise<void>;
@@ -239,6 +243,15 @@ export async function runControlledOwnedReadTest(
     fault = supervisor.fault;
   const standingReviewerFault = supervisor.standingReviewerFault;
   const pendingSaveIntent = supervisor.pendingSaveIntent === true;
+  const initialApprovalIntent = supervisor.initialApprovalIntent === true;
+  const initialAnswerChoice = supervisor.initialAnswerChoice;
+  assert.ok(
+    initialApprovalIntent
+      ? lane === "connected" &&
+          pendingSaveIntent &&
+          (initialAnswerChoice === "allow-once" || initialAnswerChoice === "deny" || initialAnswerChoice === "save")
+      : initialAnswerChoice === undefined,
+  );
   const beforeSaveChoice = supervisor.beforeSaveChoice?.bind(supervisor);
   const beforeStandingIntentReview = supervisor.beforeStandingIntentReview?.bind(supervisor);
   const afterStandingIntentWrite = supervisor.afterStandingIntentWrite?.bind(supervisor);
@@ -468,6 +481,28 @@ export async function runControlledOwnedReadTest(
       await attest(token, producer.invocation(token).action);
     },
     verifyPersistenceReview: verifyPersistence,
+    async verifyPendingExecutionReview(action, refs) {
+      // Authenticate this historical proof while the preview is live. Future
+      // checks retain its exact seal and current reviewer, not its old expiry.
+      const initial = await verifyPersistence(action, refs);
+      initial.assertCurrent();
+      const retainedAction = structuredClone(action);
+      const ref = refs[0]!;
+      const retained = persistence.get(ref);
+      assert.ok(retained);
+      return {
+        assertCurrent: (): undefined => {
+          check();
+          currentCredential(reviewer);
+          active.assertCurrent();
+          assert.equal(persistence.get(ref), retained);
+          same(retained.action, retainedAction);
+          retained.assertUnchanged();
+          assert.ok(!lapsed(lease, Date.now()));
+          return undefined;
+        },
+      };
+    },
     async reviewStandingGrant(capture, candidate) {
       if (standingReviewerFault === "hanging") return new Promise<import("@orca/agents").StandingGrantReview>(() => {});
       assert.notEqual(standingReviewerFault, "refusing", "Standing reviewer unavailable");
@@ -819,7 +854,23 @@ export async function runControlledOwnedReadTest(
       if (state.document.scopedRules.records.length) return owner.qualify(state, action, signal);
       assert.ok(baseline && state.revision === initialRevision);
       same(action.authority.currentPolicyRevision, initialRevision);
-      same(action, initialAction);
+      if (initialApprovalIntent) {
+        // Only a genuine post-ACK registered facade can qualify a new action.
+        // The old preview is deliberately absent from executable lookups.
+        assert.ok(autoTokenFor(action) && initialAction);
+        const scope = (value: ActionEvidenceV1) => {
+          const {
+            actionId: _id,
+            bindingRef: _binding,
+            original: _original,
+            dispatch: _dispatch,
+            expiresAt: _expiry,
+            ...rest
+          } = value;
+          return rest;
+        };
+        same(scope(action), scope(initialAction));
+      } else same(action, initialAction);
       const token = await captures.forAction(action, active);
       captures.assertCurrent(token, action.authority);
       const observed = await stores.execution.observe!(
@@ -846,6 +897,7 @@ export async function runControlledOwnedReadTest(
   });
   let snapshot!: { -readonly [K in keyof SyntheticReadOwnerSnapshot]: SyntheticReadOwnerSnapshot[K] };
   let invocation: TrustedOwnedReadInvocation | undefined;
+  let initialPreview: OwnedReadReviewPreview | undefined;
   let token: ScopedPermissionCapture | undefined;
   let query!: HumanInputQuery;
   let target!: NonNullable<ReturnType<ScopedPermissionCapturePort["snapshot"]>["target"]>;
@@ -863,7 +915,7 @@ export async function runControlledOwnedReadTest(
       revision: action.authority.currentPolicyRevision,
       expiresAt: action.expiresAt,
       plannedInterval: { offset: offset, length: length },
-      executionReview: producer.invocation(capture).reviewProvenance(),
+      executionReview: captures.snapshot(capture).review,
     };
     const ref = await put("controlled-persistence-review-v1", value);
     const observation = await stores.execution.observe!(
@@ -995,7 +1047,7 @@ export async function runControlledOwnedReadTest(
   let policy!: Awaited<ReturnType<typeof managed.enrollFresh>>;
   let bootstrapRule: StrictPermissionRule | undefined;
   try {
-    await phase(lane === "bootstrap" ? "bootstrap" : "save", async () => {
+    await phase(lane === "bootstrap" ? "bootstrap" : initialApprovalIntent ? "human-read" : "save", async () => {
       policy = await managed.enrollFresh();
       const available = await managed.currentStore();
       assert.ok(available.available);
@@ -1182,7 +1234,7 @@ export async function runControlledOwnedReadTest(
           live,
           readCaptureFacts: (actor) => owner.readCaptureFacts(actor),
         });
-        const captured = await producer.capture({
+        const captureInput = {
           actor: operator,
           target,
           query,
@@ -1192,11 +1244,96 @@ export async function runControlledOwnedReadTest(
           parameters,
           policy: strict,
           evidence,
-        });
-        token = captured.token;
-        invocation = captured.invocation;
+        };
+        if (initialApprovalIntent) {
+          const { expiresAt: _historicalExpiry, ...intent } = structuredClone(snapshot);
+          const captured = await producer.captureIntent({
+            ...captureInput,
+            executionWindowMs: 55000,
+            assertIntentCurrent: (): undefined => {
+              check();
+              active.assertCurrent();
+              assert.ok(!lapsed(lease, Date.now()));
+              assert.equal(
+                createHash("sha256")
+                  .update(fs.readFileSync(join(config, "orca.permissions.json")))
+                  .digest("hex"),
+                intent.authority.currentPolicyRevision,
+              );
+              assert.equal(physicalStamp(leasePath), leaseStamp);
+              assert.ok(leaseBytes && fs.readFileSync(leasePath).equals(leaseBytes));
+              baselineSeal?.();
+              for (const proof of persistence.values()) proof.assertUnchanged();
+              return undefined;
+            },
+            authorizeExecution: async (signal) => {
+              signal.throwIfAborted();
+              await beforeFreshAuthority?.();
+              signal.throwIfAborted();
+              check();
+              const current = await owner.readCaptureFacts(operator);
+              signal.throwIfAborted();
+              check();
+              const metadata = {
+                ...intent,
+                authority: { ...intent.authority, currentPolicyRevision: current.policyRevision },
+              };
+              same(factsOf(metadata), current);
+              const leaseExpiresAt = Math.min(
+                Date.parse(lease.renewedAt) + lease.guardedTtlMs!,
+                Date.parse(currentCredential(operator).expiresAt ?? new Date(8640000000000000).toISOString()),
+              );
+              await put("controlled-fresh-authority-v1", {
+                version: 1,
+                observedAt: Date.now(),
+                intent: metadata,
+                actor: operator,
+                credential: currentCredential(operator),
+                lease,
+                executionWindowMs: 55000,
+                leaseExpiresAt,
+              });
+              signal.throwIfAborted();
+              check();
+              const authority: PostApprovalReadAuthority = {
+                ...createAuthority(metadata),
+                snapshot: () => metadata,
+                leaseExpiresAt,
+              };
+              return {
+                authority,
+                policy: policyFor({ ...metadata, expiresAt: new Date(leaseExpiresAt).toISOString() }),
+                evidence,
+              };
+            },
+            registerInvocation: (capture) => {
+              automatic.set(Object.freeze({}) as ScopedPermissionCapture, capture);
+              return undefined;
+            },
+            evidence: {
+              ...evidence,
+              recordCapture: async (action, bytes) => {
+                await put("controlled-initial-preview-v1", { action, bytes }, `initial-preview:${action.bindingRef}`);
+              },
+            },
+          });
+          token = captured.token;
+          initialPreview = captured.preview;
+          await put("controlled-initial-deferred-intent-v1", {
+            version: 1,
+            intent,
+            parameters,
+            target,
+            executionWindowMs: 55000,
+          });
+        } else {
+          const captured = await producer.capture(captureInput);
+          token = captured.token;
+          invocation = captured.invocation;
+        }
       }
-      initialAction = invocation.action;
+      const reviewInvocation = initialPreview ?? invocation!;
+      initialAction = reviewInvocation.action;
       const baselineValue = {
         version: 1,
         originalAction: initialAction,
@@ -1223,10 +1360,11 @@ export async function runControlledOwnedReadTest(
       );
       await baselineObservation.verifyUnchanged();
       baselineSeal = baselineObservation.assertUnchanged!.bind(baselineObservation);
-      const evaluation = await invocation.evaluate(abort.signal);
+      const evaluation = await reviewInvocation.evaluate(abort.signal);
       assert.equal(evaluation.phase, "final");
       if (evaluation.phase !== "final") throw Error("unexpected required execution review");
       if (lane === "bootstrap") {
+        assert.ok(invocation);
         assert.equal(evaluation.verdict.outcome, "allow");
         if (evaluation.verdict.outcome !== "allow") throw Error("bootstrap not authorized");
         const permit = await invocation.authorize(invocation.action, evaluation.verdict, abort.signal);
@@ -1236,9 +1374,20 @@ export async function runControlledOwnedReadTest(
         service.close();
         return;
       }
-      assert.equal(evaluation.verdict.outcome, "require-human");
-      same(invocation.reviewProvenance(), { result: "unavailable", sourceRefs: [] });
-      await attest(token!, invocation.action);
+      if (initialApprovalIntent) {
+        // Non-executable preview lookup cannot qualify an execution policy
+        // projection. Retain this exact refusal rather than relabel it passed.
+        assert.equal(evaluation.verdict.outcome, "indeterminate");
+        if (evaluation.verdict.outcome !== "indeterminate") throw Error("Unexpected preview policy result");
+        assert.equal(evaluation.verdict.reason, "required-policy-unavailable");
+        await put("controlled-initial-preview-evaluation-v1", {
+          actionId: reviewInvocation.action.actionId,
+          outcome: evaluation.verdict.outcome,
+          reason: evaluation.verdict.reason,
+        });
+      } else assert.equal(evaluation.verdict.outcome, "require-human");
+      same(reviewInvocation.reviewProvenance(), { result: "unavailable", sourceRefs: [] });
+      await attest(token!, reviewInvocation.action);
       if (fault === "review-proof") persistence.clear();
       if (fault === "reviewer-revoked") await credentials.revoke(reviewer.credentialId!);
       const auth = new Authorizer({
@@ -1297,6 +1446,32 @@ export async function runControlledOwnedReadTest(
       }
       const handle = (review.result as { handle: string }).handle;
       currentSaveHandle = handle;
+      if (initialApprovalIntent && initialAnswerChoice !== "save") {
+        const answering = call("scopedPermissions.choose", { target: identity, handle, choice: initialAnswerChoice });
+        const execution = delivered!.then((option) => {
+          if (option === "deny") return undefined;
+          assert.equal(option, "once");
+          return producer.executeHumanDelivery(token!, abort.signal);
+        });
+        void execution.catch(() => undefined);
+        const accepted = await answering;
+        assert.ok(
+          accepted.ok && (accepted.result as { outcome: string }).outcome === "answered",
+          JSON.stringify(accepted),
+        );
+        const receipt = await execution;
+        if (initialAnswerChoice === "allow-once") {
+          assert.ok(receipt && receipt.state === "completed");
+          receipts.push(receipt);
+          assert.equal(authorizationRefs.length, 1);
+          assert.equal(await producer.executeHumanDelivery(token!, abort.signal), receipt);
+        } else {
+          assert.equal(receipt, undefined);
+          assert.equal(authorizationRefs.length, 0);
+        }
+        assert.equal((await policy.read()).document.scopedRules.records.length, 0);
+        return;
+      }
       const saved = await call("scopedPermissions.choose", { target: identity, handle, choice: "save" });
       assert.ok(saved.ok && (saved.result as { outcome: string }).outcome === "saved", JSON.stringify(saved));
       assert.equal(live.inspect(target), "pending");
@@ -1304,10 +1479,20 @@ export async function runControlledOwnedReadTest(
       assert.equal(authorizationRefs.length, 0);
       const after = await policy.read();
       assert.equal(after.document.scopedRules.records.length, 1);
+      if (initialApprovalIntent) {
+        assert.equal(initialAnswerChoice, "save");
+        const preview = initialPreview;
+        assert.ok(preview);
+        assert.throws(() => preview.assertCurrent());
+        await assert.rejects(producer.executeHumanDelivery(token!, abort.signal));
+        assert.equal(authorizationRefs.length, 0);
+        assert.equal(receipts.length, 0);
+        return;
+      }
       if (fault === "stale-revision")
         snapshot.authority = { ...snapshot.authority, currentPolicyRevision: initialRevision };
     });
-    if (lane === "connected") {
+    if (lane === "connected" && !initialApprovalIntent) {
       await phase("human-read", async () => {
         if (fault === "cancel") abort.abort();
         if (ownerDurationMs === 300000) {
@@ -1605,7 +1790,7 @@ export async function runControlledOwnedReadTest(
       finalRevision,
     };
   } finally {
-    service?.close();
+    await service?.closeAndDrain();
     live.close();
     abort.abort();
     await delivered?.catch(() => undefined);
