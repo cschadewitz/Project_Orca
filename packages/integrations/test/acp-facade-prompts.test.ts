@@ -125,11 +125,11 @@ async function withClient<T>(
         ? new Promise<never>(() => {})
         : Promise.resolve({ outcome: { outcome: "selected" as const, optionId: "ship" } });
     })
-    .connectWith(agentApp, (ctx) => body(ctx as never, updates));
+    .connectWith(agentApp, (ctx) => body(ctx, updates));
   return { result, updates, orchestrator };
 }
 
-type ClientCtx = { request: acp.ClientSideConnection["request"]; notify: acp.ClientSideConnection["notify"] };
+type ClientCtx = Pick<acp.ClientContext, "request" | "notify">;
 
 const newSession = async (ctx: ClientCtx): Promise<string> => {
   await ctx.request(acp.methods.agent.initialize, { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
