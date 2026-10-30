@@ -240,7 +240,10 @@ it.each([1, 2] as const)(
       putSpy.mockRestore();
     }
   },
-  30000,
+  // This holds publication gates and then completes all three phases. Allow a
+  // finite full-fixture watchdog under contention; action/lease expiry and every
+  // ownership, publication-order and no-premature-effect assertion stay intact.
+  60000,
 );
 
 it.each([
@@ -873,6 +876,54 @@ it("waits past the original action expiry on the real clock before fresh Save ac
   expect(Date.parse(payload.entry.acceptedAt)).toBeGreaterThanOrEqual(Date.parse(payload.entry.action.expiresAt));
   expect(Date.parse(payload.entry.acceptedAt)).toBeLessThan(payload.entry.saveAuthority.expiresAt);
 }, 90000);
+
+it.each(["before", "after"] as const)(
+  "a refreshed attestation publication failure %s commit cannot start another invocation",
+  async (boundary) => {
+    const b = await bootstrap(),
+      c = await supervisor("connected", b.grant);
+    Object.assign(c.options, { ownerDurationMs: 300000 });
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- Retain the original receiver with Reflect.apply.
+    const put = FileExecutionStore.prototype.putPayload;
+    let attempts = 0;
+    const spy = vi.spyOn(FileExecutionStore.prototype, "putPayload").mockImplementation(async function (
+      this: FileExecutionStore,
+      ref,
+      input,
+    ) {
+      if (input.type === "agent.update" && input.payload.update.kind === "controlled-persistence-review-v1") {
+        attempts++;
+        if (attempts === 2) {
+          if (boundary === "after") await Reflect.apply(put, this, [ref, input]);
+          throw new Error("Controlled refreshed attestation publication failed");
+        }
+      }
+      return Reflect.apply(put, this, [ref, input]);
+    });
+    try {
+      await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow(/uncertain/);
+      expect(attempts).toBe(2);
+      expect(c.phases).toEqual(["save"]);
+      expect(c.observed).toEqual([]);
+      const stores = fileStores(join(c.base, "workspace/.orca"));
+      expect(await stores.events.readTypes("controlled", ["human.answered"])).toEqual([]);
+      const approvals = await stores.events.readTypes("controlled", ["agent.permission"]);
+      expect(
+        approvals.filter((event) => event.type === "agent.permission" && event.payload.scopedApprovalRef),
+      ).toHaveLength(1);
+      const sidecar = JSON.parse(await readFile(join(c.base, "workspace/orca.permissions.json"), "utf8")) as {
+        scopedRules: { records: { rule: { expiresAt: null } }[] };
+      };
+      // The standing grant committed before the failed handoff. Do not erase it,
+      // manufacture successful execution or automatically repeat either operation.
+      expect(sidecar.scopedRules.records).toHaveLength(1);
+      expect(sidecar.scopedRules.records[0]!.rule.expiresAt).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  },
+  30000,
+);
 
 it("observes the final runs directory with genuine metadata after all connected phases", async () => {
   const b = await bootstrap();

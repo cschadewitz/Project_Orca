@@ -905,6 +905,10 @@ export async function runControlledOwnedReadTest(
     check();
     currentCredential(reviewer);
     assert.notEqual(reviewer.principalId, operator.principalId);
+    // A policy refresh replaces the action before its attestation is renewed.
+    // Read the authoritative service review, not the outer lookup that correctly
+    // rejects an old attestation attached to that refreshed action.
+    const executionReview = producer.port.snapshot(capture).review;
     const value = {
       version: 1,
       action,
@@ -915,7 +919,7 @@ export async function runControlledOwnedReadTest(
       revision: action.authority.currentPolicyRevision,
       expiresAt: action.expiresAt,
       plannedInterval: { offset: offset, length: length },
-      executionReview: captures.snapshot(capture).review,
+      executionReview,
     };
     const ref = await put("controlled-persistence-review-v1", value);
     const observation = await stores.execution.observe!(
