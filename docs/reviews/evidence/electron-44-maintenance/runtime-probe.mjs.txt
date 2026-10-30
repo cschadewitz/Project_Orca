@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { startBundledDaemon } from '/workspace/Project_Orca/packages/app/dist/main/daemon-process.js';
+import { DaemonClient } from '/workspace/Project_Orca/packages/app/dist/client/daemon-client.js';
+import { LocalDaemonToken } from '/workspace/Project_Orca/packages/app/dist/client/auth.js';
+const root='/workspace/Project_Orca';
+const workspace=await mkdtemp('/tmp/orca-electron44-owned-');
+let daemon;
+let succeeded=false;
+try {
+  const config=join(workspace,'orca.config.yaml');
+  await writeFile(config,'# Synthetic maintenance runtime probe; no agents or workflows.\nworkflows: []\ntemplates: []\n');
+  daemon=await startBundledDaemon({
+    entry:join(root,'packages/app/dist/daemon/orca-daemon.mjs'),
+    cwd:workspace,configPath:config,
+    execPath:join(root,'packages/app/node_modules/electron/dist/electron'),
+    env:{TMPDIR:workspace,XDG_CONFIG_HOME:workspace,XDG_DATA_HOME:workspace,XDG_CACHE_HOME:workspace},
+    attempts:1,startTimeoutMs:15000,stopTimeoutMs:3000,
+  });
+  assert(daemon.tokenFile);
+  const refused=await fetch(daemon.url+'/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'hello',params:{client:'maintenance-unauthenticated'}})});
+  assert.equal(refused.status,401);
+  const auth=new LocalDaemonToken({url:daemon.url,workspace,tokenFile:daemon.tokenFile,env:{}});
+  const client=new DaemonClient(daemon.url,fetch,{auth,requireAuthentication:true});
+  const hello=await client.hello('electron44-maintenance-runtime',false);
+  assert.equal(hello.orcaVersion,'0.6.0');
+  assert.deepEqual(hello.protocol,{major:2,minor:0});
+  assert.equal(hello.processId,daemon.pid);
+  assert.equal(hello.storeDir,join(workspace,'.orca'));
+  assert(hello.methods.includes('hello'));
+  assert(hello.capabilities.includes('runs.control'));
+  console.log(JSON.stringify({runtime:'Electron 44.10.0 embedded Node 24.22.1',synthetic:true,authenticated:true,unauthenticatedStatus:refused.status,orcaVersion:hello.orcaVersion,protocol:hello.protocol,childIdentityVerified:true}));
+  succeeded=true;
+} catch(error) {
+  console.error(JSON.stringify({passed:false,name:error?.name,code:error?.code ?? 'PROBE_FAILED'}));
+  process.exitCode=1;
+} finally {
+  if(daemon) await daemon.stop();
+  if(!daemon || daemon.exited) await rm(workspace,{recursive:true,force:true});
+  else { console.error('Owned child exit not confirmed; synthetic workspace retained.'); process.exitCode=1; }
+  if(succeeded && !process.exitCode) console.log('Owned daemon stopped; synthetic workspace removed.');
+}
