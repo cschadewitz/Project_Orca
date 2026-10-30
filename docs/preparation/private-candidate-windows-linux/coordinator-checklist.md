@@ -25,6 +25,12 @@ backup must precede the first candidate open, including read-only opens that can
 rollback requires complete matching pre-upgrade state plus binary/toolchain. Installed
 upgrade and restore remain unverified. No manual migration procedure is chosen here.
 
+For Casey's proposed Windows 11 x64 NSIS / Ubuntu 24.04 Desktop x64 tar.gz test setup,
+use the [disposable Proxmox VM runbook](../release-test-vms/README.md). It adds capacity
+preflight, reusable baselines, independent backup/restore and effort estimates without
+changing the candidate decisions or gates below. Windows 10 x64 remains a separate
+best-effort, unverified compatibility target in that proposal.
+
 ## 1. Fill-in decisions
 
 Each placeholder below appears in the tester pages. Replace each one in the private copies
