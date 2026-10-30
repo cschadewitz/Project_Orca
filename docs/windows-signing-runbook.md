@@ -57,7 +57,7 @@ is authoritative here; the v26 builder guide still contains an older EV reputati
 | --- | --- | --- |
 | Publisher identity | A stable legal identity Casey is comfortable displaying publicly | Individual legal name or exact organization legal name; do not assume the product name “ORCA” is an eligible legal publisher |
 | Eligibility | Check Public Trust availability for that entity | Individual developers: US/Canada. Organizations: US, Canada, EU, UK, Australia, New Zealand, Japan, South Korea, Singapore, Switzerland, Norway or Israel, per current quickstart; recheck at enrollment |
-| Billing and ownership | Owner-controlled Azure tenant/subscription; Basic plan initially | Billing owner, subscription, account administrator, monthly budget and terms approval |
+| Billing and ownership | Owner-controlled Azure tenant and eligible paid subscription; Basic plan initially | Billing owner, subscription type, account administrator, monthly budget and terms approval |
 | Certificate disclosure | Review Azure's certificate subject preview | Approved CN/organization/location fields and any optional address disclosure |
 | Operational owners | Casey owns enrollment and release decisions | Named CI implementer, reviewer, recovery contact and backup administrator |
 | Enablement boundary | Dedicated protected Windows signing lane | Allowed source refs, reviewers, release cohort and when unsigned distribution ends |
@@ -68,6 +68,12 @@ Microsoft's verification flow, never to git, chat attachments or CI artifacts. C
 the tenant/subscription carefully: Microsoft currently documents resource migration
 limitations. [Azure setup/eligibility](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart)
 and [service FAQ](https://learn.microsoft.com/en-us/azure/artifact-signing/faq).
+
+The subscription must be paid: Microsoft excludes **free, trial and sponsored Azure
+subscriptions** from Artifact Signing. Confirm an eligible subscription, such as
+pay-as-you-go or an enterprise agreement, before attempting account/profile creation.
+Any billing upgrade is a separate owner decision, not an action authorized by this plan.
+[Microsoft's subscription restriction](https://learn.microsoft.com/en-us/azure/artifact-signing/faq#can-i-use-artifact-signing-with-a-free-trial-or-sponsored-azure-subscription).
 
 Microsoft currently lists Basic at **US$9.99/month including 5,000 signatures**, then
 US$0.005/additional signature; Premium US$99.99/month including 100,000. Count signed
@@ -84,7 +90,7 @@ publisher trust or buy EV for an assumed SmartScreen bypass.
 
 These are future operator actions, requiring the owner's decision to enable the service.
 
-1. Confirm the chosen tenant, subscription, billable plan and resource group. A subscription
+1. Confirm the chosen tenant, eligible paid subscription, billable plan and resource group. A subscription
    administrator registers `Microsoft.CodeSigning` if needed. Choose a supported account
    region and record its exact signing endpoint; publisher country and service region are
    separate choices.
@@ -182,7 +188,7 @@ and [Windows configuration](https://www.electron.build/v26/docs/win/).
 There is a concrete compatibility boundary: the 26.18.0 implementation installs the
 PowerShell **TrustedSigning** module with minimum version 0.5.0 and invokes
 `Invoke-TrustedSigning`; it does not call the renamed Artifact Signing action directly.
-Its publisher configuration also feeds generated updater configuration. These facts were
+Its publisher configuration also feeds generated updater configuration by default. These facts were
 checked against the [published 26.18.0 package](https://registry.npmjs.org/app-builder-lib/-/app-builder-lib-26.18.0.tgz),
 whose SHA-512 matched this repository's lockfile. Do not assume current online examples
 or the preinstalled node_modules directory prove the locked implementation works.
@@ -259,12 +265,32 @@ download/install and architecture restrictions. The first signed release can be 
 manually from the approved distribution source; an old unsigned client cannot retroactively
 gain publisher authentication. Rehearse unsigned-to-signed install continuity separately.
 
+Keep Azure's `azureSignOptions.publisherName` as the exact certificate **CN**, as its
+integration requires. Separately evaluate **full distinguished-name (DN) matching for
+the updater** before enabling signed updates. Locked updater 6.8.11 parses configured
+DN attributes and checks every configured attribute against the signer subject; it warns
+when it falls back to a bare CN. A value containing only `CN=...` is still a single-attribute
+constraint, not a full-DN pin. Use the approved certificate's actual full subject, including
+its validated organization/location fields where present; do not invent subject values.
+These behaviors were checked in the [published updater 6.8.11 source](https://registry.npmjs.org/electron-updater/-/electron-updater-6.8.11.tgz),
+whose SHA-512 matched the lockfile.
+
+Builder 26.18.0's generic publish schema supports a `publish.publisherName` string array,
+which can supply that distinct full-DN value to generated `app-update.yml` without
+replacing Azure's required CN. Review this override in the signed-lane configuration and
+prove its packaged output and native updater behavior. Do not leave a bare CN as an
+alternative entry beside the DN: the updater accepts a match against any configured entry.
+Test same-CN/different-subject rejection and a legitimate certificate renewal with the
+approved subject. Subject-field changes require an explicit reviewed transition; full-DN
+matching does not replace certificate-chain, timestamp or revocation validation.
+
 | Acceptance case | Required result |
 | --- | --- |
 | Clean signed NSIS install and ZIP launch | Expected publisher and valid timestamp; app/bundled daemon launch; normal per-user install; downloaded-file and local-launch prompts recorded |
 | Signed A → signed B, same publisher | Genuine packaged updater verifies and installs exact approved architecture/version; settings, intents, workspace and credential access preserved |
 | Unsigned A → first signed B | Approved manual transition preserves install identity/data; document what the old client did and did not verify |
 | Invalid/missing signature or valid wrong publisher | Candidate refused before installer execution; current app/workspace remain usable; cannot pass solely on hash/TLS |
+| Full-DN policy: valid signature with same CN but different configured subject fields | Refused by the actual packaged updater; no CN-only fallback in the allowlist |
 | Missing publisher metadata, wrong architecture/channel/version, damaged download | Explicit release/acceptance failure; no silent fallback or permissive verifier |
 | Signing/timestamp service failure or revoked CI authority | No signed release assets admitted to publication; no unsigned fallback |
 | Windows 10 22H2 x64 | Optional best-effort smoke when available, including real download/launch trust result; no claim of verification until exercised |
