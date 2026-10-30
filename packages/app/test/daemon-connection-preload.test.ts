@@ -81,6 +81,21 @@ it("strips Electron events from onShow and preserves explicit epoch fencing", as
   expect(invoke).toHaveBeenLastCalledWith("orca:workspace.firstRun.bindConfiguration", "opaque-config-review", 1);
   await bridge.templates!.call("templates.get", {});
   expect(invoke).toHaveBeenLastCalledWith("orca:templates", { method: "templates.get", params: {} }, 1);
+  const params = {
+    target: {
+      workspaceId: "11111111-1111-4111-8111-111111111111",
+      instanceId: "22222222-2222-4222-8222-222222222222",
+    },
+    handle: "33333333-3333-4333-8333-333333333333",
+  };
+  expect(Object.keys(bridge.scopedPermissions!)).toEqual(["call"]);
+  // A target notification above did not activate epoch 2. Opaque review commands
+  // retain the same explicit target fence as every other authenticated RPC.
+  await bridge.scopedPermissions!.call("scopedPermissions.inspect", params);
+  expect(invoke).toHaveBeenLastCalledWith("orca:scopedPermissions", { method: "scopedPermissions.inspect", params }, 1);
   await bridge.daemonConnection!.connect(null);
   expect(invoke).toHaveBeenLastCalledWith("orca:daemon.connect", null, 1);
+  bridge.daemonConnection!.activate(2);
+  await bridge.scopedPermissions!.call("scopedPermissions.cancel", params);
+  expect(invoke).toHaveBeenLastCalledWith("orca:scopedPermissions", { method: "scopedPermissions.cancel", params }, 2);
 });

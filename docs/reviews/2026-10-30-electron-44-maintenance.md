@@ -152,6 +152,44 @@ and packaged artifact validation were not executed. The full suite and coverage
 were not run; focused results do not replace required CI or full release checks.
 No package, release, workflow dispatch, deployment or release-gate change occurred.
 
+## Bridge smoke follow-up
+
+The reported exact-head App smoke run
+[41124495214](https://github.com/cschadewitz/Project_Orca/actions/runs/41124495214)
+on `6180c3afb854380bf3d1063527b4d7310dfb4a3b` had 27 Linux passes and one
+failure: the exact bridge allowlist omitted `scopedPermissions`. No workflow
+list/view or log query was repeated for this investigation; the run result is
+provided context, with the mismatch independently reproduced from source.
+
+Commit `3f72ee46fc9f55b3b6f1fe24ad1d757c149a323d` intentionally added the typed
+bridge, preload implementation, main dispatcher and closed protocol contracts,
+but omitted the smoke allowlist update. Both the original PR head and current
+main `2942010e175bebee220f56baf6a6b8ae10c11690` contain that mismatch. It predates
+the Electron update. The bridge exposes only `call`; main validates the closed
+review/choose/inspect/cancel family, and the daemon retains authentication and
+owner authority. Production startup still does not register that family.
+
+The follow-up merges that current main without rewriting either history and
+records the intentional key in the exact allowlist. An additional exact nested
+assertion permits only `call`. The actual-preload regression checks its IPC
+envelope and explicit epoch fencing before and after target activation. No
+runtime permissions, registration, authentication or sandbox settings change.
+
+On Node 24.19.0/pnpm 12.4.2, frozen installation, root/renderer typechecks,
+TypeScript/Vite build, affected ESLint/Prettier and `git diff --check` passed.
+The focused preload/client, renderer choices/port, daemon scoped-bridge and
+authorization-inventory suites passed **6 files / 160 tests / zero skips**, with
+at most two concurrent workers. Executing the actual preload source independently
+confirmed the single missing key before and exact equality after the correction.
+Playwright discovers all 28 smoke cases; discovery and source checks are not GUI
+smoke. The existing renderer chunk-size build warning remains.
+
+Local GUI smoke remains blocked: Xvfb is absent, and `unshare -Ur true` fails
+because `/proc/self/uid_map` is read-only. Obtain fresh full App smoke on the
+new exact pushed head in a sandbox-capable runner; the old run cannot accept it.
+Any homelab dispatch still requires the owner's fresh resource preflight.
+Type proof, native acceptance and the other candidate gates remain separate.
+
 ## Required before accepting a private candidate
 
 Preserve every gate in the [private-release ledger](2026-10-27-release-readiness.md),
