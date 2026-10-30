@@ -1,0 +1,1 @@
+ACP session callers can require context loading with `requireContextRecovery: true` and a nonempty `resumeSessionId`. Unsupported, failed or timed-out loads stop and clean up the owned connection instead of opening a fresh session. This opt-in checks protocol load success; native context verification and durable approval continuation remain separate work under #357.
