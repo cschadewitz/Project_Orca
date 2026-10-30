@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import { fileStores, FileExecutionStore } from "@orca/store";
 import * as agents from "@orca/agents";
+import * as daemonTransport from "../../daemon/src/server.js";
 import type { ActionEvidenceV1, PolicyEvaluationV1, StrictPermissionRule } from "@orca/core";
 import { resolveManagedRootBinding } from "../src/typed-workspace-gate.js";
 import { runControlledOwnedReadTest, type ControlledReadTestSupervisor } from "./controlled-owned-read-producer.js";
@@ -168,6 +169,110 @@ async function bootstrap() {
   };
   return { ...s, result, grant };
 }
+it.each(["missing", "refusing", "hanging"] as const)(
+  "%s standing reviewer disables Save while ordinary answers remain available",
+  async (fault) => {
+    const b = await bootstrap();
+    for (const choice of (fault === "hanging" ? ["allow-once", "deny"] : ["save", "allow-once", "deny"]) as readonly (
+      "save" | "allow-once" | "deny"
+    )[]) {
+      const c = await supervisor("connected", b.grant);
+      Object.assign(c.options, { standingReviewerFault: fault });
+      const dispatch = daemonTransport.dispatch;
+      let selected: Awaited<ReturnType<typeof dispatch>> | undefined;
+      const spy = vi.spyOn(daemonTransport, "dispatch").mockImplementation(async (text, ...rest) => {
+        const request = JSON.parse(text) as { method: string; params: { choice?: string } };
+        if (request.method === "scopedPermissions.choose") {
+          request.params.choice = choice;
+          selected = await dispatch(JSON.stringify(request), ...rest);
+          return selected;
+        }
+        return dispatch(text, ...rest);
+      });
+      try {
+        // This producer expects Save and intentionally stops after this substituted
+        // answer. The actual authenticated bridge/owner records its real outcome.
+        const error = await runControlledOwnedReadTest(c.base, "connected", c.options).then(
+          () => undefined,
+          (failure: unknown) => failure,
+        );
+        expect(error).toBeInstanceOf(Error);
+        expect(selected, `${choice}: ${String(error)}`).toBeDefined();
+        if (choice === "save") {
+          if (selected?.ok) expect(selected.result).not.toMatchObject({ outcome: "saved" });
+        } else {
+          expect(selected?.ok).toBe(true);
+          if (selected?.ok) expect(selected.result).toMatchObject({ outcome: "answered" });
+        }
+        const stores = fileStores(join(c.base, "workspace/.orca"));
+        const answers = await stores.events.readTypes("controlled", ["human.answered"]);
+        expect(answers.filter((event) => event.type === "human.answered").map((event) => event.payload.answer)).toEqual(
+          choice === "save" ? [] : [choice === "deny" ? "deny" : "once"],
+        );
+        expect(await stores.events.readTypes("controlled", ["agent.permission"])).toEqual([]);
+        expect(c.observed).toEqual([]);
+      } finally {
+        spy.mockRestore();
+        c.restore();
+      }
+    }
+  },
+);
+
+it("the saved standing grant qualifies a fresh action after the original action expires", async () => {
+  const b = await bootstrap();
+  const c = await supervisor("connected", b.grant);
+  Object.assign(c.options, { ownerDurationMs: 300000 });
+  const originalPhase = c.options.phase.bind(c.options);
+  let expiredActionAt = 0;
+  let advanced: ReturnType<typeof vi.spyOn> | undefined;
+  c.options.phase = (name, work) =>
+    originalPhase(name, async () => {
+      if (name === "rule-read") {
+        const stores = fileStores(join(c.base, "workspace/.orca"));
+        const approved = (await stores.events.readTypes("controlled", ["agent.permission"]))[0]!;
+        const payload = (await stores.execution.getPayload(
+          "controlled",
+          approved.executionPayloadRef!,
+          "agent.permission",
+        )) as {
+          entry: {
+            version: number;
+            command: { rule: { version: number; expiresAt: null } };
+            action: { expiresAt: string };
+          };
+        };
+        expect(payload.entry.version).toBe(2);
+        expect(payload.entry.command.rule).toMatchObject({ version: 2, expiresAt: null });
+        expiredActionAt = Date.parse(payload.entry.action.expiresAt);
+        const lease = await stores.leases.get("run:controlled");
+        expect(lease!.guardedTtlMs).toBe(300000);
+        expect(expiredActionAt + 1).toBeLessThan(Date.parse(lease!.renewedAt) + lease!.guardedTtlMs!);
+        // Simulated clock transition, not a real elapsed-time/effect-proof claim.
+        const realNow = Date.now.bind(Date);
+        const advance = expiredActionAt + 1 - realNow();
+        advanced = vi.spyOn(Date, "now").mockImplementation(() => realNow() + advance);
+      }
+      await work();
+    });
+  try {
+    const result = await runControlledOwnedReadTest(c.base, "connected", c.options);
+    const stores = fileStores(join(c.base, "workspace/.orca"));
+    const payload = (await stores.execution.getPayload("controlled", result.authorizationRefs[1]!, "agent.update")) as {
+      update: { text: string };
+    };
+    const execution = JSON.parse(payload.update.text).value as {
+      action: { expiresAt: string };
+      verdict: { authorizedBy: { kind: string } };
+    };
+    expect(execution.verdict.authorizedBy.kind).toBe("rule");
+    expect(Date.parse(execution.action.expiresAt)).toBeGreaterThan(expiredActionAt + 1);
+    expect(c.observed.map((effect) => effect.phase)).toEqual(["human-read", "rule-read"]);
+  } finally {
+    advanced?.mockRestore();
+  }
+});
+
 it("connects actual Save, separately settled original Allow once and fresh rule execution", async () => {
   const b = await bootstrap();
   const c = await supervisor("connected", b.grant);
@@ -294,7 +399,7 @@ it.each(["root", "lifetime"] as const)(
   30000,
 );
 
-it.each(["reviewer", "proof", "actor"] as const)(
+it.each(["reviewer", "proof", "standing-proof", "actor"] as const)(
   "authenticates saved %s again after Save",
   async (fault) => {
     const b = await bootstrap();
@@ -306,17 +411,17 @@ it.each(["reviewer", "proof", "actor"] as const)(
         if (name !== "save") return;
         const storeDir = join(c.base, "workspace/.orca"),
           stores = fileStores(storeDir);
-        if (fault === "proof") {
+        if (fault === "proof" || fault === "standing-proof") {
           const saved = (await stores.events.readTypes("controlled", ["agent.permission"]))[0]!;
           const payload = (await stores.execution.getPayload(
             "controlled",
             saved.executionPayloadRef!,
             "agent.permission",
-          )) as { entry: { persistenceReview: { sourceRefs: string[] } } };
+          )) as { entry: { persistenceReview: { sourceRefs: string[] }; standingReview: { sourceRefs: string[] } } };
           const path = join(
             storeDir,
             "private-execution",
-            `${encodeURIComponent(payload.entry.persistenceReview.sourceRefs[0]!)}.payload.json`,
+            `${encodeURIComponent((fault === "proof" ? payload.entry.persistenceReview : payload.entry.standingReview).sourceRefs[0]!)}.payload.json`,
           );
           const bytes = await readFile(path);
           bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 1;

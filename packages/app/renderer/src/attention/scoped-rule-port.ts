@@ -59,7 +59,7 @@ export function scopedRulePort(bridge: OrcaBridge, input: LiveDecisionTarget): S
         },
         allowOnce: () => choose("allow-once"),
         deny: () => choose("deny"),
-        createRule: () => choose("save"),
+        ...(review.standingReview !== "unavailable" ? { createRule: () => choose("save") } : {}),
       };
     },
   };

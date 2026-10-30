@@ -60,7 +60,7 @@ const target = {
   workspaceId: "11111111-1111-4111-8111-111111111111",
   instanceId: "22222222-2222-4222-8222-222222222222",
 };
-function fixture() {
+function fixture(standingReview?: "available" | "unavailable") {
   const fake = fakeBridge({
     connection: {
       state: "live",
@@ -110,6 +110,7 @@ function fixture() {
           },
           reviewUntil: Date.now() + 60000,
           requiredReview: "passed",
+          ...(standingReview ? { standingReview } : {}),
           decision: view(),
         }),
       };
@@ -207,6 +208,16 @@ async function save() {
   click("Save scoped rule");
   await screen.findByText(/Scoped rule saved/);
 }
+it("an unavailable standing reviewer disables Save and preserves the one-time answer", async () => {
+  const f = fixture("unavailable");
+  await open();
+  expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).toBe("true");
+  expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).not.toBe("true");
+  click("Allow once");
+  await waitFor(() => expect(f.calls.some((call) => call.params.choice === "allow-once")).toBe(true));
+  expect(f.calls.some((call) => call.params.choice === "save")).toBe(false);
+});
+
 it("confirms save only, then loads a fresh handle for a separately selected answer", async () => {
   const f = fixture();
   await save();

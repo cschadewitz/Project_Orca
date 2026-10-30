@@ -59,6 +59,7 @@ export const SCOPED_PERMISSION_CONTRACTS = {
       reviewUntil: z.number().finite(),
       scope: ScopedPermissionScopeSchema,
       requiredReview: z.enum(["passed", "failed", "unavailable"]),
+      standingReview: z.enum(["available", "unavailable"]).optional(),
       decision: GuardDecisionViewSchema,
     }),
   },

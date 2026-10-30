@@ -13,6 +13,15 @@ export type StrictPreflight =
   | { readonly phase: "final"; readonly verdict: PolicyVerdictV1 }
   | { readonly phase: "needs-review"; readonly review: ReviewEligibilityV1; readonly rule: StrictPermissionRule };
 
+/** Internal comparison only: an unbounded rule never makes an action or permit
+ * unbounded. Unknown/mixed encodings remain unavailable, rather than legacy. */
+export function strictRuleExpiry(rule: StrictPermissionRule): number | undefined {
+  if (Object.hasOwn(rule, "version")) return rule.version === 2 && rule.expiresAt === null ? Infinity : undefined;
+  if (typeof rule.expiresAt !== "string") return undefined;
+  const expiry = Date.parse(rule.expiresAt);
+  return Number.isFinite(expiry) ? expiry : undefined;
+}
+
 const AUTHORITY_KEYS = [
   "capturedGeneration",
   "currentPolicyRevision",
@@ -199,14 +208,15 @@ export function evaluateStrictPermission(
   const rule = state.rules.value.find((candidate) => matches(candidate, action));
   if (!rule) return finish("require-human", "no-approved-match");
   if (rule.status === "revoked") return finish("deny", "rule-revoked");
+  const ruleExpiry = strictRuleExpiry(rule);
   if (
     rule.status !== "approved" ||
     !rule.ruleId ||
     !rule.ruleRevision ||
     !Number.isFinite(Date.parse(rule.notBefore)) ||
-    !Number.isFinite(Date.parse(rule.expiresAt)) ||
+    ruleExpiry === undefined ||
     Date.parse(rule.notBefore) > now ||
-    Date.parse(rule.expiresAt) <= now
+    ruleExpiry <= now
   )
     return finish("indeterminate", "rule-not-current");
   if (rule.decision === "deny") return finish("deny", "rule-deny");
@@ -240,7 +250,7 @@ export function evaluateStrictPermission(
       destinationPolicyRef: delegation.destinationPolicyRef,
       judgeConfigRef: delegation.judgeConfigRef,
       deadlineAt: new Date(
-        Math.min(Date.parse(action.expiresAt), Date.parse(rule.expiresAt), now + delegation.maximumDurationMs),
+        Math.min(Date.parse(action.expiresAt), ruleExpiry, now + delegation.maximumDurationMs),
       ).toISOString(),
     },
   };

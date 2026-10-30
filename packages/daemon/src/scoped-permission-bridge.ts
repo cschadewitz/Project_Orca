@@ -34,6 +34,10 @@ export interface RetainedScopedReview {
   readonly scope: z.infer<typeof ScopedPermissionScopeSchema>;
   readonly requiredReview: "passed" | "failed" | "unavailable";
   readonly persistenceReview?: { readonly result: "passed"; readonly sourceRefs: readonly string[] };
+  /** Capability availability only; a fresh protected standing approval is required inside Save. */
+  readonly standingReviewAvailable?: boolean;
+  /** Runtime owner record only: displayed-handle lifetime is not Save execution authority. */
+  readonly pendingGrantIntent?: true;
 }
 export interface ScopedPermissionOwner {
   readonly currentStore: ManagedTypedStoreProvider;
@@ -47,6 +51,9 @@ export interface ScopedPermissionOwner {
   ): Promise<RetainedScopedReview>;
   /** Exact protected approval/action/scope lookup, synchronous and nonmutating at publication. */
   assertCurrent(review: RetainedScopedReview, actor: MutationActor): undefined;
+  /** Original finite action only, including the live registry's accepting phase.
+   * This cannot authorize Save or reuse a pending grant as execution authority. */
+  assertAnswerCurrent?(review: RetainedScopedReview, actor: MutationActor): undefined;
   readAuthorityRevision(review: RetainedScopedReview, actor: MutationActor): Promise<string>;
   assertAuthorityRevision(review: RetainedScopedReview, actor: MutationActor, revision: string): undefined;
   /** Original run lease spans protected Save acceptance AND standing publication. */
@@ -99,11 +106,15 @@ export function scopedPermissionMethods(
     assertManagedTypedStoreBinding(binding);
     if (
       !Number.isFinite(entry.review.reviewUntil) ||
-      Date.now() >= entry.review.reviewUntil ||
+      (Date.now() >= entry.review.reviewUntil && !(entry.state === "pending" && entry.review.pendingGrantIntent)) ||
       !(owner.live.inspect(entry.input) === "pending" || (accepting && owner.live.inspect(entry.input) === "accepting"))
     )
       stale();
-    if (owner.assertCurrent(structuredClone(entry.review), { ...entry.actor }) !== undefined) stale();
+    const result =
+      accepting && owner.assertAnswerCurrent
+        ? owner.assertAnswerCurrent(structuredClone(entry.review), { ...entry.actor })
+        : owner.assertCurrent(structuredClone(entry.review), { ...entry.actor });
+    if (result !== undefined) stale();
   };
   const lookup = (ctx: MethodContext, params: z.infer<typeof handleSchema>) => {
     const call = context(ctx, params.target);
@@ -145,6 +156,12 @@ export function scopedPermissionMethods(
           reviewUntil: review.reviewUntil,
           scope: ScopedPermissionScopeSchema.parse(review.scope),
           requiredReview: review.requiredReview,
+          standingReview:
+            review.command.rule.version === 2
+              ? review.standingReviewAvailable
+                ? "available"
+                : "unavailable"
+              : "available",
           decision: projectGuardDecision(review.projection, owner.disclosure, Date.now()),
         };
       },
@@ -155,6 +172,14 @@ export function scopedPermissionMethods(
         const { entry, principal, answer } = lookup(ctx, params);
         if (entry.state !== "ready") stale();
         current(entry);
+        // No standing approval was issued, so no write can have started. Leave
+        // this live handle available for an explicit ordinary answer.
+        if (
+          params.choice === "save" &&
+          entry.review.command.rule.version === 2 &&
+          !entry.review.standingReviewAvailable
+        )
+          stale();
         // Claim before any await; even a lost acknowledgement never permits automatic replay.
         entry.state = "pending";
         try {
@@ -165,6 +190,7 @@ export function scopedPermissionMethods(
           if (params.choice === "save") {
             if (
               (entry.review.requiredReview !== "passed" && entry.review.persistenceReview?.result !== "passed") ||
+              (entry.review.command.rule.version === 2 && !entry.review.standingReviewAvailable) ||
               entry.review.action.coverage.level !== "verified-per-execution"
             )
               stale();

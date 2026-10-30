@@ -9,6 +9,8 @@ import {
   type ScopedCaptureTarget,
   type ScopedPermissionCapture,
   type ScopedPermissionCapturePort,
+  type CreateScopedRule,
+  type PendingScopedGrant,
 } from "@orca/agents";
 import {
   assertOriginalDelivery,
@@ -70,6 +72,10 @@ export function ownedReadScopedCapture(options: {
     binding: ManagedTypedStoreBinding;
     blocked: boolean;
     refreshed: boolean;
+    parameters: DisposableFileReadParameters;
+    clock(): number;
+    ownerSignal: AbortSignal;
+    pendingGrant?: { command: CreateScopedRule; capability: PendingScopedGrant };
   };
   const entries = new Map<ScopedPermissionCapture, Entry>();
   const targets = new Set<string>(); // Lifetime tombstones; no callback replay or replacement.
@@ -137,6 +143,59 @@ export function ownedReadScopedCapture(options: {
       current(entry);
       return undefined;
     },
+    async retainGrantIntent(token, command) {
+      const retainedCommand = structuredClone(command);
+      const entry = lookup(token);
+      await currentBinding();
+      current(entry); // Retain historical scope only while the original action is live.
+      if (entry.pendingGrant) {
+        same(entry.pendingGrant.command, retainedCommand);
+        entry.pendingGrant.capability.assertCurrent();
+        return entry.pendingGrant.capability;
+      }
+      const action = entry.invocation.action;
+      const parameters = structuredClone(entry.parameters);
+      const capturedAt = entry.clock();
+      if (
+        !Number.isSafeInteger(capturedAt) ||
+        capturedAt <= 0 ||
+        !Number.isFinite(Date.parse(action.expiresAt)) ||
+        capturedAt >= Date.parse(action.expiresAt)
+      )
+        refuse();
+      const signal = AbortSignal.any([
+        service.lifetimeSignal,
+        entry.ownerSignal,
+        entry.query.live!.signal,
+        ...(entry.query.signal ? [entry.query.signal] : []),
+      ]);
+      const capability = Object.freeze<PendingScopedGrant>({
+        capturedAt,
+        signal,
+        assertCurrent: (): undefined => {
+          signal.throwIfAborted();
+          if (
+            entry.blocked ||
+            entry.humanStarted ||
+            entry.binding !== binding ||
+            live.inspect(entry.target) !== "pending"
+          )
+            refuse();
+          assertManagedTypedStoreBinding(entry.binding);
+          live.assertOriginalQuery(entry.query);
+          service.assertPendingResource(parameters);
+          signal.throwIfAborted();
+          return undefined;
+        },
+        retire: (): undefined => {
+          entry.blocked = true;
+          return service.retireInvocation(entry.invocation);
+        },
+      });
+      capability.assertCurrent();
+      entry.pendingGrant = { command: retainedCommand, capability };
+      return capability;
+    },
     async policyChanged(token, facts) {
       const entry = lookup(token);
       if (entry.blocked || entry.refreshed) refuse();
@@ -158,6 +217,12 @@ export function ownedReadScopedCapture(options: {
   });
   return Object.freeze({
     port,
+    /** Save does not answer the old prompt. Tombstone its actual service facade. */
+    retire(token: ScopedPermissionCapture): undefined {
+      const entry = lookup(token);
+      entry.blocked = true;
+      return service.retireInvocation(entry.invocation);
+    },
     /** Trusted execution owner retrieves the exact retained facade after policyChanged. */
     invocation(token: ScopedPermissionCapture) {
       const entry = lookup(token);
@@ -212,6 +277,8 @@ export function ownedReadScopedCapture(options: {
       const originalOwner = input.owner,
         policy = input.policy,
         evidence = input.evidence;
+      const clock = originalOwner.clock.now.bind(originalOwner.clock);
+      const ownerSignal = originalOwner.signal;
       const query = input.query;
       const onceOptionId = input.onceOptionId,
         denyOptionId = input.denyOptionId;
@@ -264,6 +331,9 @@ export function ownedReadScopedCapture(options: {
         binding: active,
         blocked: false,
         refreshed: false,
+        parameters,
+        clock,
+        ownerSignal,
       });
       ownedPrompts.set(token, (candidate) => {
         const entry = lookup(token);
