@@ -194,6 +194,22 @@ export function makeTarGz(entries, { globalPax } = {}) {
   return gzipSync(Buffer.concat(blocks));
 }
 
+/** ZIP extra fields, including a valid Info-ZIP alternate Unicode pathname. */
+export function zipExtra(id, payload) {
+  const body = Buffer.from(payload);
+  const header = Buffer.alloc(4);
+  header.writeUInt16LE(id, 0);
+  header.writeUInt16LE(body.length, 2);
+  return Buffer.concat([header, body]);
+}
+
+export function unicodePathExtra(storedName, effectiveName) {
+  const prefix = Buffer.alloc(5);
+  prefix[0] = 1;
+  prefix.writeUInt32LE(crc32(Buffer.from(storedName)), 1);
+  return zipExtra(0x7075, Buffer.concat([prefix, Buffer.from(effectiveName)]));
+}
+
 /** A classic ZIP with deflated members, as 7-Zip writes Windows archives. */
 export function makeZip(entries, { corruptCrc } = {}) {
   const locals = [];
@@ -202,6 +218,8 @@ export function makeZip(entries, { corruptCrc } = {}) {
   for (const entry of entries) {
     const name = Buffer.from(entry.name);
     const localName = Buffer.from(entry.localName ?? entry.name);
+    const localExtra = entry.localExtra ?? Buffer.alloc(0);
+    const centralExtra = entry.centralExtra ?? Buffer.alloc(0);
     const body = Buffer.from(entry.kind === "symlink" ? entry.linkName : (entry.body ?? ""));
     const data = deflateRawSync(body);
     const crc = (crc32(body) ^ (corruptCrc === entry.name ? 1 : 0)) >>> 0;
@@ -213,6 +231,7 @@ export function makeZip(entries, { corruptCrc } = {}) {
     local.writeUInt32LE(data.length, 18);
     local.writeUInt32LE(body.length, 22);
     local.writeUInt16LE(localName.length, 26);
+    local.writeUInt16LE(localExtra.length, 28);
     const record = Buffer.alloc(46);
     record.writeUInt32LE(0x02014b50, 0);
     record.writeUInt16LE(3 * 256 + 20, 4);
@@ -223,10 +242,11 @@ export function makeZip(entries, { corruptCrc } = {}) {
     record.writeUInt32LE(data.length, 20);
     record.writeUInt32LE(body.length, 24);
     record.writeUInt16LE(name.length, 28);
+    record.writeUInt16LE(centralExtra.length, 30);
     record.writeUInt32LE(offset, 42);
-    locals.push(local, localName, data);
-    central.push(record, name);
-    offset += 30 + localName.length + data.length;
+    locals.push(local, localName, localExtra, data);
+    central.push(record, name, centralExtra);
+    offset += 30 + localName.length + localExtra.length + data.length;
   }
   const directory = Buffer.concat(central);
   const end = Buffer.alloc(22);

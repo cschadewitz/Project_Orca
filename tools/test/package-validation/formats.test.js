@@ -13,7 +13,17 @@ import {
   readUpdateMetadata,
   readZip,
 } from "../../package-validation/formats.js";
-import { blockmap, makeAsar, makeElf, makePe, makeTarGz, makeZip, updateMetadata } from "./fixtures.js";
+import {
+  blockmap,
+  makeAsar,
+  makeElf,
+  makePe,
+  makeTarGz,
+  makeZip,
+  unicodePathExtra,
+  updateMetadata,
+  zipExtra,
+} from "./fixtures.js";
 
 describe("containment", () => {
   it.each(["a/b", "dir/", "ORCA-1.0.0/resources/app.asar"])("accepts %s", (name) =>
@@ -74,6 +84,57 @@ describe("tar.gz", () => {
 });
 
 describe("zip", () => {
+  it.each([
+    [0, 0],
+    [1, 1],
+    [1, 2],
+    [2, 1],
+    [3, 3],
+  ])("refuses EOCD counts %s/%s that disagree with the two stored records", (diskCount, totalCount) => {
+    const zip = makeZip([
+      { name: "safe/name", body: "x" },
+      { name: "../unseen", body: "y" },
+    ]);
+    zip.writeUInt16LE(diskCount, zip.length - 22 + 8);
+    zip.writeUInt16LE(totalCount, zip.length - 22 + 10);
+    expect(() => readZip(zip)).toThrow(/zip_directory_invalid/);
+  });
+  it("requires the central directory size to consume every parsed record", () => {
+    const zip = makeZip([{ name: "safe/name", body: "x" }]);
+    zip.writeUInt32LE(zip.readUInt32LE(zip.length - 22 + 12) - 1, zip.length - 22 + 12);
+    expect(() => readZip(zip)).toThrow(/zip_directory_invalid/);
+  });
+  it.each(["local", "central", "both"])("refuses Unicode-path overrides in %s extra fields", (location) => {
+    for (const effectiveName of ["../unicode-escape", "ORCA.exe", "safe/name"]) {
+      const extra = unicodePathExtra("safe/name", effectiveName);
+      const entry = { name: "safe/name", body: "x" };
+      if (location !== "central") entry.localExtra = extra;
+      if (location !== "local") entry.centralExtra = extra;
+      expect(() => readZip(makeZip([entry]))).toThrow(/zip_extra_unsupported/);
+    }
+  });
+  it.each(["localExtra", "centralExtra"])("refuses malformed or unknown %s fields", (field) => {
+    for (const extra of [
+      Buffer.from([0x55]),
+      Buffer.from([0x55, 0x54, 5, 0]),
+      zipExtra(0x9999, "x"),
+      zipExtra(1, ""),
+    ]) {
+      expect(() => readZip(makeZip([{ name: "safe/name", body: "x", [field]: extra }]))).toThrow(
+        /zip_extra_(?:invalid|unsupported)/,
+      );
+    }
+  });
+  it("preserves supported timestamp/owner extra fields and ordinary ZIP comments", () => {
+    const extra = Buffer.concat([
+      zipExtra(0x5455, Buffer.alloc(5)),
+      zipExtra(0x000a, Buffer.alloc(32)),
+      zipExtra(0x7875, Buffer.from([1, 1, 0, 1, 0])),
+    ]);
+    const zip = makeZip([{ name: "safe/name", body: "x", localExtra: extra, centralExtra: extra }]);
+    zip.writeUInt16LE(7, zip.length - 2);
+    expect(readZip(Buffer.concat([zip, Buffer.from("comment")]))[0].body.toString()).toBe("x");
+  });
   it.each(["../evilxx", "different-length/name", "SAFE/name"])(
     "refuses a local filename %j that differs from the central filename",
     (localName) => {
@@ -148,6 +209,30 @@ describe("executables", () => {
 });
 
 describe("update metadata and blockmap", () => {
+  it.each(["[unterminated", "{bad", "'unterminated", '"unterminated', "&anchor timestamp"])(
+    "refuses malformed/unsupported releaseDate scalar %j",
+    (value) => {
+      const metadata = updateMetadata("1.2.3", "x64", Buffer.from("x")).replace(
+        /^releaseDate:.*$/m,
+        `releaseDate: ${value}`,
+      );
+      expect(() => readUpdateMetadata(metadata)).toThrow(/update_metadata_invalid/);
+    },
+  );
+  it.each(["blockMapSize: [unterminated", "blockMapSize: !!int 3", "blockMapSize: NaN", "unknown: [unterminated"])(
+    "refuses unsupported files-entry scalar %j",
+    (field) => {
+      const metadata = updateMetadata("1.2.3", "x64", Buffer.from("x")).replace(/^path:/m, `    ${field}\npath:`);
+      expect(() => readUpdateMetadata(metadata)).toThrow(/update_metadata_invalid/);
+    },
+  );
+  it("accepts optional numeric blockMapSize and simple quoted scalar values", () => {
+    const text = updateMetadata("1.2.3", "x64", Buffer.from("x")).replace(
+      "    size: 1",
+      '    size: "1"\n    blockMapSize: 42',
+    );
+    expect(readUpdateMetadata(text).files[0]).toMatchObject({ size: 1 });
+  });
   it.each(["files:\n", "files: []\n", '"files": []\n', "releaseDate: again\n", '"version": 1.2.3\n'])(
     "refuses duplicate or alternate YAML mapping keys: %j",
     (suffix) => {

@@ -122,10 +122,21 @@ It refuses, rather than skips, when:
 | AppImage | ELF runtime for x64 and a squashfs payload marker; contents not inspected |
 
 The supported format subset is conservative. Global PAX headers are refused rather than
-ignored. ZIP local filenames, flags and methods must agree with their central directory
-records. ASAR link targets are checked relative to the archive root. Update metadata must
-use the flat `version`, `files`, `path`, `sha512` and optional `releaseDate` mapping; duplicate
-keys, quoted/flow mapping keys and unsupported structure are refused.
+ignored. ZIP per-disk and total EOCD counts must agree, and the parsed records must consume
+the full declared central directory up to EOCD; its comment length must match the supplied
+bytes. Local filenames, flags and methods must agree with their central records. Both local
+and central extra-field areas are checked as bounded records: only timestamp/owner tags
+`0x5455`, `0x000a` and `0x7875` are supported. Unicode-path overrides (`0x7075`), ZIP64 and
+unknown extension tags are refused. ASAR link targets are checked relative to the archive
+root.
+
+Update metadata must use the flat `version`, `files`, `path`, `sha512` and optional
+`releaseDate` mapping. File entries accept `url`, `sha512`, `size` and optional numeric
+`blockMapSize` (validated but not emitted or used as chunk-checksum evidence). Every value
+must be a simple token, optionally in matching simple quotes; sizes are safe unsigned
+decimal integers, and `releaseDate` must be a canonical UTC ISO timestamp with milliseconds.
+Duplicate keys, unknown file fields, collections, tags, aliases, escaped/multiline values,
+comments and quoted/flow mapping keys are refused.
 
 Windows archive destinations are indexed case-insensitively for duplicates and ancestors.
 Member paths and link targets must use printable ASCII without reserved device names,

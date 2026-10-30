@@ -19,6 +19,7 @@ import {
   makeSource,
   rendererHtml,
   updateMetadata,
+  unicodePathExtra,
   windowsArchive,
   windowsNative,
   writeCandidate,
@@ -179,6 +180,32 @@ describe("content refusals", () => {
     platform === "linux"
       ? { [linux]: linuxArchive(VERSION, "x64", { extra }) }
       : { [windows]: windowsArchive(VERSION, "x64", source, { extra }) };
+
+  it("refuses an understated EOCD count hiding a trailing traversal entry", () => {
+    const bytes = windowsArchive(VERSION, "x64", source, { extra: [{ name: "../unseen", body: "x" }] });
+    const count = bytes.readUInt16LE(bytes.length - 22 + 10);
+    expect(count).toBe(14);
+    bytes.writeUInt16LE(count - 1, bytes.length - 22 + 8);
+    bytes.writeUInt16LE(count - 1, bytes.length - 22 + 10);
+    expect(refusal(run({ [windows]: bytes }), windows)).toMatch(/zip_directory_invalid/);
+  });
+
+  it.each(["../unicode-escape", "ORCA.exe"])("refuses a Unicode-path override to %j", (effectiveName) => {
+    const extra = unicodePathExtra("safe/name", effectiveName);
+    for (const fields of [{ localExtra: extra }, { centralExtra: extra }, { localExtra: extra, centralExtra: extra }]) {
+      const report = run(archive("win", [{ name: "safe/name", body: "x", ...fields }]));
+      expect(refusal(report, windows)).toMatch(/zip_extra_unsupported/);
+    }
+  });
+
+  it.each(["releaseDate", "blockMapSize"])("refuses malformed %s with an otherwise complete update set", (field) => {
+    const set = fullSet();
+    set["latest-x64.yml"] =
+      field === "releaseDate"
+        ? set["latest-x64.yml"].replace(/^releaseDate:.*$/m, "releaseDate: [unterminated")
+        : set["latest-x64.yml"].replace(/^path:/m, "    blockMapSize: [unterminated\npath:");
+    expect(refusal(run(set), "latest-x64.yml")).toMatch(/update_metadata_invalid/);
+  });
 
   it("refuses global PAX linkpath overrides in an otherwise consistent Linux archive", () => {
     const report = run({

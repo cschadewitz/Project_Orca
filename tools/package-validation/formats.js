@@ -149,29 +149,47 @@ export function readTarGz(compressed) {
   return members;
 }
 
+/** Only inert timestamp/owner ZIP extensions are supported; alternate filenames are not. */
+function checkZipExtra(extra, name) {
+  let offset = 0;
+  while (offset < extra.length) {
+    if (offset + 4 > extra.length) fail("zip_extra_invalid", name);
+    const id = extra.readUInt16LE(offset);
+    const size = extra.readUInt16LE(offset + 2);
+    if (offset + 4 + size > extra.length) fail("zip_extra_invalid", name);
+    // Extended timestamps, NTFS timestamps, Unix uid/gid. In particular 0x7075
+    // (Unicode path) and ZIP64 must not silently override the fields we inspect.
+    if (![0x5455, 0x000a, 0x7875].includes(id)) fail("zip_extra_unsupported", `0x${id.toString(16)} at ${name}`);
+    offset += 4 + size;
+  }
+}
+
 /** Stored and deflated entries of a classic (non-Zip64, unencrypted) ZIP, CRC-checked. */
 export function readZip(bytes) {
   const floor = Math.max(0, bytes.length - 65_557);
   let eocd = -1;
   for (let i = bytes.length - 22; i >= floor; i--) {
-    if (bytes.readUInt32LE(i) === 0x06054b50) {
+    if (bytes.readUInt32LE(i) === 0x06054b50 && i + 22 + bytes.readUInt16LE(i + 20) === bytes.length) {
       eocd = i;
       break;
     }
   }
   if (eocd === -1) fail("zip_directory_missing");
   const count = bytes.readUInt16LE(eocd + 10);
+  const diskCount = bytes.readUInt16LE(eocd + 8);
   const directorySize = bytes.readUInt32LE(eocd + 12);
   const directoryOffset = bytes.readUInt32LE(eocd + 16);
-  if (count === 0xffff || directoryOffset === 0xffffffff) fail("zip64_unsupported");
+  const directoryEnd = directoryOffset + directorySize;
+  if (count === 0xffff || diskCount === 0xffff || directoryOffset === 0xffffffff || directorySize === 0xffffffff)
+    fail("zip64_unsupported");
   if (bytes.readUInt16LE(eocd + 4) !== 0 || bytes.readUInt16LE(eocd + 6) !== 0) fail("zip_multidisk_unsupported");
-  if (directoryOffset + directorySize > eocd) fail("zip_directory_invalid");
+  if (diskCount !== count || directoryEnd !== eocd) fail("zip_directory_invalid");
   if (count > MAX_ENTRIES) fail("zip_too_many_entries");
   const entries = [];
   let offset = directoryOffset;
   let expanded = 0;
   for (let i = 0; i < count; i++) {
-    if (offset + 46 > eocd || bytes.readUInt32LE(offset) !== 0x02014b50) fail("zip_directory_invalid");
+    if (offset + 46 > directoryEnd || bytes.readUInt32LE(offset) !== 0x02014b50) fail("zip_directory_invalid");
     const flags = bytes.readUInt16LE(offset + 8);
     const method = bytes.readUInt16LE(offset + 10);
     const crc = bytes.readUInt32LE(offset + 16);
@@ -183,10 +201,10 @@ export function readZip(bytes) {
     const madeBy = bytes.readUInt16LE(offset + 4) >> 8;
     const external = bytes.readUInt32LE(offset + 38);
     const local = bytes.readUInt32LE(offset + 42);
-    if (offset + 46 + nameLength + extraLength + commentLength > directoryOffset + directorySize)
-      fail("zip_directory_invalid");
+    if (offset + 46 + nameLength + extraLength + commentLength > directoryEnd) fail("zip_directory_invalid");
     const nameBytes = bytes.subarray(offset + 46, offset + 46 + nameLength);
     const name = nameBytes.toString("utf8");
+    checkZipExtra(bytes.subarray(offset + 46 + nameLength, offset + 46 + nameLength + extraLength), name);
     offset += 46 + nameLength + extraLength + commentLength;
     if ([compressedSize, size, local].includes(0xffffffff)) fail("zip64_unsupported");
     if (flags & 0x1) fail("zip_encrypted_unsupported", name);
@@ -201,7 +219,8 @@ export function readZip(bytes) {
       bytes.readUInt16LE(local + 8) !== method
     )
       fail("zip_local_header_mismatch", name);
-    if (dataStart + compressedSize > bytes.length) fail("zip_truncated", name);
+    checkZipExtra(bytes.subarray(local + 30 + localNameLength, dataStart), name);
+    if (dataStart + compressedSize > directoryOffset) fail("zip_truncated", name);
     expanded += size;
     if (expanded > MAX_EXPANDED_BYTES) fail("zip_too_large");
     const raw = bytes.subarray(dataStart, dataStart + compressedSize);
@@ -217,6 +236,7 @@ export function readZip(bytes) {
     const kind = name.endsWith("/") ? "directory" : (unixMode & 0o170000) === 0o120000 ? "symlink" : "file";
     entries.push({ name, kind, size, linkName: kind === "symlink" ? body.toString("utf8") : undefined, body });
   }
+  if (offset !== directoryEnd) fail("zip_directory_invalid", "record count does not consume the directory");
   return entries;
 }
 
@@ -352,7 +372,16 @@ export function readElf(bytes) {
  */
 export function readUpdateMetadata(text) {
   if (typeof text !== "string" || text.length > 64 * 1024 || text.includes("\r")) fail("update_metadata_invalid");
-  const unquote = (value) => value.trim().replace(/^(['"])(.*)\1$/, "$2");
+  const unquote = (raw) => {
+    if (typeof raw !== "string" || !raw || raw !== raw.trim()) fail("update_metadata_invalid", "scalar");
+    const quoted = /^(['"])(.*)\1$/.exec(raw);
+    const value = quoted ? quoted[2] : raw;
+    // A token, optionally enclosed in matching simple quotes. No YAML collections,
+    // tags, aliases, comments, escapes or multiline scalars.
+    if (!/^[A-Za-z0-9_./:+-]+={0,2}$/.test(value) || (!quoted && (value === "-" || value.endsWith(":"))))
+      fail("update_metadata_invalid", "unsupported scalar");
+    return value;
+  };
   const top = (key) => {
     const matches = [...text.matchAll(new RegExp(`^${key}: (.+)$`, "gm"))];
     if (matches.length !== 1) fail("update_metadata_invalid", `${key} must appear once`);
@@ -374,6 +403,16 @@ export function readUpdateMetadata(text) {
       keys.add(key);
       inFiles = key === "files";
       if (inFiles && line !== "files:") fail("update_metadata_invalid", "files must be a block list");
+      if (!inFiles) {
+        const value = unquote(line.slice(key.length + 2));
+        if (
+          key === "releaseDate" &&
+          (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) ||
+            !Number.isFinite(Date.parse(value)) ||
+            new Date(value).toISOString() !== value)
+        )
+          fail("update_metadata_invalid", "releaseDate must be a canonical UTC timestamp");
+      }
       current = undefined;
       continue;
     }
@@ -383,6 +422,9 @@ export function readUpdateMetadata(text) {
     }
     const start = /^ {2}- (\w+): (.*)$/.exec(line);
     const more = /^ {4}(\w+): (.*)$/.exec(line);
+    const field = start ?? more;
+    if (field && !["url", "sha512", "size", "blockMapSize"].includes(field[1]))
+      fail("update_metadata_invalid", `unsupported files[] field ${field[1]}`);
     if (start) files.push((current = { [start[1]]: unquote(start[2]) }));
     else if (more && current) {
       if (more[1] in current) fail("update_metadata_invalid", `duplicate ${more[1]}`);
@@ -391,8 +433,14 @@ export function readUpdateMetadata(text) {
   }
   if (!keys.has("files")) fail("update_metadata_invalid", "files must appear once");
   for (const file of files) {
+    if (!/^(?:0|[1-9][0-9]*)$/.test(file.size ?? "")) fail("update_metadata_invalid", "files[] entry");
     file.size = Number(file.size);
     if (!file.url || !file.sha512 || !Number.isSafeInteger(file.size)) fail("update_metadata_invalid", "files[] entry");
+    if (
+      file.blockMapSize !== undefined &&
+      (!/^(?:0|[1-9][0-9]*)$/.test(file.blockMapSize) || !Number.isSafeInteger(Number(file.blockMapSize)))
+    )
+      fail("update_metadata_invalid", "blockMapSize must be a safe unsigned integer");
   }
   return {
     version: top("version"),
