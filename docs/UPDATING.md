@@ -152,8 +152,9 @@ Windows signing is **not proven or provisioned by this change**. Current builds 
 unsigned. Bootstrap requires trusting the installer through Windows' unsigned-app warning;
 that is not production signing evidence. Before wider rollout configure electron-builder
 Windows signing, timestamping and a stable publisher identity, then verify signature
-checking with both valid and wrong-publisher installers. Use Azure Trusted Signing or an
-appropriate certificate/HSM setup; the existing signing notes in RELEASING.md apply. Do not
+checking with both valid and wrong-publisher installers. Follow the
+[Windows signing runbook](windows-signing-runbook.md) for the proposed Azure Artifact Signing
+OIDC setup or a reviewed certificate/HSM alternative. Do not
 weaken signature validation to get a test green. HTTPS/checksums protect distribution but
 do not substitute for publisher identity.
 

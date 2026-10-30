@@ -138,8 +138,20 @@ still belongs to the production-wired integration head.
 `loadSession` capability before sending `session/load`. Unsupported/failed loads
 open a fresh session and report `SessionContinuity` as `fresh` with the reason;
 a successful load reports `loaded`. The integrated engine records this on
-`agent.session.opened.continuity`. Default engine restart behavior
-remains fresh; automatic persisted session selection is not implemented.
+`agent.session.opened.continuity`.
+
+Callers that require a load can set `requireContextRecovery: true` alongside a
+nonempty `resumeSessionId`. Missing IDs fail before spawn. Unsupported, rejected
+or timed-out loads reject the open, close the connection and run bounded cleanup
+of the owned process; they never send `session/new` or a prompt. These failures
+carry a sanitized `details.contextRecoveryReason`: `missing-session-id`,
+`load-unsupported`, `load-failed` or `load-timeout`. Provider error text and stderr
+are omitted from these load-failure errors. A successful load still establishes
+only protocol success, not expected native checkpoint identity or context completeness.
+See [#357 investigation and remaining contract](preparation/agent-context-recovery-357/README.md).
+
+Default engine restart behavior remains fresh; automatic persisted session
+selection and durable approval continuation are not implemented by this option.
 Loading conversation context does not restore a tool callback, authorize a tool,
 move an agent process between hosts, or inject text into an active turn.
 

@@ -179,17 +179,21 @@ export function validStrictPermissionRule(value: unknown): value is StrictPermis
     !exact(
       value,
       ["ruleId", "ruleRevision", "status", "notBefore", "expiresAt", "match", "decision"],
-      ["delegation"],
+      ["delegation", "version"],
     ) ||
     !nonempty(value.ruleId) ||
     !nonempty(value.ruleRevision) ||
     !oneOf(value.status, ["approved", "revoked"]) ||
     !oneOf(value.decision, ["allow", "deny", "require-human"]) ||
     typeof value.notBefore !== "string" ||
-    typeof value.expiresAt !== "string" ||
     !Number.isFinite(Date.parse(value.notBefore)) ||
-    !Number.isFinite(Date.parse(value.expiresAt)) ||
-    Date.parse(value.notBefore) >= Date.parse(value.expiresAt)
+    !(
+      (Object.hasOwn(value, "version") && value.version === 2 && value.expiresAt === null) ||
+      (!Object.hasOwn(value, "version") &&
+        typeof value.expiresAt === "string" &&
+        Number.isFinite(Date.parse(value.expiresAt)) &&
+        Date.parse(value.notBefore) < Date.parse(value.expiresAt))
+    )
   )
     return false;
   const m = value.match;
