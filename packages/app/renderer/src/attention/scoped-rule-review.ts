@@ -23,6 +23,9 @@ export interface ScopedRuleReview {
   readonly reviewUntil: number;
   /** Owner result for required review of this proposed scope, independent of the descriptive decision view. */
   readonly requiredReview: "passed" | "failed" | "unavailable";
+  /** Non-authorizing server projection of retained Save prerequisites. A fresh
+   * protected standing review is still required after explicit Save choice. */
+  readonly saveEligibility?: "eligible" | "unavailable" | undefined;
   /** Owner checks current workspace/input/review/revision and authority before every invocation. */
   readonly isCurrent: () => boolean;
   readonly cancel?: (() => Promise<void>) | undefined;
@@ -48,7 +51,7 @@ export function copyScopedReviewScope(scope: ScopedRuleReview["scope"]): ScopedR
 }
 
 /** Conservative presentation veto only. Positive authority comes exclusively from owner capabilities. */
-export function scopedReviewUnavailable(review: ScopedRuleReview, now: number): string | undefined {
+function scopedReviewCommonUnavailable(review: ScopedRuleReview, now: number): string | undefined {
   if (!Number.isFinite(review.reviewUntil) || review.reviewUntil <= now) return "This review expired. Review again.";
   try {
     if (!review.isCurrent()) return "This review is stale. Review again.";
@@ -72,6 +75,25 @@ export function scopedReviewUnavailable(review: ScopedRuleReview, now: number): 
       (!Number.isFinite(Date.parse(view.expiry.at)) || Date.parse(view.expiry.at) <= now))
   )
     return "The reviewed grant expired or was revoked.";
-  if (review.requiredReview !== "passed") return "Required review is unavailable or did not pass.";
   return undefined;
+}
+
+/** Ordinary execution answers retain the required execution-review gate. */
+export function scopedReviewUnavailable(review: ScopedRuleReview, now: number): string | undefined {
+  return (
+    scopedReviewCommonUnavailable(review, now) ??
+    (review.requiredReview !== "passed" ? "Required review is unavailable or did not pass." : undefined)
+  );
+}
+
+/** Save has independent persistence prerequisites; this remains a presentation
+ * veto and cannot manufacture a standing approval or execution permission. */
+export function scopedSaveReviewUnavailable(review: ScopedRuleReview, now: number): string | undefined {
+  const common = scopedReviewCommonUnavailable(review, now);
+  if (common) return common;
+  if (review.requiredReview === "failed" || review.saveEligibility === "unavailable")
+    return "Required Save review is unavailable or did not pass.";
+  if (review.saveEligibility === "eligible" || review.requiredReview === "passed") return undefined;
+  // An older server without the projection retains its conservative legacy gate.
+  return "Required Save review is unavailable or did not pass.";
 }

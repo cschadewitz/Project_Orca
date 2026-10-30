@@ -162,6 +162,16 @@ export function scopedPermissionMethods(
                 ? "available"
                 : "unavailable"
               : "available",
+          // Describes retained prerequisites only. The actual Save path below
+          // still acquires current authority and a fresh protected standing review.
+          // Keep a failed execution review conservatively blocked in presentation.
+          saveEligibility:
+            review.requiredReview !== "failed" &&
+            (review.requiredReview === "passed" || review.persistenceReview?.result === "passed") &&
+            (review.command.rule.version !== 2 || review.standingReviewAvailable === true) &&
+            review.action.coverage.level === "verified-per-execution"
+              ? "eligible"
+              : "unavailable",
           decision: projectGuardDecision(review.projection, owner.disclosure, Date.now()),
         };
       },

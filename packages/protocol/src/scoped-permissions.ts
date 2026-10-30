@@ -60,6 +60,8 @@ export const SCOPED_PERMISSION_CONTRACTS = {
       scope: ScopedPermissionScopeSchema,
       requiredReview: z.enum(["passed", "failed", "unavailable"]),
       standingReview: z.enum(["available", "unavailable"]).optional(),
+      // Presentation only: eligibility to request fresh Save checks, not authority.
+      saveEligibility: z.enum(["eligible", "unavailable"]).optional(),
       decision: GuardDecisionViewSchema,
     }),
   },

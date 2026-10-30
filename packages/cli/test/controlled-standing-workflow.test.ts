@@ -428,6 +428,71 @@ async function noSavedGrant(base: string) {
   expect(events.filter((event) => event.type === "agent.permission" && event.payload.scopedApprovalRef).length).toBe(0);
 }
 
+it.each(["current", "missing-reviewer", "missing-proof", "stale"] as const)(
+  "projects persistence-only Save prerequisites through the actual RPC under %s",
+  async (fault) => {
+    const b = await bootstrap(),
+      c = await supervisor("connected", b.grant, fault === "missing-proof" ? "review-proof" : undefined);
+    Object.assign(c.options, {
+      ownerDurationMs: 300000,
+      pendingSaveIntent: true,
+      ...(fault === "missing-reviewer" ? { standingReviewerFault: "missing" } : {}),
+      ...(fault === "stale"
+        ? {
+            beforeSaveChoice: async () =>
+              fs.promises.appendFile(join(c.base, "workspace/.orca/workspace-identity/id"), "changed"),
+          }
+        : {}),
+    });
+    const phase = c.options.phase.bind(c.options);
+    c.options.phase = (name, work) =>
+      phase(name, async () => {
+        await work();
+        if (name === "save") throw new Error("Stopped after confirmed Save without execution");
+      });
+    const dispatch = daemonTransport.dispatch;
+    let reviewed: Awaited<ReturnType<typeof dispatch>> | undefined,
+      saved: Awaited<ReturnType<typeof dispatch>> | undefined;
+    const spy = vi.spyOn(daemonTransport, "dispatch").mockImplementation(async (text, ...rest) => {
+      const request = JSON.parse(text) as { method: string };
+      const result = await dispatch(text, ...rest);
+      if (request.method === "scopedPermissions.review") reviewed = result;
+      if (request.method === "scopedPermissions.choose") saved = result;
+      return result;
+    });
+    try {
+      await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow();
+      if (fault === "missing-proof") expect(reviewed?.ok).toBe(false);
+      else {
+        expect(reviewed?.ok).toBe(true);
+        if (reviewed?.ok)
+          expect(reviewed.result).toMatchObject({
+            requiredReview: "unavailable",
+            saveEligibility: fault === "missing-reviewer" ? "unavailable" : "eligible",
+          });
+      }
+      if (fault === "current") {
+        expect(saved?.ok).toBe(true);
+        if (saved?.ok) expect(saved.result).toMatchObject({ outcome: "saved" });
+        const document = JSON.parse(await readFile(join(c.base, "workspace/orca.permissions.json"), "utf8")) as {
+          scopedRules: { records: unknown[] };
+        };
+        expect(document.scopedRules.records.length).toBe(1);
+      } else {
+        if (saved?.ok) expect(saved.result).not.toMatchObject({ outcome: "saved" });
+        await noSavedGrant(c.base);
+      }
+      expect(c.observed).toEqual([]);
+      expect(
+        await fileStores(join(c.base, "workspace/.orca")).events.readTypes("controlled", ["human.answered"]),
+      ).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  },
+  30000,
+);
+
 it.each([
   ["allow-once", "current"],
   ["deny", "current"],

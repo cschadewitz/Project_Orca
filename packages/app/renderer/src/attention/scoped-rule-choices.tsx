@@ -6,6 +6,7 @@ import { useAnnounce } from "../a11y/announce-context.js";
 import {
   copyScopedReviewScope,
   scopedReviewUnavailable,
+  scopedSaveReviewUnavailable,
   type ScopedRuleReview,
   type ScopedRuleReviewPort,
 } from "./scoped-rule-review.js";
@@ -83,19 +84,24 @@ export function ScopedRuleChoices({
       setOutcome("Review failed. No choice was sent.");
     }
   };
-  const reason =
+  const commonReason =
     cannotWrite ??
     (lock.current
       ? phase === "settled"
         ? "Refresh authoritative state before reviewing this input again."
         : "A choice is awaiting confirmation."
-      : review
-        ? scopedReviewUnavailable(review, Date.now())
-        : "Review the exact scope first.");
+      : !review
+        ? "Review the exact scope first."
+        : undefined);
+  const reason = commonReason ?? (review ? scopedReviewUnavailable(review, Date.now()) : undefined);
+  const saveReason = commonReason ?? (review ? scopedSaveReviewUnavailable(review, Date.now()) : undefined);
   const choose = async (choice: "allowOnce" | "deny" | "createRule") => {
     if (lock.current || cannotWrite || !review || phase === "settled") return;
     // Denial does not require positive scope/coverage, but still requires the owner's current capability.
-    const blocked = scopedReviewUnavailable(review, Date.now());
+    const blocked =
+      choice === "createRule"
+        ? scopedSaveReviewUnavailable(review, Date.now())
+        : scopedReviewUnavailable(review, Date.now());
     if (choice !== "deny" && blocked) {
       setOutcome(blocked);
       return;
@@ -219,7 +225,8 @@ export function ScopedRuleChoices({
                   <ObjectId id={review.decision.matchedRule.revision.id} variant="full" />
                 </Text>
               )}
-              {reason && <Text style="caption">{reason}</Text>}
+              {reason && <Text style="caption">Allow once: {reason}</Text>}
+              {saveReason && saveReason !== reason && <Text style="caption">Save: {saveReason}</Text>}
             </>
           )}
           {phase !== "settled" && phase !== "saved" && (
@@ -239,8 +246,8 @@ export function ScopedRuleChoices({
                     </Button>
                   </span>
                   <Button
-                    disabled={reason !== undefined || !review?.createRule}
-                    disabledReason={reason ?? "Scoped rule creation is unavailable."}
+                    disabled={saveReason !== undefined || !review?.createRule}
+                    disabledReason={saveReason ?? "Scoped rule creation is unavailable."}
                     onClick={() => void choose("createRule")}
                   >
                     Save scoped rule
@@ -268,8 +275,8 @@ export function ScopedRuleChoices({
                   </Button>
                   {!saved && (
                     <Button
-                      disabled={reason !== undefined || !review?.createRule}
-                      disabledReason={reason ?? "Scoped rule creation is unavailable."}
+                      disabled={saveReason !== undefined || !review?.createRule}
+                      disabledReason={saveReason ?? "Scoped rule creation is unavailable."}
                       onClick={() => setPhase("confirm")}
                     >
                       Create scoped rule

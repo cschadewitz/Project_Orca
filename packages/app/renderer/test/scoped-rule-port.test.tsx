@@ -60,7 +60,13 @@ const target = {
   workspaceId: "11111111-1111-4111-8111-111111111111",
   instanceId: "22222222-2222-4222-8222-222222222222",
 };
-function fixture(standingReview?: "available" | "unavailable") {
+function fixture(
+  standingReview?: "available" | "unavailable",
+  prerequisites: {
+    requiredReview?: "passed" | "failed" | "unavailable";
+    saveEligibility?: "eligible" | "unavailable";
+  } = {},
+) {
   const fake = fakeBridge({
     connection: {
       state: "live",
@@ -109,7 +115,8 @@ function fixture(standingReview?: "available" | "unavailable") {
             coverage: "Synthetic verified boundary",
           },
           reviewUntil: Date.now() + 60000,
-          requiredReview: "passed",
+          requiredReview: prerequisites.requiredReview ?? "passed",
+          ...(prerequisites.saveEligibility ? { saveEligibility: prerequisites.saveEligibility } : {}),
           ...(standingReview ? { standingReview } : {}),
           decision: view(),
         }),
@@ -216,6 +223,47 @@ it("an unavailable standing reviewer disables Save and preserves the one-time an
   click("Allow once");
   await waitFor(() => expect(f.calls.some((call) => call.params.choice === "allow-once")).toBe(true));
   expect(f.calls.some((call) => call.params.choice === "save")).toBe(false);
+});
+
+it("confirms a persistence-only Save without enabling or sending an execution answer", async () => {
+  const f = fixture("available", { requiredReview: "unavailable", saveEligibility: "eligible" });
+  await open();
+  expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).toBe("true");
+  expect(screen.getByRole("button", { name: "Deny" }).getAttribute("aria-disabled")).not.toBe("true");
+  expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).not.toBe("true");
+  click("Allow once");
+  click("Create scoped rule");
+  click("Save scoped rule");
+  await screen.findByText(/Scoped rule saved/);
+  expect(
+    f.calls.filter((call) => call.method === "scopedPermissions.choose").map((call) => call.params.choice),
+  ).toEqual(["save"]);
+  expect(f.onAnswer).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["available", "unavailable", "unavailable"],
+  ["unavailable", "unavailable", "eligible"],
+  ["available", "unavailable", undefined],
+  ["available", "failed", "eligible"],
+] as const)(
+  "blocks Save for reviewer %s, execution review %s, Save projection %s",
+  async (standing, required, eligibility) => {
+    const f = fixture(standing, { requiredReview: required, ...(eligibility ? { saveEligibility: eligibility } : {}) });
+    await open();
+    expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).toBe("true");
+    click("Create scoped rule");
+    expect(f.calls.some((call) => call.params.choice === "save")).toBe(false);
+    expect(f.onAnswer).not.toHaveBeenCalled();
+  },
+);
+
+it("rejects unknown Save eligibility projections in the strict protocol schema", () => {
+  const projection = SCOPED_PERMISSION_CONTRACTS["scopedPermissions.review"].result.shape.saveEligibility;
+  expect(projection.safeParse(undefined).success).toBe(true);
+  expect(projection.safeParse("eligible").success).toBe(true);
+  expect(projection.safeParse("passed").success).toBe(false);
+  expect(projection.safeParse({ authority: true }).success).toBe(false);
 });
 
 it("confirms save only, then loads a fresh handle for a separately selected answer", async () => {

@@ -1,5 +1,17 @@
 # Standing rules and post-approval authority
 
+The optional Save eligibility projection describes retained prerequisites for
+requesting fresh Save checks. It grants no authority and does not change the
+execution-review result. A new client receiving an older response without this
+field keeps its conservative passed-review gate. Older clients use strict result
+schemas and may reject newer response fields, including this projection and the
+earlier `standingReview` field. This is not bidirectional wire compatibility:
+activation requires matching client/daemon contracts or reviewed capability
+negotiation. Rejection fails closed; it does not grant execution or Save authority.
+The UI and eligibility projection conservatively block an explicitly failed
+execution review. This presentation veto does not change the backend's existing
+independent persistence-review alternative or its final Save authority checks.
+
 This draft integrates the inactive owned-read preparation APIs and their local
 tests. It does not activate a production mount, add provider continuation, or
 change the overall agent-turn timeout.

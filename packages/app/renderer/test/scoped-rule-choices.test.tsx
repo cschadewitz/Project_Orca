@@ -267,6 +267,34 @@ describe("inactive scoped choices in the existing permission card", () => {
     expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).toBe("true");
   });
+  it.each([
+    ["stale", { isCurrent: () => false }],
+    ["revoked", { decision: view({ revocation: complete("revoked") }) }],
+    ["unverified", { decision: view({ coverage: undefined }) }],
+    ["expired", { reviewUntil: 1 }],
+    ["failed", { requiredReview: "failed" as const }],
+  ] as const)("Save eligibility does not bypass the shared %s veto", async (_name, patch) => {
+    const review = reviewed({ requiredReview: "unavailable", saveEligibility: "eligible", ...patch });
+    mount(review);
+    await open();
+    expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).toBe("true");
+    click("Create scoped rule");
+    expect(review.createRule).not.toHaveBeenCalled();
+    expect(review.allowOnce).not.toHaveBeenCalled();
+  });
+
+  it("rechecks persistence-only Save freshness at confirmation time", async () => {
+    let current = true;
+    const review = reviewed({ requiredReview: "unavailable", saveEligibility: "eligible", isCurrent: () => current });
+    mount(review);
+    await open();
+    click("Create scoped rule");
+    current = false;
+    click("Save scoped rule");
+    expect(review.createRule).not.toHaveBeenCalled();
+    expect(review.allowOnce).not.toHaveBeenCalled();
+    expect(screen.getByText(/This review is stale/)).toBeTruthy();
+  });
   it("rechecks owner authority and expiry at save time", async () => {
     let current = true;
     const review = reviewed({ isCurrent: () => current });
@@ -473,7 +501,7 @@ describe("inactive scoped choices in the existing permission card", () => {
     await open();
     click("Allow once");
     expect(review.allowOnce).not.toHaveBeenCalled();
-    expect(screen.getByText("Exact scope disclosure is unavailable.")).toBeTruthy();
+    expect(screen.getByText("Allow once: Exact scope disclosure is unavailable.")).toBeTruthy();
   });
   it("preserves the explicit revision and read-only boundaries", () => {
     const port = { scopeKey: "a", review: vi.fn(async () => reviewed()) };
@@ -508,7 +536,7 @@ describe("scoped choice boundaries", () => {
     mount(review);
     await open();
     expect(document.body.textContent).toContain(word);
-    expect(screen.getByText("The reviewed grant expired or was revoked.")).toBeTruthy();
+    expect(screen.getByText("Allow once: The reviewed grant expired or was revoked.")).toBeTruthy();
     click("Allow once");
     click("Create scoped rule");
     expect(review.allowOnce).not.toHaveBeenCalled();
