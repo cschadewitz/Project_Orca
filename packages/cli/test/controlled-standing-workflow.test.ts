@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import { fileStores, FileExecutionStore, ProtectedEventStore } from "@orca/store";
+import { readPrivateJson } from "../../store/src/protected-file.js";
 import { LiveHumanInput, type LiveAnswerAuthority } from "@orca/engine";
 import { strictPermissionRuleRevision } from "@orca/agents";
 import type { StrictPermissionRule } from "@orca/core";
@@ -883,6 +884,35 @@ it.each(["before", "after"] as const)(
     const b = await bootstrap(),
       c = await supervisor("connected", b.grant);
     Object.assign(c.options, { ownerDurationMs: 300000 });
+    const dispatch = daemonTransport.dispatch;
+    let originalReview: string | undefined;
+    const refused: string[] = [];
+    const dispatchSpy = vi.spyOn(daemonTransport, "dispatch").mockImplementation(async (text, ...rest) => {
+      const request = JSON.parse(text) as { id: number; method: string; params: Record<string, unknown> };
+      if (request.method === "scopedPermissions.review") originalReview = text;
+      const response = await dispatch(text, ...rest);
+      if (
+        request.method === "scopedPermissions.choose" &&
+        request.params.choice === "save" &&
+        response.ok &&
+        (response.result as { outcome?: unknown }).outcome === "uncertain"
+      ) {
+        expect(originalReview).toBeDefined();
+        const probes = [
+          ["duplicate-save", { ...request, id: 9001 }],
+          ["duplicate-allow-once", { ...request, id: 9002, params: { ...request.params, choice: "allow-once" } }],
+          ["fresh-review", { ...JSON.parse(originalReview!), id: 9003 }],
+        ] as const;
+        // Probe the still-live genuine RPC context before the producer unwinds.
+        // Use the original dispatcher so these are real calls, not mock replies.
+        for (const [name, probe] of probes) {
+          const result = await dispatch(JSON.stringify(probe), ...rest);
+          expect(result.ok, name).toBe(false);
+          refused.push(name);
+        }
+      }
+      return response;
+    });
     // eslint-disable-next-line @typescript-eslint/unbound-method -- Retain the original receiver with Reflect.apply.
     const put = FileExecutionStore.prototype.putPayload;
     let attempts = 0;
@@ -902,6 +932,7 @@ it.each(["before", "after"] as const)(
     });
     try {
       await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow(/uncertain/);
+      expect(refused).toEqual(["duplicate-save", "duplicate-allow-once", "fresh-review"]);
       expect(attempts).toBe(2);
       expect(c.phases).toEqual(["save"]);
       expect(c.observed).toEqual([]);
@@ -920,6 +951,7 @@ it.each(["before", "after"] as const)(
       expect(sidecar.scopedRules.records[0]!.rule.expiresAt).toBeNull();
     } finally {
       spy.mockRestore();
+      dispatchSpy.mockRestore();
     }
   },
   30000,
@@ -1047,12 +1079,60 @@ it("uses a five-minute real lease with a distinct post-approval human action and
   expect(sidecar.scopedRules.records[0]!.rule).toMatchObject({ version: 2, expiresAt: null });
 }, 90000);
 
-it.each(["operator-revoked", "lease-lost", "physical-changed", "policy-tampered", "lost-ack"] as const)(
+it("the fresh workflow refuses a lease actually removed after the owned answer settles", async () => {
+  const b = await bootstrap(),
+    c = await supervisor("connected", b.grant);
+  const leases = fileStores(join(c.base, "workspace/.orca")).leases;
+  let removed = false,
+    factoryReached = 0;
+  Object.assign(c.options, {
+    ownerDurationMs: 300000,
+    settleOriginalDelivery: async () => {
+      // This hook runs after the answer's ownership callback releases its mutex.
+      // A supported operator release can now actually remove the live lease.
+      const before = await leases.get("run:controlled");
+      expect(before).toBeDefined();
+      const released = await leases.forceRelease("run:controlled");
+      expect(released).toEqual(before);
+      expect(await leases.get("run:controlled")).toBeUndefined();
+      removed = true;
+    },
+    beforeFreshAuthority: async () => {
+      factoryReached++;
+    },
+  });
+  await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow();
+  expect(removed).toBe(true);
+  expect(await leases.get("run:controlled")).toBeUndefined();
+  expect(factoryReached).toBe(0);
+  expect(c.observed).toEqual([]);
+  const stores = fileStores(join(c.base, "workspace/.orca"));
+  expect(await stores.events.readTypes("controlled", ["human.answered"])).toHaveLength(1);
+  const privateDir = join(c.base, "workspace/.orca/private-execution");
+  const payloads = await Promise.all(
+    (await readdir(privateDir))
+      .filter((name) => name.endsWith(".payload.json"))
+      .map(async (name) => {
+        // Inspect actual persisted, authenticated records rather than plaintext
+        // assumptions or the public projection, which omits these private kinds.
+        const value = await readPrivateJson(privateDir, name);
+        expect(value).toMatchObject({ runId: "controlled", type: expect.any(String), payload: expect.any(Object) });
+        return value as { type: string; payload: { update?: { kind?: string } } };
+      }),
+  );
+  const kinds = payloads.filter((value) => value.type === "agent.update").map((value) => value.payload.update?.kind);
+  expect(kinds).toContain("controlled-deferred-intent-v1");
+  expect(kinds).not.toContain("controlled-fresh-authority-v1");
+  expect(kinds).not.toContain("controlled-authorization-v1");
+}, 30000);
+
+it.each(["operator-revoked", "lease-lock-contention", "physical-changed", "policy-tampered", "lost-ack"] as const)(
   "the fresh workflow refuses %s between intent and fresh execution",
   async (fault) => {
     const b = await bootstrap();
     const c = await supervisor("connected", b.grant, fault === "lost-ack" ? "lost-ack" : undefined);
-    let factoryReached = 0;
+    let factoryReached = 0,
+      leaseLockTimedOut = false;
     Object.assign(c.options, {
       ownerDurationMs: 300000,
       beforeFreshAuthority: async () => {
@@ -1062,8 +1142,22 @@ it.each(["operator-revoked", "lease-lost", "physical-changed", "policy-tampered"
           const operator = credentials.list().find((record) => record.principal === "controlled-test-operator")!;
           expect(await credentials.revoke(operator.id)).toBe(true);
         }
-        if (fault === "lease-lost")
-          await fileStores(join(c.base, "workspace/.orca")).leases.forceRelease("run:controlled");
+        if (fault === "lease-lock-contention") {
+          // The factory still owns the mutation mutex here. This intentionally
+          // proves non-stealing lock refusal, not successful lease removal.
+          const leases = fileStores(join(c.base, "workspace/.orca")).leases;
+          const before = await leases.get("run:controlled");
+          expect(before).toBeDefined();
+          try {
+            await leases.forceRelease("run:controlled");
+            throw new Error("Contended operator release unexpectedly completed");
+          } catch (error) {
+            expect(error).toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+            expect(await leases.get("run:controlled")).toEqual(before);
+            leaseLockTimedOut = true;
+            throw error;
+          }
+        }
         if (fault === "physical-changed")
           await fs.promises.appendFile(join(c.base, "workspace/.orca/workspace-identity/id"), "changed");
         if (fault === "policy-tampered") {
@@ -1080,6 +1174,7 @@ it.each(["operator-revoked", "lease-lost", "physical-changed", "policy-tampered"
     });
     await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow();
     expect(factoryReached).toBe(fault === "lost-ack" ? 0 : 1);
+    expect(leaseLockTimedOut).toBe(fault === "lease-lock-contention");
     expect(c.observed).toEqual([]);
     const stores = fileStores(join(c.base, "workspace/.orca"));
     expect(await stores.events.readTypes("controlled", ["human.answered"])).toHaveLength(1);
