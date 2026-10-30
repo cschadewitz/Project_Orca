@@ -398,7 +398,8 @@ it("saves the same pending grant after original action expiry using fresh bounde
   } finally {
     clock.mockRestore();
   }
-}, 30000);
+  // Full-fixture watchdog only; the real action, Save and lease checks still apply.
+}, 60000);
 
 it("refreshes disclosure after its handle expires without expiring the pending intent", async () => {
   const b = await bootstrap(),
@@ -747,6 +748,222 @@ it.each(["save-review-reentrant", "save-review-method-replaced"] as const)(
   },
   30000,
 );
+
+it.each([
+  ["review", "cancel"],
+  ["verify-first", "cancel"],
+  ["verify-approval", "cancel"],
+  ["review", "credential-expiry"],
+  ["verify-first", "credential-expiry"],
+  ["verify-approval", "credential-expiry"],
+] as const)(
+  "legacy bounded Save %s stops on %s without late publication",
+  async (stage, ending) => {
+    const b = await bootstrap(),
+      c = await supervisor("connected", b.grant);
+    Object.assign(c.options, {
+      ownerDurationMs: 300000,
+      ...(ending === "credential-expiry" ? { operatorCredentialTtlMs: 20000 } : {}),
+    });
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let invalidate!: () => void, late: Promise<unknown> | undefined;
+    let scope: { signal?: AbortSignal } | undefined;
+    const realFactory = protectedOwner.protectedScopedPermissionOwner;
+    const spy = vi.spyOn(protectedOwner, "protectedScopedPermissionOwner").mockImplementation((options) => {
+      invalidate = () => options.live.close();
+      const method = stage === "review" ? "reviewStandingGrant" : "verifyStandingGrantReview";
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- Reflect.apply retains the original capture-port receiver.
+      const original = options.captures[method]!;
+      let calls = 0;
+      Object.assign(options.captures, {
+        standingGrantReviewScope: "owned-v1",
+        [method]: (...args: unknown[]) => {
+          if (++calls !== (stage === "verify-approval" ? 2 : 1)) return Reflect.apply(original, options.captures, args);
+          scope = args.at(-1) as { signal?: AbortSignal };
+          entered();
+          return (late = gate.then(() => Reflect.apply(original, options.captures, args)));
+        },
+      });
+      return realFactory(options);
+    });
+    let settled = false;
+    const running = runControlledOwnedReadTest(c.base, "connected", c.options).finally(() => {
+      settled = true;
+    });
+    void running.catch(() => undefined);
+    try {
+      await Promise.race([
+        started,
+        running.then(() => {
+          throw new Error("Reviewer gate not reached");
+        }),
+      ]);
+      const operator = new CredentialStore({ file: join(c.base, "credentials.json") })
+        .list()
+        .find((item) => item.principal === "controlled-test-operator")!;
+      if (ending === "cancel") invalidate();
+      const waitMs = ending === "cancel" ? 2000 : Math.max(1, Date.parse(operator.expiresAt!) - Date.now() + 2000);
+      let timer!: ReturnType<typeof setTimeout>;
+      const completed = await Promise.race([
+        running.then(
+          () => true,
+          () => true,
+        ),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), waitMs);
+        }),
+      ]).finally(() => clearTimeout(timer));
+      expect(completed).toBe(true);
+      expect(settled).toBe(true);
+      expect(scope?.signal?.aborted).toBe(true);
+      if (ending === "credential-expiry") expect(Date.now()).toBeGreaterThanOrEqual(Date.parse(operator.expiresAt!));
+      await expect(running).rejects.toThrow();
+      const dir = join(c.base, "workspace/.orca/private-execution");
+      const before = (await readdir(dir)).sort();
+      release();
+      await late?.catch(() => undefined);
+      expect((await readdir(dir)).sort()).toEqual(before);
+      const document = JSON.parse(await readFile(join(c.base, "workspace/orca.permissions.json"), "utf8")) as {
+        scopedRules: { records: unknown[] };
+      };
+      expect(document.scopedRules.records).toEqual([]);
+      expect(c.observed).toEqual([]);
+      const stores = fileStores(join(c.base, "workspace/.orca"));
+      expect(await stores.events.readTypes("controlled", ["human.answered"])).toEqual([]);
+      // Successful operator removal after settlement also proves the mutex was released.
+      expect(await stores.leases.forceRelease("run:controlled")).toMatchObject({ resource: "run:controlled" });
+    } finally {
+      release();
+      await late?.catch(() => undefined);
+      await running.catch(() => undefined);
+      spy.mockRestore();
+    }
+  },
+  45000,
+);
+
+it("legacy Save without an owned-review contract refuses before invoking reviewers while Deny remains available", async () => {
+  const b = await bootstrap(),
+    c = await supervisor("connected", b.grant);
+  Object.assign(c.options, { ownerDurationMs: 300000 });
+  let calls = 0;
+  const factory = protectedOwner.protectedScopedPermissionOwner;
+  const ownerSpy = vi.spyOn(protectedOwner, "protectedScopedPermissionOwner").mockImplementation((options) => {
+    Reflect.deleteProperty(options.captures, "standingGrantReviewScope");
+    Object.assign(options.captures, {
+      reviewStandingGrant: async () => {
+        calls++;
+        throw new Error("Unscoped reviewer must not run");
+      },
+      verifyStandingGrantReview: async () => {
+        calls++;
+        throw new Error("Unscoped verifier must not run");
+      },
+    });
+    return factory(options);
+  });
+  const dispatch = daemonTransport.dispatch;
+  let denied = false;
+  const dispatchSpy = vi.spyOn(daemonTransport, "dispatch").mockImplementation(async (text, ...rest) => {
+    const request = JSON.parse(text) as { method: string; params: Record<string, unknown> };
+    const reply = await dispatch(text, ...rest);
+    if (request.method === "scopedPermissions.review") {
+      expect(reply.ok).toBe(true);
+      if (reply.ok)
+        expect(reply.result).toMatchObject({ standingReview: "unavailable", saveEligibility: "unavailable" });
+    }
+    if (request.method === "scopedPermissions.choose") {
+      expect(reply.ok).toBe(false);
+      const deny = await dispatch(
+        JSON.stringify({ ...request, id: 9001, params: { ...request.params, choice: "deny" } }),
+        ...rest,
+      );
+      expect(deny.ok).toBe(true);
+      if (deny.ok) expect(deny.result).toMatchObject({ outcome: "answered" });
+      denied = true;
+    }
+    return reply;
+  });
+  try {
+    await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow();
+    expect(calls).toBe(0);
+    expect(denied).toBe(true);
+    expect(c.observed).toEqual([]);
+    await noSavedGrant(c.base);
+  } finally {
+    dispatchSpy.mockRestore();
+    ownerSpy.mockRestore();
+  }
+}, 30000);
+
+it("legacy Save retains ownership until a started standing-review publication settles", async () => {
+  const b = await bootstrap(),
+    c = await supervisor("connected", b.grant);
+  Object.assign(c.options, { ownerDurationMs: 300000 });
+  let release!: () => void, entered!: () => void, invalidate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const factory = protectedOwner.protectedScopedPermissionOwner;
+  const ownerSpy = vi.spyOn(protectedOwner, "protectedScopedPermissionOwner").mockImplementation((options) => {
+    invalidate = () => options.live.close();
+    return factory(options);
+  });
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- Preserve the actual store receiver.
+  const put = FileExecutionStore.prototype.putPayload;
+  const putSpy = vi.spyOn(FileExecutionStore.prototype, "putPayload").mockImplementation(async function (
+    this: FileExecutionStore,
+    ref,
+    input,
+  ) {
+    const result = await Reflect.apply(put, this, [ref, input]);
+    if (input.type === "agent.update" && input.payload.update.kind === "controlled-standing-review-v2") {
+      entered();
+      await gate;
+    }
+    return result;
+  });
+  let settled = false;
+  const running = runControlledOwnedReadTest(c.base, "connected", c.options).finally(() => {
+    settled = true;
+  });
+  void running.catch(() => undefined);
+  try {
+    await Promise.race([
+      started,
+      running.then(() => {
+        throw new Error("Publication gate not reached");
+      }),
+    ]);
+    invalidate();
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    expect(settled).toBe(false);
+    const mutex = join(c.base, "workspace/.orca/leases/run%3Acontrolled.json.mutation.lock");
+    expect(fs.lstatSync(mutex).isDirectory()).toBe(true);
+    expect(c.observed).toEqual([]);
+    await noSavedGrant(c.base);
+    release();
+    await expect(running).rejects.toThrow();
+    expect(settled).toBe(true);
+    expect(fs.existsSync(mutex)).toBe(false);
+    expect(c.observed).toEqual([]);
+    await noSavedGrant(c.base);
+  } finally {
+    release();
+    await running.catch(() => undefined);
+    putSpy.mockRestore();
+    ownerSpy.mockRestore();
+  }
+}, 30000);
 
 it("cancellation releases a hanging Save reviewer without publishing", async () => {
   const b = await bootstrap(),

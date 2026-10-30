@@ -126,7 +126,15 @@ export interface ScopedPermissionCapturePort {
   ): Promise<{ assertCurrent(): undefined }>;
   /** Called only after the exact until-revoked command exists, while the original
    * Save action and reviewer are live. The result binds scope AND grant lifetime. */
-  reviewStandingGrant?(capture: ScopedPermissionCapture, command: CreateScopedRule): Promise<StandingGrantReview>;
+  /** Explicit trusted opt-in: Save reviewers register all I/O with the supplied
+   * scope. Absent/unknown means legacy Save is unavailable, not an unbounded wait.
+   * This is an embedding contract, never a serialized authorization claim. */
+  readonly standingGrantReviewScope?: "owned-v1";
+  reviewStandingGrant?(
+    capture: ScopedPermissionCapture,
+    command: CreateScopedRule,
+    scope?: ScopedSaveReviewScope,
+  ): Promise<StandingGrantReview>;
   /** Authenticate that versioned protected approval at its original acceptance
    * time and freshly verify its records/reviewer. An expired historical action
    * is not reused as a present action, capture, callback or permit. */
@@ -134,9 +142,11 @@ export interface ScopedPermissionCapturePort {
     action: ActionEvidenceV1,
     command: CreateScopedRule,
     review: StandingGrantReview,
+    scope?: ScopedSaveReviewScope,
   ): Promise<{ assertCurrent(): undefined }>;
   /** Opt-in trusted producer: retain a non-executable intent before the original
-   * capture expires. Missing any v3 port leaves existing v1/v2 behavior unchanged. */
+   * capture expires. Without v3 ports, legacy Save additionally requires the
+   * explicit owned-v1 contract; existing stored approvals retain their meaning. */
   retainGrantIntent?(capture: ScopedPermissionCapture, command: CreateScopedRule): Promise<PendingScopedGrant>;
   /** Only explicit authenticated Save can request this new protected review. */
   reviewStandingIntent?(

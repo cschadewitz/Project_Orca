@@ -263,6 +263,7 @@ type Entry = {
   assertPendingExecutionReviewCurrent?: () => undefined;
   intent?: StandingGrantIntent;
   saveAuthority?: ScopedSaveAuthority;
+  saveReviewUntil?: number;
   intentReview?: StandingIntentReview;
 };
 export interface ProtectedScopedPermissionOptions {
@@ -293,12 +294,16 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
   const provider = options.currentStore,
     live = options.live,
     credentials = options.credentials;
+  const observeInvalidation = live.onInvalidated.bind(live);
   const leases = options.leases,
     lease = structuredClone(options.lease),
     execution = options.execution,
     events = options.events;
   if (!(events instanceof ProtectedEventStore)) fail();
   const captures = Object.freeze({
+    ...(Object.getOwnPropertyDescriptor(options.captures, "standingGrantReviewScope")?.value === "owned-v1"
+      ? { standingGrantReviewScope: "owned-v1" as const }
+      : {}),
     read: options.captures.read.bind(options.captures),
     snapshot: options.captures.snapshot.bind(options.captures),
     forAction: options.captures.forAction.bind(options.captures),
@@ -494,11 +499,12 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
    * Late reviewer completion cannot resume this one claimed Save attempt. */
   function awaitSaveReview<T>(entry: Entry, work: (scope: ScopedSaveReviewScope) => Promise<T>): Promise<T> {
     assertEntry(entry);
-    if (!entry.pendingGrant || !entry.saveAuthority) return fail();
-    const remaining = entry.saveAuthority.expiresAt - now();
+    const until = entry.pendingGrant ? entry.saveAuthority?.expiresAt : entry.saveReviewUntil;
+    if (until === undefined) return fail();
+    const remaining = until - now();
     if (remaining <= 0 || remaining > 60000) return fail();
     const abort = new AbortController();
-    const signal = AbortSignal.any([entry.pendingGrant.signal, abort.signal]);
+    const signal = entry.pendingGrant ? AbortSignal.any([entry.pendingGrant.signal, abort.signal]) : abort.signal;
     return new Promise<T>((resolve, reject) => {
       const owned = new Set<Promise<unknown>>();
       let closed = false,
@@ -507,8 +513,12 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         ownedFailed = false;
       let failure: unknown;
       const timer = setTimeout(() => abort.abort("Save review execution expired"), remaining);
+      const stopObserving = observeInvalidation((target) => {
+        if (isDeepStrictEqual(target, entry.target)) abort.abort("Original Save input invalidated");
+      });
       const cleanup = () => {
         clearTimeout(timer);
+        stopObserving();
         signal.removeEventListener("abort", cancelled);
       };
       const finish = async (ok: boolean, value: unknown) => {
@@ -565,6 +575,7 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         },
       });
       signal.addEventListener("abort", cancelled, { once: true });
+      if (!["pending", "accepting"].includes(live.inspect(entry.target))) abort.abort("Original Save input expired");
       if (signal.aborted) {
         cancelled();
         return;
@@ -717,7 +728,15 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         !captures.verifyStandingGrantReview
       )
         fail();
-      const proof = await captures.verifyStandingGrantReview(parsed.action, parsed.command, parsed.standingReview);
+      const activeSave =
+        held && !held.pendingGrant && held.review.command.approvalRecordRef === parsed.command.approvalRecordRef
+          ? held
+          : undefined;
+      const proof = activeSave
+        ? await awaitSaveReview(activeSave, (scope) =>
+            captures.verifyStandingGrantReview!(parsed.action, parsed.command, parsed.standingReview, scope),
+          )
+        : await captures.verifyStandingGrantReview(parsed.action, parsed.command, parsed.standingReview);
       const check = proof.assertCurrent.bind(proof);
       assertPersistenceCurrent = () => {
         if (check() !== undefined) fail();
@@ -963,7 +982,12 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         requiredReview: source.review.result,
         ...(source.persistenceReview ? { persistenceReview: structuredClone(source.persistenceReview) } : {}),
         standingReviewAvailable:
-          pendingSupported || Boolean(captures.reviewStandingGrant && captures.verifyStandingGrantReview),
+          pendingSupported ||
+          Boolean(
+            captures.standingGrantReviewScope === "owned-v1" &&
+            captures.reviewStandingGrant &&
+            captures.verifyStandingGrantReview,
+          ),
         ...(pendingGrant ? { pendingGrantIntent: true as const } : {}),
         ...(pendingExecution
           ? { pendingExecutionIntent: true as const, executionWindowMs: pendingExecution.executionWindowMs }
@@ -1056,7 +1080,9 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
         !review.standingReviewAvailable ||
         (entry.pendingGrant
           ? !captures.reviewStandingIntent || !captures.verifyStandingIntentReview
-          : !captures.reviewStandingGrant || !captures.verifyStandingGrantReview)
+          : captures.standingGrantReviewScope !== "owned-v1" ||
+            !captures.reviewStandingGrant ||
+            !captures.verifyStandingGrantReview)
       )
         return fail();
       const lineage = lineages.get(JSON.stringify(targetSchema.parse(entry.target)));
@@ -1115,14 +1141,25 @@ export function protectedScopedPermissionOwner(options: ProtectedScopedPermissio
             }
             // Only explicit Save invokes the optional reviewer. Ordinary live
             // review/answers never await it, including an unavailable reviewer.
+            if (!observedLease) fail();
+            const issuedAt = now();
+            const grantor = credential(actor);
+            entry.saveReviewUntil = Math.min(
+              issuedAt + 60000,
+              entry.review.reviewUntil,
+              Date.parse(entry.review.action.expiresAt),
+              Date.parse(observedLease.renewedAt) + (observedLease.guardedTtlMs ?? observedLease.ttlMs),
+              grantor.expiresAt ? Date.parse(grantor.expiresAt) : Infinity,
+            );
+            if (!Number.isSafeInteger(entry.saveReviewUntil) || entry.saveReviewUntil <= issuedAt) fail();
             const reviewed = standingReviewSchema.parse(
-              await captures.reviewStandingGrant!(entry.capture, structuredClone(review.command)),
+              await awaitSaveReview(entry, (scope) =>
+                captures.reviewStandingGrant!(entry.capture, structuredClone(review.command), scope),
+              ),
             );
             assertEntry(entry);
-            const proof = await captures.verifyStandingGrantReview!(
-              review.action,
-              structuredClone(review.command),
-              reviewed,
+            const proof = await awaitSaveReview(entry, (scope) =>
+              captures.verifyStandingGrantReview!(review.action, structuredClone(review.command), reviewed, scope),
             );
             assertEntry(entry);
             const check = proof.assertCurrent.bind(proof);

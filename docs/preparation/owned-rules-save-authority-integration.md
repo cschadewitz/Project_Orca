@@ -50,6 +50,15 @@ lifetimes. Protected approval version 3 binds that authority to the exact retain
 intent and standing review. Publication must finish inside the fresh window.
 Legacy approval versions retain their existing meaning.
 
+Legacy version-2 Save reviewers must explicitly opt into the trusted `owned-v1`
+work-scope contract. Their waits end on cancellation or the earliest original
+action, review-handle, lease or credential deadline, with a 60-second ceiling;
+this never extends the original action. All owned I/O must be registered with
+the supplied scope. Already-started operations drain before ownership releases,
+even after cancellation; late reviewer completion cannot publish new work or
+resume the consumed attempt. Without this contract, legacy Save is unavailable.
+Existing grant verification and ordinary Allow once/Deny semantics are preserved.
+
 Save performs no resource read and supplies no execution answer. A separately
 acknowledged human approval can authorize a new read under its own fresh window.
 Cancellation invalidates pending work; uncertain publication consumes its attempt
@@ -135,7 +144,11 @@ Durable tool approval must distinguish a protected, nonexecuting grant intent
 from an expired provider callback. The current durable continuation boundary is
 for selected root workflow decisions and explicitly excludes permission callbacks.
 Keeping a request visible after timeout requires an explicit durable owner and
-step lifecycle, cancellation tombstones and current-authority checks. Automatic
-new prompting versus an explicit Continue action, one-use future-invocation
-consumption, and pending-intent retention/privacy policy need deliberate contracts;
-none is implemented by silently widening the existing continuation validator.
+step lifecycle, cancellation tombstones and current-authority checks. Casey chose
+**Approved — Continue** initially: a late approval records the decision, and a
+separate explicit Continue starts a newly authorized invocation. This is a product
+requirement, not an implemented durable continuation path. One-use future-invocation
+consumption, run lifecycle and pending-intent retention/privacy policy still need
+deliberate contracts; none is implemented by silently widening the existing
+continuation validator. See [provider continuation](owned-rules-provider-continuation-boundary.md)
+and existing recovery issue #357.

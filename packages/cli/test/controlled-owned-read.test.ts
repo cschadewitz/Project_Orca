@@ -308,7 +308,9 @@ it("connects actual Save, separately settled original Allow once and fresh rule 
   )) as { entry: { requiredReview: string; persistenceReview: { result: string } } };
   expect(approval.entry.requiredReview).toBe("unavailable");
   expect(approval.entry.persistenceReview.result).toBe("passed");
-}, 30000);
+  // Budget the complete three-phase fixture separately from its unchanged
+  // individual action and lease fences; do not remove a running fixture at 30s.
+}, 60000);
 it.each(["review-proof", "reviewer-revoked", "stale-revision", "lost-ack", "cancel", "wrong-interval"] as const)(
   "refuses %s without an extra read",
   async (fault) => {

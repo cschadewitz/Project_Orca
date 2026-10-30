@@ -331,110 +331,124 @@ export async function runControlledOwnedReadTest(
       await attest(token, producer.invocation(token).action);
     },
     verifyPersistenceReview: verifyPersistence,
-    async reviewStandingGrant(capture, candidate) {
+    standingGrantReviewScope: "owned-v1",
+    async reviewStandingGrant(capture, candidate, scope) {
+      assert.ok(scope, "Save review requires its owned scope");
+      scope.signal.throwIfAborted();
       if (standingReviewerFault === "hanging") return new Promise<import("@orca/agents").StandingGrantReview>(() => {});
       assert.notEqual(standingReviewerFault, "refusing", "Standing reviewer unavailable");
-      const action = producer.port.snapshot(capture).action;
-      captures.assertCurrent(capture, action.authority);
-      check();
-      const reviewedAt = Date.now();
-      const priorRef = attestations.get(capture)?.sourceRefs[0];
-      assert.ok(priorRef);
-      const prior = persistence.get(priorRef);
-      assert.ok(prior);
-      same(prior.action, action);
-      prior.assertUnchanged();
-      const credential = currentCredential(reviewer);
-      assert.notEqual(reviewer.principalId, operator.principalId);
-      assert.ok(reviewedAt < Date.parse(action.expiresAt) && !lapsed(lease, reviewedAt));
-      assert.ok(
-        action.effectiveCwd.state === "complete" &&
-          action.workspaceRef.state === "complete" &&
-          action.resources.state === "complete" &&
-          action.environmentAndCredentialRefs.state === "complete",
-      );
-      // The designated test reviewer approves the exact generated scope and the
-      // explicit standing lifetime, never the earlier action-only v1 attestation.
-      assert.equal(candidate.rule.version, 2);
-      assert.equal(candidate.rule.expiresAt, null);
-      assert.equal(candidate.rule.status, "approved");
-      assert.equal(candidate.rule.decision, "allow");
-      assert.equal(candidate.rule.delegation, undefined);
-      assert.equal(candidate.rule.ruleRevision, strictPermissionRuleRevision(candidate.rule));
-      assert.equal(candidate.expectedRevision, action.authority.currentPolicyRevision);
-      same(candidate.rule.match, {
-        principalRef: action.invocation.principalRef,
-        agentId: action.invocation.agentId,
-        hostId: action.invocation.hostId,
-        runnerId: action.invocation.runnerId,
-        operation: action.operation,
-        profileRef: action.profileRef,
-        coverageId: action.coverage.coverageId,
-        effectiveCwd: action.effectiveCwd.value,
-        workspaceRef: action.workspaceRef.value,
-        resources: action.resources.value,
-        environmentAndCredentialRefs: action.environmentAndCredentialRefs.value,
-      });
-      const value = structuredClone({
-        version: 2,
-        grantMode: "until-revoked",
-        reviewedAt,
-        action,
-        command: candidate,
-        binding: bindingIdentity(active),
-        actor: operator,
-        reviewer: { actor: reviewer, credential },
-        lease,
-        persistenceReview: { ref: priorRef, value: prior.value },
-      });
-      const ref = await put("controlled-standing-review-v2", value);
-      const observation = await stores.execution.observe!(
-        async () => same(await read(ref, "controlled-standing-review-v2"), value),
-        { maxRecords: 32 },
-      );
-      await observation.verifyUnchanged();
-      captures.assertCurrent(capture, action.authority);
-      check();
-      standing.set(ref, { value, assertUnchanged: observation.assertUnchanged!.bind(observation) });
-      return { version: 2, result: "passed", sourceRefs: [ref] };
-    },
-    async verifyStandingGrantReview(action, candidate, review) {
-      check();
-      assert.equal(review.version, 2);
-      assert.equal(review.result, "passed");
-      assert.equal(review.sourceRefs.length, 1);
-      const retained = standing.get(review.sourceRefs[0]!);
-      assert.ok(retained, "No retained protected standing approval");
-      const value = retained.value;
-      const prior = persistence.get(value.persistenceReview.ref);
-      assert.ok(prior);
-      same(prior.action, action);
-      same(prior.value, value.persistenceReview.value);
-      same(await read(value.persistenceReview.ref, "controlled-persistence-review-v1"), prior.value);
-      same(value.action, action);
-      same(value.command, candidate);
-      same(value.binding, bindingIdentity(active));
-      same(value.actor, operator);
-      same(value.reviewer.actor, reviewer);
-      assert.equal(value.grantMode, "until-revoked");
-      assert.ok(value.reviewedAt < Date.parse(action.expiresAt) && !lapsed(value.lease, value.reviewedAt));
-      assert.ok(
-        !value.reviewer.credential.expiresAt || value.reviewedAt < Date.parse(value.reviewer.credential.expiresAt),
-      );
-      same(await read(review.sourceRefs[0]!, "controlled-standing-review-v2"), value);
-      const assertCurrent = (): undefined => {
+      return scope.withOwnedWork(async () => {
+        const action = producer.port.snapshot(capture).action;
+        captures.assertCurrent(capture, action.authority);
         check();
-        active.assertCurrent();
-        currentCredential(reviewer);
-        retained.assertUnchanged();
+        const reviewedAt = Date.now();
+        const priorRef = attestations.get(capture)?.sourceRefs[0];
+        assert.ok(priorRef);
+        const prior = persistence.get(priorRef);
+        assert.ok(prior);
+        same(prior.action, action);
         prior.assertUnchanged();
-        // Historical approval expiry was checked at review time above. Present
-        // execution still needs its own live action, credential, lease and permit.
-        assert.ok(!lapsed(lease, Date.now()));
-        return undefined;
+        const credential = currentCredential(reviewer);
+        assert.notEqual(reviewer.principalId, operator.principalId);
+        assert.ok(reviewedAt < Date.parse(action.expiresAt) && !lapsed(lease, reviewedAt));
+        assert.ok(
+          action.effectiveCwd.state === "complete" &&
+            action.workspaceRef.state === "complete" &&
+            action.resources.state === "complete" &&
+            action.environmentAndCredentialRefs.state === "complete",
+        );
+        // The designated test reviewer approves the exact generated scope and the
+        // explicit standing lifetime, never the earlier action-only v1 attestation.
+        assert.equal(candidate.rule.version, 2);
+        assert.equal(candidate.rule.expiresAt, null);
+        assert.equal(candidate.rule.status, "approved");
+        assert.equal(candidate.rule.decision, "allow");
+        assert.equal(candidate.rule.delegation, undefined);
+        assert.equal(candidate.rule.ruleRevision, strictPermissionRuleRevision(candidate.rule));
+        assert.equal(candidate.expectedRevision, action.authority.currentPolicyRevision);
+        same(candidate.rule.match, {
+          principalRef: action.invocation.principalRef,
+          agentId: action.invocation.agentId,
+          hostId: action.invocation.hostId,
+          runnerId: action.invocation.runnerId,
+          operation: action.operation,
+          profileRef: action.profileRef,
+          coverageId: action.coverage.coverageId,
+          effectiveCwd: action.effectiveCwd.value,
+          workspaceRef: action.workspaceRef.value,
+          resources: action.resources.value,
+          environmentAndCredentialRefs: action.environmentAndCredentialRefs.value,
+        });
+        const value = structuredClone({
+          version: 2,
+          grantMode: "until-revoked",
+          reviewedAt,
+          action,
+          command: candidate,
+          binding: bindingIdentity(active),
+          actor: operator,
+          reviewer: { actor: reviewer, credential },
+          lease,
+          persistenceReview: { ref: priorRef, value: prior.value },
+        });
+        const ref = await put("controlled-standing-review-v2", value);
+        scope.signal.throwIfAborted();
+        const observation = await stores.execution.observe!(
+          async () => same(await read(ref, "controlled-standing-review-v2"), value),
+          { maxRecords: 32 },
+        );
+        scope.signal.throwIfAborted();
+        await observation.verifyUnchanged();
+        scope.signal.throwIfAborted();
+        captures.assertCurrent(capture, action.authority);
+        check();
+        standing.set(ref, { value, assertUnchanged: observation.assertUnchanged!.bind(observation) });
+        return { version: 2, result: "passed", sourceRefs: [ref] };
+      });
+    },
+    async verifyStandingGrantReview(action, candidate, review, scope) {
+      const verify = async () => {
+        scope?.signal.throwIfAborted();
+        check();
+        assert.equal(review.version, 2);
+        assert.equal(review.result, "passed");
+        assert.equal(review.sourceRefs.length, 1);
+        const retained = standing.get(review.sourceRefs[0]!);
+        assert.ok(retained, "No retained protected standing approval");
+        const value = retained.value;
+        const prior = persistence.get(value.persistenceReview.ref);
+        assert.ok(prior);
+        same(prior.action, action);
+        same(prior.value, value.persistenceReview.value);
+        same(await read(value.persistenceReview.ref, "controlled-persistence-review-v1"), prior.value);
+        scope?.signal.throwIfAborted();
+        same(value.action, action);
+        same(value.command, candidate);
+        same(value.binding, bindingIdentity(active));
+        same(value.actor, operator);
+        same(value.reviewer.actor, reviewer);
+        assert.equal(value.grantMode, "until-revoked");
+        assert.ok(value.reviewedAt < Date.parse(action.expiresAt) && !lapsed(value.lease, value.reviewedAt));
+        assert.ok(
+          !value.reviewer.credential.expiresAt || value.reviewedAt < Date.parse(value.reviewer.credential.expiresAt),
+        );
+        same(await read(review.sourceRefs[0]!, "controlled-standing-review-v2"), value);
+        scope?.signal.throwIfAborted();
+        const assertCurrent = (): undefined => {
+          check();
+          active.assertCurrent();
+          currentCredential(reviewer);
+          retained.assertUnchanged();
+          prior.assertUnchanged();
+          // Historical approval expiry was checked at review time above. Present
+          // execution still needs its own live action, credential, lease and permit.
+          assert.ok(!lapsed(lease, Date.now()));
+          return undefined;
+        };
+        assertCurrent();
+        return { assertCurrent };
       };
-      assertCurrent();
-      return { assertCurrent };
+      return scope ? scope.withOwnedWork(verify) : verify();
     },
   };
   if (standingReviewerFault === "missing") {
