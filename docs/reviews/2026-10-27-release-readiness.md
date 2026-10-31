@@ -223,15 +223,29 @@ added later (#686, #674 and #646 by #691). This audit changed only the following
   configuration loading and update bootstrap refuse a workspace beneath a
   `.orca-typed-workspace` marker.
 
+**Rechecked against current source**
+
+- `331-admission-retry.added.md`: rechecked against `main` at
+  `d89cf92b4154483c07fdef25d5c6f87290e32eef`; replaced the separate-integration-patch
+  wording with the current conditional availability. The
+  [CLI wiring](https://github.com/cschadewitz/Project_Orca/blob/d89cf92b4154483c07fdef25d5c6f87290e32eef/packages/cli/src/commands/index.ts#L1104-L1119)
+  requires writable token mode, retry claims, direct admissions and Request submissions;
+  [daemon authority binding](https://github.com/cschadewitz/Project_Orca/blob/d89cf92b4154483c07fdef25d5c6f87290e32eef/packages/daemon/src/server.ts#L607-L632)
+  also requires the workspace binding. The
+  [method table](https://github.com/cschadewitz/Project_Orca/blob/d89cf92b4154483c07fdef25d5c6f87290e32eef/packages/daemon/src/methods.ts#L907-L927)
+  and [`hello` capabilities](https://github.com/cschadewitz/Project_Orca/blob/d89cf92b4154483c07fdef25d5c6f87290e32eef/packages/daemon/src/methods.ts#L392-L400)
+  require control, retry and authority services;
+  [`runs.start`](https://github.com/cschadewitz/Project_Orca/blob/d89cf92b4154483c07fdef25d5c6f87290e32eef/packages/daemon/src/methods.ts#L638-L652)
+  shares that admission path when wired. This agrees with the
+  [protocol prerequisites and grants](https://github.com/cschadewitz/Project_Orca/blob/d89cf92b4154483c07fdef25d5c6f87290e32eef/packages/protocol/README.md#L301-L302).
+  Source reconciliation only; no native/platform or candidate acceptance is established.
+
 **Flagged for fragment authors, not changed**
 
 - 49 `added`/`changed`/`fixed` fragments have no `**area:**` prefix. Examples are 331-*,
   387-*, 394-*, 483-*, 49x-*, 571-*, most 702-*/703-* and `operator-windows-sync`.
 - `703-candidate-owned-read-verifier.added.md` covers `tools/` and docs only and renders a
   `#### tests` heading. The author should decide whether it belongs in user notes.
-- `331-admission-retry.added.md` says the capabilities "are not enabled by the feature
-  modules alone". Re-check this against the protocol reference, which documents
-  `runs.admit`/`admissions.*` as part of 2.0.
 - `329-332-318-237-runtime-integration.added.md` and `operator-integration.store.md` name
   protocol 1.10. The new store fragment explains this, so the text is left as it is.
 - PRs touching `packages/` with inactive or type-only changes and neither a fragment nor
