@@ -467,6 +467,222 @@ it("pins supervisor interval and callable capabilities before Save", async () =>
     { offset: 2, length: 4, bytes: "spos" },
   ]);
 }, 30000);
+
+function composedSupervisor(c: Awaited<ReturnType<typeof supervisor>>) {
+  const events: string[] = [];
+  const previous = c.options.bootstrap!;
+  const physicalAssertion = function (this: ControlledReadTestSupervisor): undefined {
+    expect(this).toBe(c.options);
+    events.push("physical");
+    return c.check();
+  };
+  const bootstrapAssertion = function (this: object): undefined {
+    expect(this).toBe(bootstrap);
+    events.push("bootstrap");
+    assert.equal(physicalAssertion.call(c.options), undefined);
+    return previous.assertCurrent();
+  };
+  const bootstrap = { evidenceRef: previous.evidenceRef, assertCurrent: bootstrapAssertion };
+  const currentnessComposition = Object.freeze({
+    kind: "connected-physical-bootstrap-v1" as const,
+    physicalAssertion,
+    bootstrap,
+    bootstrapAssertion,
+  });
+  Object.assign(c.options, { assertCurrent: physicalAssertion, bootstrap, currentnessComposition });
+  return { events, bootstrap, currentnessComposition };
+}
+
+it("selects the declared composition on every producer check with original receivers", async () => {
+  const b = await bootstrap(),
+    c = await supervisor("connected", b.grant);
+  const composed = composedSupervisor(c);
+  const result = await runControlledOwnedReadTest(c.base, "connected", c.options);
+  expect(result.authorizationRefs).toHaveLength(2);
+  // Initial setup deliberately keeps its separate physical assertion. Every later
+  // producer.check calls the bootstrap assertion, which includes physical exactly once.
+  expect(composed.events.slice(0, 3)).toEqual(["physical", "bootstrap", "physical"]);
+  expect(composed.events.length).toBeGreaterThan(3);
+  expect(composed.events.length % 2).toBe(1);
+  for (let i = 3; i < composed.events.length; i += 2)
+    expect(composed.events.slice(i, i + 2)).toEqual(["bootstrap", "physical"]);
+});
+
+it("retains composition roles and bootstrap evidence before await despite later replacements", async () => {
+  const b = await bootstrap(),
+    c = await supervisor("connected", b.grant);
+  const composed = composedSupervisor(c);
+  const replacement = vi.fn((): never => {
+    throw Error("replacement capability used");
+  });
+  const originalPhase = c.options.phase.bind(c.options);
+  c.options.phase = (name, work) =>
+    originalPhase(name, async () => {
+      await work();
+      if (name !== "save") return;
+      Object.assign(composed.bootstrap, { evidenceRef: "replacement evidence", assertCurrent: replacement });
+      Object.assign(c.options, {
+        assertCurrent: replacement,
+        bootstrap: { evidenceRef: "other bootstrap", assertCurrent: replacement },
+        currentnessComposition: Object.freeze({}),
+      });
+    });
+  const result = await runControlledOwnedReadTest(c.base, "connected", c.options);
+  expect(result.authorizationRefs).toHaveLength(2);
+  expect(replacement).not.toHaveBeenCalled();
+  expect(composed.events.filter((e) => e === "physical")).toHaveLength(
+    composed.events.filter((e) => e === "bootstrap").length + 1,
+  );
+});
+
+it.each(["physical", "bootstrap"] as const)(
+  "composed %s mutation after success refuses the next check",
+  async (role) => {
+    const b = await bootstrap(),
+      c = await supervisor("connected", b.grant);
+    const composed = composedSupervisor(c);
+    const originalPhase = c.options.phase.bind(c.options);
+    let successes = 0;
+    c.options.phase = (name, work) =>
+      originalPhase(name, async () => {
+        await work();
+        if (name !== "save") return;
+        successes = composed.events.length;
+        await fs.promises.appendFile(
+          join(role === "physical" ? c.base : b.base, "workspace/.orca/workspace-identity/id"),
+          "changed",
+        );
+      });
+    await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow();
+    expect(successes).toBeGreaterThan(3);
+    expect(composed.events.length).toBeGreaterThan(successes);
+    expect(c.observed).toEqual([]);
+  },
+);
+
+it("legacy supervisors retain separate checks of their different workspaces", async () => {
+  const b = await bootstrap(),
+    c = await supervisor("connected", b.grant);
+  const physical = vi.fn(c.check),
+    association = vi.fn(() => b.grant.assertCurrent());
+  Object.assign(c.options, { assertCurrent: physical, bootstrap: { ...b.grant, assertCurrent: association } });
+  const originalPhase = c.options.phase.bind(c.options);
+  c.options.phase = (name, work) =>
+    originalPhase(name, async () => {
+      await work();
+      if (name === "save")
+        await fs.promises.appendFile(join(b.base, "workspace/.orca/workspace-identity/id"), "changed");
+    });
+  await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow();
+  expect(physical.mock.calls.length).toBeGreaterThan(1);
+  expect(association.mock.calls).toHaveLength(physical.mock.calls.length);
+  expect(c.observed).toEqual([]);
+});
+
+it.each([
+  "copied-physical",
+  "substituted-physical",
+  "copied-bootstrap",
+  "substituted-bootstrap",
+  "copied-assertion",
+  "substituted-assertion",
+  "unfrozen",
+  "null",
+  "wrong-kind",
+  "missing",
+  "extra",
+  "getter",
+  "symbol",
+  "wrong-lane",
+  "noncallable",
+])("refuses supplied invalid %s composition before any callback or fallback", async (scenario) => {
+  const physical = vi.fn(() => undefined),
+    assertion = vi.fn(() => undefined);
+  const bootstrap = { evidenceRef: "synthetic invalid selection only", assertCurrent: assertion };
+  const phase = vi.fn(async () => {
+    throw Error("invalid composition reached phase");
+  });
+  const options: ControlledReadTestSupervisor = {
+    content,
+    offset: 2,
+    length: 4,
+    assertCurrent: physical,
+    bootstrap,
+    phase,
+  };
+  const record: Record<string, unknown> = {
+    kind: "connected-physical-bootstrap-v1",
+    physicalAssertion: physical,
+    bootstrap,
+    bootstrapAssertion: assertion,
+  };
+  if (scenario === "copied-physical") record.physicalAssertion = physical.bind(options);
+  if (scenario === "substituted-physical") record.physicalAssertion = () => undefined;
+  if (scenario === "copied-bootstrap") record.bootstrap = { ...bootstrap };
+  if (scenario === "substituted-bootstrap")
+    record.bootstrap = { evidenceRef: bootstrap.evidenceRef, assertCurrent: () => undefined };
+  if (scenario === "copied-assertion") record.bootstrapAssertion = assertion.bind(bootstrap);
+  if (scenario === "substituted-assertion") record.bootstrapAssertion = () => undefined;
+  if (scenario === "wrong-kind") record.kind = "bootstrap";
+  if (scenario === "missing") delete record.bootstrapAssertion;
+  if (scenario === "extra") record.extra = true;
+  if (scenario === "getter")
+    Object.defineProperty(record, "physicalAssertion", { get: () => physical, enumerable: true });
+  if (scenario === "symbol") Object.defineProperty(record, Symbol("extra"), { value: true });
+  if (scenario === "noncallable") {
+    Object.assign(options, { assertCurrent: null });
+    record.physicalAssertion = null;
+  }
+  Object.assign(options, {
+    currentnessComposition: scenario === "null" ? null : scenario === "unfrozen" ? record : Object.freeze(record),
+  });
+  await expect(
+    runControlledOwnedReadTest(
+      "/unused-invalid-composition",
+      scenario === "wrong-lane" ? "bootstrap" : "connected",
+      options,
+    ),
+  ).rejects.toThrow();
+  expect(physical).not.toHaveBeenCalled();
+  expect(assertion).not.toHaveBeenCalled();
+  expect(phase).not.toHaveBeenCalled();
+});
+
+it.each(["promise", "thenable", "true", "false", "throw"])(
+  "composed execution refuses %s synchronously without a physical fallback",
+  async (scenario) => {
+    const c = await supervisor("connected");
+    const physical = vi.fn(c.check);
+    let calls = 0;
+    const assertion = vi.fn((): undefined => {
+      calls++;
+      if (calls === 1) return physical(); // Preserve the initial setup success.
+      if (scenario === "throw") throw Error("original composed failure");
+      return (scenario === "promise"
+        ? Promise.resolve(undefined)
+        : scenario === "thenable"
+          ? { then: () => undefined }
+          : scenario === "true") as unknown as undefined;
+    });
+    const bootstrap = { evidenceRef: "synthetic synchronous selection only", assertCurrent: assertion };
+    Object.assign(c.options, {
+      assertCurrent: physical,
+      bootstrap,
+      currentnessComposition: Object.freeze({
+        kind: "connected-physical-bootstrap-v1",
+        physicalAssertion: physical,
+        bootstrap,
+        bootstrapAssertion: assertion,
+      }),
+    });
+    await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow(
+      scenario === "throw" ? "original composed failure" : undefined,
+    );
+    expect(assertion).toHaveBeenCalledTimes(2);
+    expect(physical).toHaveBeenCalledTimes(2); // Initial physical + initial bootstrap; no fallback.
+    expect(c.observed).toEqual([]);
+  },
+);
 it.each(["policy", "lease"] as const)(
   "refuses actual changed protected %s after Save",
   async (fault) => {
