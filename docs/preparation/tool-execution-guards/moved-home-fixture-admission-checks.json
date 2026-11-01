@@ -1,0 +1,251 @@
+{
+  "record": "moved-home-fixture-admission-checks",
+  "base": "920c2ada3b1348ed06b50ca7b10bb85be10a0c67",
+  "scope": "Only protocol test fixture and evidence; separate from guard implementation",
+  "candidatePlan": {
+    "status": "candidate prepared; tests NOT run; pending parent coordination and separate-agent review",
+    "baseHead": "920c2ada3b1348ed06b50ca7b10bb85be10a0c67",
+    "candidate": {
+      "path": "packages/protocol/test/update-window.test.ts",
+      "sha256": "ac7e35c91e56ede0f3269d9a57097d8e43d3115fa3f7630c9ca2f12b0fb09af7",
+      "bytes": 34294
+    },
+    "scope": "Only protocol test file modified by this agent. No production, guards, bounds, CI or metadata changes.",
+    "selectionCount": 8,
+    "validation": {
+      "cwd": "/workspace/orca-moved-home-validation",
+      "PATHPrefix": "/workspace/.orca-tools/node-v24.21.0-linux-x64/bin",
+      "argv": [
+        "timeout",
+        "--kill-after=5s",
+        "60s",
+        "/workspace/.orca-tools/node-v24.21.0-linux-x64/bin/node",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "packages/protocol/test/update-window.test.ts",
+        "--maxWorkers=1",
+        "--reporter=verbose",
+        "--testNamePattern",
+        "^(moved-home fixture (maps the renamed identities and deduplicates its finite ports|keeps a real moved-app blocker fail-closed without publication|resamples preparation contention before a single rename and reanchor|keeps the five-candidate cap with owned preparation blockers|propagates noncontention without another candidate|attempts every close and never resamples cleanup failure|refuses resampling when contention also has a cleanup failure)|follows a moved home: the app root is re-anchored and workspaces left behind are de-enrolled)$"
+      ],
+      "requires": "Parent verifies/copies exact candidate, coordinates no concurrent tests; no full-file selection."
+    },
+    "effects": [
+      "Temporary fixture directories under isolated supported workspace",
+      "Normal fenceBoot identity reads unchanged; no identity values output",
+      "Finite own fixture port listeners only, max33 preflight plus1 controlled blocker",
+      "Global setup creates temporary bundle directory and removes it; child bundle compiler is lazy and not called by selection",
+      "No process spawn, daemon, observer, tracer, host socket scans or live probes in selected tests"
+    ],
+    "limitations": [
+      "Temporary preadmission reservations cannot eliminate release-to-operation races",
+      "No identity or cause attribution for original CI listener",
+      "Only moved-home scenario addressed; earlier unrelated failures unresolved",
+      "Real own-listener controls may report unrelated contention as failure; assertions never retried"
+    ],
+    "preservedFailures": [
+      {
+        "action": "initial read nonexistent packages/protocol/src/update-fence.ts",
+        "result": "exit2: sed cannot read, no denial; corrected source lookup first-run-fence.ts; no mutation",
+        "exactStderr": "sed: can't read packages/protocol/src/update-fence.ts: No such file or directory\n",
+        "exitCode": 2,
+        "toolChunkId": "9ae024",
+        "actionCompleted": "Read command only; no file mutation or runtime execution; corrected to first-run-fence.ts through rg lookup."
+      },
+      {
+        "action": "rg protocol AGENTS/SKILL files",
+        "result": "exit1 no matches, no denial"
+      }
+    ],
+    "previousCandidates": [
+      {
+        "path": "packages/protocol/test/update-window.test.ts",
+        "sha256": "62a4915976041133d609c047ff1cf9273afcb6d4dfcf7b021ff04983e166724c",
+        "bytes": 33325
+      },
+      {
+        "path": "packages/protocol/test/update-window.test.ts",
+        "sha256": "928bcff0fd3c45d08e6f9fed15ea8475ff574ee8492ad878e716d7f18bf8dd40",
+        "bytes": 33501
+      }
+    ],
+    "changesAfterInitialCandidate": [
+      "Exact own-blocker address and port asserted for single real reanchor and combined contention/cleanup control; no tests yet.",
+      "Controlled resampling captures original rejection plus held status and exact port; verifies after admission. Cap requires five known held blockers/failures, each exact endpoint, final same error object. All assertions outside callback/retry."
+    ]
+  },
+  "environment": {
+    "path": "/tmp/orca-current-main-evidence/moved-home-validation-environment.json",
+    "sha256": "42f1bd582597435c6d7c2cfe4d920f925ad55d21400e8c8c799184efadb173b7"
+  },
+  "primary": {
+    "command": {
+      "cwd": "/workspace/orca-moved-home-validation",
+      "PATHPrefix": "/workspace/.orca-tools/node-v24.21.0-linux-x64/bin",
+      "argv": [
+        "timeout",
+        "--kill-after=5s",
+        "60s",
+        "/workspace/.orca-tools/node-v24.21.0-linux-x64/bin/node",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "packages/protocol/test/update-window.test.ts",
+        "--maxWorkers=1",
+        "--reporter=verbose",
+        "--testNamePattern",
+        "^(moved-home fixture (maps the renamed identities and deduplicates its finite ports|keeps a real moved-app blocker fail-closed without publication|resamples preparation contention before a single rename and reanchor|keeps the five-candidate cap with owned preparation blockers|propagates noncontention without another candidate|attempts every close and never resamples cleanup failure|refuses resampling when contention also has a cleanup failure)|follows a moved home: the app root is re-anchored and workspaces left behind are de-enrolled)$"
+      ],
+      "requires": "Parent verifies/copies exact candidate, coordinates no concurrent tests; no full-file selection."
+    },
+    "candidate": {
+      "path": "packages/protocol/test/update-window.test.ts",
+      "sha256": "ac7e35c91e56ede0f3269d9a57097d8e43d3115fa3f7630c9ca2f12b0fb09af7",
+      "bytes": 34294
+    },
+    "exitCode": 0,
+    "wallSeconds": 1.978,
+    "logPath": "/tmp/orca-current-main-evidence/moved-home-primary-selected.log",
+    "logSHA256": "a6a95b4797d0265ecc931e108452ff447524c97a97c1c8c23ac55ace5ec3bf05"
+  },
+  "primaryTestCounts": {
+    "passed": 8,
+    "unselected": 26,
+    "vitestSeconds": 1.05,
+    "failed": 0
+  },
+  "staticIdentity": {
+    "base": "920c2ada3b1348ed06b50ca7b10bb85be10a0c67",
+    "candidateTestSHA256": "ac7e35c91e56ede0f3269d9a57097d8e43d3115fa3f7630c9ca2f12b0fb09af7",
+    "fourEntryGuardsExact": true,
+    "guardModuleHashes": {
+      "tools/owned-read-proof/controlled_supervisor.py": "3e8e09e8e0f4d07273cd4d10488773970f7d97cbe80dc1d4f6977a94043a9f76",
+      "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3"
+    },
+    "productionAndConfigurationUnchanged": {
+      "packages/protocol/src/update-window.ts": "bf2d6b5bec7f80e6faf396c9efb3cc64653f5bc19234ef7f370d5aefb7ffc662",
+      "packages/protocol/src/first-run-fence.ts": "967574f4baf0e0f9688c8b9bd50e7fb82375f979595e493b465b3bf363570f4a",
+      ".github/workflows/ci.yml": "468f80a02b1163cfef01846f7592e1f7c8854bc0c51a7d9dc9d3ae02002c2c1c",
+      "vitest.config.ts": "c34bb5f818478027c7cfc1609f546ddfc5fda12518e58bf6bccd272a9a40f389",
+      "vitest.global-setup.ts": "cd0a22e5dbc9258fca47c8cbb3e12b08abe0d0289499e5951085a2143271b36f"
+    },
+    "currentFrozenInputs": 387,
+    "currentRepositoryInputs": 195,
+    "outputIdentity": {
+      "controlled-build.json": {
+        "bytes": 48027,
+        "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+      },
+      "controlled-child.mjs": {
+        "bytes": 5713,
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+      },
+      "controlled-producer.mjs": {
+        "bytes": 2248652,
+        "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+      }
+    },
+    "testFileDisjointFromImage": true,
+    "rebuild": false
+  },
+  "independentPretestReview": {
+    "path": "/tmp/orca-current-main-evidence/moved-home-independent-pretest-review.json",
+    "sha256": "7c5caee72376d8e3e14b3732fdc3f299a9359b0bcda6a6e8528b87c409a8c8f4"
+  },
+  "implementationHandoff": {
+    "path": "/tmp/orca-current-main-evidence/moved-home-implementation-handoff.json",
+    "sha256": "1954daeea3d3c47d3eb9e363da0f6b123531d297a67e6a7da6deca0532895696"
+  },
+  "independentValidation": {
+    "path": "/tmp/orca-current-main-evidence/moved-home-independent-review.json",
+    "sha256": "f449bcfb551f0f925e8239719ef26e68d2d8ad227a3c2ab32c4d9b6f77263b21",
+    "repositoryCopy": "docs/preparation/tool-execution-guards/moved-home-fixture-admission-review.json",
+    "passed": 8,
+    "unselected": 26,
+    "vitestSeconds": 2.03,
+    "wallSeconds": 2.724,
+    "exitCode": 0,
+    "blockingFindings": [],
+    "scope": "Bounded source/ordinary fixture review and one independent selected reproduction; not formal security approval or runtime qualification"
+  },
+  "localLintAndFormat": {
+    "isolatedESLint": {
+      "exitCode": 1,
+      "logPath": "/tmp/orca-current-main-evidence/moved-home-targeted-eslint.log",
+      "logSHA256": "4ba3f1ca662da7556801bb71068fd533cd699f72b8485e2d3a70506f01bfa264",
+      "diagnosis": "Reused frozen @orca/eslint-config resolves repoRoot from its own import.meta.url, selecting frozen checkout tsconfig; isolated candidate is outside that project. Configuration and rules unchanged. Not denial or code finding."
+    },
+    "primaryESLint": {
+      "exitCode": 0,
+      "cwd": "/workspace/Project_Orca",
+      "command": "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH timeout --kill-after=5s 60s node node_modules/eslint/bin/eslint.js packages/protocol/test/update-window.test.ts",
+      "logPath": "/tmp/orca-current-main-evidence/moved-home-primary-eslint.log",
+      "logSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "noConfigurationOrRuleChanges": true
+    },
+    "format": "Targeted test and evidence JSON Prettier checks passed; git diff --check passed."
+  },
+  "ordinaryCI": "Pending reviewed changed-head publication; prior-head failure41293856721 at8e8cecc not retried. Base920c2ad had passingCI41295111708.",
+  "preservedPriorEvidence": {
+    "fixture-contention-readonly-proposal.json": {
+      "path": "/tmp/orca-current-main-evidence/fixture-contention-readonly-proposal.json",
+      "sha256": "05c3e19cc7f7b8f4aaa9ac6da4e0c38d5ba763567aab56e049084be47cfe2d66"
+    },
+    "stop-error-ci-original.json": {
+      "path": "/tmp/orca-current-main-evidence/stop-error-ci-original.json",
+      "sha256": "cb132a0834b032a61243dcebd4c75b8f525031a501b1d16dda02d0c8560c86f2"
+    },
+    "stop-error-ci-independent-assessment.json": {
+      "path": "/tmp/orca-current-main-evidence/stop-error-ci-independent-assessment.json",
+      "sha256": "9f0f0ccc91c6ec40385e78baff78639dead6d45d6f4889aa8aa84d6f78247c3e"
+    },
+    "stop-error-terminal-outcome.json": {
+      "path": "/tmp/orca-current-main-evidence/stop-error-terminal-outcome.json",
+      "sha256": "6c4a81a3dc278a3ca5a234685985c5c585305edd7e6df86f5facc25aadd390a2"
+    },
+    "worker-privacy-terminal-ci.json": {
+      "path": "/tmp/orca-current-main-evidence/worker-privacy-terminal-ci.json",
+      "sha256": "2e0dd65517b5b490e476f68dfdf237c09bc2f40f52ea28587658caa7e0167a3a"
+    },
+    "finalizer-worker-ci-original.json": {
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-ci-original.json",
+      "sha256": "aa8ff302c4277a28c992464bd05ef3923909511e9547bd92898791d7714acdee"
+    },
+    "finalizer-worker-terminal-ci.json": {
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-terminal-ci.json",
+      "sha256": "a632962d139de060da0db84055fb1cda599467a1c70f1b4fcec027bee1ce9a09"
+    },
+    "inert-attempt-terminal-ci.json": {
+      "path": "/tmp/orca-current-main-evidence/inert-attempt-terminal-ci.json",
+      "sha256": "8b356f26476550d72fa948897054c0a0a553a14125f9d1b6f39324ce08bac514"
+    },
+    "inert-ci-recovery-terminal.json": {
+      "path": "/tmp/orca-current-main-evidence/inert-ci-recovery-terminal.json",
+      "sha256": "50cca97c402c577c0380b3733934eba1340839ef71c9d5f651f1f61c66dba5be"
+    }
+  },
+  "notRun": [
+    "Full local test file/suite",
+    "Existing real surviving-child scenario excluded by anchored selection",
+    "New installs or native image rebuild",
+    "Observer/tracer/provider/daemon/App Smoke",
+    "Host listener scans or runner access"
+  ],
+  "limitations": [
+    "Temporary reservations released before actual operations; race remains",
+    "Owned endpoint proves exact controlled refusal, not which internal shared-range root was first",
+    "Cleanup fault injection closes servers before throw; no proof of actual OS close-failure settlement",
+    "Four historical bind errors and two earlier unknown-cause failures remain distinct",
+    "No retrospective listener or Tyler cause attribution",
+    "No observer authority, image designation or live proof"
+  ],
+  "holds": "PR metadata unknown error untouched; all4guards/pins/bounds/images and #779/#793/#794 restrictions preserved",
+  "candidatePlanSnapshotNote": "Retained pretest snapshot: its tests-NOT-run/pending status describes preparation time; current executed results are recorded separately in primary and independentValidation.",
+  "additionalReadOnlyErrors": [
+    {
+      "action": "rg/cat/ls guessed tsconfig.eslint.json",
+      "exitCode": 2,
+      "stderr": "rg: tsconfig.eslint.json: No such file or directory (os error 2)\ncat: tsconfig.eslint.json: No such file or directory\nls: cannot access '/workspace/orca-moved-home-validation/tsconfig.eslint.json': No such file or directory\n",
+      "classification": "Missing guessed filename; actualeslint.config.js reexport/toolseslintconfig and tsconfig.json inspected successfully. Not denial; no mutation."
+    }
+  ]
+}

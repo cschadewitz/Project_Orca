@@ -3,7 +3,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { createServer, type Server } from "node:net";
 import { afterEach, expect, it } from "vitest";
+import { fenceBoot, fenceDirectory, fenceHash } from "../src/first-run-fence.js";
 import {
   ClosedUpdateWindow,
   enterConfiguredUpdateWriters,
@@ -289,25 +291,293 @@ async function recreate(path: string) {
   await rm(before, { recursive: true });
 }
 /** A home holding the control namespace, the app root and one enrolled workspace. */
-async function home() {
+type Home = {
+  base: string;
+  control: string;
+  app: string;
+  ws: string;
+  moved: { control: string; app: string; ws: string };
+};
+async function home(prepare?: (candidate: Home) => Promise<void>) {
   for (let attempt = 0; ; attempt++) {
     const base = await mkdtemp(join(process.cwd(), "orca-update-home-"));
     roots.push(base);
     const at = (dir: string) => ({ control: join(dir, "control"), app: join(dir, "app"), ws: join(dir, "ws") });
     const paths = at(join(base, "home"));
+    const candidate = { base, ...paths, moved: at(join(base, "moved")) };
     for (const path of [join(base, "home"), ...Object.values(paths)]) await mkdir(path, { mode: 0o700 });
     try {
       await provisionUpdateWindow(paths.control, [paths.app]);
       await enrollUpdateWindowRoots(paths.control, [paths.ws]);
+      await prepare?.(candidate);
     } catch (error) {
       await rm(base, { recursive: true, force: true });
       if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt >= 4) throw error;
       continue;
     }
-    return { base, ...paths, moved: at(join(base, "moved")) };
+    return candidate;
   }
 }
+
+// Match the production identity and slot mapping, including the unchanged inode after
+// this same-volume rename. This is fixture admission, not a replacement production fence.
+function homePort(identity: ReturnType<typeof fenceDirectory>, slot: number) {
+  return (
+    20000 +
+    (Number.parseInt(
+      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, identity])).slice(0, 8),
+      16,
+    ) %
+      5000) *
+      8 +
+    slot
+  );
+}
+function movedIdentity(f: Home, key: "app" | "ws" | "control") {
+  return { ...fenceDirectory(f[key]), path: f.moved[key] };
+}
+function homeMovePorts(f: Home) {
+  const roots = [fenceDirectory(f.app), fenceDirectory(f.ws), movedIdentity(f, "app"), movedIdentity(f, "ws")];
+  return [
+    ...new Set([
+      ...roots.flatMap((root) => Array.from({ length: 8 }, (_, slot) => homePort(root, slot))),
+      homePort(movedIdentity(f, "control"), 0),
+    ]),
+  ];
+}
+const listenHomePort = (server: Server, port: number) =>
+  new Promise<void>((done, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port, exclusive: true, reusePort: false }, () => {
+      server.removeListener("error", reject);
+      done();
+    });
+  });
+const closeHomePort = (server: Server) =>
+  new Promise<void>((done, reject) =>
+    server.close((error) => {
+      // A failed listen never owned a listening handle; repeated teardown is harmless.
+      if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") reject(error);
+      else done();
+    }),
+  );
+function homeServer() {
+  const server = createServer((socket) => {
+    socket.on("error", () => {});
+    socket.end();
+  });
+  server.maxConnections = 1;
+  return server;
+}
+async function prepareHomeMove(f: Home, close = closeHomePort) {
+  const held: Server[] = [];
+  let failed = false;
+  let failure: unknown;
+  try {
+    for (const port of homeMovePorts(f)) {
+      const server = homeServer();
+      held.push(server); // Own the server before listen can fail.
+      await listenHomePort(server, port);
+    }
+  } catch (error) {
+    failed = true;
+    failure = error;
+  }
+  const cleanupErrors: unknown[] = [];
+  for (const server of held.reverse()) {
+    try {
+      await close(server);
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  // Never resample if any cleanup is uncertain, even when acquisition hit EADDRINUSE.
+  if (cleanupErrors.length)
+    throw new AggregateError(failed ? [failure, ...cleanupErrors] : cleanupErrors, "Fixture listener cleanup failed");
+  if (failed) throw failure;
+}
+async function blockHomePort(port: number) {
+  const server = homeServer();
+  closers.push(() => closeHomePort(server));
+  await listenHomePort(server, port);
+  return server;
+}
 const enrolledPaths = (control: string) => inspectUpdateWindowRoots(control).roots.map((root) => root.path);
+
+it("moved-home fixture maps the renamed identities and deduplicates its finite ports", async () => {
+  const f = await home(prepareHomeMove);
+  const predicted = (["app", "ws", "control"] as const).map((key) => movedIdentity(f, key));
+  const ports = homeMovePorts(f);
+  expect(ports.length).toBeLessThanOrEqual(33);
+  expect(new Set(ports).size).toBe(ports.length);
+  await rename(join(f.base, "home"), join(f.base, "moved"));
+  for (const [index, key] of (["app", "ws", "control"] as const).entries()) {
+    const actual = fenceDirectory(f.moved[key]);
+    expect(JSON.stringify(actual)).toBe(JSON.stringify(predicted[index]));
+    for (let slot = 0; slot < (key === "control" ? 1 : 8); slot++) expect(ports).toContain(homePort(actual, slot));
+  }
+});
+
+it("moved-home fixture keeps a real moved-app blocker fail-closed without publication", async () => {
+  const f = await home(prepareHomeMove);
+  const port = homePort(movedIdentity(f, "app"), 6);
+  const blocker = await blockHomePort(port);
+  await rename(join(f.base, "home"), join(f.base, "moved"));
+  const files = [
+    join(f.moved.control, "window.json"),
+    join(f.moved.control, "enrolled.json"),
+    join(f.moved.app, GUARD),
+    join(f.moved.ws, GUARD),
+  ];
+  const before = await Promise.all(files.map((path) => readFile(path)));
+  try {
+    expect(blocker.listening).toBe(true);
+    await expect(reanchorUpdateWindow(f.moved.control, [f.moved.app])).rejects.toMatchObject({
+      code: "EADDRINUSE",
+      address: "127.0.0.1",
+      port,
+    });
+    expect(blocker.listening).toBe(true);
+    expect(await Promise.all(files.map((path) => readFile(path)))).toEqual(before);
+  } finally {
+    await closeHomePort(blocker);
+  }
+});
+
+it("moved-home fixture resamples preparation contention before a single rename and reanchor", async () => {
+  const candidates: Home[] = [];
+  let blockedPort = -1;
+  let firstFailure: unknown;
+  let heldOnFailure = false;
+  const f = await home(async (candidate) => {
+    candidates.push(candidate);
+    if (candidates.length !== 1) return prepareHomeMove(candidate);
+    blockedPort = homePort(movedIdentity(candidate, "app"), 6);
+    const blocker = await blockHomePort(blockedPort);
+    try {
+      await prepareHomeMove(candidate);
+    } catch (error) {
+      firstFailure = error;
+      heldOnFailure = blocker.listening;
+      throw error;
+    } finally {
+      await closeHomePort(blocker);
+    }
+  });
+  expect(firstFailure).toMatchObject({ code: "EADDRINUSE", address: "127.0.0.1", port: blockedPort });
+  expect(heldOnFailure).toBe(true);
+  expect(candidates.length).toBeGreaterThanOrEqual(2);
+  expect(candidates.length).toBeLessThanOrEqual(5);
+  expect(f.base).not.toBe(candidates[0]!.base);
+  for (const rejected of candidates.slice(0, -1))
+    await expect(stat(rejected.base)).rejects.toMatchObject({ code: "ENOENT" });
+  await rename(join(f.base, "home"), join(f.base, "moved"));
+  await expect(reanchorUpdateWindow(f.moved.control, [f.moved.app])).resolves.toMatchObject({ phase: "open" });
+});
+
+it("moved-home fixture keeps the five-candidate cap with owned preparation blockers", async () => {
+  const start = roots.length;
+  const failures: { error: unknown; port: number; held: boolean }[] = [];
+  let finalFailure: unknown;
+  try {
+    await home(async (candidate) => {
+      const port = homePort(movedIdentity(candidate, "app"), 6);
+      const blocker = await blockHomePort(port);
+      try {
+        await prepareHomeMove(candidate);
+      } catch (error) {
+        failures.push({ error, port, held: blocker.listening });
+        throw error;
+      } finally {
+        await closeHomePort(blocker);
+      }
+    });
+  } catch (error) {
+    finalFailure = error;
+  }
+  const attempted = roots.slice(start);
+  expect(attempted).toHaveLength(5);
+  expect(new Set(attempted).size).toBe(5);
+  expect(failures).toHaveLength(5);
+  for (const failure of failures) {
+    expect(failure.held).toBe(true);
+    expect(failure.error).toMatchObject({ code: "EADDRINUSE", address: "127.0.0.1", port: failure.port });
+  }
+  expect(finalFailure).toBe(failures.at(-1)!.error);
+  for (const base of attempted) await expect(stat(base)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("moved-home fixture propagates noncontention without another candidate", async () => {
+  const failure = new Error("injected preparation failure");
+  let atFailure = -1;
+  await expect(
+    home(async () => {
+      atFailure = roots.length;
+      throw failure;
+    }),
+  ).rejects.toBe(failure);
+  expect(atFailure).toBeGreaterThan(0);
+  expect(roots.length).toBe(atFailure);
+  await expect(stat(roots.at(-1)!)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("moved-home fixture attempts every close and never resamples cleanup failure", async () => {
+  const failure = new Error("injected close failure");
+  const closed: Server[] = [];
+  let atFailure = -1;
+  let expected = 0;
+  await expect(
+    home(async (candidate) => {
+      atFailure = roots.length;
+      expected = homeMovePorts(candidate).length;
+      await prepareHomeMove(candidate, async (server) => {
+        await closeHomePort(server);
+        closed.push(server);
+        if (closed.length === 1) throw failure;
+      });
+    }),
+  ).rejects.toBeInstanceOf(AggregateError);
+  expect(roots.length).toBe(atFailure);
+  expect(closed).toHaveLength(expected);
+  expect(closed.every((server) => !server.listening)).toBe(true);
+});
+
+it("moved-home fixture refuses resampling when contention also has a cleanup failure", async () => {
+  const failure = new Error("injected close failure after contention");
+  const closed: Server[] = [];
+  let atFailure = -1;
+  let expected = 0;
+  let blockedPort = -1;
+  let caught: unknown;
+  try {
+    await home(async (candidate) => {
+      atFailure = roots.length;
+      const port = homePort(movedIdentity(candidate, "app"), 6);
+      blockedPort = port;
+      expected = homeMovePorts(candidate).indexOf(port) + 1;
+      const blocker = await blockHomePort(port);
+      try {
+        await prepareHomeMove(candidate, async (server) => {
+          await closeHomePort(server);
+          closed.push(server);
+          if (closed.length === 1) throw failure;
+        });
+      } finally {
+        await closeHomePort(blocker);
+      }
+    });
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(AggregateError);
+  expect((caught as AggregateError).errors).toEqual([
+    expect.objectContaining({ code: "EADDRINUSE", address: "127.0.0.1", port: blockedPort }),
+    failure,
+  ]);
+  expect(roots.length).toBe(atFailure);
+  expect(closed).toHaveLength(expected);
+  expect(closed.every((server) => !server.listening)).toBe(true);
+});
 
 it("re-anchors an open, idle window whose directories were recreated with new inodes", async () => {
   const f = await fixture(2),
@@ -323,7 +593,7 @@ it("re-anchors an open, idle window whose directories were recreated with new in
 });
 
 it("follows a moved home: the app root is re-anchored and workspaces left behind are de-enrolled", async () => {
-  const f = await home();
+  const f = await home(prepareHomeMove);
   await rename(join(f.base, "home"), join(f.base, "moved"));
   await expect(reanchorUpdateWindow(f.moved.control, [f.moved.app])).resolves.toMatchObject({ phase: "open" });
   expect(enrolledPaths(f.moved.control)).toEqual([f.moved.app]);
