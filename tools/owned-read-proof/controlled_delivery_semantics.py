@@ -19,6 +19,7 @@ from controlled_semantics import (ACTION_FIELDS, UUID, bootstrap_action_schema, 
     decode, designated_credentials, digest, encoded, original_authority, parse,
     resource_projection, retained_binding, same_json)
 from controlled_timestamps import expiry_bound, iso_ns, resource_entry
+from controlled_v2_model import model, expiry_bound as v2_expiry_bound, MS, OWNER_NS
 
 COUNTS = {'controlled-baseline-v1': 1, 'controlled-capture-v1': 3,
           'controlled-persistence-review-v1': 2, 'controlled-authorization-v1': 2,
@@ -50,11 +51,16 @@ def in_phase(replay, obj, phase):
             'connected semantic publication outside required phase')
 
 
-def records(replay):
+def records(replay, *, standing_v2=False):
+    model(standing_v2)
+    counts, fields = dict(COUNTS), dict(FIELDS)
+    if standing_v2:
+        counts['controlled-standing-review-v2'] = 1
+        fields['controlled-standing-review-v2'] = 'version grantMode reviewedAt action command binding actor reviewer lease persistenceReview'
     directory = replay.original['base'] + '/workspace/.orca/private-execution/'
     key = replay.paths[directory + '.execution-key'].data
     require(len(key) == 32, 'wrong original execution key length')
-    semantic = {kind: [] for kind in COUNTS}
+    semantic = {kind: [] for kind in counts}
     events = {}
     count = 0
     for path, obj in replay.paths.items():
@@ -77,14 +83,14 @@ def records(replay):
             require(type(update['text']) is str, 'connected semantic text is not a string')
             text = parse(update['text'])
             closed_fields(text, 'kind value', 'connected semantic text')
-            require(type(text['kind']) is str and text['kind'] in COUNTS and update['kind'] == text['kind'],
+            require(type(text['kind']) is str and text['kind'] in counts and update['kind'] == text['kind'],
                     'unknown/mismatched connected semantic kind')
-            closed_fields(text['value'], FIELDS[text['kind']], text['kind'])
+            closed_fields(text['value'], fields[text['kind']], text['kind'])
             semantic[text['kind']].append((ref, text['value'], obj))
         else:
             require(value['type'] in JOURNAL_TYPES and ref not in events, 'unknown/duplicate protected journal type/ref')
             events[ref] = (value['type'], payload, obj)
-    require(all(len(semantic[k]) == v for k, v in COUNTS.items()) and len(events) == 4 and count == 15,
+    require(all(len(semantic[k]) == v for k, v in counts.items()) and len(events) == 4 and count == sum(counts.values()) + 4,
             'missing/duplicate connected protected record inventory')
     for values in semantic.values():
         values.sort(key=lambda v: v[2].creation_entry)
@@ -146,13 +152,14 @@ def action_schema(replay, action, parameters, evidence_ref):
     resource_projection(replay, resource, action, parameters)
 
 
-def authenticate_connected_delivery(replay):
+def authenticate_connected_delivery(replay, *, standing_v2=False):
     """Necessary correlations, never a callable qualification or delivery proof."""
+    model(standing_v2)
     original = replay.original
     require(replay.designation.check() is None, 'original connected designation assertion returned a flag')
     require(original['lane'] == 'connected' and len(replay.marks) == 6 and len(replay.resources) == 1,
             'missing connected kernel phase/resource observation')
-    semantic, events = records(replay)
+    semantic, events = records(replay, standing_v2=standing_v2)
     requested, answered = journal(replay, events)
     baseline = semantic['controlled-baseline-v1'][0][1]
     captures = semantic['controlled-capture-v1']
@@ -189,7 +196,10 @@ def authenticate_connected_delivery(replay):
                                       'invocationId': 'controlled-rule-invocation'}), 'wrong original/fresh connected invocation')
     for action in actions[1:]:
         preserved = deepcopy(action)
-        for key in ('actionId', 'bindingRef', 'original', 'dispatch', 'authority', 'invocation'):
+        keys = ('actionId', 'bindingRef', 'original', 'dispatch', 'authority', 'invocation')
+        if standing_v2 and action is c:
+            keys += ('expiresAt',)
+        for key in keys:
             preserved[key] = a[key]
         require(same_json(preserved, a), 'connected refresh/fresh action widens original scope')
 
@@ -222,9 +232,13 @@ def authenticate_connected_delivery(replay):
     rule_record = current['scopedRules']['records'][0]
     closed_fields(rule_record, 'rule actor approvalRecordRef scopeEvidenceRef authorityRevision', 'saved rule record')
     rule = rule_record['rule']
-    closed_fields(rule, 'ruleId ruleRevision status notBefore expiresAt match decision', 'saved rule')
+    closed_fields(rule, ('version ' if standing_v2 else '') +
+                  'ruleId ruleRevision status notBefore expiresAt match decision', 'saved rule')
+    if standing_v2:
+        require(type(rule['version']) is int and rule['version'] == 2 and rule['expiresAt'] is None,
+                'saved standing rule version/lifetime differs')
     require(re.fullmatch(UUID, rule['ruleId']) and rule['status'] == 'approved' and rule['decision'] == 'allow' and
-            rule['expiresAt'] == baseline['expiresAt'] and
+            (standing_v2 or rule['expiresAt'] == baseline['expiresAt']) and
             rule['ruleRevision'] == digest({k: v for k, v in rule.items() if k != 'ruleRevision'}),
             'saved rule revoked/invalid revision')
     require(rule_record['approvalRecordRef'] == encoded(['controlled', replay.journal_records[2]['payload']['scopedApprovalRef']]) and
@@ -247,8 +261,22 @@ def authenticate_connected_delivery(replay):
         expected_revision = baseline['initialRevision'] if action is a else revision
         original_authority(replay, {**baseline, 'initialRevision': expected_revision},
             action, binding, actors, lease, [create_ns, replay.entry_times[obj.creation_entry]])
-        require(action['expiresAt'] == baseline['expiresAt'], 'connected owner expiry changed')
-        expiry_bound(original, create_ns, iso_ns(action['expiresAt']))
+        if standing_v2 and action is c:
+            # Fresh Date.now()+55s is after the original rule-phase command and
+            # before capture publication. Floor the lower anchor to Date's exact
+            # millisecond representation, never add timing slack or owner lifetime.
+            phase_entry = replay.marks[4][4]
+            require(type(phase_entry) is int and phase_entry in replay.entry_times,
+                    'fresh rule expiry lacks original phase anchor')
+            phase_ns = replay.entry_times[phase_entry]
+            require(type(phase_ns) is int and original['startedWallNs'] <= phase_ns <=
+                    replay.entry_times[obj.creation_entry] and
+                    iso_ns(action['expiresAt']) >= max(iso_ns(a['expiresAt']), phase_ns // MS * MS + OWNER_NS),
+                    'fresh rule expiry predates source issuance interval')
+            v2_expiry_bound(original, replay.entry_times[obj.creation_entry], iso_ns(action['expiresAt']))
+        else:
+            require(action['expiresAt'] == baseline['expiresAt'], 'connected owner expiry changed')
+            (v2_expiry_bound if standing_v2 else expiry_bound)(original, create_ns, iso_ns(action['expiresAt']))
     actor = baseline['operator']['actor']
     require(same_json(answered['actor'], actor) and same_json(rule_record['actor'], actor) and
             rule_record['authorityRevision'] == a['authority']['authorityRevision'], 'original actor/authority attribution differs')
@@ -287,11 +315,11 @@ def authenticate_connected_delivery(replay):
                 replay.marks[(i + 1) * 2][5] < effect < replay.marks[(i + 1) * 2 + 1][4],
                 'capture/authorization/effect/observation causal order differs')
         require(iso_ns(rule['notBefore']) <= replay.entry_times[obj.creation_entry] <= original['finishedWallNs'] <
-                iso_ns(rule['expiresAt']), 'saved rule currency differs')
+                iso_ns(action['expiresAt'] if standing_v2 else rule['expiresAt']), 'saved rule currency differs')
     require(publication(replay, observations[0][2])[1] < captures[2][2].creation_entry,
             'fresh rule capture precedes original human completion observation')
     require(replay.designation.check() is None, 'original connected designation assertion returned a flag')
     return {'record': 'authenticated-connected-delivery-correlations-only', 'authority': 'none',
-            'protectedRecords': 15, 'serviceReads': 2, 'liveDeliveryAuthority': 'unmeasured-exact-source-memory',
+            'protectedRecords': 16 if standing_v2 else 15, 'serviceReads': 2, 'liveDeliveryAuthority': 'unmeasured-exact-source-memory',
             'saveAuthority': 'unvalidated-persistence-approval-and-review',
             'qualification': 'unavailable-save-authority-and-full-connected-effect-audit-pending'}

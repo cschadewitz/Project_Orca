@@ -5,21 +5,24 @@ from controlled_contract import require
 from controlled_delivery_semantics import authenticate_connected_delivery, publication
 from controlled_save_semantics import authenticate_connected_save
 from controlled_semantics import decode, encoded, same_json
+from controlled_v2_model import model
 
 MUTATIONS = {'protected-temp': 17, 'control-record': 2, 'sidecar-temp': 2, 'credentials-temp': 2,
              'lease-temp': 1, 'state-directory': 3, 'resource': 1, 'resource-directory': 1}
 
 
-def effect_inventory(replay):
+def effect_inventory(replay, *, standing_v2=False):
     """Close finite surviving names and all mutable object histories after full replay.
 
     Counts describe this exact source, not an exemption for unexamined operations.
     Full Replay has already consumed every raw event, including outside windows.
     """
+    model(standing_v2)
+    mutations = {**MUTATIONS, 'protected-temp': 18 if standing_v2 else 17}
     base = replay.original['base']
     store = base + '/workspace/.orca'
     private = store + '/private-execution/'
-    for family, count in MUTATIONS.items():
+    for family, count in mutations.items():
         require(sum(o.family == family for o in replay.objects) == count,
                 'unexpected aggregate mutable object count: ' + family)
     for obj in replay.objects:
@@ -28,7 +31,7 @@ def effect_inventory(replay):
     protected = [o for o in replay.objects if o.family == 'protected-temp']
     private_paths = {name for o in protected for name in o.names}
     required = {private + '.execution-key', private + 'controlled.inputs.json'}
-    require(len(private_paths) == 17 and required <= private_paths and all(
+    require(len(private_paths) == mutations['protected-temp'] and required <= private_paths and all(
             name.startswith(private) and (name in required or name.endswith('.payload.json')) for name in private_paths),
             'aggregate protected record namespace differs')
     for obj in protected:
@@ -57,15 +60,15 @@ def effect_inventory(replay):
     require(journal.family == 'connected-journal' and journal.data == b''.join(
         (encoded(row) + '\n').encode() for row in replay.journal_records), 'aggregate journal bytes differ from append history')
     return {'record': 'closed-connected-effect-inventory', 'authority': 'none',
-            'mutableCounts': dict(MUTATIONS), 'protectedFiles': len(private_paths), 'journalRecords': 4}
+            'mutableCounts': mutations, 'protectedFiles': len(private_paths), 'journalRecords': 4}
 
 
-def compose_connected(replay):
+def compose_connected(replay, *, standing_v2=False):
     """Caller first completes ConnectedKernelReplay.run on the original full trace."""
-    delivery = authenticate_connected_delivery(replay)
-    save = authenticate_connected_save(replay)
-    effects = effect_inventory(replay)
+    delivery = authenticate_connected_delivery(replay, standing_v2=standing_v2)
+    save = authenticate_connected_save(replay, standing_v2=standing_v2)
+    effects = effect_inventory(replay, standing_v2=standing_v2)
     return {'record': 'connected-aggregate-preparation-only', 'authority': 'none',
-            'delivery': delivery, 'save': save, 'effects': effects,
+            'delivery': delivery, 'save': save, 'effects': effects, 'semanticModel': 'standing-v2' if standing_v2 else 'legacy-v1',
             'acceptingToken': None, 'productionEligible': False,
             'qualification': 'unavailable-independent-aggregate-review-and-fresh-evidence-pending'}

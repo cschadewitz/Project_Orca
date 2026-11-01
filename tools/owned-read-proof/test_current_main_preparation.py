@@ -39,10 +39,11 @@ class CurrentMainPreparationControls(unittest.TestCase):
             assert_image_sources(self.image)
 
     def test_current_image_refuses_before_tracer_probe_or_owned_process_creation(self):
-        # observe's real image check runs; no trace/probe/producer may be started.
+        # The unconditional launch refusal runs before image checking. The
+        # separate test above retains the real legacy image mismatch check.
         with patch('controlled_supervisor.probe_clock', side_effect=AssertionError('unexpected probe')) as probe, \
              patch('controlled_supervisor.run_traced', side_effect=AssertionError('unexpected trace')) as trace:
-            with self.assertRaisesRegex(RuntimeError, 'retained-original check failed'):
+            with self.assertRaisesRegex(RuntimeError, 'non-live preparation: observer launch disabled'):
                 observe(self.root, self.image)
         probe.assert_not_called()
         trace.assert_not_called()

@@ -38,7 +38,7 @@ QUERY_PATHS = ('/proc/self/maps', '/proc/self/cgroup', '/proc/meminfo',
 OBSERVER_FILES = ('controlled_supervisor.py', 'controlled_observation.py', 'controlled_aggregate.py', 'controlled_diagnostics.py',
     'controlled_connected.py', 'controlled_replay.py', 'controlled_contract.py', 'controlled_notifications.py',
     'controlled_semantics.py', 'controlled_delivery_semantics.py', 'controlled_save_semantics.py',
-    'controlled_timestamps.py', 'kernel_runtime_queries.py', 'run.py', 'verify.py')
+    'controlled_timestamps.py', 'controlled_v2_model.py', 'kernel_runtime_queries.py', 'run.py', 'verify.py')
 REPORT_LIMIT = 1024 * 1024
 ORIGINAL_METADATA_LIMIT = 1024 * 1024
 RUNTIME_ASSET_LIMIT = 256 * 1024 * 1024
@@ -517,7 +517,11 @@ class ObservedRun:
 
 
 def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, diagnostic=False):
-    """One original bounded test process; no accepting outcome or arbitrary argv."""
+    """Disabled live entry point; historical body retained for source review."""
+    raise RuntimeError('non-live preparation: observer launch disabled')
+
+    # Historical implementation retained for review only. No CLI/flag/report can
+    # reach it in this preparation branch; changing this refusal needs new authority.
     require(lane in {'bootstrap', 'connected'}, 'unknown controlled observation lane')
     require(type(diagnostic) is bool, 'diagnostic mode must be an explicit supervisor boolean')
     if lane == 'connected':

@@ -15,6 +15,7 @@ from controlled_connected import HUMAN
 from controlled_delivery_semantics import authenticate_connected_delivery, in_phase, publication, records
 from controlled_semantics import UUID, closed_fields, designated_credentials, digest, encoded, parse, same_json
 from controlled_timestamps import iso_ns
+from controlled_v2_model import MS
 
 SCOPE = {'principal': 'Designated test operator', 'operation': 'Read', 'resources': 'Disposable detached inode',
          'environment': 'None', 'lifetime': 'Original test lifetime, at most one minute',
@@ -143,10 +144,10 @@ def sidecar_cycles(replay):
     return writers, directories, physicals
 
 
-def authenticate_connected_save(replay):
+def authenticate_connected_save(replay, *, standing_v2=False):
     """Authenticate source-designated test Save, never issue a permit or release."""
-    authenticate_connected_delivery(replay)
-    semantic, events = records(replay)
+    authenticate_connected_delivery(replay, standing_v2=standing_v2)
+    semantic, events = records(replay, standing_v2=standing_v2)
     baseline = semantic['controlled-baseline-v1'][0][1]
     captures = semantic['controlled-capture-v1']
     a, b, _ = [v[1]['action'] for v in captures]
@@ -160,7 +161,8 @@ def authenticate_connected_save(replay):
     kind, payload, obj = events[marker['executionPayloadRef']]
     require(kind == 'agent.permission', 'wrong authenticated Save marker type')
     approval = payload['entry']
-    closed_fields(approval, APPROVAL_FIELDS, 'controlled Save approval')
+    closed_fields(approval, APPROVAL_FIELDS + (' grantMode reviewUntil standingReview' if standing_v2 else ''),
+                  'controlled Save approval')
     actor = baseline['operator']['actor']
     operator, reviewer = actors['controlled-test-operator'], actors['controlled-test-reviewer']
     reviewer_actor = {'principalId': reviewer['principal'], 'credentialId': reviewer['id']}
@@ -191,11 +193,39 @@ def authenticate_connected_save(replay):
         resources=[{'operation': a['resources']['value'][0]['operation'],
                     'physicalTargetRef': a['resources']['value'][0]['physicalTargetRef']}], environmentAndCredentialRefs=[])
     rule = command['rule']
-    source_rule = {'ruleId': rule['ruleId'], 'ruleRevision': rule['ruleRevision'], 'status': 'approved',
-                   'notBefore': rule['notBefore'], 'expiresAt': a['expiresAt'], 'match': match, 'decision': 'allow'}
+    source_rule = {**({'version': 2} if standing_v2 else {}),
+                   'ruleId': rule['ruleId'], 'ruleRevision': rule['ruleRevision'], 'status': 'approved',
+                   'notBefore': rule['notBefore'], 'expiresAt': None if standing_v2 else a['expiresAt'],
+                   'match': match, 'decision': 'allow'}
     require(same_json(rule, source_rule) and rule['ruleRevision'] == digest({k: v for k, v in source_rule.items()
             if k != 'ruleRevision'}), 'saved rule revision is not source construction-order digest')
-    expected = {'version': 1, 'choice': 'save', 'requiredReview': 'unavailable',
+    standing_fields = {}
+    if standing_v2:
+        ref, proof, standing_obj = semantic['controlled-standing-review-v2'][0]
+        require(type(ref) is str and re.fullmatch(UUID, ref) and ref not in [p[0] for p in proofs],
+                'standing review reference reused/invalid')
+        reviewed = proof['reviewedAt']
+        require(type(reviewed) is int and 0 < reviewed <= 9007199254740991,
+                'standing reviewedAt is not an exact safe millisecond integer')
+        expected_standing = {'version': 2, 'grantMode': 'until-revoked', 'reviewedAt': reviewed,
+            'action': a, 'command': command, 'binding': baseline['binding'], 'actor': actor,
+            'reviewer': {'actor': reviewer_actor, 'credential': {k: v for k, v in reviewer.items() if k != 'secretSha256'}},
+            'lease': baseline['lease'], 'persistenceReview': {'ref': proofs[0][0], 'value': proofs[0][1]}}
+        require(same_json(proof, expected_standing), 'standing review original authority/command/prior proof differs')
+        in_phase(replay, standing_obj, 'save')
+        prior_end = publication(replay, proofs[0][2])[1]
+        require(prior_end < standing_obj.creation_entry and publication(replay, standing_obj)[1] < obj.creation_entry,
+                'standing review publication does not precede Save approval after prior proof')
+        require(replay.entry_times[prior_end] // MS <= reviewed <= replay.entry_times[standing_obj.creation_entry] // MS and
+                iso_ns(rule['notBefore']) <= reviewed * MS <= iso_ns(approval['acceptedAt']) < iso_ns(a['expiresAt']) and
+                reviewed * MS < iso_ns(baseline['lease']['renewedAt']) + 60_000_000_000,
+                'standing review timestamp outside original source authority interval')
+        require(type(approval['reviewUntil']) is int and approval['reviewUntil'] == iso_ns(a['expiresAt']) // MS,
+                'standing reviewUntil differs from original finite action expiry')
+        standing_fields = {'grantMode': 'until-revoked', 'reviewUntil': approval['reviewUntil'],
+                           'standingReview': {'version': 2, 'result': 'passed', 'sourceRefs': [ref]}}
+    expected = {'version': 2 if standing_v2 else 1, **standing_fields,
+                'choice': 'save', 'requiredReview': 'unavailable',
                 'persistenceReview': {'result': 'passed', 'sourceRefs': [proofs[0][0]]},
                 'acceptedAt': approval['acceptedAt'], 'credential': facts, 'lease': baseline['lease'],
                 'binding': baseline['binding'], 'actor': actor,
@@ -203,9 +233,9 @@ def authenticate_connected_save(replay):
                            'requestId': replay.journal_records[0]['payload']['requestId']},
                 'command': command, 'action': a, 'resourceWorkspaceRef': a['workspaceRef']['value'],
                 'scopeEvidenceRef': saved['scopeEvidenceRef'], 'authorityRevision': a['authority']['authorityRevision'],
-                'scope': SCOPE, 'projection': {'coverage': a['coverage'],
+                'scope': {**SCOPE, **({'lifetime': 'Until revoked'} if standing_v2 else {})}, 'projection': {'coverage': a['coverage'],
                     'currentAuthority': {'state': 'unknown', 'reason': 'no-execution-decision'},
-                    'expiresAt': {'state': 'complete', 'value': a['expiresAt']},
+                    'expiresAt': {'state': 'complete', 'value': None if standing_v2 else a['expiresAt']},
                     'revocation': {'state': 'complete', 'value': 'active'}}, 'references': [], 'reviewSourceRefs': []}
     require(same_json(approval, expected), 'Save approval action/choice/scope/revision/provenance differs')
     require(digest(facts) == a['authority']['revocationEpoch'] and

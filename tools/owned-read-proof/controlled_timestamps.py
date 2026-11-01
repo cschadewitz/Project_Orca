@@ -193,9 +193,13 @@ def resource_entry(replay, resource):
 
 
 def source_binding(original):
+    _source_binding(original, SOURCE, PRODUCER_INPUT_SHA, CHILD_SHA)
+
+
+def _source_binding(original, source, producer_input_sha, child_sha):
     build = original.get('controlledBuild', {})
-    require(original.get('sourceHead') == SOURCE and build.get('sources', {}).get(PRODUCER) == PRODUCER_INPUT_SHA and
-            build.get('childSha256') == CHILD_SHA,
+    require(original.get('sourceHead') == source and build.get('sources', {}).get(PRODUCER) == producer_input_sha and
+            build.get('childSha256') == child_sha,
             'missing reviewed expiry-before-service source ordering')
     child = Path(original['argv'][1])
     for path, expected in [(str(child), build['childSha256']),
