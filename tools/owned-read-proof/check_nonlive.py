@@ -23,6 +23,7 @@ TESTS = (
     'test_controlled_timestamps',
     'test_current_main_preparation',
     'test_current_image_inspection',
+    'test_offline_cleanup_privacy',
     'test_current_qualification_boundaries',
     'test_controlled_v2_semantics',
     'test_kernel_causality',

@@ -4,12 +4,12 @@ No launcher, observer, subprocess, runtime probe, plan or capability constructor
 All descriptors are acquisition-scoped; returned snapshots own no open resources.
 The trusted Python implementation is not protected against same-process mutation.
 """
-from contextlib import ExitStack
 from dataclasses import dataclass, field
 import hashlib
 import os
 import stat
 import sys
+from offline_cleanup import CleanupScope
 
 
 REVIEWED_IMAGE_SOURCE = '4ebf382fe6738bb11268b47b048a3d7c7a6f2586'
@@ -90,11 +90,9 @@ def inspect_current_image(path):
         require(0 < len(parts) <= 32 and all(p not in ('', '.', '..') for p in parts))
         directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
         pin_flags = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC
-        with ExitStack() as resources:
+        with CleanupScope() as resources:
             def open_owned(name, flags, parent=None):
-                fd = os.open(name, flags, dir_fd=parent)
-                resources.callback(os.close, fd)
-                return fd
+                return resources.acquire(lambda: os.open(name, flags, dir_fd=parent), os.close)
 
             parent = open_owned('/', directory_flags)
             ancestors = [stamp(os.fstat(parent))[:5]]

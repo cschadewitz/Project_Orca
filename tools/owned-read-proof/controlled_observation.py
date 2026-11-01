@@ -1,19 +1,17 @@
-"""Fixed-source, test-only bootstrap + connected observation. Always incomplete.
+"""Non-live wrappers and public projections; historical orchestration is disabled.
 
-No arbitrary command, provider, accepting token or production eligibility. The
-parent's explicit preparation authorization designates this exact source model;
-neither a report/hash nor CLI input can import a bootstrap capability.
+Preparation authorization does not create designation or launch authority.
+Public projections cannot reconstruct an original bootstrap capability.
 """
 from pathlib import Path
 import json
-import re
 import subprocess
 import sys
 import tempfile
 
 from controlled_contract import require
 from controlled_connected import ConnectedDesignation
-from controlled_supervisor import (REPO, OBSERVER_FILES, observe, observer_original, file_digest, digest)
+from controlled_supervisor import (REPO, OBSERVER_FILES, observe, observer_original, digest, LIMIT, RUN_NS)
 
 
 def committed_observer():
@@ -25,25 +23,52 @@ def committed_observer():
     return measured
 
 
-def safe_summary(run, root):
-    value = run.report
-    allowed = ('record', 'sourceHead', 'traceBytes', 'traceSha256', 'returncode', 'elapsedNanoseconds',
-               'imageProducerSha256', 'imageChildSha256', 'imageBuildSha256')
-    result = {k: value[k] for k in allowed if k in value}
-    if 'refusal' in value:
-        # Never print raw trace lines, producer stderr, phase tokens or protected
-        # plaintext. The full original refusal remains in the private packet.
-        reason = value['refusal'].replace(str(root), '<attempt>')
-        reason = re.sub(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '<uuid>', reason)
-        result['refusal'] = reason[:1000]
-    if run.replay is not None:
-        result['settledThreads'] = len(run.replay.settled)
-        result['serviceReads'] = len(run.replay.resources[0].reads)
-        result['finalNamedObservations'] = len(run.original.get('finalPhysicalObservations', {}))
-    if 'diagnostic' in value:
-        result['diagnostic'] = value['diagnostic']
-    result['reportSha256'] = file_digest(run.report_path)
+def public_summary(value):
+    """Fixed schema, no I/O or exception conversion; never execution authority.
+
+    Drop all supplied strings, hashes, paths and nested diagnostics. Even a valid
+    hex string might be a phase token placed in a purported digest field. Private
+    originals retain their complete hashes/correlations; this is not that evidence.
+    """
+    result = {'record': 'observation-public-summary', 'authority': 'none',
+              'acceptingToken': None, 'productionEligible': False,
+              'observationAuthorized': False,
+              'qualification': 'unavailable-public-summary-is-not-authority'}
+    if type(value) is not dict:
+        result['refusal'] = 'summary-input-refused'
+        return result
+    if 'refusal' in value or 'diagnosticRefusal' in value:
+        result['refusal'] = 'observation-refused'
+    for name, low, high in (('traceBytes', 0, LIMIT), ('elapsedNanoseconds', 0, RUN_NS),
+                            ('returncode', -255, 255)):
+        if name in value:
+            item = value[name]
+            if type(item) is int and low <= item <= high:
+                result[name] = item
+            else:
+                result['refusal'] = 'summary-field-refused'
     return result
+
+
+def public_checkpoint(value):
+    """At most the two original lane summaries; unknown/deep values are not walked."""
+    result = public_summary(value)
+    result['record'] = 'observation-public-checkpoint'
+    result['attempts'] = []
+    if type(value) is not dict:
+        return result
+    attempts = value.get('attempts', [])
+    if type(attempts) is not list or len(attempts) > 2:
+        result['refusal'] = 'checkpoint-shape-refused'
+        return result
+    result['attempts'] = [public_summary(attempt) for attempt in attempts]
+    return result
+
+
+def safe_summary(run, root):
+    # Keep the historical signature, but do not read paths, replay objects or
+    # private files merely to produce a public projection.
+    return public_summary(run.report)
 
 
 def observe_new(root=None, diagnostic=False):
@@ -74,19 +99,16 @@ def observe_new(root=None, diagnostic=False):
         connected = observe(root, image, 'connected', designation, used, diagnostic)
         checkpoint['attempts'].append(safe_summary(connected, root))
         require(connected.replay is not None, 'connected original observation refused; inspect retained first refusal')
-    except BaseException as error:
-        checkpoint['refusal'] = type(error).__name__ + ': ' + str(error).replace(str(root), '<attempt>')[:1000]
-    (root / 'sanitized-checkpoint.json').write_text(json.dumps(checkpoint, separators=(',', ':')))
+    except BaseException:
+        checkpoint['refusal'] = 'observation-refused'
+    public = public_checkpoint(checkpoint)
+    (root / 'sanitized-checkpoint.json').write_text(json.dumps(public, separators=(',', ':')))
     (root / 'sanitized-checkpoint.json').chmod(0o600)
-    return checkpoint
+    return public
 
 
 def diagnose_bootstrap():
-    """Exactly one original diagnostic process, regardless of its outcome.
-
-    The return value is a sanitized report, not a retained graph or designation.
-    No connected constructor or command is used in this bounded investigation.
-    """
+    """Disabled diagnostic wrapper; historical single-attempt body retained."""
     raise RuntimeError('non-live preparation: observer launch disabled')
     # Historical diagnostic orchestration is not an alternate launch entry point.
     implementation = committed_observer()
@@ -103,12 +125,13 @@ def diagnose_bootstrap():
         checkpoint['attempts'].append(safe_summary(run, root))
         run.assert_bootstrap_closed()
         checkpoint['originalBootstrapChecks'] = 'completed-for-this-new-original-only'
-    except BaseException as error:
-        checkpoint['refusal'] = type(error).__name__ + ': ' + str(error).replace(str(root), '<attempt>')[:1000]
+    except BaseException:
+        checkpoint['refusal'] = 'observation-refused'
+    public = public_checkpoint(checkpoint)
     path = root / 'sanitized-checkpoint.json'
-    path.write_text(json.dumps(checkpoint, separators=(',', ':')))
+    path.write_text(json.dumps(public, separators=(',', ':')))
     path.chmod(0o600)
-    return checkpoint
+    return public
 
 
 if __name__ == '__main__':

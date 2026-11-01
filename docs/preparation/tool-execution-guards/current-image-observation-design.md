@@ -1,5 +1,9 @@
 # Current-image inspection and observation design — preparation only
 
+> Later preparation: [offline cleanup and privacy projection](current-image-cleanup-privacy.md)
+> supersedes the inspector's cleanup helper and public-summary details below.
+> The original no-live guards and unfulfilled live-qualification gates remain.
+
 Base: `1b77e1a90483f71fcd08084c9f937b2b773854a0` on
 `prep/706-current-main-nonlive`, draft PR #809. This increment implements offline
 candidate inspection and closes pre-refusal side effects in the public wrappers.

@@ -1,0 +1,146 @@
+{
+  "record": "nonlive-offline-cleanup-privacy-preparation-checks",
+  "authority": "none",
+  "baseCommit": "7c4113d1425d68ed5b104e80260c3a99ddb1319e",
+  "mainPin": "f9e7225e59cfe6e83c539f2ce9922ad0677719f4",
+  "implementationHashes": {
+    "tools/owned-read-proof/offline_cleanup.py": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+    "tools/owned-read-proof/current_image_inspection.py": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+    "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+    "tools/owned-read-proof/test_offline_cleanup_privacy.py": "82d09e64cf47b43e6211883690b5f4ca51c6f237240eebd1589121deba838400",
+    "tools/owned-read-proof/check_nonlive.py": "5dd00d406d01e7778c2636cedc883d6a54156c0a109845549a3cf0f90c2a028e",
+    "docs/preparation/tool-execution-guards/current-image-cleanup-privacy.md": "45c6312302e497c5488cd270021ac13c3be94ad310080c9fbd92cda350d77fdb"
+  },
+  "unchangedControls": {
+    "tools/owned-read-proof/controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+    "tools/owned-read-proof/build-controlled.mjs": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+    "tools/owned-read-proof/controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+    "tools/owned-read-proof/controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+    "tools/owned-read-proof/controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+    "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+    "tools/owned-read-proof/controlled_v2_model.py": "af289071fc9627bb8f38115916a40740c1a131a756a4afa163d9229f6056df15",
+    "tools/owned-read-proof/run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+    "tools/owned-read-proof/verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310",
+    "tools/owned-read-proof/legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca",
+    "tools/owned-read-proof/test_controlled_connected.py": "3622b8045d59c885b1b5f017351520d9097594689fa39457b556c02010a1819c",
+    "tools/owned-read-proof/controlled_supervisor.py": "dcce704ec9d4e4a5697b889caa10e556f9c8dc9bcc8ae7b0fcc90a1fdcd44dba"
+  },
+  "outputIdentity": {
+    "controlled-build.json": {
+      "bytes": 48027,
+      "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+    },
+    "controlled-child.mjs": {
+      "bytes": 5713,
+      "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+    },
+    "controlled-producer.mjs": {
+      "bytes": 2248652,
+      "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+    }
+  },
+  "imageIdentity": "Retained files rehashed; no new designated image or independent rebuild in this increment. Disposable images built but never executed in regression tests. Prior independent rebuild remains separately identified.",
+  "fixtureInventory": {
+    "currentImageInputsVerified": 387,
+    "historicalProtectedInputsUnchanged": 392,
+    "disjointHarnessAndReference": {
+      "tools/owned-read-proof/check_nonlive.py": "5dd00d406d01e7778c2636cedc883d6a54156c0a109845549a3cf0f90c2a028e",
+      "tools/owned-read-proof/controlled_aggregate.py": "ade19e2569ed52bfd2f4672426d7c20308fd23b3f74a9fdc5543648f0093f62a",
+      "tools/owned-read-proof/controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+      "tools/owned-read-proof/controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+      "tools/owned-read-proof/controlled_delivery_semantics.py": "71248cb8208417f3ff8cd2f81dcd5d698d34edc818287f1136f1069a2e3d40d2",
+      "tools/owned-read-proof/controlled_diagnostics.py": "c02fb09e9f4c43ad1a54650091ee1ca9efc8067ec5907b467be40c2b3f3c37da",
+      "tools/owned-read-proof/controlled_notifications.py": "7efd105085b81db5b18096b357bd5e15a9b2db5bdb5f257a6b0eace648ddee8b",
+      "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+      "tools/owned-read-proof/controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+      "tools/owned-read-proof/controlled_save_semantics.py": "b1a880ef24ad2f7829f5a25557bff5f7a7eec18c8135edd47eb5a394cce18d2b",
+      "tools/owned-read-proof/controlled_semantics.py": "8001488fcea920176b95766d1819b1f16f4e0dc51aefb3f2c3b95ab25a460d0d",
+      "tools/owned-read-proof/controlled_supervisor.py": "dcce704ec9d4e4a5697b889caa10e556f9c8dc9bcc8ae7b0fcc90a1fdcd44dba",
+      "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+      "tools/owned-read-proof/controlled_v2_model.py": "af289071fc9627bb8f38115916a40740c1a131a756a4afa163d9229f6056df15",
+      "tools/owned-read-proof/current_image_inspection.py": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+      "tools/owned-read-proof/kernel_runtime_queries.py": "f43e89618e1f12c39d8c6af465d80dc8aed586d838badc65f4423946c39fbdb6",
+      "tools/owned-read-proof/legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca",
+      "tools/owned-read-proof/offline_cleanup.py": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+      "tools/owned-read-proof/run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+      "tools/owned-read-proof/test_batch_transfer.py": "14e2b01fe4157b5f0fe2fffbeb6ca8e4be35c6379265d6866d56fae5bacc5ede",
+      "tools/owned-read-proof/test_bootstrap_receipt_child.py": "b1ad54a7dde9c91b4bdd6707e19162e62c54207e37c3f0f71821931c54189773",
+      "tools/owned-read-proof/test_child_stat_observations.py": "fcd3f74276b69aa7b8128cc39775c547dddde875a74d521c08fcb666465e65d4",
+      "tools/owned-read-proof/test_cleanup.py": "f7bae206a60ab06463b204373ae35f18bc361a19a144aa021e37a3f39bbeed2a",
+      "tools/owned-read-proof/test_controlled_aggregate.py": "a15d976992778e672775d6a76933dec74b9696a8b9a6d4a6f9ac7dd010cfbe17",
+      "tools/owned-read-proof/test_controlled_connected.py": "3622b8045d59c885b1b5f017351520d9097594689fa39457b556c02010a1819c",
+      "tools/owned-read-proof/test_controlled_contract.py": "d9efbc18058263ea415fc896a90235dd075f6fa6dd18f2be52b1ebf6d7dd99f9",
+      "tools/owned-read-proof/test_controlled_delivery_semantics.py": "5152c46a61bc75deb37be470aa2f87c78ce83dc2bc287593f148c5d89484456a",
+      "tools/owned-read-proof/test_controlled_diagnostics.py": "8707bf7fa05c0b50fb476c94875e1f583cb8b92fad9eb167c5c065a03a38bd7c",
+      "tools/owned-read-proof/test_controlled_image_pins.py": "d6263b99d15625957cbd0b0cb7b7305fcda5f4e8963882b1b966b6de3b3ea5e7",
+      "tools/owned-read-proof/test_controlled_notifications.py": "a9e8849618131cab4f98caa44a97080003149dba03be3f8c62e48a891341d430",
+      "tools/owned-read-proof/test_controlled_replay.py": "01f4fef9bbce07658089d5a2e98893d903ff9b87734f9449007d073a0d6707c8",
+      "tools/owned-read-proof/test_controlled_save_semantics.py": "ba8b05cf34187da40aae391f61b876be0966acb904c565d82c977e68682166c2",
+      "tools/owned-read-proof/test_controlled_semantics.py": "3fc1b9c87c4a49d9adf1a60dfc6973d2cd43bc0c4a3310c9bc709a19bf949253",
+      "tools/owned-read-proof/test_controlled_timestamps.py": "b7070cdd15fccc58722050a9a0f8782113d60938320cf7467cf15885f6ff0797",
+      "tools/owned-read-proof/test_controlled_v2_semantics.py": "cc2a27be6f221654ecc1200aa14e098bf5918d94e838e3c830672ec03f9d09a1",
+      "tools/owned-read-proof/test_current_image_inspection.py": "391b22f124cbc2a3f39419ae720a32b4317f972a4851d0d46b6170b656aaf890",
+      "tools/owned-read-proof/test_current_main_preparation.py": "cc1d80a875f2ac5323611d8c29a05653ddfa8fa98a5b0a5266b96de01bc1822b",
+      "tools/owned-read-proof/test_current_qualification_boundaries.py": "fe3d7049f5b450ea3e7f782fa35217d36db0b8520c69194f10f3da9e62a1ac57",
+      "tools/owned-read-proof/test_intervals.py": "f16d607779cbc219e8543051549469d5b236b00eb42553eff7743738dbf5a8eb",
+      "tools/owned-read-proof/test_kernel_causality.py": "6dcd52d28073e1d320119fa80393764bdd9ab106e390479f71438fbe8a338f2c",
+      "tools/owned-read-proof/test_kernel_runtime_queries.py": "82b51e84bb394714e746199b23f4d97eb378b3092a6539bf73985ae31a06d4c2",
+      "tools/owned-read-proof/test_observer.py": "9786197702aa5d44d64a793fc1f95090de4853f05725c0fecde6d0987bd66418",
+      "tools/owned-read-proof/test_offline_cleanup_privacy.py": "82d09e64cf47b43e6211883690b5f4ca51c6f237240eebd1589121deba838400",
+      "tools/owned-read-proof/test_zero_private_wake.py": "f3a690d5b6ba653b6997b14068d4c4fcc97b0c2a62d2527c0ed606f33a664678",
+      "tools/owned-read-proof/verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310",
+      "docs/preparation/tool-execution-guards/controlled-currentness-composition-frozen-build.json": "090f842e10e5e7f28a6599665f167b1df1f16457c1c45aa5ffb7eb858be87412"
+    },
+    "validationCheckout": "/workspace/orca-fence-validation",
+    "historicalCheckout": "/workspace/orca-legacy-image-fixture"
+  },
+  "postValidationVerification": {
+    "currentInputs": 387,
+    "historicalProtectedInputs": 392,
+    "currentRepositoryInputs": 195,
+    "allHarnessCopiesMatch": true
+  },
+  "validation": {
+    "targeted": {
+      "passed": 35,
+      "seconds": 0.491
+    },
+    "fullNonlive": {
+      "outerPassed": 394,
+      "historicalChildPassed": 7,
+      "seconds": 41.592,
+      "exitCode": 0,
+      "command": "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH ORCA_LEGACY_IMAGE_FIXTURE=/workspace/orca-legacy-image-fixture timeout --kill-after=5s 180s python3 -B tools/owned-read-proof/check_nonlive.py",
+      "workingDirectory": "/workspace/orca-fence-validation"
+    },
+    "logs": {
+      "cleanup-privacy-targeted.log": {
+        "path": "/tmp/orca-current-main-evidence/cleanup-privacy-targeted.log",
+        "sha256": "9e4b1cb555e4c733289826e055720d68ea21a44fd6eeafe292e925d3a6298fde"
+      },
+      "cleanup-privacy-nonlive.log": {
+        "path": "/tmp/orca-current-main-evidence/cleanup-privacy-nonlive.log",
+        "sha256": "08f52e983f477dd6891379c319e2d5742be9e7fc0ff344485bf5f3943f80cd6b"
+      }
+    },
+    "independent": "35 normal and 35 optimized methods; separate frozen checkout; see review record",
+    "ordinaryCI": "Pending publication; local Python/historical fixtures are separate from ordinary CI."
+  },
+  "independentReviewOriginal": {
+    "path": "/tmp/orca-current-main-evidence/offline-cleanup-privacy-independent-review.json",
+    "sha256": "e082cd1c3943f3284c29ff6a9605340ee6c8c0503cefbdc3f2eb869dc24b9672"
+  },
+  "notRun": [
+    "Four real-tracer cases deliberately excluded by unchanged selector policy",
+    "Historical launcher bodies, live observer/tracer/provider/daemon, App Smoke",
+    "Current-image designation, activation, formal security approval, merge"
+  ],
+  "remainingGates": [
+    "Actual locks/pipes/probes/provenance/worker/process ownership and all early/final failure edges still require reviewed integration; generic synchronous helper does not establish process settlement.",
+    "All four live entry points remain unconditionally blocked; no current designation, source-pin widening, capability reconstruction or launch authorization.",
+    "Preventive containment and immutable loaded interpreter/module closure remain unavailable.",
+    "Private capture/persistence of failures before an original run exists remains unimplemented; fixed public refusal intentionally does not substitute for private evidence.",
+    "Original current bootstrap receipt and connected raw replay/semantic qualification remain absent.",
+    "Trusted same-process mutation, callbacks and runtime substrate remain assumptions; these tests are not formal security approval."
+  ]
+}
