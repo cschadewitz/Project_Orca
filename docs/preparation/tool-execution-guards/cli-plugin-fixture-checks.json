@@ -1,0 +1,183 @@
+{
+  "scope": "Test-only target fixture initial-admission correction. No production, image, observer guard or runtime authority change.",
+  "baseline": "4f9738623131c12e41d45bd65aa82ad334eedd64",
+  "candidate": {
+    "path": "packages/cli/test/update-bootstrap.test.ts",
+    "bytes": 26019,
+    "sha256": "35fa3b4a750096318b9dac98c4218cd23da71ef27cfe6a4204ce69c4591d7e39"
+  },
+  "admission": {
+    "maximumInitialCandidates": 5,
+    "precedent": "Existing protocol provisioning fixture, newly opted into only uncertified-plugin test.",
+    "separateFirstRunMaximumUnchanged": 16,
+    "nestedLoops": false,
+    "retryBoundary": "Actual provisionUpdateWindow await only; EADDRINUSE only; exact owned cleanup must finish before resampling.",
+    "singleShotAfterAdmission": "Owner construction, plugin setup, capture, migration, CLI invocation and original assertions.",
+    "errors": "Noncontention propagates retaining evidence. Cleanup failure aggregates original + cleanup and stops; original error remains cause."
+  },
+  "primary": {
+    "argv": [
+      "timeout",
+      "--kill-after=5s",
+      "60s",
+      "/workspace/.orca-tools/node-v24.21.0-linux-x64/bin/node",
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "packages/cli/test/update-bootstrap.test.ts",
+      "--maxWorkers=1",
+      "--reporter=verbose",
+      "--testNamePattern",
+      "^plugin fixture admission "
+    ],
+    "cwd": "/workspace/orca-cli-admission-validation",
+    "exitCode": 0,
+    "wallSeconds": 3.165,
+    "vitestSeconds": 2.66,
+    "passed": 7,
+    "unselected": 8,
+    "fullLog": {
+      "path": "/tmp/orca-current-main-evidence/cli-fixture-primary.log",
+      "bytes": 2232,
+      "sha256": "e662784fdface32ba3a07d69e3dafcd7145af47236bd7830d4b48193720e1aa6"
+    },
+    "fullResult": {
+      "path": "/tmp/orca-current-main-evidence/cli-fixture-primary-result.json",
+      "bytes": 2997,
+      "sha256": "d0c2c68a78adfb9fb03095aad931dcadb889adb8f5772f931ec55259b6837499"
+    }
+  },
+  "independentValidation": "Recorded separately in cli-plugin-fixture-review.json; independent detached checkout, same pinned source and frozen dependency inputs, shared host/cache limitation.",
+  "staticIdentity": {
+    "base": "4f9738623131c12e41d45bd65aa82ad334eedd64",
+    "candidate": {
+      "path": "/workspace/Project_Orca/packages/cli/test/update-bootstrap.test.ts",
+      "bytes": 26019,
+      "sha256": "35fa3b4a750096318b9dac98c4218cd23da71ef27cfe6a4204ce69c4591d7e39"
+    },
+    "changedTrackedFilesBeforeDocumentation": ["packages/cli/test/update-bootstrap.test.ts"],
+    "originalScenarioChange": "fixture() to pluginFixture() only; all setup/capture/migration/CLI/assertions byte-identical",
+    "separateFirstRunAllocatorUnchanged": true,
+    "initialProvisionCandidates": 5,
+    "maximumFirstRunCandidatesUnchanged": 16,
+    "nestedRetry": false,
+    "guards": [
+      "controlled_supervisor.py:observe",
+      "controlled_supervisor.py:bootstrap",
+      "controlled_observation.py:observe_new",
+      "controlled_observation.py:diagnose_bootstrap"
+    ],
+    "productionConfigurationUnchanged": {
+      "packages/protocol/src/update-window.ts": "bf2d6b5bec7f80e6faf396c9efb3cc64653f5bc19234ef7f370d5aefb7ffc662",
+      "packages/protocol/src/first-run-fence.ts": "967574f4baf0e0f9688c8b9bd50e7fb82375f979595e493b465b3bf363570f4a",
+      ".github/workflows/ci.yml": "468f80a02b1163cfef01846f7592e1f7c8854bc0c51a7d9dc9d3ae02002c2c1c",
+      "vitest.config.ts": "c34bb5f818478027c7cfc1609f546ddfc5fda12518e58bf6bccd272a9a40f389",
+      "vitest.global-setup.ts": "cd0a22e5dbc9258fca47c8cbb3e12b08abe0d0289499e5951085a2143271b36f"
+    },
+    "frozenInputsVerified": 387,
+    "currentRepositoryInputsVerified": 195,
+    "outputs": {
+      "controlled-build.json": {
+        "path": "/tmp/orca-current-main-evidence/v2-image/controlled-build.json",
+        "bytes": 48027,
+        "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+      },
+      "controlled-child.mjs": {
+        "path": "/tmp/orca-current-main-evidence/v2-image/controlled-child.mjs",
+        "bytes": 5713,
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+      },
+      "controlled-producer.mjs": {
+        "path": "/tmp/orca-current-main-evidence/v2-image/controlled-producer.mjs",
+        "bytes": 2248652,
+        "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+      }
+    },
+    "testFileDisjointFromImage": true,
+    "rebuild": false,
+    "imageDesignation": false,
+    "localSelection": "Seven fixture-only controls; original CLI serve and other eight existing tests not selected.",
+    "limitations": [
+      "Production close callback completion is not arbitrary OS settlement proof.",
+      "Original CI callsite/listener identity remains unknown.",
+      "Post-admission contention remains visible; scenario never retried."
+    ]
+  },
+  "formatAndLint": {
+    "targetedEslint": "Passed after two corrected findings; no suppression.",
+    "initialLintFailure": {
+      "path": "/tmp/orca-current-main-evidence/cli-fixture-initial-lint-failure.json",
+      "bytes": 813,
+      "sha256": "71381df66b6523829cb1607ee48574c9ca684e0e72faf4fdfb046399e6a28fed"
+    },
+    "prettier": "Candidate formatted with existing installed formatter and pinned Node; final evidence JSON check before publication.",
+    "diffCheck": "Passed before documentation; final package check before publication."
+  },
+  "preservedFailure": {
+    "run": 41298797836,
+    "head": "4f9738623131c12e41d45bd65aa82ad334eedd64",
+    "runner": "tyler-2",
+    "passed": 10057,
+    "failed": 1,
+    "skipped": 36,
+    "todo": 1,
+    "durationSeconds": 368.03,
+    "error": "listen EADDRINUSE: address already in use 127.0.0.1:47132",
+    "test": "packages/cli/test/update-bootstrap.test.ts > refuses uncertified plugin startup before module execution",
+    "terminalRecord": {
+      "path": "/tmp/orca-current-main-evidence/architecture-terminal-ci.json",
+      "bytes": 19488,
+      "sha256": "e5c0157f9423f3024363aee7efe9e56e0bc251fe7d7a5101631a8fb868f9c5e6"
+    },
+    "fullLog": {
+      "path": "/tmp/orca-current-main-evidence/architecture-ci-full.log",
+      "bytes": 321219,
+      "sha256": "31a75b0b79353ca7e8abb6d4cdabd54b6762015947f3ebb5d7fda245399b12d8"
+    },
+    "diagnosis": {
+      "path": "/tmp/orca-current-main-evidence/cli-plugin-fixture-readonly-proposal.json",
+      "bytes": 8671,
+      "sha256": "a0b9e7e759ccc04b1f81c90ae1977c6c0e34bc845f8e43572b713fd8532a1130"
+    },
+    "notRetried": true,
+    "limits": "Initial provisioning phase inferred from source; no observed JS callsite, listener identity or runner-specific cause. Earlier unresolved failures not reclassified."
+  },
+  "notRunLocally": [
+    "Original CLI serve test and all eight preexisting tests",
+    "Full file or full suite",
+    "Positive child/daemon tests",
+    "Image build, historical fixture selection or observer/tracer",
+    "App Smoke, host or provider probes"
+  ],
+  "runtimeLimits": "One worker,60s outer deadline with5s forced termination grace; existing internal limits unchanged. No test overlapped independent run.",
+  "limitations": [
+    "Local helper results are not original plugin scenario acceptance; ordinary exact-head CI separate.",
+    "Production close callback ignores callback errors; no arbitrary OS-settlement or global-quiescence proof.",
+    "Finite resampling cannot eliminate post-admission contention; assertions/scenario never retried.",
+    "Source/build/image identity unchanged; output rehash is not independent rebuild.",
+    "M1 provider/domain contract pending; no M2 or new environment authority."
+  ],
+  "errors": [
+    {
+      "record": {
+        "path": "/tmp/orca-current-main-evidence/cli-fixture-read-errors.txt",
+        "bytes": 550,
+        "sha256": "75f5a81a3d62240199bfbf0c12b29525c56da2eb608942e7e3e8b1695a1e1b2a"
+      },
+      "classification": "Benign missing guessed setup path/no local extra instruction matches, no denial."
+    },
+    {
+      "record": {
+        "path": "/tmp/orca-current-main-evidence/cli-fixture-initial-lint-failure.json",
+        "bytes": 813,
+        "sha256": "71381df66b6523829cb1607ee48574c9ca684e0e72faf4fdfb046399e6a28fed"
+      },
+      "classification": "Two local lint findings corrected and rechecked, no denied action."
+    }
+  ],
+  "holds": [
+    "Four exact launch refusals preserved",
+    "No held PR metadata retry/workaround; previous error classification unknown",
+    "#779/#793/#794 denials remain binding",
+    "No activation, merge, new credentials/access or security settings"
+  ]
+}
