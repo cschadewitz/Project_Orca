@@ -1,0 +1,75 @@
+{
+  "schema": "orca.disposable-linux-vm-preparation-checks/1",
+  "baseline": "112334a36a731302b0ea8f2d0a15e78251556a20",
+  "scope": "Documentation and source-only checks; no runtime or provider qualification",
+  "documents": [
+    {
+      "path": "docs/preparation/tool-execution-guards/current-image-linux-vm-plan.md",
+      "sha256": "70e11741fd5504adfcfbe37b155a676893d3fb15983fbaaf930278377609b22c"
+    },
+    {
+      "path": "docs/preparation/tool-execution-guards/current-image-architecture-gates.md",
+      "sha256": "6d1f07d3caf70bb2eb35564b8c8f5820a1ff86a484b144f75adf461a405a0ce5"
+    }
+  ],
+  "checks": {
+    "proseUtf8LfFinalNewlineNoTrailingWhitespaceBalancedFences": "passed",
+    "relativeFileLinks": {
+      "passed": true,
+      "count": 18
+    },
+    "gitDiffCheck": true,
+    "sourceAssessmentHashes": {
+      "baselineFiles": 8,
+      "unchangedExecutableFiles": 7
+    },
+    "firstStatementRefusalAST": "four passed without imports/execution in prior check",
+    "retainedImageOutputHashes": "three passed; no physical output files changed",
+    "runtimeOrDependencyChanges": "none"
+  },
+  "independentSourceAssessment": {
+    "path": "/tmp/orca-current-main-evidence/disposable-vm-source-contract.json",
+    "sha256": "cc40938a635487366782ca3ad80cf49c9fb5ee63a186ff6da0a2df6b9a5c31b5"
+  },
+  "notRun": [
+    "No runtime tests or historical fixture tests for prose-only change",
+    "No observer/tracer, import of launcher, host or provider query",
+    "No build, envelope creation, designation, provisioning or platform qualification",
+    "No App Smoke, formal approval, merge or activation"
+  ],
+  "primaryDocumentation": {
+    "successful": [
+      "https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html",
+      "https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html",
+      "https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html",
+      "https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.systemd1.html",
+      "https://docs.kernel.org/admin-guide/device-mapper/verity.html",
+      "https://docs.kernel.org/admin-guide/cgroup-v2.html",
+      "https://docs.python.org/3/using/cmdline.html",
+      "https://nodejs.org/docs/latest-v24.x/api/cli.html"
+    ],
+    "meaning": "Published capability documentation only, not installed/authorized provider availability; no runtime version selected"
+  },
+  "accessResults": [
+    {
+      "tool": "web.run open",
+      "target": "https://pve.proxmox.com/pve-docs/qm.1.html",
+      "completeObservedError": "Failed to fetch https://pve.proxmox.com/pve-docs/qm.1.html: (403) Forbidden",
+      "status": "denied fetch; upstream current Proxmox verification blocked; no retry/alternate route",
+      "completed": "Repository VM ownership lead and independent other-component documentation review"
+    },
+    {
+      "tool": "web.run open",
+      "target": "https://nodejs.org/docs/latest-v24.x/api/permissions.html",
+      "completeObservedError": "URL https://nodejs.org/docs/latest-v24.x/api/permissions.html is not accessible via this tool.",
+      "status": "inaccessible, reason unspecified; not retried; no guarantee derived"
+    },
+    {
+      "tool": "independent reviewer web.run open",
+      "target": "https://nodejs.org/docs/latest-v24.x/api/cli.html",
+      "completeObservedError": "URL https://nodejs.org/docs/latest-v24.x/api/cli.html is not accessible via this tool.",
+      "status": "later inaccessible result; earlier root successful retrieval preserved; no retry/alternate route"
+    }
+  ],
+  "remaining": "M1 owner/issuer/recovery/containment/immutable loader/private accounting interfaces pending. G0 domain selected, exact guest unbound. All four guards, pins/bounds/images and prior denials/metadata hold preserved."
+}

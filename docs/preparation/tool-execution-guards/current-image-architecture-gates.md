@@ -1,5 +1,11 @@
 # Finite architecture gates for future observation
 
+> Later direction decision: Casey selected a disposable Linux VM as the first
+> proof domain. The [concrete VM preparation plan](current-image-linux-vm-plan.md)
+> records the setup interfaces, safeguards and finite owner handoff now required.
+> This resolves the domain choice below, not G0's exact-environment binding or any
+> runtime gate, provisioning authority or live-run permission.
+
 Source baseline: `f14eba992bf060320fdc8cf55db066ba327a0baf`, preparation branch
 `prep/706-current-main-nonlive`, draft PR #809. This is a decision-ready architecture
 contract, not an execution plan or a new permission mechanism. No runtime code,

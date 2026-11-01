@@ -1,0 +1,185 @@
+{
+  "schema": "orca.disposable-linux-vm-plan-independent-review/1",
+  "base": "112334a36a731302b0ea8f2d0a15e78251556a20",
+  "outcome": "No remaining blocking finding for docs-only preparation. Direction is selected; exact environment and all runtime gates remain open. This is not setup approval, provisioning authority, current-image designation, live qualification or formal security approval.",
+  "reviewedFinalFiles": [
+    {
+      "path": "/workspace/Project_Orca/docs/preparation/tool-execution-guards/current-image-linux-vm-plan.md",
+      "bytes": 25265,
+      "sha256": "70e11741fd5504adfcfbe37b155a676893d3fb15983fbaaf930278377609b22c"
+    },
+    {
+      "path": "/workspace/Project_Orca/docs/preparation/tool-execution-guards/current-image-architecture-gates.md",
+      "bytes": 21846,
+      "sha256": "6d1f07d3caf70bb2eb35564b8c8f5820a1ff86a484b144f75adf461a405a0ce5"
+    }
+  ],
+  "supportingEvidence": [
+    {
+      "path": "/tmp/orca-current-main-evidence/disposable-vm-source-contract.json",
+      "bytes": 14456,
+      "sha256": "cc40938a635487366782ca3ad80cf49c9fb5ee63a186ff6da0a2df6b9a5c31b5"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/linux-vm-independent-static.json",
+      "bytes": 3245,
+      "sha256": "a8277abe4719ebd277e46e7a825235dfc36cefd4e8ee8a2d6eea01d22e190294"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/m1-manager-loader-cross-review.json",
+      "bytes": 8093,
+      "sha256": "80ff7dd71b09ac269a78237badfeb31091682fb8677d4b237f6489f74bbf7e4a"
+    }
+  ],
+  "coverage": "Read complete initial 285-line VM plan and complete six-line architecture insertion; reread final diagnostic-bound row, explicit unsettled-tracee source blocker and six-row future-negative packet. Checked selected numeric/source/identity/lifecycle anchors and accessible upstream primary citations. This is bounded architectural/source review, not whole code/runtime/dependency audit.",
+  "gateAssessment": [
+    {
+      "gate": "G0",
+      "result": "Selected guest-local domain and excluded existing-host/fleet equivalence; guest identity/generation, trusted kernel/hypervisor/bootstrap and exact threat/environment binding remain owner inputs."
+    },
+    {
+      "gate": "G1",
+      "result": "Actual issuer is explicitly missing. Owner-authenticated reservation, one-shot bootstrap/connected consumption, revocation, original association and lost-ack recovery are required; generic systemd jobs, MCP credentials or conversation approval cannot supply runtime authority."
+    },
+    {
+      "gate": "G2",
+      "result": "VM alone is insufficient. Before candidate effects, separately protected supervisor, minimal permitted files/devices/network/IPC/FDs and resource allocation are required. Version-specific policy is not selected or applied. Candidate control of manager/sink is excluded."
+    },
+    {
+      "gate": "G3",
+      "result": "New execution envelope is distinct from unchanged retained image bytes. Independently originated immutable media plus pre-evaluation complete resolution and actual-loaded corroboration are required; hash, dm-verity root nomination, Python isolation or Node flags alone do not close trust."
+    },
+    {
+      "gate": "G4",
+      "result": "S0-S10 six exit obligations, original recovery owner outside VM rollback and prewrite first-failure capacity remain open. Correctly names actual OwnedCleanupError versus control-worker-only finalizer gap; future no-disposal semantics require source correction/qualification."
+    },
+    {
+      "gate": "G5",
+      "result": "Same original supervisor/guest in-memory graph persists through bootstrap proof, original closure, receipt and fresh connected grant. Restart/snapshot/export cannot recreate capability. Save zero execution, Allow Once and fresh-rule phases remain separate."
+    },
+    {
+      "gate": "G6",
+      "result": "Current-source checker readiness required before effects and runtime replay afterward. Legacy3fce8 and current-image model4ebf382 remain distinct; VM selection cannot repin or bypass current-source qualification."
+    },
+    {
+      "gate": "G7",
+      "result": "Named private custody, source/evidence identity, durable bounded originals, privacy projections and independent exact-claim review remain required. No journal capacity is inferred from other caps; inability to fit remains a decision blocker."
+    }
+  ],
+  "resolvedRecommendations": [
+    {
+      "finding": "Make negative acceptance concrete rather than only broad exits.",
+      "resolution": "Added six future-only cases covering invalid authority, loading origin, inherited/accessible resources, lost start/reservation ack, partial/private persistence, and unsettled ownership/restart. Responsible boundary and bounded evidence specified; no commands or extra limits."
+    },
+    {
+      "finding": "Preserve actual unsettled-tracer finalizer blocker from source assessment.",
+      "resolution": "Added explicit run_traced OwnedCleanupError/control-worker-only disposal mismatch; not presented as fixed or exercised."
+    }
+  ],
+  "sourceAndBounds": {
+    "sevenRuntimeSourcesMatchBaseAndBudgetSnapshot": true,
+    "fourFirstExecutableGuards": [
+      {
+        "file": "controlled_supervisor.py",
+        "function": "observe",
+        "firstExecutable": "raise RuntimeError('non-live preparation: observer launch disabled')"
+      },
+      {
+        "file": "controlled_supervisor.py",
+        "function": "bootstrap",
+        "firstExecutable": "raise RuntimeError('non-live preparation: observer launch disabled')"
+      },
+      {
+        "file": "controlled_observation.py",
+        "function": "observe_new",
+        "firstExecutable": "raise RuntimeError('non-live preparation: observer launch disabled')"
+      },
+      {
+        "file": "controlled_observation.py",
+        "function": "diagnose_bootstrap",
+        "firstExecutable": "raise RuntimeError('non-live preparation: observer launch disabled')"
+      }
+    ],
+    "confirmed": "60s run/55s authority; three1s control-worker joins; separate5s tracer/adopted cleanup;5s helpers/30s wrapper build;256MiB per-file/trace and per-asset limits;32assets;separate1MiB report/original metadata;64KiB mutable and16MiB cumulative replay writes;4KiB association;1s/62samples/8192read diagnostics;1s sampler join;65536 producer streams detected with65537 sentinel;4000decoded stderr tail. No pooled allocation, changed limit or free preflight inferred.",
+    "imageLimit": "Retained three v2-image outputs independently rehashed after source review; byte hashes match prior retained identity. No rebuild, fresh installed-input verification or loaded-runtime claim. Docs-only tracked delta does not modify executable source.",
+    "historicalBody": "Read selected lines only. Never invoked, imported, extracted for execution or compiled; ast.parse used only for first-executable guard inspection."
+  },
+  "primarySourceChecks": [
+    {
+      "url": "https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.systemd1.html",
+      "result": "Readable systemd262; start-job interfaces, Subscribe signal semantics and transient lifetime support framing. No target-manager availability established."
+    },
+    {
+      "url": "https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html",
+      "result": "Readable systemd262; isolation vocabulary, inherited/file-backed socket caveats and JIT incompatibility support limitations, not a ready policy."
+    },
+    {
+      "url": "https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html",
+      "result": "Readable; cgroup-based resource controls, no allocation evidence."
+    },
+    {
+      "url": "https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html",
+      "result": "Readable; unit control-group termination does not attest semantic/durable settlement."
+    },
+    {
+      "url": "https://docs.kernel.org/admin-guide/cgroup-v2.html",
+      "result": "Readable; kernel process/resource hierarchy only, not independent original-owner attestation."
+    },
+    {
+      "url": "https://docs.kernel.org/admin-guide/device-mapper/verity.html",
+      "result": "Readable; read-only block integrity requires independently trusted root digest, not interpreted-code attestation."
+    },
+    {
+      "url": "https://docs.python.org/3/using/cmdline.html",
+      "result": "Readable3.15.2; -I excludes ambient/script/user paths and Python env; -S suppresses site processing. Not pinned-runtime qualification."
+    }
+  ],
+  "accessAndReadLimits": [
+    {
+      "action": "Independent single fetch of distinct Node v24 CLI documentation",
+      "target": "https://nodejs.org/docs/latest-v24.x/api/cli.html",
+      "completeToolDiagnostic": "Internal Error ()\nURL https://nodejs.org/docs/latest-v24.x/api/cli.html is not accessible via this tool.",
+      "status": "Unknown accessibility failure; no retry or alternate route. Parent prior successful retrieval remains historical evidence; not independently reverified here."
+    },
+    {
+      "action": "Previously blocked Proxmox qm.1 and Node permissions documentation",
+      "status": "Not requested by this reviewer; inherited holds preserved. No alternate route."
+    },
+    {
+      "action": "Initial exact text find Subscribe() before",
+      "status": "No matching text; later broader Subscribe() and StartTransientUnit() searches on the same readable source supplied relevant sections. Not an access failure."
+    },
+    {
+      "action": "Combined local identity/lifecycle read",
+      "status": "Successful exit0 with2384-token output warning at2300-token budget; identity pins and operative finalizer/cleanup parts visible; complete unchanged functions not claimed reviewed."
+    }
+  ],
+  "actionsNotTaken": [
+    "executable tests",
+    "repository module imports",
+    "launcher invocation or guard bypass",
+    "provider or host/proc probe",
+    "VM provisioning",
+    "security or credential changes",
+    "image rebuild",
+    "CI",
+    "metadata mutation/retry",
+    "publication",
+    "denied #779/#793/#794 actions"
+  ],
+  "nextFiniteAction": "Owner supplies exact existing management/issuer/recovery/media/sink interfaces and allocations for A. Engineering then maps concrete compatibility and accounting to B-D. Missing mechanism blocks implementation/qualification; no extra cleanup model substitutes for owner input.",
+  "gitStatusAtRecord": " M docs/preparation/tool-execution-guards/current-image-architecture-gates.md\n?? docs/preparation/tool-execution-guards/current-image-linux-vm-checks.json\n?? docs/preparation/tool-execution-guards/current-image-linux-vm-plan.md\n",
+  "finalChecksConsistency": {
+    "file": {
+      "path": "/workspace/Project_Orca/docs/preparation/tool-execution-guards/current-image-linux-vm-checks.json",
+      "bytes": 3797,
+      "sha256": "7a3c93152aa41db8337389d38d15d1cc8f429b9171b437067e9b4d579ffde0a9"
+    },
+    "evidence": {
+      "path": "/tmp/orca-current-main-evidence/linux-vm-independent-checks-consistency.json",
+      "bytes": 832,
+      "sha256": "39daeda0ecfec1862abe7b922ca6c3dffd7ef5066cbb38558788762e6163da89"
+    },
+    "result": "All document/source-assessment hashes,18relative file links,UTF8/LF/final-newline/trailing-whitespace/fence checks,git diff --check and three retained output hashes independently match. Checks accurately preserve parent earlier NodeCLI retrieval and later reviewer access failure, not runtime availability."
+  }
+}
