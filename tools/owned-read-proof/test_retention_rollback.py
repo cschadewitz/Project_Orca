@@ -277,10 +277,10 @@ class SourceOnlyRetentionGuards(unittest.TestCase):
         matches = []
         for node in ast.walk(fn):
             if isinstance(node, ast.Try) and len(node.body) > 1:
-                first, second = node.body[:2]
-                if isinstance(first, ast.Try) and isinstance(second, ast.Assign) and isinstance(second.value, ast.Call):
-                    if isinstance(second.value.func, ast.Attribute) and second.value.func.attr == 'retain_and_close':
-                        matches.append(first)
+                for first, second in zip(node.body, node.body[1:]):
+                    if isinstance(first, ast.Try) and isinstance(second, ast.Assign) and isinstance(second.value, ast.Call):
+                        if isinstance(second.value.func, ast.Attribute) and second.value.func.attr == 'retain_and_close':
+                            matches.append(first)
         self.assertEqual(len(matches), 1)
         expected = ast.parse("""try:
     require(worker.ident is not None and worker.is_alive() is False,

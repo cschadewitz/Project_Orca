@@ -100,11 +100,11 @@ class SourceOnlyFinalizerControls(unittest.TestCase):
         return next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'observe')
 
     def finalizer(self, fn):
-        matches = [node.finalbody for node in fn.body if isinstance(node, ast.Try)
-                   and any(isinstance(child, ast.Call) and ast.unparse(child.func) == 'provenance.close'
-                           for statement in node.finalbody for child in ast.walk(statement))]
-        self.assertEqual(len(matches), 1)
-        return matches[0]
+        # The last top-level try/finally owns the attempt; earlier setup has its
+        # own finally. Its prefix and disposal tail are checked independently.
+        matches = [node.finalbody for node in fn.body if isinstance(node, ast.Try) and node.finalbody]
+        self.assertTrue(matches)
+        return matches[-1]
 
     def test_finalizer_join_and_refusal_dominate_all_disposal_and_writes(self):
         fn = self.source()
@@ -114,17 +114,16 @@ try:
     worker.join(timeout=1)
     require_control_worker_inactive(worker)
 except BaseException:
+    cleanup.raise_body()
     raise RuntimeError('control-worker ownership uncertain') from None
 """).body
         self.assertEqual([ast.dump(n) for n in final[:2]], [ast.dump(n) for n in expected])
         # First two statements have no disposal or file calls; any later statement
         # is unreachable if join/check raises. Parse only, never execute this body.
-        self.assertIsInstance(final[2], ast.For)
-        calls = [node for node in ast.walk(final[2]) if isinstance(node, ast.Call)]
-        self.assertEqual([ast.unparse(node.func) for node in calls], ['os.close'])
+        self.assertIsInstance(final[2], ast.Assign)
         tail_calls = [ast.unparse(node.func) for statement in final[2:]
                       for node in ast.walk(statement) if isinstance(node, ast.Call)]
-        for name in ('os.close', 'provenance.close', 'diagnostics.retain_and_close',
+        for name in ('cleanup.close_transferred', 'diagnostics.retain_and_close',
                      'retained.write_text', 'run.report_path.write_text'):
             self.assertIn(name, tail_calls)
 

@@ -1,0 +1,90 @@
+{
+  "record": "bounded-independent-attempt-cleanup-transfer-review",
+  "reviewer": "/root/independent_review",
+  "baseCommit": "c1018de914ae1e03cc93a2e6f7ace68275f2a804",
+  "candidateState": "Uncommitted preparation delta; no candidate edits or publication by reviewer.",
+  "candidateFiles": {
+    "tools/owned-read-proof/controlled_supervisor.py": "cb5d043ddc6bbdaf5463a2e5f07cbe3a8f7a154fb269fb394109575a80729636",
+    "tools/owned-read-proof/test_attempt_cleanup.py": "34e026122b4260017c414e1e1c610c95f6ebdfaf8a389f7a35eeabe980fe156f",
+    "tools/owned-read-proof/test_finalizer_worker_guard.py": "7b3c17508f24bf8fb31e117cf94d1ff979c1fe47cf9dce2e788fffd98d3bb9f2",
+    "tools/owned-read-proof/test_retention_rollback.py": "86b387cb5361fe5070b0f426da8c7faf7c6a8b20500a6931126b202f848d4cf6",
+    "tools/owned-read-proof/check_nonlive.py": "1ec9f5262def813b1b39b8b443a7f8d758b12c65f0925e10733df09cf6569b4b",
+    "docs/preparation/tool-execution-guards/current-image-attempt-cleanup.md": "e501653001e1e93e5b99a621421e092245b6f275025399931ed46e4df9d2b33d"
+  },
+  "reviewCoverage": "Complete helper and observe diff, relevant ownership/receipt/finalizer source, all14new tests, both changed existing AST modules, selector and complete handoff. Integration source inspected/parsed only; no historical invocation/extraction/compilation for execution. Not a whole-stack, runtime or formal security audit.",
+  "sourceCorrespondence": {
+    "newClass": "AttemptCleanupFailures",
+    "existingFunctionChanged": "observe ownership transfer and body/finalization error handling",
+    "unchanged": "All other top-level AST nodes/imports including require_control_worker_inactive, original launch guards, source pins, diagnostic/query implementation and bound constants",
+    "newObserverImport": false,
+    "changedASTAssertions": "Finalizer selected as last top-level try/finally with independently asserted exact prefix/transfer/tail; diagnostic guard still immediately precedes retention call despite added path statement. Existing join-count/send/four-refusal assertions retained."
+  },
+  "assessment": {
+    "helper": "Exact finite tuple of2or8 transfers only; every nonNone descriptor attempted then optional original provenance owner, catching BaseException individually. First cleanup sticky. No acquisition/join/retry/worker settlement/authority. Trusted tuple contents and owner methods required; helper is not a global registry or replay-resistant ownership token.",
+    "errorOrdering": "First pre-finalizer body error dominates first cleanup/finalization error. Only body catch records body; diagnostic and metadata handlers use cleanup lane. Explicit None checks avoid arbitrary exception truthiness; fixed repr/pickle refusal and no holder in report/dataclass. Original errors re-raised without secondary display chaining.",
+    "normalTransfer": "Both writer slots cleared before pair helper; either failure raised only after both attempts, then original object captured as body. Finalizer sees consumed writer slots None and does not retry their numeric handles.",
+    "finalTransfer": "Unchanged bounded worker precondition effect dominates all transfer. Uncertainty raises original body if present or fixed refusal otherwise, before disposal/evidence writes. Once eligible, all8locals and provenance local cleared before helper. Descriptor/provenance failures do not prevent attempting later diagnostic and metadata blocks.",
+    "closure": "run.closed False at finalizer entry; cleanup.raise_first precedes sole successful True assignment. Historical failures now raise retained error after eligible stages rather than returning refused ObservedRun; documented unreachable behavior change. No current entry point enabled.",
+    "privacyAndEvidence": "Main/diagnostic refusal strings fixed; retained exception objects remain private in-memory potentially sensitive state. Metadata block stops on first error, files may be partial/stale; no atomic or bounded durable-evidence promise. Calling code that prints raised original errors is not automatically privacy-safe.",
+    "remainingBoundary": "Inner run_traced/diagnostics.stop finally may still mask earlier error before holder. Early acquisitions/start, worker send cleanup, diagnostic path failure/uncertain sampler, concurrent lifecycle and physical settlement unresolved."
+  },
+  "independentValidation": {
+    "checkout": "/workspace/orca-independent-current-rebuild",
+    "checkoutCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+    "candidatePythonFilesCopiedExactly": 53,
+    "disjointFromDeclaredImageInputs": true,
+    "harnessSnapshot": {
+      "path": "/tmp/orca-current-main-evidence/attempt-cleanup-independent-harness.json",
+      "sha256": "572fa1017eecf4457edd08cacde63669ef9b907af84b347a10655cf69da40080"
+    },
+    "declaredBuildInputsVerifiedBeforeAndAfter": 387,
+    "candidatePythonUnchangedAfterTests": true,
+    "selection": "test_attempt_cleanup test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+    "methodBreakdown": {
+      "newInertHelper": 10,
+      "newSourceOnly": 4,
+      "priorInjectedPureSourceOnly": 116
+    },
+    "workingDirectory": "/workspace/orca-independent-current-rebuild/tools/owned-read-proof",
+    "commands": [
+      "timeout --kill-after=5s 60s python -B -m unittest -v test_attempt_cleanup test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+      "timeout --kill-after=5s 60s python -B -O -m unittest -v test_attempt_cleanup test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy"
+    ],
+    "normal": {
+      "passed": 130,
+      "seconds": 0.203,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/attempt-cleanup-independent-normal.log",
+      "sha256": "43b78074489d1b6916392b3ad36bf9a3221cea6259fe6755eea4164d832cf784"
+    },
+    "optimized": {
+      "passed": 130,
+      "seconds": 0.207,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/attempt-cleanup-independent-optimized.log",
+      "sha256": "22976264ca0e368a1de0e72bb8c318d2e180f8c9fc9e0257dd3ed3f31d839f19"
+    },
+    "executionBoundary": "Actual helper uses fake OS and inert owner callbacks; integration AST only. Earlier selected methods remain inert/injected/pure/source-only. No real descriptor close/query/thread/process/probe/observer, no historical body execution/extraction/compilation for execution, no image build or historical harness refresh.",
+    "notRun": [
+      "Full Python selector or real-query/self-pin/sampler modules",
+      "Historical runtime/finalizer integration",
+      "Historical physical regressions/builds",
+      "Real worker/process settlement or live observation/App Smoke"
+    ]
+  },
+  "findings": {
+    "blocking": [],
+    "conclusion": "Focused ownership/error fixes match documented scope. Revised AST controls preserve safety ordering and add exact transfer/error-lane checks rather than accepting a live result."
+  },
+  "remainingGates": [
+    "Early acquisition/start and inner traced-run/diagnostic-stop masking remain.",
+    "Worker send ownership/error formatting unchanged; diagnostic path error or intentional uncertainty can retain resources.",
+    "Metadata block and private evidence do not guarantee every write, atomic retention or bounded persistence.",
+    "Trusted serial ownership/distinct descriptors and immutable runtime assumptions remain unqualified.",
+    "No child/tracer/process settlement, authenticated authority, preventive containment or bootstrap-to-connected/current-image qualification.",
+    "Prior local AST failures and both original CI failure histories remain separate from later passing runs.",
+    "Metadata hold and #779/#793/#794 restrictions remain binding."
+  ],
+  "outcome": "No blocking finding for this non-live preparation delta. Not runtime qualification, current designation, live authority, formal security approval or merge approval.",
+  "excludedActions": "No candidate edits, real runtime/probe/descriptor/thread operations, historical body invocation/extraction/compilation for execution, new builds, historical harness refresh, metadata retries/workarounds, CI action, publication, pin/budget/security/credential changes or denied operations."
+}

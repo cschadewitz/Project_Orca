@@ -525,6 +525,57 @@ def require_control_worker_inactive(worker):
         raise RuntimeError('control-worker ownership uncertain') from None
 
 
+class AttemptCleanupFailures:
+    """Private synchronous error ordering; caller transfers eligible ownership.
+
+    No acquisition, wait, worker settlement or execution authority. Descriptor
+    groups are the existing finite pair/finalizer tuples, not arbitrary iterators.
+    """
+    def __init__(self):
+        self._body = self._cleanup = None
+
+    def __repr__(self):
+        return '<AttemptCleanupFailures: private contents omitted>'
+
+    def __reduce_ex__(self, protocol):
+        raise TypeError('private cleanup failure serialization disabled')
+
+    def body_failed(self, error):
+        if self._body is None:
+            self._body = error
+
+    def cleanup_failed(self, error):
+        if self._cleanup is None:
+            self._cleanup = error
+
+    def close_transferred(self, numbers, provenance=None):
+        require(type(numbers) is tuple and len(numbers) in (2, 8),
+                'invalid transferred cleanup group')
+        for number in numbers:
+            if number is not None:
+                try:
+                    os.close(number)
+                except BaseException as error:
+                    self.cleanup_failed(error)
+        if provenance is not None:
+            try:
+                provenance.close()
+            except BaseException as error:
+                self.cleanup_failed(error)
+
+    def failed(self):
+        return self._body is not None or self._cleanup is not None
+
+    def raise_body(self):
+        if self._body is not None:
+            raise self._body from None
+
+    def raise_first(self):
+        self.raise_body()
+        if self._cleanup is not None:
+            raise self._cleanup from None
+
+
 def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, diagnostic=False):
     """Disabled live entry point; historical body retained for source review."""
     raise RuntimeError('non-live preparation: observer launch disabled')
@@ -687,6 +738,7 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
         finally:
             os.close(send)
     worker = threading.Thread(target=control, daemon=True)
+    cleanup = AttemptCleanupFailures()
     worker.start()
     report = {'record': 'controlled-' + lane + '-attempt', 'authority': 'none', 'root': str(root),
               'sourceHead': SOURCE, 'connectedCommandsReleased': False,
@@ -716,9 +768,10 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
         require(clock_sha(Path(tracer).read_bytes()) == trace_clock['tracerSha256'] and
                 Path('/proc/sys/kernel/random/boot_id').read_text().strip() == trace_clock['bootId'] and
                 clock_namespaces() == trace_clock['namespaces'], 'changed tracer/kernel clock provenance')
-        os.close(out_write)
-        os.close(err_write)
+        writer_handles = (out_write, err_write)
         out_write = err_write = None
+        cleanup.close_transferred(writer_handles)
+        cleanup.raise_first()
         producer_out = os.read(out_read, 65537)
         producer_err = os.read(err_read, 65537)
         require(len(producer_out) <= 65536 and len(producer_err) <= 65536, 'bounded producer output exceeded')
@@ -753,7 +806,8 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
         report['qualification'] = 'unavailable-effect-audit-and-source-review-pending'
         run.replay = replay
     except BaseException as error:
-        report['refusal'] = type(error).__name__ + ': ' + str(error)
+        cleanup.body_failed(error)
+        report['refusal'] = 'supervisor original attempt refused'
     finally:
         run.closed = False
         # The original worker can still use receive and provenance. Keep all
@@ -762,20 +816,16 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
             worker.join(timeout=1)
             require_control_worker_inactive(worker)
         except BaseException:
+            cleanup.raise_body()
             raise RuntimeError('control-worker ownership uncertain') from None
-        for number in (out_read, err_read, out_write, err_write):
-            if number is not None:
-                os.close(number)
-        os.close(command)
-        os.close(ack)
-        if not worker.is_alive():
-            os.close(receive)
-        os.close(lifetime)
-        provenance.close()
-        run.closed = not worker.is_alive()
+        final_handles = (out_read, err_read, out_write, err_write, command, ack, receive, lifetime)
+        final_provenance = provenance
+        out_read = err_read = out_write = err_write = command = ack = receive = lifetime = None
+        provenance = None
+        cleanup.close_transferred(final_handles, final_provenance)
         if diagnostics is not None:
-            path = root / (lane + '-diagnostics.json')
             try:
+                path = root / (lane + '-diagnostics.json')
                 # The original control worker can still bind diagnostic pins.
                 # This is a disposal precondition, never execution authority.
                 try:
@@ -787,19 +837,26 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
                 report['diagnostic'] = {'config': measured['config'], 'samples': len(measured['samples']),
                                         'errors': measured['errors'], 'sha256': file_digest(path)}
             except BaseException as error:
-                run.closed = False
-                report['diagnosticRefusal'] = type(error).__name__ + ': ' + str(error)
-        report['phaseLog'] = log
-        report['connectedCommandsReleased'] = lane == 'connected' and any(row['event'] == 'sent' for row in log)
-        if trace.exists():
-            report['traceBytes'] = trace.stat().st_size
-            report['traceSha256'] = file_digest(trace)
-        if replay is not None:
-            original['finalPhysicalObservations'] = getattr(replay, 'final_observations', {})
-        report['observerImplementation'] = implementation
-        retained.write_text(encoded(original))
-        run.report_path.write_text(encoded(report))
-        run.report_path.chmod(0o600)
+                cleanup.cleanup_failed(error)
+                report['diagnosticRefusal'] = 'supervisor diagnostic retention refused'
+        try:
+            if cleanup.failed():
+                report.setdefault('refusal', 'supervisor finalization refused')
+            report['phaseLog'] = log
+            report['connectedCommandsReleased'] = lane == 'connected' and any(row['event'] == 'sent' for row in log)
+            if trace.exists():
+                report['traceBytes'] = trace.stat().st_size
+                report['traceSha256'] = file_digest(trace)
+            if replay is not None:
+                original['finalPhysicalObservations'] = getattr(replay, 'final_observations', {})
+            report['observerImplementation'] = implementation
+            retained.write_text(encoded(original))
+            run.report_path.write_text(encoded(report))
+            run.report_path.chmod(0o600)
+        except BaseException as error:
+            cleanup.cleanup_failed(error)
+        cleanup.raise_first()
+        run.closed = True
     return run
 
 
