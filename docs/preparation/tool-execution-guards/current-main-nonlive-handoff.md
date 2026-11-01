@@ -1,5 +1,12 @@
 # Current-main guard/observer preparation — no live proof
 
+> Historical first-stage record at `7601975`. The
+> [v2 continuation handoff](current-main-v2-nonlive-handoff.md) supersedes its
+> compatibility status, test totals, launch behavior and draft-PR hold below.
+> The earlier assumption that the manual desktop/homelab resource preflight
+> blocked automatic Tyler/hosted PR CI was too broad; draft publication is authorized.
+> Original records and hashes below remain historical evidence.
+
 This is a **blocked preparation candidate**, not an observation-ready image or
 merge recommendation. It preserves current main's standing-grant behavior and
 imports the draft observer/test work without granting that older observer

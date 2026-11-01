@@ -1,0 +1,54 @@
+{
+  "record": "independent-bounded-v2-preparation-review",
+  "reviewer": "/root/independent_review",
+  "candidateCommit": "d2c1626c1b01f9dcac48753048fbdaf2c15c166c",
+  "candidateTree": "04d0bf59062be15b74109710d35677ebc6bf168d",
+  "reviewBase": "76019753e056461fd3a1b60ba7f459446f068a00",
+  "reviewedFilesSha256": {
+    "tools/owned-read-proof/check_nonlive.py": "bf53506e7237abcf857750819d2b196358cd8d20c54d3382ca04a114c986b87d",
+    "tools/owned-read-proof/controlled_aggregate.py": "ade19e2569ed52bfd2f4672426d7c20308fd23b3f74a9fdc5543648f0093f62a",
+    "tools/owned-read-proof/controlled_delivery_semantics.py": "71248cb8208417f3ff8cd2f81dcd5d698d34edc818287f1136f1069a2e3d40d2",
+    "tools/owned-read-proof/controlled_save_semantics.py": "b1a880ef24ad2f7829f5a25557bff5f7a7eec18c8135edd47eb5a394cce18d2b",
+    "tools/owned-read-proof/controlled_supervisor.py": "1dcb287a1800a29a4007b730c91bed7dbc02f648ed86fcad15c2a3f19fdcc8a7",
+    "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+    "tools/owned-read-proof/controlled_v2_model.py": "af289071fc9627bb8f38115916a40740c1a131a756a4afa163d9229f6056df15",
+    "tools/owned-read-proof/test_controlled_v2_semantics.py": "cc2a27be6f221654ecc1200aa14e098bf5918d94e838e3c830672ec03f9d09a1",
+    "tools/owned-read-proof/test_current_main_preparation.py": "cc1d80a875f2ac5323611d8c29a05653ddfa8fa98a5b0a5266b96de01bc1822b"
+  },
+  "outcome": "No blocking finding in the bounded v2 offline-model delta. This is not runtime qualification, whole-stack audit or formal security approval.",
+  "scope": [
+    "Reviewed explicit boolean standing_v2 selection with unchanged legacy defaults and source-binding wrapper.",
+    "Reviewed new fixed current-source model, closed v2 record inventory, standing proof action/command/prior-proof/reviewer/binding/lease correlations, Save approval v2 shape, exact source-order rule digest and sidecar bytes.",
+    "Reviewed standing publication causality and millisecond timestamp boundaries; reviewUntil equals original finite action expiry for this source.",
+    "Reviewed distinct fresh c expiry without extending original a/b owner/run bound, preserving current authority and exact scope checks.",
+    "Reviewed 18 protected-file aggregate, zero Save resource reads/answers, unavailable execution-review provenance, authority:none/no accepting token/no production eligibility.",
+    "Reviewed unconditional observe refusal before image checking/probing/process creation; legacy observer/ConnectedDesignation source selectors remain unchanged.",
+    "Compared commit diff to ensure only nine tools/owned-read-proof Python files changed; producer/child/builder/lock source bytes equal previously reviewed 4ebf382."
+  ],
+  "checks": [
+    {
+      "command": "timeout --kill-after=5s 60s python3 -B -m unittest discover -s tools/owned-read-proof -p test_controlled_v2_semantics.py -v",
+      "result": "13 test methods passed in 0.944 s on exact candidate bytes, exit 0; synthetic/reauthenticated fixtures only."
+    },
+    {
+      "command": "git diff --check 7601975 d2c1626",
+      "result": "passed"
+    },
+    {
+      "result": "Earlier independent supplemental in-memory tests refused wrong source/producer/child bindings and reviewUntil\u00b11ms; exact fresh-expiry upper boundary passed. Those controls are now covered in the committed 13-method suite."
+    }
+  ],
+  "resolvedReviewComment": "The misleading comment claiming observe ran image checking was corrected; it now states unconditional refusal precedes image checking, and the separate image-mismatch test remains.",
+  "limitations": [
+    "The v2 fixture is synthetic and manually constructs physical history; no complete current-source kernel trace has been observed/replayed.",
+    "Original callback, registry, review-handle, permit and dispatch memory identities remain exact-source assumptions.",
+    "Four legacy image-designation positive-setup failures remain unresolved by design; no source selector or assertion was weakened to make them pass.",
+    "This review did not rerun all parent-owned Python/Vitest/typechecks or independently install dependencies/rebuild the new candidate image.",
+    "No live observer/tracer/provider/daemon, formal GitHub/security approval, #779 review, #793 merge, #794 approval or activation occurred."
+  ],
+  "sourcePins": {
+    "offlineV2Model": "4ebf382fe6738bb11268b47b048a3d7c7a6f2586",
+    "legacyObserver": "3fce8bcc9afd381cd07c0e06051921307d6322b3"
+  },
+  "automaticApprovalDenialsDuringReview": []
+}
