@@ -1,0 +1,122 @@
+{
+  "record": "injected-query-constructor-rollback-checks",
+  "authority": "none",
+  "baseCommit": "f68df5026a7d8e282ba170ccd0af1e89572f636b",
+  "mainPin": "f9e7225e59cfe6e83c539f2ce9922ad0677719f4",
+  "candidateHashes": {
+    "tools/owned-read-proof/kernel_runtime_queries.py": "be492af65c37eab4a02859375ea66c88749ba8a038396283d14dfd0ffbe2c617",
+    "tools/owned-read-proof/test_query_rollback.py": "ff69a71f147d390a59de4b82e216ae8cb4632da7d599d108873ef49f8ae0bc8d",
+    "tools/owned-read-proof/check_nonlive.py": "3f14e72f15a6608704a4f255103d6f3237235b1961c83454b0fc263ce8e2cf47",
+    "docs/preparation/tool-execution-guards/current-image-query-rollback.md": "e0afd6e4294ea8f8af68e1248ebf36cdf3e4b912d360c22699991484af457f5e"
+  },
+  "unchangedSourceControls": {
+    "tools/owned-read-proof/controlled_supervisor.py": "dcce704ec9d4e4a5697b889caa10e556f9c8dc9bcc8ae7b0fcc90a1fdcd44dba",
+    "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+    "tools/owned-read-proof/controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+    "tools/owned-read-proof/controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+    "tools/owned-read-proof/controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+    "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+    "tools/owned-read-proof/controlled_diagnostics.py": "c02fb09e9f4c43ad1a54650091ee1ca9efc8067ec5907b467be40c2b3f3c37da",
+    "tools/owned-read-proof/offline_cleanup.py": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+    "tools/owned-read-proof/current_image_inspection.py": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+    "tools/owned-read-proof/run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+    "tools/owned-read-proof/verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310",
+    "tools/owned-read-proof/legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca"
+  },
+  "unchangedAST": {
+    "topLevelFunctions": [
+      "fs_type",
+      "ident",
+      "mount_fields",
+      "check_mount",
+      "namespaces",
+      "process_identity",
+      "check_process",
+      "retained_contract"
+    ],
+    "ownerMethods": ["own_tracer", "bind_leader", "validate_leader", "validate_mounts"],
+    "queryTable": true,
+    "imports": true
+  },
+  "outputIdentity": {
+    "controlled-build.json": {
+      "bytes": 48027,
+      "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+    },
+    "controlled-child.mjs": {
+      "bytes": 5713,
+      "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+    },
+    "controlled-producer.mjs": {
+      "bytes": 2248652,
+      "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+    }
+  },
+  "imageIdentity": "Retained native outputs rehashed. No build, image execution, new designation or physical regression rerun in this increment. Kernel observer implementation hash changes; image/source pins and all declared image inputs do not.",
+  "verifiedInputs": {
+    "currentFrozenInputs": 387,
+    "currentRepositoryInputs": 195,
+    "historicalProtectedInputs": 392,
+    "historicalHarnessCopied": false,
+    "historicalTestsRun": false
+  },
+  "validation": {
+    "selected": {
+      "passed": 57,
+      "seconds": 0.055,
+      "exitCode": 0,
+      "breakdown": {
+        "newInjectedRollback": 16,
+        "pureNativeReplay": 10,
+        "inertAttemptModel": 13,
+        "cleanupPrivacy": 18
+      },
+      "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy -v",
+      "workingDirectory": "/workspace/Project_Orca/tools/owned-read-proof",
+      "log": {
+        "path": "/tmp/orca-current-main-evidence/query-rollback-selected.log",
+        "sha256": "130417042da2e6146ea3e4e442d521ff6c2eb2e3185d7557f5047cc4b75044ad"
+      }
+    },
+    "ordinaryCI": "Pending publication; ordinary Vitest CI does not execute this Python selection.",
+    "independent": {
+      "normalPassed": 57,
+      "normalSeconds": 0.05,
+      "optimizedPassed": 57,
+      "optimizedSeconds": 0.059,
+      "selection": "same explicit injected/pure selection; no real-query methods, image builds or full selector; separate checkout, same managed host"
+    }
+  },
+  "notRun": [
+    "Full check_nonlive.py selector",
+    "KernelProvenanceControls.test_real_symlink_redirection_and_wrong_held_filesystem_refuse",
+    "KernelProvenanceControls.test_changed_namespace_and_mountinfo_refuse_without_mutating_host",
+    "Historical physical image regressions or disposable image builds",
+    "Live host query/procfs/ctypes probes; observer/tracer; historical launch body/extraction",
+    "App Smoke; designation; activation; merge; formal approval"
+  ],
+  "remainingGates": [
+    "bind_leader pidfd/procfd registration and worker ownership",
+    "Diagnostic constructors, clock probes, early lock/pipe acquisition and final settlement",
+    "Durable bounded private-failure capture (protocol outline only)",
+    "Authenticated original session, preventive containment and actual loaded-runtime closure",
+    "Original bootstrap-to-connected qualification and current-image designation"
+  ],
+  "previousCIHistory": {
+    "run": 41283402840,
+    "originalAttempt": "3 failed tests on tyler-2; only first has explicit EADDRINUSE; latter causes unresolved",
+    "singleFailedJobRetry": "10,051 passed,36skipped,1todo on tyler-3; same head and merge candidate",
+    "record": "/tmp/orca-current-main-evidence/inert-ci-recovery-terminal.json",
+    "sha256": "50cca97c402c577c0380b3733934eba1340839ef71c9d5f651f1f61c66dba5be"
+  },
+  "metadataHold": "PR description mutation remains held; unknown earlier error classification. No retry or alternate route.",
+  "independentReviewOriginal": {
+    "path": "/tmp/orca-current-main-evidence/query-rollback-independent-review.json",
+    "sha256": "c2bc5d64b1f6880539ee17692ec1e4ad42bba8bae8d603658b887f85ae25aa68"
+  },
+  "independentReviewRepresentation": {
+    "path": "docs/preparation/tool-execution-guards/current-image-query-rollback-review.json",
+    "sha256": "1108710449ee15f74290673a624de3ba4dd6783e7bfde3b1cc428d3460093502",
+    "relationship": "Prettier serialization only; parsed JSON equals the original independent review. Original byte hash is recorded separately."
+  }
+}

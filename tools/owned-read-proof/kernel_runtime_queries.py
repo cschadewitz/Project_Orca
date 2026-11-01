@@ -74,11 +74,18 @@ def open_exact(path):
             flags = os.O_CLOEXEC | os.O_NOFOLLOW
             flags |= os.O_RDONLY if i == len(parts) - 1 else os.O_PATH | os.O_DIRECTORY
             child = os.open(part, flags, dir_fd=number)
-            os.close(number)
-            number = child
+            # Own the child before attempting the predecessor's one-shot close.
+            # A failed close may already have released/reused that numeric FD.
+            previous, number = number, child
+            os.close(previous)
         return number
     except BaseException:
-        os.close(number)
+        try:
+            os.close(number)
+        except BaseException:
+            # Preserve the original walk/close error, without formatting either.
+            # Cleanup failure still means refusal; no descriptor is returned.
+            pass
         raise
 
 
@@ -112,21 +119,38 @@ class KernelRuntimeQueries:
     """Retain real descriptors throughout the owned attempt and independent replay."""
     def __init__(self):
         self.fds = []
-        self.value = {'kind': KIND, 'mountinfo': Path('/proc/self/mountinfo').read_text(),
-                      'namespaces': namespaces('/proc/self'), 'queries': {}}
-        self.tracer = None
-        self.pidfd = self.procfd = None
-        s = os.stat('/')
-        self.root = [s.st_dev, s.st_ino]
-        # Global probes can be held prelaunch. Process-relative self is bound only
-        # after the original leader is independently observed, never to our inode.
-        for path in QUERIES:
-            if path != '/proc/self/cgroup':
-                self.retain(path, path.replace('//', '/'))
+        # Private exception objects may retain traceback state; never serialize or
+        # project them. This is in-memory error precedence, not durable evidence.
+        self._first_failure = self._cleanup_error = None
+        try:
+            self.value = {'kind': KIND, 'mountinfo': Path('/proc/self/mountinfo').read_text(),
+                          'namespaces': namespaces('/proc/self'), 'queries': {}}
+            self.tracer = None
+            self.pidfd = self.procfd = None
+            s = os.stat('/')
+            self.root = [s.st_dev, s.st_ino]
+            # Global probes can be held prelaunch. Process-relative self is bound only
+            # after the original leader is independently observed, never to our inode.
+            for path in QUERIES:
+                if path != '/proc/self/cgroup':
+                    self.retain(path, path.replace('//', '/'))
+        except BaseException as error:
+            self._first_failure = error
+            try:
+                self.close()
+            except BaseException:
+                # close attempts every registered FD and privately retains its
+                # first disposal error; never replace the constructor's failure.
+                pass
+            raise
 
     def retain(self, path, resolved):
+        # Reserve tracking before acquisition. A failed open leaves only an empty
+        # slot; replacing a slot in this ordinary list needs no list growth.
+        self.fds.append(None)
+        slot = len(self.fds) - 1
         number = open_exact(resolved)
-        self.fds.append(number)
+        self.fds[slot] = number
         actual = ident(number)
         kind = fs_type(number)
         require(kind == QUERIES[path][3] and stat.S_ISREG(actual[2]),
@@ -197,9 +221,19 @@ class KernelRuntimeQueries:
                 os.close(other)
 
     def close(self):
-        for number in reversed(self.fds):
-            os.close(number)
-        self.fds = []
+        while self.fds:
+            # Consume before closing; a disposal error must not trigger a later
+            # retry against a numeric descriptor which could already be reused.
+            number = self.fds.pop()
+            if number is None:
+                continue
+            try:
+                os.close(number)
+            except BaseException as error:
+                if self._cleanup_error is None:
+                    self._cleanup_error = error
+        if self._cleanup_error is not None:
+            raise RuntimeError('query descriptor cleanup uncertain') from None
 
 
 def retained_contract(value, leader):
