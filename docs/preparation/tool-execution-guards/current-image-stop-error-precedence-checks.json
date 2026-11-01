@@ -1,0 +1,138 @@
+{
+  "record": "bounded-stop-error-precedence-checks",
+  "base": "a0ecb4daf2eb2dc77c3714d69fd852e0fd49fe6e",
+  "scope": "Inner original-error capture before existing diagnostic stop; historical integration source-only",
+  "staticIdentity": {
+    "base": "a0ecb4daf2eb2dc77c3714d69fd852e0fd49fe6e",
+    "candidateHashes": {
+      "tools/owned-read-proof/controlled_supervisor.py": "e0ae2fc78de01c0d038902bb7b94a8b24de4267dd05eb76201ebe335bf69bafc",
+      "tools/owned-read-proof/check_nonlive.py": "28a2f9a6ba0e3e9539216246474533fa9ef48ead5c5a582ec6c492b7390420b9",
+      "tools/owned-read-proof/test_stop_error_precedence.py": "5e46fb94ab812dd000abffe7e9f36d0c66953639768190e784ff959d4429095a",
+      "docs/preparation/tool-execution-guards/current-image-stop-error-precedence.md": "28f8afcb34717b56fd9b9a4846fc9a25b9604dbd5cd327002b37d3e3a4a7714c"
+    },
+    "unchangedSourceControls": {
+      "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+      "tools/owned-read-proof/controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+      "tools/owned-read-proof/controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+      "tools/owned-read-proof/controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+      "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+      "tools/owned-read-proof/offline_cleanup.py": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+      "tools/owned-read-proof/current_image_inspection.py": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+      "tools/owned-read-proof/run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+      "tools/owned-read-proof/verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310",
+      "tools/owned-read-proof/legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca",
+      "tools/owned-read-proof/kernel_runtime_queries.py": "be492af65c37eab4a02859375ea66c88749ba8a038396283d14dfd0ffbe2c617",
+      "tools/owned-read-proof/controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+      "tools/owned-read-proof/build-controlled.mjs": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+      "pnpm-lock.yaml": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+      "package.json": "eebdc3c3f9d91ffe06f3f871fbf4309b66c02c55ca92e3e9bf95d8884e9f2f80",
+      "pnpm-workspace.yaml": "1a66b4ae3b971b09ddfc0b8b3452fd1593aae9294bb12e1688996bce00c86cd4",
+      "tsconfig.json": "e1ef9bdff1231e76824ee6cd75df5e2e4759430f20183fabb22a4b6c48c54375",
+      "tools/owned-read-proof/controlled_diagnostics.py": "61966f556d1ab891a56e94fd59d5696c7f0d8fa1ae51e53f63a98bca8896d314"
+    },
+    "outputIdentity": {
+      "controlled-build.json": {
+        "bytes": 48027,
+        "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+      },
+      "controlled-child.mjs": {
+        "bytes": 5713,
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+      },
+      "controlled-producer.mjs": {
+        "bytes": 2248652,
+        "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+      }
+    },
+    "currentFrozenInputs": 387,
+    "currentRepositoryInputs": 195,
+    "fourFirstExecutableRefusalsExact": true,
+    "runTracedArgumentsUnchanged": true,
+    "threeOriginalJoinsUnchanged": true,
+    "outerFinalizerASTUnchanged": true,
+    "existingHolderMethodsASTUnchanged": true,
+    "rebuild": false
+  },
+  "localTests": {
+    "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_stop_error_precedence test_attempt_cleanup test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy -v",
+    "passed": 140,
+    "seconds": 0.291,
+    "exitCode": 0,
+    "log": {
+      "path": "/tmp/orca-current-main-evidence/stop-error-selected.log",
+      "sha256": "3a112ccbfcb1c6389a861ed895a0f59f48d295d670488819aca2dd430161166b"
+    },
+    "newInertMethods": 7,
+    "newSourceOnlyMethods": 3,
+    "previousMethodsUnchanged": 130
+  },
+  "independentReview": {
+    "originalPath": "/tmp/orca-current-main-evidence/stop-error-independent-review.json",
+    "sha256": "9c9b77867beb7960b48853593b85e3132704ae4f5c98b980a7c4089580d5ade4",
+    "repositoryCopy": "docs/preparation/tool-execution-guards/current-image-stop-error-precedence-review.json",
+    "normalPassed": 140,
+    "normalSeconds": 0.245,
+    "optimizedPassed": 140,
+    "optimizedSeconds": 0.211,
+    "blockingFindings": [],
+    "coverage": "Focused full source/test delta and static correspondence; no formal security approval or runtime qualification"
+  },
+  "ordinaryCI": "Pending publication; ordinary CI does not run this Python selection",
+  "priorEvidence": {
+    "attempt-cleanup-terminal-ci.json": {
+      "path": "/tmp/orca-current-main-evidence/attempt-cleanup-terminal-ci.json",
+      "sha256": "2bf900a9c3408287022c5812607207ee0dd6b4de642e24d5006b1e6b1ae97537"
+    },
+    "finalizer-worker-ci-original.json": {
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-ci-original.json",
+      "sha256": "aa8ff302c4277a28c992464bd05ef3923909511e9547bd92898791d7714acdee"
+    },
+    "finalizer-worker-terminal-ci.json": {
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-terminal-ci.json",
+      "sha256": "a632962d139de060da0db84055fb1cda599467a1c70f1b4fcec027bee1ce9a09"
+    },
+    "finalizer-worker-ci-independent-assessment.json": {
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-ci-independent-assessment.json",
+      "sha256": "e50f86f01f0a9b9b1c135f0c1c92c445f39fc6a9d040189066bb4e919b53f36e"
+    },
+    "inert-attempt-terminal-ci.json": {
+      "path": "/tmp/orca-current-main-evidence/inert-attempt-terminal-ci.json",
+      "sha256": "8b356f26476550d72fa948897054c0a0a553a14125f9d1b6f39324ce08bac514"
+    },
+    "inert-ci-recovery-terminal.json": {
+      "path": "/tmp/orca-current-main-evidence/inert-ci-recovery-terminal.json",
+      "sha256": "50cca97c402c577c0380b3733934eba1340839ef71c9d5f651f1f61c66dba5be"
+    },
+    "finalizer-worker-initial-test-failure.json": {
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-initial-test-failure.json",
+      "sha256": "9e4d93fd762ee552bb4f0921049bfdd3a59af06047fe42a73651b5331dc28101"
+    }
+  },
+  "priorFailures": "Preserved separately; no claim later success explains original causes",
+  "notRun": [
+    "Full Python selector",
+    "Real host queries/probes/sampler/thread/process tests",
+    "Historical launcher/physical tests",
+    "Image builds/designation",
+    "App Smoke/live observer/tracer/provider/daemon"
+  ],
+  "toolErrors": [
+    {
+      "action": "rg --files -g AGENTS.md -g SKILL.md tools docs .agents",
+      "target": "/workspace/Project_Orca/.agents",
+      "exitCode": 2,
+      "stderr": "rg: .agents: No such file or directory (os error 2)",
+      "classification": "Missing optional directory, not denial; known absence retained. No safety bypass or metadata retry."
+    }
+  ],
+  "heldMetadata": "PR #809 description mutation remains unknown classification; no retry or alternative route",
+  "restrictions": "All four refusals/source pins/bounds/images preserved; no #779/#793/#794 actions",
+  "limitations": [
+    "One stop at this site; later retention retains existing stop",
+    "Existing stop may join/capture internally; no added wait or budget",
+    "Retained error identity is not OS release or process settlement",
+    "Early acquisition/start and worker send ownership/privacy remain",
+    "Durable private evidence and partial metadata unresolved",
+    "Authenticated authority, preventive containment, loaded-runtime closure and original lineage remain unavailable"
+  ]
+}

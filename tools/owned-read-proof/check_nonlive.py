@@ -31,6 +31,7 @@ TESTS = (
     'test_retention_rollback',
     'test_finalizer_worker_guard',
     'test_attempt_cleanup',
+    'test_stop_error_precedence',
     'test_current_qualification_boundaries',
     'test_controlled_v2_semantics',
     'test_kernel_causality',

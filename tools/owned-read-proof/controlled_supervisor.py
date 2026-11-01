@@ -528,8 +528,9 @@ def require_control_worker_inactive(worker):
 class AttemptCleanupFailures:
     """Private synchronous error ordering; caller transfers eligible ownership.
 
-    No acquisition, wait, worker settlement or execution authority. Descriptor
-    groups are the existing finite pair/finalizer tuples, not arbitrary iterators.
+    No acquisition, new wait/budget, worker settlement or execution authority.
+    Diagnostic stop delegates to its existing implementation and bounds.
+    Descriptor groups are existing finite pair/finalizer tuples, not iterators.
     """
     def __init__(self):
         self._body = self._cleanup = None
@@ -547,6 +548,14 @@ class AttemptCleanupFailures:
     def cleanup_failed(self, error):
         if self._cleanup is None:
             self._cleanup = error
+
+    def stop_diagnostics(self, diagnostics):
+        """Attempt the existing stop once; retain failure, never infer settlement."""
+        if diagnostics is not None:
+            try:
+                diagnostics.stop()
+            except BaseException as error:
+                self.cleanup_failed(error)
 
     def close_transferred(self, numbers, provenance=None):
         require(type(numbers) is tuple and len(numbers) in (2, 8),
@@ -754,11 +763,16 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
                         pass_fds=(lifetime, command, ack), cwd=image,
                         env={'PATH': os.environ['PATH'], 'HOME': str(base), 'TMPDIR': str(base)},
                         stdout=out_write, stderr=err_write, text=True, timeout=60, on_started=launched)
+        except BaseException as error:
+            cleanup.body_failed(error)
         finally:
             # Stop before any full-packet/kernel replay; sampling never reads
             # those packets or launches another process while run_traced owns one.
-            if diagnostics is not None:
-                diagnostics.stop()
+            cleanup.stop_diagnostics(diagnostics)
+        # A stop failure must not replace the original traced-attempt error or
+        # permit replay to proceed. Neither successful stop nor this holder
+        # establishes worker/process settlement.
+        cleanup.raise_first()
         worker.join(timeout=1)
         require(not worker.is_alive() and not errors, errors)
         finish_clock = sample_clock()
