@@ -1,0 +1,87 @@
+{
+  "record": "independent-frozen-build-byte-review",
+  "reviewer": "/root/independent_review",
+  "sourceCommit": "4ebf382fe6738bb11268b47b048a3d7c7a6f2586",
+  "sourceTree": "e6c8fcc5263506ef406dec163da244248a070eaa",
+  "workspace": "/tmp/orca-current-main-frozen",
+  "image": "/tmp/orca-current-main-evidence/frozen-image",
+  "files": {
+    "controlled-build.json": {
+      "bytes": 48027,
+      "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+    },
+    "controlled-child.mjs": {
+      "bytes": 5713,
+      "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+    },
+    "controlled-producer.mjs": {
+      "bytes": 2248652,
+      "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+    }
+  },
+  "inputCounts": {
+    "repository": 195,
+    "dependency": 192
+  },
+  "allInstalledInputsMatch": true,
+  "allRepositoryInputsMatchCommittedBlobs": true,
+  "childMatchesCommittedBlob": true,
+  "lock": {
+    "committedBytesMatch": true,
+    "repositorySha256": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+    "installedSha256": "a2077f20668fef13914cac77e73f0113d9b2783706f0ebec025f3aa7863e220f",
+    "repositoryDocumentCount": 2,
+    "installedDocumentCount": 1,
+    "workspaceDocumentEqual": true,
+    "repositoryTopLevelKeys": [
+      "importers",
+      "lockfileVersion",
+      "packages",
+      "settings",
+      "snapshots"
+    ],
+    "installedTopLevelKeys": [
+      "importers",
+      "lockfileVersion",
+      "packages",
+      "settings",
+      "snapshots"
+    ],
+    "differingWorkspaceKeys": [],
+    "note": "Committed lock document 0 pins pnpm12.4.2; document 1 describes workspace dependencies. Installed lock is the single workspace document."
+  },
+  "installedVersions": {
+    "sdk": "1.8.0",
+    "zod": "4.6.7",
+    "tsx": "4.23.15",
+    "vitest": "5.0.5",
+    "typescript": "7.0.2"
+  },
+  "historicalComparison": {
+    "oldInputCount": 386,
+    "newInputCount": 387,
+    "added": [
+      "packages/engine/src/deferred-human-delivery.ts"
+    ],
+    "removed": [],
+    "changed": [
+      "packages/agents/src/acp-session.ts",
+      "packages/agents/src/strict-permission-source.ts",
+      "packages/cli/test/controlled-owned-read-producer.ts",
+      "packages/core/src/strict-permission.ts",
+      "packages/daemon/src/owned-read-scoped-capture.ts",
+      "packages/daemon/src/protected-scoped-permission-owner.ts",
+      "packages/daemon/src/scoped-permission-bridge.ts",
+      "packages/engine/src/executors/basic.ts",
+      "packages/engine/src/human-input.ts",
+      "packages/engine/src/owned-file-read-service.ts",
+      "packages/engine/src/synthetic-read-fence.ts",
+      "packages/protocol/src/scoped-permissions.ts",
+      "packages/store/src/protected-event-store.ts"
+    ],
+    "unchanged": 373,
+    "changedRepositoryCount": 13,
+    "changedDependencyCount": 0
+  },
+  "scope": "Independent Python SHA-256 recomputation of output files and every declared input; committed repository/child byte correspondence; PyYAML parse comparison of repository workspace lock document and installed lockfile. No live observation, runtime designation, security approval or activation."
+}

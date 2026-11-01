@@ -1,0 +1,43 @@
+{
+  "record": "independent-bounded-preparation-review",
+  "reviewer": "/root/independent_review",
+  "candidateCommit": "4ebf382fe6738bb11268b47b048a3d7c7a6f2586",
+  "baseMain": "f9e7225e59cfe6e83c539f2ce9922ad0677719f4",
+  "outcome": "No additional blocker found in reviewed preparation delta; current-source observer compatibility and lock-conforming build remain blocked. Not approval for runtime use.",
+  "coverage": [
+    "Main-relative producer currentness composition and child fresh metadata/composition changes; original function/receiver retention, frozen exact role record, no fallback on invalid/failed composed assertion.",
+    "Preservation of current-main #805 standing review, Save-only persistence, separate original Allow Once and fresh subsequent rule-action expiry; no production packages/*/src, shared lockfile, workflows, or execution-limit changes in candidate diff.",
+    "Legacy observer SOURCE pin retention and assert_image_sources ordering before trace probe/process/directory creation.",
+    "New current-main refusal and v2 shape-negative controls, explicit non-live test selector, and exact historical build manifest preservation.",
+    "Targeted connected delivery/Save/aggregate schema comparison with current-main producer and protected owner; identified unresolved v2 incompatibility.",
+    "Independent three-file output/input hashing and committed-source correspondence recorded separately."
+  ],
+  "notCovered": [
+    "No full new audit of the approximately 9,700 imported observer/test lines.",
+    "No full test-suite rerun, live observer, tracer, daemon, provider, activation or runtime acceptance.",
+    "No formal GitHub review, #779 security review, #793 merge or #794 formal approval.",
+    "No independent rebuild of the retained artifact or dependency installation/lock-conformance proof."
+  ],
+  "findings": [
+    {
+      "status": "open-compatibility-blocker",
+      "target": "Current-main image designation and connected observation",
+      "reason": "Legacy source is 3fce8bcc9afd381cd07c0e06051921307d6322b3. Current main adds protected standing-review-v2 inventory, approval v2 fields, versioned standing rules with null expiry, Until revoked disclosure/projection, and fresh rule-action expiry; legacy finite delivery/Save/aggregate grammar does not model these. Retained exact-source refusal prevents launch."
+    },
+    {
+      "status": "open-build-provenance-blocker",
+      "target": "Lock-conforming current-main test image",
+      "reason": "Actual installed SDK1.5.0/Zod4.6.5 differ from current lock/package requirements SDK1.8.0/Zod4.6.7. Actual output hashes and all declared inputs verify, but this does not establish a frozen-install/current-lock build."
+    }
+  ],
+  "independentChecks": [
+    {
+      "command": "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH timeout 45s python3 -B -m unittest discover -s tools/owned-read-proof -p test_current_main_preparation.py -v",
+      "result": "5 tests passed in 0.582 seconds; no live observation launched"
+    },
+    {
+      "result": "Candidate changed-path check confirms no production /src/, shared lockfile, package manifest or workflow files changed."
+    }
+  ],
+  "automaticApprovalDenialsDuringReview": []
+}

@@ -1,0 +1,109 @@
+{
+  "record": "non-live-preparation-checks",
+  "authority": "none",
+  "sourceCommit": "4ebf382fe6738bb11268b47b048a3d7c7a6f2586",
+  "sourceTree": "e6c8fcc5263506ef406dec163da244248a070eaa",
+  "checks": [
+    {
+      "name": "Python non-live selection",
+      "status": "failed",
+      "exitCode": 1,
+      "details": "341 tests: 337 passed, 1 failure and 3 errors in four historical image-designation tests. Four real tracer cases not selected.",
+      "log": "/tmp/orca-current-main-evidence/frozen-python-nonlive.log",
+      "logSha256": "a42c2d718c49ca95bd2769167f99c9d7771c21fa4c968fddfb76b72547624a1e"
+    },
+    {
+      "name": "Optimized Python current-main refusal and timestamps",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "20 tests passed under python3 -O.",
+      "log": "/tmp/orca-current-main-evidence/optimized.log",
+      "logSha256": "d684f6a57c115eb895fcc6a6ef1cd88475adfdd89febb6dfc2c000a05e8891e3"
+    },
+    {
+      "name": "Producer currentness and authority selection",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "26 selected tests passed; 25 unselected. Includes standing grant with fresh action, separate Allow Once, composition identity/currentness/failure controls.",
+      "log": "/tmp/orca-current-main-evidence/frozen-composition-targeted.log",
+      "logSha256": "d91c6ec68bc04757dc1313d62b364e5f3ac71a1f6d1cd9a6a6c922b5af202f36"
+    },
+    {
+      "name": "Protected Save review regressions",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "All 7 tests passed: Save-only persistence, lost acknowledgement, reviewer/proof refusal, approval tampering and rule revocation.",
+      "log": "/tmp/orca-current-main-evidence/frozen-review-tests.log",
+      "logSha256": "98e0cc3f1ddfc8b8b55c9804232e4de6b05515498801991e534446dd0d7de94e"
+    },
+    {
+      "name": "Lifetime fdinfo controls",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "All 19 tests passed.",
+      "log": "/tmp/orca-current-main-evidence/frozen-fdinfo.log",
+      "logSha256": "d3e1997c7410a9fb6d4ce4cda13dc66dde5d99f9455edbc437c6b8154c73c7b4"
+    },
+    {
+      "name": "Workspace TypeScript",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "Complete root typecheck, no emit.",
+      "log": "/tmp/orca-current-main-evidence/frozen-typecheck.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "Renderer TypeScript",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "Complete renderer typecheck, no emit.",
+      "log": "/tmp/orca-current-main-evidence/frozen-renderer-typecheck.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "Changed JS/TS lint",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "Producer, producer tests, child.",
+      "log": "/tmp/orca-current-main-evidence/frozen-lint.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "Changed JS/TS and inventory formatting",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "Prettier read-only check.",
+      "log": "/tmp/orca-current-main-evidence/frozen-format.log",
+      "logSha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+    },
+    {
+      "name": "Broad selected producer/review/fdinfo attempt",
+      "status": "timeout",
+      "exitCode": 124,
+      "details": "180-second outer limit, no completed suite summary; not a pass. Subsequent selected checks reported separately; expired process group observed settled.",
+      "log": "/tmp/orca-current-main-evidence/frozen-vitest.log",
+      "logSha256": "89205f51fc4fc0b5af21d2d7626a1a22824c24c87776ecfcc3d747bf8a9945a6"
+    },
+    {
+      "name": "Frozen dependency installation",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "Isolated checkout, pnpm12.4.2, unchanged frozen lock, normal dependency policies; Electron binary download omitted per DEVELOPMENT, no app launch.",
+      "log": "/tmp/orca-current-main-evidence/frozen-install-supported.log",
+      "logSha256": "bc1de1746c67c9ab4597a24ccc64207700c9c754ea405698206b47923f896429"
+    }
+  ],
+  "notRun": [
+    "Live bootstrap or connected observer/tracer",
+    "four tracer tests excluded by check_nonlive.py",
+    "Full repository test suite or coverage",
+    "App smoke, packaged/native device checks, daemon startup",
+    "CI/workflow dispatch, formal security approval, merge, deployment, activation"
+  ],
+  "historicalAttempts": {
+    "preservedDependencyImage": "/tmp/orca-current-main-evidence/image",
+    "typecheck": "missing yaml in preserved installation; resolved by frozen install",
+    "testAttempt": "preserved-dependency producer/review attempt exited124 at180s; not acceptance",
+    "packageManagerAttempts": "First install used unsupported cache-dir argument and failed parsing; supported state-dir form succeeded. No lock or supply-chain policy was changed."
+  }
+}
