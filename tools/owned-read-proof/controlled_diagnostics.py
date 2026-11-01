@@ -134,23 +134,68 @@ class PinnedProcess:
 
 class SparseDiagnostics:
     def __init__(self, trace, phases):
+        self.resource = None
+        self._first_failure = self._cleanup_error = None
         self.trace, self.phases = Path(trace), phases
         self.processes, self.samples, self.errors = {}, [], []
         self.lock, self.done, self.thread = threading.Lock(), threading.Event(), None
         self.stopped = False
-        self.resource = os.open('/sys/fs/cgroup', os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
         try:
+            self.resource = os.open('/sys/fs/cgroup', os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
             own = proc_fields(Path('/proc/self/stat').read_text())
             self.bind('supervisor', own)
-        except BaseException:
-            os.close(self.resource)
+        except BaseException as error:
+            if self._first_failure is None:
+                self._first_failure = error
+            # Failed construction has no sampler. Consume registered ownership
+            # before disposal, including successful bind followed by lock-exit failure.
+            while self.processes:
+                _, process = dict.popitem(self.processes)
+                self._rollback_pin(process)
+            resource, self.resource = self.resource, None
+            if resource is not None:
+                try:
+                    os.close(resource)
+                except BaseException as cleanup:
+                    if self._cleanup_error is None:
+                        self._cleanup_error = cleanup
             raise
+
+    def _rollback_pin(self, process):
+        try:
+            process.close()
+        except BaseException as error:
+            if self._cleanup_error is None:
+                self._cleanup_error = error
 
     def bind(self, name, expected, procfd=None, pidfd=None):
         require(name in CONFIG['processes'], 'unknown diagnostic process role')
-        with self.lock:
-            require(name not in self.processes, 'diagnostic process role already pinned')
-            self.processes[name] = PinnedProcess(expected, procfd, pidfd)
+        failure = None
+        try:
+            with self.lock:
+                try:
+                    require(name not in self.processes, 'diagnostic process role already pinned')
+                    process = PinnedProcess(expected, procfd, pidfd)
+                    try:
+                        self.processes[name] = process
+                    except BaseException:
+                        # This internally owned dict may contain a partial insertion.
+                        # Detach only our pin, using native dict rollback operations.
+                        if dict.get(self.processes, name) is process:
+                            dict.pop(self.processes, name)
+                        self._rollback_pin(process)
+                        raise
+                except BaseException as error:
+                    failure = error
+                    raise
+        except BaseException as error:
+            original = failure if failure is not None else error
+            if self._first_failure is None:
+                self._first_failure = original
+            if original is not error:
+                # A secondary lock-exit failure cannot replace the original error.
+                raise original from None
+            raise
 
     def capture(self):
         require(len(self.samples) < MAX_SAMPLES, 'diagnostic sample count exceeds bound')
