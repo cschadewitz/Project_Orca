@@ -1,0 +1,227 @@
+{
+  "record": "independent architecture gate trust and dependency review",
+  "reviewer": "/root/independent_review",
+  "reviewedAtUTC": "2026-11-01T10:39:28.287187+00:00",
+  "baseline": "f14eba992bf060320fdc8cf55db066ba327a0baf",
+  "candidate": {
+    "path": "docs/preparation/tool-execution-guards/current-image-architecture-gates.md",
+    "bytes": 21456,
+    "sha256": "e509704baf9810954c695eea01eb755c0c563e9aed999660142769b45d6a9a7a"
+  },
+  "scope": "Read-only review of documentation against selected source; only this evidence record written outside repository. Not formal security review, whole-stack audit, product choice, provider qualification, execution authorization or runtime proof.",
+  "sourceFiles": [
+    {
+      "path": "tools/owned-read-proof/controlled_supervisor.py",
+      "bytes": 50605,
+      "sha256": "3e8e09e8e0f4d07273cd4d10488773970f7d97cbe80dc1d4f6977a94043a9f76",
+      "equalsBaselineGitBlob": true
+    },
+    {
+      "path": "tools/owned-read-proof/controlled_observation.py",
+      "bytes": 6999,
+      "sha256": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+      "equalsBaselineGitBlob": true
+    },
+    {
+      "path": "tools/owned-read-proof/controlled_connected.py",
+      "bytes": 22470,
+      "sha256": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+      "equalsBaselineGitBlob": true
+    },
+    {
+      "path": "tools/owned-read-proof/current_image_inspection.py",
+      "bytes": 7347,
+      "sha256": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+      "equalsBaselineGitBlob": true
+    },
+    {
+      "path": "tools/owned-read-proof/controlled-child.mjs",
+      "bytes": 5713,
+      "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+      "equalsBaselineGitBlob": true
+    },
+    {
+      "path": "tools/owned-read-proof/build-controlled.mjs",
+      "bytes": 2304,
+      "sha256": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+      "equalsBaselineGitBlob": true
+    },
+    {
+      "path": "tools/owned-read-proof/run.py",
+      "bytes": 13314,
+      "sha256": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+      "equalsBaselineGitBlob": true
+    },
+    {
+      "path": "tools/owned-read-proof/kernel_runtime_queries.py",
+      "bytes": 12682,
+      "sha256": "be492af65c37eab4a02859375ea66c88749ba8a038396283d14dfd0ffbe2c617",
+      "equalsBaselineGitBlob": true
+    },
+    {
+      "path": "tools/owned-read-proof/controlled_timestamps.py",
+      "bytes": 11540,
+      "sha256": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+      "equalsBaselineGitBlob": true
+    },
+    {
+      "path": "tools/owned-read-proof/controlled_replay.py",
+      "bytes": 84275,
+      "sha256": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+      "equalsBaselineGitBlob": true
+    },
+    {
+      "path": "docs/preparation/tool-execution-guards/current-image-observation-design.md",
+      "bytes": 14598,
+      "sha256": "9654990153ec1a2395ef68fde39e602507ab589c723e522678a3bbcd87e92cf9",
+      "equalsBaselineGitBlob": true
+    },
+    {
+      "path": "docs/preparation/tool-execution-guards/current-main-qualification-map.md",
+      "bytes": 16397,
+      "sha256": "3426cb402e6d916993c34d657531b88f5f77ab8eac7f2dd330f0e706aa88c0ce",
+      "equalsBaselineGitBlob": true
+    }
+  ],
+  "localLinks": [
+    {
+      "target": "current-image-observation-design.md",
+      "exists": true
+    },
+    {
+      "target": "current-main-qualification-map.md",
+      "exists": true
+    },
+    {
+      "target": "current-image-early-ownership.md",
+      "exists": true
+    },
+    {
+      "target": "../../../tools/owned-read-proof/run.py",
+      "exists": true
+    },
+    {
+      "target": "../../../tools/owned-read-proof/controlled_supervisor.py",
+      "exists": true
+    },
+    {
+      "target": "../../../tools/owned-read-proof/controlled_timestamps.py",
+      "exists": true
+    }
+  ],
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "required clarification",
+      "finding": "Initial S9 placed receipt sealing before closure claims, conflicting with assert_bootstrap_closed prerequisite to designate_bootstrap.",
+      "resolution": "S9 now distinguishes original process/resource settlement, committed originals and original closed assertion before receipt sealing and connected association.",
+      "status": "resolved"
+    },
+    {
+      "id": "R2",
+      "severity": "required clarification",
+      "finding": "Initial prelaunch dependency set omitted reviewed current-source/checker integration; complete runtime proof cannot be its substitute.",
+      "resolution": "G6 prelaunch reviewed-source/checker portion now explicitly included in prerequisite text and diagram; runtime bootstrap proof precedes G5 and connected proof remains later.",
+      "status": "resolved"
+    },
+    {
+      "id": "R3",
+      "severity": "precision",
+      "finding": "M0 could be read as requiring or claiming the actual proof-domain choice.",
+      "resolution": "M0 explicitly reviews framed question/options; G0 remains decision required.",
+      "status": "resolved"
+    },
+    {
+      "id": "R4",
+      "severity": "precision",
+      "finding": "One-attempt session language ambiguous across bootstrap and connected lane.",
+      "resolution": "G1 specifies one original session with at most one bootstrap and one connected lane, each fresh grant check and no automatic retry.",
+      "status": "resolved"
+    },
+    {
+      "id": "R5",
+      "severity": "precision",
+      "finding": "Blanket durable-evidence privacy language could forbid required private original paths/tokens.",
+      "resolution": "Restriction now explicitly belongs to fixed-code failure journal; bounded private trace/plan/receipt custody stays distinct from public projection.",
+      "status": "resolved"
+    }
+  ],
+  "conclusions": [
+    "Eight gates and S0-S10 are finite planning exit obligations, explicitly not complete transitive implementation coverage.",
+    "External session origin and internal bootstrap/action capabilities are distinct; no report, hash, CLI/env flag, signed object without trusted issuer, constructed callback or JSON receipt may self-authorize.",
+    "Before-evaluation loader enforcement is separate from post-run actual-loaded corroboration. Independently rooted bootstrap/controller remains missing; no circular candidate self-attestation is introduced.",
+    "Dependency sequence correctly separates readiness review and separate live decision from original bootstrap replay/settlement, receipt continuity, fresh session grant check, connected phases and final exact-claim review.",
+    "Original guest/process restart or artifact export cannot preserve in-memory receipt capability. Observer/tracer/producer correspondence must be original inside one chosen domain.",
+    "Guest-local proof and a named existing-host-kernel proof are different claims; environment choice remains undecided and availability/adequacy uninspected. Same-kernel namespaces do not establish unisolated-host equivalence.",
+    "Actual unresolved source gap is correctly stated: run_traced may raise OwnedCleanupError while observe finalizer only checks control-worker inactivity before disposing handles/provenance. Local private error capture does not settle owned tracees.",
+    "Existing report, metadata, trace, asset and receipt bounds are separate. Journal implementation has no new allocation/whitelist/pin/timeout authorization; incompatible accounting blocks G4.",
+    "M1 names concrete trusted provider/owner contract, M2 cohesive ownership implementation remains guarded, M3 environment qualification/live work remains a separate decision."
+  ],
+  "coverage": {
+    "substantiveSourceSections": [
+      "controlled_supervisor observer_original/assert_observer, ObservedRun closure/designation, runtime_paths/runtime_originals, historical observe setup/control/finalizer and bounds",
+      "controlled_connected ConnectedDesignation constructor/check/bind/association and ConnectedKernelReplay prerequisite",
+      "controlled_observation four-entry refusal context, public projection and historical wrapper ordering",
+      "controlled-child static import followed by pathname checks; build-controlled loader banner and external modules",
+      "run_traced process creation/cleanup/subreaper restoration; probe_clock helper lifecycle",
+      "KernelRuntimeQueries original leader/root/namespace correspondence; fixed inspector nonauthority contract"
+    ],
+    "notSubstantivelyAudited": [
+      "Complete replay syscall dispatcher and all source/product semantic branches",
+      "Python/Node/native dependencies, compiler or OS/hypervisor correctness",
+      "Provider interfaces, actual platform state, containment availability, runtime loaded graph or current bootstrap evidence"
+    ]
+  },
+  "checks": {
+    "testsRun": 0,
+    "runtimeOrHostProbesRun": 0,
+    "buildsRun": 0,
+    "sourceFilesUnchangedAtBaseline": true,
+    "newAuthorityOrRuntimeImplementation": false,
+    "publicationOrCIOrMetadataActions": false,
+    "independentSourceLinkCheck": "All document local links exist; exact files hashed."
+  },
+  "errors": [
+    {
+      "phase": "preliminary source inspection",
+      "diagnostic": "rg: tools/owned-read-proof/controlled_image.py: No such file or directory (os error 2)",
+      "overallCommandExit": 0,
+      "subcommandExit": "not separately captured; later commands completed",
+      "resolution": "Definition search located controlled_connected.py and it was read; no mutation or denial."
+    },
+    {
+      "phase": "preliminary source inspection",
+      "diagnostic": "sed: can't read docs/preparation/tool-execution-guards/current-image-worker-failure.md: No such file or directory",
+      "overallCommandExit": 2,
+      "resolution": "No claim based on nonexistent file; current actual supervisor source read. No mutation or denial."
+    }
+  ],
+  "remainingBlockers": [
+    "G0 product/environment scope choice not made",
+    "G1 trusted issuer and surviving recovery owner not named",
+    "G2/G3 provider containment and loader origin not implemented or qualified",
+    "G4 cohesive lifecycle and compatible durable storage protocol not implemented",
+    "G5/G6 no genuine current original bootstrap/connected runtime proof",
+    "G7 concrete private storage/custody and independent runtime qualification absent"
+  ],
+  "outcome": "No remaining blocking finding for this docs-only M0 architecture contract after recorded corrections. No live readiness, permission or closure established.",
+  "priorSnapshots": [
+    {
+      "reviewRecordSHA256": "950c0e1a6734f0fc10f0eec5c940161716a1fa9676438cdec99de8c5d35d08a1",
+      "candidate": {
+        "path": "docs/preparation/tool-execution-guards/current-image-architecture-gates.md",
+        "bytes": 21130,
+        "sha256": "c0dcbd66b5e1e766485d39bf6a45aaf3c2be4259c0ecb58569aaeb2eb47e6629"
+      }
+    }
+  ],
+  "finalWordingReview": {
+    "atUTC": "2026-11-01T10:40:19.714976+00:00",
+    "changes": [
+      "Capitalized Some writes.",
+      "S0-S10 explicitly describe required ownership categories/ordering, not exact existing chronology; helper calls before lane creation and wrapper builds before observe remain included.",
+      "Unavailable M1 outcome explicitly blocks M2; only available reviewed provider/owner contract permits cohesive guarded implementation."
+    ],
+    "outcome": "No new blocking finding; all prior substantive corrections retained. Awaiting final evidence package consistency check; no runtime action."
+  }
+}

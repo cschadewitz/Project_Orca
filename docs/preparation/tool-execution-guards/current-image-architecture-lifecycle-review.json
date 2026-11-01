@@ -1,0 +1,107 @@
+{
+  "record": "independent-architecture-gates-lifecycle-budget-privacy-review",
+  "reviewer": "/root/worker_privacy_review",
+  "sourceBaseline": "f14eba992bf060320fdc8cf55db066ba327a0baf",
+  "document": {
+    "path": "docs/preparation/tool-execution-guards/current-image-architecture-gates.md",
+    "sha256": "e509704baf9810954c695eea01eb755c0c563e9aed999660142769b45d6a9a7a",
+    "bytes": 21456
+  },
+  "scope": "Read-only bounded lifecycle/budget/privacy review against exact source and dated preparation docs; not implementation-complete transitive audit, environment qualification or formal security approval.",
+  "sourceFilesVerifiedUnchanged": {
+    "tools/owned-read-proof/controlled_supervisor.py": "3e8e09e8e0f4d07273cd4d10488773970f7d97cbe80dc1d4f6977a94043a9f76",
+    "tools/owned-read-proof/run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+    "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+    "tools/owned-read-proof/controlled_diagnostics.py": "61966f556d1ab891a56e94fd59d5696c7f0d8fa1ae51e53f63a98bca8896d314",
+    "tools/owned-read-proof/kernel_runtime_queries.py": "be492af65c37eab4a02859375ea66c88749ba8a038396283d14dfd0ffbe2c617",
+    "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+    "tools/owned-read-proof/controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+    "tools/owned-read-proof/offline_attempt_model.py": "dea121f343b369140f06e1006ac75ec5a629218660977a625e737c39aa9259ec"
+  },
+  "datedReferencesRead": [
+    "current-image-observation-design.md",
+    "current-image-early-ownership.md",
+    "current-image-query-rollback.md",
+    "current-image-cleanup-privacy.md"
+  ],
+  "fourFirstExecutableRefusals": {
+    "controlled_supervisor.py:observe": "raise RuntimeError('non-live preparation: observer launch disabled')",
+    "controlled_supervisor.py:bootstrap": "raise RuntimeError('non-live preparation: observer launch disabled')",
+    "controlled_observation.py:observe_new": "raise RuntimeError('non-live preparation: observer launch disabled')",
+    "controlled_observation.py:diagnose_bootstrap": "raise RuntimeError('non-live preparation: observer launch disabled')"
+  },
+  "assessment": {
+    "M0": "Decision-ready planning only: reviewed finite gates/categories and framed G0 question, not an already selected domain or completed runtime prerequisite.",
+    "gateDAG": "Original independently authenticated issuer, preventive containment, trusted bootstrap/actual loaded closure, whole-lifecycle implementation and G7 prelaunch policy precede effects/separate live decision. Real bootstrap replay/settlement/originals precede original receipt; fresh external authority plus original same-domain supervisor/image lineage precede connected phases. No user-set Boolean/report or reconstructed receipt grants authority.",
+    "S0toS10": "Includes preexisting outer reservation, wrapper build, initial directory/flock/exclusion/four-pair resources, nested preparatory subprocesses, pre-start state, ambiguous control/tracer/sampler startup, leader adoption/phase release, separate actor settlement, eligible consume-once disposal, durable originals/receipt and connected continuity. Explicitly architectural categories rather than exact current chronology or complete callgraph.",
+    "sixG4ExitProperties": "Every concrete operation requires owner/transfer/borrowers, success/failure/uncertain startup including hidden constructor work, first-error/disposal conditions, durable intent/ack/storage-failure policy, unchanged artifact/count/time accounting, and terminal pre-effect refusal/verified original closure/retained uncertainty with surviving original recovery owner. Runtime evidence remains required; inert transitions cannot discharge settlement.",
+    "currentSourceBlocker": "run_traced may raise OwnedCleanupError while tracer/tracees remain unsettled; observe finalizer gates only on control-worker inactivity before eight-FD/provenance disposal. Private error capture is not process settlement. Stream closing/subreaper restoration can mask prior errors; earlier clock probe owns another nested process lifecycle. Document correctly retains these launch blockers under unchanged refusals.",
+    "journalBootstrap": "Journal create/open/sync are acquisitions. S0 requires an already trusted controller, acknowledged reservation mechanism, private destination and surviving recovery owner. Management-plane quotas/access/retention must be named; off-child storage is not free capacity. Lost acknowledgment/partial publication is unknown, never evidence of no effect or safe retry.",
+    "privacy": "Original exception identity and traceback remain process-local. Durable fixed phase/error/ownership codes and acknowledgment order omit arbitrary exception text/paths/argv/environment/tokens. This restriction is explicitly limited to journal, separate from bounded original trace/plan/receipt held privately under G7. First means defined detection order, not total cross-thread chronology; raw originals cannot leak in public projections.",
+    "budget": "Report1MiB, originalmetadata1MiB plus separately counted immutablehex, trace256MiB, max32runtimeassets/perasset256MiB, compactreceipt4096bytes and diagnostic limits are distinct. No borrowed trace/receipt capacity, extra1MiB journal, larger timeout, widened whitelist/pin or invented aggregate cap. Record/temp/simultaneous versions need reviewed allocation and enforcement before writing; incompatible accounting leaves G4 unavailable.",
+    "M1toM3": "M1 names actual issuer/interface/owner/loader/data/resources/sink/retention/accounting. Unavailable M1 explicitly blocks M2. M2 remains beneath refusals with inert validation and cannot fabricate provider capabilities. M3 environment/live qualification requires another exact-environment decision; no implicit deployment or activation.",
+    "domainAndLineage": "Guest-local result is not existing-host/fleet proof; host proc cannot supply guest originals; guest/process restart or JSON export cannot reconstruct original in-memory lineage. Availability/adequacy is not asserted. G0 choice does not authorize provisioning or a live run.",
+    "holds": "Unknown PR metadata hold and #779/#793/#794 restrictions remain; bounded review is not formal approval, merge or activation."
+  },
+  "findings": {
+    "resolved": [
+      {
+        "issue": "Receipt-before-closure wording could create cycle with designate_bootstrap requiring assert_bootstrap_closed first.",
+        "resolution": "S9 now establishes original process/resource settlement and closed-state assertion before receipt sealing, explicitly rejecting receipt as settlement prerequisite."
+      },
+      {
+        "issue": "M0 could imply actual G0 choice already made.",
+        "resolution": "Now framed question/options; direction decision remains open."
+      },
+      {
+        "issue": "M1 unavailable outcome could ambiguously permit M2.",
+        "resolution": "Explicit blocked M1 outcome and available reviewed contract requirement."
+      },
+      {
+        "issue": "Compact receipt cap and journal-versus-raw-original distinction needed clarity.",
+        "resolution": "4096-byte receipt is not journal capacity; raw private trace/plan/receipt custody distinguished from fixed journal codes."
+      },
+      {
+        "issue": "Stage table could be read as current call chronology.",
+        "resolution": "Categories/required ordering explicitly distinguished from actual early helper/wrapper calls."
+      }
+    ],
+    "blocking": [],
+    "conclusion": "No remaining lifecycle/budget/privacy blocker to docs-only planning publication; source ownership/settlement and runtime gates remain unavailable."
+  },
+  "staticChecks": {
+    "gateRows": 8,
+    "stageRows": 11,
+    "sourcesUnchanged": true,
+    "localLinksVerified": [
+      "current-image-observation-design.md",
+      "current-main-qualification-map.md",
+      "current-image-early-ownership.md",
+      "../../../tools/owned-read-proof/run.py",
+      "../../../tools/owned-read-proof/controlled_supervisor.py",
+      "../../../tools/owned-read-proof/controlled_timestamps.py"
+    ],
+    "initialCounterErrorPreserved": true
+  },
+  "testsRun": false,
+  "implementationOrLiveActions": false,
+  "toolErrors": [
+    {
+      "action": "Initial local review-evidence static counter, before review file creation",
+      "target": "/workspace/Project_Orca/docs/preparation/tool-execution-guards/current-image-architecture-gates.md",
+      "exitCode": 1,
+      "stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 15, in <module>\nAssertionError\n",
+      "diagnosis": "Naive text.count(\"| G\")/text.count(\"| S\") includes table headers and other rows: observed10/13. Correct anchored G0-G7/S0-S10 regex independently returns8/11. Only reviewer counter corrected; no document or source changes.",
+      "classification": "Local static checker error, not denial, runtime failure or document defect. No tests executed."
+    }
+  ],
+  "remainingGates": [
+    "G0 exact domain/claim direction choice remains open.",
+    "No named authenticated issuer, preexisting durable owner/destination/retention/accounting or preventive platform is available in this task.",
+    "Concrete acquisition/start/persistence callgraph and cohesive implementation remain future M1/M2 work.",
+    "Original process/control/sampler settlement, actual loaded closure and current-image/connected qualification remain unproved.",
+    "No prior CI/test failures erased or reclassified as architecture qualification."
+  ],
+  "outcome": "Independent bounded preparation review passed after documented wording corrections; M0 planning only, not runtime gate closure, live authority, designation, formal security or merge approval.",
+  "excludedActions": "No source edits, tests, historical-body invocation/extraction/bypass, runtime probes/host inspection, thread/process experiments, CI/metadata/publication, provisioning, credentials/security/access changes or denied operations."
+}
