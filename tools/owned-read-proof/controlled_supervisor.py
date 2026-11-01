@@ -557,6 +557,14 @@ class AttemptCleanupFailures:
             except BaseException as error:
                 self.cleanup_failed(error)
 
+    def close_worker_send(self, number):
+        """Worker caller consumes its send slot before this single close attempt."""
+        if number is not None:
+            try:
+                os.close(number)
+            except BaseException as error:
+                self.cleanup_failed(error)
+
     def close_transferred(self, numbers, provenance=None):
         require(type(numbers) is tuple and len(numbers) in (2, 8),
                 'invalid transferred cleanup group')
@@ -689,7 +697,10 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
     retained.chmod(0o600)
     trace = base / 'trace'
     trace.touch(mode=0o600)
-    log, errors = [], []
+    log = []
+    # Written only by the original control worker; main reads after its existing
+    # bounded join and inactivity check. This is not concurrent lifecycle proof.
+    worker_failures = AttemptCleanupFailures()
     diagnostics = None
     if diagnostic:
         from controlled_diagnostics import SparseDiagnostics, CONFIG
@@ -699,6 +710,7 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
     original['startedWallNs'] = start_clock['wallNs']
     original['clockSamples'] = {'start': start_clock, 'phases': []}
     def control():
+        nonlocal send
         try:
             deadline = start_clock['monotonicBeforeNs'] + RUN_NS
             require(tracer_ready.wait(max(0, deadline - time.monotonic_ns()) / NS), 'owned tracer not observed')
@@ -743,9 +755,11 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
                 original['clockSamples']['phases'].append({'event': 'after-ack-read', **sample_clock()})
                 log.append({'event': 'received', **phase})
         except BaseException as error:
-            errors.append(repr(error))
+            worker_failures.body_failed(error)
         finally:
-            os.close(send)
+            worker_send = send
+            send = None
+            worker_failures.close_worker_send(worker_send)
     worker = threading.Thread(target=control, daemon=True)
     cleanup = AttemptCleanupFailures()
     worker.start()
@@ -774,7 +788,8 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
         # establishes worker/process settlement.
         cleanup.raise_first()
         worker.join(timeout=1)
-        require(not worker.is_alive() and not errors, errors)
+        require_control_worker_inactive(worker)
+        worker_failures.raise_first()
         finish_clock = sample_clock()
         original['finishedWallNs'] = finish_clock['wallNs']
         original['clockSamples']['finish'] = finish_clock
@@ -793,7 +808,8 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
         report.update(elapsedNanoseconds=elapsed_ns, elapsedSeconds=elapsed_ns / NS, traceBytes=trace.stat().st_size,
                       returncode=result.returncode, producerStderr=producer_err.decode()[-4000:])
         worker.join(timeout=1)
-        require(not worker.is_alive() and not errors, errors)
+        require_control_worker_inactive(worker)
+        worker_failures.raise_first()
         require(result.returncode == 0 and trace.stat().st_size <= LIMIT, 'supervisor retained-original check failed')
         require(log == [{'event': event, **phase} for phase in phases for event in ('sent', 'received')], 'supervisor retained-original check failed')
         provenance.validate_mounts()

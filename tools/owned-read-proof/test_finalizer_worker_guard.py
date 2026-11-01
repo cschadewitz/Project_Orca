@@ -143,7 +143,8 @@ except BaseException:
         fn = self.source()
         control = next(n for n in fn.body if isinstance(n, ast.FunctionDef) and n.name == 'control')
         final = next(n.finalbody for n in control.body if isinstance(n, ast.Try))
-        self.assertEqual([ast.dump(n) for n in final], [ast.dump(n) for n in ast.parse('os.close(send)').body])
+        self.assertEqual([ast.dump(n) for n in final], [ast.dump(n) for n in ast.parse(
+            'worker_send = send\nsend = None\nworker_failures.close_worker_send(worker_send)').body])
 
 
 if __name__ == '__main__':
