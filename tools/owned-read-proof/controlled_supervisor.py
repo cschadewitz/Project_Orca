@@ -760,6 +760,13 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
         if diagnostics is not None:
             path = root / (lane + '-diagnostics.json')
             try:
+                # The original control worker can still bind diagnostic pins.
+                # This is a disposal precondition, never execution authority.
+                try:
+                    require(worker.ident is not None and worker.is_alive() is False,
+                            'diagnostic control-worker ownership uncertain')
+                except BaseException:
+                    raise RuntimeError('diagnostic control-worker ownership uncertain') from None
                 measured = diagnostics.retain_and_close(path)
                 report['diagnostic'] = {'config': measured['config'], 'samples': len(measured['samples']),
                                         'errors': measured['errors'], 'sha256': file_digest(path)}

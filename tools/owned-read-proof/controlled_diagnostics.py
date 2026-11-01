@@ -136,6 +136,7 @@ class SparseDiagnostics:
     def __init__(self, trace, phases):
         self.resource = None
         self._first_failure = self._cleanup_error = None
+        self._retention_state = 'ready'
         self.trace, self.phases = Path(trace), phases
         self.processes, self.samples, self.errors = {}, [], []
         self.lock, self.done, self.thread = threading.Lock(), threading.Event(), None
@@ -247,16 +248,50 @@ class SparseDiagnostics:
         self.stopped = True
 
     def retain_and_close(self, destination):
-        self.stop()
-        value = {'config': CONFIG, 'authority': 'none', 'samples': self.samples, 'errors': self.errors,
-                 'pins': {name: {'expected': process.expected, 'procIdentity': list(process.identity)}
-                          for name, process in self.processes.items()},
-                 'samplerStopped': self.thread is None or not self.thread.is_alive()}
+        require(self._retention_state == 'ready', 'diagnostic retention already attempted')
+        # One attempt only, including uncertain ownership. No retry of stop,
+        # file publication or potentially consumed handles follows a failure.
+        self._retention_state = 'uncertain'
+        thread = self.thread
+        disposable, primary, value = False, None, None
         try:
+            try:
+                self.stop()
+            except BaseException:
+                # With any sampler object present, stop failure leaves ownership
+                # uncertain even if it may have finished. Do not infer settlement.
+                disposable = thread is None and self.thread is None
+                raise
+            require(self.thread is thread, 'diagnostic sampler ownership uncertain')
+            if thread is not None:
+                require(thread.ident is not None and thread.is_alive() is False,
+                        'diagnostic sampler ownership uncertain')
+            disposable = True
+            value = {'config': CONFIG, 'authority': 'none', 'samples': self.samples, 'errors': self.errors,
+                     'pins': {name: {'expected': process.expected, 'procIdentity': list(process.identity)}
+                              for name, process in self.processes.items()},
+                     'samplerStopped': True}
             Path(destination).write_text(json.dumps(value, separators=(',', ':')))
             Path(destination).chmod(0o600)
-            return value
+        except BaseException as error:
+            primary = error
+            if self._first_failure is None:
+                self._first_failure = error
         finally:
-            for process in self.processes.values():
-                process.close()
-            os.close(self.resource)
+            if disposable:
+                self._retention_state = 'consumed'
+                while self.processes:
+                    _, process = dict.popitem(self.processes)
+                    self._rollback_pin(process)
+                resource, self.resource = self.resource, None
+                if resource is not None:
+                    try:
+                        os.close(resource)
+                    except BaseException as error:
+                        if self._cleanup_error is None:
+                            self._cleanup_error = error
+        if primary is not None:
+            raise primary
+        if self._cleanup_error is not None:
+            raise RuntimeError('diagnostic retention cleanup uncertain') from None
+        return value

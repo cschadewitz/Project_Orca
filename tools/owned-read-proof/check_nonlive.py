@@ -28,6 +28,7 @@ TESTS = (
     'test_query_rollback',
     'test_diagnostic_rollback',
     'test_sparse_rollback',
+    'test_retention_rollback',
     'test_current_qualification_boundaries',
     'test_controlled_v2_semantics',
     'test_kernel_causality',

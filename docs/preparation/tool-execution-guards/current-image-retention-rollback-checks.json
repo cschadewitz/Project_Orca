@@ -1,0 +1,123 @@
+{
+  "record": "injected-diagnostic-retention-ownership-checks",
+  "authority": "none",
+  "baseCommit": "5b848936192e4274f34b095eb19311565781cbef",
+  "mainPin": "f9e7225e59cfe6e83c539f2ce9922ad0677719f4",
+  "candidateHashes": {
+    "tools/owned-read-proof/controlled_diagnostics.py": "61966f556d1ab891a56e94fd59d5696c7f0d8fa1ae51e53f63a98bca8896d314",
+    "tools/owned-read-proof/controlled_supervisor.py": "c40ed96fccea6a1d7c7dbfeec6004fa8b6a14ead645ebbd425815dc3a10db91f",
+    "tools/owned-read-proof/test_retention_rollback.py": "c798e3e8f2a36d6222ac92fa273f21096d2eb4b0ce3084f48fe93b83962020ed",
+    "tools/owned-read-proof/check_nonlive.py": "b83b99eea75026c502dd351659e434fdc512786fdc7362e4ed04590822cb9627",
+    "docs/preparation/tool-execution-guards/current-image-retention-rollback.md": "5726068e6bd246b4bef47e701e6cbce464c1d25ed181e98bf8c6a605d7603fca"
+  },
+  "identity": {
+    "unchangedSourceControls": {
+      "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+      "tools/owned-read-proof/controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+      "tools/owned-read-proof/controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+      "tools/owned-read-proof/controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+      "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+      "tools/owned-read-proof/offline_cleanup.py": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+      "tools/owned-read-proof/current_image_inspection.py": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+      "tools/owned-read-proof/run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+      "tools/owned-read-proof/verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310",
+      "tools/owned-read-proof/legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca",
+      "tools/owned-read-proof/kernel_runtime_queries.py": "be492af65c37eab4a02859375ea66c88749ba8a038396283d14dfd0ffbe2c617",
+      "tools/owned-read-proof/controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+      "tools/owned-read-proof/build-controlled.mjs": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+      "pnpm-lock.yaml": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+      "package.json": "eebdc3c3f9d91ffe06f3f871fbf4309b66c02c55ca92e3e9bf95d8884e9f2f80",
+      "pnpm-workspace.yaml": "1a66b4ae3b971b09ddfc0b8b3452fd1593aae9294bb12e1688996bce00c86cd4",
+      "tsconfig.json": "e1ef9bdff1231e76824ee6cd75df5e2e4759430f20183fabb22a4b6c48c54375"
+    },
+    "outputIdentity": {
+      "controlled-build.json": {
+        "bytes": 48027,
+        "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+      },
+      "controlled-child.mjs": {
+        "bytes": 5713,
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+      },
+      "controlled-producer.mjs": {
+        "bytes": 2248652,
+        "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+      }
+    },
+    "currentFrozenInputs": 387,
+    "currentRepositoryInputs": 195,
+    "diagnosticsAST": "Only Sparse init state field and retain_and_close changed; other module/class methods unchanged",
+    "supervisorDiff": "Only seven-line source-only diagnostic disposal guard inserted; all other bytes unchanged",
+    "rebuild": false
+  },
+  "validation": {
+    "selection": "test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+    "newMethods": 17,
+    "newSourceOnlyMethods": 2,
+    "priorMethods": 89,
+    "timeoutSeconds": 60,
+    "logs": {
+      "selected": {
+        "passed": 106,
+        "seconds": 0.107,
+        "exitCode": 0,
+        "path": "/tmp/orca-current-main-evidence/retention-rollback-selected.log",
+        "sha256": "fd98f30d157df079bcac9a7ffcc5f9b5cbb28e9358750d695fdac17dd5b97aa7"
+      },
+      "independent-normal": {
+        "passed": 106,
+        "seconds": 0.108,
+        "exitCode": 0,
+        "path": "/tmp/orca-current-main-evidence/retention-rollback-independent-normal.log",
+        "sha256": "ad99b69e961e09e97b89520b2f418744d3152ed456c968f077962414c2713468"
+      },
+      "independent-optimized": {
+        "passed": 106,
+        "seconds": 0.094,
+        "exitCode": 0,
+        "path": "/tmp/orca-current-main-evidence/retention-rollback-independent-optimized.log",
+        "sha256": "a1452c6d48292845a9a1d4f46aa47edbec422d7d90fcdfc6f33faef0c10a71a0"
+      }
+    },
+    "ordinaryCI": "Pending publication; ordinary CI does not run this Python selection."
+  },
+  "scope": [
+    "One retention attempt, terminal consumed or uncertain bookkeeping",
+    "No sampler disposal on failed stop with present sampler, changed/alive/unstarted/uninspectable thread",
+    "Eligible preparation/write failures drain all owned slots preserving primary error",
+    "Only source inspection of new original-control-worker disposal guard, below unchanged first launch refusal"
+  ],
+  "notRun": [
+    "Full Python selector, whole diagnostic/real-query modules",
+    "Real host probes/queries/self-pins, threads/process settlement",
+    "Historical physical regression/image builds",
+    "Historical launch-body invocation/extraction/compilation for execution",
+    "Observer/tracer/provider/daemon/App Smoke, designation/activation/formal approval/merge"
+  ],
+  "remainingGates": [
+    "Earlier historical pipe/lifetime/provenance disposal before control-worker quiescence",
+    "Resolution of ownership retained after terminal uncertainty",
+    "Concurrent external start/bind/capture and sampler-start failure",
+    "Private file publication and bounded durable first-failure persistence",
+    "Original process settlement, authenticated session, preventive containment, loaded-runtime and bootstrap-to-connected qualification"
+  ],
+  "priorCI": {
+    "baseRun": 41287902156,
+    "baseOutcome": "First attempt passed on tyler-1",
+    "earlierRun": 41283402840,
+    "earlierOutcome": "Original three failures retained; one failed-job retry passed; latter two original causes unresolved"
+  },
+  "metadataHold": "Prior PR description update error reason/denial classification remains unknown; no retry or alternate route",
+  "independentReviewOriginal": {
+    "path": "/tmp/orca-current-main-evidence/retention-rollback-independent-review.json",
+    "sha256": "e43f615c4554721b6901f568dbc617c8a16a002c6d44ab4b3e883d83b1f2db92"
+  },
+  "independentReviewRepresentation": {
+    "path": "docs/preparation/tool-execution-guards/current-image-retention-rollback-review.json",
+    "sha256": "497c788cc370a367f888e3b88fbcff85640e41efd30f89bdb8f0632641abaf38",
+    "originalBytes": 8076,
+    "formattedBytes": 8046,
+    "parsedJSONEqual": true,
+    "note": "Prettier formatting only; original review retained unchanged."
+  }
+}
