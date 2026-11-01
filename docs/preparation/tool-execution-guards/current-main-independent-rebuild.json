@@ -1,0 +1,150 @@
+{
+  "record": "independent-current-source-fresh-rebuild",
+  "reviewer": "/root/independent_review",
+  "sourceCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+  "sourceTree": "7edf51f1462de60f0954c5a45ad79fbc89c38f77",
+  "checkout": "/workspace/orca-independent-current-rebuild",
+  "detachedHead": true,
+  "workingTreeStatusAfterBuild": "",
+  "freshBuildPerformed": true,
+  "hashOnlyVerification": false,
+  "toolchain": {
+    "tsx": "4.23.15",
+    "esbuild": "0.28.2",
+    "node": "v24.21.0",
+    "pnpm": "12.4.2"
+  },
+  "nodeBinary": {
+    "path": "/workspace/.orca-tools/node-v24.21.0-linux-x64/bin/node",
+    "sha256": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c"
+  },
+  "pnpmEntry": {
+    "path": "/workspace/.orca-tools/node_modules/pnpm/bin/pnpm.mjs",
+    "sha256": "b6e13402c88a275f5b1ec4fb420df8763179bbe9f2b87a10911be44a3622d68d"
+  },
+  "install": {
+    "command": "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH ELECTRON_SKIP_BINARY_DOWNLOAD=1 timeout --kill-after=5s 180s node /workspace/.orca-tools/node_modules/pnpm/bin/pnpm.mjs install --frozen-lockfile --store-dir /tmp/orca-current-main-pnpm-store --state-dir /tmp/orca-current-main-pnpm-state --reporter append-only",
+    "exitCode": 0,
+    "reportedSeconds": 9.5,
+    "sharedPackageCache": "/tmp/orca-current-main-pnpm-store",
+    "scope": "New separate installation, using existing shared content cache and normal policy checks. No dependency copy from another node_modules. ELECTRON_SKIP_BINARY_DOWNLOAD=1 follows DEVELOPMENT non-launch guidance."
+  },
+  "build": {
+    "command": "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH timeout --kill-after=5s 15s node tools/owned-read-proof/build-controlled.mjs /tmp/orca-current-main-evidence/independent-current-image",
+    "exitCode": 0,
+    "image": "/tmp/orca-current-main-evidence/independent-current-image",
+    "newExclusiveOutputDirectory": true
+  },
+  "buildInputHashes": {
+    "tools/owned-read-proof/build-controlled.mjs": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+    "tools/owned-read-proof/controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+    "tsconfig.json": "e1ef9bdff1231e76824ee6cd75df5e2e4759430f20183fabb22a4b6c48c54375",
+    "pnpm-lock.yaml": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+    "package.json": "eebdc3c3f9d91ffe06f3f871fbf4309b66c02c55ca92e3e9bf95d8884e9f2f80",
+    "pnpm-workspace.yaml": "1a66b4ae3b971b09ddfc0b8b3452fd1593aae9294bb12e1688996bce00c86cd4"
+  },
+  "lock": {
+    "committedDocuments": 2,
+    "installedDocuments": 1,
+    "workspaceSemanticEqual": true,
+    "committedSha256": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+    "installedSha256": "a2077f20668fef13914cac77e73f0113d9b2783706f0ebec025f3aa7863e220f"
+  },
+  "repositoryInputsMatchedToCommitAndInstalledBytes": 195,
+  "dependencyInputsMatchedToInstalledBytes": 192,
+  "allManifestInputsEqualRetained": true,
+  "outputs": {
+    "controlled-build.json": {
+      "bytes": 48027,
+      "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977",
+      "physical": {
+        "device": 34,
+        "inode": 74588,
+        "mode": 33024,
+        "nlink": 1,
+        "size": 48027,
+        "mtimeNs": 1793510775610420435,
+        "ctimeNs": 1793510775610420435
+      },
+      "referencePath": "/tmp/orca-current-main-evidence/v2-image/controlled-build.json",
+      "referencePhysical": {
+        "device": 34,
+        "inode": 61814,
+        "mode": 33024,
+        "nlink": 1,
+        "size": 48027,
+        "mtimeNs": 1793506025076202276,
+        "ctimeNs": 1793506025076202276
+      },
+      "byteEqualToRetained": true,
+      "distinctPhysicalInstance": true
+    },
+    "controlled-child.mjs": {
+      "bytes": 5713,
+      "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+      "physical": {
+        "device": 34,
+        "inode": 74587,
+        "mode": 33152,
+        "nlink": 1,
+        "size": 5713,
+        "mtimeNs": 1793510775586420675,
+        "ctimeNs": 1793510775586420675
+      },
+      "referencePath": "/tmp/orca-current-main-evidence/v2-image/controlled-child.mjs",
+      "referencePhysical": {
+        "device": 34,
+        "inode": 61813,
+        "mode": 33152,
+        "nlink": 1,
+        "size": 5713,
+        "mtimeNs": 1793506025056202460,
+        "ctimeNs": 1793506025056202460
+      },
+      "byteEqualToRetained": true,
+      "distinctPhysicalInstance": true
+    },
+    "controlled-producer.mjs": {
+      "bytes": 2248652,
+      "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7",
+      "physical": {
+        "device": 34,
+        "inode": 74586,
+        "mode": 33152,
+        "nlink": 1,
+        "size": 2248652,
+        "mtimeNs": 1793510775570420834,
+        "ctimeNs": 1793510775570420834
+      },
+      "referencePath": "/tmp/orca-current-main-evidence/v2-image/controlled-producer.mjs",
+      "referencePhysical": {
+        "device": 34,
+        "inode": 61812,
+        "mode": 33152,
+        "nlink": 1,
+        "size": 2248652,
+        "mtimeNs": 1793506025040202607,
+        "ctimeNs": 1793506025040202607
+      },
+      "byteEqualToRetained": true,
+      "distinctPhysicalInstance": true
+    }
+  },
+  "logs": {
+    "independent-current-rebuild-install.log": {
+      "path": "/tmp/orca-current-main-evidence/independent-current-rebuild-install.log",
+      "sha256": "6c8e7203e004e33933b474df85e8a2d887b2b5fa9aae2031ecc417c766e64e99"
+    },
+    "independent-current-rebuild-build.log": {
+      "path": "/tmp/orca-current-main-evidence/independent-current-rebuild-build.log",
+      "sha256": "0f233e41684a20fa61f653bc1014c41282ec858736c24f2e9f5a2835964c5ca3"
+    }
+  },
+  "errors": [],
+  "limitations": [
+    "Fresh independent execution of the unchanged builder in a separate detached checkout, within the same managed host and shared package cache; not an independent host/toolchain implementation.",
+    "Output bytes equal retained v2 image but each output is a new physical file. This is reproducibility evidence, not original physical continuity.",
+    "No image launch, observer, tracer, provider, daemon, source-pin change, designation, credential/security/budget change, denied operation, publication, merge or formal approval.",
+    "Current legacy source-designation refusal and unconditional observe refusal remain unchanged."
+  ]
+}

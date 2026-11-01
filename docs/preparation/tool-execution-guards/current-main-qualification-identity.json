@@ -1,0 +1,406 @@
+{
+  "record": "non-authoritative-current-qualification-identity-matrix",
+  "authority": "none",
+  "productionEligible": false,
+  "acceptingToken": null,
+  "sourcePins": {
+    "historicalImage": "3fce8bcc9afd381cd07c0e06051921307d6322b3",
+    "main": "f9e7225e59cfe6e83c539f2ce9922ad0677719f4",
+    "currentImageModel": "4ebf382fe6738bb11268b47b048a3d7c7a6f2586",
+    "originalV2Build": "d2c1626c1b01f9dcac48753048fbdaf2c15c166c",
+    "publishedPreparation": "a3b115a589864326eb210926baf8db7d4a9a6d7d"
+  },
+  "remotePinsObserved": {
+    "main": "f9e7225e59cfe6e83c539f2ce9922ad0677719f4",
+    "prep/706-current-main-nonlive": "a3b115a589864326eb210926baf8db7d4a9a6d7d"
+  },
+  "imageInputCorrespondence": {
+    "currentImageModel": {
+      "checked": 195,
+      "differences": {}
+    },
+    "originalV2Build": {
+      "checked": 195,
+      "differences": {}
+    },
+    "publishedPreparation": {
+      "checked": 195,
+      "differences": {}
+    }
+  },
+  "historicalToCurrentRepositoryInputDrift": {
+    "packages/agents/src/acp-session.ts": {
+      "historical": "903d693eae751659f4e9dcb56c7cb28087662f73dc4552e74fac4f32bc84af12",
+      "current": "4a6d5444e82e674423e300aea91bd7a812352bcf64f4c818ecba8beba8a0aa81"
+    },
+    "packages/agents/src/strict-permission-source.ts": {
+      "historical": "4b089d2719142a5d42e7febde0583c49f25e6fa5a34e5f7e14e8e95da441ea67",
+      "current": "97897f5e004290fc5735cfb1606aa833dec3f557333a1e96a93b2ad6cc3356a8"
+    },
+    "packages/cli/test/controlled-owned-read-producer.ts": {
+      "historical": "61d62d01d32057036ea3cd638fa6a04abcf3f0b04be9973ae3c1c24ee44295a8",
+      "current": "9d96cddcbbc4ebe5c67657a94b7d219d534196db76cb440476f90c9d69ca0d4d"
+    },
+    "packages/core/src/strict-permission.ts": {
+      "historical": "084202f1d365a8dc26b3587600b19a7869ef43ac39ae9dbd8eefaf48c760982d",
+      "current": "88d6674e6d27f7e1fd3f2d593ece929fa21d9d3ad97a1685f9836e5c866391ef"
+    },
+    "packages/daemon/src/owned-read-scoped-capture.ts": {
+      "historical": "248edd9ce1b236043608b3ebbe3b00b5b33e9d265fb066251003511bdb68694b",
+      "current": "868320988953d067ddc87b1d341694a03a92235e4528f4821bedb54c488fd461"
+    },
+    "packages/daemon/src/protected-scoped-permission-owner.ts": {
+      "historical": "644cacd5824845b450b9db31b81645548b8f1526a8a902e93680e540dbb7c0f2",
+      "current": "f909bc01aa8419b791d243452b6c33fc3f37c78f9fca7ea8c415cb791ea885ba"
+    },
+    "packages/daemon/src/scoped-permission-bridge.ts": {
+      "historical": "060c5631013152f4d8a10ea2c787823c9ef3036c84bc0859215f88896853d383",
+      "current": "77066a978aba42e41f3044dc6c00fa779a35347701ce59738da9c6cf72a7d80f"
+    },
+    "packages/engine/src/deferred-human-delivery.ts": {
+      "historical": null,
+      "current": "dadd8c1d730694b0b0e13152daba8f6f4df78b176a879a29749169e44e4e8bbb"
+    },
+    "packages/engine/src/executors/basic.ts": {
+      "historical": "951e9ed1f6d47c7fe125509a9ff39d47fe5de00d087ba7587ae6b6ebbbfa9505",
+      "current": "6c32c01dbe4b24bb021b87dae5ffa67551a7298887b3d40e7a8c7aaa691991ea"
+    },
+    "packages/engine/src/human-input.ts": {
+      "historical": "55813daf45c7c506634ace24f48e724b97f6ca79d45c2e337af2b87d78a07fc6",
+      "current": "aa9ae9ac63a879f5fa733ebde70c1f3afb9c409045d704521199a2ce03104e1b"
+    },
+    "packages/engine/src/owned-file-read-service.ts": {
+      "historical": "80fd66a332d87fa7954cdabc9008ca51db7006ec04f3d29a51b825b028cc0dbe",
+      "current": "04599dc5408bac2eb1af1f43bc0f38eb881cb5d8928b568ddffa6e0dcd5a5f51"
+    },
+    "packages/engine/src/synthetic-read-fence.ts": {
+      "historical": "ff91f8c529b68351cfa0623de65066db43556a5feacbef6ab9d3d6df06e39450",
+      "current": "b4ef99f8a481f060bfc4e74363e050698dfe3e5b4db4f5b41e093a7b5123d4f0"
+    },
+    "packages/protocol/src/scoped-permissions.ts": {
+      "historical": "b37248bff43215b5368926dd879d94827e8b160e299dcccabda608d5eee7bf78",
+      "current": "2d37949798e6fa9dbbda0a5f2f81b3a173eb90f36c9ff23cd3406a7e55cce3bf"
+    },
+    "packages/store/src/protected-event-store.ts": {
+      "historical": "cf524f73783f9d2ac8366c2ba837370c4678d16a14a0fe58241a4c6e4327b346",
+      "current": "2a756d857a2fc3fcc90c823c4c979c9500289b75535d9da5eeb3afbd488eef29"
+    }
+  },
+  "counts": {
+    "currentRepositoryInputs": 195,
+    "currentDependencyInputs": 192,
+    "historicalRepositoryInputs": 194,
+    "changedRepositoryInputs": 13,
+    "addedRepositoryInputs": 1,
+    "observerFiles": 16,
+    "pythonHarnessFiles": 41
+  },
+  "buildRecipeInputs": {
+    "tools/owned-read-proof/build-controlled.mjs": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+    "tools/owned-read-proof/controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+    "package.json": "eebdc3c3f9d91ffe06f3f871fbf4309b66c02c55ca92e3e9bf95d8884e9f2f80",
+    "pnpm-lock.yaml": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+    "pnpm-workspace.yaml": "1a66b4ae3b971b09ddfc0b8b3452fd1593aae9294bb12e1688996bce00c86cd4",
+    "tsconfig.json": "e1ef9bdff1231e76824ee6cd75df5e2e4759430f20183fabb22a4b6c48c54375"
+  },
+  "observerFiles": {
+    "controlled_supervisor.py": "1dcb287a1800a29a4007b730c91bed7dbc02f648ed86fcad15c2a3f19fdcc8a7",
+    "controlled_observation.py": "6dd03c9edca058730886739e4c32dd90796431038da5e388f290cdcb5ba31fa6",
+    "controlled_aggregate.py": "ade19e2569ed52bfd2f4672426d7c20308fd23b3f74a9fdc5543648f0093f62a",
+    "controlled_diagnostics.py": "c02fb09e9f4c43ad1a54650091ee1ca9efc8067ec5907b467be40c2b3f3c37da",
+    "controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+    "controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+    "controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+    "controlled_notifications.py": "7efd105085b81db5b18096b357bd5e15a9b2db5bdb5f257a6b0eace648ddee8b",
+    "controlled_semantics.py": "8001488fcea920176b95766d1819b1f16f4e0dc51aefb3f2c3b95ab25a460d0d",
+    "controlled_delivery_semantics.py": "71248cb8208417f3ff8cd2f81dcd5d698d34edc818287f1136f1069a2e3d40d2",
+    "controlled_save_semantics.py": "b1a880ef24ad2f7829f5a25557bff5f7a7eec18c8135edd47eb5a394cce18d2b",
+    "controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+    "controlled_v2_model.py": "af289071fc9627bb8f38115916a40740c1a131a756a4afa163d9229f6056df15",
+    "kernel_runtime_queries.py": "f43e89618e1f12c39d8c6af465d80dc8aed586d838badc65f4423946c39fbdb6",
+    "run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+    "verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310"
+  },
+  "pythonHarnessFiles": {
+    "check_nonlive.py": "4878f4e364e37bdcdf5d43a9a0a26fed1601a2a888a1d1c0751d7e46f7283a63",
+    "controlled_aggregate.py": "ade19e2569ed52bfd2f4672426d7c20308fd23b3f74a9fdc5543648f0093f62a",
+    "controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+    "controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+    "controlled_delivery_semantics.py": "71248cb8208417f3ff8cd2f81dcd5d698d34edc818287f1136f1069a2e3d40d2",
+    "controlled_diagnostics.py": "c02fb09e9f4c43ad1a54650091ee1ca9efc8067ec5907b467be40c2b3f3c37da",
+    "controlled_notifications.py": "7efd105085b81db5b18096b357bd5e15a9b2db5bdb5f257a6b0eace648ddee8b",
+    "controlled_observation.py": "6dd03c9edca058730886739e4c32dd90796431038da5e388f290cdcb5ba31fa6",
+    "controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+    "controlled_save_semantics.py": "b1a880ef24ad2f7829f5a25557bff5f7a7eec18c8135edd47eb5a394cce18d2b",
+    "controlled_semantics.py": "8001488fcea920176b95766d1819b1f16f4e0dc51aefb3f2c3b95ab25a460d0d",
+    "controlled_supervisor.py": "1dcb287a1800a29a4007b730c91bed7dbc02f648ed86fcad15c2a3f19fdcc8a7",
+    "controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+    "controlled_v2_model.py": "af289071fc9627bb8f38115916a40740c1a131a756a4afa163d9229f6056df15",
+    "kernel_runtime_queries.py": "f43e89618e1f12c39d8c6af465d80dc8aed586d838badc65f4423946c39fbdb6",
+    "legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca",
+    "run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+    "test_batch_transfer.py": "14e2b01fe4157b5f0fe2fffbeb6ca8e4be35c6379265d6866d56fae5bacc5ede",
+    "test_bootstrap_receipt_child.py": "b1ad54a7dde9c91b4bdd6707e19162e62c54207e37c3f0f71821931c54189773",
+    "test_child_stat_observations.py": "fcd3f74276b69aa7b8128cc39775c547dddde875a74d521c08fcb666465e65d4",
+    "test_cleanup.py": "f7bae206a60ab06463b204373ae35f18bc361a19a144aa021e37a3f39bbeed2a",
+    "test_controlled_aggregate.py": "8ac772e5f8c5cdd2e53fdc6e11ac91283920cb59ba6252b08594ff894291b342",
+    "test_controlled_connected.py": "3622b8045d59c885b1b5f017351520d9097594689fa39457b556c02010a1819c",
+    "test_controlled_contract.py": "d9efbc18058263ea415fc896a90235dd075f6fa6dd18f2be52b1ebf6d7dd99f9",
+    "test_controlled_delivery_semantics.py": "5152c46a61bc75deb37be470aa2f87c78ce83dc2bc287593f148c5d89484456a",
+    "test_controlled_diagnostics.py": "a3c2fa71177c03b484879b8d246fc143732c9b94d888012e1ed8537da708781d",
+    "test_controlled_image_pins.py": "d6263b99d15625957cbd0b0cb7b7305fcda5f4e8963882b1b966b6de3b3ea5e7",
+    "test_controlled_notifications.py": "a9e8849618131cab4f98caa44a97080003149dba03be3f8c62e48a891341d430",
+    "test_controlled_replay.py": "01f4fef9bbce07658089d5a2e98893d903ff9b87734f9449007d073a0d6707c8",
+    "test_controlled_save_semantics.py": "ba8b05cf34187da40aae391f61b876be0966acb904c565d82c977e68682166c2",
+    "test_controlled_semantics.py": "3fc1b9c87c4a49d9adf1a60dfc6973d2cd43bc0c4a3310c9bc709a19bf949253",
+    "test_controlled_timestamps.py": "b7070cdd15fccc58722050a9a0f8782113d60938320cf7467cf15885f6ff0797",
+    "test_controlled_v2_semantics.py": "cc2a27be6f221654ecc1200aa14e098bf5918d94e838e3c830672ec03f9d09a1",
+    "test_current_main_preparation.py": "cc1d80a875f2ac5323611d8c29a05653ddfa8fa98a5b0a5266b96de01bc1822b",
+    "test_current_qualification_boundaries.py": "fe3d7049f5b450ea3e7f782fa35217d36db0b8520c69194f10f3da9e62a1ac57",
+    "test_intervals.py": "f16d607779cbc219e8543051549469d5b236b00eb42553eff7743738dbf5a8eb",
+    "test_kernel_causality.py": "6dcd52d28073e1d320119fa80393764bdd9ab106e390479f71438fbe8a338f2c",
+    "test_kernel_runtime_queries.py": "82b51e84bb394714e746199b23f4d97eb378b3092a6539bf73985ae31a06d4c2",
+    "test_observer.py": "9786197702aa5d44d64a793fc1f95090de4853f05725c0fecde6d0987bd66418",
+    "test_zero_private_wake.py": "f3a690d5b6ba653b6997b14068d4c4fcc97b0c2a62d2527c0ed606f33a664678",
+    "verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310"
+  },
+  "physicalArtifacts": {
+    "v2-image": {
+      "controlled-build.json": {
+        "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977",
+        "bytes": 48027,
+        "device": 34,
+        "inode": 61814,
+        "mode": 33024,
+        "nlink": 1,
+        "mtimeNs": 1793506025076202276,
+        "ctimeNs": 1793506025076202276
+      },
+      "controlled-child.mjs": {
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+        "bytes": 5713,
+        "device": 34,
+        "inode": 61813,
+        "mode": 33152,
+        "nlink": 1,
+        "mtimeNs": 1793506025056202460,
+        "ctimeNs": 1793506025056202460
+      },
+      "controlled-producer.mjs": {
+        "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7",
+        "bytes": 2248652,
+        "device": 34,
+        "inode": 61812,
+        "mode": 33152,
+        "nlink": 1,
+        "mtimeNs": 1793506025040202607,
+        "ctimeNs": 1793506025040202607
+      }
+    },
+    "legacy-reference-image": {
+      "controlled-build.json": {
+        "sha256": "7363dcc4d83530f43744c7c031f3f9f054c21917b3ffc99d27725c3840634dc2",
+        "bytes": 47911,
+        "device": 34,
+        "inode": 70492,
+        "mode": 33024,
+        "nlink": 1,
+        "mtimeNs": 1793508913945936420,
+        "ctimeNs": 1793508913945936420
+      },
+      "controlled-child.mjs": {
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+        "bytes": 5713,
+        "device": 34,
+        "inode": 70491,
+        "mode": 33152,
+        "nlink": 1,
+        "mtimeNs": 1793508913921936672,
+        "ctimeNs": 1793508913921936672
+      },
+      "controlled-producer.mjs": {
+        "sha256": "b155c2ae67af5be2b74468b909911c1af0a9db7c7559d76f06bfd089168b99f6",
+        "bytes": 2184692,
+        "device": 34,
+        "inode": 70490,
+        "mode": 33152,
+        "nlink": 1,
+        "mtimeNs": 1793508913905936839,
+        "ctimeNs": 1793508913905936839
+      }
+    },
+    "independent-current-image": {
+      "controlled-build.json": {
+        "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977",
+        "bytes": 48027,
+        "device": 34,
+        "inode": 74588,
+        "mode": 33024,
+        "nlink": 1,
+        "mtimeNs": 1793510775610420435,
+        "ctimeNs": 1793510775610420435
+      },
+      "controlled-child.mjs": {
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+        "bytes": 5713,
+        "device": 34,
+        "inode": 74587,
+        "mode": 33152,
+        "nlink": 1,
+        "mtimeNs": 1793510775586420675,
+        "ctimeNs": 1793510775586420675
+      },
+      "controlled-producer.mjs": {
+        "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7",
+        "bytes": 2248652,
+        "device": 34,
+        "inode": 74586,
+        "mode": 33152,
+        "nlink": 1,
+        "mtimeNs": 1793510775570420834,
+        "ctimeNs": 1793510775570420834
+      }
+    }
+  },
+  "independentRebuildEvidence": {
+    "path": "/tmp/orca-current-main-evidence/independent-current-rebuild.json",
+    "sha256": "099c2f4689eb17fa59b1a52432fee0f4522f265a4a27af8c66cc22a78172bbdc",
+    "freshBuildPerformed": true
+  },
+  "newPreparationDelta": {
+    "files": [
+      "tools/owned-read-proof/check_nonlive.py",
+      "tools/owned-read-proof/test_current_qualification_boundaries.py"
+    ],
+    "description": "Test selection and seven synthetic adversarial methods only; all image inputs, observer implementation, source selectors, production files and execution bounds unchanged from publishedPreparation."
+  },
+  "limitations": [
+    "Physical stamps identify saved-environment files at collection, not portable designation or continuity of rebuilt copies.",
+    "The complete manifest remains the three-file physical artifact; repository pretty-printed copies have distinct byte hashes.",
+    "Harness includes this uncommitted test delta and is separately inventoried; no harness file is an image source.",
+    "Current source checker and designation remain deliberately historical; no observed current kernel history or original receipt exists."
+  ],
+  "validationContexts": {
+    "primaryCheckout": {
+      "path": "/workspace/Project_Orca",
+      "missingDeclaredInputs": [
+        "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/acp.js",
+        "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/jsonrpc.js",
+        "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/line-buffer.js",
+        "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/schema-deserialize.js",
+        "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/schema/guards.gen.js",
+        "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/schema/index.js",
+        "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/schema/zod.gen.js",
+        "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/stream-limits.js",
+        "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/stream.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/index.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/checks.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/coerce.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/compat.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/deep-partial.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/errors.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/external.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/from-json-schema.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/in-out.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/index.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/iso.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/parse.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/schemas.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/api.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/checks.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/compile.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/core.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/doc.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/errors.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/index.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/json-schema-generator.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/json-schema-processors.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/json-schema.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/memoizer.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/parse.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/regexes.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/registries.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/schemas.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/to-json-schema.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/util.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/versions.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/visit.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/index.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ar.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/az.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/be.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/bg.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/bn.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ca.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ckb.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/cs.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/da.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/de.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/el.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/en.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/eo.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/es.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fa.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fi.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fr-CA.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fr.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/gu.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/he.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hi.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hr.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hu.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hy.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/id.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/index.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/is.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/it.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ja.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ka.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/kh.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/km.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/kn.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ko.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/lt.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/mk.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ms.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ne.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/nl.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/nn.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/no.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ota.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/pl.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ps.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/pt-BR.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/pt.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ro.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ru.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/sk.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/sl.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/sv.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ta.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/tg.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/th.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/tk.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/tr.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ua.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/uk.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ur.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/uz.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/vi.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/yo.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/zh-CN.js",
+        "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/zh-TW.js"
+      ],
+      "differentDeclaredInputs": [],
+      "frozenArtifactCorrespondence": false
+    },
+    "frozenValidation": {
+      "path": "/workspace/orca-fence-validation",
+      "manifestInputsMatchedBeforeValidation": 387,
+      "candidatePythonHarnessByteEqual": true,
+      "historicalFixturePath": "/workspace/orca-legacy-image-fixture",
+      "separateHarnessAndReferenceEntries": 42,
+      "historicalProtectedInputsUnchanged": 392
+    }
+  }
+}

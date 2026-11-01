@@ -1,0 +1,61 @@
+{
+  "record": "bounded-current-qualification-checks",
+  "authority": "none",
+  "baseCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+  "implementationHashes": {
+    "tools/owned-read-proof/test_current_qualification_boundaries.py": "fe3d7049f5b450ea3e7f782fa35217d36db0b8520c69194f10f3da9e62a1ac57",
+    "tools/owned-read-proof/check_nonlive.py": "4878f4e364e37bdcdf5d43a9a0a26fed1601a2a888a1d1c0751d7e46f7283a63"
+  },
+  "checks": [
+    {
+      "kind": "initial-targeted-synthetic",
+      "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_controlled_v2_semantics test_current_qualification_boundaries -v",
+      "result": "passed",
+      "methods": 20,
+      "seconds": 1.341
+    },
+    {
+      "kind": "primary-checkout-preflight",
+      "result": "failed",
+      "reason": "106 declared dependency paths absent; zero existing-path hash mismatches. Shell continued into bounded test selection despite failed setup. Not frozen-image correspondence evidence."
+    },
+    {
+      "kind": "primary-checkout-selection",
+      "result": "passed",
+      "methods": 359,
+      "nestedHistoricalMethods": 7,
+      "seconds": 47.768,
+      "limitation": "Dependency preflight failed; historical harness was refreshed during this overlapping invocation. Not used as controlled frozen-artifact validation."
+    },
+    {
+      "kind": "frozen-validation",
+      "checkout": "/workspace/orca-fence-validation",
+      "command": "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH ORCA_LEGACY_IMAGE_FIXTURE=/workspace/orca-legacy-image-fixture timeout --kill-after=5s 180s python3 -B tools/owned-read-proof/check_nonlive.py",
+      "result": "passed",
+      "methods": 359,
+      "nestedHistoricalMethods": 7,
+      "seconds": 46.627,
+      "inputs": "All 387 current image inputs matched before execution; exact 41-file candidate Python harness plus reference copied separately to historical fixture after disjointness check; all 392 historical declared/protected input files unchanged."
+    }
+  ],
+  "logs": {
+    "qualification-nonlive.log": {
+      "path": "/tmp/orca-current-main-evidence/qualification-nonlive.log",
+      "sha256": "7f9969410cebb3cf51bef38599f9dbcfc9827a327052f0c8232d4e596ac0e4a8"
+    },
+    "qualification-frozen-nonlive.log": {
+      "path": "/tmp/orca-current-main-evidence/qualification-frozen-nonlive.log",
+      "sha256": "b1621a5a013e49d674b09704d95a3a72aec11c8a7a49dbd05fded727ab3256b6"
+    },
+    "qualification-fixture-inventory.json": {
+      "path": "/tmp/orca-current-main-evidence/qualification-fixture-inventory.json",
+      "sha256": "30fe9dc9f661a2ffaffae7e5da0b98b5ad279604de701c4ca3060677b13bc34c"
+    }
+  },
+  "notRun": [
+    "Four real-tracer tests excluded by unchanged non-live selection",
+    "Observer/image launch, actual current designation, live provider/device/daemon work",
+    "Formal security approval, merge or activation"
+  ],
+  "ci": "Previous a3b115a CI41275991519 passed; any publication requires a separate exact-head result."
+}

@@ -1,0 +1,156 @@
+{
+  "record": "bounded-independent-current-qualification-preparation-review",
+  "reviewer": "/root/independent_review",
+  "baseCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+  "candidateSnapshotHashes": {
+    "tools/owned-read-proof/check_nonlive.py": "4878f4e364e37bdcdf5d43a9a0a26fed1601a2a888a1d1c0751d7e46f7283a63",
+    "tools/owned-read-proof/test_current_qualification_boundaries.py": "fe3d7049f5b450ea3e7f782fa35217d36db0b8520c69194f10f3da9e62a1ac57",
+    "docs/preparation/tool-execution-guards/current-main-qualification-identity.json": "b3d8f47ed05f50f5c6b20203c7487a02893cecff0ce1dbaa30abaf4baa8cbd4b",
+    "docs/preparation/tool-execution-guards/current-main-qualification-map.md": "ed2967de55ed4e2ecea21d3ea476b03b0bc27e1fdd610db5a7fde9ef8e704dbe"
+  },
+  "newExecutableDelta": "Full new seven-method/17-mutation-case test module and single explicit selector addition reviewed; no production/checker/selector-pin/limit modifications.",
+  "proofModuleCoverage": {
+    "controlled_supervisor.py": "Reviewed source checker, observer pin measurement, original bootstrap closure/receipt binding, direct unconditional observe refusal, and downstream replay/composition invocation. Did not audit every preparation/packet-bound/cleanup branch.",
+    "controlled_observation.py": "Read complete orchestration and diagnostic entry points; no entry point invoked. Build-before-observe orchestration does not remove observe refusal.",
+    "controlled_aggregate.py": "Read complete v1/v2 composition and effect inventory; full kernel replay is a caller prerequisite, not established by accepting replay-shaped objects.",
+    "controlled_diagnostics.py": "Read pinned process sampling, finite bounds, lifecycle and retention; no measured diagnostic/performance claim.",
+    "controlled_connected.py": "Read designation/snapshot/source association and connected phase, journal, publication and read extensions. These remain historical-source-bound.",
+    "controlled_replay.py": "Reviewed run/final physical closure, phase crossings, interval-conflict logic, and selected descriptor/effect handling. Did not exhaustively audit the entire 1373-line syscall dispatcher, all notification overlap proofs or all possible traces.",
+    "controlled_contract.py": "Reviewed fixed grammar/limits, source-independent framing and phase boundary refusal; grammar is not execution authority.",
+    "controlled_notifications.py": "Read complete finite unit-counter partial-order model; no runtime counter observation performed.",
+    "controlled_semantics.py": "Reviewed strict JSON/AEAD decoding, exact scalar equality, source action/physical projection and credential/lease/authority currency checks. Not a complete audit of every bootstrap correlation branch.",
+    "controlled_delivery_semantics.py": "Read complete connected delivery v1/v2 correlations, record counts, actions, policy revision, acknowledgements, attribution, fresh expiry and effects.",
+    "controlled_save_semantics.py": "Read complete Save v1/v2 provenance, sidecar cycle, standing review, accepted deadline and exact publication bytes/order checks.",
+    "controlled_timestamps.py": "Read complete clock/source/expiry adapter. Tracer/probe code read only; no current measured clock or trace evidence.",
+    "controlled_v2_model.py": "Read complete fixed offline selector and finite expiry bounds; does not feed launcher/designation.",
+    "kernel_runtime_queries.py": "Reviewed process identity, retained descriptors/mounts, pre-release binding and retained-contract checks; not an OS/kernel implementation audit.",
+    "run.py": "Reviewed run_traced group ownership/settlement and bounded cleanup; did not execute or audit all standalone installation/scenario paths.",
+    "verify.py": "Reviewed raw unfinished/resumed decoder and supported vocabulary/interval interface. Did not exhaustively audit the separate older verify_trace state machine."
+  },
+  "historicalToCurrentInputDriftCoverage": {
+    "packages/agents/src/acp-session.ts": "Read entire historical-to-current diff, including context-recovery refusal. ACP/provider/session paths are bundled but outside finite controlled run qualification.",
+    "packages/agents/src/strict-permission-source.ts": "Read entire diff for closed version-2/null-expiry rule shape.",
+    "packages/cli/test/controlled-owned-read-producer.ts": "Reviewed standing review/verification, concrete capture/baseline, Save-zero-answer/authorization assertions, final delivery acknowledgement, separate Allow Once and fresh rule action/capture/authorize/dispatch. Not an exhaustive review of fault injection, optional test-owner lifetime, cleanup and every bootstrap/service setup path.",
+    "packages/core/src/strict-permission.ts": "Read entire diff for explicit standing rule expiry and finite action/delegation bounds; not all pre-existing policy branches.",
+    "packages/daemon/src/owned-read-scoped-capture.ts": "Reviewed concrete policy refresh, retirement, retained delivery execution and selected pending-grant distinction. Did not fully audit intent capture/reservation, alternate kinds, races or all cancellation paths.",
+    "packages/daemon/src/protected-scoped-permission-owner.ts": "Reviewed concrete versus pending grant assertEntry, v2 approval verification and withSaveOwnership/recordApproval timing and state transitions. Did not fully audit version-3 pending-intent authority, every review/read/revocation branch or concurrent failure path.",
+    "packages/daemon/src/scoped-permission-bridge.ts": "Read entire diff for handle currency, answer-current separation, standing availability and Save eligibility. UI/handle races not qualified by synthetic model.",
+    "packages/engine/src/deferred-human-delivery.ts": "Read complete new module: retained WeakMap/WeakSet identity, original delivery wait, cancellation and exact deferred attachment. Its runtime integration/alternate pending-intent path is not exercised by current concrete-action model.",
+    "packages/engine/src/executors/basic.ts": "Read complete emit-result diff; full executor behavior not audited.",
+    "packages/engine/src/human-input.ts": "Read complete published-presentation diff; no provider/live input session qualified.",
+    "packages/engine/src/owned-file-read-service.ts": "Reviewed retained facade human eligibility/dispatch links, pending resource distinction and selected deferred execution drain. Did not fully audit 1107-line historical diff, fresh execution intent API, owner accessor sealing, scheduling/cancellation races or all resource lifetimes.",
+    "packages/engine/src/synthetic-read-fence.ts": "Read entire deferred binding diff and concrete service call sites; full pre-existing permit/state machine not re-audited.",
+    "packages/protocol/src/scoped-permissions.ts": "Read complete presentation-only standing/pending fields diff; schema data is not a live capability.",
+    "packages/store/src/protected-event-store.ts": "Read complete sensitive-presentation redaction diff; full store implementation and encryption/dependency correctness not audited."
+  },
+  "coverageStatement": "Cross-layer bounded preparation review touching all 16 proof modules and 14 historical-to-current source-drift paths, with limitations per file. Not whole-stack, complete branch, formal security or runtime qualification audit.",
+  "identityMatrixVerification": {
+    "repositoryInputsPerSourceCommit": 195,
+    "sourceCommitsChecked": [
+      "4ebf382fe6738bb11268b47b048a3d7c7a6f2586",
+      "d2c1626c1b01f9dcac48753048fbdaf2c15c166c",
+      "a3b115a589864326eb210926baf8db7d4a9a6d7d"
+    ],
+    "observerHashesAndInventory": 16,
+    "pythonHarnessHashesAndInventory": 41,
+    "changedRepositoryPaths": 13,
+    "addedRepositoryPaths": 1,
+    "physicalImageInventoriesChecked": 3,
+    "buildRecipeHashesChecked": true,
+    "independentRebuildRecordHashChecked": true,
+    "mismatches": [],
+    "remoteRefs": "Recorded parent observations; reviewer did not query GitHub or remote refs."
+  },
+  "independentTests": {
+    "selection": "test_current_qualification_boundaries test_controlled_v2_semantics",
+    "normal": {
+      "exitCode": 0,
+      "passedMethods": 20,
+      "seconds": 1.457,
+      "log": "/tmp/orca-current-main-evidence/current-qualification-independent-tests.log",
+      "sha256": "359356d68b3cad8dcba7a143f2aa950c3908de2422aab80952e4e9cad51c10c2"
+    },
+    "optimized": {
+      "exitCode": 0,
+      "passedMethods": 20,
+      "seconds": 1.443,
+      "log": "/tmp/orca-current-main-evidence/current-qualification-independent-optimized.log",
+      "sha256": "f92d96efdf3763c46b2f2f813d10fe6a103dbd0d9e95bb2dde3cd3884c8b8c80"
+    },
+    "bounds": "Each used timeout --kill-after=5s 60s; -B both, -O optimized. No full suite rerun by reviewer."
+  },
+  "findings": {
+    "newTestCodeDefects": [],
+    "documentationClarificationsRequested": [
+      "Describe map as proof obligations, not a completed qualification argument.",
+      "Explicitly state assert_image_sources checks manifest-declared entries and output self-hashes, not complete manifest membership or bundle derivation; fresh reproducible build and exact manifest comparison are separate evidence.",
+      "Explicitly state Python/cryptography, Node/esbuild/dependencies, same-UID cooperative memory, OS/tracer and clocks remain trusted runtime/source assumptions, not independently audited implementations."
+    ],
+    "status": "Resolved for bounded preparation: all requested documentation qualifications are included; final evidence/doc consistency checks pass. No blocking finding for the already-authorized preparation publication. This is not qualification, source designation, live authorization or formal security approval."
+  },
+  "remainingQualificationGaps": [
+    "No complete current-source raw kernel replay or original observed bootstrap/receipt.",
+    "ConnectedDesignation and current constructor/source selector remain intentionally historical.",
+    "Aggregate semantic functions accept a replay-shaped input and rely on caller-completed full kernel replay.",
+    "Final diagnostic acknowledgement and AEAD/event associations cannot independently prove JavaScript registry, callback, permit identity or final ownership memory.",
+    "Concrete-action standing-v2 model does not cover version-3 pending-intent, provider recovery, all current-main product modes, races or cancellation paths.",
+    "All 192 dependency input hashes match installed bytes; their implementations and compiler/interpreter correctness are not audited by this review."
+  ],
+  "noLiveActions": "No image launch, live observer/tracer/provider/daemon, designation, credential/security/budget changes, denied operation, publication, merge or formal approval performed.",
+  "independentFreshBuildEvidence": {
+    "path": "/tmp/orca-current-main-evidence/independent-current-rebuild.json",
+    "sha256": "099c2f4689eb17fa59b1a52432fee0f4522f265a4a27af8c66cc22a78172bbdc"
+  },
+  "finalConsistency": {
+    "previousReviewRecordSha256": "04b4f00189c0c917e14f58f7491308dfdb1c7e5c14a0b72532e46f527766b30a",
+    "earlierSnapshotPreserved": "candidateSnapshotHashes remains the earlier reviewed snapshot; the hashes below identify final documents checked after amendments.",
+    "documentHashes": {
+      "docs/preparation/tool-execution-guards/current-main-qualification-map.md": "3426cb402e6d916993c34d657531b88f5f77ab8eac7f2dd330f0e706aa88c0ce",
+      "docs/preparation/tool-execution-guards/current-main-qualification-identity.json": "b3d8f47ed05f50f5c6b20203c7487a02893cecff0ce1dbaa30abaf4baa8cbd4b",
+      "docs/preparation/tool-execution-guards/current-main-qualification-checks.json": "806d33a44e93dafd6636961b0c809d31f7bd412089fe2b5b81ccfab7448f56cf",
+      "docs/preparation/tool-execution-guards/current-main-independent-rebuild.json": "099c2f4689eb17fa59b1a52432fee0f4522f265a4a27af8c66cc22a78172bbdc"
+    },
+    "repositoryCopiesBeforeReviewUpdate": {
+      "rebuildJsonValuesEqualLocalOriginal": true,
+      "reviewJsonValuesEqualPreviousLocalOriginal": true,
+      "copyInstruction": "Parent must refresh the repository review copy from this final local record; formatting may change bytes while preserving JSON values. Hash references to local originals remain local-original identities."
+    },
+    "logHashesRechecked": {
+      "qualification-nonlive.log": "7f9969410cebb3cf51bef38599f9dbcfc9827a327052f0c8232d4e596ac0e4a8",
+      "qualification-frozen-nonlive.log": "b1621a5a013e49d674b09704d95a3a72aec11c8a7a49dbd05fded727ab3256b6",
+      "qualification-fixture-inventory.json": "30fe9dc9f661a2ffaffae7e5da0b98b5ad279604de701c4ca3060677b13bc34c"
+    },
+    "fullSelectionEvidence": {
+      "primaryCheckout": {
+        "outerPassed": 359,
+        "nestedHistoricalPassed": 7,
+        "seconds": 47.768,
+        "use": "Historical diagnostic result only; initial preflight reported 106 missing declared dependency paths, zero existing-path hash mismatches, and harness refresh overlapped invocation. Not accepted as frozen-artifact validation."
+      },
+      "frozenValidation": {
+        "outerPassed": 359,
+        "nestedHistoricalPassed": 7,
+        "seconds": 46.627,
+        "nestedSeconds": 14.403,
+        "logsChecked": true,
+        "fullSuiteRerunByReviewer": false
+      }
+    },
+    "independentReadOnlyRecheck": {
+      "currentFrozenManifestInputs": 387,
+      "historicalDeclaredAndProtectedInputs": 392,
+      "candidateHarnessAndReferenceEntriesAcrossPrimaryFrozenAndHistoricalTrees": 42,
+      "mismatches": []
+    },
+    "resolvedClarifications": [
+      "Map describes proof obligations, not a completed qualification argument.",
+      "Manifest completeness and bundle derivation remain explicit source/build assumptions.",
+      "Trusted runtime/compiler/crypto/dependency and OS/process/clock/tracer assumptions are explicit.",
+      "Substantive and partial per-file review coverage remains explicit and matches this record.",
+      "Initial uncontrolled dependency/harness context is disclosed and distinguished from corrected frozen validation."
+    ],
+    "remainingBlockers": "Current-image legacy designation refusal, absent original current bootstrap/receipt and raw connected kernel proof, unaudited branches/runtime substrate remain unchanged. They do not become resolved by preparation publication.",
+    "reviewOutcome": "No blocking consistency issue for authorized preparation-only publication; no qualification, activation, merge or formal approval implied.",
+    "additionalExecution": "No tests or builds rerun for final consistency review; read/hash comparisons only."
+  }
+}
