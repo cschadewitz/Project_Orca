@@ -1,0 +1,94 @@
+{
+  "record": "bounded-independent-diagnostic-constructor-and-reader-rollback-review",
+  "reviewer": "/root/independent_review",
+  "baseCommit": "d657abf644bcc31ae7febb16400dcb474ec0c939",
+  "candidateState": "Uncommitted preparation delta, exact file hashes below; reviewer made no candidate edits.",
+  "candidateFiles": {
+    "tools/owned-read-proof/controlled_diagnostics.py": "6b5899d3d1c078b22c178fc3437156b957b88220e2808f793184e17a02399cb1",
+    "tools/owned-read-proof/test_diagnostic_rollback.py": "2be0a5d33c16458d60cf5894aee613abd980670a0d47607cf02fc09d0ea45149",
+    "tools/owned-read-proof/check_nonlive.py": "e34f30329da4928aaedfa2757e85a7d7d01e0bb97c6b0474b4ef5f8e56503236",
+    "docs/preparation/tool-execution-guards/current-image-diagnostic-rollback.md": "5ac95bee9b0f16bb6fd628ceef8efac5a738a7e196e350cbcbac928975184f10"
+  },
+  "reviewCoverage": "Full diagnostics diff, full 16-method injected test module, selector addition and full handoff document. Relevant unchanged sample/SparseDiagnostics source read for integration consequences. Not a whole-stack audit, real-kernel qualification or formal security approval.",
+  "sourceCorrespondence": {
+    "onlyChangedDiagnosticsAST": ["read_at", "PinnedProcess.__init__", "PinnedProcess.close"],
+    "unchanged": [
+      "PinnedProcess.sample",
+      "all SparseDiagnostics methods",
+      "counters",
+      "proc_fields",
+      "imports",
+      "CONFIG and all timing/read/sample bounds"
+    ],
+    "newObserverImport": false,
+    "measuredModuleSourceChanges": true
+  },
+  "assessment": {
+    "constructor": "Both owned slots and private error fields initialized before setup. Only successful native acquisition or dup return values enter slots; supplied originals remain borrowed. Original constructor BaseException retained by identity and re-raised after attempted cleanup, even if disposal fails. Initial identity/sample checks preserved.",
+    "close": "Clears each slot before attempting close, attempts both despite errors, retains first cleanup error privately, refuses with fixed text and suppressed display chaining. Consumed handles never retried. Later assigned slots still drain while uncertainty remains sticky. Trusted ordinary Python ownership assumed; no thread or async-interruption guarantee.",
+    "reader": "Original flags, relative directory, bound and ASCII decoding preserved. Open failure does not close borrowed directory. Read/bound/decode error wins over secondary close failure; one close attempt only. Successful read plus failing close returns no data and raises fixed RuntimeError from None, retaining original error in private implicit context. This includes BaseException failures.",
+    "integration": "Fixed reader cleanup RuntimeError is not swallowed by unchanged sample FileNotFoundError handling. Sparse outer error formatting, resource ownership, insertion/threads/retention and cleanup remain unchanged and incomplete. This review does not claim end-to-end privacy or settlement.",
+    "documentation": "Precisely separates actual injected function coverage, private in-memory exception state, unimplemented durable protocol and missing runtime authority/containment/loaded-code closure. Four launch guards and pins are unchanged."
+  },
+  "independentValidation": {
+    "checkout": "/workspace/orca-independent-current-rebuild",
+    "checkoutCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+    "candidatePythonFilesCopiedExactly": 49,
+    "disjointFromDeclaredImageInputs": true,
+    "harnessSnapshot": {
+      "path": "/tmp/orca-current-main-evidence/diagnostic-rollback-independent-harness.json",
+      "sha256": "3806c38acdcbd60045291851cc65073885a26047e703a529158184f157d56b3d"
+    },
+    "declaredBuildInputsVerifiedBeforeAndAfter": 387,
+    "candidatePythonUnchangedAfterTests": true,
+    "selection": "test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+    "methodBreakdown": {
+      "newInjectedDiagnostics": 16,
+      "injectedQueryRollback": 16,
+      "pureNativeReplay": 10,
+      "inertAttempt": 13,
+      "cleanupPrivacy": 18
+    },
+    "workingDirectory": "/workspace/orca-independent-current-rebuild/tools/owned-read-proof",
+    "commands": [
+      "timeout --kill-after=5s 60s python -B -m unittest -v test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+      "timeout --kill-after=5s 60s python -B -O -m unittest -v test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy"
+    ],
+    "normal": {
+      "passed": 73,
+      "seconds": 0.063,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/diagnostic-rollback-independent-normal.log",
+      "sha256": "2ba56ddb887ebca8c9da0b5cbc84da1756a2979de11535dc0b62e57d05df68df"
+    },
+    "optimized": {
+      "passed": 73,
+      "seconds": 0.108,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/diagnostic-rollback-independent-optimized.log",
+      "sha256": "4920f61a1cfb019c75fd15e8d6be7ed366c4a801fdf385a69a05f279c2cd2fca"
+    },
+    "executionBoundary": "Actual diagnostic constructor/read_at/close and unchanged sample invoked only with injected FakeOS, synthetic counter strings and synthetic poll. No real procfs, host descriptor open/close, polling, worker/thread/process, probe, image build or historical body. Earlier selected helper methods remain injected/pure.",
+    "notRun": [
+      "Full diagnostic test module or full nonlive selector",
+      "Real host query and self-pin tests",
+      "Historical physical regressions/image builds",
+      "Observer/tracer/provider/daemon/App Smoke",
+      "Sampler threads or process settlement"
+    ]
+  },
+  "findings": {
+    "blocking": [],
+    "coverageLimit": "Selected failure positions are covered, not every potential poll/parser/sample branch or arbitrary asynchronous interruption. No real kernel resource release proof."
+  },
+  "remainingGates": [
+    "Sparse bind dictionary insertion ownership, outer constructor resource rollback, sampler startup/stop and final retention cleanup remain unresolved.",
+    "Private diagnostic strings/files and error objects/tracebacks remain private trusted-state assumptions, not bounded durable evidence.",
+    "Secondary reader cleanup error is not independently persisted when an original read/validation/decode error wins.",
+    "OS disposal uncertainty is not settlement; worker/leader/lock/pipe ownership and loaded-runtime closure remain incomplete.",
+    "Authenticated original-session authority, preventive containment, bootstrap-to-connected qualification and current-image designation remain unavailable.",
+    "Prior CI failures remain separate from later passing runs. PR metadata hold and #779/#793/#794 restrictions remain binding."
+  ],
+  "outcome": "No blocking finding for this focused preparation-only delta; not formal security approval, current designation, live authorization or merge approval.",
+  "excludedActions": "No repository edits/publication, metadata mutation/retry/workaround, CI action, live observer/tracer/provider/daemon/App Smoke, real host query/thread probes, historical body invocation/extraction, new build, source-pin/limit/security/credential change or denied operation."
+}

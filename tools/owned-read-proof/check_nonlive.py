@@ -26,6 +26,7 @@ TESTS = (
     'test_offline_cleanup_privacy',
     'test_offline_attempt_model',
     'test_query_rollback',
+    'test_diagnostic_rollback',
     'test_current_qualification_boundaries',
     'test_controlled_v2_semantics',
     'test_kernel_causality',

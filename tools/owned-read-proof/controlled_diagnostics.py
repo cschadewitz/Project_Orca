@@ -31,9 +31,23 @@ def read_at(directory, name):
     try:
         value = os.read(number, READ_BOUND + 1)
         require(len(value) <= READ_BOUND, 'diagnostic counter exceeds fixed read bound')
-        return value.decode('ascii')
-    finally:
-        os.close(number)
+        value = value.decode('ascii')
+    except BaseException:
+        try:
+            os.close(number)
+        except BaseException:
+            # Keep the original read/bound/decode error, never format private
+            # errors or retry a close which may already have released the FD.
+            pass
+        raise
+    else:
+        try:
+            os.close(number)
+        except BaseException:
+            # The original close exception remains private implicit context;
+            # display only fixed text and never return apparently valid data.
+            raise RuntimeError('diagnostic reader cleanup uncertain') from None
+        return value
 
 
 def counters(raw):
@@ -55,9 +69,10 @@ def proc_fields(raw):
 
 class PinnedProcess:
     def __init__(self, expected, procfd=None, pidfd=None):
-        self.expected = {key: expected[key] for key in ('pid', 'starttime', 'ppid', 'pgrp', 'session')}
         self.procfd = self.pidfd = None
+        self._first_failure = self._cleanup_error = None
         try:
+            self.expected = {key: expected[key] for key in ('pid', 'starttime', 'ppid', 'pgrp', 'session')}
             self.pidfd = os.dup(pidfd) if pidfd is not None else os.pidfd_open(expected['pid'])
             self.procfd = os.dup(procfd) if procfd is not None else os.open('/proc/' + str(expected['pid']),
                 os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -67,8 +82,14 @@ class PinnedProcess:
             actual = proc_fields(read_at(self.procfd, 'stat'))
             require({k: actual[k] for k in self.expected} == self.expected, 'diagnostic initial process identity differs')
             self.sample()  # Refuse a stale/reused initial identity.
-        except BaseException:
-            self.close()
+        except BaseException as error:
+            self._first_failure = error
+            try:
+                self.close()
+            except BaseException:
+                # close consumes both owned slots and privately retains the first
+                # disposal error. Preserve the original constructor exception.
+                pass
             raise
 
     def sample(self):
@@ -101,8 +122,14 @@ class PinnedProcess:
         for name in ('procfd', 'pidfd'):
             value = getattr(self, name)
             if value is not None:
-                os.close(value)
                 setattr(self, name, None)
+                try:
+                    os.close(value)
+                except BaseException as error:
+                    if self._cleanup_error is None:
+                        self._cleanup_error = error
+        if self._cleanup_error is not None:
+            raise RuntimeError('diagnostic pin cleanup uncertain') from None
 
 
 class SparseDiagnostics:
