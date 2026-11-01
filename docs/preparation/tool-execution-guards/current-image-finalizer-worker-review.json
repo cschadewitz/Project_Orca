@@ -1,0 +1,102 @@
+{
+  "record": "bounded-independent-finalizer-worker-precondition-review",
+  "reviewer": "/root/independent_review",
+  "baseCommit": "160d7ebd752e2b62b92571bf6c492c6f3644c73c",
+  "candidateState": "Uncommitted preparation source/test/docs delta; no reviewer repository edits or publication.",
+  "candidateFiles": {
+    "tools/owned-read-proof/controlled_supervisor.py": "1f228b9906539e198d1396f7a272d27f0a3ec1261924cb56004ec68065f4cc62",
+    "tools/owned-read-proof/test_finalizer_worker_guard.py": "acc1835f20044ffdd5a3bb2e80f34f552a67d80512fc214990e66c4c7580406a",
+    "tools/owned-read-proof/check_nonlive.py": "fe6b76949eb276c351ba0ca1e5993ad0d29ac2610d674473cf476a45f56d95f1",
+    "docs/preparation/tool-execution-guards/current-image-finalizer-worker-guard.md": "df121d26a6776fb1ccdc98693ef542a788d0e83cf6159bf4db5b5a51462777fb"
+  },
+  "reviewCoverage": "Complete new helper/finalizer diff, surrounding original worker ownership and cleanup source, full 10-method module, selector and full handoff. Historical body parsed/read only, not invoked/extracted/compiled for execution. No formal or whole-stack/runtime qualification audit.",
+  "sourceCorrespondence": {
+    "newFunction": "require_control_worker_inactive",
+    "existingFunctionChanged": "observe finalizer prefix plus relocation of its existing join",
+    "verified": "AST all other top-level nodes/imports unchanged; observe becomes AST-identical after replacing modified finalbody with original; finalizer tail AST-identical after removing original join and comparing after new prefix.",
+    "preserved": [
+      "four first-executable launch refusals",
+      "exact three worker.join(timeout=1) calls, one in finalizer",
+      "worker-owned send finally close",
+      "later diagnostic worker guard and diagnostic module",
+      "source pins and execution bounds"
+    ],
+    "newObserverImport": false
+  },
+  "assessment": {
+    "helper": "Check only original trusted worker.ident nonNone and exact False is_alive. All failures yield fixed RuntimeError from None; private context preserved without formatting. No wait/launch/dispose/file operation, token or boolean; returns None, checks anew each call.",
+    "integration": "Finalizer first clears run.closed, attempts existing bounded join, then helper. Join/check failure fixed-refuses before remaining finalizer disposal/retention/writes. No additional wait or closure flag on uncertainty.",
+    "ownership": "Control retains send ownership in own finally. Outer receive/provenance/lifetime and pipe disposal follow original worker precondition. Trusted started/nonrunning Thread semantics prevent this worker still using them; not proof its send close succeeded, all resources released, child/tracer settled or execution authorized.",
+    "uncertainty": "Moving join ahead of pipe closes may remove an earlier termination signal; bounded refusal/retained handles are conservative. No closing-first bypass, new budget or retry/resolution protocol. Earlier normal-path writer closes and worker writes may already have occurred.",
+    "remainingCleanup": "Once precondition passes original sequential closes can fail and skip later cleanup/mask prior errors; normal writer close slots can be retried after partial failure. Early acquisitions/start outside finalizer remain. Existing private reports/tracebacks and concurrent lifecycle mutation are unqualified.",
+    "documentation": "Accurately scopes finalizer-only prevention, trusted thread/serial ownership assumptions, source-only integration evidence and no runtime/designation/settlement claims."
+  },
+  "initialTestHistory": {
+    "record": "/tmp/orca-current-main-evidence/finalizer-worker-initial-test-failure.json",
+    "recordSHA256": "9e4d93fd762ee552bb4f0921049bfdd3a59af06047fe42a73651b5331dc28101",
+    "log": "/tmp/orca-current-main-evidence/finalizer-worker-targeted.log",
+    "logSHA256": "d648412726e823f5120332246bf43092cdafbc8b1569be9cdfa8fbde369801ed",
+    "passed": 8,
+    "failed": 2,
+    "assessment": "Read full original log and recorded explanation. Failing AST selectors matched earlier lifetime-exclusion setup finally, not attempt finalizer. Corrected unique provenance.close selection preserves exact prefix/order and join-count assertions. No original failed-test rerun or historical execution by reviewer."
+  },
+  "independentValidation": {
+    "checkout": "/workspace/orca-independent-current-rebuild",
+    "checkoutCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+    "candidatePythonFilesCopiedExactly": 52,
+    "disjointFromDeclaredImageInputs": true,
+    "harnessSnapshot": {
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-independent-harness.json",
+      "sha256": "3ef4bcd89c00f4e06abec7a5cd624e1ee708b717157e3f183685f52d15d9a5b6"
+    },
+    "declaredBuildInputsVerifiedBeforeAndAfter": 387,
+    "candidatePythonUnchangedAfterTests": true,
+    "selection": "test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+    "methodBreakdown": {
+      "newInertHelper": 7,
+      "newSourceOnlyAST": 3,
+      "priorInjectedPureSourceOnly": 106
+    },
+    "workingDirectory": "/workspace/orca-independent-current-rebuild/tools/owned-read-proof",
+    "commands": [
+      "timeout --kill-after=5s 60s python -B -m unittest -v test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+      "timeout --kill-after=5s 60s python -B -O -m unittest -v test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy"
+    ],
+    "normal": {
+      "passed": 116,
+      "seconds": 0.193,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-independent-normal.log",
+      "sha256": "fbe729606b8f4206048a126945159407ce8246db8d963a70b7a4c8506113b302"
+    },
+    "optimized": {
+      "passed": 116,
+      "seconds": 0.132,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-independent-optimized.log",
+      "sha256": "290f54b5f8edc513d3f5eaa8dfc2e02dba2fb1200f9558f87dda7a0a2d355262"
+    },
+    "executionBoundary": "New helper receives inert objects; tests prohibit OS/thread/tracer adapters. Historical integration AST only; earlier selected tests injected/pure/source-only. No real join/thread/query/probe/process/observer, no historical body invocation/extraction/compilation for execution or image build.",
+    "notRun": [
+      "Full Python selector or real diagnostic/query modules",
+      "Historical physical image regressions/builds",
+      "Real worker/child/tracer settlement or live finalizer",
+      "App Smoke, observer/tracer/provider/daemon"
+    ]
+  },
+  "findings": {
+    "blocking": [],
+    "conclusion": "Source and evidence match focused finalizer disposal-prevention design with unchanged budgets and entry refusals."
+  },
+  "remainingGates": [
+    "Sequential cleanup error precedence and close-before-slot-consumption gaps remain.",
+    "Early acquisitions/worker-start errors and uncertainty resolution are incomplete.",
+    "Original worker inactivity is not OS release, child/tracer settlement or authenticated execution authority.",
+    "Concurrent lifecycle and immutable loaded-runtime identity remain unqualified.",
+    "Private exception/report storage lacks complete privacy/bounded durable guarantees.",
+    "Runtime containment, original session and bootstrap-to-connected/current-image qualification remain unavailable.",
+    "Metadata hold, #779/#793/#794 restrictions and original CI failures remain binding."
+  ],
+  "outcome": "No blocking finding for focused non-live preparation publication; not formal security approval, runtime qualification, current designation, live authorization or merge approval.",
+  "excludedActions": "No candidate edits, real runtime/host probes, historical body invocation/extraction/compilation for execution, image build/launch, historical harness refresh, metadata mutation/retry/workaround, CI action, publication, bound/pin/security/credential changes or denied operations."
+}

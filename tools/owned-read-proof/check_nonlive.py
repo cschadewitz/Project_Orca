@@ -29,6 +29,7 @@ TESTS = (
     'test_diagnostic_rollback',
     'test_sparse_rollback',
     'test_retention_rollback',
+    'test_finalizer_worker_guard',
     'test_current_qualification_boundaries',
     'test_controlled_v2_semantics',
     'test_kernel_causality',

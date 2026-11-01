@@ -516,6 +516,15 @@ class ObservedRun:
                                     image=image, assert_bootstrap_closed=assert_original_receipt)
 
 
+def require_control_worker_inactive(worker):
+    """Check the original trusted worker only; no wait, disposal or authority."""
+    try:
+        require(worker.ident is not None and worker.is_alive() is False,
+                'control-worker ownership uncertain')
+    except BaseException:
+        raise RuntimeError('control-worker ownership uncertain') from None
+
+
 def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, diagnostic=False):
     """Disabled live entry point; historical body retained for source review."""
     raise RuntimeError('non-live preparation: observer launch disabled')
@@ -746,12 +755,19 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
     except BaseException as error:
         report['refusal'] = type(error).__name__ + ': ' + str(error)
     finally:
+        run.closed = False
+        # The original worker can still use receive and provenance. Keep all
+        # finalizer-owned handles if its bounded join or state is uncertain.
+        try:
+            worker.join(timeout=1)
+            require_control_worker_inactive(worker)
+        except BaseException:
+            raise RuntimeError('control-worker ownership uncertain') from None
         for number in (out_read, err_read, out_write, err_write):
             if number is not None:
                 os.close(number)
         os.close(command)
         os.close(ack)
-        worker.join(timeout=1)
         if not worker.is_alive():
             os.close(receive)
         os.close(lifetime)
