@@ -38,6 +38,26 @@ async function fixture() {
   owners.push(owner);
   return { base, workspace, control, owner };
 }
+async function heldFirstRunFixture(acquire = acquireFirstRunFence) {
+  let occupied: unknown;
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const f = await fixture();
+    try {
+      // Allocate only disposable fixture identities before first-run ownership evidence.
+      // Keep this exact socket open through the assertion; production never changes ports.
+      const kernel = await acquire(fenceDirectory(f.workspace), () => "retained");
+      return { ...f, kernel };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+      occupied = error;
+      await f.owner.detach();
+      owners.splice(owners.indexOf(f.owner), 1);
+      await rm(f.base, { recursive: true, force: true });
+      roots.splice(roots.indexOf(f.base), 1);
+    }
+  }
+  throw new Error("No free initial fixture fence after 16 fresh workspaces", { cause: occupied });
+}
 const cli = resolve("packages/cli/src/main.ts");
 it("actual auth/init CLI routes refuse before protected writes while help remains usable", async () => {
   const f = await fixture();
@@ -214,10 +234,9 @@ it("refuses uncertified plugin startup before module execution", async () => {
   expect(await readdir(f.workspace)).not.toContain("executed");
 });
 it("refuses a surviving first-run writer on the same boot", async () => {
-  const f = await fixture();
-  await retainFirstRun(f.workspace);
-  const kernel = await acquireFirstRunFence(fenceDirectory(f.workspace), () => "retained");
+  const f = await heldFirstRunFixture();
   try {
+    await retainFirstRun(f.workspace);
     f.owner.closeAdmission("a".repeat(64));
     await f.owner.capture();
     const permit = await f.owner.beginMigration();
@@ -232,6 +251,55 @@ it("refuses a surviving first-run writer on the same boot", async () => {
       ),
     ).rejects.toThrow();
   } finally {
-    await new Promise<void>((done) => kernel.close(() => done()));
+    await new Promise<void>((done) => f.kernel.close(() => done()));
   }
+});
+
+it("first-run fence fixture replaces only an unreserved colliding identity and retains the exact fence", async () => {
+  const attempted: string[] = [];
+  const collision = Object.assign(new Error("synthetic occupied setup port"), { code: "EADDRINUSE" });
+  const f = await heldFirstRunFixture(async (workspace, observation) => {
+    attempted.push(workspace.path);
+    expect(await readdir(workspace.path)).not.toContain(".orca-first-run-ownership");
+    if (attempted.length === 1) throw collision;
+    return acquireFirstRunFence(workspace, observation);
+  });
+  try {
+    expect(attempted.length).toBeGreaterThanOrEqual(2);
+    expect(attempted.length).toBeLessThanOrEqual(16);
+    expect(new Set(attempted).size).toBe(attempted.length);
+    for (const workspace of attempted.slice(0, -1))
+      await expect(readdir(workspace)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(f.workspace).toBe(attempted.at(-1));
+    await expect(acquireFirstRunFence(fenceDirectory(f.workspace), () => undefined)).rejects.toMatchObject({
+      code: "EADDRINUSE",
+    });
+  } finally {
+    await new Promise<void>((done) => f.kernel.close(() => done()));
+  }
+});
+
+it("first-run fence fixture stops after the existing 16 fresh-workspace allocation bound", async () => {
+  const attempted: string[] = [];
+  const collision = Object.assign(new Error("synthetic occupied setup port"), { code: "EADDRINUSE" });
+  await expect(
+    heldFirstRunFixture(async (workspace) => {
+      attempted.push(workspace.path);
+      throw collision;
+    }),
+  ).rejects.toMatchObject({ message: "No free initial fixture fence after 16 fresh workspaces", cause: collision });
+  expect(new Set(attempted).size).toBe(16);
+  for (const workspace of attempted) await expect(readdir(workspace)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("first-run fence fixture propagates other setup failures without retry", async () => {
+  let attempts = 0;
+  const refused = Object.assign(new Error("synthetic setup refusal"), { code: "EACCES" });
+  await expect(
+    heldFirstRunFixture(async () => {
+      attempts++;
+      throw refused;
+    }),
+  ).rejects.toBe(refused);
+  expect(attempts).toBe(1);
 });
