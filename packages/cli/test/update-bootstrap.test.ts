@@ -38,10 +38,13 @@ async function fixture() {
   owners.push(owner);
   return { base, workspace, control, owner };
 }
-async function heldFirstRunFixture(acquire = acquireFirstRunFence) {
+async function allocateHeldFirstRunFence<T extends { workspace: string; discard(): Promise<void> }>(
+  create: () => Promise<T>,
+  acquire = acquireFirstRunFence,
+) {
   let occupied: unknown;
   for (let attempt = 0; attempt < 16; attempt++) {
-    const f = await fixture();
+    const f = await create();
     try {
       // Allocate only disposable fixture identities before first-run ownership evidence.
       // Keep this exact socket open through the assertion; production never changes ports.
@@ -50,13 +53,24 @@ async function heldFirstRunFixture(acquire = acquireFirstRunFence) {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
       occupied = error;
-      await f.owner.detach();
-      owners.splice(owners.indexOf(f.owner), 1);
-      await rm(f.base, { recursive: true, force: true });
-      roots.splice(roots.indexOf(f.base), 1);
+      await f.discard();
     }
   }
   throw new Error("No free initial fixture fence after 16 fresh workspaces", { cause: occupied });
+}
+async function heldFirstRunFixture(acquire = acquireFirstRunFence) {
+  return allocateHeldFirstRunFence(async () => {
+    const f = await fixture();
+    return {
+      ...f,
+      async discard() {
+        await f.owner.detach();
+        owners.splice(owners.indexOf(f.owner), 1);
+        await rm(f.base, { recursive: true, force: true });
+        roots.splice(roots.indexOf(f.base), 1);
+      },
+    };
+  }, acquire);
 }
 const cli = resolve("packages/cli/src/main.ts");
 it("actual auth/init CLI routes refuse before protected writes while help remains usable", async () => {
@@ -280,15 +294,33 @@ it("first-run fence fixture replaces only an unreserved colliding identity and r
 });
 
 it("first-run fence fixture stops after the existing 16 fresh-workspace allocation bound", async () => {
-  const attempted: string[] = [];
+  const attempted: string[] = [],
+    discarded: string[] = [];
   const collision = Object.assign(new Error("synthetic occupied setup port"), { code: "EADDRINUSE" });
   await expect(
-    heldFirstRunFixture(async (workspace) => {
-      attempted.push(workspace.path);
-      throw collision;
-    }),
+    allocateHeldFirstRunFence(
+      async () => {
+        // This unit control needs disposable identities, not update-window sockets.
+        // Real provisioning and exact held-socket refusal remain in the tests above.
+        const workspace = await mkdtemp(join(process.cwd(), "orca-fence-allocation-"));
+        roots.push(workspace);
+        return {
+          workspace,
+          async discard() {
+            await rm(workspace, { recursive: true, force: true });
+            roots.splice(roots.indexOf(workspace), 1);
+            discarded.push(workspace);
+          },
+        };
+      },
+      async (workspace) => {
+        attempted.push(workspace.path);
+        throw collision;
+      },
+    ),
   ).rejects.toMatchObject({ message: "No free initial fixture fence after 16 fresh workspaces", cause: collision });
   expect(new Set(attempted).size).toBe(16);
+  expect(discarded).toEqual(attempted);
   for (const workspace of attempted) await expect(readdir(workspace)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
