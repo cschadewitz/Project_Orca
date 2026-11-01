@@ -47,6 +47,8 @@ def safe_summary(run, root):
 
 
 def observe_new(root=None, diagnostic=False):
+    raise RuntimeError('non-live preparation: observer launch disabled')
+    # Historical orchestration retained for review only; refusal precedes all I/O.
     require(type(diagnostic) is bool, 'explicit supervisor diagnostic mode required')
     implementation = committed_observer()
     root = Path(tempfile.mkdtemp(prefix='orca-connected-observation-')) if root is None else Path(root)
@@ -85,6 +87,8 @@ def diagnose_bootstrap():
     The return value is a sanitized report, not a retained graph or designation.
     No connected constructor or command is used in this bounded investigation.
     """
+    raise RuntimeError('non-live preparation: observer launch disabled')
+    # Historical diagnostic orchestration is not an alternate launch entry point.
     implementation = committed_observer()
     root = Path(tempfile.mkdtemp(prefix='orca-bootstrap-diagnostic-'))
     image = root / 'image'

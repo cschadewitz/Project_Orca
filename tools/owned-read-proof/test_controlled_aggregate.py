@@ -156,7 +156,7 @@ class ComposedControls(unittest.TestCase):
 
 
 class OriginalSupervisorControls(unittest.TestCase):
-    def test_refused_bootstrap_cannot_release_connected_commands(self):
+    def test_observation_wrapper_refuses_before_any_bootstrap(self):
         run = SimpleNamespace(report={}, assert_bootstrap_closed=lambda: (_ for _ in ()).throw(
             RuntimeError('missing permanently closed original bootstrap')))
         with tempfile.TemporaryDirectory() as directory:
@@ -166,12 +166,10 @@ class OriginalSupervisorControls(unittest.TestCase):
                  patch('controlled_observation.observe', return_value=run) as observe, \
                  patch('controlled_observation.safe_summary', return_value={'refusal': 'bounded bootstrap refusal'}), \
                  patch('controlled_observation.ConnectedDesignation') as designation:
-                result = observe_new(root)
-            self.assertEqual(observe.call_count, 1)
+                with self.assertRaisesRegex(RuntimeError, 'observer launch disabled'):
+                    observe_new(root)
+            observe.assert_not_called()
             designation.assert_not_called()
-            self.assertIn('closed original bootstrap', result['refusal'])
-            self.assertFalse(result['productionEligible'])
-            self.assertIsNone(result['acceptingToken'])
 
     def test_report_success_cannot_replace_closed_original_graph(self):
         for closed in (False, True):

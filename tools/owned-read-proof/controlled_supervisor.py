@@ -781,6 +781,8 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
 
 
 def bootstrap():
+    raise RuntimeError('non-live preparation: observer launch disabled')
+    # Historical wrapper remains unreachable before build/directory side effects.
     root = Path(tempfile.mkdtemp(prefix='orca-controlled-replay-'))
     image = root / 'image'
     subprocess.run(['node', str(REPO / 'tools/owned-read-proof/build-controlled.mjs'), str(image)],

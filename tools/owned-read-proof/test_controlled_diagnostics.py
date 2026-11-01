@@ -64,7 +64,7 @@ class PinnedCounters(unittest.TestCase):
 
 
 class SparseMeasurementControls(unittest.TestCase):
-    def test_single_original_launcher_does_not_construct_connected_designation_on_success(self):
+    def test_diagnostic_wrapper_cannot_construct_observation_or_designation(self):
         with tempfile.TemporaryDirectory() as value:
             run = SimpleNamespace(assert_bootstrap_closed=lambda: None)
             with patch('controlled_observation.committed_observer', return_value={}), \
@@ -73,13 +73,10 @@ class SparseMeasurementControls(unittest.TestCase):
                  patch('controlled_observation.safe_summary', return_value={'authority': 'none'}), \
                  patch('controlled_observation.observe', return_value=run) as observe, \
                  patch('controlled_observation.ConnectedDesignation') as designation:
-                result = diagnose_bootstrap()
-            self.assertEqual(observe.call_count, 1)
-            self.assertIs(observe.call_args.kwargs['diagnostic'], True)
+                with self.assertRaisesRegex(RuntimeError, 'observer launch disabled'):
+                    diagnose_bootstrap()
+            observe.assert_not_called()
             designation.assert_not_called()
-            self.assertIsNone(result['acceptingToken'])
-            self.assertFalse(result['productionEligible'])
-            self.assertFalse(result['connectedCommandsReleased'])
 
     def test_progress_reads_size_and_count_without_trace_packet_or_token(self):
         with tempfile.TemporaryDirectory() as value:
