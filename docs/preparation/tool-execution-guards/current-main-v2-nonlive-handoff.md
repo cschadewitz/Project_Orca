@@ -1,5 +1,11 @@
 # Current-main v2 offline preparation — launch disabled
 
+> Publication update: the parent subsequently opened draft PR #809 under explicit
+> user approval. The [CI formatting repair](current-main-format-handoff.md)
+> records its first exact-head CI failure and distinguishes formatted repository
+> evidence copies from unchanged physical artifacts. The denied attempt recorded
+> below remains historical; it was not retried by this agent.
+
 The offline grammar now models current main's standing-review v2 records while
 preserving the existing authority, effect, scope and timing checks. This is still
 **preparation with unresolved designation failures**, not end-to-end current-main

@@ -49,8 +49,10 @@ currentness composition. Main's newer producer/test edits were retained.
 Historical observation reports were not copied or relabeled. Their exact records
 remain at the linked draft heads. The old
 [composition manifest](controlled-currentness-composition-frozen-build.json)
-is copied byte-for-byte solely because the inherited image-pin tests reference
-it. It describes the historical image, not this candidate.
+was initially copied byte-for-byte solely because the inherited image-pin tests
+reference it. The later [formatting repair](current-main-format-handoff.md) changes
+only its JSON layout, preserving all values. It describes the historical image,
+not this candidate.
 
 No production `packages/*/src` code, package manifest, shared lockfile, workflow,
 accepted-build registry, credential grant, diagnostic setting or execution limit
@@ -85,7 +87,10 @@ The retained image is `/tmp/orca-current-main-evidence/frozen-image`, built from
 the exact implementation commit in `/tmp/orca-current-main-frozen`. It was never
 launched. [Build identity](current-main-nonlive-identity.json) records the Node
 binary, builder, tsconfig, lock and archive hashes; the complete native
-[manifest](current-main-nonlive-build.json) is retained without reformatting.
+[manifest](current-main-nonlive-build.json) was initially retained without
+reformatting. The later [CI formatting repair](current-main-format-handoff.md)
+formats that repository copy only; the native image manifest and its hash below
+remain unchanged. The formatted copy has equal JSON values and a distinct hash.
 
 | Output | Bytes | SHA-256 |
 | --- | ---: | --- |

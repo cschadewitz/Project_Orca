@@ -33,20 +33,8 @@
     "repositoryDocumentCount": 2,
     "installedDocumentCount": 1,
     "workspaceDocumentEqual": true,
-    "repositoryTopLevelKeys": [
-      "importers",
-      "lockfileVersion",
-      "packages",
-      "settings",
-      "snapshots"
-    ],
-    "installedTopLevelKeys": [
-      "importers",
-      "lockfileVersion",
-      "packages",
-      "settings",
-      "snapshots"
-    ],
+    "repositoryTopLevelKeys": ["importers", "lockfileVersion", "packages", "settings", "snapshots"],
+    "installedTopLevelKeys": ["importers", "lockfileVersion", "packages", "settings", "snapshots"],
     "differingWorkspaceKeys": [],
     "note": "Committed lock document 0 pins pnpm12.4.2; document 1 describes workspace dependencies. Installed lock is the single workspace document."
   },
@@ -60,9 +48,7 @@
   "historicalComparison": {
     "oldInputCount": 386,
     "newInputCount": 387,
-    "added": [
-      "packages/engine/src/deferred-human-delivery.ts"
-    ],
+    "added": ["packages/engine/src/deferred-human-delivery.ts"],
     "removed": [],
     "changed": [
       "packages/agents/src/acp-session.ts",
