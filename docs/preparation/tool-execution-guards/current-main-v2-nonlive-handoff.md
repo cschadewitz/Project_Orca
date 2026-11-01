@@ -132,10 +132,23 @@ publication is authorized without dispatching a manual desktop/homelab workflow.
 No runner policy, workflow, resource budget or repository variable was changed.
 Actual automatic CI selection/status must be reported from the resulting run.
 
+The branch was published non-force through evidence commit
+`bc46cab321f015a89b74a8318f43a4b1a6c6e631`. The subsequent GitHub connector request
+to create a draft PR against `main` was **denied by automatic approval review**:
+it judged draft creation an external commitment and said the trusted user
+messages did not explicitly authorize opening this PR or publishing its payload.
+No retry or alternate route was attempted. A read-only follow-up search confirmed
+no open PR for this branch. Draft creation remains blocked pending new explicit
+authorization evidence; automatic PR CI was consequently not observed and no
+actual selected runner can be reported. The prepared description is retained at
+`/tmp/orca-current-main-evidence/draft-pr-body.md` in the saved environment.
+
 Connected current-source designation and full current-source kernel replay remain
 unproven. Callback/registry/review-handle/permit/dispatch identities retain their
 exact-source assumptions. There is no full repository or monolithic suite pass,
 native desktop proof, observation, activation or end-to-end acceptance claim.
 No live observer/tracer/provider/device/daemon was launched by this preparation.
 The prior denials for #779 security review, #793 merge and #794 formal approval
-remain binding; none was retried. No automatic-approval denial occurred here.
+remain binding; none was retried. The draft-creation denial above is the only
+automatic-approval denial in this continuation; earlier review/build records
+pre-date that publication attempt.
