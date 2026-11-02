@@ -118,10 +118,12 @@ except BaseException:
     raise RuntimeError('control-worker ownership uncertain') from None
 """).body
         self.assertEqual([ast.dump(n) for n in final[:2]], [ast.dump(n) for n in expected])
-        # First two statements have no disposal or file calls; any later statement
-        # is unreachable if join/check raises. Parse only, never execute this body.
-        self.assertIsInstance(final[2], ast.Assign)
-        tail_calls = [ast.unparse(node.func) for statement in final[2:]
+        # The additional traced-return refusal must follow the worker check and
+        # precede ownership transfer. Parse only, never execute this body.
+        gate = ast.parse('if not traced_call_returned:\n    cleanup.refuse_unreturned_traced_call()').body[0]
+        self.assertEqual(ast.dump(final[2]), ast.dump(gate))
+        self.assertIsInstance(final[3], ast.Assign)
+        tail_calls = [ast.unparse(node.func) for statement in final[3:]
                       for node in ast.walk(statement) if isinstance(node, ast.Call)]
         for name in ('cleanup.close_transferred', 'diagnostics.retain_and_close',
                      'retained.write_text', 'run.report_path.write_text'):

@@ -106,8 +106,10 @@ class StopSourceControls(unittest.TestCase):
     def test_original_run_call_stays_inside_capture_before_stop(self):
         _, _, inner = self.source()
         self.assertIsInstance(inner, ast.Try)
-        self.assertEqual(len(inner.body), 1)
+        self.assertEqual(len(inner.body), 2)
         self.assertEqual(ast.unparse(inner.body[0].value.func), 'run_traced')
+        self.assertEqual(ast.dump(inner.body[1]),
+                         ast.dump(ast.parse('traced_call_returned = True').body[0]))
         self.assertEqual(len(inner.handlers), 1)
         self.assertEqual(ast.unparse(inner.handlers[0].type), 'BaseException')
         self.assertEqual(inner.handlers[0].name, 'error')

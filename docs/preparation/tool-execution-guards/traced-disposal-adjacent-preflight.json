@@ -1,0 +1,74 @@
+{
+  "scope": "Supplemental adjacent inert preflight and test correspondence correction; original five-file review remains historically unchanged.",
+  "sourceCommit": "bc91ed8124f10544a24c397bd384c592e4d8b412",
+  "publishedBase": "4582a05c59a6715681b7c0b0c8f59479db180217",
+  "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_traced_disposal_gate test_attempt_cleanup test_finalizer_worker_guard test_stop_error_precedence test_worker_error_privacy -v",
+  "cwd": "tools/owned-read-proof",
+  "initialResult": {
+    "tests": 54,
+    "passed": 52,
+    "failures": 2,
+    "seconds": 0.215,
+    "exitCode": 1,
+    "failedTests": [
+      {
+        "name": "test_finalizer_worker_guard.SourceOnlyFinalizerControls.test_finalizer_join_and_refusal_dominate_all_disposal_and_writes",
+        "cause": "Expected final[2] to be ast.Assign; new pre-disposal refusal is ast.If."
+      },
+      {
+        "name": "test_stop_error_precedence.StopSourceControls.test_original_run_call_stays_inside_capture_before_stop",
+        "cause": "Expected len(inner.body) == 1; direct traced call now followed by local normal-return assignment."
+      }
+    ]
+  },
+  "correction": "Update exactly these two AST expectations to require the new exact refusal and post-return assignment; preserve all worker, disposal, exception-capture, stop/finally, privacy and launch-refusal assertions. No implementation change.",
+  "files": [
+    {
+      "path": "tools/owned-read-proof/test_finalizer_worker_guard.py",
+      "sha256": "3e7828b46378b3f16092c0467fb85f11a9e2f8304b8cd23cf0e8fdccc42709b5"
+    },
+    {
+      "path": "tools/owned-read-proof/test_stop_error_precedence.py",
+      "sha256": "bd5704d3d9d654c824dba8f0d2f764c76424e8503b3caa4f8b5c60506d9ce8f7"
+    }
+  ],
+  "primaryCorrectedResult": {
+    "tests": 54,
+    "passed": 54,
+    "seconds": 0.702,
+    "exitCode": 0,
+    "outputLimitation": "Tool display/output truncated; terminal count/result retained, full successful independent log retained separately."
+  },
+  "independentResult": {
+    "reviewer": "/root/independent_review",
+    "tests": 54,
+    "passed": 54,
+    "seconds": 0.375,
+    "exitCode": 0,
+    "runs": 1,
+    "finding": "No substantive blocker. Both exact AST assertions are stronger; original worker prefix, disposal tail, capture and finalizer checks preserved."
+  },
+  "staticChecks": [
+    "Changed test AST syntax and tabnanny passed.",
+    "git diff --check passed.",
+    "Supervisor and original five reviewed files unchanged from bc91ed8."
+  ],
+  "evidence": [
+    {
+      "path": "/tmp/orca-current-main-evidence/traced-disposal-adjacent-initial-result.json",
+      "sha256": "38b261836a2a583a644e97b261a87147a3d219f81731211599bdaea19ad156aa"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/traced-disposal-adjacent-fixed-result.json",
+      "sha256": "4d955d102a25bed6bb215fe7d2aa9495458232779db6e16ab9abd62f79218716"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/traced-disposal-adjacent-independent-tests.log",
+      "sha256": "afcf9ff19f1aebc1922d009fc56ef8e8d65797972f88832b55a89217a9cc2369"
+    }
+  ],
+  "notRun": [
+    "Historical live bodies, observer, tracer, daemon, provider, real host/network/thread/process tests, App Smoke, image rebuild or current-image qualification."
+  ],
+  "limitations": "Tests establish inert bookkeeping and source correspondence only. Actual settlement, surviving custody and remaining architecture gates remain unresolved. CI does not run these Python suites. Existing metadata hold and prior denials unchanged."
+}
