@@ -1,0 +1,143 @@
+{
+  "reviewer": "Independent read-only agent /root/independent_review",
+  "base": "9d6cfe312493781e6578815260437a87de3b5005",
+  "outcome": "No remaining blocking finding in the final narrow source change. Error precedence and unsafe-disposal classification are preserved under the reviewed synchronous model. This is bounded implementation review with inert tests, not formal security approval or live settlement/custody qualification.",
+  "files": [
+    {
+      "path": "tools/owned-read-proof/run.py",
+      "sha256": "7da1b70daa7d099ba6da84049a7b426633bfe41ce4eebbe4a131dd8b5c2edfc4"
+    },
+    {
+      "path": "tools/owned-read-proof/test_traced_failure_privacy.py",
+      "sha256": "7d34fa6a7fde3ff7eade8f2fb37148be6fa5b8d01dd3d2d2afa065dec762f64c"
+    },
+    {
+      "path": "docs/preparation/tool-execution-guards/traced-failure-preservation.md",
+      "sha256": "c7b2211562e2201aef01838e3235bab42de34b07cc48ba621d60d56e93e425c4"
+    },
+    {
+      "path": "docs/preparation/tool-execution-guards/traced-failure-checks.json",
+      "sha256": "892bb7df329e146d4f81c0159bef793f628587a571615af6734635ff3195ae11"
+    }
+  ],
+  "originalReview": {
+    "path": "/tmp/orca-current-main-evidence/traced-failure-independent-review.json",
+    "sha256": "b8a991a20b78d70ed2e0188e4f287b95e0bc28bd141f69f34d05fdc3c0aa6efd"
+  },
+  "coverage": [
+    "Reviewed complete run.py delta, complete new test suite, handoff and final checks. Read actual proof_directory contract and physical test_cleanup.py source only; did not import or run test_cleanup.py.",
+    "Verified complete strict replacements of run.ctypes, subprocess, os, time and signal before actual run_traced tests. tempfile, shutil, fcntl and importlib are forbidden in traced tests; proof_directory substitutes inert path/removal adapters. No real prctl, Popen, kill/wait/reap, sleep or filesystem deletion is reached.",
+    "Reviewed adjacent helper/AST selection from prior rounds; no observe/bootstrap historical body is invoked, extracted for execution, compiled or bypassed. Module definitions are imported for helper access only.",
+    "Static checks compare unchanged controls and original call/bound ASTs, not executable runtime identity or whole dependency closure."
+  ],
+  "findingsAndResolutions": [
+    {
+      "finding": "An ordinary error before Popen returns could reach unchanged proof_directory removal policy without a retained process handle.",
+      "resolution": "Parent-authorized refinement marks process-is-None failures unsafe. Fixed carrier retains original acquisition exception; proof_directory preserves its path. Tests cover PrivateFailure, OSError and KeyboardInterrupt, exactly one acquisition, no invented kill/wait/reap, and unchanged restoration. This preserves uncertainty, not recovery of an unknown child."
+    },
+    {
+      "finding": "Serialization refusal while a private exception is actively handled could implicitly print that active exception.",
+      "resolution": "Parent hardening adds from None to both new __reduce_ex__ refusal methods. New all-protocol test runs inside active PrivateFailure handling and verifies suppressed context printing, no explicit cause, and still-private accessible __context__. Ordinary object inspection remains outside isolation claim."
+    }
+  ],
+  "sourceAssessment": [
+    {
+      "topic": "Sticky first error and unsafe classification",
+      "result": "_TracedFailures records first detected exception by identity using is None, independently retains first unsafe source and preallocates fixed-message OwnedCleanupError before child acquisition. Any failed settlement or unreturned acquisition forces unsafe carrier regardless of earlier body or later stream/restoration failure. Captured OwnedCleanupError from other phases cannot be downgraded. Successful result cannot return after recorded failure."
+    },
+    {
+      "topic": "Synchronous detection order",
+      "result": "Order is launch/callback/communicate/result construction, settlement, stdout, stderr, restoration. Falsey exceptions remain first. This is not global concurrent chronology. Initial subreaper setup remains outside child-acquisition capture; arbitrary asynchronous interruption/allocation failure is not exhaustively contained."
+    },
+    {
+      "topic": "Original ownership and bounds",
+      "result": "Returned-process settlement retains original returncode-before-signal decision, missing-group handling and a single original wait. Already-reaped PID/PGID is never signaled. Five-second wait, separate five-second adopted deadline, waitpid(-1, WNOHANG), 0.01-second sleep, launch/communicate/prctl calls and timeout arguments are unchanged. Standalone sequential child ownership assumption remains required; no unrelated child scope is newly authorized."
+    },
+    {
+      "topic": "Stream cleanup and restoration",
+      "result": "Original stream slots are set to None before close; next eligible stream is attempted after failure. The same aliased stream object is closed at most once. A thrown close is not proof of release. Restoration is attempted once after earlier failures. First settlement failure still stops its sequence; no new kill/wait/reap retries. Restoration-only failure after normal cleanup blocks success without inventing unsettled children."
+    },
+    {
+      "topic": "Directory policy",
+      "result": "proof_directory is unchanged. It retains on OwnedCleanupError, including ambiguous start and settlement failures now protected from masking; ordinary body failure after cleanup retains prior removal policy. The directory tests use inert filesystem adapters, not actual durable storage."
+    },
+    {
+      "topic": "Private carrier and serialization",
+      "result": "Unsafe carrier arguments/public message are fixed. Exact original objects are private attributes, not public report data. Holder repr omits contents. Both holder and OwnedCleanupError refuse standard pickle protocols, including exception __dict__ traversal, with fixed TypeError from None. Re-raises suppress normal cause/context printing; attributes, __context__ and tracebacks remain inspectable by trusted same-process code. No durable journal or hostile-process secrecy claim."
+    },
+    {
+      "topic": "Unreturned process and recovery limits",
+      "result": "Conservative retention does not recover a child for which Popen never returned ownership. No numeric PID rediscovery, fabricated cleanup or retry was added. Initial setup uncertainty, hidden resources, destructor effects, retained error lifetime, actual EXITKILL/process-group correctness and surviving recovery owner remain open."
+    }
+  ],
+  "independentValidation": {
+    "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_traced_failure_privacy test_traced_disposal_gate test_attempt_cleanup test_finalizer_worker_guard test_stop_error_precedence test_worker_error_privacy -v",
+    "cwd": "/workspace/Project_Orca/tools/owned-read-proof",
+    "runs": [
+      {
+        "stage": "Intermediate: before ambiguous-start refinement",
+        "passed": 75,
+        "seconds": 0.349,
+        "exitCode": 0,
+        "sourceSha256": "f64cc8bf77a78cbc2ef45b724ea8086773cfbc96f5a9508b391366629e075102",
+        "testSha256": "21c23d89cd63fa6a166eb95702996e83dfa4551b8fbc0d269aa6e40954ed3860",
+        "log": {
+          "path": "/tmp/orca-current-main-evidence/traced-failure-independent-tests.log",
+          "bytes": 13315,
+          "sha256": "a02dfd5daae7918b318f6587e8dd0695e212c5d49e85fc5b1dabab467accef42"
+        }
+      },
+      {
+        "stage": "Intermediate: ambiguous-start refinement, before active-handler serialization hardening",
+        "passed": 75,
+        "seconds": 0.604,
+        "exitCode": 0,
+        "sourceSha256": "32346a7909b7deafe1ea39d65bfecb2bf4133453736b26a464b18ae98be7e06e",
+        "testSha256": "1987c429682134cc59ecafa9bc64de1a12fcb306dd57761f10f745bc01803ff4",
+        "log": {
+          "path": "/tmp/orca-current-main-evidence/traced-failure-independent-final-tests.log",
+          "bytes": 13309,
+          "sha256": "2e56ec53d4c41d321d77e5bfea78769ab1f8a3ec03dec1d83952b25f071df6a1"
+        }
+      },
+      {
+        "stage": "Final reviewed source",
+        "passed": 76,
+        "newTests": 22,
+        "adjacentTests": 54,
+        "seconds": 0.309,
+        "exitCode": 0,
+        "toolWallSeconds": 0.623755605,
+        "sourceSha256": "7da1b70daa7d099ba6da84049a7b426633bfe41ce4eebbe4a131dd8b5c2edfc4",
+        "testSha256": "7d34fa6a7fde3ff7eade8f2fb37148be6fa5b8d01dd3d2d2afa065dec762f64c",
+        "log": {
+          "path": "/tmp/orca-current-main-evidence/traced-failure-independent-privacy-final-tests.log",
+          "bytes": 13510,
+          "sha256": "c769a180b4c2e1b7f57f36372f6a99e08f4501306d536ac45b19698bc451e8a9"
+        }
+      }
+    ],
+    "reasonForRepeatedRuns": "Only code/test refinements justified the later runs. Each actual invocation retained the same 60-second timeout and 5-second kill-after envelope. No test failure or timeout occurred.",
+    "finalSummary": "Passed 76 tests: 22 new + 54 adjacent, in 0.309 seconds, exit 0. Full final log retained."
+  },
+  "remainingBlockers": [
+    "No original surviving recovery owner for ambiguous start or later guest/supervisor loss.",
+    "No complete acquisition-to-settlement proof, actual process release validation or durable private failure custody.",
+    "No authenticated session issuer/transport, preventive containment, immutable actual-loaded closure or current-source connected qualification.",
+    "Parent clearance remains required for any publication; reviewer made no repository or external mutation."
+  ],
+  "errors": [],
+  "readLimitations": [
+    "Parent missing .agents and display-truncation diagnostics remain in checks. Reviewer performed no denied-document retries or alternate routes; no independent tool/test errors in this slice. Full test outputs captured in files."
+  ],
+  "notRun": [
+    "test_cleanup.py, including real-prctl reaped-leader test",
+    "Live Node/strace/process/thread/host/network experiments",
+    "Observe/bootstrap historical bodies or alternate launcher",
+    "Full/historical selectors, App Smoke, CI",
+    "Image rebuild or runtime designation",
+    "Provider/daemon/access/security/credential operations",
+    "Metadata mutation, commit, push, merge, activation or denied #779/#793/#794 routes"
+  ],
+  "publication": "Local commit only, pending parent clearance; no formal security approval."
+}

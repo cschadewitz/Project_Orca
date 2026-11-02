@@ -64,6 +64,42 @@ def install(target):
 class OwnedCleanupError(RuntimeError):
     """Unsettled owned children: preserve their disposable directory for inspection."""
 
+    def __reduce_ex__(self, protocol):
+        raise TypeError('private owned cleanup failure serialization disabled') from None
+
+
+class _TracedFailures:
+    """Private detection order, with unsafe disposal independent of first error."""
+    def __init__(self):
+        self._first = self._unsettled = None
+        # Allocate the classification carrier before any child acquisition.
+        self._unsafe = OwnedCleanupError('Owned cleanup incomplete; disposal unsafe')
+
+    def __repr__(self):
+        return '<_TracedFailures: private contents omitted>'
+
+    def __reduce_ex__(self, protocol):
+        raise TypeError('private traced failure serialization disabled') from None
+
+    def record(self, error):
+        if self._first is None:
+            self._first = error
+        if isinstance(error, OwnedCleanupError) and self._unsettled is None:
+            self._unsettled = error
+
+    def unsettled(self, error):
+        self.record(error)
+        if self._unsettled is None:
+            self._unsettled = error
+
+    def raise_first(self):
+        if self._unsettled is not None:
+            self._unsafe._first_failure = self._first
+            self._unsafe._settlement_failure = self._unsettled
+            raise self._unsafe from None
+        if self._first is not None:
+            raise self._first from None
+
 
 @contextlib.contextmanager
 def proof_directory():
@@ -89,11 +125,12 @@ def require_exitkill(tracer):
 def run_traced(args, **kwargs):
     """Own one group and reap adopted tracees before returning or raising.
 
-    Used only by this standalone, sequential harness. Subreaper state is process-local,
-    restored after settlement; no system configuration or unrelated processes change.
+    Used only by this standalone, sequential harness. Subreaper state is process-local;
+    restoration is attempted even after failed settlement. No new wait scope or budget.
     """
     timeout = kwargs.pop('timeout', 30)
     on_started = kwargs.pop('on_started', None)
+    failures = _TracedFailures()
     libc = ctypes.CDLL(None, use_errno=True)
     previous = ctypes.c_int()
     if libc.prctl(37, ctypes.byref(previous), 0, 0, 0) != 0:  # PR_GET_CHILD_SUBREAPER
@@ -102,49 +139,66 @@ def run_traced(args, **kwargs):
         raise OSError(ctypes.get_errno(), 'set child subreaper')
     process = None
     try:
-        process = subprocess.Popen(args, start_new_session=True, **kwargs)
         try:
+            process = subprocess.Popen(args, start_new_session=True, **kwargs)
             if on_started is not None:
                 on_started(process)
             stdout, stderr = process.communicate(timeout=timeout)
-            return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+            result = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+        except BaseException as error:
+            if process is None:
+                # A thrown acquisition does not prove no child started. Without
+                # its original handle, retain uncertainty; never rediscover/retry.
+                failures.unsettled(error)
+            else:
+                failures.record(error)
         finally:
-            try:
-                # Do not poll/wait before this decision. An unreaped group leader
-                # pins its PID/PGID, even if it exited just after communicate timed
-                # out. After communicate reaps it, the numeric group may be reused:
-                # never signal it then; required EXITKILL settles its tracees.
-                if process.returncode is None:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    try:
+            if process is not None:
+                try:
+                    # Do not poll/wait before this decision. An unreaped group leader
+                    # pins its PID/PGID, even if it exited just after communicate timed
+                    # out. After communicate reaps it, the numeric group may be reused:
+                    # never signal it then; required EXITKILL settles its tracees.
+                    if process.returncode is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
                         process.wait(timeout=5)
-                    except subprocess.TimeoutExpired as error:
-                        raise OwnedCleanupError('Tracer did not settle; disposal unsafe') from error
-                # This standalone sequential supervisor launches no other children.
-                # Reap its adopted tracees too, including ones that changed groups.
-                deadline = time.monotonic() + 5
-                while True:
-                    try:
-                        pid, _ = os.waitpid(-1, os.WNOHANG)
-                    except ChildProcessError:
-                        break
-                    if pid == 0:
-                        if time.monotonic() >= deadline:
-                            raise OwnedCleanupError('Owned tracees did not settle; disposal unsafe')
-                        time.sleep(0.01)
-            except BaseException as error:
-                raise OwnedCleanupError('Owned cleanup incomplete; disposal unsafe') from error
-            finally:
-                for stream in (process.stdout, process.stderr):
-                    if stream is not None:
-                        stream.close()
+                    # This standalone sequential supervisor launches no other children.
+                    # Reap its adopted tracees too, including ones that changed groups.
+                    deadline = time.monotonic() + 5
+                    while True:
+                        try:
+                            pid, _ = os.waitpid(-1, os.WNOHANG)
+                        except ChildProcessError:
+                            break
+                        if pid == 0:
+                            if time.monotonic() >= deadline:
+                                raise OwnedCleanupError('Owned tracees did not settle; disposal unsafe')
+                            time.sleep(0.01)
+                except BaseException as error:
+                    failures.unsettled(error)
+                finally:
+                    consumed = None
+                    for name in ('stdout', 'stderr'):
+                        try:
+                            stream = getattr(process, name)
+                            setattr(process, name, None)
+                            if stream is not None and stream is not consumed:
+                                consumed = stream
+                                stream.close()
+                        except BaseException as error:
+                            failures.record(error)
 
     finally:
-        if libc.prctl(36, previous.value, 0, 0, 0) != 0:
-            raise OSError(ctypes.get_errno(), 'restore child subreaper')
+        try:
+            if libc.prctl(36, previous.value, 0, 0, 0) != 0:
+                raise OSError(ctypes.get_errno(), 'restore child subreaper')
+        except BaseException as error:
+            failures.record(error)
+    failures.raise_first()
+    return result
 
 
 def main():
