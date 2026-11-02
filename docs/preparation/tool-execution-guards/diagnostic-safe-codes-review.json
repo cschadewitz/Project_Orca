@@ -1,0 +1,97 @@
+{
+  "reviewer": "Independent read-only agent /root/independent_review",
+  "base": "34bcb55780c728c04b29e05d90fb717f421e729f",
+  "outcome": "No blocking finding in the focused diagnostic code projection and private collection identity change. This is bounded implementation review with inert and synthetic-file regression tests, not formal security approval, concurrency qualification or external custody proof.",
+  "retainedRecord": {
+    "path": "/tmp/orca-current-main-evidence/diagnostic-codes-independent-review.json",
+    "sha256": "7c44bb2a060dbd64b1ea5bc456e16961766914268cca53a6e2238b61469c58c5"
+  },
+  "reviewedFiles": [
+    {
+      "path": "/workspace/Project_Orca/tools/owned-read-proof/controlled_diagnostics.py",
+      "bytes": 15789,
+      "sha256": "badb58809ac6629fa70af53aa87779e427c96d86cf2368a413926e98338562dc"
+    },
+    {
+      "path": "/workspace/Project_Orca/tools/owned-read-proof/test_diagnostic_codes.py",
+      "bytes": 14377,
+      "sha256": "6b532a4210bcf981d0c58e0d1903bea3e0b7fed5b359fa7c975b9e1910822640"
+    },
+    {
+      "path": "/workspace/Project_Orca/docs/preparation/tool-execution-guards/diagnostic-safe-codes.md",
+      "bytes": 8343,
+      "sha256": "a8df24b8709a9750af1b96366e31ecdf827c0365af48a2d0b906dba16a65aa86"
+    },
+    {
+      "path": "/workspace/Project_Orca/docs/preparation/tool-execution-guards/diagnostic-safe-codes-checks.json",
+      "bytes": 7097,
+      "sha256": "d0acec7594a8059c62b479748fe08cc578fb762fd1b8182caca0d334051795ff"
+    }
+  ],
+  "sourceAssessment": [
+    "Exactly four fixed string literals replace exception class-name/string concatenation at the same diagnosticError and errors-item field locations. Process/resource catch classes remain OSError, RuntimeError and ValueError; sampler/final handlers retain BaseException. Successful measurements and collection progression are unchanged.",
+    "The new collection slot is initialized before publication of the owner. All current calls that conditionally record it hold the existing process-pin lock, including already-locked process sampling. Vacancy uses is None; no string, repr, truth conversion or dynamic class-name projection of the exception occurs.",
+    "First recorded identity is sticky in lock-serialized recording order, not necessarily chronological detection order. Separate structural _first_failure and cleanup slots retain their existing precedence and are not repurposed for concurrent collection.",
+    "Existing writer, retention method, pickle refusal, query/pin methods and imported/constants/top-level expressions are AST unchanged. Existing supervisor, observation, run_traced and VM specimen files match baseline byte-for-byte.",
+    "Explicit retention JSON excludes the new private slot. The unchanged standard pickle refusal suppresses active exception context; private original objects and traceback state remain available to trusted in-process inspection.",
+    "Additional lock acquisition can block or fail, and synchronous fake locks cannot qualify concurrent behavior. Existing ownership, serialization, payload-memory and resource bounds are not upgraded by fixed error strings."
+  ],
+  "independentValidation": {
+    "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_diagnostic_codes test_diagnostic_writer test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_attempt_cleanup test_finalizer_worker_guard test_stop_error_precedence test_worker_error_privacy test_traced_disposal_gate -v",
+    "cwd": "/workspace/Project_Orca/tools/owned-read-proof",
+    "passed": 129,
+    "seconds": 0.32,
+    "exitCode": 0,
+    "runs": 1,
+    "log": {
+      "path": "/tmp/orca-current-main-evidence/diagnostic-codes-independent-tests.log",
+      "bytes": 22852,
+      "sha256": "061dd9f9058be9056eb2c8b72eb95a8ddb0eda9c730128aad96cfd0287c27a5d"
+    }
+  },
+  "findings": [],
+  "custodyHandoff": {
+    "assessment": "Latest document treats manual pve2 console custody as direction only and dedicated serial transport as unimplemented. The pinned homelab packet and proposed VM parameters are explicitly offline, unverified and unapproved, not authenticated provider access, observation allocations, loading/containment proof or custody. Prior failed root BatchMode access remains a no-retry boundary. The non-secret owner/interface/placement/evidence inputs form a concrete next setup-contract milestone requiring separate setup and live-run authorization.",
+    "evidenceBoundary": "Homelab assertions were checked for fidelity to the coordinator-supplied pinned summary, not independently fetched from that separate repository or verified against any host. No credentials, host, provider or network calls were made."
+  },
+  "limitations": [
+    "Lock failures, asynchronous interruptions, hostile internal object replacement and allocation failures remain outside this narrow correction. Added lock latency is unbounded here.",
+    "Exception traceback retention is process-memory state, not independent durable custody or recovery. Ordinary measurements and existing collection data are not a new general data-sanitization claim.",
+    "No concurrent sampler, real thread/process settlement, authenticated provider, immutable loaded-runtime closure, preventive containment, original bootstrap-connected continuity or physical persistence was qualified.",
+    "No image rebuild or artifact hash revalidation was performed; protected source files and numeric constants were compared against the supplied baseline."
+  ],
+  "notRun": [
+    "test_controlled_diagnostics.py",
+    "test_cleanup.py",
+    "historical observer/bootstrap bodies",
+    "real host/process/thread/prctl/network/provider probes",
+    "App Smoke",
+    "image rebuild/designation",
+    "CI",
+    "metadata mutation",
+    "publication"
+  ],
+  "errors": [],
+  "primaryErrorHistory": [
+    {
+      "action": "Initial test-file creation used repo-relative path from tools/owned-read-proof cwd",
+      "outcome": "No file created; subsequent import failed. Corrected path once; focused and full bounded tests then passed.",
+      "classification": "Ordinary local path error, not denial.",
+      "result": {
+        "path": "/tmp/orca-current-main-evidence/diagnostic-codes-initial-path-error.log",
+        "sha256": "29000944f7a363bdad580d6d15ff9dc1a1e31c7a2b02199ba60a51c14657b7b9"
+      }
+    },
+    {
+      "action": "Combined source read exceeded display limit",
+      "outcome": "Output truncated; targeted subsequent reads and independent inspection cover actual changed source and selected suites.",
+      "classification": "Display limitation, not denial."
+    }
+  ],
+  "coverage": {
+    "newTests": 10,
+    "adjacentTests": 119,
+    "review": "Full candidate source diff, complete new test module and updated handoff; exact baseline correspondence of changed and protected methods/files. Adjacent suites were previously reviewed injected/helper/AST or isolated synthetic filesystem suites.",
+    "testSafety": "New tests replace OS/select/path, clock, read_at, writer and thread dependencies with inert adapters. The actual sampler closure runs synchronously on the test stack; InertThread.start never spawns. Existing writer regressions touch only their own TemporaryDirectory files/FIFO. No historical observer body or physical query/process test is executed."
+  }
+}

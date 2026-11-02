@@ -165,6 +165,7 @@ class SparseDiagnostics:
     def __init__(self, trace, phases):
         self.resource = None
         self._first_failure = self._cleanup_error = None
+        self._collection_failure = None
         self._retention_state = 'ready'
         self.trace, self.phases = Path(trace), phases
         self.processes, self.samples, self.errors = {}, [], []
@@ -227,6 +228,15 @@ class SparseDiagnostics:
                 raise original from None
             raise
 
+    def _remember_collection_failure(self, error):
+        """Caller holds self.lock; order is recording order, not global chronology.
+
+        Separate from constructor/bind/retention failures: those owners retain their
+        existing error precedence and never race this collection-owned slot.
+        """
+        if self._collection_failure is None:
+            self._collection_failure = error
+
     def capture(self):
         require(len(self.samples) < MAX_SAMPLES, 'diagnostic sample count exceeds bound')
         started = time.monotonic_ns()
@@ -237,13 +247,16 @@ class SparseDiagnostics:
                 try:
                     sample['processes'][name] = process.sample()
                 except (OSError, RuntimeError, ValueError) as error:
-                    sample['processes'][name] = {'diagnosticError': type(error).__name__ + ': ' + str(error)}
+                    self._remember_collection_failure(error)
+                    sample['processes'][name] = {'diagnosticError': 'process-sample-failed'}
         for name in RESOURCE_NAMES:
             try:
                 raw = read_at(self.resource, name)
                 sample['resources'][name] = counters(raw) if name in {'cpu.stat', 'memory.events'} else raw.strip()
             except (OSError, RuntimeError, ValueError) as error:
-                sample['resources'][name] = {'diagnosticError': type(error).__name__ + ': ' + str(error)}
+                with self.lock:
+                    self._remember_collection_failure(error)
+                    sample['resources'][name] = {'diagnosticError': 'resource-sample-failed'}
         sample['monotonicAfterNs'] = time.monotonic_ns()
         self.samples.append(sample)
 
@@ -257,7 +270,9 @@ class SparseDiagnostics:
                 while not self.done.wait(PERIOD_NS / 1_000_000_000):
                     self.capture()
             except BaseException as error:
-                self.errors.append(type(error).__name__ + ': ' + str(error))
+                with self.lock:
+                    self._remember_collection_failure(error)
+                    self.errors.append('sampler-work-failed')
         self.thread = threading.Thread(target=work, daemon=True)
         self.thread.start()
 
@@ -273,7 +288,9 @@ class SparseDiagnostics:
                     self.capture()
                     self.samples[-1]['finalAfterOwnedSettlement'] = True
                 except BaseException as error:
-                    self.errors.append(type(error).__name__ + ': ' + str(error))
+                    with self.lock:
+                        self._remember_collection_failure(error)
+                        self.errors.append('final-sample-failed')
         self.stopped = True
 
     def retain_and_close(self, destination):
