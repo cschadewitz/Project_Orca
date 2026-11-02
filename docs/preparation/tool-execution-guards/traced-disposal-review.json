@@ -1,0 +1,102 @@
+{
+  "reviewer": "Independent read-only agent /root/independent_review",
+  "base": "4582a05c59a6715681b7c0b0c8f59479db180217",
+  "scope": "Actual supervisor source delta, inert helper tests, AST correspondence, handoff and checks; no formal security approval",
+  "files": [
+    {
+      "path": "tools/owned-read-proof/controlled_supervisor.py",
+      "sha256": "54c4b381533dbe8b50a9e24ac1bb2fa5d0005428aca069855aea3317de4865b8"
+    },
+    {
+      "path": "tools/owned-read-proof/test_traced_disposal_gate.py",
+      "sha256": "ef0a697ec2c828493ae9c429457ee974018485fe57cba5f4caa617b3025d2646"
+    },
+    {
+      "path": "docs/preparation/tool-execution-guards/traced-disposal-gate.md",
+      "sha256": "1b2ef508c58b3e2ab3adb878390af7917a545cc59b313aec44e2701c88f6b897"
+    },
+    {
+      "path": "docs/preparation/tool-execution-guards/traced-disposal-checks.json",
+      "sha256": "3d42ba26d65fcfe7a82b4b2aa2dfe0d0a70e8b7329278ec5628bd78b64865f71"
+    }
+  ],
+  "result": "No substantive blocker found in the narrow disposal prerequisite.",
+  "independentTest": {
+    "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_traced_disposal_gate test_attempt_cleanup -v",
+    "cwd": "tools/owned-read-proof",
+    "passed": 23,
+    "newTests": 9,
+    "existingTests": 14,
+    "seconds": 0.084,
+    "exitCode": 0
+  },
+  "findings": [
+    "The lexical marker starts false before the protected attempt and becomes true only after the direct original run_traced call returns. It is not caller-supplied authority.",
+    "The refusal precedes finalizer descriptor and provenance transfer, clearing, disposal, diagnostic retention and publication; worker inactivity remains independently required.",
+    "All four first-statement launch refusals remain byte-identical; run.py, original tracer/join call ASTs and existing error-holder methods remain unchanged.",
+    "Private original failure identity is preserved; the helper has no successful return or settlement setter.",
+    "Documentation correctly limits normal return to a necessary source-control condition, not independent settlement, loaded-code identity or surviving recovery proof."
+  ],
+  "limitations": [
+    "Review and inert tests do not execute the historical launch path, real processes, threads, observer, tracer, provider, host/network probes or App Smoke.",
+    "Ambiguous original launch/settlement, pre-try acquisitions, durable recovery ownership, internal finalizer error masking and private durable evidence remain unresolved.",
+    "No current-image rebuild, designation or live qualification; no PR metadata mutation, CI run or publication in this increment."
+  ],
+  "publication": "Local commit only; pending parent clearance before push.",
+  "independentRecord": {
+    "path": "/tmp/orca-current-main-evidence/traced-disposal-independent-review.json",
+    "sha256": "7218cfa7567e18b6b37b3cedd6ae732f8cc39ecaf8baaab677c6763a32dd8728",
+    "evidence": [
+      {
+        "path": "/tmp/orca-current-main-evidence/traced-disposal-independent-static.json",
+        "bytes": 4184,
+        "sha256": "7a003ce43f1cc7d351d99610f38f595924783d798b043a86245b688a3f1aa4c8"
+      },
+      {
+        "path": "/tmp/orca-current-main-evidence/traced-disposal-independent-tests.log",
+        "bytes": 4277,
+        "sha256": "15a64d739a9b2fa36a63779da0eb0f2f34811466bc8cef58e51fba912717bf65"
+      },
+      {
+        "path": "/tmp/orca-current-main-evidence/traced-disposal-destructor-source.json",
+        "bytes": 414,
+        "sha256": "e677fd1e524662688f34ff0a9e44e08eb34ea043cfefd8f4b8a42a33ffdedc6f"
+      }
+    ],
+    "coverage": [
+      "Reviewed complete supervisor diff, all 9 new test methods, complete handoff and checks JSON; reviewed relevant existing cleanup tests and selected original run_traced, finalizer, callback, query ownership and ObservedRun source.",
+      "Inspected actual refusal helper through the authorized inert tests. Tests import module definitions but do not invoke, extract for execution, compile or bypass the historical observe body. AST checks inspect source only.",
+      "Read installed standard-library Popen.__del__ source only; no destructor or process behavior was executed. No broad interpreter, unchanged dependency or whole-stack audit claimed."
+    ],
+    "sourceAssessment": [
+      {
+        "topic": "Original local marker",
+        "result": "The lexical local initializes False immediately before the existing protected attempt. Its only other assignment is True immediately after the same direct run_traced call returns. It is not a caller argument, serialized report, closure setter or authority flag. Trusted same-process mutation remains outside this guarantee."
+      },
+      {
+        "topic": "Ambiguous outcomes",
+        "result": "Any exception escaping run_traced leaves the marker false, including startup/callback failures, OwnedCleanupError, stream-close/subreaper restoration errors and interrupts. An interrupt before the True assignment also conservatively refuses even if cleanup may have succeeded. No exception path promotes the marker."
+      },
+      {
+        "topic": "Disposal ordering",
+        "result": "The existing original-worker bounded join and inactivity condition still precede the new gate. The false branch invokes an always-raising helper before eight-slot/provenance transfer, slot clearing, cleanup, diagnostic retention and report publication. run.closed remains False. Normal output-writer disposal remains after captured first-error rethrow."
+      },
+      {
+        "topic": "Error precedence and privacy",
+        "result": "Helper calls unchanged raise_first: exact captured body exception wins, then first cleanup exception, otherwise fixed generic refusal. No error string/repr/truth conversion or public raw-error projection is added. Inner run_traced finalizers may still mask earlier failures; this change preserves only the exception actually delivered to supervisor."
+      },
+      {
+        "topic": "Normal return limit",
+        "result": "Normal return requires existing synchronous call finalizers to finish without escaping an error; this is not independent validation of their implementation. A nonzero child result or later replay/report failure can follow normal return. The extra condition permits only the existing disposal path after other required conditions; it grants no launch or connected authority."
+      },
+      {
+        "topic": "Custody and unwinding",
+        "result": "Skipping explicit finalizer cleanup does not retain a durable recovery graph. Raw integer slots do not auto-close but bookkeeping can be lost; query/diagnostic owners have no inspected destructor hooks, own_tracer stores identity rather than Popen ownership, and ObservedRun omits the complete live resource graph. Tracebacks and Popen destructor bookkeeping do not provide surviving custody. Early acquisitions/startup before the protected attempt remain outside scope."
+      }
+    ],
+    "errors": [],
+    "readLimitations": [
+      "One successful combined source read exceeded display budget; narrower subsequent reads supplied complete run_traced and operative ownership/test sections. Not an execution failure or denial. Parent missing-path/search errors remain in checks JSON; reviewer did not repeat those failed lookups."
+    ]
+  }
+}

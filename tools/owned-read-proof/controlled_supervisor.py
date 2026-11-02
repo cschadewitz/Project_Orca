@@ -592,6 +592,15 @@ class AttemptCleanupFailures:
         if self._cleanup is not None:
             raise self._cleanup from None
 
+    def refuse_unreturned_traced_call(self):
+        """Always refuse disposal; preserve the original private failure first.
+
+        No success argument, report or settlement setter. The original call site's
+        local normal-return marker supplies an additional disposal precondition.
+        """
+        self.raise_first()
+        raise RuntimeError('original traced-call completion unavailable') from None
+
 
 def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, diagnostic=False):
     """Disabled live entry point; historical body retained for source review."""
@@ -770,6 +779,9 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
               'imageBuildSha256': digest((image / 'controlled-build.json').read_bytes())}
     replay = None
     run = ObservedRun(report, original, None, root / (lane + '-attempt.json'))
+    # Local to this original call, never accepted from a report/caller. A thrown
+    # run_traced (including its stream/restoration finalizers) leaves this false.
+    traced_call_returned = False
     try:
         try:
             result = run_traced(['prlimit', '--fsize=268435456:268435456', '--core=0:0', tracer,
@@ -777,6 +789,7 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
                         pass_fds=(lifetime, command, ack), cwd=image,
                         env={'PATH': os.environ['PATH'], 'HOME': str(base), 'TMPDIR': str(base)},
                         stdout=out_write, stderr=err_write, text=True, timeout=60, on_started=launched)
+            traced_call_returned = True
         except BaseException as error:
             cleanup.body_failed(error)
         finally:
@@ -848,6 +861,10 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
         except BaseException:
             cleanup.raise_body()
             raise RuntimeError('control-worker ownership uncertain') from None
+        # Worker inactivity cannot settle an original tracer/tracee. Retain all
+        # finalizer-owned slots on every unreturned/ambiguous traced outcome.
+        if not traced_call_returned:
+            cleanup.refuse_unreturned_traced_call()
         final_handles = (out_read, err_read, out_write, err_write, command, ack, receive, lifetime)
         final_provenance = provenance
         out_read = err_read = out_write = err_write = command = ack = receive = lifetime = None

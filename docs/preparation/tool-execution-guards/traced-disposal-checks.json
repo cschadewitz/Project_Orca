@@ -1,0 +1,66 @@
+{
+  "scope": "Local source-only disposal prerequisite; parent clearance required before publication",
+  "base": "4582a05c59a6715681b7c0b0c8f59479db180217",
+  "files": [
+    {
+      "path": "tools/owned-read-proof/controlled_supervisor.py",
+      "sha256": "54c4b381533dbe8b50a9e24ac1bb2fa5d0005428aca069855aea3317de4865b8"
+    },
+    {
+      "path": "tools/owned-read-proof/test_traced_disposal_gate.py",
+      "sha256": "ef0a697ec2c828493ae9c429457ee974018485fe57cba5f4caa617b3025d2646"
+    },
+    {
+      "path": "docs/preparation/tool-execution-guards/traced-disposal-gate.md",
+      "sha256": "1b2ef508c58b3e2ab3adb878390af7917a545cc59b313aec44e2701c88f6b897"
+    }
+  ],
+  "primaryTest": {
+    "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_traced_disposal_gate test_attempt_cleanup -v",
+    "cwd": "tools/owned-read-proof",
+    "passed": 23,
+    "newTests": 9,
+    "existingTests": 14,
+    "seconds": 0.125,
+    "exitCode": 0,
+    "toolChunk": "3ee6b5"
+  },
+  "staticChecks": {
+    "syntaxAndIndentation": "AST parse and tabnanny passed for both changed Python files",
+    "text": "UTF-8, LF, final newline, trailing whitespace, relative Markdown links and git diff --check passed",
+    "guards": "All four first executable refusal statements byte-identical to baseline",
+    "baseline": "run.py and both prior specimen Python files byte-identical; diff restricted to one existing supervisor and new test/documentation/evidence",
+    "pythonExternalLint": "Not run: no root Python lint configuration or installed ruff/pycodestyle found; no tool installed"
+  },
+  "notRun": [
+    "Historical body invocation, extraction, compilation or bypass",
+    "Real host, network, process, thread, observer, tracer, provider or daemon tests",
+    "Full or historical test selection, App Smoke, CI, image rebuild, current-image designation or live qualification"
+  ],
+  "imageEvidence": "No source pin, bound or image changed. Prior retained image directory absent; no fresh artifact hash verification claimed.",
+  "limitations": [
+    "Normal original call return is an additional disposal prerequisite under unchanged run_traced source assumptions, not independent settlement attestation.",
+    "All failed traced calls conservatively refuse explicit finalizer disposal, even if some cleanup succeeded.",
+    "No surviving recovery owner or durable private error store exists; pre-try acquisition/startup gaps remain.",
+    "Internal run_traced finalizer error masking is unchanged; the actual exception reaching the supervisor is preserved."
+  ],
+  "toolErrors": [
+    {
+      "action": "Read wrong documentation path",
+      "result": "cat: docs/verification/offline-vm-attempt-checks.json: No such file or directory",
+      "exitCode": 1,
+      "classification": "Missing local path, not denial; located existing preparation path with rg."
+    },
+    {
+      "action": "Include absent .agents path in file search",
+      "result": "rg: .agents: No such file or directory (os error 2)",
+      "exitCode": 2,
+      "classification": "Missing directory, not denial; no .agents skill files available."
+    },
+    {
+      "action": "Bounded source reads exceeded output display budget",
+      "result": "Tool output truncated; narrower reads used for needed source evidence.",
+      "classification": "Display truncation, not execution denial."
+    }
+  ]
+}
