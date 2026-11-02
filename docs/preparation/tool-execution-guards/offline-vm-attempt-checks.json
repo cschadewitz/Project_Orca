@@ -1,0 +1,57 @@
+{
+  "scope": "Local unintegrated inert protocol specimen; publication pending parent clearance",
+  "base": "d96b90a29820039ebec3f29503ef9c2915f14f37",
+  "files": [
+    {
+      "path": "tools/owned-read-proof/offline_vm_attempt.py",
+      "sha256": "86a367315b8260f29167629bbcc76a7769dcc19dcd08380a2c498061613691bc"
+    },
+    {
+      "path": "tools/owned-read-proof/test_offline_vm_attempt.py",
+      "sha256": "a7113d8232ee44245b6cc34b0cf26dce52ec8297894eff5c68c0c0473ed69cda"
+    },
+    {
+      "path": "docs/preparation/tool-execution-guards/offline-vm-attempt-specimen.md",
+      "sha256": "f98bad4d9df88ef0b11673c326ecb061d672737dacda36735dcf33096182fc81"
+    }
+  ],
+  "fixtureOnlyCapacity": {
+    "bytes": 410,
+    "names": 13,
+    "ownerAllocation": false
+  },
+  "primaryTest": {
+    "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_offline_vm_attempt test_offline_attempt_model -v",
+    "cwd": "tools/owned-read-proof",
+    "passed": 35,
+    "seconds": 0.026,
+    "newTests": 22,
+    "existingTests": 13,
+    "exitCode": 0
+  },
+  "staticChecks": {
+    "syntaxAndIndentation": "AST + python3 -B -m tabnanny passed",
+    "text": "UTF-8/LF/final newline/no trailing whitespace/local links passed",
+    "guards": "Four first executable raises checked via AST; both complete source files byte-identical to base",
+    "baseline": "No existing tracked file changes",
+    "pythonExternalLint": "Not run: no root Python lint config and no ruff/pycodestyle executable found; no tool installed"
+  },
+  "notRun": [
+    "No full/historical tests, launcher imports/extraction/invocation, observer/tracer/provider/daemon, host/network probe, CI or App Smoke",
+    "No build/runtime identity, media durability, custody integration, quota reservation or actual settlement qualification"
+  ],
+  "retainedImagePathPresent": false,
+  "imageEvidence": "No image files or source pins changed; prior /tmp retained image not assumed available or reverified in this increment",
+  "errors": [
+    {
+      "action": "Initial rg supplied absent .agents path with stderr redirected",
+      "status": "exit2; diagnostic suppressed by command and unavailable; later explicit directory check confirmed absence, not denial"
+    },
+    {
+      "action": "Read-only rg tools/owned-read-proof/README*",
+      "error": "rg: tools/owned-read-proof/README*: No such file or directory (os error 2)",
+      "status": "exit2 missing path, not denial; test conventions read from existing source/docs"
+    }
+  ],
+  "limitations": "Filesystem adapter exists only in tests and trusts owned synthetic root. Exclusive reservation marker is not physical preallocation. Lost write/sync/close/ack may leave no acknowledged first-failure frame; memory original exception remains private. Existing six G4 obligations, unknown owner allocations, no actual issuer/transport and unchanged runtime limits remain blockers."
+}
