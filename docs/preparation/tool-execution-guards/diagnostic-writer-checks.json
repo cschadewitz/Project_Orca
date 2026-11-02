@@ -1,0 +1,73 @@
+{
+  "scope": "Local actual create-only writer for existing final diagnostic artifact; not a durable publication protocol",
+  "base": "8c9a62de3ccc622e3657466c03c91b1f288bd08f",
+  "files": [
+    {
+      "path": "tools/owned-read-proof/controlled_diagnostics.py",
+      "sha256": "1f712c32ff4b87ee3514514792b49058688e12328e607e8fde28dbb85f2e5a2c"
+    },
+    {
+      "path": "tools/owned-read-proof/test_retention_rollback.py",
+      "sha256": "a2bc6c9b975fc91bfc0a714cab21602495d053a96254971f3fc29132ac393b96"
+    },
+    {
+      "path": "tools/owned-read-proof/test_diagnostic_writer.py",
+      "sha256": "3cd853f6f2127aafb7b445c9073a8c6957e6c792483a2b93e8f148afdd7177fb"
+    },
+    {
+      "path": "docs/preparation/tool-execution-guards/diagnostic-writer-preservation.md",
+      "sha256": "d39880f14d9e21c6528ce3f5b5d39ee5cb670c8c587f87b76942f31cdc24499c"
+    }
+  ],
+  "primaryTest": {
+    "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_diagnostic_writer test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_attempt_cleanup test_finalizer_worker_guard test_stop_error_precedence test_worker_error_privacy test_traced_disposal_gate -v",
+    "cwd": "tools/owned-read-proof",
+    "passed": 119,
+    "newTests": 16,
+    "adjacentTests": 103,
+    "seconds": 0.44,
+    "exitCode": 0,
+    "runs": 1,
+    "resultPath": "/tmp/orca-current-main-evidence/diagnostic-writer-primary-1.json",
+    "resultSha256": "bf2ddc95edd13db16372c7bbc59cb85889b57e7e8e839c4b97fdaafeb60c9c1c"
+  },
+  "boundaries": "Actual writer and retention helper under inert OS/thread/query/clock dependencies, plus three test-created isolated filesystem cases. No real host queries, processes or threads. Synthetic FIFO only in owned temporary root.",
+  "staticChecks": [
+    "Python AST and tabnanny passed on all three changed Python files.",
+    "PERIOD_NS, MAX_SAMPLES, READ_BOUND, RESOURCE_NAMES and CONFIG assignment ASTs unchanged.",
+    "All original SparseDiagnostics methods except the writer statements are AST-identical; retention borrower gates, state/error ordering and cleanup AST identical after excluding writer calls.",
+    "Both observation source files containing four launch refusals, run.py, prior disposal gate and VM specimen/test byte-identical to baseline.",
+    "UTF-8, LF, final newline, trailing whitespace, local Markdown links and git diff --check passed."
+  ],
+  "pythonExternalLint": "Not run: no configured root Python linter or installed ruff/pycodestyle found earlier; no tool installed.",
+  "accounting": {
+    "newArtifactNames": 0,
+    "temporaryOrSidecarNames": 0,
+    "simultaneousVersionsAdded": 0,
+    "writerDescriptors": 1,
+    "directoryDescriptors": 0,
+    "fileSyncCallsPerCompletedWrite": 1,
+    "directorySyncCalls": 0,
+    "newQuotaOrNumericLimit": false,
+    "acceptedPayloadSchemaChanged": false,
+    "limits": "Positive progress bounds write calls by encoded payload length. No aggregate byte/memory/I/O-time allocation is established; sample/read limits do not supply spare evidence capacity."
+  },
+  "failureSemantics": "Existing destinations refuse without writes. Private mode precedes bytes. First writer error survives secondary close failure; close-only failure also refuses. No application-level retry of an exception, invalid progress or consumed close; retention remains one-attempt. Eligible independent ownership cleanup continues only after original borrower gates. Partial/uncertain artifacts remain and no successful value is returned.",
+  "privacy": "No writer exception added to artifact JSON. Existing per-attempt primary identity and sticky first-error field preserved. Diagnostic owner standard pickle is refused with suppressed active exception context. Existing sample/error payload collection is unchanged and not newly sanitized.",
+  "notRun": [
+    "Physical test_controlled_diagnostics.py and test_cleanup.py modules, including hidden real process/prctl/thread probes.",
+    "Historical observer/bootstrap body invocation, extraction, compilation or bypass.",
+    "Host/network/provider/daemon/live observation tests, App Smoke, CI, image rebuild/designation, publication or metadata mutation."
+  ],
+  "remaining": [
+    "No trusted ancestor or pathname custody, directory sync/commit/ack protocol, physical-media durability, external recovery owner or authenticated sink.",
+    "Aggregate allocation, payload-memory accounting, I/O latency, durable first-failure custody and all original G4/G7 obligations remain open."
+  ],
+  "toolErrors": [
+    {
+      "action": "Combined source read exceeded display limit",
+      "result": "Output truncated; targeted subsequent source reads and independent inspection cover the selected inert suites.",
+      "classification": "Display limitation, not denial."
+    }
+  ]
+}

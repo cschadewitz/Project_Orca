@@ -26,6 +26,32 @@ CONFIG = {'record': 'sparse-original-diagnostics-v1', 'periodNanoseconds': PERIO
           'authority': 'none'}
 
 
+def _write_private_diagnostic(destination, payload):
+    """Create the existing artifact once; trusted ancestors, no custody claim."""
+    require(type(payload) is bytes, 'diagnostic writer requires encoded bytes')
+    number = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                     os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        os.fchmod(number, 0o600)
+        view, offset = memoryview(payload), 0
+        while offset < len(view):
+            written = os.write(number, view[offset:])
+            require(type(written) is int and 0 < written <= len(view) - offset,
+                    'diagnostic writer made invalid progress')
+            offset += written
+        os.fsync(number)
+    except BaseException:
+        try:
+            os.close(number)
+        except BaseException:
+            # A consumed close is never retried. Keep the original private error.
+            pass
+        raise
+    else:
+        # A close failure also refuses success; its outcome may be ambiguous.
+        os.close(number)
+
+
 def read_at(directory, name):
     number = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
     try:
@@ -133,6 +159,9 @@ class PinnedProcess:
 
 
 class SparseDiagnostics:
+    def __reduce_ex__(self, protocol):
+        raise TypeError('private diagnostic owner serialization disabled') from None
+
     def __init__(self, trace, phases):
         self.resource = None
         self._first_failure = self._cleanup_error = None
@@ -271,8 +300,7 @@ class SparseDiagnostics:
                      'pins': {name: {'expected': process.expected, 'procIdentity': list(process.identity)}
                               for name, process in self.processes.items()},
                      'samplerStopped': True}
-            Path(destination).write_text(json.dumps(value, separators=(',', ':')))
-            Path(destination).chmod(0o600)
+            _write_private_diagnostic(Path(destination), json.dumps(value, separators=(',', ':')).encode('utf-8'))
         except BaseException as error:
             primary = error
             if self._first_failure is None:

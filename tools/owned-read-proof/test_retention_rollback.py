@@ -58,17 +58,19 @@ def injected(value, stop_error=None, stop_action=None, write_error=None, chmod_e
         value.stopped = True
     def path(destination):
         events.append(('path', destination))
-        def write(text):
-            events.append(('write', text))
-            if write_error is not None:
-                raise write_error
-        def chmod(mode):
-            events.append(('chmod', mode))
-            if chmod_error is not None:
-                raise chmod_error
-        return SimpleNamespace(write_text=write, chmod=chmod)
+        return destination
+    def write(destination, payload):
+        # Owner bookkeeping tests inject the writer boundary. Its actual OS
+        # ordering/failures are exercised by test_diagnostic_writer separately.
+        events.append(('chmod', 0o600))
+        if chmod_error is not None:
+            raise chmod_error
+        events.append(('write', payload))
+        if write_error is not None:
+            raise write_error
     with patch.object(value, 'stop', side_effect=stop), \
          patch.object(diagnostics, 'Path', side_effect=path), \
+         patch.object(diagnostics, '_write_private_diagnostic', side_effect=write), \
          patch.object(diagnostics, 'os', fake):
         yield fake, events, stop_calls
 
@@ -98,7 +100,8 @@ class RetentionRollbackControls(unittest.TestCase):
             self.assertEqual(result['authority'], 'none')
             self.assertIs(result['samplerStopped'], True)
             self.assertEqual(list(result['pins']), ['supervisor', 'leader'])
-            self.assertEqual(events[-1], ('chmod', 0o600))
+            self.assertEqual(events[-2], ('chmod', 0o600))
+            self.assertEqual(events[-1][0], 'write')
             self.assertEqual(calls, ['stop'])
 
     def test_alive_never_started_and_nonboolean_liveness_refuse_and_retain(self):
@@ -194,7 +197,7 @@ class RetentionRollbackControls(unittest.TestCase):
             self.assertIs(value._first_failure, original)
             self.assert_consumed(value, pins, fake)
             if stage == 'chmod':
-                self.assertTrue(any(event[0] == 'write' for event in events))
+                self.assertFalse(any(event[0] == 'write' for event in events))
 
     def test_each_and_all_disposal_failures_attempt_every_slot_and_fixed_refuse(self):
         for failed in (('leader',), ('supervisor',), ('resource',), ('leader', 'supervisor', 'resource')):
@@ -209,7 +212,8 @@ class RetentionRollbackControls(unittest.TestCase):
             self.assertTrue(caught.exception.__suppress_context__)
             self.assert_consumed(value, pins, fake)
             self.assertIs(value._cleanup_error, next(errors[n] for n in ('leader', 'supervisor', 'resource') if n in errors))
-            self.assertEqual(events[-1], ('chmod', 0o600))
+            self.assertEqual(events[-2], ('chmod', 0o600))
+            self.assertEqual(events[-1][0], 'write')
 
     def test_existing_private_errors_stay_sticky_and_refuse_success(self):
         value = owner(); pins = dict(value.processes)
