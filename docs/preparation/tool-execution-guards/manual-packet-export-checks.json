@@ -1,0 +1,124 @@
+{
+  "record": "native-declared-packet-exporter-checks",
+  "baseline": "32cfcd019ac3f3b8bd6f13e82aa3b4e84589e654",
+  "authority": "none",
+  "scope": "declared-export-bytes-only",
+  "candidateSha256": {
+    "tools/owned-read-proof/packet_exporter.py": "2170070db703aa92addaa11cfb870a1d60865daeedf656421f73d901d4fe28c6",
+    "tools/owned-read-proof/test_packet_exporter.py": "96398b806215acb241be3aa4e407fdd2bfda8bd24d22837106ae0a6b2e7f9251",
+    "tools/owned-read-proof/check_nonlive.py": "1566d7ee3f6cf5a0808727fa8a7576f176abe23d23dd8bfd57eebd403f657516"
+  },
+  "protocol": {
+    "receiverUnchanged": true,
+    "chunkBytes": 16777216,
+    "nativeReadWriteBytes": 65536,
+    "indexMaximumBytes": 4194304,
+    "lineMaximumBytes": 512,
+    "maximumArtifacts": 4096,
+    "maximumChunks": 8192,
+    "maximumDeclaredPayloadBytes": 8589934592,
+    "maximumOwnedNativeFdsIncludingScandir": 12291,
+    "maximumAdditionalBorrowedFds": 4097,
+    "reservedFileDataBytes": "sum of declared source sizes plus exact canonical index size",
+    "additionalPayloadStagingCopies": 0,
+    "newJournalAllowance": 0,
+    "capacityIsRestrictiveNotAuthorityOrHostQuota": true,
+    "apiReservationSemanticsRequireInstalledFilesystemQualification": true,
+    "severalPayloadReadWritePassesNot8GiBTotalIO": true,
+    "publication": "original owner prepares unnamed native allocations/copies; independently retained plan precedes one create-only publication attempt; chunks then index last; no overwrite/unlink/retry"
+  },
+  "manualRouteFact": {
+    "record": "manual-scp-single-file-pilot.json",
+    "recordSha256": "d43146ced2f75d91a7fd2e8d1c037ca7fa729ec7524393134ec295598798e4c9",
+    "hostGeneratedBytes": 16777216,
+    "sha256": "080acf35a507ac9849cfcba47dc2ad83e01b75663a516279c8b9d243b719643e",
+    "verifiedByParentThroughUserOperatedExistingSshScpAndPrivateUpload": true,
+    "rawBytesOrExactHostPathRetainedHere": false,
+    "indexedTwoChunkPilotOrFullPrivateTransportQualified": false
+  },
+  "verification": {
+    "focusedNormal": {
+      "tests": 91,
+      "seconds": 0.769,
+      "exitCode": 0,
+      "logSha256": "360c189da7bdadd784908c65636cff6e22bdf3a6a124e07bb0909936d2920fa6"
+    },
+    "focusedOptimized": {
+      "tests": 91,
+      "seconds": 0.749,
+      "exitCode": 0,
+      "logSha256": "82ae8b2e32699e55c924fb5c313b8c91b24b52dfa575e07eda456d182b1ef9ef"
+    },
+    "explicitNonlive": {
+      "outerTests": 651,
+      "historicalChildTests": 7,
+      "seconds": 25.508,
+      "historicalChildSeconds": 6.39,
+      "exitCode": 0,
+      "logSha256": "54a66029032c1a26e6769a3cf963399039b400f1090ae79d21f27386566e563e"
+    },
+    "historicalFixture": {
+      "harnessAndReferenceFiles": 71,
+      "protectedExactHistoricalGitInputs": 199,
+      "disjointnessAndExactSourceCheckedBeforeCopy": true,
+      "inventorySha256": "68891ab72c772b490fd2c77b20584df6e923820ced1ceba0c26132fca734b4ad"
+    },
+    "pythonCompilationFiles": 3,
+    "gitDiffCheck": true,
+    "jsonFormatting": true
+  },
+  "independentReview": {
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "xhigh",
+    "status": "clear within declared-byte export source scope",
+    "fullSourceTestsAndSelectorAvailable": true,
+    "comparedCandidateFiles": 3,
+    "normal": {
+      "tests": 29,
+      "seconds": 0.426,
+      "exitCode": 0,
+      "skips": 0,
+      "logSha256": "b35e43a01cb622a210a695161969d0a9b4a9ef901e155db72cb4d02bfb643119"
+    },
+    "optimized": {
+      "tests": 29,
+      "seconds": 0.4,
+      "exitCode": 0,
+      "skips": 0,
+      "logSha256": "adbca27e7d80bfaeea5f7e8ccc4ba3259f7c4649b3db2dcf8f6be119d6d1d06a"
+    },
+    "findingsRemaining": [],
+    "clarificationsApplied": [
+      "No application allocation fallback; native posix_fallocate semantics and filesystem metadata/quota qualification remain separate",
+      "Retained source metadata/stamps are observations, not installed kernel write seals or immutable leases"
+    ],
+    "qualification": "bounded filesystem byte-copy source review under cooperative original-owner and trusted Linux procfs/ancestor assumptions; not original session, privacy permission, durable media, host quota or formal security qualification"
+  },
+  "preserved": {
+    "observerEntryRefusals": true,
+    "sourceAndImagePins": true,
+    "priorObserverArtifactBudgets": true,
+    "existingDeadlines": true,
+    "borrowedDescriptorsAndOffsets": true,
+    "privateOriginalFailurePrecedence": true,
+    "consumeOnceUncertainty": true,
+    "noAutomaticRetry": true,
+    "visiblePublicationPartialsRetained": true,
+    "noSourceWritesOrDeletion": true,
+    "originalReceiptNonSerialization": true,
+    "fullSourceCertificationRefuses": true,
+    "noHostSshNetworkVmLiveDeploymentOrSecurityActions": true,
+    "noCredentialsOrAccessChanges": true,
+    "oldMetadataWriteHold": true
+  },
+  "remainingSetupAndProofGaps": [
+    "Existing original trusted custodian and original-run artifact/disposition binding",
+    "Named private host export root/principal/protection, approved file data and metadata quota, and qualified installed native semantics",
+    "Already approved independent plan/expectation retention and recovery path, without inventing journal capacity",
+    "Privacy/disclosure approval for raw originals, disposable secrets/keys and paths",
+    "Whole packet/index upload acceptance and multi-file/full-size/private transport",
+    "Original physical and loaded-code closure, settlement, issuer authority and in-memory receipt continuity",
+    "Existing helper pipe and preventive pre-rejection disk acquisition gaps remain independent"
+  ],
+  "nextOwnerAction": "Review the named existing private export root/principal, exact original inventory/dispositions, capacity/privacy and independent management retention binding; do not repeat the one-file pilot or export raw evidence now"
+}

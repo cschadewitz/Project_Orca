@@ -4,6 +4,9 @@ Baseline: `1b2366bd539a97f28b8e7cbfcd8a3f01a62c5931`, draft PR #809.
 The later [source byte safety increment](source-byte-bounds-and-delivery-profile.md)
 updates the two helper bounds below; the final-check section and checks JSON retain
 the original receiver increment's historical test/hash evidence.
+The subsequent [native packet exporter](manual-packet-export.md) adds the matching
+source-side byte-copy protocol and records a genuine single 16 MiB manual SCP/upload
+pilot. That fact does not qualify the indexed whole packet or original authority.
 The selected direction remains Casey's console-operated pve2 host controller with
 private host evidence outside guest snapshot rollback. This source increment
 advances G7 byte delivery/integrity and G4 custody accounting through a **read-only

@@ -1,6 +1,10 @@
 # Source byte safety and proposed private delivery profile
 
 Baseline: `e4e909f85cad6342b6aa2c6f88025089148c4675`, draft PR #809.
+Later progress: the [native exporter and manual route record](manual-packet-export.md)
+now document one genuine 16 MiB host→Windows SCP→private upload transfer. The proposed
+two-chunk/index pilot and 12 GiB allocation below remain unexecuted/unapproved;
+the original checks remain the source-safety increment's historical evidence.
 This increment advances G4 finite original custody accounting and G7 byte delivery.
 It restricts two real source outputs, without instantiating an observation issuer,
 host custodian, transport or complete-source acceptance. All observer entry
