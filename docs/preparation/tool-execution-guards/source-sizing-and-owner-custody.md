@@ -94,3 +94,46 @@ Repository `AGENTS.md` and `docs/DEVELOPMENT.md` were read. Neither repository
 The old uncertain PR-description write was not retried; publication is limited to
 the reviewed source/evidence branch update. No PR description/comment change or
 manual workflow dispatch accompanies this increment.
+
+## Independent baseline attribution supplement
+
+The same independent **gpt-6.1-sol, xhigh** reviewer subsequently compared
+baseline `158a94fd58daf0eaea28f8ce63445a251a639961` with executable candidate
+`77b6dbbea7f1b2cf187d3f4b17b1cbce0e7900e4`. It verified access to the exact
+candidate files and independently matched these SHA-256 values:
+
+| Candidate path | SHA-256 |
+| --- | --- |
+| `tools/owned-read-proof/controlled_supervisor.py` | `2adeab0090b0b9e1ce6ba20dccec679b9a334bfbd91e67f7deb1f6e0b815955c` |
+| `tools/owned-read-proof/check_nonlive.py` | `c3116369c876fdea002b309e382de963d355dc736aae4d086d0c655c50e98cdf` |
+| `tools/owned-read-proof/test_source_sizing.py` | `16e10ae04f3ae749c9dced736989935eab5fd29d4ff7454b5193905f3c40b1ed` |
+| `tools/owned-read-proof/test_finalizer_worker_guard.py` | `169370d9a722cc359b9026f3578d53d2185379ca4fb90f2ca87d54e3e7852734` |
+
+All image build source inputs, builder, child, inspection pins, lockfile and
+TypeScript configuration are unchanged across the two commits. The reviewer
+created an isolated baseline worktree and copied the existing dependency tree,
+including relative links and package dependency trees; it did not install new
+dependencies or construct a historical acceptance fixture. Separate unlaunched
+builds under Node 24.19.0, tsx 4.23.15 and esbuild 0.28.2 produced identical bytes
+at baseline and candidate:
+
+| Output | Baseline and candidate size | Baseline and candidate SHA-256 |
+| --- | ---: | --- |
+| `controlled-build.json` | 47838 | `3ff84fb6cb1b1e3e053231a07ba3b2f160e8da820d0f2bc7d16ab81c2e3ff9b6` |
+| `controlled-producer.mjs` | 2236786 | `a3caa5df9b61c08b80fdfbe4bbcc94b3c6671c8ac7b8b5a2a53ac4d8fb548cd3` |
+| `controlled-child.mjs` | 5713 | `17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13` |
+
+Both baseline and candidate inspector calls refused with the fixed code
+`current image inspection refused`. The manifest and producer differ from the
+unchanged fixed pins (48027 and 2248652 bytes, respectively); the child matches.
+The two manifests contain the same 386 source keys, no parent-relative keys and
+no source-head field. Thus this mismatch already exists at baseline in this
+dependency/toolchain environment and is not caused by the source-sizing delta.
+The exact underlying historical dependency/build drift is not diagnosed here;
+byte equality does not supply authority or resolve qualification.
+
+This attribution is separate from the absent `ORCA_LEGACY_IMAGE_FIXTURE`, which
+remains unprovided and untested, and from the 80 focused passing tests. No pin,
+assertion, fixture requirement or launch boundary was changed to obtain a pass.
+The reviewer again confirmed the preserved independent budgets and unchanged
+first-statement launch refusals; no actionable source regression was found.
