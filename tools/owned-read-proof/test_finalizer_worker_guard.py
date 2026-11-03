@@ -126,7 +126,7 @@ except BaseException:
         tail_calls = [ast.unparse(node.func) for statement in final[3:]
                       for node in ast.walk(statement) if isinstance(node, ast.Call)]
         for name in ('cleanup.close_transferred', 'diagnostics.retain_and_close',
-                     'retained.write_text', 'run.report_path.write_text'):
+                     'write_original_packet', 'run.report_path.write_bytes'):
             self.assertIn(name, tail_calls)
 
     def test_existing_three_join_calls_keep_original_bound_with_only_one_in_finalizer(self):

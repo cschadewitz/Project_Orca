@@ -43,6 +43,8 @@ REPORT_LIMIT = 1024 * 1024
 ORIGINAL_METADATA_LIMIT = 1024 * 1024
 RUNTIME_ASSET_LIMIT = 256 * 1024 * 1024
 MAX_RUNTIME_ASSETS = 32
+# Additional preventive source-memory ceiling, independent of trace/metadata budgets.
+ORIGINAL_SOURCE_LIMIT = 512 * 1024 * 1024
 ORIGINAL_KEYS = frozenset(('base', 'lane', 'node', 'argv', 'sourceHead', 'controlledBuild', 'traceClock',
     'observerImplementation', 'clockProbePath', 'supervisorPid', 'readlinks', 'inheritedUmask',
     'commandFd', 'ackFd', 'lifetimeFd', 'immutable', 'directories', 'queries', 'absentProbes',
@@ -205,6 +207,8 @@ def originals_packet_limit(original, pins):
     require(type(entries) is dict and set(entries) == set(pins), 'originals asset inventory/count differs')
     metadata = {**original, 'immutable': {}}
     hex_size = 0
+    require(sum(pin['size'] for pin in pins.values()) <= ORIGINAL_SOURCE_LIMIT,
+            'original source aggregate exceeds memory bound')
     for path, entry in entries.items():
         require(type(entry) is dict and set(entry) == {'identity', 'hex', 'sha256', 'family'},
                 'unknown originals asset fields')
@@ -240,6 +244,66 @@ def packet_matches(path, expected, maximum):
             offset += len(chunk)
 
 
+def original_chunks(value):
+    """Exact encoded() JSON with bounded string escaping, including giant hex tokens.
+
+    Input grammar/metadata and immutable sizes are checked separately. Never use
+    JSONEncoder.iterencode here: one string token can contain the entire asset.
+    """
+    if type(value) is dict:
+        yield b'{'
+        for index, (key, child) in enumerate(value.items()):
+            if index:
+                yield b','
+            yield from original_chunks(key)
+            yield b':'
+            yield from original_chunks(child)
+        yield b'}'
+    elif type(value) is list:
+        yield b'['
+        for index, child in enumerate(value):
+            if index:
+                yield b','
+            yield from original_chunks(child)
+        yield b']'
+    elif type(value) is str:
+        yield b'"'
+        for offset in range(0, len(value), 16384):
+            yield encoded(value[offset:offset + 16384])[1:-1].encode('utf-8')
+        yield b'"'
+    else:
+        yield encoded(value).encode('utf-8')
+
+
+def original_packet_check(path, original, maximum):
+    """Compare original canonical bytes and return a source digest without a copy."""
+    value, count = hashlib.sha256(), 0
+    with Path(path).open('rb') as stream:
+        for chunk in original_chunks(original):
+            count += len(chunk)
+            require(count <= maximum, 'original packet exceeds source byte bound')
+            require(stream.read(len(chunk)) == chunk, 'bootstrap receipt original evidence changed')
+            value.update(chunk)
+        require(stream.read(1) == b'', 'bootstrap receipt original evidence changed')
+    return value.hexdigest()
+
+
+def write_original_packet(path, original):
+    # Validate the metadata grammar before opening/truncating the private sink.
+    pins = {p: {'identity': v['identity'], 'size': len(v['hex']) // 2,
+                'sha256': v['sha256'], 'family': v['family']}
+            for p, v in original['immutable'].items()}
+    require(sum(p['size'] for p in pins.values()) <= ORIGINAL_SOURCE_LIMIT,
+            'original retained sources exceed memory bound')
+    maximum = originals_packet_limit(original, pins)
+    with Path(path).open('w', encoding='utf-8') as stream:
+        count = 0
+        for chunk in original_chunks(original):
+            count += len(chunk)
+            require(count <= maximum, 'original packet exceeds source byte bound')
+            stream.write(chunk.decode('utf-8'))
+
+
 def stamp(path):
     s = Path(path).lstat()
     return list(map(str, [s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid, s.st_nlink,
@@ -251,10 +315,54 @@ def fd_identity(number):
     return [s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid]
 
 
-def immutable(path, family, follow=False):
+def source_size(path, family, follow=False):
     p = Path(path)
-    s = p.stat() if follow else p.lstat()
-    data = p.read_bytes() if stat.S_ISREG(s.st_mode) else b''
+    info = p.stat() if follow else p.lstat()
+    maximum = {'runtime': RUNTIME_ASSET_LIMIT, 'image': 16 * 1024 * 1024,
+               'original-file': 65536, 'enrollment-witness': 130, 'lifetime': 0}[family]
+    require((stat.S_ISREG(info.st_mode) and 0 <= info.st_size <= maximum) or
+            (family == 'runtime' and str(p) == '/dev/null' and stat.S_ISCHR(info.st_mode)),
+            'original source type/size exceeds bound')
+    return info, maximum
+
+
+def immutable(path, family, follow=False, remaining=ORIGINAL_SOURCE_LIMIT):
+    p = Path(path)
+    s, maximum = source_size(p, family, follow)
+    maximum = min(maximum, remaining)
+    require(s.st_size <= maximum, 'original source aggregate exceeds memory bound')
+    data = b''
+    if stat.S_ISREG(s.st_mode):
+        # Nonblocking/no-follow read prevents a replaced FIFO or symlink from
+        # being followed. Runtime symlinks are resolved only by the existing
+        # trusted runtime policy; inode correspondence is still required.
+        number = os.open(p, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK |
+                         (0 if follow else os.O_NOFOLLOW))
+        try:
+            before = os.fstat(number)
+            physical = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                                     info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            require(physical(before) == physical(s), 'original source changed before read')
+            chunks, count = [], 0
+            while True:
+                chunk = os.read(number, min(65536, maximum + 1 - count))
+                if not chunk:
+                    break
+                count += len(chunk)
+                require(count <= maximum, 'original source grew beyond bound')
+                chunks.append(chunk)
+            data = b''.join(chunks)
+            require(physical(os.fstat(number)) == physical(before) and
+                    physical(p.stat() if follow else p.lstat()) == physical(s),
+                    'original source changed during read')
+        except BaseException:
+            try:
+                os.close(number)
+            except BaseException:
+                pass
+            raise
+        else:
+            os.close(number)
     return {'identity': [s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid],
             'hex': data.hex(), 'sha256': digest(data), 'family': family}
 
@@ -356,7 +464,16 @@ def runtime_paths(node):
 
 
 def runtime_originals(node):
-    return {p: immutable(p, 'runtime', follow=True) for p in sorted(runtime_paths(node))}
+    paths = sorted(runtime_paths(node))
+    require(len(paths) <= MAX_RUNTIME_ASSETS, 'runtime asset count exceeds finite bound')
+    sizes = [source_size(p, 'runtime', True)[0].st_size for p in paths]
+    require(sum(sizes) <= ORIGINAL_SOURCE_LIMIT, 'original source aggregate exceeds memory bound')
+    result, remaining = {}, ORIGINAL_SOURCE_LIMIT
+    for p in paths:
+        entry = immutable(p, 'runtime', follow=True, remaining=remaining)
+        remaining -= len(entry['hex']) // 2
+        result[p] = entry
+    return result
 
 
 def assert_image_sources(image):
@@ -455,9 +572,10 @@ class ObservedRun:
         originals_limit = originals_packet_limit(self.original, pins)
         limits = {str(self.report_path): REPORT_LIMIT, str(originals_path): originals_limit, str(trace): LIMIT}
         seals = {p: evidence_seal(p, maximum) for p, maximum in limits.items()}
-        report_bytes, original_bytes = metadata_bytes(self.report, REPORT_LIMIT), encoded(self.original).encode()
+        report_bytes = metadata_bytes(self.report, REPORT_LIMIT)
+        original_digest = original_packet_check(originals_path, self.original, originals_limit)
         require(packet_matches(self.report_path, report_bytes, REPORT_LIMIT) and
-                packet_matches(originals_path, original_bytes, originals_limit),
+                original_packet_check(originals_path, self.original, originals_limit) == original_digest,
                 'bootstrap receipt report/originals differ from original run')
         require(len({tuple(value[0][:2]) for value in seals.values()} |
                     {tuple(map(str, value[0][:2])) for value in files.values()}) == len(seals) + len(files),
@@ -503,7 +621,7 @@ class ObservedRun:
             require(type(self.report) is dict and set(self.report) <= REPORT_KEYS, 'unknown report packet fields')
             originals_packet_limit(self.original, pins)
             require(metadata_bytes(self.report, REPORT_LIMIT) == report_bytes and
-                    encoded(self.original).encode() == original_bytes,
+                    original_packet_check(originals_path, self.original, originals_limit) == original_digest,
                     'bootstrap receipt original run changed')
             for original_path, retained in seals.items():
                 require(evidence_seal(original_path, limits[original_path]) == retained,
@@ -649,12 +767,23 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
     clock_root.mkdir(mode=0o700)
     trace_clock = probe_clock(tracer, clock_root)
     argv = [node, str(image / 'controlled-child.mjs'), str(base), lane, str(lifetime), str(command), str(ack)]
-    originals = {p: immutable(p, 'image') for p in plan['inventory']}
-    originals.update(runtime_originals(node))
-    originals.update({p: immutable(p, 'original-file') for p in plan['originalFiles']})
-    originals[str(base / 'controlled-plan.json')] = immutable(base / 'controlled-plan.json', 'original-file')
-    originals[plan['enrollmentWitness']['path']] = immutable(plan['enrollmentWitness']['path'], 'enrollment-witness')
-    originals[str(lock)] = immutable(lock, 'lifetime')
+    sources = [(p, 'image', False) for p in plan['inventory']]
+    runtime = sorted(runtime_paths(node))
+    require(len(runtime) <= MAX_RUNTIME_ASSETS, 'runtime asset count exceeds finite bound')
+    sources += [(p, 'runtime', True) for p in runtime]
+    sources += [(p, 'original-file', False) for p in plan['originalFiles']]
+    sources += [(base / 'controlled-plan.json', 'original-file', False),
+                (plan['enrollmentWitness']['path'], 'enrollment-witness', False),
+                (lock, 'lifetime', False)]
+    require(sum(source_size(p, family, follow)[0].st_size for p, family, follow in sources)
+            <= ORIGINAL_SOURCE_LIMIT, 'original source aggregate exceeds memory bound')
+    originals, remaining = {}, ORIGINAL_SOURCE_LIMIT
+    for p, family, follow in sources:
+        entry = immutable(p, family, follow, remaining)
+        remaining -= len(entry['hex']) // 2
+        originals[str(p)] = entry
+    require(sum(len(v['hex']) // 2 for v in originals.values()) <= ORIGINAL_SOURCE_LIMIT,
+            'original retained sources exceed memory bound')
     dirs = dict(plan['roots'])
     for path in list(originals) + [str(image), str(root)]:
         p = Path(path)
@@ -702,7 +831,7 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
     # Original observer/runtime inputs are held outside the child base and are not
     # accepted from any producer report or child-writable plan file.
     retained = root / (lane + '-originals.json')
-    retained.write_text(encoded(original))
+    write_original_packet(retained, original)
     retained.chmod(0o600)
     trace = base / 'trace'
     trace.touch(mode=0o600)
@@ -744,7 +873,7 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
             provenance.value['verifiedBeforeRelease'] = True
             original['kernelRuntimeQueries'] = provenance.value
             # No child-supplied PID or readiness report establishes ownership.
-            retained.write_text(encoded(original))
+            write_original_packet(retained, original)
             for phase in phases:
                 assert_observer(implementation)
                 if designation is not None:
@@ -897,8 +1026,9 @@ def observe(root, image, lane='bootstrap', designation=None, used_tokens=None, d
             if replay is not None:
                 original['finalPhysicalObservations'] = getattr(replay, 'final_observations', {})
             report['observerImplementation'] = implementation
-            retained.write_text(encoded(original))
-            run.report_path.write_text(encoded(report))
+            write_original_packet(retained, original)
+            require(type(report) is dict and set(report) <= REPORT_KEYS, 'unknown report packet fields')
+            run.report_path.write_bytes(metadata_bytes(report, REPORT_LIMIT))
             run.report_path.chmod(0o600)
         except BaseException as error:
             cleanup.cleanup_failed(error)

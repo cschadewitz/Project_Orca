@@ -8,6 +8,7 @@ import sys
 import unittest
 
 TESTS = (
+    'test_source_sizing',
     'test_bootstrap_receipt_child',
     'test_child_stat_observations',
     'test_controlled_aggregate',
