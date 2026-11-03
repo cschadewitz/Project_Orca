@@ -1,0 +1,146 @@
+{
+  "baseline": "52a883a05fe9e0f2d8146ab852621b15154e9069",
+  "failedRun": {
+    "id": 41577928469,
+    "jobId": 125725766616,
+    "head": "52a883a05fe9e0f2d8146ab852621b15154e9069",
+    "mergeCandidate": "855346a2db92f6113c763992260a74de6ac6b918",
+    "base": "f9e7225e59cfe6e83c539f2ce9922ad0677719f4",
+    "runner": "tyler-1",
+    "conclusion": "failure",
+    "test": "packages/app/test/mac-managed-replacement-startup.test.ts > provisions on a first launch and opens ordinary startup",
+    "line": 133,
+    "expected": "ordinary",
+    "received": "unknown",
+    "testMilliseconds": 15,
+    "passed": 10064,
+    "failed": 1,
+    "skipped": 36,
+    "todo": 1,
+    "seconds": 367.12,
+    "passedSteps": ["typecheck", "design tokens", "format", "lint", "build", "retry admission acceptance"],
+    "downstreamSkipped": ["coverage reporting", "coverage report upload", "compiled smoke"],
+    "fullLogSha256": "9d9eeb1c16580b5c12278375bd0bd106e421d2de29e16c7c6b7376890fcd6297",
+    "originalCaughtExceptionRetained": false,
+    "exactHistoricalCauseEstablished": false,
+    "failureNotClassifiedAsFlaky": true
+  },
+  "unchangedBetweenPriorSourceBaselineAndFailedHead": {
+    "packages/app/test/mac-managed-replacement-startup.test.ts": "6b3169fcc22ddf076c20a0fdc7ec99c15bd57517fcfd0fb551ae88ad4cbc0b41",
+    "packages/app/src/main/mac-managed-replacement-startup.ts": "ee2b3f2e5e87b1fb8607017f00127ea39d84af50c029b3fc3c317a9bf908978f",
+    "packages/app/src/main/mac-update-namespace.ts": "876b037dc2786ba1cc2229ae97fec0960fb7174f0aa5e38071d57b5f5b90ec7e",
+    "packages/protocol/src/update-window.ts": "bf2d6b5bec7f80e6faf396c9efb3cc64653f5bc19234ef7f370d5aefb7ffc662"
+  },
+  "baselineTargetedDiagnostic": {
+    "testFiles": 1,
+    "tests": 10,
+    "passed": 10,
+    "seconds": 1.01,
+    "logSha256": "3b28cb242c16187df868c3f861f128765312ed8082033e09563a811c20994dd1",
+    "qualification": "local selected test result; neither CI rerun nor historical cause classification"
+  },
+  "automaticCiRetry": false,
+  "appSmokeDispatched": false,
+  "fixtureFollowup": {
+    "file": "packages/app/test/mac-managed-replacement-startup.test.ts",
+    "candidateSha256": "2ef7cf372360f6d22636057f3d651db3b855f62b17560e0398add75af916573d",
+    "productionChanged": false,
+    "maximumDisposablePreparationCandidates": 5,
+    "mappedAppRootSlots": 8,
+    "controlAbsentUntilRealProvisioning": true,
+    "startupInvokedOnceOutsideSelectionCatch": true,
+    "onlyActualProbeEaddrinuseResamplesFreshFixture": true,
+    "hookErrorsPreserveOriginalValueAndOneAttempt": true,
+    "partialProbeAndAbandonedDirectoryCleanupVerified": true,
+    "successfulPreparationResamplingThenOneStartupVerified": true,
+    "residualRace": "availability probe is not a reservation; native blocker acquisition and later competing binds remain real fixture preconditions",
+    "eslintException": "one line for intentional primitive-throw fault injection in the test, no global rule or production change"
+  },
+  "nativePreEditDemonstration": {
+    "commandSha256": "e6ad0609d01e0d4b0965da40b18915b8a16052bc104fc2b93ffed84626ce33fd",
+    "resultLogSha256": "f3bcba3c3304b644cf89eef9ac215f688125d6133b74535e27b5a21c71c97bcf",
+    "exitCode": 0,
+    "blockedSlot": 7,
+    "bothControlPathsAbsentBeforeInitialize": true,
+    "blockedOutcome": "unknown",
+    "blockedOrdinaryAllowed": false,
+    "blockedGuardAndWindowPublished": false,
+    "separateFreeRootOutcome": "ordinary",
+    "initializationsPerRoot": 1,
+    "ownedSocketsAndFilesCleaned": true,
+    "qualification": "isolated synthetic local mechanism, not recovered CI exception or Darwin/host/live proof"
+  },
+  "verification": {
+    "targeted": {
+      "files": 4,
+      "tests": 86,
+      "seconds": 7.83,
+      "exitCode": 0,
+      "logSha256": "0717a0beefe15c025497f8e8f29dc8da01e79dae929adf56827d448450831d65",
+      "selection": [
+        "packages/app/test/mac-managed-replacement-startup.test.ts",
+        "packages/app/test/mac-fixed-path-recovery.test.ts",
+        "packages/app/test/mac-update-windows.test.ts",
+        "packages/protocol/test/update-window.test.ts"
+      ]
+    },
+    "rootTypecheck": {
+      "exitCode": 0,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "eslint": {
+      "exitCode": 0,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "prettier": {
+      "exitCode": 0,
+      "files": [
+        "packages/app/test/mac-managed-replacement-startup.test.ts",
+        "docs/preparation/tool-execution-guards/source-byte-bounds-ci-followup-checks.json"
+      ],
+      "logSha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+    },
+    "gitDiffCheck": true,
+    "pythonCandidateFilesUnchanged": 10,
+    "priorPythonResultsRemainApplicable": {
+      "normal": 185,
+      "optimized": 185,
+      "explicitNonliveOuter": 622,
+      "historicalChild": 7,
+      "recordSha256": "5d21c3998a8441f7e2d3ee29ae10d89a07b675fc28a33c2c38648d2d63a32c34"
+    },
+    "toolingNote": "Initial agent pnpm exec setup failed ENOENT before check tools ran; direct installed Node tool entrypoints then passed without installing or configuring anything. Root final checks also use those installed entrypoints."
+  },
+  "independentReview": {
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "xhigh",
+    "status": "clear within fixture source scope",
+    "completeFinalFixtureAndPriorPythonBytesCompared": true,
+    "pythonCandidateHashesUnchanged": 10,
+    "productionHashesUnchanged": 3,
+    "normal": {
+      "tests": 18,
+      "seconds": 2.81,
+      "maxWorkers": 1,
+      "exitCode": 0,
+      "skips": 0,
+      "todo": 0,
+      "logSha256": "28492077aab7f440dfe0ec35b782fc1916fb6902a18e274c9fe16ced4dfe4eba",
+      "jsonReportSha256": "c5348a1fddff869cb9681432b17802177e3acee02f8c53513948f95a8296890a"
+    },
+    "findingsResolved": [
+      "Add successful resampling after an owned first preparation collision, followed by one real first startup"
+    ],
+    "findingsRemaining": [],
+    "qualification": "fixture source/resource-bound review only; original CI exception unavailable and no external-contention independence or host/live qualification"
+  },
+  "remainingSourceAndDeliveryGapsUnchanged": [
+    "uncapped helper pipe capture",
+    "no complete preventive disk acquisition bound",
+    "installed clock compatibility unmeasured",
+    "actual owner root/principal/quota/privacy/recovery not installed or approved",
+    "existing authorized pve2-to-workstation binary retrieval route unidentified",
+    "16MiB pilot and private/full-profile upload route unqualified",
+    "uploaded bytes do not restore in-memory original receipt capability"
+  ]
+}

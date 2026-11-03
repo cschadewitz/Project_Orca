@@ -48,21 +48,35 @@ function layout(base: string, home = join(base, "home")): Layout {
   return { base, home, appRoot, control: appRoot + "-native-replacement", workspace: join(home, "workspace") };
 }
 /** userData, its sibling control namespace and one workspace; provisioned and enrolled as main
- * does on a first launch unless `fresh`. A port collision retries with a fresh directory. */
+ * does on a first launch unless `fresh`. Only disposable preparation retries a port collision.
+ * A fresh fixture probes appRoot slots while control is absent; it never starts/retries startup. */
 async function installed(fresh = false, prepare?: (f: Layout) => Promise<void>): Promise<Layout> {
   for (let attempt = 0; ; attempt++) {
     const f = layout(await mkdtemp(join(process.cwd(), "orca-mac-startup-")));
     bases.push(f.base);
     for (const path of [f.home, f.appRoot, f.workspace]) await mkdir(path, { mode: 0o700 });
-    if (fresh) return f;
+    let freshProbe = false;
     try {
-      await provisionMacUpdateNamespace(f.control, [f.appRoot], backend());
-      await enrollMacUpdateRoots(f.control, [f.workspace], backend());
-      await prepare?.(f);
+      if (fresh) {
+        // The hook can arrange a real preparation collision. Its own errors are
+        // outside the retryable probe; no control inode or startup exists yet.
+        await prepare?.(f);
+        freshProbe = true;
+        await probeSlots([fenceDirectory(f.appRoot)]);
+      } else {
+        await provisionMacUpdateNamespace(f.control, [f.appRoot], backend());
+        await enrollMacUpdateRoots(f.control, [f.workspace], backend());
+        await prepare?.(f);
+      }
       return f;
     } catch (error) {
       await rm(f.base, { recursive: true, force: true });
-      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt >= 4) throw error;
+      if (
+        (fresh && !freshProbe) ||
+        (error as NodeJS.ErrnoException | null | undefined)?.code !== "EADDRINUSE" ||
+        attempt >= 4
+      )
+        throw error;
     }
   }
 }
@@ -77,22 +91,30 @@ async function prepareHomeMove(f: Layout): Promise<void> {
     fenceDirectory(f.workspace),
     ...(["appRoot", "workspace", "control"] as const).map((key) => ({ ...fenceDirectory(f[key]), path: moved[key] })),
   ];
+  await probeSlots(identities);
+}
+function fixtureSlots(identity: ReturnType<typeof fenceDirectory>): number[] {
+  const start =
+    20000 +
+    (Number.parseInt(
+      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, identity])).slice(0, 8),
+      16,
+    ) %
+      5000) *
+      8;
+  return Array.from({ length: 8 }, (_, slot) => start + slot);
+}
+/** A probe owns real listeners only until preparation returns. It is availability
+ * selection, not a reservation or permission to retry any later startup outcome. */
+async function probeSlots(identities: readonly ReturnType<typeof fenceDirectory>[]): Promise<void> {
   const held: Server[] = [];
   try {
     for (const identity of identities) {
-      const start =
-        20000 +
-        (Number.parseInt(
-          fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, identity])).slice(0, 8),
-          16,
-        ) %
-          5000) *
-          8;
-      for (let slot = 0; slot < 8; slot++) {
+      for (const port of fixtureSlots(identity)) {
         const server = createServer();
         await new Promise<void>((resolve, reject) => {
           server.once("error", reject);
-          server.listen({ host: "127.0.0.1", port: start + slot, exclusive: true, reusePort: false }, resolve);
+          server.listen({ host: "127.0.0.1", port, exclusive: true, reusePort: false }, resolve);
         });
         held.push(server);
       }
@@ -100,6 +122,22 @@ async function prepareHomeMove(f: Layout): Promise<void> {
   } finally {
     for (const server of held) await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+}
+/** Test-owned contention, never a substitute socket mapping or production adapter. */
+async function occupy(port: number) {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port, exclusive: true, reusePort: false }, resolve);
+  });
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  };
+  closers.push(close);
+  return { server, close };
 }
 async function launch(f: Pick<Layout, "appRoot" | "control">) {
   const startup = createManagedMacReplacementStartup({
@@ -129,10 +167,91 @@ const enrolledPaths = (control: string) => inspectUpdateWindowRoots(control).roo
 
 it("provisions on a first launch and opens ordinary startup", async () => {
   const f = await installed(true);
+  await expect(lstat(f.control)).rejects.toMatchObject({ code: "ENOENT" });
   const { startup, outcome } = await launch(f);
   expect(outcome).toBe("ordinary");
   expect(startup.bootstrap.ordinaryAllowed).toBe(true);
   expect(enrolledPaths(f.control)).toEqual([f.appRoot]);
+});
+
+it("keeps first startup unknown when a mapped app-root slot is occupied after preparation", async () => {
+  const f = await installed(true);
+  await expect(lstat(f.control)).rejects.toMatchObject({ code: "ENOENT" });
+  const blocker = await occupy(fixtureSlots(fenceDirectory(f.appRoot))[7]!);
+  const { startup, outcome } = await launch(f); // One original initialization; never retried.
+  expect(outcome).toBe("unknown");
+  expect(startup.bootstrap.ordinaryAllowed).toBe(false);
+  expect(blocker.server.listening).toBe(true);
+  await expect(lstat(join(f.appRoot, GUARD))).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(lstat(join(f.control, "window.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  await blocker.close();
+  await probeSlots([fenceDirectory(f.appRoot)]); // Initial provisioning released its partial listeners.
+});
+
+it("resamples a blocked preparation before one genuine first startup", async () => {
+  const attempted: Layout[] = [];
+  let blocker: Awaited<ReturnType<typeof occupy>> | undefined;
+  const f = await installed(true, async (candidate) => {
+    if (attempted.length) {
+      await expect(lstat(attempted.at(-1)!.base)).rejects.toMatchObject({ code: "ENOENT" });
+      await blocker!.close();
+    }
+    attempted.push(candidate);
+    if (attempted.length === 1) blocker = await occupy(fixtureSlots(fenceDirectory(candidate.appRoot))[7]!);
+  });
+  expect(attempted.length).toBeGreaterThanOrEqual(2);
+  expect(attempted.length).toBeLessThanOrEqual(5);
+  expect(f).toBe(attempted.at(-1));
+  await expect(lstat(f.control)).rejects.toMatchObject({ code: "ENOENT" });
+  const { startup, outcome } = await launch(f); // Startup begins only after selection, once.
+  expect(outcome).toBe("ordinary");
+  expect(startup.bootstrap.ordinaryAllowed).toBe(true);
+  expect(enrolledPaths(f.control)).toEqual([f.appRoot]);
+});
+
+it("selects at most five unprovisioned candidates and releases partial preparation probes", async () => {
+  const attempted: { fixture: Layout; ports: number[] }[] = [];
+  const blockers = new Map<number, Awaited<ReturnType<typeof occupy>>>();
+  await expect(
+    installed(true, async (f) => {
+      if (attempted.length)
+        await expect(lstat(attempted.at(-1)!.fixture.base)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(lstat(f.control)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(lstat(join(f.appRoot, GUARD))).rejects.toMatchObject({ code: "ENOENT" });
+      const ports = fixtureSlots(fenceDirectory(f.appRoot));
+      attempted.push({ fixture: f, ports });
+      const port = ports[7]!;
+      if (!blockers.has(port)) blockers.set(port, await occupy(port));
+    }),
+  ).rejects.toMatchObject({ code: "EADDRINUSE" });
+  expect(attempted).toHaveLength(5);
+  expect(new Set(attempted.map(({ fixture }) => fixture.base)).size).toBe(5);
+  for (const { fixture } of attempted) await expect(lstat(fixture.base)).rejects.toMatchObject({ code: "ENOENT" });
+  for (const { server } of blockers.values()) expect(server.listening).toBe(true);
+  // The rejected candidates' probes released every non-blocker, including the
+  // seven acquired before the deliberate last-slot collision. No startup ran.
+  for (const port of new Set(attempted.flatMap(({ ports }) => ports))) {
+    if (!blockers.has(port)) await (await occupy(port)).close();
+  }
+});
+
+it.each([
+  { label: "EACCES", failure: Object.assign(new Error("Private preparation failure"), { code: "EACCES" }) },
+  { label: "EADDRINUSE", failure: Object.assign(new Error("Private preparation failure"), { code: "EADDRINUSE" }) },
+  { label: "null", failure: null },
+  { label: "undefined", failure: undefined },
+  { label: "primitive", failure: 7 },
+])("preserves a fresh preparation-hook $label without resampling", async ({ failure }) => {
+  const attempted: Layout[] = [];
+  await expect(
+    installed(true, async (f) => {
+      attempted.push(f);
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- Exercise exact unknown rejection identity, including primitives.
+      throw failure;
+    }),
+  ).rejects.toBe(failure);
+  expect(attempted).toHaveLength(1);
+  await expect(lstat(attempted[0]!.base)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it("resumes ordinary startup after Migration Assistant or Time Machine recreates every directory", async () => {
