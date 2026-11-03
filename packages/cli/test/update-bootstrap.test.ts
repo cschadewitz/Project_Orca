@@ -381,15 +381,33 @@ it("first-run fence fixture stops after the existing 16 fresh-workspace allocati
 });
 
 it("first-run fence fixture propagates other setup failures without retry", async () => {
-  let attempts = 0;
+  let attempts = 0,
+    discards = 0;
   const refused = Object.assign(new Error("synthetic setup refusal"), { code: "EACCES" });
   await expect(
-    heldFirstRunFixture(async () => {
-      attempts++;
-      throw refused;
-    }),
+    allocateHeldFirstRunFence(
+      async () => {
+        // Isolate allocator error propagation from unrelated update-window sockets.
+        // Real provisioning and held-fence refusal remain in the integration tests above.
+        const workspace = await mkdtemp(join(process.cwd(), "orca-fence-allocation-"));
+        roots.push(workspace);
+        return {
+          workspace,
+          async discard() {
+            discards++;
+            await rm(workspace, { recursive: true, force: true });
+            roots.splice(roots.indexOf(workspace), 1);
+          },
+        };
+      },
+      async () => {
+        attempts++;
+        throw refused;
+      },
+    ),
   ).rejects.toBe(refused);
   expect(attempts).toBe(1);
+  expect(discards).toBe(0);
 });
 
 // Test controls use only these disposable fixtures' deterministic update slots.

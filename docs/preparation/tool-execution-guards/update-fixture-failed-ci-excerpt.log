@@ -1,0 +1,32 @@
+2026-11-03T01:20:14.4570138Z  FAIL  packages/cli/test/update-bootstrap.test.ts > first-run fence fixture propagates other setup failures without retry
+2026-11-03T01:20:14.4573348Z AssertionError: expected Error: listen EADDRINUSE: address already… { …(5) } to be Error: synthetic setup refusal { …(1) } // Object.is equality
+2026-11-03T01:20:14.4573669Z
+2026-11-03T01:20:14.4573752Z - Expected
+2026-11-03T01:20:14.4573906Z + Received
+2026-11-03T01:20:14.4573981Z
+2026-11-03T01:20:14.4574056Z   Error {
+2026-11-03T01:20:14.4574262Z -   "message": "synthetic setup refusal",
+2026-11-03T01:20:14.4574478Z -   "code": "EACCES",
+2026-11-03T01:20:14.4574797Z +   "message": "listen EADDRINUSE: address already in use 127.0.0.1:59090",
+2026-11-03T01:20:14.4575081Z +   "code": "EADDRINUSE",
+2026-11-03T01:20:14.4575261Z +   "errno": -98,
+2026-11-03T01:20:14.4575443Z +   "syscall": "listen",
+2026-11-03T01:20:14.4575632Z +   "address": "127.0.0.1",
+2026-11-03T01:20:14.4575810Z +   "port": 59090,
+2026-11-03T01:20:14.4575958Z   }
+2026-11-03T01:20:14.4576029Z
+2026-11-03T01:20:14.4576242Z  ❯ packages/cli/test/update-bootstrap.test.ts:391:4
+2026-11-03T01:20:14.4606498Z     389|       throw refused;
+2026-11-03T01:20:14.4606690Z     390|     }),
+2026-11-03T01:20:14.4606965Z     391|   ).rejects.toBe(refused);
+2026-11-03T01:20:14.4607170Z        |    ^
+2026-11-03T01:20:14.4607410Z     392|   expect(attempts).toBe(1);
+2026-11-03T01:20:14.4607592Z     393| });
+2026-11-03T01:20:14.4607896Z
+2026-11-03T01:20:14.4608069Z ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+2026-11-03T01:20:14.4608196Z
+2026-11-03T01:20:14.4609761Z
+2026-11-03T01:20:14.4620075Z  Test Files  1 failed | 578 passed | 5 skipped (584)
+2026-11-03T01:20:14.4644781Z       Tests  1 failed | 10064 passed | 36 skipped | 1 todo (10102)
+2026-11-03T01:20:14.4645264Z    Start at  01:14:07
+2026-11-03T01:20:14.4649555Z    Duration  366.75s (tests 90%, import 7%, transform 2%, environment 1%, worker 1%)
