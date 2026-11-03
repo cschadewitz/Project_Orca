@@ -236,3 +236,12 @@ passed 36 tests in 0.226 seconds, and optimized run passed 29 in 0.072 seconds.
 No remaining source finding was identified. Host installation, actual custody
 isolation, media durability, kernel I/O deadlines, complete-packet delivery and
 issuer authentication are still unqualified. No formal security approval follows.
+
+
+Subsequent [complete-original inventory and read-only receiver work](complete-originals-receiver.md)
+adds real independently expected chunk/whole-byte verification without writing
+export or reconstructed payload files. It identifies uncapped clock-helper bytes
+and diagnostics' missing serialized cap instead of pooling existing allowances.
+It does not extend the single-report component into full source qualification or
+an approved host exporter; all installation, quota and privacy decisions above
+remain open. Earlier test/error/probe records remain separate dated evidence.

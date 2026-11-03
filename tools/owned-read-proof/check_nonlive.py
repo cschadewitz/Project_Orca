@@ -10,6 +10,7 @@ import unittest
 TESTS = (
     'test_source_sizing',
     'test_host_report_custody',
+    'test_packet_receiver',
     'test_bootstrap_receipt_child',
     'test_child_stat_observations',
     'test_controlled_aggregate',

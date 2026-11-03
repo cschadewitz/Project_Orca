@@ -1,0 +1,115 @@
+{
+  "record": "readonly-original-upload-receiver-checks",
+  "baseline": "1b2366bd539a97f28b8e7cbfcd8a3f01a62c5931",
+  "authority": "none",
+  "scope": "declared-upload-bytes-only",
+  "hostOrGuestOrLargePrivateDeliveryQualified": false,
+  "candidateSha256": {
+    "tools/owned-read-proof/packet_receiver.py": "1f1fc2f69ac617bf41b78d7138d5cacc72f65326aebc535970cd1ede1175e47a",
+    "tools/owned-read-proof/test_packet_receiver.py": "7db0867e03b6c42de2c40b783400b159a31feaef837361881fc778326e653857",
+    "tools/owned-read-proof/check_nonlive.py": "598d5e8085651b9fc6d7c7746c56419d3976d33657f4d6a2461596632749c06d"
+  },
+  "receiverOnlyLimits": {
+    "chunkBytes": 16777216,
+    "nativeReadBytes": 65536,
+    "indexBytes": 4194304,
+    "lineBytes": 512,
+    "artifacts": 4096,
+    "chunks": 8192,
+    "declaredPayloadBytes": 8589934592,
+    "maximumOwnedNativeFds": 8195,
+    "payloadOutputFiles": 0,
+    "qualification": "local decoder/streaming workload limits, not source-observer bounds or approved host/export storage"
+  },
+  "sourceInventoryFacts": {
+    "reportBytes": 1048576,
+    "originalMetadataBytes": 1048576,
+    "rawSourceAggregateBytes": 536870912,
+    "canonicalOriginalsMaximumBytes": 1074790400,
+    "mainTraceBytes": 268435456,
+    "runtimeAssetCount": 32,
+    "runtimeAssetBytes": 268435456,
+    "compactAssociationBytes": 4096,
+    "clockProbeTraceExplicitByteCap": null,
+    "diagnosticEnforcedSerializedByteCap": null,
+    "diagnosticSamples": 62,
+    "diagnosticReadBytes": 8192,
+    "canonicalPublicSummaryMaximumBytes": 305,
+    "canonicalCheckpointMaximumBytes": 933,
+    "checkpointBoundDerivedFromConstructionNotNewAllowance": true
+  },
+  "verification": {
+    "normalFocused": {
+      "tests": 62,
+      "packetReceiverTests": 26,
+      "hostCustodyTests": 29,
+      "qualificationBoundaryTests": 7,
+      "seconds": 0.382,
+      "exitCode": 0,
+      "logSha256": "fd54d7345c59af12573f20aaabffdd89f33eb43df1a8d69de3aed2ff355d1d6b"
+    },
+    "optimizedReceiver": {
+      "tests": 26,
+      "seconds": 0.129,
+      "exitCode": 0,
+      "logSha256": "06dfd4d21c642f06f4d10a8b08913a58d16827b006843ac637c3437f7a30dfe4"
+    },
+    "explicitNonlive": {
+      "outerTests": 582,
+      "historicalChildTests": 7,
+      "seconds": 26.92,
+      "historicalChildSeconds": 6.742,
+      "exitCode": 0,
+      "logSha256": "7917226393a548b8ff1d9d473bc6310ca6c9326a87dfa6f46ff7434b1f3b0a6e"
+    },
+    "historicalFixture": {
+      "harnessAndReferenceFiles": 67,
+      "protectedHistoricalGitInputs": 199,
+      "disjointnessAndExactGitInputChecksPassed": true
+    },
+    "pythonCompilation": true,
+    "gitDiffCheck": true
+  },
+  "independentReview": {
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "xhigh",
+    "completeSourceTestsSelectorAndInventoryAvailable": true,
+    "findingsResolved": [
+      "Validate native O_PATH pin before any index/chunk read-open; reopen only pinned regular inode through trusted local procfs",
+      "Consume transient pin once and refuse reads after uncertain close"
+    ],
+    "findingsRemaining": [],
+    "normal": {
+      "tests": 26,
+      "seconds": 0.149,
+      "logSha256": "e8c616fdfa632beb99a8155d28343de4d69f2bd06e38d31aab409492da29a3d1"
+    },
+    "optimized": {
+      "tests": 26,
+      "seconds": 0.134,
+      "logSha256": "70befbc7ed43fb50ef1a12003f9c364f8c05e46bee4563af598b7a2891787125"
+    },
+    "projectionMaximaIndependentlyVerified": true,
+    "qualification": "byte-integrity source review only, not original source completeness, semantic replay or formal security qualification"
+  },
+  "preserved": {
+    "existingObserverGuards": true,
+    "sourcePins": true,
+    "artifactWhitelists": true,
+    "sourceBudgets": true,
+    "existingTimeouts": true,
+    "privateOriginalFailure": true,
+    "consumeOnceUncertainty": true,
+    "noAutomaticRetry": true,
+    "noReconstructionOrExportWrites": true,
+    "noCapabilitySerializationOrIssuer": true,
+    "metadataWriteHold": true
+  },
+  "nextRequiredOwnerInput": [
+    "Approve exact artifact/disposition inventory and source-specific preventive helper/diagnostic byte accounting",
+    "Provide existing host principal/root and aggregate originals/index/chunks/metadata/staging/retention allocation",
+    "Approve complete raw disclosure including disposable auth/private paths/keys; summary or redaction cannot substitute exact replay bytes",
+    "Specify authenticated guest-to-host acquisition and pve2-to-user-upload-to-assistant route, with independent expected inventory/index digest origin"
+  ],
+  "fullSourceCertification": "unconditionally refused by receiver; no index/callback/Boolean override"
+}
