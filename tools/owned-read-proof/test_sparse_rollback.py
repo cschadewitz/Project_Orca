@@ -64,17 +64,18 @@ def construction(owner, fake, lock=None, read_error=None, before_read=None, raw=
     paths = []
     def path(value):
         paths.append(value)
-        def read_text():
-            if before_read is not None:
-                before_read()
-            if read_error is not None:
-                raise read_error
-            return raw
-        return SimpleNamespace(read_text=read_text)
+        return SimpleNamespace()
+    def own_stat():
+        if before_read is not None:
+            before_read()
+        if read_error is not None:
+            raise read_error
+        return diagnostics.proc_fields(raw)
     inert_threading = SimpleNamespace(Lock=lambda: lock or InertLock(), Event=lambda: object())
     with ExitStack() as stack:
         stack.enter_context(patch.object(diagnostics, 'os', fake))
         stack.enter_context(patch.object(diagnostics, 'Path', side_effect=path))
+        stack.enter_context(patch.object(diagnostics, '_read_own_stat', side_effect=own_stat))
         stack.enter_context(patch.object(diagnostics, 'threading', inert_threading))
         yield paths
 
@@ -171,7 +172,7 @@ class SparseRollbackControls(unittest.TestCase):
         owner, fake, pin = bare_owner(), FakeOS(), InertPin()
         with construction(owner, fake) as paths, patch.object(diagnostics, 'PinnedProcess', return_value=pin):
             owner.__init__('synthetic-trace', [])
-        self.assertEqual(paths, ['synthetic-trace', '/proc/self/stat'])
+        self.assertEqual(paths, ['synthetic-trace'])
         self.assertEqual(owner.resource, 100)
         self.assertIs(owner.processes['supervisor'], pin)
         self.assertEqual(fake.closed, [])

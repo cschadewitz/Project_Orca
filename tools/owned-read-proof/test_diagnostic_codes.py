@@ -112,7 +112,8 @@ class CheckedOwner(diagnostics.SparseDiagnostics):
 
 
 class Pin:
-    expected, identity = {'pid': 9}, (1, 2, 3)
+    expected = {'pid': 9, 'starttime': 1, 'ppid': 8, 'pgrp': 7, 'session': 7}
+    identity = (1, 2, 3)
 
     def __init__(self, error=None):
         self.error, self.calls, self.closes = error, 0, 0

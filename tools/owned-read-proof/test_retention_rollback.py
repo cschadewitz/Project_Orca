@@ -12,7 +12,7 @@ from test_sparse_rollback import InertPin
 
 
 class Pin(InertPin):
-    expected = {'pid': 9}
+    expected = {'pid': 9, 'starttime': 1, 'ppid': 8, 'pgrp': 7, 'session': 7}
     identity = (1, 2, 3)
 
 
@@ -172,9 +172,9 @@ class RetentionRollbackControls(unittest.TestCase):
                 raise original
         pins['supervisor'].identity = BrokenIdentity()
         with injected(value) as (fake, events, _):
-            with self.assertRaises(PrivateError) as caught:
+            with self.assertRaisesRegex(RuntimeError, 'bounded diagnostic proc identity'):
                 value.retain_and_close('private-fixture')
-        self.assertIs(caught.exception, original)
+        self.assertIsNot(value._first_failure, original)  # Reject before custom iteration.
         self.assert_consumed(value, pins, fake)
         self.assertEqual(events, [])
 
@@ -253,7 +253,12 @@ class RetentionRollbackControls(unittest.TestCase):
 
     def test_actual_stop_uses_original_single_join_bound_with_inert_thread(self):
         value = owner(); calls = []
-        value.samples = [None] * diagnostics.MAX_SAMPLES  # No final capture needed.
+        # Valid minimal source-shaped rows; stop count is still the test's intent.
+        row = {'monotonicBeforeNs': 0, 'wallNs': 0, 'traceBytes': 0, 'phaseEventCount': 0,
+               'processes': {}, 'resources': {'cpu.stat': {}, 'io.stat': '',
+                                             'memory.events': {}, 'memory.current': ''},
+               'monotonicAfterNs': 0}
+        value.samples = [row] * diagnostics.MAX_SAMPLES  # No final capture needed.
         value.done = SimpleNamespace(set=lambda: calls.append('set'))
         value.thread = Thread()
         value.thread.join = lambda **kwargs: calls.append(('join', kwargs))

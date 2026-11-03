@@ -1,0 +1,177 @@
+{
+  "record": "source-byte-bounds-and-delivery-profile-checks",
+  "baseline": "e4e909f85cad6342b6aa2c6f88025089148c4675",
+  "authority": "none",
+  "scope": "preventive clock trace restriction and derived diagnostic serialization; proposed private delivery accounting",
+  "candidateSha256": {
+    "tools/owned-read-proof/check_nonlive.py": "aeb04b718714eb4f927888db3dae53c3069bb48e48df13ce22c827f8e4bddb72",
+    "tools/owned-read-proof/controlled_diagnostics.py": "39cf5e0e70edb2f015e79ecfd72914a6c690661fc318cacde1e9012935504566",
+    "tools/owned-read-proof/controlled_timestamps.py": "70de1ae1517f4ec184d1373bab6aa07f1362bbde89aeeda6e138f2872ed15d7f",
+    "tools/owned-read-proof/packet_receiver.py": "9ac1a193a38623b8d93fb510b071829f05b248f4e66141e995271a0d4a34b1ae",
+    "tools/owned-read-proof/test_clock_probe_bounds.py": "26a5092d5cedb1651fb84eac1b660da0ce093fe9bba4ae1aa1e70bdc287d6350",
+    "tools/owned-read-proof/test_diagnostic_bounds.py": "810319cf0b376616500b56c1ec3abd469642bc1757023136d6b7601566e0758e",
+    "tools/owned-read-proof/test_diagnostic_codes.py": "40d56106562d054e110ea91c61ba45d9128c89ad58fd2a2155a4b6272c0b27d5",
+    "tools/owned-read-proof/test_packet_receiver.py": "4040f74df81cda823ec69ee19363a4084a541d727cd6b8eada08056408a0b366",
+    "tools/owned-read-proof/test_retention_rollback.py": "e28ca6aefcd2727de04f7ea1abe95eb7d0ea12bd58bc6b36bd75289e179a0c3d",
+    "tools/owned-read-proof/test_sparse_rollback.py": "ea8f48ee5bc8cf679e95dacb4f4011076c971aaf1cf89b9f40a99d572668ba09"
+  },
+  "sourceBounds": {
+    "clockProbeTraceBytes": 1048576,
+    "clockLimitStatus": "provisional engineering restriction, no measured installed compatibility or host allocation",
+    "clockDeadlineSeconds": 5,
+    "diagnosticSerializedBytes": 52121905,
+    "diagnosticReadBytes": 8192,
+    "diagnosticSamples": 62,
+    "readGroupsPerSample": 16,
+    "readGroupJsonBytes": 49154,
+    "nativeIntegerBits": 32768,
+    "nativeIntegerJsonBytes": 9866,
+    "sampleJsonBytes": 836842,
+    "diagnosticConfigBytes": 450,
+    "mainTraceBytesUnchanged": 268435456,
+    "reportBytesUnchanged": 1048576,
+    "originalMetadataBytesUnchanged": 1048576,
+    "rawOriginalSourceBytesUnchanged": 536870912,
+    "canonicalOriginalsBytesUnchanged": 1074790400
+  },
+  "verification": {
+    "normalFocused": {
+      "tests": 185,
+      "seconds": 0.632,
+      "exitCode": 0,
+      "logSha256": "cc5622895a4d543ccd7080c68a4287dba0e8320e8bb4abd4ae7c92b1ef2f249f"
+    },
+    "optimizedFocused": {
+      "tests": 185,
+      "seconds": 0.781,
+      "exitCode": 0,
+      "logSha256": "594bf7dc499ce1336e40472ffd999563964d6f76b909b946afaf7bcedeedd1be"
+    },
+    "explicitNonlive": {
+      "outerTests": 622,
+      "historicalChildTests": 7,
+      "seconds": 32.012,
+      "historicalChildSeconds": 7.198,
+      "exitCode": 0,
+      "logSha256": "7e7ef9819456a92b4d2936c090b4455e950501a61ebf387d51f292bab7ffd51c"
+    },
+    "historicalFixture": {
+      "source": "3fce8bcc9afd381cd07c0e06051921307d6322b3",
+      "harnessAndReferenceFiles": 69,
+      "protectedHistoricalGitInputs": 199,
+      "disjointnessAndExactGitInputsCheckedBeforeCopy": true,
+      "inventorySha256": "0990402e0b66c866a1eb1039f8451e953cb2d56b365ee3ae9185295e8d5f5fa3"
+    },
+    "pythonCompilationFiles": 10,
+    "gitDiffCheck": true,
+    "initialCommandError": {
+      "tests": 93,
+      "successfulTests": 92,
+      "errors": 1,
+      "cause": "mistyped test module name test_qualification_boundaries; corrected to existing test_current_qualification_boundaries, no source fix",
+      "logSha256": "0b6fd054d005d8755c36bd9f247787fcb5fbff69b05b878e24dd6982170944f0"
+    }
+  },
+  "independentReview": {
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "xhigh",
+    "status": "clear within source-only scope",
+    "sourceAndTestsAvailable": true,
+    "comparedCandidateFiles": 10,
+    "candidateHashesMatch": true,
+    "retainedRootLogAndFixtureHashesVerified": 5,
+    "historicalHarnessAndProtectedGitInputsIndependentlyVerified": true,
+    "normal": {
+      "tests": 115,
+      "seconds": 0.301,
+      "exitCode": 0,
+      "skips": 0,
+      "logSha256": "dd913a178d270da04ff2747cf1590b315a93692af11900f1995c675d3f75d5a0"
+    },
+    "optimized": {
+      "tests": 115,
+      "seconds": 0.311,
+      "exitCode": 0,
+      "skips": 0,
+      "logSha256": "94d78994a7d0e3fc109dd19f226b07b1c133903f3909ed8ef8396ca433458490"
+    },
+    "testScope": "18 new diagnostic bounds +22 new clock bounds +75 existing inert diagnostic/rollback/writer tests; existing nine native self-pin collector tests excluded from reviewer isolated selection, covered by root explicit non-live run",
+    "findingsResolved": [
+      "Validate exact builtin keys before discriminator lookup to prevent hash-colliding custom-key equality on all five dispatch/acquisition paths"
+    ],
+    "findingsRemaining": [],
+    "trustAssumptions": [
+      "stopped-owner/cooperative-process model",
+      "trusted local procfs and path ancestors; no hostile same-UID/root isolation claim"
+    ],
+    "qualification": "source byte-safety and evidence consistency review, not host setup, installed compatibility, source completeness, formal security qualification or live readiness"
+  },
+  "proposedHostAccounting": {
+    "status": "proposal only, no host allocation or setup",
+    "maximumOriginalAttempts": 1,
+    "maximumBootstrapLanes": 1,
+    "maximumConnectedLanes": 1,
+    "diagnosticsCountedForBothLanes": true,
+    "persistedProfileBytes": 2878912081,
+    "simultaneousProfileCopies": 3,
+    "copies": ["retained originals", "acquisition staging", "export chunks"],
+    "chunkStagingBytes": 16777216,
+    "proposedCatalogAndIndexBytes": 16777216,
+    "receiverIndexBytesUnchanged": 4194304,
+    "subtotalBeforeFilesystemOverheadBytes": 8670290675,
+    "proposedQuotaBytes": 12884901888,
+    "remainingForQualifiedFilesystemOverheadBytes": 4214611213,
+    "preventiveCompleteRunDiskBoundProven": false,
+    "newSourceJournalAllowance": 0
+  },
+  "proposedNonsecretPilot": {
+    "executed": false,
+    "content": "16777216 ASCII P bytes followed by one ASCII Q byte",
+    "artifactId": "00000000000000000000000000000001",
+    "sourceBytes": 16777217,
+    "chunkBytes": [16777216, 1],
+    "chunkSha256": [
+      "d61744896212f04ac9995775ccebc979df4d04f99b6f64bfb012ef5ef436c251",
+      "4ae81572f06e1b88fd5ced7a1a000945432e83e1551e6f721ee9c00b8cc33260"
+    ],
+    "wholeSha256": "36cc1f42062fe57caf7ce314090b0fdf4c6a652f8d8b616c544dfac47ed87f06",
+    "indexBytes": 299,
+    "indexSha256": "34d476697a8fd67b567231cf1a48e4fd4eebf7beabe5037e423ca5178777db3c",
+    "indexAscii": "ORCA-UPLOAD-1\nA 00000000000000000000000000000001 16777217 36cc1f42062fe57caf7ce314090b0fdf4c6a652f8d8b616c544dfac47ed87f06 2\nC 00000000 0 16777216 d61744896212f04ac9995775ccebc979df4d04f99b6f64bfb012ef5ef436c251\nC 00000001 16777216 1 4ae81572f06e1b88fd5ced7a1a000945432e83e1551e6f721ee9c00b8cc33260\n"
+  },
+  "priorCloudProof": {
+    "bytes": 165,
+    "sha256": "0b13608eccc53b041b5a3967dda59501992cc843b8eb4537d953d99932d739ad",
+    "scope": "cross-executor fixed nonsecret cloud file retrieval only; no pve2, user upload, large or private delivery qualification"
+  },
+  "preserved": {
+    "observerEntryRefusals": true,
+    "sourceAndImagePins": true,
+    "artifactGrammar": true,
+    "existingDeadlines": true,
+    "privateOriginalFailurePrecedence": true,
+    "consumeOnceUncertainty": true,
+    "noAutomaticRetryOrExpansion": true,
+    "noHostOrLiveActions": true,
+    "noCredentialsAccessOrSecurityChanges": true,
+    "receiptNonSerialization": true,
+    "fullSourceCertificationRefuses": true,
+    "oldMetadataWriteHold": true
+  },
+  "remainingProofGaps": [
+    "deadline-only helper stdout/stderr capture remains uncapped",
+    "builder outputs and pre-rejection mutable filesystem effects lack preventive complete-run disk confinement",
+    "complete authentic original artifact/disposition and loaded-code/physical lineage closure",
+    "actual authenticated guest-to-host acquisition and installed owner root/principal/quota/recovery binding",
+    "privacy-approved raw originals, fixture-only keys/tokens and paths",
+    "existing authorized pve2-to-workstation binary retrieval route is unidentified",
+    "nonsecret 16MiB pilot and private/full-profile user upload/assistant retrieval unqualified",
+    "uploaded bytes cannot restore original in-memory bootstrap or connected capability",
+    "host disk failure still loses the host custody copy"
+  ],
+  "nextOwnerReview": [
+    "Name existing host root/principal/protection and qualify proposed12GiB one-attempt capacity",
+    "Approve exact finite artifact/disposition and raw privacy/disclosure/retention policy",
+    "Identify an existing authorized binary retrieval route from pve2 to the user workstation before proposed nonsecret pilot"
+  ]
+}

@@ -27,7 +27,7 @@ no payload buffer, reassembled file, journal or output file is created.
 All limits below are RECEIVER decoder/streaming-work limits, not source ceilings,
 host/export quotas, user upload limits, or allocations. In particular 8 GiB means
 maximum streamed payload work, not memory reservation. These limits do not make a
-complete source packet bounded. Unknown helper/diagnostic/export policies remain
+complete source packet bounded. Helper capture/acquisition/export gaps remain
 open, and certify_current_source_packet() always refuses without an override.
 
 Native UID/mode/identity checks are mechanics under a trusted local operator;
@@ -61,8 +61,8 @@ MAX_CHUNKS = 8192
 MAX_DECLARED_BYTES = 8 * 1024 * 1024 * 1024
 INDEX_NAME = 'packet-index.v1'
 _SCOPE = 'declared-upload-bytes-only'
-_SOURCE_GAPS = ('clock-trace-source-byte-cap-missing',
-                'enabled-diagnostic-serialized-cap-missing',
+_SOURCE_GAPS = ('helper-output-capture-source-byte-cap-missing',
+                'source-acquisition-preventive-disk-bound-unverified',
                 'checkpoint-standalone-budget-policy-missing',
                 'host-export-policy-missing', 'source-physical-and-semantic-closure-unverified')
 
@@ -81,8 +81,9 @@ def source_packet_gaps():
     """Fixed source/policy gaps, independent of index content or byte success.
 
     The fixed-schema checkpoint is bounded by construction; this does not assign
-    it a standalone source/export byte allowance. Clock trace has no explicit
-    source byte cap; enabled diagnostics have no separate serialized source cap.
+    it a standalone source/export byte allowance. Separate clock-trace and derived
+    diagnostic source ceilings do not bound helper pipes or all acquisition disk
+    effects, allocate export space, or establish original physical authority.
     """
     return _SOURCE_GAPS
 

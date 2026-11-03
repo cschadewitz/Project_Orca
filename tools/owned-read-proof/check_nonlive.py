@@ -18,6 +18,8 @@ TESTS = (
     'test_controlled_contract',
     'test_controlled_delivery_semantics',
     'test_controlled_diagnostics',
+    'test_diagnostic_bounds',
+    'test_clock_probe_bounds',
     'test_controlled_image_pins',
     'test_controlled_notifications',
     'test_controlled_replay',

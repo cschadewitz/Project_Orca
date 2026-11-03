@@ -566,9 +566,11 @@ class PacketReceiverTests(unittest.TestCase):
             self.assertEqual(owner.verify(fd, digest, expected).scope, 'declared-upload-bytes-only')
         with self.assertRaisesRegex(subject.SourcePacketUnavailable, '^current source packet qualification unavailable$'):
             subject.certify_current_source_packet()
-        self.assertIn('clock-trace-source-byte-cap-missing', subject.source_packet_gaps())
-        self.assertIn('enabled-diagnostic-serialized-cap-missing', subject.source_packet_gaps())
+        self.assertIn('helper-output-capture-source-byte-cap-missing', subject.source_packet_gaps())
+        self.assertIn('source-acquisition-preventive-disk-bound-unverified', subject.source_packet_gaps())
         self.assertIn('checkpoint-standalone-budget-policy-missing', subject.source_packet_gaps())
+        self.assertIn('host-export-policy-missing', subject.source_packet_gaps())
+        self.assertIn('source-physical-and-semantic-closure-unverified', subject.source_packet_gaps())
 
     def test_source_has_no_writer_observer_reconstruction_or_authority_import(self):
         tree = ast.parse(Path(subject.__file__).read_text())

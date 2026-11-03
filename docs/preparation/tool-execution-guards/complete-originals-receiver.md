@@ -1,6 +1,9 @@
 # Complete originals: inventory and read-only upload verification
 
 Baseline: `1b2366bd539a97f28b8e7cbfcd8a3f01a62c5931`, draft PR #809.
+The later [source byte safety increment](source-byte-bounds-and-delivery-profile.md)
+updates the two helper bounds below; the final-check section and checks JSON retain
+the original receiver increment's historical test/hash evidence.
 The selected direction remains Casey's console-operated pve2 host controller with
 private host evidence outside guest snapshot rollback. This source increment
 advances G7 byte delivery/integrity and G4 custody accounting through a **read-only
@@ -26,8 +29,8 @@ disposition. Receiver byte checks cannot infer that disposition from absence.
 | `<lane>-attempt.json` | `controlled_supervisor.observe`, bootstrap and separately connected | `REPORT_LIMIT` 1048576 bytes; metadata grammar checked before report write. Reports are evidence/correlations, never receipt capabilities. |
 | `<lane>-originals.json` | Supervisor before launch, refreshed during/finally | `ORIGINAL_METADATA_LIMIT` separately 1048576 bytes plus immutable hex. The restrictive raw-source aggregate is 536870912 bytes, giving at most **1074790400 bytes (1025 MiB)** for a canonical packet. Runtime inventory remains at most 32 entries, each at most 268435456 bytes. This does not allocate an export copy or an additional metadata file. |
 | `<lane>/trace` | Original tracer output in each lane | `LIMIT` and the observation's per-file `prlimit --fsize` are 268435456 bytes. Complete exact raw lines, timestamps, partial/resumed framing and their hash are required; a tail/summary is insufficient. |
-| `<lane>-clock/clock-probe.trace` | `probe_clock` before original capture/start | **No explicit source byte cap.** Its separate `run_traced` call has a five-second timeout but no observation `prlimit` or byte ceiling; it later calls `read_text()`. Main-trace LIMIT cannot be borrowed for this helper. Hash/time correlations are retained in originals, but do not replace raw probe bytes. |
-| `<lane>-diagnostics.json` | Optional `diagnostic=True`; retention after owned original settlement | At most 62 samples; each counter read at most 8192 bytes; three process roles and four resource names. These are **not an enforced total serialized-artifact byte limit**. Writer takes already encoded bytes without a total length check. Exact standalone source/custodian accounting remains open; no new 1 MiB allowance is inferred. |
+| `<lane>-clock/clock-probe.trace` | `probe_clock` before original capture/start | Distinct provisional 1 MiB source ceiling, preventive fixed `prlimit` and bounded native read. The five-second timeout is unchanged. No installed compatibility measurement exists; helper pipes remain a separate uncapped capture gap. Hash/time correlations are retained in originals, but do not replace raw probe bytes. |
+| `<lane>-diagnostics.json` | Optional `diagnostic=True`; retention after owned original settlement | At most 62 samples, 8192 bytes/read, three process roles/four resource names. Strict grouped schema preflight derives a 52,121,905-byte canonical ceiling before JSON; encoded length and writer check it before open. This derives from existing construction, not a new 1 MiB allowance or approved custody allocation. |
 | `bootstrap-association.json` | Only after full original bootstrap closure and receipt construction | Existing compact receipt at most 4096 bytes. It references original report, originals and trace/image digests; JSON cannot recreate the closed-graph callback or designation. It is not first-failure journal capacity. |
 | `sanitized-checkpoint.json` | `observe_new` / `diagnose_bootstrap` wrapper final projection, including refusal paths | Fixed public schema, fixed strings, at most two summaries and bounded counters. For the canonical current writer, maximum public summary is 305 bytes and maximum checkpoint is **933 bytes**, derived from projection construction. This is not a new journal/export allowance or proof that raw originals were retained. |
 | `<lane>/controlled-plan.json`, `workspace/.orca/workspace-identity/id`, `lifetime.lock` | Supervisor preparation | Existing source-capture maxima 65536 bytes, 37 bytes, zero content bytes respectively. Exact plan/identity/lock bytes and metadata are also embedded in originals. FD/flock ownership is live original state; uploading a zero-byte lock file does not preserve it. |
@@ -60,9 +63,11 @@ existing ceilings. It excludes separate image copies, helpers, diagnostics,
 mutable-tree copies, compact association, checkpoint, filesystem metadata, another
 lane, transport index/chunks and retention. The 16 MiB mutable-write ceiling is not
 extra export capacity. There is currently no justified finite preventive *complete
-packet* reservation: clock-probe bytes lack a source cap, diagnostics lack an
-enforced serialized cap, and the owner has not allocated aggregate export/index/
-copy space. This exact conflict blocks host export/admission, not read-only checking
+packet* reservation: helper pipes remain uncapped, builder and mutable filesystem
+effects lack a preventive complete-run disk bound, and the owner has not allocated
+aggregate export/index/copy space. The later source-safety proposal supplies a
+finite persisted-byte profile equation, not that missing preventive qualification.
+These conflicts block host export/admission, not read-only checking
 of already approved received bytes.
 
 Physical checks in `Replay.run` still read original absolute paths and compare
