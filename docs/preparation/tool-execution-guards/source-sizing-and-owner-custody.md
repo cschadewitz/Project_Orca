@@ -142,3 +142,12 @@ remains unprovided and untested, and from the 80 focused passing tests. No pin,
 assertion, fixture requirement or launch boundary was changed to obtain a pass.
 The reviewer again confirmed the preserved independent budgets and unchanged
 first-statement launch refusals; no actionable source regression was found.
+
+
+Subsequent source work after the named pve2/Casey console-controller direction adds
+[a real single-report custody transaction](host-report-custody-and-delivery.md),
+with native preallocation and publication tests. It is a partial artifact mechanism,
+not an installed host provider or full S0/G1/G4 exit. Actual principal, protected
+root, aggregate capacity, original-session binding and complete evidence transport/
+export policy remain separate setup prerequisites. Earlier source/error/CI records
+above remain preserved as dated evidence.

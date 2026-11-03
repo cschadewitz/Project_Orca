@@ -1,0 +1,95 @@
+{
+  "record": "native-single-report-custody-source-checks",
+  "baseline": "61484825c961d21b4c49c5326fe7f9167a7dab81",
+  "authority": "none",
+  "productionEligible": false,
+  "hostInstalledOrTested": false,
+  "scope": "G4 S4-S9 and G7 single report artifact mechanism; not full S0/G1 issuer or complete custody gate",
+  "candidateSha256": {
+    "tools/owned-read-proof/host_report_custody.py": "2586ed25b97b5518762b03fcb95e12073a56554385d28cb9d677ebf00daa22e4",
+    "tools/owned-read-proof/test_host_report_custody.py": "83099b1d196cf239e3f416783e13610523c5a42423dcfcb7c05c13ea48c09cac",
+    "tools/owned-read-proof/check_nonlive.py": "8cfcf11df565ef5b890190240c4ce46d37cf79b43a218401ec939ff82c349a15"
+  },
+  "limits": {
+    "reportBytes": 1048576,
+    "copyChunkBytes": 65536,
+    "payloadInodes": 1,
+    "maximumAliases": 2,
+    "newObservationJournal": false,
+    "originalMetadataBytes": 1048576,
+    "traceBytes": 268435456,
+    "runtimeAssetCount": 32,
+    "runtimeAssetBytes": 268435456,
+    "originalSourceBytes": 536870912
+  },
+  "tests": {
+    "normalFocused": {
+      "tests": 36,
+      "hostCustodyTests": 29,
+      "qualificationBoundaryTests": 7,
+      "seconds": 0.242,
+      "exitCode": 0,
+      "logSha256": "d58f8cb417f11b07b4dd1426c6faaf0117702d5c6ff662403465132245ea7c03"
+    },
+    "optimizedCustody": {
+      "tests": 29,
+      "seconds": 0.066,
+      "exitCode": 0,
+      "logSha256": "2b7471cbf2a20b4762ee57f4290a265b66b8fa046dbc1c8e2f902472b61a57fa"
+    },
+    "explicitNonlive": {
+      "outerTests": 556,
+      "historicalChildTests": 7,
+      "seconds": 25.68,
+      "childSeconds": 6.282,
+      "exitCode": 0,
+      "logSha256": "18864a82e1fdfdd0bcbb7aa13e5893a0b993e210221ff4ee82d546174ff3770c"
+    },
+    "historicalHarness": {
+      "filesIncludingReference": 65,
+      "protectedHistoricalGitInputs": 199,
+      "copyDisjointnessAndExactGitInputsVerified": true
+    },
+    "compileChangedPython": true,
+    "gitDiffCheck": true,
+    "jsonFormatting": true
+  },
+  "independentReview": {
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "xhigh",
+    "sourceAvailable": true,
+    "findingsRemaining": [],
+    "findingsResolved": [
+      "Nonblocking read-open plus FIFO-race regression",
+      "Original process PID and exact Thread object binding",
+      "Post-hash destination content stamp correspondence"
+    ],
+    "normal": {
+      "tests": 36,
+      "seconds": 0.226,
+      "logSha256": "ec4664585dca917e1bc6fab2842caaa06c83b37d0f1bce48a52ab2219c6fbd77"
+    },
+    "optimized": {
+      "tests": 29,
+      "seconds": 0.072,
+      "logSha256": "6ee5e8504ddad23dc4bda32d1889b1eeb68e21abbf236ad630998328606e9653"
+    },
+    "qualification": "bounded source and local real-file protocol review, not host/runtime/formal security qualification"
+  },
+  "preserved": {
+    "observerLaunchRefusals": true,
+    "reportWhitelist": true,
+    "sourcePins": true,
+    "existingTimeouts": true,
+    "firstPrivateFailure": true,
+    "noAutomaticRetryAfterUncertainty": true,
+    "noMetadataWriteOrManualWorkflow": true
+  },
+  "stoppingConditions": [
+    "Separate owner review of protected installed source/principal/root, filesystem, I/O-deadline/recovery policy, metadata/aggregate capacity",
+    "Actual issuer and original-attempt/lane-consumption/revocation/lost-ack/recovery binding",
+    "Complete raw artifact custody and authenticated guest/host transport",
+    "Privacy-reviewed raw export and quota including all simultaneous originals/chunks/index/staging",
+    "Actual host/user upload route qualification; cloud 165-byte probe only is verified"
+  ]
+}
