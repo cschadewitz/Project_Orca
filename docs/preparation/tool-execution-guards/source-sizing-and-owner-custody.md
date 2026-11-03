@@ -95,6 +95,11 @@ The old uncertain PR-description write was not retried; publication is limited t
 the reviewed source/evidence branch update. No PR description/comment change or
 manual workflow dispatch accompanies this increment.
 
+Subsequent [setup diagnosis and repair](python-setup-investigation.md) identifies
+the exact stale dependency inputs and records a passing selection with the
+documented fresh historical fixture. Earlier failed results below remain dated
+evidence, separate from that later setup repair.
+
 ## Independent baseline attribution supplement
 
 The same independent **gpt-6.1-sol, xhigh** reviewer subsequently compared
