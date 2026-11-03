@@ -1,6 +1,10 @@
 # Native packet export and the demonstrated manual delivery route
 
 Baseline: `32cfcd019ac3f3b8bd6f13e82aa3b4e84589e654`, draft PR #809.
+The subsequent [runnable nonsecret controller](runnable-nonsecret-controller.md)
+packages this API with native custody and receiver integration. Its hard-pinned
+public-pilot command is runnable; private/raw export and host installation remain
+unavailable without the actual owner/privacy binding.
 This increment implements the G7 declared-byte export boundary and part of G4 S8
 copy/failure accounting. It does not close S0, M1 issuer/recovery binding, complete
 original acquisition/settlement, privacy admission or original receipt continuity.
