@@ -150,9 +150,12 @@ The parent authorized materializing the actual uploaded pilot for a local positi
 run. The resolved-reference preparation succeeded, but the current required helper
 exited 1 with `library file transfer failed: download failed`. No retry/alternate
 transfer was attempted. No actual-pilot bytes are embedded in the repository or
-bundle. Parent-side execution of the final delivered artifact against its already
-retained genuine pilot copy is a separate receiving-side check, not success of this
-executor's blocked materialization or a host installation.
+bundle. Parent independently ran the exact delivered 70,104-byte bundle from commit
+`efd6c2ea4c06a93a51d3e4ce924d7b2c0b681b18` (SHA-256
+`cb025ded500cfabfcf7b77bcb2d182ecd0199372043718fed8c9a76febdf5102`) against its retained
+genuine pilot copy. `pilot` and `verify-pilot` exited zero, the 212-byte index matched
+the pinned hash, and source hash/mode stayed unchanged. This is receiving-cloud
+execution, not success of this executor's held failed materialization or a host run.
 
 The actual 16 MiB host→Windows SCP→private upload fact remains valid. A local CLI
 selftest or receiving-side CLI check does not establish host native compatibility,

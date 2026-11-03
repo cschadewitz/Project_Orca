@@ -1,0 +1,166 @@
+{
+  "record": "original-native-local-control-peer-checks",
+  "baseline": "efd6c2ea4c06a93a51d3e4ce924d7b2c0b681b18",
+  "scope": "cached-kernel-peer-lifetime-and-one-read-only-greeting; no VM/issuer/observer authority",
+  "namedGate": "G1/S0/ExitA native peer-lifetime sub-obligation; M1 remains open",
+  "candidateSha256": {
+    "tools/owned-read-proof/host_control_peer.py": "1f6f4592dd9a3d1eed6fe1344c5d59b9f0c4bf8b322eef4db3ca7d1760e0e013",
+    "tools/owned-read-proof/test_host_control_peer.py": "900e6f1647d8d3ed753b4e218a425f80cd40f45a8cc22ccba2150513c4f4b34e",
+    "tools/owned-read-proof/check_nonlive.py": "a2cf83534bd8811b0e848ba71f70f9dff25ea6d9be529aa89dd07d65c03f7c93"
+  },
+  "mechanism": {
+    "platform": "Linux x86_64 only; actual SO_PEERPIDFD success required",
+    "nativePeerPidfdOption": 77,
+    "numericPidReopening": false,
+    "procOrPathDiscovery": false,
+    "nativeCredentialScope": "cached original listener/connector PID/UID/GID; same effectiveUID/GID required, not Casey/VM/current handler/current authorization",
+    "ownedFds": 2,
+    "additionalBorrowedFds": 1,
+    "borrowedFileDescriptionFlagsAndOwnershipPreserved": true,
+    "exclusiveReaderRequired": true,
+    "sharedQueueConsumedByReads": true,
+    "borrowedOriginalNotClosedAndNoQmpSlotReleaseClaim": true,
+    "nativeReadMaximumBytes": 4096,
+    "greetingMaximumBytesIncludingCrlf": 65536,
+    "overflowProbeAdditionalBytes": 1,
+    "jsonDepthMaximum": 8,
+    "packagePrintableAsciiMaximumCharacters": 1024,
+    "maximumCapabilities": 16,
+    "capabilityNameMaximumCharacters": 64,
+    "absoluteApplicationWindowSeconds": 5,
+    "deadlineAppliesAfterGreeting": true,
+    "backgroundTimerOrKernelDeadline": false,
+    "callerMustCloseOriginalAndOwnedResources": true,
+    "kernelBufferPythonObjectOverheadAndWholeControllerAccountingSeparate": true,
+    "fileOutputJournalDiskOrHostQuotaGrant": 0,
+    "connectionSendNegotiationOrLaunchMethods": false,
+    "privateOriginalFailureAndCloseOnceUncertainty": true,
+    "sameThreadEffectReentryRefused": true,
+    "originalOwnerNonSerializable": true,
+    "vmAuthorityAlwaysRefused": true
+  },
+  "verification": {
+    "nativeNormal": {
+      "tests": 22,
+      "seconds": 0.548,
+      "exitCode": 0,
+      "skips": 0,
+      "logSha256": "a9beb399a526b0f00319b6739501ac15579e4c5dbf014c6d08e35a24cc7376ae"
+    },
+    "nativeOptimized": {
+      "tests": 22,
+      "seconds": 0.508,
+      "exitCode": 0,
+      "skips": 0,
+      "logSha256": "26af6d72e677c7de9c9a5801de465227ef10a6441144dbf618218626f57bd312"
+    },
+    "focusedNormal": {
+      "tests": 136,
+      "seconds": 3.689,
+      "exitCode": 0,
+      "skips": 0,
+      "logSha256": "55f6e0256eac32bb801a150034659647d08fdb258465d49f3af4a488ae24fa91"
+    },
+    "focusedOptimized": {
+      "tests": 136,
+      "seconds": 3.758,
+      "exitCode": 0,
+      "skips": 0,
+      "logSha256": "cacc0bdaa26ee25070a419a337127d05f808a045ec5353478f9d55e9091df64b"
+    },
+    "explicitNonlive": {
+      "outerTests": 693,
+      "seconds": 30.072,
+      "historicalChildTests": 7,
+      "historicalChildSeconds": 7.103,
+      "exitCode": 0,
+      "skips": 0,
+      "logSha256": "c03b77670358c18512710276fa08540ca3da7283d303d64095c9cf8730478da5"
+    },
+    "historicalFixture": {
+      "harnessAndReferenceFiles": 77,
+      "protectedExactHistoricalGitInputs": 199,
+      "disjointnessAndExactSourceCheckedBeforeCopy": true,
+      "inventorySha256": "6ff7d34dacfd9e88c97f051a70916106c6a66a5fd251ba62f71d179757c11b16"
+    },
+    "qualifiedLocalTestRuntime": {
+      "python": "3.12.14",
+      "kernel": "6.18.57",
+      "architecture": "x86_64",
+      "peerType": "real child-created isolated Unix listener; separate inherited-listener counterexample",
+      "pve2QemuVmOrTracer": false
+    },
+    "pythonCompilationFiles": 3,
+    "gitDiffCheck": true,
+    "baselineByteEqualSafetyFiles": [
+      "controlled_observation.py",
+      "controlled_connected.py",
+      "controlled_supervisor.py",
+      "controlled_timestamps.py",
+      "packet_exporter.py",
+      "packet_receiver.py",
+      "host_report_custody.py",
+      "controller_cli.py",
+      "controller_main.py",
+      "build_controller.py"
+    ],
+    "firstStatementLaunchRefusals": 4
+  },
+  "independentReview": {
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "xhigh",
+    "fullSourceAndTestsAvailable": true,
+    "sourceStatus": "final source, documentation and evidence clear within cached-peer/greeting scope; no remaining findings",
+    "normal": {
+      "tests": 22,
+      "seconds": 0.484,
+      "exitCode": 0,
+      "skips": 0,
+      "logSha256": "452fa035c9cd79b21b64a3371f3d6d49b99a36dca5a3c21004f2daf5777dea20"
+    },
+    "optimized": {
+      "tests": 22,
+      "seconds": 0.498,
+      "exitCode": 0,
+      "skips": 0,
+      "logSha256": "7ff8d6ac98ca020eea47ad9bfc1c8c05fcf8b660e26e8ef58b1f1e95cd4927ac"
+    },
+    "resolvedFinding": "P2 same-thread reentrant close during final readiness poll could leave check_current returning closed; busy guards now cover fresh check and close with two native regressions",
+    "findingsRemaining": [],
+    "broaderEvidenceAndProtectedHistoricalInputsIndependentlyVerified": true
+  },
+  "preservedEarlierEvidence": {
+    "expandedLocalRun": {
+      "tests": 20,
+      "seconds": 0.511,
+      "failures": 1,
+      "logSha256": "c19dee027f6cf8f44fb6010ee53f242e7373234474fc309fb918b9eb832609a5",
+      "cause": "late queued unnegotiated bytes were not refused by fresh check; corrected quiescent checks and regression retained"
+    },
+    "priorCiFailuresAndSourcePinsNotReclassifiedOrChanged": true,
+    "heldChildPilotDownload": "unchanged exit1 download failed; no retry or alternate transfer"
+  },
+  "receivingCloudFact": {
+    "verifiedBy": "parent independent consumer",
+    "sourceCommit": "efd6c2ea4c06a93a51d3e4ce924d7b2c0b681b18",
+    "artifactSha256": "cb025ded500cfabfcf7b77bcb2d182ecd0199372043718fed8c9a76febdf5102",
+    "pilotExitCode": 0,
+    "verifyPilotExitCode": 0,
+    "payloadBytes": 16777216,
+    "payloadSha256": "080acf35a507ac9849cfcba47dc2ad83e01b75663a516279c8b9d243b719643e",
+    "indexBytes": 212,
+    "indexSha256": "c3e2aedd222732c37f6784524fcf75cb85914485df412586299a3a7a69547e04",
+    "sourceHashAndModeUnchanged": true,
+    "childTransferHostVmOrOriginalAuthorityProof": false
+  },
+  "remainingBlockers": [
+    "Installed protected original endpoint provider and exclusive-reader/full-connection-lifetime owner",
+    "Actual original cached-peer-to-managed-VM-generation binding, including QEMU daemonization/proxy/inherited-listener qualification",
+    "Original session/lane approval-consumption-revocation and durable lost-command-reply/recovery owner",
+    "Installed kernel/native API/interpreter/loader compatibility and trusted origin qualification",
+    "Approved private artifact/disposition/root/principal/quota/privacy/retention and full-evidence delivery policy",
+    "Guest physical/loaded-code/semantic closure and original bootstrap-connected in-memory capability continuity"
+  ],
+  "nextConcreteSourceAction": "Integrate only with a concrete protected original endpoint provider that binds the native peer to the managed VM generation and retains caller endpoint ownership; absent that provider remains unavailable, with no connects/commands/issuer granted. No repeat data pilot.",
+  "noHostSshVmControlPlaneConnectionDeploymentCredentialsNetworkSecurityMergeOrMetadataActions": true
+}

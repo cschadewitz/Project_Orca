@@ -13,6 +13,7 @@ TESTS = (
     'test_packet_receiver',
     'test_packet_exporter',
     'test_controller_cli',
+    'test_host_control_peer',
     'test_bootstrap_receipt_child',
     'test_child_stat_observations',
     'test_controlled_aggregate',
