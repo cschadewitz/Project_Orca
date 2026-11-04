@@ -126,6 +126,16 @@ commit (`release: vX.Y.Z` merged into `main`). No such candidate is selected her
 
 ## Candidate evidence ledger (unbound preparation)
 
+**4 November Windows desktop preparation:** the next personal desktop test targets
+Windows 11 in a fresh workspace. Windows 10 compatibility testing is excluded;
+Apple Silicon remains outside this release. This selects an OS/test scope, not an
+artifact, architecture, version or final candidate. Existing-install update/restore
+acceptance remains separate. The archive-format/review hold in #779 remains open;
+its stopped investigation is not resumed by packaging preparation. Durable pending
+approval and **Approved — Continue** recovery remain implementation/acceptance gaps
+tracked in #357. The stopped independent guard controller is not restarted, and
+the proposed narrower guard proof remains unapproved.
+
 **No offered platform set or candidate has been selected.** These are conditional slots
 from `packages/app/electron-builder.yml` at `267be3e`, not an offer or support claim.
 Instantiate one record per actually offered platform/architecture/file type after D1;

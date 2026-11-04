@@ -109,6 +109,14 @@ live/provider/host steps for a documentation review.
 
 ### Desktop workflow bundle probe
 
+For a manual Windows packaging rehearsal, select **Desktop → Run workflow →
+platform: windows** on the branch being tested. This runs only the existing Windows
+packaging leg (both x64 and arm64); it does not install or launch either artifact
+on Windows 11. The default `all` and release workflow calls retain all three
+platforms. Record the resolved source SHA, version, run/attempt, artifact file sizes
+and hashes before handing a package to a tester. A fresh-workspace Windows 11 test
+does not establish existing-install update, rollback, signing or guard acceptance.
+
 After `pnpm run build` and `pnpm --filter @orca/app run build:daemon`, run
 `node tools/probe-bundled-daemon.js` to reproduce the Desktop workflow's authenticated
 hello check. `desktop.yml` runs this helper on every platform before packaging; a
