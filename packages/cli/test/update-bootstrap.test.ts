@@ -1,10 +1,11 @@
 /** Real CLI consumers and authenticated closed read-only startup with disposable auth. */
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile, readdir, lstat } from "node:fs/promises";
+import { createServer, type Server } from "node:net";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
-import { ClosedUpdateWindow, provisionUpdateWindow } from "@orca/protocol/update-window";
+import { ClosedUpdateWindow, enterUpdateWriter, provisionUpdateWindow } from "@orca/protocol/update-window";
 import { bootstrapLocalOwner, openAuthDirectory } from "@orca/daemon";
 import { DaemonClient } from "../../app/src/client/daemon-client.js";
 import { LocalDaemonToken } from "../../app/src/client/auth.js";
@@ -13,7 +14,8 @@ import { fenceBoot, fenceDirectory, fenceHash, fenceWrite, acquireFirstRunFence 
 
 const roots: string[] = [],
   children: ChildProcess[] = [],
-  owners: ClosedUpdateWindow[] = [];
+  owners: ClosedUpdateWindow[] = [],
+  listeners: Server[] = [];
 afterEach(async () => {
   for (const child of children.splice(0))
     if (child.exitCode === null && child.signalCode === null) {
@@ -22,22 +24,132 @@ afterEach(async () => {
       await done;
     }
   for (const owner of owners.splice(0)) await owner.detach();
+  for (const server of listeners.splice(0))
+    if (server.listening) await new Promise<void>((done) => server.close(() => done()));
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
-async function fixture() {
-  const base = await mkdtemp(join(process.cwd(), "orca-cli-update-"));
-  roots.push(base);
-  const workspace = join(base, "workspace"),
-    control = join(base, "recovery");
-  await mkdir(workspace, { mode: 0o700 });
-  await mkdir(control, { mode: 0o700 });
-  await mkdir(join(workspace, ".orca"), { mode: 0o700 });
-  await writeFile(join(workspace, "orca.config.yaml"), "storeDir: .orca\n", { mode: 0o600 });
-  await provisionUpdateWindow(control, [workspace]);
-  const owner = new ClosedUpdateWindow(control);
-  owners.push(owner);
-  return { base, workspace, control, owner };
+type FixtureLayout = { base: string; workspace: string; control: string };
+async function fixture(beforeProvision?: (layout: FixtureLayout) => Promise<void>) {
+  for (let attempt = 0; ; attempt++) {
+    const base = await mkdtemp(join(process.cwd(), "orca-cli-update-"));
+    roots.push(base);
+    const workspace = join(base, "workspace"),
+      control = join(base, "recovery");
+    await mkdir(workspace, { mode: 0o700 });
+    await mkdir(control, { mode: 0o700 });
+    await mkdir(join(workspace, ".orca"), { mode: 0o700 });
+    await writeFile(join(workspace, "orca.config.yaml"), "storeDir: .orca\n", { mode: 0o600 });
+    const layout = { base, workspace, control };
+    await beforeProvision?.(layout);
+    try {
+      await provisionUpdateWindow(layout.control, [layout.workspace]);
+    } catch (error) {
+      // Production has awaited partial listener cleanup. Select another disposable
+      // identity only during initial provisioning, never after capture or child startup.
+      await rm(base, { recursive: true, force: true });
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt >= 4) throw error;
+      continue;
+    }
+    const owner = new ClosedUpdateWindow(layout.control);
+    owners.push(owner);
+    return { ...layout, owner };
+  }
 }
+/** Only for real contention injection: the cross-process fence itself keeps its fixed ports. */
+function fixtureSlots(root: string): number[] {
+  const start =
+    20000 +
+    (Number.parseInt(
+      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, fenceDirectory(root)])).slice(0, 8),
+      16,
+    ) %
+      5000) *
+      8;
+  return Array.from({ length: 8 }, (_, slot) => start + slot);
+}
+async function occupy(port: number) {
+  const server = createServer();
+  listeners.push(server);
+  await new Promise<void>((done, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port, exclusive: true, reusePort: false }, () => {
+      server.removeListener("error", reject);
+      done();
+    });
+  });
+  return server;
+}
+
+it("selects a fresh CLI fixture after initial contention and releases partially acquired slots", async () => {
+  let abandoned: FixtureLayout | undefined, blocker: Server | undefined;
+  const slots: number[] = [];
+  const f = await fixture(async (layout) => {
+    if (blocker) return;
+    abandoned = layout;
+    slots.push(...fixtureSlots(layout.workspace));
+    blocker = await occupy(slots[7]!);
+  });
+  expect(blocker?.listening).toBe(true);
+  expect(f.base).not.toBe(abandoned?.base);
+  await expect(lstat(abandoned!.base)).rejects.toMatchObject({ code: "ENOENT" });
+  f.owner.closeAdmission("a".repeat(64));
+  expect(await f.owner.capture()).toBe(true);
+  expect(f.owner.snapshot.phase).toBe("closed");
+  await expect(enterUpdateWriter(f.workspace)).rejects.toThrow();
+  await f.owner.detach();
+  await new Promise<void>((done) => blocker!.close(() => done()));
+  for (const port of slots) expect((await occupy(port)).listening).toBe(true);
+});
+
+it("bounds initial CLI fixture contention and cleans all exhausted trees", async () => {
+  const attempted: FixtureLayout[] = [];
+  const blockers = new Map<number, Server>();
+  await expect(
+    fixture(async (layout) => {
+      attempted.push(layout);
+      const port = fixtureSlots(layout.workspace)[7]!;
+      if (!blockers.has(port)) blockers.set(port, await occupy(port));
+    }),
+  ).rejects.toMatchObject({ code: "EADDRINUSE" });
+  expect(attempted).toHaveLength(5);
+  for (const layout of attempted) await expect(lstat(layout.base)).rejects.toMatchObject({ code: "ENOENT" });
+  for (const server of blockers.values()) expect(server.listening).toBe(true);
+});
+
+it("propagates non-contention provisioning refusal without selecting another CLI fixture", async () => {
+  const attempted: FixtureLayout[] = [];
+  await expect(
+    fixture(async (layout) => {
+      attempted.push(layout);
+      layout.control = layout.workspace;
+    }),
+  ).rejects.toThrow("Protected update window unavailable");
+  expect(attempted).toHaveLength(1);
+  await expect(lstat(attempted[0]!.base)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("does not resample a CLI fixture when a writer blocks capture after provisioning", async () => {
+  const f = await fixture();
+  const blocker = await occupy(fixtureSlots(f.workspace)[7]!);
+  f.owner.closeAdmission("a".repeat(64));
+  expect(await f.owner.capture()).toBe(false);
+  expect(f.owner.snapshot.phase).toBe("draining");
+  expect(blocker.listening).toBe(true);
+  expect((await lstat(f.base)).isDirectory()).toBe(true);
+});
+
+it("provisions 128 CLI fixtures with at most eight concurrent allocations", async () => {
+  await Promise.all(
+    Array.from({ length: 8 }, async () => {
+      for (let trial = 0; trial < 16; trial++) {
+        const f = await fixture();
+        expect(f.owner.snapshot.phase).toBe("open");
+        expect(f.owner.snapshot.roots.map((root) => root.path)).toEqual([f.workspace]);
+      }
+    }),
+  );
+});
+
 const cli = resolve("packages/cli/src/main.ts");
 it("actual auth/init CLI routes refuse before protected writes while help remains usable", async () => {
   const f = await fixture();
