@@ -28,6 +28,13 @@ on:
         type: string
         required: false
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platforms to package (Windows-only is preparation, not release acceptance).
+        type: choice
+        options: [all, windows]
+        default: all
+        required: true
 
 permissions:
   contents: read
@@ -39,31 +46,35 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  targets:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - id: select
+        env:
+          DESKTOP_EVENT_NAME: ${{ github.event_name }}
+          DESKTOP_PLATFORM: ${{ inputs.platform || 'all' }}
+        run: |
+          set -euo pipefail
+          matrix=$(node tools/desktop-matrix.js)
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+
   package:
+    needs: targets
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       # One platform failing is a fact about that platform, and the other two artifacts are
       # still worth having in the run's output while it is being diagnosed.
       fail-fast: false
-      matrix:
-        include:
-          - os: [self-hosted, linux, x64, homelab]
-            name: linux
-            cache_path: |
-              ~/.cache/electron
-              ~/.cache/electron-builder
-          - os: macos-latest
-            name: macos
-            cache_path: |
-              ~/Library/Caches/electron
-              ~/Library/Caches/electron-builder
-          - os: windows-latest
-            name: windows
-            # actions/cache expands ~ on Windows; it does not expand %LOCALAPPDATA%.
-            cache_path: |
-              ~\AppData\Local\electron\Cache
-              ~\AppData\Local\electron-builder\Cache
+      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
         with:
