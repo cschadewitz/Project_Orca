@@ -20,7 +20,7 @@
     "@orca/engine": "workspace:*",
     "@orca/protocol": "workspace:*",
     "@orca/store": "workspace:*",
-    "ws": "^8.22.0",
+    "ws": "^8.22.1",
     "yaml": "^2.9.1",
     "zod": "^4.6.7"
   },
