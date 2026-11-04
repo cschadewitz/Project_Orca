@@ -54,10 +54,11 @@ async function installed(fresh = false, prepare?: (f: Layout) => Promise<void>):
     const f = layout(await mkdtemp(join(process.cwd(), "orca-mac-startup-")));
     bases.push(f.base);
     for (const path of [f.home, f.appRoot, f.workspace]) await mkdir(path, { mode: 0o700 });
-    if (fresh) return f;
     try {
-      await provisionMacUpdateNamespace(f.control, [f.appRoot], backend());
-      await enrollMacUpdateRoots(f.control, [f.workspace], backend());
+      if (!fresh) {
+        await provisionMacUpdateNamespace(f.control, [f.appRoot], backend());
+        await enrollMacUpdateRoots(f.control, [f.workspace], backend());
+      }
       await prepare?.(f);
       return f;
     } catch (error) {
@@ -65,6 +66,39 @@ async function installed(fresh = false, prepare?: (f: Layout) => Promise<void>):
       if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt >= 4) throw error;
     }
   }
+}
+function fixturePort(identity: ReturnType<typeof fenceDirectory>, slot: number): number {
+  return (
+    20000 +
+    (Number.parseInt(
+      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, identity])).slice(0, 8),
+      16,
+    ) %
+      5000) *
+      8 +
+    slot
+  );
+}
+async function holdFixtureSlot(identity: ReturnType<typeof fenceDirectory>, slot: number): Promise<Server> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port: fixturePort(identity, slot), exclusive: true, reusePort: false }, resolve);
+  });
+  return server;
+}
+/** Probe before the scenario, never retry a startup outcome or change production ownership. */
+async function probeUnownedSlots(identities: ReturnType<typeof fenceDirectory>[]): Promise<void> {
+  const held: Server[] = [];
+  try {
+    for (const identity of identities)
+      for (let slot = 0; slot < 8; slot++) held.push(await holdFixtureSlot(identity, slot));
+  } finally {
+    for (const server of held) await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+async function prepareFirstLaunch(f: Layout): Promise<void> {
+  await probeUnownedSlots([fenceDirectory(f.appRoot)]);
 }
 /** Select an unowned fixture before moving anything. Mirror update-window's kernel-port
  * mapping only here: the moved app writer must not share slots with later enrollment.
@@ -77,29 +111,7 @@ async function prepareHomeMove(f: Layout): Promise<void> {
     fenceDirectory(f.workspace),
     ...(["appRoot", "workspace", "control"] as const).map((key) => ({ ...fenceDirectory(f[key]), path: moved[key] })),
   ];
-  const held: Server[] = [];
-  try {
-    for (const identity of identities) {
-      const start =
-        20000 +
-        (Number.parseInt(
-          fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, identity])).slice(0, 8),
-          16,
-        ) %
-          5000) *
-          8;
-      for (let slot = 0; slot < 8; slot++) {
-        const server = createServer();
-        await new Promise<void>((resolve, reject) => {
-          server.once("error", reject);
-          server.listen({ host: "127.0.0.1", port: start + slot, exclusive: true, reusePort: false }, resolve);
-        });
-        held.push(server);
-      }
-    }
-  } finally {
-    for (const server of held) await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
+  await probeUnownedSlots(identities);
 }
 async function launch(f: Pick<Layout, "appRoot" | "control">) {
   const startup = createManagedMacReplacementStartup({
@@ -128,11 +140,44 @@ async function recreate(path: string) {
 const enrolledPaths = (control: string) => inspectUpdateWindowRoots(control).roots.map((root) => root.path);
 
 it("provisions on a first launch and opens ordinary startup", async () => {
-  const f = await installed(true);
+  const f = await installed(true, prepareFirstLaunch);
+  await expect(lstat(f.control)).rejects.toMatchObject({ code: "ENOENT" });
   const { startup, outcome } = await launch(f);
   expect(outcome).toBe("ordinary");
   expect(startup.bootstrap.ordinaryAllowed).toBe(true);
   expect(enrolledPaths(f.control)).toEqual([f.appRoot]);
+});
+
+it("selects a fresh fixture before startup when a provisioning slot is occupied", async () => {
+  const candidates: Layout[] = [];
+  const f = await installed(true, async (candidate) => {
+    candidates.push(candidate);
+    if (candidates.length === 1) {
+      const held = await holdFixtureSlot(fenceDirectory(candidate.appRoot), 0);
+      closers.push(() => new Promise<void>((resolve) => held.close(() => resolve())));
+    }
+    await prepareFirstLaunch(candidate);
+  });
+  expect(candidates.length).toBeGreaterThan(1);
+  expect(f.base).not.toBe(candidates[0]?.base);
+  await expect(lstat(f.control)).rejects.toMatchObject({ code: "ENOENT" });
+  const { startup, outcome } = await launch(f);
+  expect(outcome).toBe("ordinary");
+  expect(startup.bootstrap.ordinaryAllowed).toBe(true);
+});
+
+it("keeps first-launch startup closed if a slot is occupied after fixture selection", async () => {
+  const f = await installed(true, prepareFirstLaunch);
+  const identity = fenceDirectory(f.appRoot);
+  const held = await holdFixtureSlot(identity, 0);
+  closers.push(() => new Promise<void>((resolve) => held.close(() => resolve())));
+  await expect(probeUnownedSlots([identity])).rejects.toMatchObject({ code: "EADDRINUSE" });
+  const { startup, outcome } = await launch(f);
+  expect(outcome).toBe("unknown");
+  expect(startup.bootstrap.ordinaryAllowed).toBe(false);
+  expect(startup.bootstrap.existingWorkAllowed).toBe(false);
+  expect(startup.resettable).toBe(false);
+  await expect(lstat(join(f.control, "enrolled.json"))).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it("resumes ordinary startup after Migration Assistant or Time Machine recreates every directory", async () => {
