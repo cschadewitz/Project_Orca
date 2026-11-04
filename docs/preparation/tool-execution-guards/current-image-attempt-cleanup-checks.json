@@ -1,0 +1,135 @@
+{
+  "record": "attempt-cleanup-transfer-first-error-checks",
+  "authority": "none",
+  "baseCommit": "c1018de914ae1e03cc93a2e6f7ace68275f2a804",
+  "mainPin": "f9e7225e59cfe6e83c539f2ce9922ad0677719f4",
+  "candidateHashes": {
+    "tools/owned-read-proof/controlled_supervisor.py": "cb5d043ddc6bbdaf5463a2e5f07cbe3a8f7a154fb269fb394109575a80729636",
+    "tools/owned-read-proof/test_attempt_cleanup.py": "34e026122b4260017c414e1e1c610c95f6ebdfaf8a389f7a35eeabe980fe156f",
+    "tools/owned-read-proof/test_finalizer_worker_guard.py": "7b3c17508f24bf8fb31e117cf94d1ff979c1fe47cf9dce2e788fffd98d3bb9f2",
+    "tools/owned-read-proof/test_retention_rollback.py": "86b387cb5361fe5070b0f426da8c7faf7c6a8b20500a6931126b202f848d4cf6",
+    "tools/owned-read-proof/check_nonlive.py": "1ec9f5262def813b1b39b8b443a7f8d758b12c65f0925e10733df09cf6569b4b",
+    "docs/preparation/tool-execution-guards/current-image-attempt-cleanup.md": "e501653001e1e93e5b99a621421e092245b6f275025399931ed46e4df9d2b33d"
+  },
+  "identity": {
+    "unchangedSourceControls": {
+      "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+      "tools/owned-read-proof/controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+      "tools/owned-read-proof/controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+      "tools/owned-read-proof/controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+      "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+      "tools/owned-read-proof/offline_cleanup.py": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+      "tools/owned-read-proof/current_image_inspection.py": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+      "tools/owned-read-proof/run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+      "tools/owned-read-proof/verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310",
+      "tools/owned-read-proof/legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca",
+      "tools/owned-read-proof/kernel_runtime_queries.py": "be492af65c37eab4a02859375ea66c88749ba8a038396283d14dfd0ffbe2c617",
+      "tools/owned-read-proof/controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+      "tools/owned-read-proof/build-controlled.mjs": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+      "pnpm-lock.yaml": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+      "package.json": "eebdc3c3f9d91ffe06f3f871fbf4309b66c02c55ca92e3e9bf95d8884e9f2f80",
+      "pnpm-workspace.yaml": "1a66b4ae3b971b09ddfc0b8b3452fd1593aae9294bb12e1688996bce00c86cd4",
+      "tsconfig.json": "e1ef9bdff1231e76824ee6cd75df5e2e4759430f20183fabb22a4b6c48c54375",
+      "tools/owned-read-proof/controlled_diagnostics.py": "61966f556d1ab891a56e94fd59d5696c7f0d8fa1ae51e53f63a98bca8896d314"
+    },
+    "outputIdentity": {
+      "controlled-build.json": {
+        "bytes": 48027,
+        "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+      },
+      "controlled-child.mjs": {
+        "bytes": 5713,
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+      },
+      "controlled-producer.mjs": {
+        "bytes": 2248652,
+        "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+      }
+    },
+    "currentFrozenInputs": 387,
+    "currentRepositoryInputs": 195,
+    "supervisorAST": "New AttemptCleanupFailures and changed observe only; all other nodes/imports/constants/pins/bounds unchanged",
+    "fourFirstExecutableRefusalsExact": true,
+    "diagnosticsModuleUnchanged": true,
+    "rebuild": false
+  },
+  "validation": {
+    "selection": "test_attempt_cleanup test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+    "newMethods": 14,
+    "newInertHelperMethods": 10,
+    "newSourceOnlyMethods": 4,
+    "priorMethods": 116,
+    "timeoutSeconds": 60,
+    "logs": {
+      "selected": {
+        "passed": 130,
+        "seconds": 0.187,
+        "exitCode": 0,
+        "path": "/tmp/orca-current-main-evidence/attempt-cleanup-selected.log",
+        "sha256": "dd22ae0d73ab70f4f875986b2459d019e0b3a49a1a0ad3d9791ec37136fa928f"
+      },
+      "independent-normal": {
+        "passed": 130,
+        "seconds": 0.203,
+        "exitCode": 0,
+        "path": "/tmp/orca-current-main-evidence/attempt-cleanup-independent-normal.log",
+        "sha256": "43b78074489d1b6916392b3ad36bf9a3221cea6259fe6755eea4164d832cf784"
+      },
+      "independent-optimized": {
+        "passed": 130,
+        "seconds": 0.207,
+        "exitCode": 0,
+        "path": "/tmp/orca-current-main-evidence/attempt-cleanup-independent-optimized.log",
+        "sha256": "22976264ca0e368a1de0e72bb8c318d2e180f8c9fc9e0257dd3ed3f31d839f19"
+      }
+    },
+    "ordinaryCI": "Pending publication; ordinary CI does not run this Python selection."
+  },
+  "scope": [
+    "Finite transferred pair/finalizer FD groups and optional original provenance owner",
+    "Normal and final owning slots cleared before helper attempts",
+    "First body error before first cleanup/finalization error, without exception formatting/truthiness",
+    "Worker uncertainty exits before transfer/disposal/write; all four entry guards unchanged",
+    "Eligible diagnostic/metadata stages continue after FD/provenance failures; raise_first precedes closed=True"
+  ],
+  "historicalBehaviorChange": "Failed historical observe raises retained original error after eligible cleanup/evidence attempts instead of returning refused ObservedRun. Current normal entry points remain unconditionally disabled.",
+  "notRun": [
+    "Full Python selector/real-query/self-pin/sampler tests",
+    "Real descriptors/host probes/threads/process-settlement tests",
+    "Historical physical regression/image builds",
+    "Historical body invocation/extraction/bypass",
+    "Live observer/tracer/provider/daemon, App Smoke, designation/activation/formal approval/merge"
+  ],
+  "remainingGates": [
+    "Early acquisition/start rollback",
+    "Inner run_traced error can be masked by diagnostics.stop before outer body capture",
+    "Worker send cleanup/error formatting",
+    "Diagnostic path error or intentional sampler uncertainty may retain resources",
+    "Metadata block stops at first failure; no atomic/durable bounded evidence",
+    "Concurrent lifecycle/immutable runtime and child/tracer/process settlement",
+    "Authenticated session, preventive containment and current-image qualification"
+  ],
+  "independentReviewOriginal": {
+    "path": "/tmp/orca-current-main-evidence/attempt-cleanup-independent-review.json",
+    "sha256": "663b3e86d9101cd33e2109715b4417d2b07f1d0dc72b2de95e1e88ad080dbc95"
+  },
+  "priorCI": {
+    "baseRun": 41290279626,
+    "baseOutcome": "Original tyler-2 attempt: 10,049 passed and two EADDRINUSE failures. One same-source failed-job retry on tyler-3 passed 10,051. Exact phases and listener owners unresolved.",
+    "baseFailureRecord": "/tmp/orca-current-main-evidence/finalizer-worker-ci-original.json",
+    "baseTerminalRecord": "/tmp/orca-current-main-evidence/finalizer-worker-terminal-ci.json",
+    "earlierRun": 41283402840,
+    "earlierOutcome": "Original three failures retained; one failed-job retry passed; latter two original causes unresolved"
+  },
+  "priorLocalFailure": "Prior finalizer source selector had eight passes and two failures; corrected selection and original full evidence remain retained. No failure in this new 130-method run.",
+  "metadataHold": "Previous PR-description mutation reason/denial classification unknown; no retry or workaround",
+  "independentReviewRepresentation": {
+    "path": "docs/preparation/tool-execution-guards/current-image-attempt-cleanup-review.json",
+    "sha256": "663b3e86d9101cd33e2109715b4417d2b07f1d0dc72b2de95e1e88ad080dbc95",
+    "originalBytes": 8673,
+    "formattedBytes": 8673,
+    "parsedJSONEqual": true,
+    "byteIdentical": true,
+    "note": "Prettier representation only; original retained separately."
+  }
+}

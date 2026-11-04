@@ -1,0 +1,153 @@
+{
+  "record": "independent-bounded-moved-home-fixture-review",
+  "reviewer": "/root/worker_privacy_review",
+  "baseCommit": "920c2ada3b1348ed06b50ca7b10bb85be10a0c67",
+  "candidate": {
+    "path": "packages/protocol/test/update-window.test.ts",
+    "sha256": "ac7e35c91e56ede0f3269d9a57097d8e43d3115fa3f7630c9ca2f12b0fb09af7",
+    "bytes": 34294
+  },
+  "candidateState": "One test-only source candidate independently inspected and executed once in separate exact-base worktree; root prepares docs separately. No reviewer candidate edits/publication.",
+  "reviewCoverage": "Full test-file delta, original home/moved-home scenario, production port/holdAll/reanchor path and Mac prepareHomeMove precedent; exact selected test/global setup effects. Not a production audit or original CI listener investigation.",
+  "sourceCorrespondence": {
+    "productionUnchanged": {
+      "packages/protocol/src/update-window.ts": "bf2d6b5bec7f80e6faf396c9efb3cc64653f5bc19234ef7f370d5aefb7ffc662",
+      "packages/protocol/src/first-run-fence.ts": "967574f4baf0e0f9688c8b9bd50e7fb82375f979595e493b465b3bf363570f4a",
+      "vitest.config.ts": "c34bb5f818478027c7cfc1609f546ddfc5fda12518e58bf6bccd272a9a40f389",
+      "vitest.global-setup.ts": "cd0a22e5dbc9258fca47c8cbb3e12b08abe0d0289499e5951085a2143271b36f",
+      ".github/workflows/ci.yml": "468f80a02b1163cfef01846f7592e1f7c8854bc0c51a7d9dc9d3ae02002c2c1c",
+      "tools/owned-read-proof/controlled_supervisor.py": "3e8e09e8e0f4d07273cd4d10488773970f7d97cbe80dc1d4f6977a94043a9f76",
+      "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+      "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+      "tools/owned-read-proof/controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+      "tools/owned-read-proof/controlled_diagnostics.py": "61966f556d1ab891a56e94fd59d5696c7f0d8fa1ae51e53f63a98bca8896d314",
+      "tools/owned-read-proof/build-controlled.mjs": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+      "tools/owned-read-proof/controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+      "pnpm-lock.yaml": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+      "package.json": "eebdc3c3f9d91ffe06f3f871fbf4309b66c02c55ca92e3e9bf95d8884e9f2f80",
+      "pnpm-workspace.yaml": "1a66b4ae3b971b09ddfc0b8b3452fd1593aae9294bb12e1688996bce00c86cd4",
+      "tsconfig.json": "e1ef9bdff1231e76824ee6cd75df5e2e4759430f20183fabb22a4b6c48c54375"
+    },
+    "originalScenario": "Byte-exact original test body except home() becomes home(prepareHomeMove); rename/reanchor/enrollment/refusal/writer assertions unchanged and outside admission retry.",
+    "bounds": "Same attempt>=4 cutoff means at most5 candidates; original test/hook bounds unchanged. Source finite union at most33 unique preflight ports; controlled tests hold1 blocker at a time, at most34owned listening servers. No alternate production ports/reuse settings/fence relaxation.",
+    "guards": "Four first-executable observer refusals, pins, diagnostic/observer source, image inputs/output bytes and workflow unchanged."
+  },
+  "assessment": {
+    "mapping": "Same production kernel-domain+identity hash, modulo5000, base20000 and8slots. Predicted path preserves dev/ino/uid and object field order; actual renamed identity/JSON correspondence tested. Old/future app/ws ranges and futurecontrol0 deduplicated.",
+    "admission": "Optional callback after provision/enroll and before home return. Only acquisition EADDRINUSE with no cleanup error can cause fresh disposable candidate under unchanged5cap. Original scenario never retried; no production/check assertion moved inside retry.",
+    "ownership": "Every server tracked before listen. Successful blocker handle remains listening across exactendpoint refusal assertions. Preparation attempts closing alltrackedservers in reverse order, including failedlisten object; ERR_SERVER_NOT_RUNNING tolerated for nonlistening/repeatedteardown. Any reported cleanup failure produces AggregateError without EADDRINUSE code, preventing resampling.",
+    "controlledEvidence": "Known reanchor failure matches exact address/port while blocker retained and4durablefiles unchanged. Resampling control captures ownheldendpoint error then asserts outside retry; cap requires5captured heldblockererrors and same finalexception. Unknown contention cannot masquerade as these controlled successes.",
+    "resolvedFindings": [
+      "Initial code-only failure checks strengthened to exact heldendpoint.",
+      "Initial cap blockers>0 and resample attribution gaps fixed: fiveownedfailures/exactendpoint+originalerroridentity, assertions outside retries."
+    ],
+    "limits": "Port may be shared with oldrange; no internal root acquisition order claim. Temporary reservations release before scenario and cannot eliminate external check/use race. Injected cleanupfailure runs realclose then throws: proves continuation/error/resampling policy, not release after actual OSclosefailure. No claim originalCIlistener/cause is identified or all socket contention fixed."
+  },
+  "independentValidation": {
+    "worktree": "/workspace/orca-moved-home-independent",
+    "head": "920c2ada3b1348ed06b50ca7b10bb85be10a0c67",
+    "dependencySetup": "12 links to existing frozen root/package node_modules; no install/build. Shared host/toolchain/dependency cache is a limitation.",
+    "environment": {
+      "path": "/tmp/orca-current-main-evidence/moved-home-independent-environment.json",
+      "sha256": "2224107b815e9d99b5c48d17db230592c8d7d34651655bb8e2bc898b7a0cf188"
+    },
+    "commandResult": {
+      "path": "/tmp/orca-current-main-evidence/moved-home-independent-result.json",
+      "sha256": "7aac7a1ae47700b56edbc1f2936d3b75c8757c0ae9af47aef46504a909155427"
+    },
+    "command": {
+      "cwd": "/workspace/orca-moved-home-independent",
+      "PATHPrefix": "/workspace/.orca-tools/node-v24.21.0-linux-x64/bin",
+      "argv": [
+        "timeout",
+        "--kill-after=5s",
+        "60s",
+        "/workspace/.orca-tools/node-v24.21.0-linux-x64/bin/node",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "packages/protocol/test/update-window.test.ts",
+        "--maxWorkers=1",
+        "--reporter=verbose",
+        "--testNamePattern",
+        "^(moved-home fixture (maps the renamed identities and deduplicates its finite ports|keeps a real moved-app blocker fail-closed without publication|resamples preparation contention before a single rename and reanchor|keeps the five-candidate cap with owned preparation blockers|propagates noncontention without another candidate|attempts every close and never resamples cleanup failure|refuses resampling when contention also has a cleanup failure)|follows a moved home: the app root is re-anchored and workspaces left behind are de-enrolled)$"
+      ],
+      "requires": "Parent verifies/copies exact candidate, coordinates no concurrent tests; no full-file selection."
+    },
+    "passed": 8,
+    "unselected": 26,
+    "vitestSeconds": 2.03,
+    "wallSeconds": 2.724,
+    "exitCode": 0,
+    "log": {
+      "path": "/tmp/orca-current-main-evidence/moved-home-independent-selected.log",
+      "sha256": "30521f961d085bbc1951dfef03645ced967bc206d39a6d41f0d55440c3ae4903"
+    },
+    "executions": 1,
+    "selectedTests": [
+      "moved-home fixture maps the renamed identities and deduplicates its finite ports",
+      "moved-home fixture keeps a real moved-app blocker fail-closed without publication",
+      "moved-home fixture resamples preparation contention before a single rename and reanchor",
+      "moved-home fixture keeps the five-candidate cap with owned preparation blockers",
+      "moved-home fixture propagates noncontention without another candidate",
+      "moved-home fixture attempts every close and never resamples cleanup failure",
+      "moved-home fixture refuses resampling when contention also has a cleanup failure",
+      "follows a moved home: the app root is re-anchored and workspaces left behind are de-enrolled"
+    ],
+    "fullFileOrSuiteRun": false,
+    "normalFixtureEffects": "Disposable own directories and normal production fenceBoot/fenceDirectory identity reads, real exclusive own loopback listeners. No host socket enumeration, external listener identification/termination, observer/tracer/provider/daemon/AppSmoke. Selected tests do not call child/spawn; global bundle compiler remains lazy/uninvoked.",
+    "postRun": "Only candidateTS differs in independent worktree; ownhomefixture directories removed; candidate and16protectedsource/config files exact.",
+    "currentImageInputsVerifiedBeforeAndAfter": 387,
+    "historicalProtectedInputsVerifiedReadOnly": 392,
+    "retainedOutputs": {
+      "controlled-build.json": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977",
+      "controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+      "controlled-producer.mjs": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+    },
+    "noImageBuildOrDesignation": true
+  },
+  "primaryEvidence": {
+    "result": {
+      "path": "/tmp/orca-current-main-evidence/moved-home-primary-result.json",
+      "sha256": "83fbd30d87c0471bb67ac9764cb9bac426bf1e6d4bff3eb7f52c1ce25d0eeee0"
+    },
+    "passed": 8,
+    "unselected": 26,
+    "vitestSeconds": 1.05,
+    "wallSeconds": 1.978,
+    "exitCode": 0
+  },
+  "pretestReview": {
+    "path": "/tmp/orca-current-main-evidence/moved-home-independent-pretest-review.json",
+    "sha256": "7c5caee72376d8e3e14b3732fdc3f299a9359b0bcda6a6e8528b87c409a8c8f4"
+  },
+  "priorFailures": "Original CI41293856721 EADDRINUSE and earlierCI/local failures preserved; this focused pass does not establish originallisteneridentity or retrospectively fix causes. No CIretry performed.",
+  "remainingGates": [
+    "Exact-head ordinary CI after reviewed publication remains separate.",
+    "Other CLI/Mac/first-run fixture failures and torn-state uncertainty remain unresolved.",
+    "Temporaryreservation-to-operation race and actualOScleanupfailure settlement are not eliminated.",
+    "No observer/current-image/runtime authority/containment/loadedclosure/live qualification or formal security approval.",
+    "Held metadata unknown classification and #779/#793/#794 restrictions remain binding."
+  ],
+  "findings": {
+    "blocking": [],
+    "conclusion": "No blocking finding for this scoped test-only fixture increment; successful realownedlistener controls support admission/cleanup semantics under stated bounds, not broadCI reliability."
+  },
+  "toolErrors": [
+    {
+      "action": "rg source definition lookup",
+      "target": "packages/protocol/src/workspace-fence.ts",
+      "exitCode": 2,
+      "stderr": "rg: packages/protocol/src/workspace-fence.ts: IO error for operation on packages/protocol/src/workspace-fence.ts: No such file or directory (os error 2)",
+      "classification": "Mistyped filename, not denial; imported first-run-fence.ts subsequently read."
+    },
+    {
+      "action": "rg global setup lookup",
+      "target": "tools/test/global-setup.ts",
+      "exitCode": 2,
+      "stderr": "rg: tools/test/global-setup.ts: No such file or directory (os error 2)",
+      "classification": "Mistyped filename, not denial; configured vitest.global-setup.ts subsequently read."
+    }
+  ],
+  "testErrors": [],
+  "excludedActions": "No CI actions/retries, metadata mutation/workaround, publication, productionguard/mapping/budget/security/access changes, observer/tracer/provider/daemon/AppSmoke, merge/activation or denied actions."
+}

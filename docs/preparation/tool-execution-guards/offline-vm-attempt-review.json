@@ -1,0 +1,156 @@
+{
+  "schema": "orca.offline-vm-attempt-independent-review/1",
+  "base": "d96b90a29820039ebec3f29503ef9c2915f14f37",
+  "scope": "Independent full review of new unintegrated specimen, all22new test methods and handoff; bounded review of unchanged inert model/cleanup dependency and13existing selected tests; one actual independent inert test selection. Test-created temporary files/FIFOs only. No historical launcher import/extraction/invocation, real worker/thread/process/probe, network/provider/host/API/credential access, CI, metadata, publication or repository edit by reviewer.",
+  "outcome": "No remaining blocking finding for local non-authoritative specimen handoff. Factory-local first-error findings corrected and independently tested. This does not clear publication, M1/M2 or runtime integration.",
+  "candidateFiles": [
+    {
+      "path": "/workspace/Project_Orca/tools/owned-read-proof/offline_vm_attempt.py",
+      "bytes": 8067,
+      "sha256": "86a367315b8260f29167629bbcc76a7769dcc19dcd08380a2c498061613691bc"
+    },
+    {
+      "path": "/workspace/Project_Orca/tools/owned-read-proof/test_offline_vm_attempt.py",
+      "bytes": 20413,
+      "sha256": "a7113d8232ee44245b6cc34b0cf26dce52ec8297894eff5c68c0c0473ed69cda"
+    },
+    {
+      "path": "/workspace/Project_Orca/docs/preparation/tool-execution-guards/offline-vm-attempt-specimen.md",
+      "bytes": 6406,
+      "sha256": "f98bad4d9df88ef0b11673c326ecb061d672737dacda36735dcf33096182fc81"
+    },
+    {
+      "path": "/workspace/Project_Orca/docs/preparation/tool-execution-guards/offline-vm-attempt-checks.json",
+      "bytes": 2895,
+      "sha256": "68133895568cd58f8414c90fbce6960ca5320ae406abb774c768b418cf5cbea2"
+    }
+  ],
+  "supportingEvidence": [
+    {
+      "path": "/tmp/orca-current-main-evidence/offline-vm-attempt-independent-static.json",
+      "bytes": 3500,
+      "sha256": "07dc7edcf89540b0536a1c9871eb4b430bfe8eba0c7c626f469ee6919023a629"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/offline-vm-attempt-independent-tests.log",
+      "bytes": 134,
+      "sha256": "1645052e396940f8fd5b471cafbf405472597baff2ac245839f166a913111be2"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/offline-vm-attempt-primary-tests.json",
+      "bytes": 6244,
+      "sha256": "606f28e8d9105a06590cebacaa3eee9491fcfb4a169da560a46741801f17ea8b"
+    }
+  ],
+  "findingsResolved": [
+    {
+      "finding": "FileFixture.reserve finally-close could mask original fsync exception.",
+      "resolution": "Except path now attempts close once and bare-reraises original; success path close failure still refuses. New injected regression performs actual ownedFD close then raises secondary and checks first exception identity/no retry."
+    },
+    {
+      "finding": "FileFixture.create rollback close could mask original descriptor-registration exception.",
+      "resolution": "Factory catches secondary close failure and reraises original registration error. Added actual syntheticFD regression closes then raises and checks original private error; no secondary disposal retry."
+    }
+  ],
+  "reviewCoverage": {
+    "transitions": "Finite five-event normal order, optional uncertainty after acknowledged reservation and before terminal completion. Invalid type/order/duplicates/reentrancy and failures set absorbing uncertainty before further fixture effects. No load/resume/ID/receipt/command API or automatic retry. Second model over same fixture refuses reservation.",
+    "lostAcknowledgment": "Publication may precede directory sync/close/ack failure; files remain and model does not resend/overwrite/recreate capability. No ambiguous store retry to write an uncertainty record. Explicit terminal uncertainty is model input, not durable first-error proof.",
+    "prewriteAccounting": "Closed frames contain no arbitrary payload. Exact synthetic410bytes conservatively charge both temporary and published copies of all six frames;13names include empty reservation and two names per frame. Shortwrites must make positive bounded progress; zero,bool,negative,oversize and exceptions refuse. Reservation is memory/marker bookkeeping, not disk preallocation/quota or production allowance.",
+    "firstFailure": "PrivateFirstFailure retains first exact BaseException withoutstr/repr; write-vs-close and factory rollback precedence reviewed. Returned handle consumed before one close attempt. Unreturned resource cleanup remains factory responsibility; failures can leave uncertain resources and no acknowledged durable failure record.",
+    "privacy": "Frames fixed ASCII schema, report fixed fields and bounded model count, no authority/settlement/custody/media success. Serialization refuses. Private exception object may retain traceback/state in memory; this is not process-isolated secrecy or durable custody.",
+    "filesystemFixture": "FileFixture exists only in tests. Exclusive nofollow creation, create-only link, sync/close ordering, preserved partial bytes, real lostack, duplicate reservation, symlink/FIFO collisions at reservation/temp/final names, and ordinary-file directoryFD refusal are covered. Parent/root FD is trusted TemporaryDirectory setup; unsafe ownership/mode/ancestor replacement/races/hostile same-process callers and actual crash/media outcomes are NOT qualified.",
+    "authorityAndIntegration": "Specimen imports only enum and existing pure first-error model; dependency imports offline_cleanup/dataclasses. Mutable objects and trusted injected methods are not a security capability. No observer integration/selector/launch adapter introduced. Manual pve2 console custody and serial path remain unimplemented direction, not authenticated issuer or transport."
+  },
+  "independentTests": {
+    "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_offline_vm_attempt test_offline_attempt_model",
+    "cwd": "/workspace/Project_Orca/tools/owned-read-proof",
+    "exitCode": 0,
+    "passed": 35,
+    "new": 22,
+    "existing": 13,
+    "unittestSeconds": 0.021,
+    "toolWallSeconds": 0.064113019,
+    "executionCount": 1,
+    "notRun": "No optimized rerun/full selector/historical fixture/runtime tests or broad checks. No extra tests necessary after selected success."
+  },
+  "baselineAndControls": {
+    "trackedDiffFromBase": "",
+    "unchangedControls": [
+      {
+        "path": "/workspace/Project_Orca/tools/owned-read-proof/controlled_supervisor.py",
+        "bytes": 50605,
+        "sha256": "3e8e09e8e0f4d07273cd4d10488773970f7d97cbe80dc1d4f6977a94043a9f76",
+        "matchesBase": true
+      },
+      {
+        "path": "/workspace/Project_Orca/tools/owned-read-proof/controlled_observation.py",
+        "bytes": 6999,
+        "sha256": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+        "matchesBase": true
+      },
+      {
+        "path": "/workspace/Project_Orca/tools/owned-read-proof/offline_attempt_model.py",
+        "bytes": 5788,
+        "sha256": "dea121f343b369140f06e1006ac75ec5a629218660977a625e737c39aa9259ec",
+        "matchesBase": true
+      },
+      {
+        "path": "/workspace/Project_Orca/tools/owned-read-proof/offline_cleanup.py",
+        "bytes": 3710,
+        "sha256": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+        "matchesBase": true
+      },
+      {
+        "path": "/workspace/Project_Orca/tools/owned-read-proof/test_offline_attempt_model.py",
+        "bytes": 8946,
+        "sha256": "4d201ed5e1906a68851c2e789172f27a3f13ca57432363e9de5ff5b19a447d9e",
+        "matchesBase": true
+      }
+    ],
+    "firstExecutableGuards": [
+      {
+        "module": "controlled_supervisor.py",
+        "function": "observe",
+        "firstExecutable": "raise RuntimeError('non-live preparation: observer launch disabled')"
+      },
+      {
+        "module": "controlled_supervisor.py",
+        "function": "bootstrap",
+        "firstExecutable": "raise RuntimeError('non-live preparation: observer launch disabled')"
+      },
+      {
+        "module": "controlled_observation.py",
+        "function": "observe_new",
+        "firstExecutable": "raise RuntimeError('non-live preparation: observer launch disabled')"
+      },
+      {
+        "module": "controlled_observation.py",
+        "function": "diagnose_bootstrap",
+        "firstExecutable": "raise RuntimeError('non-live preparation: observer launch disabled')"
+      }
+    ],
+    "imageEvidence": "No image builder/source/pin or any existing tracked file changed. Prior retained image artifacts absent in this session and not independently rehashed/rebuilt; no loaded-code or physical image continuity claim."
+  },
+  "checksFileConsistency": "All three exact file hashes,410/13 fixture envelope,35primary tests0.026s exit0 and no-runtime/source-only limitations match observed evidence. Parent AST/tabnanny/format claims are reported primary checks, not rerun by reviewer. No unavailable external Python linter installed.",
+  "completeReviewErrors": [
+    {
+      "action": "Initial authorized test command with log redirection",
+      "exitCode": 1,
+      "completeDiagnostic": "/bin/bash: line 1: /tmp/orca-current-main-evidence/offline-vm-attempt-independent-tests.log: No such file or directory\n",
+      "classification": "Shell failed before timeout/Python/test execution. Missing scratch path, not test failure or denial. Created only permitted scratch directory then ran one actual test selection."
+    },
+    {
+      "action": "Scoped scratch/source directory check",
+      "completeDiagnostic": "ls: cannot access '/tmp/orca-current-main-evidence': No such file or directory\n",
+      "classification": "Missing exactscratchpath confirmed; later independent ls completed and enclosing command exit0. No prior artifact reconstruction or authority inference."
+    }
+  ],
+  "remainingBlockers": [
+    "No actual owner allocation/private retention destination or physical capacity reservation.",
+    "No authenticated issuer/purpose-bound transport/surviving recovery-owner integration; manual console or proposed serial channel is insufficient.",
+    "No preventative containment or immutable actual-loaded runtime closure.",
+    "No actual process settlement,current-source designation or bootstrap-connected capability continuity.",
+    "Publication remains pending parent clearance; reviewer made no repository or external mutation."
+  ],
+  "priorHolds": "All four launchguards/pins/bounds, #779/#793/#794, noAppSmoke/live/security/access/merge/activation and held metadata/document-fetch restrictions remain binding."
+}

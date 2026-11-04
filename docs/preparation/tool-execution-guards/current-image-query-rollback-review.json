@@ -1,0 +1,91 @@
+{
+  "record": "bounded-independent-actual-query-rollback-review-with-injected-dependencies",
+  "reviewer": "/root/independent_review",
+  "baseCommit": "f68df5026a7d8e282ba170ccd0af1e89572f636b",
+  "candidateState": "Uncommitted preparation source delta, exact hashes below; no candidate source edits or publication by reviewer.",
+  "candidateFiles": {
+    "tools/owned-read-proof/kernel_runtime_queries.py": "be492af65c37eab4a02859375ea66c88749ba8a038396283d14dfd0ffbe2c617",
+    "tools/owned-read-proof/test_query_rollback.py": "ff69a71f147d390a59de4b82e216ae8cb4632da7d599d108873ef49f8ae0bc8d",
+    "tools/owned-read-proof/check_nonlive.py": "3f14e72f15a6608704a4f255103d6f3237235b1961c83454b0fc263ce8e2cf47",
+    "docs/preparation/tool-execution-guards/current-image-query-rollback.md": "e0afd6e4294ea8f8af68e1248ebf36cdf3e4b912d360c22699991484af457f5e"
+  },
+  "reviewCoverage": "Complete actual kernel_runtime_queries.py diff, full 16-method injected test module, selector addition, full query rollback/private protocol document, and source of the selected pure NativeReplayControls/helper fixtures. Actual functions were exercised only through injected dependencies. Not a whole-stack, real-kernel, formal security or live qualification audit.",
+  "sourceCorrespondence": {
+    "onlyChangedModuleFunction": "open_exact",
+    "onlyChangedClassMethods": ["__init__", "retain", "close"],
+    "importsUnchanged": true,
+    "QUERIESAstUnchanged": true,
+    "otherModuleFunctionsAndClassMethodsAstUnchanged": true,
+    "newObserverDependency": false,
+    "newMeasuredSourceHashRequired": true
+  },
+  "assessment": {
+    "walker": "Ownership variable transfers to child before predecessor close. If predecessor close fails, its number is not retried; still-owned child/current handle is attempted once. If rollback also fails, primary exception identity is preserved and no descriptor returns. Original path grammar and flags retained.",
+    "constructor": "Tracking/private fields initialized before wrapped metadata/query setup. Every registered descriptor is drained after constructor failure, including one whose post-acquisition validation failed. Original constructor exception identity is retained and re-raised without conversion even after cleanup failure.",
+    "registration": "retain reserves None slot before acquisition; failed reservation invokes no open, failed open leaves a consumable empty slot, returned handle replaces existing slot before validation. Ordinary trusted list/single-threaded behavior assumed; no arbitrary mutation/interruption safety claim.",
+    "close": "Pop before each close prevents retry of consumed numeric FDs. All registered handles attempted despite failures; first cleanup exception retained privately; fixed public uncertainty text. Repeated close does not retry old handles but still drains newly registered handles, avoiding a terminal-success cache incompatibility with unchanged later-adoption paths.",
+    "privacyAndProtocol": "Exception objects/tracebacks remain private in-memory state, not durable storage. Proposed protocol covers origin/session, private destination, content/bounds, first-error precedence, commit uncertainty and retention, explicitly unimplemented. No source hash/report/record becomes authority.",
+    "scopePreservation": "No bind_leader/worker/diagnostic lifecycle edits, no new import, query/mount/identity checks unchanged. All four launch refusals and legacy source pins unchanged; image inputs/bytes unchanged."
+  },
+  "independentValidation": {
+    "checkout": "/workspace/orca-independent-current-rebuild",
+    "checkoutCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+    "candidatePythonFilesCopiedExactly": 48,
+    "disjointFromDeclaredImageInputs": true,
+    "harnessSnapshot": {
+      "path": "/tmp/orca-current-main-evidence/query-rollback-independent-harness.json",
+      "sha256": "4f05368130901cb0f8568eb1affa0990ac9012e6b51f6008df4035b849a619e4"
+    },
+    "declaredBuildInputsVerifiedBeforeAndAfter": 387,
+    "candidatePythonUnchangedAfterTests": true,
+    "selection": "test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+    "methodBreakdown": {
+      "newActualFunctionsInjected": 16,
+      "pureNativeReplay": 10,
+      "inertAttemptModel": 13,
+      "injectedCleanupPrivacy": 18
+    },
+    "commands": [
+      "timeout --kill-after=5s 60s python -B -m unittest -v test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+      "timeout --kill-after=5s 60s python -B -O -m unittest -v test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy"
+    ],
+    "workingDirectory": "/workspace/orca-independent-current-rebuild/tools/owned-read-proof",
+    "normal": {
+      "passed": 57,
+      "seconds": 0.05,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/query-rollback-independent-normal.log",
+      "sha256": "f143fda116d6b41477d889e80d9d9e516c794e0b6525ee6e5928b5ac99a2ecbd"
+    },
+    "optimized": {
+      "passed": 57,
+      "seconds": 0.059,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/query-rollback-independent-optimized.log",
+      "sha256": "73e002691c5472f804d15b24740c70f82d90f8e140735ebedb821509b69c3830"
+    },
+    "executionBoundary": "Actual open_exact/constructor/retain/close functions execute with FakeOS/FakePath and injected namespace/filesystem probes. Selected NativeReplayControls use synthetic traces/objects. No host query descriptors, live procfs, ctypes probe, image build, worker/process/tracer, historical-body invocation/extraction or bypass.",
+    "notRun": [
+      "Full check_nonlive selector",
+      "KernelProvenanceControls real-query methods",
+      "Historical physical image regression/new image builds",
+      "Real leader binding, diagnostics construction, worker/process settlement",
+      "App Smoke or live observation"
+    ]
+  },
+  "findings": {
+    "blockingCodeOrDocumentationFindings": [],
+    "conclusion": "Selected actual rollback paths address the documented ownership/first-error defects without changing their identity validation or live authority boundary."
+  },
+  "remainingGates": [
+    "bind_leader pidfd/procfd append-after-open windows and worker/provenance transfer remain unchanged and unqualified.",
+    "Diagnostic constructor, lock/pipe/probe setup, worker startup/shared resource and supervisor settlement gaps remain.",
+    "OS close failure may leave resources unreleased; callback return and injected handle accounting are not physical closure proof.",
+    "Durable bounded private first-failure protocol is a design outline only; no persistence implementation or guarantees.",
+    "Authenticated original session, preventive containment, loaded-runtime closure, original bootstrap-to-connected qualification and current designation remain absent.",
+    "Prior CI three failures remain preserved despite parent-reported passing retry; not independently reclassified or rerun by reviewer.",
+    "PR-description metadata hold and #779/#793/#794/forbidden lookup restrictions remain binding."
+  ],
+  "outcome": "No blocking finding for this focused non-live preparation delta. Not formal security approval, current designation, live authorization or merge approval.",
+  "excludedActions": "No candidate edits, host query probe, observer/tracer/provider/daemon/App Smoke, historical-body execution/extraction, image build/launch, source-pin/limit/security/credential changes, forbidden lookup/denied route, metadata mutation/retry/workaround, CI action, merge or publication by reviewer."
+}

@@ -1,0 +1,124 @@
+{
+  "record": "injected-diagnostic-pin-reader-rollback-checks",
+  "authority": "none",
+  "baseCommit": "d657abf644bcc31ae7febb16400dcb474ec0c939",
+  "mainPin": "f9e7225e59cfe6e83c539f2ce9922ad0677719f4",
+  "candidateHashes": {
+    "tools/owned-read-proof/controlled_diagnostics.py": "6b5899d3d1c078b22c178fc3437156b957b88220e2808f793184e17a02399cb1",
+    "tools/owned-read-proof/test_diagnostic_rollback.py": "2be0a5d33c16458d60cf5894aee613abd980670a0d47607cf02fc09d0ea45149",
+    "tools/owned-read-proof/check_nonlive.py": "e34f30329da4928aaedfa2757e85a7d7d01e0bb97c6b0474b4ef5f8e56503236",
+    "docs/preparation/tool-execution-guards/current-image-diagnostic-rollback.md": "5ac95bee9b0f16bb6fd628ceef8efac5a738a7e196e350cbcbac928975184f10"
+  },
+  "unchangedSourceControls": {
+    "tools/owned-read-proof/controlled_supervisor.py": "dcce704ec9d4e4a5697b889caa10e556f9c8dc9bcc8ae7b0fcc90a1fdcd44dba",
+    "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+    "tools/owned-read-proof/controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+    "tools/owned-read-proof/controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+    "tools/owned-read-proof/controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+    "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+    "tools/owned-read-proof/offline_cleanup.py": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+    "tools/owned-read-proof/current_image_inspection.py": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+    "tools/owned-read-proof/run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+    "tools/owned-read-proof/verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310",
+    "tools/owned-read-proof/legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca",
+    "tools/owned-read-proof/kernel_runtime_queries.py": "be492af65c37eab4a02859375ea66c88749ba8a038396283d14dfd0ffbe2c617",
+    "tools/owned-read-proof/controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+    "tools/owned-read-proof/build-controlled.mjs": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+    "pnpm-lock.yaml": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+    "package.json": "eebdc3c3f9d91ffe06f3f871fbf4309b66c02c55ca92e3e9bf95d8884e9f2f80",
+    "pnpm-workspace.yaml": "1a66b4ae3b971b09ddfc0b8b3452fd1593aae9294bb12e1688996bce00c86cd4",
+    "tsconfig.json": "e1ef9bdff1231e76824ee6cd75df5e2e4759430f20183fabb22a4b6c48c54375"
+  },
+  "unchangedAST": [
+    "counters",
+    "proc_fields",
+    "PinnedProcess.sample",
+    "entire SparseDiagnostics class",
+    "all imports",
+    "all top-level assignments including CONFIG and limits"
+  ],
+  "outputIdentity": {
+    "controlled-build.json": {
+      "bytes": 48027,
+      "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+    },
+    "controlled-child.mjs": {
+      "bytes": 5713,
+      "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+    },
+    "controlled-producer.mjs": {
+      "bytes": 2248652,
+      "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+    }
+  },
+  "imageIdentity": "Retained native outputs rehashed. No rebuild, image execution, physical regression rerun or designation. Measured controlled_diagnostics.py source hash changes; all image inputs and legacy pins remain unchanged.",
+  "verifiedInputs": {
+    "currentFrozenInputs": 387,
+    "currentRepositoryInputs": 195,
+    "historicalProtectedInputs": 392,
+    "historicalHarnessCopied": false,
+    "historicalTestsRun": false
+  },
+  "validation": {
+    "selected": {
+      "passed": 73,
+      "seconds": 0.062,
+      "exitCode": 0,
+      "breakdown": {
+        "newInjectedDiagnostic": 16,
+        "injectedQueryRollback": 16,
+        "pureNativeReplay": 10,
+        "inertAttemptModel": 13,
+        "cleanupPrivacy": 18
+      },
+      "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy -v",
+      "workingDirectory": "/workspace/Project_Orca/tools/owned-read-proof",
+      "log": {
+        "path": "/tmp/orca-current-main-evidence/diagnostic-rollback-selected.log",
+        "sha256": "460667ca776d0577cb564d8e17d97a7884113df24173572bd94c3c020db1c64d"
+      }
+    },
+    "independent": {
+      "normalPassed": 73,
+      "normalSeconds": 0.063,
+      "optimizedPassed": 73,
+      "optimizedSeconds": 0.108,
+      "boundary": "Same explicit injected/pure selection; separate checkout, same host; no probes or builds"
+    },
+    "ordinaryCI": "Pending publication; ordinary CI does not run this Python selection."
+  },
+  "independentReviewOriginal": {
+    "path": "/tmp/orca-current-main-evidence/diagnostic-rollback-independent-review.json",
+    "sha256": "218227042d2f1bcf81da144011fbfbceefad6f04960308b2fce55cf50cfc3775"
+  },
+  "notRun": [
+    "Full check_nonlive.py",
+    "Whole test_controlled_diagnostics (real self pins, cgroup counters and sampler threads)",
+    "Real-query KernelProvenanceControls methods",
+    "Historical physical image regression, image builds",
+    "Historical launcher invocation/extraction/bypass; live observer/tracer/provider/daemon; App Smoke",
+    "Designation, activation, formal approval, merge"
+  ],
+  "remainingGates": [
+    "SparseDiagnostics bind dictionary adoption, outer constructor resource rollback, sampler and final retention cleanup",
+    "Existing private diagnostic error string formatting and publication remain unchanged",
+    "Leader-handle adoption, shared worker/process ownership and settlement",
+    "Durable bounded private evidence: prior protocol outline only",
+    "Authenticated session, preventive containment, loaded-runtime closure, bootstrap-to-connected/current-image qualification"
+  ],
+  "priorCI": {
+    "baseRun": 41285613112,
+    "baseResult": "first attempt passed on tyler-3",
+    "earlierRun": 41283402840,
+    "earlierHistory": "Original three failures preserved; one retry passed; latter two original causes unresolved"
+  },
+  "metadataHold": "No PR description retry or alternate account/endpoint/comment route; prior error reason/denial classification remains unknown.",
+  "independentReviewRepresentation": {
+    "path": "docs/preparation/tool-execution-guards/current-image-diagnostic-rollback-review.json",
+    "sha256": "1ef30ba7fd69bfdaa997ace5009b35e2ae50dac12cfa5ecbfd07b9d2f3cf2da1",
+    "originalBytes": 7448,
+    "formattedBytes": 7424,
+    "parsedJSONEqual": true,
+    "note": "Prettier formatting only; original review retained unchanged."
+  }
+}

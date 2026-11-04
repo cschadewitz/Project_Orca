@@ -1,0 +1,25 @@
+{
+  "record": "cloud-only-nonsecret-custody-delivery-probe",
+  "authority": "none",
+  "bytes": 165,
+  "sha256": "0b13608eccc53b041b5a3967dda59501992cc843b8eb4537d953d99932d739ad",
+  "library_file_id": "libfile_118352ba0c8881918063f24d13cc1852",
+  "file_id": "file_0000000048b48230955c59f1ae5c3fd2",
+  "uploadConfirmed": true,
+  "byteMaterializationConfirmed": true,
+  "materializationFailureCode": "library file transfer failed: download failed",
+  "retried": false,
+  "pve2OrGuestTransportTested": false,
+  "privateEvidenceExported": false,
+  "capabilityTransferred": false,
+  "localMaterializationConfirmed": false,
+  "independentConsumer": {
+    "verifiedBy": "parent-side consumer",
+    "materializedThrough": "current supported Library route",
+    "attributesApplied": true,
+    "bytes": 165,
+    "sha256": "0b13608eccc53b041b5a3967dda59501992cc843b8eb4537d953d99932d739ad",
+    "crossExecutorCloudFileToAssistantVerified": true,
+    "qualification": "fixed nonsecret small cloud file only; not pve2, guest, user-upload limits, large/private evidence transfer or live authority"
+  }
+}

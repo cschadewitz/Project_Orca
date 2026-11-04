@@ -1,0 +1,106 @@
+{
+  "scope": "Local actual-source failure precedence and unsafe-disposal classification; no publication or live qualification",
+  "base": "9d6cfe312493781e6578815260437a87de3b5005",
+  "files": [
+    {
+      "path": "tools/owned-read-proof/run.py",
+      "sha256": "7da1b70daa7d099ba6da84049a7b426633bfe41ce4eebbe4a131dd8b5c2edfc4"
+    },
+    {
+      "path": "tools/owned-read-proof/test_traced_failure_privacy.py",
+      "sha256": "7d34fa6a7fde3ff7eade8f2fb37148be6fa5b8d01dd3d2d2afa065dec762f64c"
+    },
+    {
+      "path": "docs/preparation/tool-execution-guards/traced-failure-preservation.md",
+      "sha256": "c7b2211562e2201aef01838e3235bab42de34b07cc48ba621d60d56e93e425c4"
+    }
+  ],
+  "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_traced_failure_privacy test_traced_disposal_gate test_attempt_cleanup test_finalizer_worker_guard test_stop_error_precedence test_worker_error_privacy -v",
+  "cwd": "tools/owned-read-proof",
+  "primaryRuns": [
+    {
+      "passed": 74,
+      "newTests": 20,
+      "adjacentTests": 54,
+      "seconds": 0.202,
+      "exitCode": 0,
+      "note": "Initial selection before adding explicit falsey-error test."
+    },
+    {
+      "passed": 75,
+      "newTests": 21,
+      "adjacentTests": 54,
+      "seconds": 0.225,
+      "exitCode": 0,
+      "note": "After explicit falsey test, before conservative ambiguous-start refinement."
+    },
+    {
+      "passed": 75,
+      "newTests": 21,
+      "adjacentTests": 54,
+      "seconds": 0.237,
+      "exitCode": 0,
+      "note": "After conservative ambiguous-start refinement, before active-handler serialization context hardening."
+    },
+    {
+      "passed": 76,
+      "newTests": 22,
+      "adjacentTests": 54,
+      "seconds": 0.198,
+      "exitCode": 0,
+      "note": "Final source including from-None serialization refusals and active-handler privacy regression."
+    }
+  ],
+  "staticChecks": [
+    "Python AST and tabnanny passed.",
+    "Both complete observation source files, including all four launch guards and prior disposal gate, byte-identical to baseline.",
+    "Prior inert VM specimen and its tests byte-identical to baseline.",
+    "proof_directory, require_exitkill, install and main ASTs unchanged.",
+    "Original launch, communicate, kill/wait/reap, clock, prctl and timeout-pop call ASTs unchanged.",
+    "UTF-8, LF, final newline, trailing whitespace, local Markdown links and git diff --check passed."
+  ],
+  "pythonExternalLint": "Not run: no configured root Python linter or installed ruff/pycodestyle from earlier inspection; no tool installation.",
+  "testBoundary": "Actual run_traced under complete strict replacement of ctypes, subprocess, OS, signal and clock modules. Other effectful references forbidden. Actual proof_directory with inert filesystem adapters. No real prctl/process/thread effects.",
+  "notRun": [
+    "test_cleanup.py, including its reaped-leader case with real ctypes/prctl, and all historical physical test selectors.",
+    "Observe/bootstrap historical body invocation, extraction, compilation or bypass.",
+    "Live host/network/process/thread/observer/tracer/provider/daemon tests, App Smoke, image rebuild, CI or external mutation."
+  ],
+  "limitations": [
+    "Detection order is synchronous body, settlement, stdout, stderr, restoration, not global chronology.",
+    "Unsafe classification and exact first error are in-process only; arbitrary object inspection is not prevented. No traceback serialization or durable first-error storage.",
+    "Early ambiguous Popen acquisition now conservatively preserves the directory through unsafe classification, without an original handle or invented cleanup. Initial prctl ambiguity, real process settlement, restoration recovery and surviving original custody remain unqualified.",
+    "Existing standalone sequential child ownership assumption, waitpid scope, five-second windows and all launch controls are preserved; no new unrelated child handling."
+  ],
+  "toolErrors": [
+    {
+      "action": "Search included missing .agents directory",
+      "result": "rg: .agents: No such file or directory (os error 2)",
+      "exitCode": 2,
+      "classification": "Missing local directory, not denial."
+    },
+    {
+      "action": "Combined source read exceeded display budget",
+      "result": "Output truncated; relevant actual run_traced and physical cleanup test sources were available in bounded reads.",
+      "classification": "Display limitation, not denial."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "/tmp/orca-current-main-evidence/traced-failure-primary-1.json",
+      "sha256": "3deb826192a3f31210d72431a4eacc053dce6ed9aff79939d4178fcdc23fbb42"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/traced-failure-primary-2.json",
+      "sha256": "c85a419d78d89bd2328f7a9e8ac69361739ee692b30c7544ac6532fc2b4f574e"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/traced-failure-primary-3.json",
+      "sha256": "44366009a79bb8335da7ea1221a75aabcfe4596ad7a76c30f4d248e4922fc30c"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/traced-failure-primary-4.json",
+      "sha256": "4443bfe3e8952c70625cbe9daafb2569bb03ac41d1a50ba5538adb7810a56ca3"
+    }
+  ]
+}

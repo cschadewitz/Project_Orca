@@ -1,0 +1,80 @@
+{
+  "record": "bounded-independent-offline-cleanup-and-public-projection-review",
+  "reviewer": "/root/independent_review",
+  "baseCommit": "7c4113d1425d68ed5b104e80260c3a99ddb1319e",
+  "candidateState": "Uncommitted preparation delta identified by file hashes; reviewer did not publish or edit repository candidate.",
+  "candidateFiles": {
+    "tools/owned-read-proof/offline_cleanup.py": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+    "tools/owned-read-proof/current_image_inspection.py": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+    "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+    "tools/owned-read-proof/test_offline_cleanup_privacy.py": "82d09e64cf47b43e6211883690b5f4ca51c6f237240eebd1589121deba838400",
+    "tools/owned-read-proof/check_nonlive.py": "5dd00d406d01e7778c2636cedc883d6a54156c0a109845549a3cf0f90c2a028e",
+    "docs/preparation/tool-execution-guards/current-image-cleanup-privacy.md": "45c6312302e497c5488cd270021ac13c3be94ad310080c9fbd92cda350d77fdb"
+  },
+  "reviewCoverage": "Complete new cleanup helper and 18-method injected privacy/cleanup test module; complete inspector integration diff, complete measured observation-module projection/guarded checkpoint diff, selector addition, unchanged 17-method inspector regression module, and full cleanup/privacy design document. Historical bodies read for integration boundaries, never invoked/extracted/bypassed. Bounded implementation review, not a whole-stack or formal security review.",
+  "assessment": {
+    "cleanup": "OPEN/CLOSING/CLOSED state; reserve registration storage before trusted factory; retain returned resource before caller can use it; reverse-order entries consumed before callbacks; all callbacks attempted after BaseException/non-None return; scope protocol/acquisition failures poison outcome; stable terminal outcome and no retry of possibly reused numeric handles. Original body exception preserved without formatting; cleanup uncertainty alone prevents inspector snapshot return.",
+    "cleanupLimits": "Synchronous single-threaded trusted callbacks only. Factory owns cleanup of hidden/unreturned resources. callbacks-returned means None returns with no detected scope misuse, not OS closure, process settlement or successful body execution. Cap 39 derives existing inspector resource accounting and changes no execution limit.",
+    "privacy": "Pure fixed-schema projections in already measured controlled_observation.py. No new observer helper import. All supplied string/digest/path/source/nested diagnostic fields dropped; fixed refusal codes, exact bounded int metrics only, bool/float/NaN/infinity rejected, <=2 projected attempts. safe_summary accesses report only and performs no file/replay work. No private exception str/repr/class-name conversion in projection/catch paths.",
+    "integration": "Cleanup helper imported only by standalone inspector. Both public checkpoint write/return paths project through the same helper but remain behind first-statement refusal. All four guards remain intact; original private supervisor reports, receipts, correlation checks, source pins and runtime bounds unchanged.",
+    "documentation": "Accurately states trusted callback/process/procfs assumptions, numeric disclosure is not provenance or covert-channel prevention, private pre-run failure capture is unimplemented, and historical acquisition/process-settlement integration remains unavailable."
+  },
+  "findings": {
+    "blockingCodeOrDocumentationFindings": [],
+    "designPrecautionsAddressed": [
+      "No numeric-handle retry or reentrant success",
+      "No callback-returned to OS/process-settled promotion",
+      "No raw exception/string/digest forwarding",
+      "No unmeasured new observer import",
+      "No extracted or alternate historical launch test entry",
+      "No assertion that private pre-run failures are fully persisted"
+    ]
+  },
+  "independentValidation": {
+    "checkout": "/workspace/orca-independent-current-rebuild",
+    "checkoutCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+    "candidatePythonFilesCopiedExactly": 45,
+    "harnessSnapshot": {
+      "path": "/tmp/orca-current-main-evidence/offline-cleanup-privacy-independent-harness.json",
+      "sha256": "ea96c6df45c356aa87804155fa355cb63a18f2f4f09e2b05a9e4d328123aa71e"
+    },
+    "allDeclaredImageInputsVerifiedBeforeAndAfter": 387,
+    "harnessDisjointFromDeclaredImageInputs": true,
+    "candidateFilesUnchangedAfterTests": true,
+    "selection": "test_offline_cleanup_privacy test_current_image_inspection",
+    "methodBreakdown": {
+      "injectedCleanupPrivacy": 18,
+      "realOfflineInspector": 17
+    },
+    "commands": [
+      "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH timeout --kill-after=5s 60s python -B -m unittest -v test_offline_cleanup_privacy test_current_image_inspection",
+      "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH timeout --kill-after=5s 60s python -B -O -m unittest -v test_offline_cleanup_privacy test_current_image_inspection"
+    ],
+    "workingDirectory": "/workspace/orca-independent-current-rebuild/tools/owned-read-proof",
+    "normal": {
+      "passed": 35,
+      "seconds": 0.67,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/offline-cleanup-privacy-independent-normal.log",
+      "sha256": "51d6308f6ba1af3d9812e995b70794cba59b2251da0e41b8e09f2d3a2756e794"
+    },
+    "optimized": {
+      "passed": 35,
+      "seconds": 0.634,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/offline-cleanup-privacy-independent-optimized.log",
+      "sha256": "c5c0a1d5e309a9eb7b7a688981a619fd509033dd605760c402cd53fdbada67e8"
+    },
+    "executionBoundary": "The 18 new tests use pure/injected callbacks and projections. Existing inspector tests build genuine disposable images under their unchanged 15-second build bound, inspect and mutate copies, and directly test only blocked observation functions. Images never executed; no historical launcher body, real observer/tracer/provider/daemon or App Smoke invoked. No broad suite rerun by reviewer."
+  },
+  "remainingGates": [
+    "Actual locks/pipes/probes/provenance/worker/process ownership and all early/final failure edges still require reviewed integration; generic synchronous helper does not establish process settlement.",
+    "All four live entry points remain unconditionally blocked; no current designation, source-pin widening, capability reconstruction or launch authorization.",
+    "Preventive containment and immutable loaded interpreter/module closure remain unavailable.",
+    "Private capture/persistence of failures before an original run exists remains unimplemented; fixed public refusal intentionally does not substitute for private evidence.",
+    "Original current bootstrap receipt and connected raw replay/semantic qualification remain absent.",
+    "Trusted same-process mutation, callbacks and runtime substrate remain assumptions; these tests are not formal security approval."
+  ],
+  "outcome": "No blocking finding for this focused non-live preparation delta; all listed live/qualification obligations remain open.",
+  "excludedActions": "No repository edits by reviewer, image execution, observer/tracer/provider/daemon, App Smoke, runtime designation, production activation, limit/security/credential changes, forbidden gh lookup or #779/#793/#794 action, merge or external publication."
+}

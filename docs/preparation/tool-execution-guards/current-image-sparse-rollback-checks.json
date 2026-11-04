@@ -1,0 +1,120 @@
+{
+  "record": "injected-sparse-registration-constructor-rollback-checks",
+  "authority": "none",
+  "baseCommit": "e908c2d1c60d8555e296189b09ab178b17bce358",
+  "mainPin": "f9e7225e59cfe6e83c539f2ce9922ad0677719f4",
+  "candidateHashes": {
+    "tools/owned-read-proof/controlled_diagnostics.py": "c55743ee281b04c62dd0027a4392f0337f6d37d1d9a386808fad75c7b7e9c60f",
+    "tools/owned-read-proof/test_sparse_rollback.py": "5db2cedec4d5dfc2ad97149de47c144f2b6264234e4e50ce54eb54f80d1362cc",
+    "tools/owned-read-proof/check_nonlive.py": "8a451dbb2292405376de3b18099ebba804b494257ef4a819bffd86a936a8bdad",
+    "docs/preparation/tool-execution-guards/current-image-sparse-rollback.md": "7fcdbaaab1a9fe3a6fa3699168d60bff532b7478ce2f5493577536002f9e51c9"
+  },
+  "identity": {
+    "unchangedSourceControls": {
+      "tools/owned-read-proof/controlled_supervisor.py": "dcce704ec9d4e4a5697b889caa10e556f9c8dc9bcc8ae7b0fcc90a1fdcd44dba",
+      "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+      "tools/owned-read-proof/controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+      "tools/owned-read-proof/controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+      "tools/owned-read-proof/controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+      "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+      "tools/owned-read-proof/offline_cleanup.py": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+      "tools/owned-read-proof/current_image_inspection.py": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+      "tools/owned-read-proof/run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+      "tools/owned-read-proof/verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310",
+      "tools/owned-read-proof/legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca",
+      "tools/owned-read-proof/kernel_runtime_queries.py": "be492af65c37eab4a02859375ea66c88749ba8a038396283d14dfd0ffbe2c617",
+      "tools/owned-read-proof/controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+      "tools/owned-read-proof/build-controlled.mjs": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+      "pnpm-lock.yaml": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+      "package.json": "eebdc3c3f9d91ffe06f3f871fbf4309b66c02c55ca92e3e9bf95d8884e9f2f80",
+      "pnpm-workspace.yaml": "1a66b4ae3b971b09ddfc0b8b3452fd1593aae9294bb12e1688996bce00c86cd4",
+      "tsconfig.json": "e1ef9bdff1231e76824ee6cd75df5e2e4759430f20183fabb22a4b6c48c54375"
+    },
+    "outputIdentity": {
+      "controlled-build.json": {
+        "bytes": 48027,
+        "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+      },
+      "controlled-child.mjs": {
+        "bytes": 5713,
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+      },
+      "controlled-producer.mjs": {
+        "bytes": 2248652,
+        "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+      }
+    },
+    "currentFrozenInputs": 387,
+    "currentRepositoryInputs": 195,
+    "fourRefusalsUnchanged": true,
+    "unchangedAST": "All top-level nodes except SparseDiagnostics; Sparse capture/start/stop/retain_and_close unchanged",
+    "newAST": "Sparse __init__, bind, _rollback_pin",
+    "rebuild": false
+  },
+  "validation": {
+    "selection": "test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+    "newMethods": 16,
+    "priorMethods": 73,
+    "timeoutSeconds": 60,
+    "logs": {
+      "selected": {
+        "passed": 89,
+        "seconds": 0.071,
+        "exitCode": 0,
+        "path": "/tmp/orca-current-main-evidence/sparse-rollback-selected.log",
+        "sha256": "133302c41b8a6874b725392b863a065e0886492da389e1d1100727c6eecb50a2"
+      },
+      "independent-normal": {
+        "passed": 89,
+        "seconds": 0.065,
+        "exitCode": 0,
+        "path": "/tmp/orca-current-main-evidence/sparse-rollback-independent-normal.log",
+        "sha256": "c27224671af1278796237436e4a07d6972da5119c66c384862697379e070639d"
+      },
+      "independent-optimized": {
+        "passed": 89,
+        "seconds": 0.072,
+        "exitCode": 0,
+        "path": "/tmp/orca-current-main-evidence/sparse-rollback-independent-optimized.log",
+        "sha256": "2c6d104500d91da40aa6d4677e1158af9b4bd88055e376dfac9967e420d0efd5"
+      }
+    },
+    "ordinaryCI": "Pending publication; ordinary CI does not run this Python selection."
+  },
+  "notRun": [
+    "Full Python non-live selector, whole diagnostic and real-query modules",
+    "Actual host queries/self-pins/sampler threads/process settlement",
+    "Historical physical regressions, image builds or launch-body invocation/extraction/bypass",
+    "Observer/tracer/provider/daemon/App Smoke",
+    "Designation/activation/formal approval/merge"
+  ],
+  "remainingGates": [
+    "Sparse retain_and_close pre-finally failures and early disposal interruption",
+    "Sampler startup/stop and shared ownership",
+    "Private formatting/file publication and bounded durable evidence",
+    "Leader/worker original process settlement",
+    "Authenticated session, preventive containment and loaded-runtime closure; original bootstrap-to-connected/current-image qualification"
+  ],
+  "priorCI": {
+    "baseRun": 41286839537,
+    "baseOutcome": "First attempt passed on tyler-3",
+    "earlierRun": 41283402840,
+    "earlierOutcome": "Original three failures preserved; one failed-job retry passed; latter two original causes unresolved"
+  },
+  "metadataHold": "Previous PR-description update error reason and denial classification unknown; no retry or alternate route",
+  "preflightNotes": [
+    "Repository .agents absent; rg reported expected missing path (exit2); no denial. No relevant nested AGENTS.md/SKILL.md found under tools/docs."
+  ],
+  "independentReviewOriginal": {
+    "path": "/tmp/orca-current-main-evidence/sparse-rollback-independent-review.json",
+    "sha256": "6c4bf209db328ab2c078d57e7f93bc6c2e014a917c40d304c2847ca93f6ac8ac"
+  },
+  "independentReviewRepresentation": {
+    "path": "docs/preparation/tool-execution-guards/current-image-sparse-rollback-review.json",
+    "sha256": "6b1d32616c79502c47da6a9382d6ba9541227e24a48afb544450fd2dbe86c3cc",
+    "originalBytes": 7632,
+    "formattedBytes": 7608,
+    "parsedJSONEqual": true,
+    "note": "Prettier formatting only; original review retained unchanged."
+  }
+}

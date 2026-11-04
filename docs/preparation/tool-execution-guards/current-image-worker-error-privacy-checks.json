@@ -1,0 +1,142 @@
+{
+  "record": "bounded-control-worker-private-error-checks",
+  "base": "8e8cecc2cad5195dc0023cc2338aaf5771a61048",
+  "scope": "Separate private worker failure holder, consumed worker-owned send, reads after original joins/inactivity gates; historical integration source-only",
+  "staticIdentity": {
+    "base": "8e8cecc2cad5195dc0023cc2338aaf5771a61048",
+    "candidateHashes": {
+      "tools/owned-read-proof/controlled_supervisor.py": "3e8e09e8e0f4d07273cd4d10488773970f7d97cbe80dc1d4f6977a94043a9f76",
+      "tools/owned-read-proof/check_nonlive.py": "2498a25aad141b21f176e832bd771459465df99361a5dd2f108442dfa151fe35",
+      "tools/owned-read-proof/test_worker_error_privacy.py": "1733908efc1f9e37a9306aba2d3c99d9e88248a1dc7370e8cb26ba7e1a517fa1",
+      "tools/owned-read-proof/test_finalizer_worker_guard.py": "a55b76e2156046f3e2061c7a6b44521ab835a5e191619c4988f062da045cd636",
+      "docs/preparation/tool-execution-guards/current-image-worker-error-privacy.md": "74a032e1c1614446c725499a1f75edea327869e743eed94efc73cc45511d854e"
+    },
+    "unchangedSourceControls": {
+      "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+      "tools/owned-read-proof/controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+      "tools/owned-read-proof/controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+      "tools/owned-read-proof/controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+      "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+      "tools/owned-read-proof/offline_cleanup.py": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+      "tools/owned-read-proof/current_image_inspection.py": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+      "tools/owned-read-proof/run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+      "tools/owned-read-proof/verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310",
+      "tools/owned-read-proof/legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca",
+      "tools/owned-read-proof/kernel_runtime_queries.py": "be492af65c37eab4a02859375ea66c88749ba8a038396283d14dfd0ffbe2c617",
+      "tools/owned-read-proof/controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+      "tools/owned-read-proof/build-controlled.mjs": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+      "pnpm-lock.yaml": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+      "package.json": "eebdc3c3f9d91ffe06f3f871fbf4309b66c02c55ca92e3e9bf95d8884e9f2f80",
+      "pnpm-workspace.yaml": "1a66b4ae3b971b09ddfc0b8b3452fd1593aae9294bb12e1688996bce00c86cd4",
+      "tsconfig.json": "e1ef9bdff1231e76824ee6cd75df5e2e4759430f20183fabb22a4b6c48c54375",
+      "tools/owned-read-proof/controlled_diagnostics.py": "61966f556d1ab891a56e94fd59d5696c7f0d8fa1ae51e53f63a98bca8896d314"
+    },
+    "outputIdentity": {
+      "controlled-build.json": {
+        "bytes": 48027,
+        "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+      },
+      "controlled-child.mjs": {
+        "bytes": 5713,
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+      },
+      "controlled-producer.mjs": {
+        "bytes": 2248652,
+        "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+      }
+    },
+    "currentFrozenInputs": 387,
+    "currentRepositoryInputs": 195,
+    "fourFirstExecutableRefusalsExact": true,
+    "controlTryBodyASTUnchanged": true,
+    "outerFinalizerASTUnchanged": true,
+    "threeOriginalJoinsUnchanged": true,
+    "tracerArgumentsUnchanged": true,
+    "existingHolderMethodsUnchanged": true,
+    "rebuild": false
+  },
+  "localTests": {
+    "passed": 151,
+    "seconds": 0.388,
+    "exitCode": 0,
+    "log": {
+      "path": "/tmp/orca-current-main-evidence/worker-privacy-selected.log",
+      "sha256": "bac4712ef8d6878678c8d22d68faaa2bda48c8cc7ed23ede0a125977bd7d80e2"
+    },
+    "newInertMethods": 6,
+    "newASTMethods": 5,
+    "priorMethods": 140,
+    "changedPriorAssertion": "Exact worker-finally send snapshot/clear/helper sequence replaces directclose expectation; other bounds/refusals retained"
+  },
+  "independentReview": {
+    "originalPath": "/tmp/orca-current-main-evidence/worker-privacy-independent-review.json",
+    "sha256": "451deb84d518a98552a021a687a9ef29120ae2f3cad92bc86c89b969fc25546a",
+    "repositoryCopy": "docs/preparation/tool-execution-guards/current-image-worker-error-privacy-review.json",
+    "normalPassed": 151,
+    "normalSeconds": 0.498,
+    "optimizedPassed": 151,
+    "optimizedSeconds": 0.451,
+    "blockingFindings": [],
+    "coverage": "Full focused source/test/docs delta, AST reversal correspondence and frozen input/output checks. Not formal security approval or runtime qualification."
+  },
+  "ordinaryCI": "No new candidate run yet; base-head CI41293856721 remains failed. No retry requested.",
+  "priorEvidence": {
+    "stop-error-ci-original.json": {
+      "path": "/tmp/orca-current-main-evidence/stop-error-ci-original.json",
+      "sha256": "cb132a0834b032a61243dcebd4c75b8f525031a501b1d16dda02d0c8560c86f2"
+    },
+    "stop-error-ci-independent-assessment.json": {
+      "path": "/tmp/orca-current-main-evidence/stop-error-ci-independent-assessment.json",
+      "sha256": "9f0f0ccc91c6ec40385e78baff78639dead6d45d6f4889aa8aa84d6f78247c3e"
+    },
+    "stop-error-terminal-outcome.json": {
+      "path": "/tmp/orca-current-main-evidence/stop-error-terminal-outcome.json",
+      "sha256": "6c4a81a3dc278a3ca5a234685985c5c585305edd7e6df86f5facc25aadd390a2"
+    },
+    "attempt-cleanup-terminal-ci.json": {
+      "path": "/tmp/orca-current-main-evidence/attempt-cleanup-terminal-ci.json",
+      "sha256": "2bf900a9c3408287022c5812607207ee0dd6b4de642e24d5006b1e6b1ae97537"
+    },
+    "finalizer-worker-ci-original.json": {
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-ci-original.json",
+      "sha256": "aa8ff302c4277a28c992464bd05ef3923909511e9547bd92898791d7714acdee"
+    },
+    "finalizer-worker-terminal-ci.json": {
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-terminal-ci.json",
+      "sha256": "a632962d139de060da0db84055fb1cda599467a1c70f1b4fcec027bee1ce9a09"
+    },
+    "inert-attempt-terminal-ci.json": {
+      "path": "/tmp/orca-current-main-evidence/inert-attempt-terminal-ci.json",
+      "sha256": "8b356f26476550d72fa948897054c0a0a553a14125f9d1b6f39324ce08bac514"
+    },
+    "inert-ci-recovery-terminal.json": {
+      "path": "/tmp/orca-current-main-evidence/inert-ci-recovery-terminal.json",
+      "sha256": "50cca97c402c577c0380b3733934eba1340839ef71c9d5f651f1f61c66dba5be"
+    },
+    "finalizer-worker-initial-test-failure.json": {
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-initial-test-failure.json",
+      "sha256": "9e4d93fd762ee552bb4f0921049bfdd3a59af06047fe42a73651b5331dc28101"
+    }
+  },
+  "separateFixtureAnalysis": {
+    "path": "/tmp/orca-current-main-evidence/fixture-contention-readonly-proposal.json",
+    "sha256": "05c3e19cc7f7b8f4aaa9ac6da4e0c38d5ba763567aab56e049084be47cfe2d66"
+  },
+  "fixtureScope": "Read-only comparative proposal only; no fixture edits/experiments/retry in this guard increment",
+  "notRun": [
+    "Full Python selector",
+    "Real worker/thread/process/sampler/host queries or probes",
+    "Historical body invocation/extraction",
+    "Historical physical image tests/builds",
+    "App Smoke/live observer/tracer/provider/daemon"
+  ],
+  "remainingGaps": [
+    "Early acquisition/start still outside protected attempt",
+    "Private traceback state and external exception printing not globally sanitized",
+    "Diagnostic sampler strings and partial metadata remain",
+    "No durable private-failure recovery or actual process/resource settlement",
+    "Authenticated authority, containment and loaded-runtime closure absent"
+  ],
+  "restrictions": "Fourguards/pins/bounds/images unchanged; metadatahold unknown and untouched; #779/#793/#794 restrictions binding",
+  "toolErrors": []
+}

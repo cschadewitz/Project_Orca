@@ -1,0 +1,135 @@
+{
+  "scope": "Actual collection error projection and private identity retention; source-only preparation, no authority or custody integration",
+  "base": "34bcb55780c728c04b29e05d90fb717f421e729f",
+  "files": [
+    {
+      "path": "tools/owned-read-proof/controlled_diagnostics.py",
+      "sha256": "badb58809ac6629fa70af53aa87779e427c96d86cf2368a413926e98338562dc"
+    },
+    {
+      "path": "tools/owned-read-proof/test_diagnostic_codes.py",
+      "sha256": "6b532a4210bcf981d0c58e0d1903bea3e0b7fed5b359fa7c975b9e1910822640"
+    },
+    {
+      "path": "docs/preparation/tool-execution-guards/diagnostic-safe-codes.md",
+      "sha256": "a8df24b8709a9750af1b96366e31ecdf827c0365af48a2d0b906dba16a65aa86"
+    }
+  ],
+  "primaryTest": {
+    "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_diagnostic_codes test_diagnostic_writer test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_attempt_cleanup test_finalizer_worker_guard test_stop_error_precedence test_worker_error_privacy test_traced_disposal_gate -v",
+    "cwd": "tools/owned-read-proof",
+    "exitCode": 0,
+    "passed": 129,
+    "newTests": 10,
+    "adjacentTests": 119,
+    "seconds": 0.296,
+    "result": {
+      "path": "/tmp/orca-current-main-evidence/diagnostic-codes-primary.log",
+      "sha256": "9133d820dd347476ae239f15df7a9744fe066e416a1bcf0cb3785b5146d778d2"
+    }
+  },
+  "focusedTest": {
+    "command": "timeout --kill-after=5s 60s python3 -B -m unittest test_diagnostic_codes -v",
+    "passed": 10,
+    "seconds": 0.016,
+    "result": {
+      "path": "/tmp/orca-current-main-evidence/diagnostic-codes-focused.log",
+      "sha256": "a1cc37e03678da4ab2017ce5e2e8adf104a043d8120a7c69d46a3dc900d67dc1"
+    }
+  },
+  "boundaries": "Actual collection callback executed synchronously on test stack under inert OS/path/clock/thread adapters. Adjacent writer tests use owned synthetic temporary files. No real thread, process, prctl or host queries.",
+  "ordering": "Private collection slot is initialized before sharing. All later conditional writes hold the existing process-pin lock. First successfully recorded collection failure wins by identity using is None; this is recording order, not global chronology. Structural constructor/bind/retention and cleanup errors remain separate with original precedence.",
+  "privacy": "Four fixed codes in unchanged fields; no error str/repr/truth/class-name projection. Private identity excluded from explicit JSON. Existing owner pickle refusal suppresses active exception context. Same-process introspection and private traceback retention are not a security boundary or durable custody.",
+  "accounting": {
+    "newRuntimeArtifacts": 0,
+    "newLocksOrThreads": 0,
+    "newPublicFields": 0,
+    "newQuotaOrNumericLimit": false,
+    "privateMemory": "One original collection exception reference and its existing traceback graph. No new aggregate memory or I/O latency qualification."
+  },
+  "staticChecks": {
+    "base": "34bcb55780c728c04b29e05d90fb717f421e729f",
+    "unchangedMethods": ["__reduce_ex__", "_rollback_pin", "bind", "retain_and_close"],
+    "unchangedTopLevelFunctionsAndClasses": [
+      "_write_private_diagnostic",
+      "read_at",
+      "counters",
+      "proc_fields",
+      "PinnedProcess"
+    ],
+    "allModuleAssignmentASTsUnchanged": true,
+    "constructorOnlyAddsPrivateSlot": true,
+    "unchangedFiles": [
+      {
+        "path": "tools/owned-read-proof/controlled_supervisor.py",
+        "sha256": "54c4b381533dbe8b50a9e24ac1bb2fa5d0005428aca069855aea3317de4865b8"
+      },
+      {
+        "path": "tools/owned-read-proof/controlled_observation.py",
+        "sha256": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3"
+      },
+      {
+        "path": "tools/owned-read-proof/run.py",
+        "sha256": "7da1b70daa7d099ba6da84049a7b426633bfe41ce4eebbe4a131dd8b5c2edfc4"
+      },
+      {
+        "path": "tools/owned-read-proof/offline_vm_attempt.py",
+        "sha256": "86a367315b8260f29167629bbcc76a7769dcc19dcd08380a2c498061613691bc"
+      },
+      {
+        "path": "tools/owned-read-proof/test_offline_vm_attempt.py",
+        "sha256": "a7113d8232ee44245b6cc34b0cf26dce52ec8297894eff5c68c0c0473ed69cda"
+      }
+    ],
+    "byteIdenticalFirstStatementGuards": [
+      {
+        "file": "tools/owned-read-proof/controlled_supervisor.py",
+        "function": "observe",
+        "statement": "raise RuntimeError('non-live preparation: observer launch disabled')"
+      },
+      {
+        "file": "tools/owned-read-proof/controlled_supervisor.py",
+        "function": "bootstrap",
+        "statement": "raise RuntimeError('non-live preparation: observer launch disabled')"
+      },
+      {
+        "file": "tools/owned-read-proof/controlled_observation.py",
+        "function": "observe_new",
+        "statement": "raise RuntimeError('non-live preparation: observer launch disabled')"
+      },
+      {
+        "file": "tools/owned-read-proof/controlled_observation.py",
+        "function": "diagnose_bootstrap",
+        "statement": "raise RuntimeError('non-live preparation: observer launch disabled')"
+      }
+    ],
+    "pythonASTAndTabnanny": "passed"
+  },
+  "notRun": [
+    "Physical test_controlled_diagnostics.py and test_cleanup.py, real threads/processes/probes, observer/tracer/provider/daemon, historical body invocation/extraction/compilation/bypass.",
+    "CI, App Smoke, image rebuild or designation, remote publication, metadata mutation, host access or configuration."
+  ],
+  "limitations": [
+    "Lock acquisition/release failure, arbitrary asynchronous or allocation failures and hostile internal replacements remain outside this bounded correction. Added lock latency not qualified.",
+    "No real concurrency, process settlement, surviving recovery custody, actual loaded-runtime closure, preventive containment or physical durability proof.",
+    "M1 owner interfaces and resource/evidence allocations remain missing; parent-supplied pinned homelab packet is offline access lead only."
+  ],
+  "pythonExternalLint": "Not run: no configured root Python linter or installed ruff/pycodestyle found; no installation.",
+  "format": "Changed Python AST/tabnanny, LF/final newline/trailing whitespace and git diff --check passed. Documentation/evidence checked with repository Prettier.",
+  "errors": [
+    {
+      "action": "Initial test-file creation used repo-relative path from tools/owned-read-proof cwd",
+      "outcome": "No file created; subsequent import failed. Corrected path once; focused and full bounded tests then passed.",
+      "classification": "Ordinary local path error, not denial.",
+      "result": {
+        "path": "/tmp/orca-current-main-evidence/diagnostic-codes-initial-path-error.log",
+        "sha256": "29000944f7a363bdad580d6d15ff9dc1a1e31c7a2b02199ba60a51c14657b7b9"
+      }
+    },
+    {
+      "action": "Combined source read exceeded display limit",
+      "outcome": "Output truncated; targeted subsequent reads and independent inspection cover actual changed source and selected suites.",
+      "classification": "Display limitation, not denial."
+    }
+  ]
+}

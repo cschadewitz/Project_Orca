@@ -1,0 +1,27 @@
+{
+  "record": "independent-preparation-review-resolution",
+  "reviewer": "/root/independent_review",
+  "candidateCommit": "4ebf382fe6738bb11268b47b048a3d7c7a6f2586",
+  "candidateTree": "e6c8fcc5263506ef406dec163da244248a070eaa",
+  "priorReview": {
+    "path": "/tmp/orca-current-main-evidence/independent-source-review.json",
+    "sha256": "fb3a7d056e1029105370638780424d0b380078c58bdaa01bb0695b312eb7d66b",
+    "preservedUnchanged": true
+  },
+  "newBuildReview": {
+    "path": "/tmp/orca-current-main-evidence/frozen-build-review.json",
+    "sha256": "711fd2e5c9a79018e028130377c9eff785819c5ac5401f39dba87dee443b6b38"
+  },
+  "resolvedFinding": {
+    "target": "Lock-conforming current-main test image",
+    "status": "resolved-for-new-frozen-image",
+    "reason": "All 387 inputs independently match isolated installed bytes; 195 repository inputs and child match exact candidate blobs. Installed SDK 1.8.0/Zod 4.6.7 match requirements. Installed workspace lock equals committed workspace YAML document in full. Initial mismatched-dependency image remains historical and is not relabeled."
+  },
+  "remainingFinding": {
+    "target": "Current-main image observer designation/connected grammar",
+    "status": "open-compatibility-blocker",
+    "reason": "Legacy SOURCE pin and finite v1 connected predicates remain unchanged. Exact-source refusal still blocks current image; v2 standing-review inventory/approval/rule/expiry grammar adaptation remains pending."
+  },
+  "reviewOutcome": "Bounded preparation source review remains applicable to unchanged candidate 4ebf382; new frozen artifact byte/lock verification resolves the dependency build issue only. No runtime designation, live proof or formal security approval.",
+  "independentExecution": "No new producer, observer, tracer or daemon execution in this follow-up; read-only hashes, committed-byte comparisons and YAML/manifest parsing only."
+}

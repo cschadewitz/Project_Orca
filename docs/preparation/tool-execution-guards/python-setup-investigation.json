@@ -1,0 +1,607 @@
+{
+  "record": "nonlive-python-setup-investigation",
+  "authority": "none",
+  "sourceCommit": "c848c1903d3107a1b1ca8808c71af1a024088026",
+  "staleInstallation": {
+    "installedLockSha256": "b72bf9d3931e93238fe90d709086426d6dfe29104b7c1bb0c45b102e55a04400",
+    "installedLockMatchesCommittedWorkspace": false,
+    "expectedSourceCount": 387,
+    "actualSourceCount": 386,
+    "sharedKeys": 281,
+    "sharedHashMismatches": [],
+    "expectedOnly": {
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/acp.js": "3c11f3eede21589735cd85f99f48ca7e9eaa93c39be5add28031a60b48e6fb74",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/jsonrpc.js": "1f322c9397c55282710f22f7bf0163f04b084efa6f1b108d3a2fb040426022a7",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/line-buffer.js": "d481b5e42b0d9dbedac1e5b213903da5081d208b21d2f3a9f185ca58edddea61",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/schema-deserialize.js": "ce6ff0d877d0db0ba4ec4da3d5fedb8112d6cd615bd1027dd0f8a679a9a136b2",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/schema/guards.gen.js": "ccc709ce4208da98f9b17e1c1b2169fb64ebc655ca47049a5b95f064a258a6bf",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/schema/index.js": "cad431bef827793644cd7ad849af4a710cd079d50877c3f46b872f0f42f74cbf",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/schema/zod.gen.js": "d5c2fa481b792119ae52437697004cf41bf595f6de6520dce67ddde78a276605",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/stream-limits.js": "74f186d8bfb4106d865cf3853c15386d7d8486e097a2300a8eac3aec551cb889",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/stream.js": "53377a7f6bcc0e7193c642f8eaf94b1fef781e54b7d8ec564cc5e690c4e8d1e0",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/index.js": "32e7efd49a94a765f6d10a1a0a3c02c50c246def17c80c6f0225f85525d98505",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/checks.js": "7543391a9ad5e7df287bbfecaa79844d46af44c75c1de0d43a411d65795d9dd1",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/coerce.js": "fb2efe3b6eacc475c77cbb571b5fb8650d92a10f316dc869e49b722973d83c3c",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/compat.js": "0e948b101771cc0e7b753e54b3f5b486929d3db9bd4c09d98fe4ce86271bcf7b",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/deep-partial.js": "0abffcc9838e04dc6f091229c1d522fbfd43aab9563316b52d3eb8ff2bacf26d",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/errors.js": "d32f7c1ef8e2c70072f6f0ec8ba7081bbc331353cc3a7cb4429e5ece91409543",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/external.js": "c6b584ae70ba4e7132b2cd78c23ea4ecedc9828abf999edee312372e1fb453d6",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/from-json-schema.js": "31dc999a26cb6928f5e99ea564d648567e85cf9aa47565198fb6186dbd6c070e",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/in-out.js": "34370913842ff02d14a9796b11c5ec2af160bdb35a7148edc286e9a9c6fb5c17",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/index.js": "978a923075be24db9051635ccd2c21ade18d7a6b5ce0fe6e0029660072073398",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/iso.js": "deaa026b7c5302e59719f401248e7866691d8d8a892884dd2b6868b1cb7252d8",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/parse.js": "11941573401bbef138842c7a523dff554873343fccbf0e8b0a144259d2d703f1",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/schemas.js": "2bf4a631a18f734a9a7ab7fc11bcf919214774d2235a312dcec0dd53d0324c32",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/api.js": "03ae6016abc9585e3f3481d6b8d775a95ae4ee65badbde73ca1ed953ff14c0e7",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/checks.js": "bc42543274218aa7ef72192b3218d2a4a399e53df8de240a04d9ff275096f563",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/compile.js": "53fcf24821f50ecf42492ab7101abe8a50ead8286a53567d71648fe5ca346b99",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/core.js": "c7ce485c97263e42568d16b11bb4a90133221c7e807498a9273d70f41ba16ef6",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/doc.js": "be4c1b1a1ad247cc70f360a572060edd7e0cea24252c3a319f33d247899c5643",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/errors.js": "a0c95ef2f7085b5bc2931f7b566f524b26a0360c8df741e3f87f923745cf9792",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/index.js": "2a0e452323aa5b75b7d7de4879289e2579b9dd2d6af291c0416ba6806ca2199d",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/json-schema-generator.js": "beaeab6faa654e99e443b8a9f5d8a4adc08cd8226f92a0cd32477a58ecfa1807",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/json-schema-processors.js": "b6d2aee72212c076b9cde38da6333591c76a24eb049a4ee4e7bd2b7825d8b817",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/json-schema.js": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/memoizer.js": "18a3188c51229d9189a5408b0b7fbc3e121b55c2b4c3c406d79cb9b77e7ad964",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/parse.js": "fb05b91ec260f3f484f7c00a177b6126ceb8fd1b09dc90b1200afdffd4d98efd",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/regexes.js": "24fc98f6fc9175e50ff29d28b040e3b4ac5650de19914d45ee27b853d367ecc6",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/registries.js": "f04d4b2c0bc5b4ac2d6610ea34edf2e5260eade18f20976b79916dcdbeb9fa4d",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/schemas.js": "0ee56e8afbae28eeb1060a162ad7e56f0675ee6fb83f0ae56bea2e088f6cdbc0",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/to-json-schema.js": "85b883eb8f05e9f060c71a39fce7df9345b566af29d5bc9c8fa477fe616a051d",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/util.js": "bb08133b11b478c8e715038fff26ebea204d7fd5443fba31fe138b142d202efb",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/versions.js": "28439030e50c35b90e1f88726297a346f5285e32e24da7ea4ce15618661d9ac1",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/visit.js": "a804062900869e09ea0b975cfa569fd3c70dc33bad7fc30b63872d451cae29f7",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/index.js": "5ba6cdbd3839d2a9df5c6d91d2121ef680f3d22fd60ee9d2c0b4611b7cb49a65",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ar.js": "eec4016c2b3063ae929617d90ec609e4c425e60c97a954d3a24de0f457b6ec97",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/az.js": "5bd03646b9d18b73e71356cd28937e4e6413b806bb23e14689cc88f6f65ff3a6",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/be.js": "f969afea5d9800a71958a621658943b85a2576a2bfefdd5dea70afc4924d4af4",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/bg.js": "96741333a790320e05aef7286b5b709a4a7c48cfffc50fc5e6acff5b505275e9",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/bn.js": "6d8227b52a6864465b7c52a9ef7e09d261d904ec8a619932e15dd9f9f826e8dd",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ca.js": "67f6f38b59a6e3ee81cc5155480465331dd9a142b2471a495503a81dafba0684",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ckb.js": "bdb9ef0cfda4009f8892585a1780fff863cd409931d6f89394c271042c131137",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/cs.js": "4ffa0e484ad1842a2c0e5c7f2dfe9160155ff5be4b95ab6e524d3a30a2210488",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/da.js": "29addcd60e88422bed9ed78c6c864220a15c06b31fdb4ab7ad4f87be4098e6ae",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/de.js": "f344eb96ba18d9db907f3f9c95897ce2590ab0cde1553c023daffbb1cb5ef6f4",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/el.js": "fdea833aa0a8c381d26216db1521dd7fbc4dccb6d3aa50f9a585ffb975df91eb",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/en.js": "d5930e10d137b048b37823e168e4177947e1f696ada8419c71bb0d32da4333c0",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/eo.js": "97797bd22319ecc3f2044da6c305f1114b851803697029ffce2b66644757da3a",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/es.js": "12e762b921b1e3fdb8e265d2b554de81ce9706ceb23a81527f48ae2dddf355db",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fa.js": "60e7eeff4c000c85f8420168374344305d3c2110a5f91a2fb672b2a2381eeddf",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fi.js": "1e72af4193e564cd37dce4a850dc18bc1bcd6ca280f29e9f5f8c6bbab6a2cad9",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fr-CA.js": "a2ca0451ff943766bb6a88b392b25447462a1d3ed75c1adda5ddb0bc474bcd42",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fr.js": "477345d6401d0e4f07794b1a2cff8b78953723f1fc8cfaeb6b660c19be47125a",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/gu.js": "b1921ac6b4158e6360a8da6099df8bbf2d7bce7c1cf381d5a5e47aa0c74874d2",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/he.js": "1cfff31fac19616d900d1f3febd9690ea87711e13b5be299326ebfd3f33aad4d",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hi.js": "c31e466c2a31dc10ba6a288e1aebf429a6e9566a26918d0240aae058693f6329",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hr.js": "ff2bebef0761f2d6095103d58484e3b95551bc51d56770db8f161b8e0e0ec941",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hu.js": "9816c21ee0b3be9d973f9e033e9587a608f2d35dd1b984d415b88e03242b0189",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hy.js": "daf6d0c590d9b061759598ba9f7f97041e2874c7a58da2c64b86f152840d68fa",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/id.js": "e5c23bb0b6f696fa936bafd7969e64738504cf7a5be3ec04b24ae899d4912b58",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/index.js": "7ea85250d1e7bd9459cda61f38c78757a410d561a5421bb3f08019bba79c9849",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/is.js": "1cce1285bbf55c8a76303fea0be0fb6d39fbd0ece833137ea23a22f406ac1ae1",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/it.js": "096b497df6c5fe7de4422482b7733e764e4b344e8d7f768a7289556687acdb82",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ja.js": "2a6bbbd6dbd573687b22f35873a13cdf730c07423b4ab114e5a8b12d8777146d",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ka.js": "baf3204123cf4246df654fd1948b6c8da6917e7a06e470aeeaf7c1eaa7003628",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/kh.js": "78c3d1991041bb8c8fc0f7c5d745aae422d4c2e4e8f30bae44f3fef4765900a8",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/km.js": "e61079f14070dfa9c7b2047eb79f5bea6d4e845f192756d103c121bbd63ee18a",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/kn.js": "884b1b68a1ca02fe9a774b8de9cbfa3486892eea36192699120f57b31f0a1f42",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ko.js": "11fcef61a2f23e010bf0f569d71be0d49524afc97f3072cc03fdc6fe3ea2f14d",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/lt.js": "d2e67a35a3c6e7241a9eb9c5851e4b5b651ac8b23278854862e6055829946c48",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/mk.js": "64ddd914c432ba5690d0686bff6603651ce886a891f84823d7dc766c9c980cd1",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ms.js": "94faf0d306ffa2a4f95e57f3e53060d27220a639b9cb529f00d1d01b6270f045",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ne.js": "6da69989b702ae15baa27b799b6b2b32fd011ba3980a190dd0eccfc9233083d6",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/nl.js": "296ced8be508c5f9e82b562049d2974882029bcd5b2ab4ade14401b33ec99909",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/nn.js": "bae9756817629db30841eb54a27ed9b3c71c2a4208314d8d070be624bd2e9359",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/no.js": "f358e5586940350ee25a05db184565d23eb1c66903e182ebec812172f31cb55a",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ota.js": "66ed8c3ce00b2e9971ed5a17f002937405d8cdfeb399ebe012db9d2317f42146",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/pl.js": "b7f82cf9f747785beeec05cd31d3d7493c52bd3647598924141568f148c07222",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ps.js": "1c15b81fcce0cdc59dbcca18df5c4ecf4e176fc3fb7668207b9ba54df43cce46",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/pt-BR.js": "abc52db767b9dd938954776728ea7480cdcab569a5a17664f60e5a2c1d63e60b",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/pt.js": "93a820f60d571607bf34b69198f5b24617475584c0b22c0f8d160fcdef096a46",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ro.js": "54751d2866171c9c7ce1a72868dec09efa54d1b2b67401767594c5b360aca38a",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ru.js": "40a019b53bd1684fd4b750db87021520dd5d710f714010c0a594e5bcf5787478",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/sk.js": "ae7c49242e70149434c9051dd00209afbd517d98ba54c13692371a5340b616da",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/sl.js": "490ca48f8aae3aed660758b32856d49a9fc5c7e255dad220e75abaef8c35140b",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/sv.js": "448f36996bb0d159489b34ad7d86df03e520a13e43b1c98ea2fb18d7ed4a3c95",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ta.js": "8b6e1bc033fdaefb1acfc7edf88c9f53c3a50cc892066effdab306103e994d42",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/tg.js": "9a5c9a3b18b8ccded28d66033575b22d823df17a7afa8bb9a733f31fe071462f",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/th.js": "913cc4962ddf5cb54ed694d04b7008493ef401d3333b26426b32f4890712574e",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/tk.js": "445abfed18c5a9d79143b02c9cf9c171b41fb5dff8ffc2cb59b7aef7203e5a7f",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/tr.js": "bca07607a27f518f19877dd9c2235fada9c73eb56896f0f6e274781fab71d64e",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ua.js": "9391169ffbc72f777a83230b6ffcc3f4cf46ab5945ec540de9ef4609dca1f4cc",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/uk.js": "1e59ba41296aeb5b6142a6e5ed84712931e33e54ab0b9ae5d83faf436fc3d968",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ur.js": "d37ed2c93408e0a6b6e1cd290117a6f0e9d7b2c83509cd34b502e1dd94899c87",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/uz.js": "2cbe07635b03064ffad0bfcc98d2d570f3264b9cd3e22bbd5c160cd0343f7872",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/vi.js": "15939adaf263e0869c602d4b34c206178a235b8bec11c8207ccd3fa50de3a141",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/yo.js": "88b33f6527c1a2faaf159568330cf727c448dc468eac72142a6fb24f8714ac1e",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/zh-CN.js": "8fc02f2bd4d92f46b24b8d82da0ee95c962fc80c14dd7dd469500e14de08d320",
+      "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/zh-TW.js": "01d9b119e318d8b9f1a8fa720d06424457429425a61d0730984b750e6a5edf7d"
+    },
+    "actualOnly": {
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/acp.js": "cc717d74b018c1fe3e1e53e31ff6355ccf52e729e753666051bda42499be7b9f",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/jsonrpc.js": "1f322c9397c55282710f22f7bf0163f04b084efa6f1b108d3a2fb040426022a7",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/line-buffer.js": "78002508f23baee1b013ca5dc68acaa2bcde1e0b96e8f06ddf2828623eb0acb8",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/schema-deserialize.js": "1fd2240595b8d813993f08f5816b7503f1acea8acec4186d86cb3b674e101c05",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/schema/guards.gen.js": "7e706751f22e6a82165f813705aabc8e4a65351541397487e4b55cac62a88f46",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/schema/index.js": "e855a3f9b5f8e7de952410f7b048393a16650e096ec7e51fbfef5902bd37bc06",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/schema/zod.gen.js": "52aa742f3e4bd9a93428a9abd58639cf2b84de42fc770b417efdcd204a8aa293",
+      "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/stream.js": "042e7b09f1d1d7485c75777fbc8f864f68f76e5b3c30aeb51d60dd5d4db86ab3",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/index.js": "32e7efd49a94a765f6d10a1a0a3c02c50c246def17c80c6f0225f85525d98505",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/checks.js": "7543391a9ad5e7df287bbfecaa79844d46af44c75c1de0d43a411d65795d9dd1",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/coerce.js": "fb2efe3b6eacc475c77cbb571b5fb8650d92a10f316dc869e49b722973d83c3c",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/compat.js": "0e948b101771cc0e7b753e54b3f5b486929d3db9bd4c09d98fe4ce86271bcf7b",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/deep-partial.js": "0abffcc9838e04dc6f091229c1d522fbfd43aab9563316b52d3eb8ff2bacf26d",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/errors.js": "d32f7c1ef8e2c70072f6f0ec8ba7081bbc331353cc3a7cb4429e5ece91409543",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/external.js": "c6b584ae70ba4e7132b2cd78c23ea4ecedc9828abf999edee312372e1fb453d6",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/from-json-schema.js": "31dc999a26cb6928f5e99ea564d648567e85cf9aa47565198fb6186dbd6c070e",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/in-out.js": "34370913842ff02d14a9796b11c5ec2af160bdb35a7148edc286e9a9c6fb5c17",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/index.js": "978a923075be24db9051635ccd2c21ade18d7a6b5ce0fe6e0029660072073398",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/iso.js": "deaa026b7c5302e59719f401248e7866691d8d8a892884dd2b6868b1cb7252d8",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/parse.js": "11941573401bbef138842c7a523dff554873343fccbf0e8b0a144259d2d703f1",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/schemas.js": "2bf4a631a18f734a9a7ab7fc11bcf919214774d2235a312dcec0dd53d0324c32",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/api.js": "03ae6016abc9585e3f3481d6b8d775a95ae4ee65badbde73ca1ed953ff14c0e7",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/checks.js": "bc42543274218aa7ef72192b3218d2a4a399e53df8de240a04d9ff275096f563",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/compile.js": "df28853593428e5a2a8729b09f43baf0998eaae7f1e37797993035187833b054",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/core.js": "c7ce485c97263e42568d16b11bb4a90133221c7e807498a9273d70f41ba16ef6",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/doc.js": "be4c1b1a1ad247cc70f360a572060edd7e0cea24252c3a319f33d247899c5643",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/errors.js": "a0c95ef2f7085b5bc2931f7b566f524b26a0360c8df741e3f87f923745cf9792",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/index.js": "2a0e452323aa5b75b7d7de4879289e2579b9dd2d6af291c0416ba6806ca2199d",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/json-schema-generator.js": "beaeab6faa654e99e443b8a9f5d8a4adc08cd8226f92a0cd32477a58ecfa1807",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/json-schema-processors.js": "b6d2aee72212c076b9cde38da6333591c76a24eb049a4ee4e7bd2b7825d8b817",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/json-schema.js": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/memoizer.js": "18a3188c51229d9189a5408b0b7fbc3e121b55c2b4c3c406d79cb9b77e7ad964",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/parse.js": "fb05b91ec260f3f484f7c00a177b6126ceb8fd1b09dc90b1200afdffd4d98efd",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/regexes.js": "24fc98f6fc9175e50ff29d28b040e3b4ac5650de19914d45ee27b853d367ecc6",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/registries.js": "f04d4b2c0bc5b4ac2d6610ea34edf2e5260eade18f20976b79916dcdbeb9fa4d",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/schemas.js": "e632b655441418f0593153abc6809fd81cf3e0782d810622d0a4fa50ef6e182e",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/to-json-schema.js": "85b883eb8f05e9f060c71a39fce7df9345b566af29d5bc9c8fa477fe616a051d",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/util.js": "728f52b496620336775eafcdb91c0a574380086e53f215b55c58eedc1422c49c",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/versions.js": "63b38035ff5e2a5a5cfe5665e271af72b0cf9791e770dccf5e99d977064fb96c",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/visit.js": "a804062900869e09ea0b975cfa569fd3c70dc33bad7fc30b63872d451cae29f7",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/index.js": "5ba6cdbd3839d2a9df5c6d91d2121ef680f3d22fd60ee9d2c0b4611b7cb49a65",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ar.js": "eec4016c2b3063ae929617d90ec609e4c425e60c97a954d3a24de0f457b6ec97",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/az.js": "5bd03646b9d18b73e71356cd28937e4e6413b806bb23e14689cc88f6f65ff3a6",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/be.js": "f969afea5d9800a71958a621658943b85a2576a2bfefdd5dea70afc4924d4af4",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/bg.js": "96741333a790320e05aef7286b5b709a4a7c48cfffc50fc5e6acff5b505275e9",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/bn.js": "6d8227b52a6864465b7c52a9ef7e09d261d904ec8a619932e15dd9f9f826e8dd",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ca.js": "67f6f38b59a6e3ee81cc5155480465331dd9a142b2471a495503a81dafba0684",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ckb.js": "bdb9ef0cfda4009f8892585a1780fff863cd409931d6f89394c271042c131137",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/cs.js": "4ffa0e484ad1842a2c0e5c7f2dfe9160155ff5be4b95ab6e524d3a30a2210488",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/da.js": "29addcd60e88422bed9ed78c6c864220a15c06b31fdb4ab7ad4f87be4098e6ae",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/de.js": "f344eb96ba18d9db907f3f9c95897ce2590ab0cde1553c023daffbb1cb5ef6f4",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/el.js": "fdea833aa0a8c381d26216db1521dd7fbc4dccb6d3aa50f9a585ffb975df91eb",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/en.js": "d5930e10d137b048b37823e168e4177947e1f696ada8419c71bb0d32da4333c0",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/eo.js": "97797bd22319ecc3f2044da6c305f1114b851803697029ffce2b66644757da3a",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/es.js": "12e762b921b1e3fdb8e265d2b554de81ce9706ceb23a81527f48ae2dddf355db",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/fa.js": "60e7eeff4c000c85f8420168374344305d3c2110a5f91a2fb672b2a2381eeddf",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/fi.js": "1e72af4193e564cd37dce4a850dc18bc1bcd6ca280f29e9f5f8c6bbab6a2cad9",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/fr-CA.js": "a2ca0451ff943766bb6a88b392b25447462a1d3ed75c1adda5ddb0bc474bcd42",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/fr.js": "477345d6401d0e4f07794b1a2cff8b78953723f1fc8cfaeb6b660c19be47125a",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/gu.js": "b1921ac6b4158e6360a8da6099df8bbf2d7bce7c1cf381d5a5e47aa0c74874d2",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/he.js": "1cfff31fac19616d900d1f3febd9690ea87711e13b5be299326ebfd3f33aad4d",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/hi.js": "c31e466c2a31dc10ba6a288e1aebf429a6e9566a26918d0240aae058693f6329",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/hr.js": "ff2bebef0761f2d6095103d58484e3b95551bc51d56770db8f161b8e0e0ec941",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/hu.js": "9816c21ee0b3be9d973f9e033e9587a608f2d35dd1b984d415b88e03242b0189",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/hy.js": "daf6d0c590d9b061759598ba9f7f97041e2874c7a58da2c64b86f152840d68fa",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/id.js": "e5c23bb0b6f696fa936bafd7969e64738504cf7a5be3ec04b24ae899d4912b58",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/index.js": "7ea85250d1e7bd9459cda61f38c78757a410d561a5421bb3f08019bba79c9849",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/is.js": "1cce1285bbf55c8a76303fea0be0fb6d39fbd0ece833137ea23a22f406ac1ae1",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/it.js": "096b497df6c5fe7de4422482b7733e764e4b344e8d7f768a7289556687acdb82",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ja.js": "2a6bbbd6dbd573687b22f35873a13cdf730c07423b4ab114e5a8b12d8777146d",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ka.js": "baf3204123cf4246df654fd1948b6c8da6917e7a06e470aeeaf7c1eaa7003628",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/kh.js": "78c3d1991041bb8c8fc0f7c5d745aae422d4c2e4e8f30bae44f3fef4765900a8",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/km.js": "e61079f14070dfa9c7b2047eb79f5bea6d4e845f192756d103c121bbd63ee18a",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/kn.js": "884b1b68a1ca02fe9a774b8de9cbfa3486892eea36192699120f57b31f0a1f42",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ko.js": "11fcef61a2f23e010bf0f569d71be0d49524afc97f3072cc03fdc6fe3ea2f14d",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/lt.js": "d2e67a35a3c6e7241a9eb9c5851e4b5b651ac8b23278854862e6055829946c48",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/mk.js": "64ddd914c432ba5690d0686bff6603651ce886a891f84823d7dc766c9c980cd1",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ms.js": "94faf0d306ffa2a4f95e57f3e53060d27220a639b9cb529f00d1d01b6270f045",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ne.js": "6da69989b702ae15baa27b799b6b2b32fd011ba3980a190dd0eccfc9233083d6",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/nl.js": "296ced8be508c5f9e82b562049d2974882029bcd5b2ab4ade14401b33ec99909",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/nn.js": "bae9756817629db30841eb54a27ed9b3c71c2a4208314d8d070be624bd2e9359",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/no.js": "f358e5586940350ee25a05db184565d23eb1c66903e182ebec812172f31cb55a",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ota.js": "66ed8c3ce00b2e9971ed5a17f002937405d8cdfeb399ebe012db9d2317f42146",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/pl.js": "b7f82cf9f747785beeec05cd31d3d7493c52bd3647598924141568f148c07222",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ps.js": "1c15b81fcce0cdc59dbcca18df5c4ecf4e176fc3fb7668207b9ba54df43cce46",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/pt-BR.js": "abc52db767b9dd938954776728ea7480cdcab569a5a17664f60e5a2c1d63e60b",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/pt.js": "93a820f60d571607bf34b69198f5b24617475584c0b22c0f8d160fcdef096a46",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ro.js": "54751d2866171c9c7ce1a72868dec09efa54d1b2b67401767594c5b360aca38a",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ru.js": "40a019b53bd1684fd4b750db87021520dd5d710f714010c0a594e5bcf5787478",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/sk.js": "ae7c49242e70149434c9051dd00209afbd517d98ba54c13692371a5340b616da",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/sl.js": "490ca48f8aae3aed660758b32856d49a9fc5c7e255dad220e75abaef8c35140b",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/sv.js": "448f36996bb0d159489b34ad7d86df03e520a13e43b1c98ea2fb18d7ed4a3c95",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ta.js": "8b6e1bc033fdaefb1acfc7edf88c9f53c3a50cc892066effdab306103e994d42",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/tg.js": "9a5c9a3b18b8ccded28d66033575b22d823df17a7afa8bb9a733f31fe071462f",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/th.js": "913cc4962ddf5cb54ed694d04b7008493ef401d3333b26426b32f4890712574e",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/tk.js": "445abfed18c5a9d79143b02c9cf9c171b41fb5dff8ffc2cb59b7aef7203e5a7f",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/tr.js": "bca07607a27f518f19877dd9c2235fada9c73eb56896f0f6e274781fab71d64e",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ua.js": "9391169ffbc72f777a83230b6ffcc3f4cf46ab5945ec540de9ef4609dca1f4cc",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/uk.js": "1e59ba41296aeb5b6142a6e5ed84712931e33e54ab0b9ae5d83faf436fc3d968",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ur.js": "d37ed2c93408e0a6b6e1cd290117a6f0e9d7b2c83509cd34b502e1dd94899c87",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/uz.js": "2cbe07635b03064ffad0bfcc98d2d570f3264b9cd3e22bbd5c160cd0343f7872",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/vi.js": "15939adaf263e0869c602d4b34c206178a235b8bec11c8207ccd3fa50de3a141",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/yo.js": "88b33f6527c1a2faaf159568330cf727c448dc468eac72142a6fb24f8714ac1e",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/zh-CN.js": "8fc02f2bd4d92f46b24b8d82da0ee95c962fc80c14dd7dd469500e14de08d320",
+      "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/zh-TW.js": "01d9b119e318d8b9f1a8fa720d06424457429425a61d0730984b750e6a5edf7d"
+    },
+    "preservedInstalledLockPath": "/tmp/orca-image-review-uIgygu/baseline/node_modules/.pnpm/lock.yaml",
+    "preservedStaleManifestPath": "/tmp/orca-image-review-uIgygu/candidate-image/controlled-build.json",
+    "preservedInstalledLockHashVerified": true
+  },
+  "freshHistoricalFixture": {
+    "path": "/workspace/orca-legacy-image-fixture",
+    "head": "3fce8bcc9afd381cd07c0e06051921307d6322b3",
+    "historicalProtectedInputCount": 199,
+    "harnessDisjointFromProtected": true,
+    "copiedHarnessAndReferenceSha256": {
+      "tools/owned-read-proof/check_nonlive.py": "c3116369c876fdea002b309e382de963d355dc736aae4d086d0c655c50e98cdf",
+      "tools/owned-read-proof/controlled_aggregate.py": "ade19e2569ed52bfd2f4672426d7c20308fd23b3f74a9fdc5543648f0093f62a",
+      "tools/owned-read-proof/controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+      "tools/owned-read-proof/controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+      "tools/owned-read-proof/controlled_delivery_semantics.py": "71248cb8208417f3ff8cd2f81dcd5d698d34edc818287f1136f1069a2e3d40d2",
+      "tools/owned-read-proof/controlled_diagnostics.py": "badb58809ac6629fa70af53aa87779e427c96d86cf2368a413926e98338562dc",
+      "tools/owned-read-proof/controlled_notifications.py": "7efd105085b81db5b18096b357bd5e15a9b2db5bdb5f257a6b0eace648ddee8b",
+      "tools/owned-read-proof/controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+      "tools/owned-read-proof/controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+      "tools/owned-read-proof/controlled_save_semantics.py": "b1a880ef24ad2f7829f5a25557bff5f7a7eec18c8135edd47eb5a394cce18d2b",
+      "tools/owned-read-proof/controlled_semantics.py": "8001488fcea920176b95766d1819b1f16f4e0dc51aefb3f2c3b95ab25a460d0d",
+      "tools/owned-read-proof/controlled_supervisor.py": "2adeab0090b0b9e1ce6ba20dccec679b9a334bfbd91e67f7deb1f6e0b815955c",
+      "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+      "tools/owned-read-proof/controlled_v2_model.py": "af289071fc9627bb8f38115916a40740c1a131a756a4afa163d9229f6056df15",
+      "tools/owned-read-proof/current_image_inspection.py": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+      "tools/owned-read-proof/kernel_runtime_queries.py": "be492af65c37eab4a02859375ea66c88749ba8a038396283d14dfd0ffbe2c617",
+      "tools/owned-read-proof/legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca",
+      "tools/owned-read-proof/offline_attempt_model.py": "dea121f343b369140f06e1006ac75ec5a629218660977a625e737c39aa9259ec",
+      "tools/owned-read-proof/offline_cleanup.py": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+      "tools/owned-read-proof/offline_vm_attempt.py": "86a367315b8260f29167629bbcc76a7769dcc19dcd08380a2c498061613691bc",
+      "tools/owned-read-proof/run.py": "7da1b70daa7d099ba6da84049a7b426633bfe41ce4eebbe4a131dd8b5c2edfc4",
+      "tools/owned-read-proof/test_attempt_cleanup.py": "34e026122b4260017c414e1e1c610c95f6ebdfaf8a389f7a35eeabe980fe156f",
+      "tools/owned-read-proof/test_batch_transfer.py": "14e2b01fe4157b5f0fe2fffbeb6ca8e4be35c6379265d6866d56fae5bacc5ede",
+      "tools/owned-read-proof/test_bootstrap_receipt_child.py": "b1ad54a7dde9c91b4bdd6707e19162e62c54207e37c3f0f71821931c54189773",
+      "tools/owned-read-proof/test_child_stat_observations.py": "fcd3f74276b69aa7b8128cc39775c547dddde875a74d521c08fcb666465e65d4",
+      "tools/owned-read-proof/test_cleanup.py": "f7bae206a60ab06463b204373ae35f18bc361a19a144aa021e37a3f39bbeed2a",
+      "tools/owned-read-proof/test_controlled_aggregate.py": "a15d976992778e672775d6a76933dec74b9696a8b9a6d4a6f9ac7dd010cfbe17",
+      "tools/owned-read-proof/test_controlled_connected.py": "3622b8045d59c885b1b5f017351520d9097594689fa39457b556c02010a1819c",
+      "tools/owned-read-proof/test_controlled_contract.py": "d9efbc18058263ea415fc896a90235dd075f6fa6dd18f2be52b1ebf6d7dd99f9",
+      "tools/owned-read-proof/test_controlled_delivery_semantics.py": "5152c46a61bc75deb37be470aa2f87c78ce83dc2bc287593f148c5d89484456a",
+      "tools/owned-read-proof/test_controlled_diagnostics.py": "8707bf7fa05c0b50fb476c94875e1f583cb8b92fad9eb167c5c065a03a38bd7c",
+      "tools/owned-read-proof/test_controlled_image_pins.py": "d6263b99d15625957cbd0b0cb7b7305fcda5f4e8963882b1b966b6de3b3ea5e7",
+      "tools/owned-read-proof/test_controlled_notifications.py": "a9e8849618131cab4f98caa44a97080003149dba03be3f8c62e48a891341d430",
+      "tools/owned-read-proof/test_controlled_replay.py": "01f4fef9bbce07658089d5a2e98893d903ff9b87734f9449007d073a0d6707c8",
+      "tools/owned-read-proof/test_controlled_save_semantics.py": "ba8b05cf34187da40aae391f61b876be0966acb904c565d82c977e68682166c2",
+      "tools/owned-read-proof/test_controlled_semantics.py": "3fc1b9c87c4a49d9adf1a60dfc6973d2cd43bc0c4a3310c9bc709a19bf949253",
+      "tools/owned-read-proof/test_controlled_timestamps.py": "b7070cdd15fccc58722050a9a0f8782113d60938320cf7467cf15885f6ff0797",
+      "tools/owned-read-proof/test_controlled_v2_semantics.py": "cc2a27be6f221654ecc1200aa14e098bf5918d94e838e3c830672ec03f9d09a1",
+      "tools/owned-read-proof/test_current_image_inspection.py": "391b22f124cbc2a3f39419ae720a32b4317f972a4851d0d46b6170b656aaf890",
+      "tools/owned-read-proof/test_current_main_preparation.py": "cc1d80a875f2ac5323611d8c29a05653ddfa8fa98a5b0a5266b96de01bc1822b",
+      "tools/owned-read-proof/test_current_qualification_boundaries.py": "fe3d7049f5b450ea3e7f782fa35217d36db0b8520c69194f10f3da9e62a1ac57",
+      "tools/owned-read-proof/test_diagnostic_codes.py": "6b532a4210bcf981d0c58e0d1903bea3e0b7fed5b359fa7c975b9e1910822640",
+      "tools/owned-read-proof/test_diagnostic_rollback.py": "2be0a5d33c16458d60cf5894aee613abd980670a0d47607cf02fc09d0ea45149",
+      "tools/owned-read-proof/test_diagnostic_writer.py": "3cd853f6f2127aafb7b445c9073a8c6957e6c792483a2b93e8f148afdd7177fb",
+      "tools/owned-read-proof/test_finalizer_worker_guard.py": "169370d9a722cc359b9026f3578d53d2185379ca4fb90f2ca87d54e3e7852734",
+      "tools/owned-read-proof/test_intervals.py": "f16d607779cbc219e8543051549469d5b236b00eb42553eff7743738dbf5a8eb",
+      "tools/owned-read-proof/test_kernel_causality.py": "6dcd52d28073e1d320119fa80393764bdd9ab106e390479f71438fbe8a338f2c",
+      "tools/owned-read-proof/test_kernel_runtime_queries.py": "82b51e84bb394714e746199b23f4d97eb378b3092a6539bf73985ae31a06d4c2",
+      "tools/owned-read-proof/test_observer.py": "9786197702aa5d44d64a793fc1f95090de4853f05725c0fecde6d0987bd66418",
+      "tools/owned-read-proof/test_offline_attempt_model.py": "4d201ed5e1906a68851c2e789172f27a3f13ca57432363e9de5ff5b19a447d9e",
+      "tools/owned-read-proof/test_offline_cleanup_privacy.py": "82d09e64cf47b43e6211883690b5f4ca51c6f237240eebd1589121deba838400",
+      "tools/owned-read-proof/test_offline_vm_attempt.py": "a7113d8232ee44245b6cc34b0cf26dce52ec8297894eff5c68c0c0473ed69cda",
+      "tools/owned-read-proof/test_query_rollback.py": "ff69a71f147d390a59de4b82e216ae8cb4632da7d599d108873ef49f8ae0bc8d",
+      "tools/owned-read-proof/test_retention_rollback.py": "a2bc6c9b975fc91bfc0a714cab21602495d053a96254971f3fc29132ac393b96",
+      "tools/owned-read-proof/test_source_sizing.py": "16e10ae04f3ae749c9dced736989935eab5fd29d4ff7454b5193905f3c40b1ed",
+      "tools/owned-read-proof/test_sparse_rollback.py": "5db2cedec4d5dfc2ad97149de47c144f2b6264234e4e50ce54eb54f80d1362cc",
+      "tools/owned-read-proof/test_stop_error_precedence.py": "bd5704d3d9d654c824dba8f0d2f764c76424e8503b3caa4f8b5c60506d9ce8f7",
+      "tools/owned-read-proof/test_traced_disposal_gate.py": "ef0a697ec2c828493ae9c429457ee974018485fe57cba5f4caa617b3025d2646",
+      "tools/owned-read-proof/test_traced_failure_privacy.py": "7d34fa6a7fde3ff7eade8f2fb37148be6fa5b8d01dd3d2d2afa065dec762f64c",
+      "tools/owned-read-proof/test_worker_error_privacy.py": "1733908efc1f9e37a9306aba2d3c99d9e88248a1dc7370e8cb26ba7e1a517fa1",
+      "tools/owned-read-proof/test_zero_private_wake.py": "f3a690d5b6ba653b6997b14068d4c4fcc97b0c2a62d2527c0ed606f33a664678",
+      "tools/owned-read-proof/verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310",
+      "docs/preparation/tool-execution-guards/controlled-currentness-composition-frozen-build.json": "090f842e10e5e7f28a6599665f167b1df1f16457c1c45aa5ffb7eb858be87412"
+    },
+    "claim": "new unlaunched source fixture only; no original observed image or authority"
+  },
+  "normalizedDependencyComparison": {
+    "oldCount": 191,
+    "newCount": 192,
+    "newOnly": {
+      "@agentclientprotocol/sdk/dist/stream-limits.js": {
+        "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/stream-limits.js",
+        "sha256": "74f186d8bfb4106d865cf3853c15386d7d8486e097a2300a8eac3aec551cb889"
+      }
+    },
+    "oldOnly": {},
+    "changed": {
+      "@agentclientprotocol/sdk/dist/acp.js": {
+        "old": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/acp.js",
+          "sha256": "cc717d74b018c1fe3e1e53e31ff6355ccf52e729e753666051bda42499be7b9f"
+        },
+        "expected": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/acp.js",
+          "sha256": "3c11f3eede21589735cd85f99f48ca7e9eaa93c39be5add28031a60b48e6fb74"
+        }
+      },
+      "@agentclientprotocol/sdk/dist/line-buffer.js": {
+        "old": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/line-buffer.js",
+          "sha256": "78002508f23baee1b013ca5dc68acaa2bcde1e0b96e8f06ddf2828623eb0acb8"
+        },
+        "expected": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/line-buffer.js",
+          "sha256": "d481b5e42b0d9dbedac1e5b213903da5081d208b21d2f3a9f185ca58edddea61"
+        }
+      },
+      "@agentclientprotocol/sdk/dist/schema-deserialize.js": {
+        "old": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/schema-deserialize.js",
+          "sha256": "1fd2240595b8d813993f08f5816b7503f1acea8acec4186d86cb3b674e101c05"
+        },
+        "expected": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/schema-deserialize.js",
+          "sha256": "ce6ff0d877d0db0ba4ec4da3d5fedb8112d6cd615bd1027dd0f8a679a9a136b2"
+        }
+      },
+      "@agentclientprotocol/sdk/dist/schema/guards.gen.js": {
+        "old": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/schema/guards.gen.js",
+          "sha256": "7e706751f22e6a82165f813705aabc8e4a65351541397487e4b55cac62a88f46"
+        },
+        "expected": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/schema/guards.gen.js",
+          "sha256": "ccc709ce4208da98f9b17e1c1b2169fb64ebc655ca47049a5b95f064a258a6bf"
+        }
+      },
+      "@agentclientprotocol/sdk/dist/schema/index.js": {
+        "old": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/schema/index.js",
+          "sha256": "e855a3f9b5f8e7de952410f7b048393a16650e096ec7e51fbfef5902bd37bc06"
+        },
+        "expected": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/schema/index.js",
+          "sha256": "cad431bef827793644cd7ad849af4a710cd079d50877c3f46b872f0f42f74cbf"
+        }
+      },
+      "@agentclientprotocol/sdk/dist/schema/zod.gen.js": {
+        "old": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/schema/zod.gen.js",
+          "sha256": "52aa742f3e4bd9a93428a9abd58639cf2b84de42fc770b417efdcd204a8aa293"
+        },
+        "expected": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/schema/zod.gen.js",
+          "sha256": "d5c2fa481b792119ae52437697004cf41bf595f6de6520dce67ddde78a276605"
+        }
+      },
+      "@agentclientprotocol/sdk/dist/stream.js": {
+        "old": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.5.0_zod@4.6.5/node_modules/@agentclientprotocol/sdk/dist/stream.js",
+          "sha256": "042e7b09f1d1d7485c75777fbc8f864f68f76e5b3c30aeb51d60dd5d4db86ab3"
+        },
+        "expected": {
+          "path": "node_modules/.pnpm/@agentclientprotocol+sdk@1.8.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/stream.js",
+          "sha256": "53377a7f6bcc0e7193c642f8eaf94b1fef781e54b7d8ec564cc5e690c4e8d1e0"
+        }
+      },
+      "zod/v4/core/compile.js": {
+        "old": {
+          "path": "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/compile.js",
+          "sha256": "df28853593428e5a2a8729b09f43baf0998eaae7f1e37797993035187833b054"
+        },
+        "expected": {
+          "path": "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/compile.js",
+          "sha256": "53fcf24821f50ecf42492ab7101abe8a50ead8286a53567d71648fe5ca346b99"
+        }
+      },
+      "zod/v4/core/schemas.js": {
+        "old": {
+          "path": "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/schemas.js",
+          "sha256": "e632b655441418f0593153abc6809fd81cf3e0782d810622d0a4fa50ef6e182e"
+        },
+        "expected": {
+          "path": "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/schemas.js",
+          "sha256": "0ee56e8afbae28eeb1060a162ad7e56f0675ee6fb83f0ae56bea2e088f6cdbc0"
+        }
+      },
+      "zod/v4/core/util.js": {
+        "old": {
+          "path": "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/util.js",
+          "sha256": "728f52b496620336775eafcdb91c0a574380086e53f215b55c58eedc1422c49c"
+        },
+        "expected": {
+          "path": "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/util.js",
+          "sha256": "bb08133b11b478c8e715038fff26ebea204d7fd5443fba31fe138b142d202efb"
+        }
+      },
+      "zod/v4/core/versions.js": {
+        "old": {
+          "path": "node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/versions.js",
+          "sha256": "63b38035ff5e2a5a5cfe5665e271af72b0cf9791e770dccf5e99d977064fb96c"
+        },
+        "expected": {
+          "path": "node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/versions.js",
+          "sha256": "28439030e50c35b90e1f88726297a346f5285e32e24da7ea4ce15618661d9ac1"
+        }
+      }
+    },
+    "unchangedCommonCount": 180
+  },
+  "currentFreshSetup": {
+    "root": "/workspace/orca-current-setup-validation",
+    "sourceKeys": 387,
+    "repoKeys": 195,
+    "dependencyKeys": 192,
+    "allSourceBytesMatchManifest": true,
+    "manifestEqualsRetained": true,
+    "committedLockSha256": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+    "installedLockSha256": "a2077f20668fef13914cac77e73f0113d9b2783706f0ebec025f3aa7863e220f",
+    "lockWorkspaceSemanticEqual": true,
+    "outputs": {
+      "controlled-build.json": {
+        "bytes": 48027,
+        "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+      },
+      "controlled-child.mjs": {
+        "bytes": 5713,
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+      },
+      "controlled-producer.mjs": {
+        "bytes": 2248652,
+        "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+      }
+    }
+  },
+  "historicalFreshSetup": {
+    "root": "/workspace/orca-legacy-image-fixture",
+    "sourceKeys": 386,
+    "repoKeys": 194,
+    "dependencyKeys": 192,
+    "allSourceBytesMatchManifest": true,
+    "manifestEqualsRetained": true,
+    "committedLockSha256": "352f24faa4a0b52765738749035e39a89e1d0f40c5312b61655be1040cdb6c8a",
+    "installedLockSha256": "11e3f2d0badb46cf8cf1a92057e2ce2cb454bf0277c6c2ff72b4b96fe6711b34",
+    "lockWorkspaceSemanticEqual": true,
+    "outputs": {
+      "controlled-build.json": {
+        "bytes": 47911,
+        "sha256": "7363dcc4d83530f43744c7c031f3f9f054c21917b3ffc99d27725c3840634dc2"
+      },
+      "controlled-child.mjs": {
+        "bytes": 5713,
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+      },
+      "controlled-producer.mjs": {
+        "bytes": 2184692,
+        "sha256": "b155c2ae67af5be2b74468b909911c1af0a9db7c7559d76f06bfd089168b99f6"
+      }
+    }
+  },
+  "installations": {
+    "current": {
+      "log": "/tmp/orca-current-frozen-install.log",
+      "logSha256": "fe0b0e6e65e2edf20b8459afcdb691ed033bcc6a24959ae96db02bfaef088413",
+      "exitCode": 0,
+      "seconds": 15.4,
+      "frozenLockfile": true,
+      "normalPolicyChecks": true,
+      "skipElectronBinaryOnly": true
+    },
+    "historical": {
+      "log": "/tmp/orca-legacy-frozen-install.log",
+      "logSha256": "7ac031aaa56acfa586b99cefd93efff6b910834e361bf2968cda88334cd0a0f5",
+      "exitCode": 0,
+      "seconds": 14.2,
+      "frozenLockfile": true,
+      "normalPolicyChecks": true,
+      "skipElectronBinaryOnly": true
+    },
+    "primaryRepair": {
+      "log": "/tmp/orca-primary-frozen-install.log",
+      "logSha256": "f42d7f199049ba6289d1fb66ff07f9f2874bafc261025e59b061fc5d7ace90eb",
+      "exitCode": 0,
+      "seconds": 6.1,
+      "frozenLockfile": true,
+      "normalPolicyChecks": true,
+      "skipElectronBinaryOnly": true
+    }
+  },
+  "toolchain": {
+    "node": "v24.21.0",
+    "nodePath": "/workspace/.orca-tools/node-v24.21.0-linux-x64/bin/node",
+    "nodeSha256": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c",
+    "pnpm": "12.4.2",
+    "pnpmEntrySha256": "b6e13402c88a275f5b1ec4fb420df8763179bbe9f2b87a10911be44a3622d68d",
+    "tsx": "4.23.15",
+    "esbuild": "0.28.2"
+  },
+  "verification": {
+    "normalSelection": {
+      "command": "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH ORCA_LEGACY_IMAGE_FIXTURE=/workspace/orca-legacy-image-fixture timeout --kill-after=5s 180s python3 -B tools/owned-read-proof/check_nonlive.py",
+      "cwd": "/workspace/orca-current-setup-validation",
+      "logSha256": "7ca5c70a2722748ff962ef54c6cfa54be08efc4111ca6c0f2cbc04f2d1860bbb",
+      "exitCode": 0,
+      "outerTests": 527,
+      "historicalChildTests": 7,
+      "outerSeconds": 26.512,
+      "historicalChildSeconds": 6.187
+    },
+    "priorFailedSelection": {
+      "logSha256": "f3cc805de9db66b57489cc6ab9bcce1e31df9c04a0749d700a6e4764b0d9ef01",
+      "exitCode": 1,
+      "tests": 512,
+      "passingTests": 511,
+      "testErrors": 1,
+      "classSetupErrors": 1,
+      "seconds": 17.008,
+      "qualification": "retained original failed run; superseded only as setup status, not rewritten as a pass"
+    },
+    "primaryOptimizedFocused": {
+      "command": "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH ORCA_LEGACY_IMAGE_FIXTURE=/workspace/orca-legacy-image-fixture PYTHONPATH=tools/owned-read-proof timeout --kill-after=5s 60s python3 -O -B -m unittest test_controlled_image_pins test_current_image_inspection test_source_sizing -q",
+      "cwd": "/workspace/Project_Orca",
+      "logSha256": "b7ff6c057afb671b8a16286e0508aca850611857204cde4e20b7e5e5e62ec24e",
+      "exitCode": 0,
+      "outerTests": 32,
+      "historicalChildTests": 7,
+      "outerSeconds": 7.131,
+      "historicalChildSeconds": 5.749
+    },
+    "missingFixtureNegative": {
+      "command": "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH PYTHONPATH=tools/owned-read-proof env -u ORCA_LEGACY_IMAGE_FIXTURE timeout --kill-after=5s 15s python3 -B -m unittest test_controlled_image_pins.HistoricalImagePinControls.test_real_historical_source_and_physical_controls -q",
+      "logSha256": "dba2bf069511fb9a20ba854f13f2d1eeebb54929903b21447f84d2ba7c7afc4b",
+      "exitCode": 1,
+      "tests": 1,
+      "errors": 1,
+      "expectedFailureForMissingConfiguration": true,
+      "fixedRefusal": "required ORCA_LEGACY_IMAGE_FIXTURE is missing; historical coverage is blocked"
+    }
+  },
+  "preserved": {
+    "productionEligible": false,
+    "launchRefusals": true,
+    "sourcePinsAndAssertionsUnchanged": true,
+    "reportLimitBytes": 1048576,
+    "originalMetadataLimitBytes": 1048576,
+    "traceLimitBytes": 268435456,
+    "runtimeAssetCount": 32,
+    "runtimeAssetLimitBytes": 268435456,
+    "restrictiveOriginalSourceLimitBytes": 536870912,
+    "noLiveOrHostWork": true,
+    "noOriginalObservedImageClaim": true
+  },
+  "primaryRepair": {
+    "committedLockSha256": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+    "installedLockSha256": "a2077f20668fef13914cac77e73f0113d9b2783706f0ebec025f3aa7863e220f",
+    "installedWorkspaceLockMatchesCommitted": true
+  },
+  "independentReview": {
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "xhigh",
+    "sourceAndEvidenceAvailable": true,
+    "findings": [],
+    "currentRepositoryInputsVerifiedAgainstGitAndManifest": 195,
+    "currentDependencyInputsVerifiedAgainstManifest": 192,
+    "historicalRepositoryInputsVerifiedAgainstGitAndManifest": 194,
+    "historicalDependencyInputsVerifiedAgainstManifest": 192,
+    "protectedHistoricalInputsVerified": 199,
+    "disjointHarnessAndReferenceFilesVerified": 63,
+    "recordedInstallAndTestLogHashesVerified": 6,
+    "staleNodeVersionControl": {
+      "documentedNode": "v24.21.0",
+      "previousNode": "v24.19.0",
+      "staleOutputBytesEqual": true,
+      "nodeVersionAloneRuledOut": true
+    },
+    "repairedPrimaryIndependentlyRebuiltToExactCurrentPins": true,
+    "focusedTests": {
+      "outer": 32,
+      "historicalChild": 7,
+      "outerSeconds": 6.973,
+      "childSeconds": 5.786,
+      "logSha256": "5a0881beceda53bba2df47d6b01cdf124562395700d7c071986d2b360b88d1e6",
+      "exitCode": 0
+    },
+    "correctionsIncorporated": [
+      "Existing synthetic closure callbacks supply no runtime authority; no source checker or pin assertion was mocked.",
+      "Test bodies unchanged by setup repair from c848c190; current harness differs from raw historical SOURCE."
+    ],
+    "qualification": "nonlive setup and evidence review only; no formal security or runtime qualification"
+  }
+}

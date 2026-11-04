@@ -1,0 +1,95 @@
+{
+  "record": "bounded-independent-sparse-registration-constructor-rollback-review",
+  "reviewer": "/root/independent_review",
+  "baseCommit": "e908c2d1c60d8555e296189b09ab178b17bce358",
+  "candidateState": "Uncommitted preparation delta; no reviewer source edits or publication.",
+  "candidateFiles": {
+    "tools/owned-read-proof/controlled_diagnostics.py": "c55743ee281b04c62dd0027a4392f0337f6d37d1d9a386808fad75c7b7e9c60f",
+    "tools/owned-read-proof/test_sparse_rollback.py": "5db2cedec4d5dfc2ad97149de47c144f2b6264234e4e50ce54eb54f80d1362cc",
+    "tools/owned-read-proof/check_nonlive.py": "8a451dbb2292405376de3b18099ebba804b494257ef4a819bffd86a936a8bdad",
+    "docs/preparation/tool-execution-guards/current-image-sparse-rollback.md": "7fcdbaaab1a9fe3a6fa3699168d60bff532b7478ce2f5493577536002f9e51c9"
+  },
+  "reviewCoverage": "Complete diagnostics diff, all 16 new injected test methods, selector addition and complete handoff. Relevant unchanged pin, reader and outer Sparse methods read for ownership/integration consequences. Not a whole-stack audit, formal approval or kernel/runtime qualification.",
+  "sourceCorrespondence": {
+    "onlyChangedAST": ["SparseDiagnostics.__init__", "SparseDiagnostics._rollback_pin", "SparseDiagnostics.bind"],
+    "unchanged": [
+      "whole PinnedProcess class",
+      "read_at and other module helpers",
+      "SparseDiagnostics.capture/start/stop/retain_and_close",
+      "imports",
+      "all top-level assignments, CONFIG and limits"
+    ],
+    "newObserverImport": false,
+    "measuredModuleHashChanges": true
+  },
+  "assessment": {
+    "registration": "Constructed pin remains local until dictionary assignment returns. Failed insertion detaches only identical owned entry via native dict operations, disposes pin once and preserves primary error over cleanup. Existing registrations remain untouched. Successful registration remains dictionary-owned after lock-exit failure.",
+    "errorPrecedence": "A recorded body failure wins over secondary lock-exit failure by object identity without formatting. First private failure and first private cleanup slots are sticky across later failures. Ordinary fixed-string role keys, native internal dict and trusted nonsuppressing lock semantics are assumed; no arbitrary hostile mapping/concurrent mutation proof.",
+    "constructor": "Tracked resource/private slots initialized before setup. Wrapped resource open/read/parse/bind failures drain dictionary ownership before pin cleanup, attempt every pin despite disposal failures, then consume resource before close. Failed pin construction handles its own rollback and is not repeated by Sparse owner.",
+    "firstFailureBoundary": "Path(trace) and Lock/Event construction remain before acquisition try; unknown-role check remains before bind try. Such errors acquire no tracked descriptor and are not retained in _first_failure. No universal early-failure capture claimed.",
+    "integration": "Two tests execute actual unchanged PinnedProcess under injected OS/counter/poll and verify exact fake-FD disposal once. Constructor rollback has no sampler and must not be reused as a running-owner teardown. Private exceptions remain in-memory potentially sensitive traceback state.",
+    "scope": "No new launcher, worker/thread operation, storage writer, pin, execution limit or authority pathway. Final retention/stop/start and private diagnostic formatting remain unchanged."
+  },
+  "independentValidation": {
+    "checkout": "/workspace/orca-independent-current-rebuild",
+    "checkoutCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+    "candidatePythonFilesCopiedExactly": 50,
+    "disjointFromDeclaredImageInputs": true,
+    "harnessSnapshot": {
+      "path": "/tmp/orca-current-main-evidence/sparse-rollback-independent-harness.json",
+      "sha256": "4b045d5d7344f71837407c6a94496e90a0f150681593b5f8afcb8e51ee834f0c"
+    },
+    "declaredBuildInputsVerifiedBeforeAndAfter": 387,
+    "candidatePythonUnchangedAfterTests": true,
+    "selection": "test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+    "methodBreakdown": {
+      "newSparseInjected": 16,
+      "diagnosticInjected": 16,
+      "queryInjected": 16,
+      "pureNativeReplay": 10,
+      "inertAttempt": 13,
+      "cleanupPrivacy": 18
+    },
+    "workingDirectory": "/workspace/orca-independent-current-rebuild/tools/owned-read-proof",
+    "commands": [
+      "timeout --kill-after=5s 60s python -B -m unittest -v test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+      "timeout --kill-after=5s 60s python -B -O -m unittest -v test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy"
+    ],
+    "normal": {
+      "passed": 89,
+      "seconds": 0.065,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/sparse-rollback-independent-normal.log",
+      "sha256": "c27224671af1278796237436e4a07d6972da5119c66c384862697379e070639d"
+    },
+    "optimized": {
+      "passed": 89,
+      "seconds": 0.072,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/sparse-rollback-independent-optimized.log",
+      "sha256": "2c6d104500d91da40aa6d4677e1158af9b4bd88055e376dfac9967e420d0efd5"
+    },
+    "executionBoundary": "Actual Sparse constructor/bind/helper run only with inert locks, threading factories, fake OS/paths/counter/poll or pin fixtures; two integration cases use actual PinnedProcess under injection. No real procfs/cgroup/host descriptor/query/poll/thread, historical launcher or image build.",
+    "notRun": [
+      "Full nonlive selector",
+      "Whole diagnostic/real-query modules",
+      "Historical physical regressions/builds",
+      "Running sampler, real host queries or process settlement",
+      "Observer/tracer/provider/daemon/App Smoke"
+    ]
+  },
+  "findings": {
+    "blocking": [],
+    "documentationPrecision": "Resolved before review snapshot: handoff explicitly limits private first-failure retention to wrapped acquisition/registration paths and lists uncaptured Path/Lock/Event setup and unknown-role refusal. No implementation change needed."
+  },
+  "remainingGates": [
+    "Final retain_and_close executes stop/value construction before cleanup; a pin cleanup failure can skip later disposal.",
+    "Sampler startup/join and shared ownership remain unmodified and unqualified.",
+    "Private exception objects, existing error string formatting and file publication have no complete privacy/durable retention guarantee.",
+    "Trusted ordinary Python object/lock/key assumptions; no arbitrary async-interruption or concurrency safety claim.",
+    "Leader/worker/lock/pipe ownership, authenticated session, preventive containment, loaded-runtime closure and original bootstrap-to-connected/current-image qualification remain open.",
+    "Original CI failure history remains preserved; PR metadata hold and #779/#793/#794 restrictions remain binding."
+  ],
+  "outcome": "No blocking finding for focused non-live preparation publication; no formal security approval, runtime designation, live authority or merge approval.",
+  "excludedActions": "No candidate edits, metadata mutation/retry/workaround, CI action, publication, real queries/probes/threads, historical body invocation/extraction, image build/launch, limit/pin/security/credential changes or denied operations."
+}

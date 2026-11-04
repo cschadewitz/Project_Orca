@@ -1,0 +1,646 @@
+"""Crypto negatives and synthetic semantic predicate controls; never bootstrap acceptance."""
+import base64
+import json
+import unittest
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from controlled_semantics import decode, parse
+
+
+class AuthenticationControls(unittest.TestCase):
+    def envelope(self, plaintext=b'{"value":1}'):
+        key = bytes(range(32))
+        nonce = bytes(range(12))
+        raw = AESGCM(key).encrypt(nonce, plaintext, b'orca:protected-execution:v1:private-execution:test.payload.json')
+        obj = {'version': 1, 'algorithm': 'aes-256-gcm', 'nonce': base64.b64encode(nonce).decode(),
+               'ciphertext': base64.b64encode(raw[:-16]).decode(), 'tag': base64.b64encode(raw[-16:]).decode()}
+        return key, obj
+
+    def test_authenticated_json_roundtrip_has_no_authority(self):
+        key, obj = self.envelope()
+        self.assertEqual(decode('test.payload.json', json.dumps(obj), key), {'value': 1})
+
+    def test_wrong_record_identity_and_key_refuse(self):
+        key, obj = self.envelope()
+        for name, supplied in [('other.payload.json', key), ('test.payload.json', bytes(32))]:
+            with self.assertRaises(InvalidTag):
+                decode(name, json.dumps(obj), supplied)
+
+    def test_ciphertext_or_tag_corruption_refuses(self):
+        for field in ('ciphertext', 'tag'):
+            key, obj = self.envelope()
+            data = bytearray(base64.b64decode(obj[field])); data[0] ^= 1
+            obj[field] = base64.b64encode(data).decode()
+            with self.assertRaises(InvalidTag):
+                decode('test.payload.json', json.dumps(obj), key)
+
+    def test_unknown_envelope_fields_or_nonce_bounds_refuse(self):
+        for change in ({'extra': True}, {'version': 2}, {'version': True}, {'version': 1.0}, {'nonce': 'eA=='}, {'algorithm': 'unknown'}):
+            key, obj = self.envelope(); obj.update(change)
+            with self.assertRaises(RuntimeError):
+                decode('test.payload.json', json.dumps(obj), key)
+
+    def test_duplicate_json_keys_refuse(self):
+        with self.assertRaisesRegex(RuntimeError, 'duplicate'):
+            parse('{"kind":"original","kind":"replacement"}')
+
+class CredentialIdentityControls(unittest.TestCase):
+    def test_exact_two_distinct_designated_credentials(self):
+        from controlled_semantics import designated_credentials
+        original = [{'principal': 'controlled-test-operator', 'id': 'operator'},
+                    {'principal': 'controlled-test-reviewer', 'id': 'reviewer'}]
+        self.assertEqual(len(designated_credentials(original)), 2)
+        for records in [original + [dict(original[0], id='extra')],
+                        [original[0], dict(original[0], id='extra')],
+                        [original[0], dict(original[1], id='operator')], [], original[:1]]:
+            with self.subTest(records=records), self.assertRaises(RuntimeError):
+                designated_credentials(records)
+
+
+# All data below is deliberately synthetic. Passing these predicates is not a
+# bootstrap run, source review, kernel-provider proof or connected capability.
+from copy import deepcopy
+from types import SimpleNamespace
+from urllib.parse import quote
+import hashlib
+import os
+import stat
+
+from controlled_semantics import authenticate_bootstrap, digest, encoded
+from controlled_timestamps import iso_ns
+from test_controlled_timestamps import clock_original, START, NS
+
+
+def synthetic_bootstrap():
+    original = clock_original()
+    original['node'] = '/node'
+    machine, platform = {'x86_64': (62, 'linux-x64'), 'aarch64': (183, 'linux-arm64')}[os.uname().machine]
+    elf = b'\x7fELF\x02\x01\x01' + bytes(11) + machine.to_bytes(2, 'little')
+    original['immutable']['/node'] = {'hex': elf.hex(), 'family': 'runtime'}
+    base = '/synthetic'
+    w, store = base + '/workspace', base + '/workspace/.orca'
+    ident = store + '/workspace-identity/id'
+    uid = '12345678-1234-4123-8123-123456789abc'
+    raw = (uid + '\n').encode()
+    directories = {p: [1, i + 10, stat.S_IFDIR | 0o700, os.getuid(), os.getgid()] for i, p in
+                   enumerate([base + '/control', base + '/releases', w, store, store + '/workspace-identity'])}
+    def directory(p):
+        return {'path': p, 'device': directories[p][0], 'inode': directories[p][1]}
+    roots = {'control': directory(base + '/control'), 'releases': directory(base + '/releases'),
+             'workspaceIdentity': {'path': ident, 'device': 1, 'inode': 30,
+                 'digest': hashlib.sha256(raw.hex().encode()).hexdigest(),
+                 'directory': directory(store + '/workspace-identity')},
+             'roles': [{'role': role, 'path': p, 'directory': directory(parent), 'target': w}
+                 for role, p, parent in [('config', w, w), ('sidecar', w + '/orca.permissions.json', w), ('store', store, store)]],
+             'targets': [directory(w)]}
+    binding = {'workspaceRef': hashlib.sha256(raw).hexdigest(), 'rootBindingRef': digest(roots), 'enrollmentRef': uid}
+    paths = {p: SimpleNamespace(physical=(os.major(v[0]), os.minor(v[0]), v[1])) for p, v in directories.items()}
+    paths[ident] = SimpleNamespace(data=raw, physical=(0, 1, 30), mode=stat.S_IFREG | 0o600,
+                                  uid=os.getuid(), gid=os.getgid())
+    witness = (binding['workspaceRef'] + '\n' + binding['rootBindingRef'] + '\n').encode()
+    original.update(base=base, leaderPid=10, offset=2, length=4, directories=directories)
+    original['immutable'].update({ident: {'hex': raw.hex(), 'identity': [1, 30, stat.S_IFREG | 0o600, os.getuid(), os.getgid()]},
+        base + '/control/never-typed': {'hex': witness.hex(), 'family': 'enrollment-witness'}})
+    marker = {'version': 1, 'workspaceRef': binding['workspaceRef'],
+              'sidecarRef': hashlib.sha256((w + '/orca.permissions.json').encode()).hexdigest(),
+              'format': 'orca-permissions-v2', 'minimumWriterContract': 'orca-typed-sidecar-v1',
+              'rootBindingRef': binding['rootBindingRef'], 'enrollmentRef': uid, 'state': 'enrollment-pending'}
+    for name, obj in [('intent', marker), ('enrolled', {**marker, 'state': 'enrolled'})]:
+        paths[base + '/control/' + name + '.json'] = SimpleNamespace(data=encoded(obj).encode())
+    sidecar = encoded({'version': 2, 'agents': {}, 'scopedRules': {'version': 1, 'records': []}}).encode()
+    paths[w + '/orca.permissions.json'] = SimpleNamespace(data=sidecar)
+    revision = hashlib.sha256(sidecar).hexdigest()
+    def iso(seconds):
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(START // NS + seconds, timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+    credentials = [{'principal': p, 'id': i, 'secretSha256': 'a' * 64, 'permissions': perms,
+                    'scope': {'workflows': '*', 'runs': 'all'}, 'createdAt': iso(1)} for p, i, perms in
+                   [('controlled-test-operator', 'operator1234', ['permissions.grant', 'inputs.answer']),
+                    ('controlled-test-reviewer', 'reviewer1234', ['permissions.grant'])]]
+    paths[base + '/credentials.json'] = SimpleNamespace(data=encoded({'version': 1, 'credentials': credentials}).encode())
+    lease = {'resource': 'run:controlled', 'holder': uid, 'pid': 10, 'host': '\0orca-guarded-lease',
+             'acquiredAt': iso(1), 'renewedAt': iso(1), 'ttlMs': 9007199254740991,
+             'guardedTtlMs': 60000, 'guardedHost': os.uname().nodename, 'guardedId': uid}
+    paths[store + '/leases/run%3Acontrolled.json'] = SimpleNamespace(data=encoded(lease).encode())
+    actor = {'principalId': credentials[0]['principal'], 'credentialId': credentials[0]['id']}
+    facts = {**actor, 'permissions': ['inputs.answer', 'permissions.grant'], 'scope': credentials[0]['scope'],
+             'expiresAt': None, 'createdAt': iso(1)}
+    revocation = digest(facts)
+    epoch = digest([lease[k] for k in ('resource', 'holder', 'guardedId', 'acquiredAt', 'pid', 'guardedHost')])
+    invocation = {'instanceId': 'controlled-test-boot', 'sessionId': 'controlled-session',
+                  'turnId': 'controlled-human-turn', 'invocationId': 'controlled-human-invocation',
+                  'runId': 'controlled', 'rootRunId': 'controlled', 'stepRunId': 'controlled-step',
+                  'attemptId': 'controlled-attempt', 'agentId': 'controlled-agent', 'hostId': 'controlled-local-linux',
+                  'runnerId': 'controlled-runner', 'principalRef': 'controlled-test-operator'}
+    data = b'disposable candidate bytes'
+    stamp = (1, 99, stat.S_IFREG | 0o400, os.getuid(), os.getgid(), 0, len(data), 123, 456)
+    resource_ref = 'owned-file:' + uid
+    physical = resource_ref + ':' + ':'.join(map(str, stamp))
+    resources = [{'operation': 'fs.readOwnedBytes', 'physicalTargetRef': physical}]
+    resource_root = base + '/orca-owned-service-abcdef'
+    coverage_id = resource_ref + ':source-v1'
+    representation = {'kind': 'parsed-json', 'codecVersion': 'orca-owned-file-read-v1',
+                      'privateRef': 'synthetic-read:' + uid + ':parameters',
+                      'bindingRef': 'synthetic-read:' + uid + ':parameters'}
+    action = {'version': 1, 'actionId': uid,
+              'original': deepcopy(representation), 'dispatch': deepcopy(representation),
+              'transformations': [], 'offeredChoices': [],
+              'rawDuplicateKeyValidation': {'state': 'absent', 'reason': 'Exact structured own data fields; no raw JSON parser'},
+              'executableAndInterpreter': {'state': 'absent', 'reason': 'Injected read has no child executable'},
+              'stdin': {'state': 'absent', 'reason': 'Injected read has no stdin'}, 'profileRef': 'orca-owned-file-read-v1', 'capturedByBoundaryId': 'orca-owned-file-read-v1',
+              'operation': 'fs.readOwnedBytes', 'invocation': invocation,
+              'authority': {'capturedGeneration': 'controlled-original-ceiling', 'currentPolicyRevision': revision,
+                  'revocationEpoch': revocation, 'leaseEpoch': epoch, 'authorityRevision': digest([binding, revocation, epoch])},
+              'workspaceRef': {'state': 'complete', 'value': resource_ref + ':temporary-tree'},
+              'effectiveCwd': {'state': 'complete', 'value': resource_root},
+              'relevantStateRefs': {'state': 'complete', 'value': [physical]},
+              'environmentAndCredentialRefs': {'state': 'complete', 'value': []},
+              'coverage': {'version': 1, 'coverageId': coverage_id, 'boundaryId': 'orca-owned-file-read-v1',
+                  'provider': 'orca-owned-disposable-file-service', 'providerVersion': '1', 'adapterVersion': '1',
+                  'tool': 'fs.readOwnedBytes', 'toolSchemaVersion': '1', 'hostId': 'controlled-local-linux',
+                  'platform': platform, 'level': 'policy-per-ask', 'evidence':
+                  {'sourceRefs': ['packages/engine/src/owned-file-read-service.ts', 'packages/engine/src/synthetic-read-fence.ts'],
+                   'installedRefs': [], 'independentlyObservedEffects': False},
+                  'negotiatedHook': {'state': 'complete', 'value': resource_ref + ':retained-descriptor'},
+                  'protectedConfiguration': {'state': 'complete', 'value': resource_ref + ':controlled-test-scope'},
+                  'guaranteedEffects': ['bounded-positional-read-of-retained-detached-inode', 'one-effect-per-original-invocation'],
+                  'unsupportedPaths': ['arbitrary-path', 'external-writers', 'hostile-same-uid', 'root', 'remote-host',
+                                       'macos', 'windows', 'native-shell', 'alternate-mcp', 'production', 'restart-recovery']},
+              'resources': {'state': 'complete', 'value': resources}, 'expiresAt': iso(55),
+              'bindingRef': 'synthetic-read:' + uid + ':action'}
+    match = {k: invocation[k] for k in ('principalRef', 'agentId', 'hostId', 'runnerId')}
+    match.update(operation=action['operation'], profileRef=action['profileRef'], coverageId=coverage_id,
+                 effectiveCwd=resource_root, workspaceRef=resource_ref + ':temporary-tree', resources=resources, environmentAndCredentialRefs=[])
+    rule = {'ruleId': 'controlled-bootstrap-only', 'ruleRevision': '', 'status': 'approved',
+            'notBefore': iso(2), 'expiresAt': iso(55), 'decision': 'allow', 'match': match}
+    rule['ruleRevision'] = digest({k: v for k, v in rule.items() if k != 'ruleRevision'})
+    baseline = {'version': 1, 'originalAction': action, 'capturedCeiling': {'operation': action['operation'],
+                'profileRef': action['profileRef'], 'resourceRef': resource_ref, 'maximumInvocations': 2},
+                'binding': binding, 'operator': {'actor': actor, 'credential': {k: v for k, v in credentials[0].items() if k != 'secretSha256'}},
+                'lease': {**lease, 'host': lease['guardedHost'], 'ttlMs': 60000}, 'initialRevision': revision,
+                'profileRef': action['profileRef'], 'installedEvidenceRef': None,
+                'interval': {'offset': 2, 'length': 4}, 'expiresAt': iso(55), 'rules': [rule]}
+    auth_ref = 'synthetic-read:' + uid + ':evidence'
+    authorization = {'action': action, 'protectedEvidenceRef': auth_ref, 'verdict': {'version': 1, 'outcome': 'allow',
+                     'authorizedBy': {'kind': 'rule', 'ruleId': rule['ruleId'], 'ruleRevision': rule['ruleRevision']},
+                     'actionBindingRef': action['bindingRef'], 'authority': action['authority'], 'coverageId': coverage_id}}
+    semantics = {'controlled-baseline-v1': (uid, baseline),
+                 'controlled-capture-v1': ('capture:' + action['bindingRef'], {'action': action, 'bytes': encoded([action['profileRef'], resource_ref, physical, 2, 4])}),
+                 'controlled-authorization-v1': (auth_ref, authorization),
+                 'controlled-producer-observation-v1': ('23456789-1234-4123-8123-123456789abc', {'actionId': uid, 'authorizationRef': auth_ref})}
+    key = bytes(range(32))
+    private = store + '/private-execution/'
+    paths[private + '.execution-key'] = SimpleNamespace(data=key)
+    record_objects = {}
+    for kind, entry, durable in [('controlled-baseline-v1', 30, 35), ('controlled-capture-v1', 40, 45),
+                                 ('controlled-authorization-v1', 50, 55), ('controlled-producer-observation-v1', 70, 75)]:
+        record_objects[kind] = SimpleNamespace(creation_entry=entry, durable_publication_completion=durable,
+            physical=(0, 1, entry), published=True, directory_synced=True)
+    resource_path = resource_root + '/fixture'
+    resource = SimpleNamespace(data=data, physical=(0, 1, 99), mode=stamp[2], uid=stamp[3], gid=stamp[4],
+        resource_stamps={stamp}, birth_ns=START+2*NS, creation_entry=20, creation_path=resource_path,
+        effect_entries=[60], creation_record=(10, 'openat', ['AT_FDCWD', json.dumps(resource_path),
+        'O_WRONLY|O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC', '0400'], '20', 20, 20))
+    replay = SimpleNamespace(original=original, paths=paths, resources=[resource], leader=10,
+        entry_times={i: START + i * NS // 10 for i in range(20, 76)}, family=lambda p: 'resource')
+    return replay, semantics, record_objects, key
+
+
+def reauthenticate(fixture, mutate_payload=None):
+    replay, semantics, objects, key = fixture
+    private = replay.original['base'] + '/workspace/.orca/private-execution/'
+    for index, (kind, (ref, value)) in enumerate(semantics.items()):
+        name = quote(ref, safe='') + '.payload.json'
+        payload = {'runId': 'controlled', 'type': 'agent.update', 'sensitivityRefs': [], 'payload':
+                   {'stepRunId': 'controlled-step', 'sessionId': 'controlled-session', 'update':
+                    {'kind': kind, 'text': encoded({'kind': kind, 'value': value})}}}
+        if mutate_payload is not None:
+            mutate_payload(kind, payload)
+        plaintext = encoded(payload).encode()
+        nonce = index.to_bytes(12, 'big')
+        cipher = AESGCM(key).encrypt(nonce, plaintext,
+                                    ('orca:protected-execution:v1:private-execution:' + name).encode())
+        envelope = {'version': 1, 'algorithm': 'aes-256-gcm', 'nonce': base64.b64encode(nonce).decode(),
+                    'ciphertext': base64.b64encode(cipher[:-16]).decode(), 'tag': base64.b64encode(cipher[-16:]).decode()}
+        objects[kind].data = encoded(envelope).encode()
+        # The roundtrip explicitly establishes valid crypto for each negative control.
+        if AESGCM(key).decrypt(nonce, cipher,
+                ('orca:protected-execution:v1:private-execution:' + name).encode()) != plaintext:
+            raise AssertionError('synthetic reauthentication roundtrip differs')
+        replay.paths[private + name] = objects[kind]
+    return replay
+
+
+class SyntheticOriginalAuthorityControls(unittest.TestCase):
+    def test_synthetic_positive_predicates_return_no_acceptance_authority(self):
+        result = authenticate_bootstrap(reauthenticate(synthetic_bootstrap()))
+        self.assertEqual(result['authority'], 'none')
+        self.assertEqual(result['semanticRecords'], 4)
+        self.assertEqual(result['ownerOrigin'], 'unmeasured-source-precedes-create-entry')
+
+    def refuses(self, change, message):
+        fixture = synthetic_bootstrap()
+        change(*fixture)
+        with self.assertRaisesRegex(RuntimeError, message):
+            authenticate_bootstrap(reauthenticate(fixture))
+
+    def test_reauthenticated_binding_tampering(self):
+        for field in ('workspaceRef', 'rootBindingRef', 'enrollmentRef'):
+            self.refuses(lambda r, s, o, k: s['controlled-baseline-v1'][1]['binding'].__setitem__(field, 'wrong'), 'managed binding')
+        self.refuses(lambda r, s, o, k: s['controlled-capture-v1'][1]['action']['effectiveCwd'].__setitem__('value', '/elsewhere'), 'owned resource projection')
+
+    def test_reauthenticated_revision_tampering_even_when_records_agree(self):
+        def change(r, s, o, k):
+            s['controlled-baseline-v1'][1]['initialRevision'] = 'f' * 64
+            s['controlled-capture-v1'][1]['action']['authority']['currentPolicyRevision'] = 'f' * 64
+        self.refuses(change, 'actual initial sidecar revision')
+        def nonempty(r, s, o, k):
+            r.paths['/synthetic/workspace/orca.permissions.json'].data = encoded(
+                {'version': 2, 'agents': {}, 'scopedRules': {'version': 1, 'records': [{}]}}).encode()
+        self.refuses(nonempty, 'not empty initial policy')
+        self.refuses(lambda r, s, o, k: setattr(r.paths['/synthetic/workspace/orca.permissions.json'], 'data',
+            r.paths['/synthetic/workspace/orca.permissions.json'].data + b'\n'), 'actual initial sidecar revision')
+
+    def test_actual_marker_witness_and_identity_correspondence(self):
+        for name in ('intent', 'enrolled'):
+            def change(r, s, o, k):
+                obj = r.paths['/synthetic/control/' + name + '.json']
+                value = parse(obj.data); value['rootBindingRef'] = 'wrong'; obj.data = encoded(value).encode()
+            self.refuses(change, 'intent/enrollment')
+        self.refuses(lambda r, s, o, k: r.original['immutable']['/synthetic/control/never-typed'].__setitem__('hex', b'wrong'.hex()), 'witness')
+        self.refuses(lambda r, s, o, k: setattr(r.paths['/synthetic/workspace/.orca/workspace-identity/id'], 'physical', (0, 1, 31)), 'identity changed')
+        self.refuses(lambda r, s, o, k: setattr(r.paths['/synthetic/workspace'], 'physical', (0, 1, 999)), 'root physical')
+
+    def test_reauthenticated_epochs_cannot_be_producer_authored_equalities(self):
+        for field in ('revocationEpoch', 'leaseEpoch', 'authorityRevision', 'capturedGeneration'):
+            self.refuses(lambda r, s, o, k: s['controlled-capture-v1'][1]['action']['authority'].__setitem__(field, 'f' * 64), 'epoch differs')
+
+    def test_actual_lease_and_reauthenticated_logical_lease_tampering(self):
+        for field, value, message in [('resource', 'run:other', 'resource/holder'), ('holder', 'invalid', 'resource/holder'),
+                ('guardedId', 'invalid', 'resource/holder'),
+                ('holder', '23456789-1234-4123-8123-123456789abc', 'epoch differs'),
+                ('guardedId', '23456789-1234-4123-8123-123456789abc', 'epoch differs'), ('pid', 11, 'resource/holder'),
+                ('guardedHost', 'wrong-host', 'resource/holder'), ('guardedTtlMs', 60001, 'resource/holder'),
+                ('acquiredAt', '2026-10-26T23:59:59.000Z', 'live interval'),
+                ('renewedAt', '2026-10-26T23:59:59.000Z', 'live interval'),
+                ('renewedAt', '2026-10-25T00:00:00.000Z', 'live interval')]:
+            def change(r, s, o, k):
+                obj = r.paths['/synthetic/workspace/.orca/leases/run%3Acontrolled.json']
+                lease = parse(obj.data); lease[field] = value; obj.data = encoded(lease).encode()
+                logical = {**lease, 'host': lease['guardedHost'], 'ttlMs': lease['guardedTtlMs']}
+                s['controlled-baseline-v1'][1]['lease'] = logical
+            self.refuses(change, message)
+
+    def test_actual_credential_currency_and_scope(self):
+        for field, value, message in [('scope', {'workflows': '*', 'runs': 'owned'}, 'permissions/scope'),
+                ('permissions', ['permissions.grant'], 'permissions/scope'), ('revokedAt', '2026-10-26T00:00:00.000Z', 'designated'),
+                ('expiresAt', '2026-10-25T00:00:00.000Z', 'expired'),
+                ('createdAt', '2026-10-26T23:59:59.000Z', 'creation outside')]:
+            def change(r, s, o, k):
+                obj = r.paths['/synthetic/credentials.json']; value_ = parse(obj.data)
+                value_['credentials'][0][field] = value; obj.data = encoded(value_).encode()
+                s['controlled-baseline-v1'][1]['operator']['credential'][field] = value
+            self.refuses(change, message)
+
+    def test_reauthenticated_future_rule_with_recomputed_revision(self):
+        def change(r, s, o, k):
+            rule = s['controlled-baseline-v1'][1]['rules'][0]
+            rule['notBefore'] = '2026-10-26T23:59:59.000Z'
+            rule['ruleRevision'] = digest({key: value for key, value in rule.items() if key != 'ruleRevision'})
+            s['controlled-authorization-v1'][1]['verdict']['authorizedBy']['ruleRevision'] = rule['ruleRevision']
+        self.refuses(change, 'rule notBefore/expiry')
+
+    def test_durable_records_required_without_weak_publication_fallback(self):
+        for kind in ('controlled-capture-v1', 'controlled-baseline-v1', 'controlled-authorization-v1'):
+            for value in (None, True, '35', -1):
+                def change(r, s, o, k):
+                    o[kind].publication_completion = o[kind].durable_publication_completion
+                    o[kind].durable_publication_completion = value
+                self.refuses(change, 'durable_publication_completion')
+
+    def test_reauthenticated_records_with_wrong_causal_order(self):
+        for kind, durable in [('controlled-baseline-v1', 40), ('controlled-capture-v1', 50),
+                              ('controlled-authorization-v1', 60)]:
+            self.refuses(lambda r, s, o, k: setattr(o[kind], 'durable_publication_completion', durable), 'publication order')
+        self.refuses(lambda r, s, o, k: setattr(o['controlled-producer-observation-v1'], 'creation_entry', 60), 'publication order')
+        self.refuses(lambda r, s, o, k: r.entry_times.pop(50), 'raw-line timestamp')
+        self.refuses(lambda r, s, o, k: r.entry_times.pop(60), 'pread time')
+
+    def test_node_json_stringify_golden_owner_encodings(self):
+        # Golden bytes/hashes obtained independently with Node createHash(JSON.stringify).
+        facts = {'principalId': 'controlled-test-operator', 'credentialId': 'operator1234',
+                 'permissions': ['inputs.answer', 'permissions.grant'],
+                 'scope': {'workflows': '*', 'runs': 'all'}, 'expiresAt': None,
+                 'createdAt': '2026-10-26T15:53:21.000Z'}
+        self.assertEqual(digest(facts), '9fe8dfd46a9a7714c3a26c598f24e8e124143898d1c96e58e3247370b96a32f7')
+        self.assertEqual(digest(['run:controlled', '12345678-1234-4123-8123-123456789abc',
+            '23456789-1234-4123-8123-123456789abc', '2026-10-26T15:53:21.000Z', 10, 'synthetic-host']),
+            '597682676440451651588a2b4529a6574b1353f95569a9a14cf5e272d5e77265')
+
+    def test_reauthenticated_expired_rule_with_recomputed_revision(self):
+        def change(r, s, o, k):
+            baseline = s['controlled-baseline-v1'][1]
+            rule = baseline['rules'][0]
+            # Exactly finish: the upper endpoint is exclusive, even with valid crypto/revision.
+            expiry = '2026-10-26T15:53:30.000Z'
+            self.assertEqual(iso_ns(expiry), r.original['finishedWallNs'])
+            baseline['expiresAt'] = rule['expiresAt'] = baseline['originalAction']['expiresAt'] = expiry
+            rule['ruleRevision'] = digest({key: value for key, value in rule.items() if key != 'ruleRevision'})
+            s['controlled-authorization-v1'][1]['verdict']['authorizedBy']['ruleRevision'] = rule['ruleRevision']
+        self.refuses(change, 'rule notBefore/expiry')
+
+    def test_synthetic_rule_lower_endpoint_is_inclusive(self):
+        fixture = synthetic_bootstrap()
+        rule = fixture[1]['controlled-baseline-v1'][1]['rules'][0]
+        rule['notBefore'] = '2026-10-26T15:53:23.000Z'
+        rule['ruleRevision'] = digest({key: value for key, value in rule.items() if key != 'ruleRevision'})
+        fixture[1]['controlled-authorization-v1'][1]['verdict']['authorizedBy']['ruleRevision'] = rule['ruleRevision']
+        self.assertEqual(authenticate_bootstrap(reauthenticate(fixture))['authority'], 'none')
+
+    def test_reauthenticated_noncanonical_rule_scope(self):
+        for field, value in [('delegation', {}), ('match', {})]:
+            def change(r, s, o, k):
+                rule = s['controlled-baseline-v1'][1]['rules'][0]
+                rule[field] = value
+                rule['ruleRevision'] = digest({key: value_ for key, value_ in rule.items() if key != 'ruleRevision'})
+                s['controlled-authorization-v1'][1]['verdict']['authorizedBy']['ruleRevision'] = rule['ruleRevision']
+            self.refuses(change, 'rule fields|applicability')
+
+    def test_credential_scope_json_key_order_uses_schema_construction_order(self):
+        fixture = synthetic_bootstrap()
+        r, s, _, _ = fixture
+        obj = r.paths['/synthetic/credentials.json']
+        value = parse(obj.data)
+        value['credentials'][0]['scope'] = {'runs': 'all', 'workflows': '*'}
+        obj.data = encoded(value).encode()
+        self.assertEqual(authenticate_bootstrap(reauthenticate(fixture))['authority'], 'none')
+
+    def coherent_action(self, semantics, mutate):
+        """Change all authenticated copies plus rule/revision/verdict consistently."""
+        action = deepcopy(semantics['controlled-capture-v1'][1]['action'])
+        mutate(action)
+        baseline = semantics['controlled-baseline-v1'][1]
+        baseline['originalAction'] = deepcopy(action)
+        semantics['controlled-capture-v1'][1]['action'] = deepcopy(action)
+        authorization = semantics['controlled-authorization-v1'][1]
+        authorization['action'] = deepcopy(action)
+        authorization['verdict']['authority'] = deepcopy(action['authority'])
+        authorization['verdict']['coverageId'] = action['coverage']['coverageId']
+        rule = baseline['rules'][0]
+        for field in ('effectiveCwd', 'workspaceRef', 'resources', 'environmentAndCredentialRefs'):
+            rule['match'][field] = deepcopy(action[field]['value'])
+        rule['match']['coverageId'] = action['coverage']['coverageId']
+        rule['ruleRevision'] = digest({k: v for k, v in rule.items() if k != 'ruleRevision'})
+        authorization['verdict']['authorizedBy']['ruleRevision'] = rule['ruleRevision']
+
+    def test_synthetic_enrollment_and_resource_identities_are_both_retained(self):
+        fixture = synthetic_bootstrap()
+        result = authenticate_bootstrap(reauthenticate(fixture))
+        baseline = fixture[1]['controlled-baseline-v1'][1]
+        resource = fixture[0].resources[0]
+        self.assertEqual(result['enrollmentBinding'], baseline['binding'])
+        projection = result['resourceProjection']
+        self.assertEqual(projection['effectiveCwd'], {'state': 'complete', 'value': '/synthetic/orca-owned-service-abcdef'})
+        self.assertEqual(projection['workspaceRef'], {'state': 'complete',
+            'value': baseline['capturedCeiling']['resourceRef'] + ':temporary-tree'})
+        self.assertNotEqual(projection['workspaceRef']['value'], result['enrollmentBinding']['workspaceRef'])
+        self.assertNotEqual(projection['effectiveCwd']['value'], '/synthetic/workspace')
+        self.assertEqual(projection['relevantStateRefs']['value'][0],
+                         baseline['capturedCeiling']['resourceRef'] + ':' + ':'.join(map(str, next(iter(resource.resource_stamps)))))
+        authority = baseline['originalAction']['authority']
+        self.assertEqual(authority['authorityRevision'], digest([baseline['binding'],
+            authority['revocationEpoch'], authority['leaseEpoch']]))
+        self.assertEqual(result['authority'], 'none')
+
+    def test_coherent_wrong_enrollment_root_and_workspace_still_refuse(self):
+        for field, value in [('rootBindingRef', 'f' * 64), ('workspaceRef', 'e' * 64)]:
+            def change(r, s, o, k):
+                binding = s['controlled-baseline-v1'][1]['binding']
+                binding[field] = value
+                # Actual markers agree with the forged baseline, but not with
+                # the independently retained original identity/roots/witness.
+                for name in ('intent', 'enrolled'):
+                    marker = r.paths['/synthetic/control/' + name + '.json']
+                    data = parse(marker.data); data[field] = value; marker.data = encoded(data).encode()
+                def update(action):
+                    facts = action['authority']
+                    facts['authorityRevision'] = digest([binding, facts['revocationEpoch'], facts['leaseEpoch']])
+                self.coherent_action(s, update)
+            self.refuses(change, 'intent/enrollment correspondence')
+
+    def test_coherent_wrong_projected_root_refuses_against_original_fixture_path(self):
+        for root in ['/synthetic/workspace', '/synthetic/orca-owned-service-ghijkl',
+                     '/synthetic/orca-owned-service-abcdef/..', '/other/orca-owned-service-abcdef']:
+            self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                lambda a: a['effectiveCwd'].__setitem__('value', root)), 'owned resource projection')
+
+    def test_coherent_wrong_projected_workspace_refuses(self):
+        for workspace in ['e' * 64, 'owned-file:23456789-1234-4123-8123-123456789abc:temporary-tree']:
+            self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                lambda a: a['workspaceRef'].__setitem__('value', workspace)), 'owned resource projection')
+        def enrolled_workspace(r, s, o, k):
+            self.coherent_action(s, lambda a: a['workspaceRef'].__setitem__('value', s['controlled-baseline-v1'][1]['binding']['workspaceRef']))
+        self.refuses(enrolled_workspace, 'owned resource projection')
+
+    def test_coherent_wrong_physical_resource_refuses_against_actual_stamps(self):
+        for component in (0, 1, 6, 7, 8):
+            def change(r, s, o, k):
+                capture = s['controlled-capture-v1'][1]
+                params = parse(capture['bytes'])
+                stamp = params[2][len(params[1]) + 1:].split(':')
+                stamp[component] = str(int(stamp[component]) + 1)
+                target = params[1] + ':' + ':'.join(stamp)
+                params[2] = target; capture['bytes'] = encoded(params)
+                def update(action):
+                    action['resources']['value'][0]['physicalTargetRef'] = target
+                    action['relevantStateRefs']['value'] = [target]
+                self.coherent_action(s, update)
+            self.refuses(change, 'captured resource physical identity')
+
+    def test_coherent_wrong_resource_projection_links_refuse(self):
+        for field, value in [('relevantStateRefs', []),
+                ('relevantStateRefs', ['owned-file:23456789-1234-4123-8123-123456789abc:other']),
+                ('resources', []), ('environmentAndCredentialRefs', ['unexpected-credential'])]:
+            self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                lambda a: a[field].__setitem__('value', value)), 'owned resource projection')
+        self.refuses(lambda r, s, o, k: self.coherent_action(s,
+            lambda a: a['coverage'].__setitem__('coverageId', 'owned-file:23456789-1234-4123-8123-123456789abc:source-v1')),
+            'bootstrap coverage')
+
+    def test_reauthenticated_cross_record_projection_disagreement_refuses(self):
+        for kind, field in [('controlled-baseline-v1', 'originalAction'), ('controlled-capture-v1', 'action'),
+                            ('controlled-authorization-v1', 'action')]:
+            def change(r, s, o, k):
+                # Break Python fixture aliasing explicitly: only one protected
+                # copy changes, yet every resulting ciphertext authenticates.
+                altered = deepcopy(s[kind][1][field])
+                altered['workspaceRef']['value'] = 'owned-file:23456789-1234-4123-8123-123456789abc:temporary-tree'
+                s[kind][1][field] = altered
+            self.refuses(change, 'original action/authentication binding')
+
+    def test_projected_workspace_cannot_replace_managed_authority_epoch(self):
+        def change(r, s, o, k):
+            binding = deepcopy(s['controlled-baseline-v1'][1]['binding'])
+            binding['workspaceRef'] = s['controlled-capture-v1'][1]['action']['workspaceRef']['value']
+            def update(action):
+                facts = action['authority']
+                facts['authorityRevision'] = digest([binding, facts['revocationEpoch'], facts['leaseEpoch']])
+            self.coherent_action(s, update)
+        self.refuses(change, 'original credential/lease/authority epoch differs')
+
+    def test_projected_cwd_cannot_designate_a_different_kernel_creation_record(self):
+        def change(r, s, o, k):
+            resource = r.resources[0]
+            resource.creation_path = '/synthetic/orca-owned-service-ghijkl/fixture'
+            self.coherent_action(s, lambda a: a['effectiveCwd'].__setitem__('value', '/synthetic/orca-owned-service-ghijkl'))
+        self.refuses(change, 'original successful leader/exclusive resource create anchor')
+
+    def test_coherent_action_versions_reject_boolean_float_and_wrong_integer(self):
+        for version in (True, False, 1.0, 2, '1'):
+            self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                lambda a: a.__setitem__('version', version)), 'action version/UUID')
+
+    def test_action_uuid_direct_check_is_defense_in_depth(self):
+        # Integrated kernel filename/reference grammar already refuses these IDs.
+        # This standalone consumer control claims no newly demonstrated bypass.
+        for action_id in ('not-a-uuid', '12345678-1234-1123-8123-123456789abc',
+                          '12345678-1234-4123-7123-123456789abc'):
+            self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                lambda a: a.__setitem__('actionId', action_id)), 'action version/UUID')
+
+    def test_closed_action_keys_reject_unknown_and_missing_fields(self):
+        self.refuses(lambda r, s, o, k: self.coherent_action(s,
+            lambda a: a.__setitem__('permitConsumed', True)), 'bootstrap action fields')
+        for field in list(synthetic_bootstrap()[1]['controlled-capture-v1'][1]['action']):
+            def change(r, s, o, k):
+                # Initial synthetic copies share identity; removal is coherent.
+                s['controlled-capture-v1'][1]['action'].pop(field)
+            self.refuses(change, 'bootstrap action fields')
+
+    def test_exact_original_dispatch_representations_and_empty_lists(self):
+        for field in ('original', 'dispatch'):
+            for key, value in [('kind', 'raw-json'), ('codecVersion', 'other'), ('privateRef', 'forged'),
+                               ('bindingRef', 'forged'), ('extra', True)]:
+                self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                    lambda a: a[field].__setitem__(key, value)), 'representation/transformations/choices')
+        for field in ('transformations', 'offeredChoices'):
+            self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                lambda a: a.__setitem__(field, [{'kind': 'allow_once', 'qualified': True}])),
+                'representation/transformations/choices')
+
+    def test_exact_raw_parser_executable_and_stdin_absence(self):
+        for field in ('rawDuplicateKeyValidation', 'executableAndInterpreter', 'stdin'):
+            for key, value in [('state', 'complete'), ('reason', 'forged'), ('extra', True)]:
+                self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                    lambda a: a[field].__setitem__(key, value)), 'parser/executable/stdin')
+
+    def test_complete_coverage_constants_reject_coherent_alternatives(self):
+        changes = {'version': True, 'boundaryId': 'other-boundary', 'provider': 'other-provider',
+                   'providerVersion': 1, 'adapterVersion': '2', 'tool': 'fs.readTextFile',
+                   'toolSchemaVersion': '2', 'hostId': 'other-host', 'platform': 'linux-other',
+                   'level': 'verified-per-execution', 'sourceAuthority': True,
+                   'guaranteedEffects': [], 'unsupportedPaths': [],
+                   'negotiatedHook': {'state': 'complete', 'value': 'forged-hook'},
+                   'protectedConfiguration': {'state': 'complete', 'value': 'forged-config'},
+                   'evidence': {'sourceRefs': [], 'installedRefs': [], 'independentlyObservedEffects': False}}
+        for key, value in changes.items():
+            self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                lambda a: a['coverage'].__setitem__(key, value)), 'bootstrap coverage')
+        for field in list(synthetic_bootstrap()[1]['controlled-capture-v1'][1]['action']['coverage']):
+            self.refuses(lambda r, s, o, k: s['controlled-capture-v1'][1]['action']['coverage'].pop(field), 'bootstrap coverage')
+
+    def test_coverage_nested_unknowns_scalar_types_and_order_refuse(self):
+        for field in ('evidence', 'negotiatedHook', 'protectedConfiguration'):
+            self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                lambda a: a['coverage'][field].__setitem__('extra', True)), 'bootstrap coverage')
+        self.refuses(lambda r, s, o, k: self.coherent_action(s,
+            lambda a: a['coverage']['evidence'].__setitem__('independentlyObservedEffects', 0)), 'bootstrap coverage')
+        for field in ('guaranteedEffects', 'unsupportedPaths'):
+            self.refuses(lambda r, s, o, k: self.coherent_action(s,
+                lambda a: a['coverage'][field].reverse()), 'bootstrap coverage')
+        self.refuses(lambda r, s, o, k: self.coherent_action(s,
+            lambda a: a['coverage']['evidence']['sourceRefs'].reverse()), 'bootstrap coverage')
+
+    def test_verdict_schema_forbids_forged_judge_provenance_and_child_flags(self):
+        for field, value in [('version', True), ('version', 1.0), ('version', 2),
+                             ('judgeResultRef', 'forged-judge-result'), ('judgeResultRef', None),
+                             ('judgeResultRef', ''), ('permitConsumed', True), ('dispatchAuthorized', True)]:
+            self.refuses(lambda r, s, o, k: s['controlled-authorization-v1'][1]['verdict'].__setitem__(field, value),
+                         'judge provenance forbidden')
+        for field in list(synthetic_bootstrap()[1]['controlled-authorization-v1'][1]['verdict']):
+            self.refuses(lambda r, s, o, k: s['controlled-authorization-v1'][1]['verdict'].pop(field),
+                         'judge provenance forbidden')
+        self.refuses(lambda r, s, o, k: s['controlled-authorization-v1'][1]['verdict']['authorizedBy'].__setitem__(
+            'judgeResultRef', 'forged'), 'judge provenance forbidden')
+
+    def test_outer_kind_and_closed_authenticated_record_shapes(self):
+        for kind in synthetic_bootstrap()[1]:
+            fixture = synthetic_bootstrap()
+            def wrong_kind(actual_kind, payload):
+                if actual_kind == kind:
+                    payload['payload']['update']['kind'] = 'controlled-other-v1'
+            with self.assertRaisesRegex(RuntimeError, 'outer update kind'):
+                authenticate_bootstrap(reauthenticate(fixture, wrong_kind))
+        for level, message in [('envelope', 'protected semantic envelope'), ('payload', 'semantic payload'),
+                               ('update', 'semantic update'), ('text', 'semantic text')]:
+            fixture = synthetic_bootstrap()
+            def extra_field(kind, payload):
+                if level == 'envelope': payload['extra'] = True
+                elif level == 'payload': payload['payload']['extra'] = True
+                elif level == 'update': payload['payload']['update']['extra'] = True
+                else:
+                    text = parse(payload['payload']['update']['text']); text['extra'] = True
+                    payload['payload']['update']['text'] = encoded(text)
+            with self.assertRaisesRegex(RuntimeError, message):
+                authenticate_bootstrap(reauthenticate(fixture, extra_field))
+        for kind, message in [('controlled-baseline-v1', 'bootstrap baseline'), ('controlled-capture-v1', 'bootstrap capture'),
+                              ('controlled-authorization-v1', 'bootstrap authorization'),
+                              ('controlled-producer-observation-v1', 'bootstrap observation')]:
+            self.refuses(lambda r, s, o, k: s[kind][1].__setitem__('judgeResultRef', 'forged'), message)
+
+    def test_nonfinite_authenticated_semantic_text_refuses_with_valid_crypto(self):
+        for constant in ('NaN', 'Infinity', '-Infinity', '1e999'):
+            fixture = synthetic_bootstrap()
+            def nonfinite(kind, payload):
+                text = payload['payload']['update']['text']
+                payload['payload']['update']['text'] = text[:-1] + ',"nonfinite":' + constant + '}'
+            with self.assertRaisesRegex(RuntimeError, 'non-finite JSON'):
+                authenticate_bootstrap(reauthenticate(fixture, nonfinite))
+            with self.assertRaisesRegex(RuntimeError, 'non-finite JSON'):
+                parse('{"value":' + constant + '}')
+
+    def test_strict_versions_intervals_and_ceiling_types(self):
+        self.refuses(lambda r, s, o, k: s['controlled-baseline-v1'][1].__setitem__('version', True), 'bootstrap designation')
+        self.refuses(lambda r, s, o, k: s['controlled-baseline-v1'][1]['interval'].__setitem__('offset', 2.0), 'bootstrap designation')
+        self.refuses(lambda r, s, o, k: s['controlled-baseline-v1'][1]['capturedCeiling'].__setitem__('maximumInvocations', 2.0),
+                     'original bootstrap ceiling')
+        for path, key, value, message in [('/synthetic/control/intent.json', 'version', True, 'intent/enrollment'),
+                ('/synthetic/workspace/orca.permissions.json', 'version', 2.0, 'initial policy'),
+                ('/synthetic/credentials.json', 'version', True, 'credential file version')]:
+            def change(r, s, o, k):
+                obj = r.paths[path]; data = parse(obj.data); data[key] = value; obj.data = encoded(data).encode()
+            self.refuses(change, message)
+        def one_boolean_copy(r, s, o, k):
+            action = deepcopy(s['controlled-baseline-v1'][1]['originalAction']); action['version'] = True
+            s['controlled-baseline-v1'][1]['originalAction'] = action
+        self.refuses(one_boolean_copy, 'original action/authentication binding')
+
+    def test_capture_bytes_are_pinned_source_canonical_json(self):
+        for change in (lambda value: ' ' + value, lambda value: value.replace(',', ', '),
+                       lambda value: value.replace('orca', r'\u006frca', 1),
+                       lambda value: value.replace(',2,4]', ',2.0,4]')):
+            self.refuses(lambda r, s, o, k: s['controlled-capture-v1'][1].__setitem__('bytes',
+                change(s['controlled-capture-v1'][1]['bytes'])), 'canonical parameter bytes')
+
+    def test_coverage_platform_uses_retained_native_node_header(self):
+        for header in (b'not an ELF binary', b'\x7fELF\x01\x01\x01' + bytes(13),
+                       b'\x7fELF\x02\x01\x01' + bytes(13)):
+            self.refuses(lambda r, s, o, k: r.original['immutable']['/node'].__setitem__('hex', header.hex()),
+                         'Node ELF header|Node platform')
+
+
+    def test_nonfinite_decrypted_json_refuses_after_valid_aes_gcm(self):
+        for constant in ('NaN', 'Infinity', '-Infinity', '1e999'):
+            key, envelope = AuthenticationControls().envelope(('{"value":' + constant + '}').encode())
+            with self.assertRaisesRegex(RuntimeError, 'non-finite JSON'):
+                decode('test.payload.json', encoded(envelope), key)

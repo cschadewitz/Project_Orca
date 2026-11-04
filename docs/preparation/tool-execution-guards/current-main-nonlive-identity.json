@@ -1,0 +1,20 @@
+{
+  "record": "current-main-test-image-identity",
+  "authority": "none",
+  "sourceCommit": "4ebf382fe6738bb11268b47b048a3d7c7a6f2586",
+  "sourceTree": "e6c8fcc5263506ef406dec163da244248a070eaa",
+  "nodeVersion": "24.21.0",
+  "nodeBinarySha256": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c",
+  "pnpmVersion": "12.4.2",
+  "builderSha256": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+  "tsconfigSha256": "e1ef9bdff1231e76824ee6cd75df5e2e4759430f20183fabb22a4b6c48c54375",
+  "lockfileSha256": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+  "image": "/tmp/orca-current-main-evidence/frozen-image",
+  "manifestSha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977",
+  "archive": "/tmp/orca-current-main-evidence/current-main-test-image.tar",
+  "archiveSha256": "1680ef3d948299209a79e47b59afc686d7e6a6df7ee47475ab7712e31710b978",
+  "independentVerification": "current-main-nonlive-build-review.json",
+  "observerDesignation": "refused: legacy source and v1 grammar incompatible with current main",
+  "liveProof": false,
+  "productionEligible": false
+}

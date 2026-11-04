@@ -1,0 +1,92 @@
+{
+  "record": "bounded-independent-retention-ownership-uncertainty-review",
+  "reviewer": "/root/independent_review",
+  "baseCommit": "5b848936192e4274f34b095eb19311565781cbef",
+  "candidateState": "Uncommitted preparation delta; no candidate edits or publication by reviewer.",
+  "candidateFiles": {
+    "tools/owned-read-proof/controlled_diagnostics.py": "61966f556d1ab891a56e94fd59d5696c7f0d8fa1ae51e53f63a98bca8896d314",
+    "tools/owned-read-proof/controlled_supervisor.py": "c40ed96fccea6a1d7c7dbfeec6004fa8b6a14ead645ebbd425815dc3a10db91f",
+    "tools/owned-read-proof/test_retention_rollback.py": "c798e3e8f2a36d6222ac92fa273f21096d2eb4b0ce3084f48fe93b83962020ed",
+    "tools/owned-read-proof/check_nonlive.py": "b83b99eea75026c502dd351659e434fdc512786fdc7362e4ed04590822cb9627",
+    "docs/preparation/tool-execution-guards/current-image-retention-rollback.md": "5726068e6bd246b4bef47e701e6cbce464c1d25ed181e98bf8c6a605d7603fca"
+  },
+  "reviewCoverage": "Full diagnostics and supervisor diffs; surrounding stop/start/capture, control-worker bind/join and finalizer source; full new 17-method test module, selector addition and complete handoff. Historical body source read/AST inspected only, never invoked, extracted or compiled for execution. Not formal security or whole-stack/runtime qualification.",
+  "sourceCorrespondence": {
+    "changedDiagnosticsAST": ["SparseDiagnostics.__init__", "SparseDiagnostics.retain_and_close"],
+    "changedSupervisorAST": ["observe (source-only guard before diagnostic retention)"],
+    "unchanged": [
+      "PinnedProcess class and reader/parser helpers",
+      "Sparse bind/rollback_pin/capture/start/stop",
+      "four first-executable launch refusals",
+      "imports, CONFIG, timing/read/sample bounds, source pins"
+    ],
+    "newObserverDependency": false,
+    "measuredSourceHashesChange": true
+  },
+  "assessment": {
+    "admission": "Ready changes to uncertain before stop/writes/cleanup. Repeat and reentry refuse before repeated effects. Uncertain is terminal, no automatic resolution/retry; consumed marks slots attempted, not released or retained successfully.",
+    "eligibility": "Snapshots sampler, calls existing stop once, adds no join. Stop error with any sampler retains all ownership. No-thread-before-and-after stop error may drain under serial ownership. Successful stop requires same object; present sampler must have ident and exact False liveness. Alive/unstarted/replaced/uninspectable refuses without writes/disposal. Mutable stopped flag insufficient.",
+    "cleanup": "Once eligible, value preparation/serialization/path/write/chmod failures still drain. Marks consumed, pops each pin before disposal, attempts all pins then consumes resource before close. Primary operation exception preserved by identity; first private failure/cleanup slots sticky. Cleanup-only uncertainty fixed-refuses without successful result.",
+    "filesAndPrivacy": "Existing write/chmod sequence unchanged. Partial or already-written files may remain after later failure; no atomicity, removal, durable bounded evidence or privacy proof. Private exceptions may retain sensitive frames.",
+    "supervisorCompanion": "Original control worker can bind diagnostic pins. New direct started/nonrunning check dominates the historical retention call; inspection errors fixed-refuse. Uses original local worker, no report/run.closed flag and no new join. It prevents diagnostic disposal at this call only; earlier pipe/lifetime/provenance cleanup remains unresolved with live/uncertain worker.",
+    "assumptions": "Trusted ordinary Python objects/dictionary/fixed keys and serial ownership. No concurrent external capture/bind/start or arbitrary mutation/interruption. Existing other lifecycle methods unchanged; retention state does not prevent later misuse. Thread state checks are disposal preconditions, not tracee settlement/loaded-code/authority proof."
+  },
+  "independentValidation": {
+    "checkout": "/workspace/orca-independent-current-rebuild",
+    "checkoutCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+    "candidatePythonFilesCopiedExactly": 51,
+    "disjointFromDeclaredImageInputs": true,
+    "harnessSnapshot": {
+      "path": "/tmp/orca-current-main-evidence/retention-rollback-independent-harness.json",
+      "sha256": "de80570c1a44386cb129d18d3c5a96aa9db642398ae7b010ff479e609d854b6e"
+    },
+    "declaredBuildInputsVerifiedBeforeAndAfter": 387,
+    "candidatePythonUnchangedAfterTests": true,
+    "selection": "test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+    "methodBreakdown": {
+      "newRetentionInjectedAndSourceOnly": 17,
+      "priorInjectedPure": 89
+    },
+    "workingDirectory": "/workspace/orca-independent-current-rebuild/tools/owned-read-proof",
+    "commands": [
+      "timeout --kill-after=5s 60s python -B -m unittest -v test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+      "timeout --kill-after=5s 60s python -B -O -m unittest -v test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy"
+    ],
+    "normal": {
+      "passed": 106,
+      "seconds": 0.108,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/retention-rollback-independent-normal.log",
+      "sha256": "ad99b69e961e09e97b89520b2f418744d3152ed456c968f077962414c2713468"
+    },
+    "optimized": {
+      "passed": 106,
+      "seconds": 0.094,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/retention-rollback-independent-optimized.log",
+      "sha256": "a1452c6d48292845a9a1d4f46aa47edbec422d7d90fcdfc6f33faef0c10a71a0"
+    },
+    "executionBoundary": "Actual retention code through fake OS, paths, pins and inert Thread/stop. Two tests execute unchanged real stop with inert dependencies (no real join/thread); two parse source guard ASTs only. No actual procfs/cgroup/query/probe/worker/process/sampler/observer/tracer, historical body invocation/extraction/compile for execution, image build or historical harness refresh.",
+    "notRun": [
+      "Full Python selector and real host-query/diagnostic modules",
+      "Real sampler/thread settlement",
+      "Historical physical regressions/builds",
+      "Original supervisor body or whole finalizer",
+      "App Smoke/observation/designation"
+    ]
+  },
+  "findings": {
+    "blocking": [],
+    "conclusion": "Implementation and documentation match focused one-shot disposal-prevention design without expanding execution authority or budgets."
+  },
+  "remainingGates": [
+    "Earlier historical finalizer pipe/lifetime/provenance cleanup remains before control-worker settlement.",
+    "Terminal uncertain ownership has no automatic resolution or retry protocol.",
+    "Concurrent lifecycle admission/start failure and outside callers remain unqualified.",
+    "Partial file publication and sensitive private formatting/tracebacks lack atomic bounded durable evidence guarantees.",
+    "Original process settlement, authenticated session, preventive containment, immutable loaded runtime and bootstrap-to-connected/current-image qualification remain unavailable.",
+    "Metadata mutation hold, #779/#793/#794 restrictions and prior CI failure/root-cause history remain binding."
+  ],
+  "outcome": "No blocking finding for bounded non-live preparation publication; not runtime qualification, live authority, formal security approval, designation or merge approval.",
+  "excludedActions": "No candidate edits, real probes/threads/processes/observer/tracer/provider/daemon/App Smoke, historical body execution/extraction, image build, metadata mutation/retry/workaround, CI action, publication, source-pin/limit/security/credential change or denied operation."
+}

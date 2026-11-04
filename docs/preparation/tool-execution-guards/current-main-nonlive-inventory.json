@@ -1,0 +1,110 @@
+{
+  "record": "guard-observer-current-main-preparation-inventory",
+  "authority": "none",
+  "main": "f9e7225e59cfe6e83c539f2ce9922ad0677719f4",
+  "drafts": [
+    {
+      "pr": 748,
+      "url": "https://github.com/cschadewitz/Project_Orca/pull/748",
+      "state": "open",
+      "draft": true,
+      "base": "main",
+      "baseSha": "55e26bec470b79691e7ee6f689e70893f9757fb2",
+      "head": "cal/controlled-positive-replay",
+      "headSha": "834ddf38be7ca2674a1e439e1fdfd711160531ff"
+    },
+    {
+      "pr": 756,
+      "url": "https://github.com/cschadewitz/Project_Orca/pull/756",
+      "state": "open",
+      "draft": true,
+      "base": "cal/controlled-positive-replay",
+      "baseSha": "834ddf38be7ca2674a1e439e1fdfd711160531ff",
+      "head": "cal/controlled-kernel-causality",
+      "headSha": "d95a426131ae8072c1c0db3edcececc643ddb01a"
+    },
+    {
+      "pr": 757,
+      "url": "https://github.com/cschadewitz/Project_Orca/pull/757",
+      "state": "open",
+      "draft": true,
+      "base": "cal/controlled-kernel-causality",
+      "baseSha": "1d2dd1c6602526e9e2db52925f55928551808f0c",
+      "head": "cal/706-enrollment-resource-projection",
+      "headSha": "4c4c52cb693bff2689debab062f3c83fa9640e1b"
+    },
+    {
+      "pr": 762,
+      "url": "https://github.com/cschadewitz/Project_Orca/pull/762",
+      "state": "open",
+      "draft": true,
+      "base": "cal/controlled-notification-preparation",
+      "baseSha": "03bd68fb6558ad78496c4cec76fe41783101dee9",
+      "head": "cal/706-connected-observer-grammar",
+      "headSha": "d5005fcb05e9a5c5b9e8bd5a50fd1008275d3e57"
+    },
+    {
+      "pr": 765,
+      "url": "https://github.com/cschadewitz/Project_Orca/pull/765",
+      "state": "open",
+      "draft": true,
+      "base": "cal/706-connected-observer-grammar",
+      "baseSha": "d5005fcb05e9a5c5b9e8bd5a50fd1008275d3e57",
+      "head": "cal/706-connected-semantic-correlations",
+      "headSha": "ba0002668c59c645b1cdc72df9aba94a8ca64ff5"
+    },
+    {
+      "pr": 766,
+      "url": "https://github.com/cschadewitz/Project_Orca/pull/766",
+      "state": "open",
+      "draft": true,
+      "base": "cal/706-connected-semantic-correlations",
+      "baseSha": "ba0002668c59c645b1cdc72df9aba94a8ca64ff5",
+      "head": "cal/706-connected-save-authority",
+      "headSha": "2c746f1e5d31c7be14203d53a626166139e3b90a"
+    },
+    {
+      "pr": 768,
+      "url": "https://github.com/cschadewitz/Project_Orca/pull/768",
+      "state": "open",
+      "draft": true,
+      "base": "cal/706-connected-save-authority",
+      "baseSha": "2c746f1e5d31c7be14203d53a626166139e3b90a",
+      "head": "cal/706-connected-aggregate-observation",
+      "headSha": "3869aef0b3427c1b8ffc6fb0dbc1ef667917caad"
+    },
+    {
+      "pr": 769,
+      "url": "https://github.com/cschadewitz/Project_Orca/pull/769",
+      "state": "open",
+      "draft": true,
+      "base": "cal/706-connected-aggregate-observation",
+      "baseSha": "3869aef0b3427c1b8ffc6fb0dbc1ef667917caad",
+      "head": "prep/706-bootstrap-association-receipt",
+      "headSha": "434d29987f41e4b3b3d8ea550c58ea32af8de1b5"
+    },
+    {
+      "pr": 781,
+      "url": "https://github.com/cschadewitz/Project_Orca/pull/781",
+      "state": "open",
+      "draft": true,
+      "base": "prep/706-bootstrap-association-receipt",
+      "baseSha": "434d29987f41e4b3b3d8ea550c58ea32af8de1b5",
+      "head": "prep/706-single-stat-observation",
+      "headSha": "6a4d30dda73be89b90b7684a821d18768dcc2e14"
+    },
+    {
+      "pr": 785,
+      "url": "https://github.com/cschadewitz/Project_Orca/pull/785",
+      "state": "open",
+      "draft": true,
+      "base": "prep/706-single-stat-observation",
+      "baseSha": "6a4d30dda73be89b90b7684a821d18768dcc2e14",
+      "head": "prep/706-connected-currentness-composition",
+      "headSha": "6936e629e5230102af7d653cf8401f209d971b63"
+    }
+  ],
+  "selection": "Final test-only producer, child and observer files from #785, three-way applied onto main. Main standing-grant changes preserved. Historical observation reports not promoted or copied.",
+  "legacyObserverSource": "3fce8bcc9afd381cd07c0e06051921307d6322b3",
+  "currentImageDesignated": false
+}

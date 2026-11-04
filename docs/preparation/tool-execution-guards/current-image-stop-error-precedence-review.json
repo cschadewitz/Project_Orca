@@ -1,0 +1,102 @@
+{
+  "record": "bounded-independent-traced-error-before-stop-review",
+  "reviewer": "/root/independent_review",
+  "baseCommit": "a0ecb4daf2eb2dc77c3714d69fd852e0fd49fe6e",
+  "candidateState": "Uncommitted preparation source/test/docs delta; no candidate edits/publication by reviewer.",
+  "candidateFiles": {
+    "tools/owned-read-proof/controlled_supervisor.py": "e0ae2fc78de01c0d038902bb7b94a8b24de4267dd05eb76201ebe335bf69bafc",
+    "tools/owned-read-proof/test_stop_error_precedence.py": "5e46fb94ab812dd000abffe7e9f36d0c66953639768190e784ff959d4429095a",
+    "tools/owned-read-proof/check_nonlive.py": "28a2f9a6ba0e3e9539216246474533fa9ef48ead5c5a582ec6c492b7390420b9",
+    "docs/preparation/tool-execution-guards/current-image-stop-error-precedence.md": "28f8afcb34717b56fd9b9a4846fc9a25b9604dbd5cd327002b37d3e3a4a7714c"
+  },
+  "reviewCoverage": "Complete helper/inner exception-order diff, full10-method test module, selector and handoff; surrounding original error/stop/retention/ownership code examined. Historical integration parsed/read only. Not runtime, whole-stack or formal security qualification.",
+  "sourceCorrespondence": {
+    "changed": "AttemptCleanupFailures docstring/new stop_diagnostics; observe inner except+stop delegation+immediate raise_first",
+    "verified": "Original traced-run call AST identical including arguments/timeout; reversing only inner block change and inserted raise restores all observe AST. Removing helper and docstring adjustment restores existing class AST. All other top-level nodes/imports unchanged.",
+    "preserved": [
+      "four first-executable refusals",
+      "three original worker joins and exact bounds",
+      "existing diagnostic stop/retention implementation and its separate stop call",
+      "ownership transfers, finalizer guards and first-error ordering",
+      "source pins and native image inputs"
+    ],
+    "newObserverImport": false
+  },
+  "assessment": {
+    "ordering": "Inner run_traced BaseException captured into sticky private body slot before diagnostic stop. Helper records lookup/stop BaseException into cleanup slot. Immediately following raise_first preserves original body or first cleanup error before joins/clock/replay; outer catch retains same object.",
+    "helper": "Uses is not None, attempts original stop exactly once per invocation, catches BaseException without truthiness/str/repr, ignores return value. No new direct acquisition/join/launch/disposal, no new wait or changed budget. Existing delegated stop may join and capture within unchanged bounds.",
+    "scope": "One invocation at this call site is not one stop globally: retention retains its original independent stop/state checks. Internal capture errors/early stopped return are not converted into settlement proof. Successful callback return creates no authority token.",
+    "privacy": "Private identity/precedence preserved, secondary display chaining suppressed on later raise. Sensitive traceback state, original callers printing errors, existing worker/sample formatting and durable retention remain unqualified.",
+    "documentation": "Accurately describes delegated wait boundary, narrow masking fix, source-only integration and remaining acquisition/process/identity/evidence limitations."
+  },
+  "independentValidation": {
+    "checkout": "/workspace/orca-independent-current-rebuild",
+    "checkoutCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+    "candidatePythonFilesCopiedExactly": 54,
+    "disjointFromDeclaredImageInputs": true,
+    "harnessSnapshot": {
+      "path": "/tmp/orca-current-main-evidence/stop-error-independent-harness.json",
+      "sha256": "d5ec72033d159f5a9cb577c0b7de2b76d9cbf35c69eb90f6c3f9ae3d85228a00"
+    },
+    "declaredBuildInputsVerifiedBeforeAndAfter": 387,
+    "historicalProtectedInputsVerifiedReadOnly": 392,
+    "identityEvidence": {
+      "path": "/tmp/orca-current-main-evidence/stop-error-independent-identity.json",
+      "sha256": "81fd59e7fbcad16100f6da3c14c56f264ab81097fd1a7c00455fd3a05f8ae05d"
+    },
+    "retainedOutputs": {
+      "controlled-build.json": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977",
+      "controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+      "controlled-producer.mjs": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+    },
+    "candidatePythonUnchangedAfterTests": true,
+    "selection": "test_stop_error_precedence test_attempt_cleanup test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+    "methodBreakdown": {
+      "newInertHelper": 7,
+      "newSourceOnlyAST": 3,
+      "priorInjectedPureSourceOnly": 130
+    },
+    "workingDirectory": "/workspace/orca-independent-current-rebuild/tools/owned-read-proof",
+    "commands": [
+      "timeout --kill-after=5s 60s python -B -m unittest -v test_stop_error_precedence test_attempt_cleanup test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+      "timeout --kill-after=5s 60s python -B -O -m unittest -v test_stop_error_precedence test_attempt_cleanup test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy"
+    ],
+    "normal": {
+      "passed": 140,
+      "seconds": 0.245,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/stop-error-independent-normal.log",
+      "sha256": "061defaa279bda130c3b8c7ff860891466e6359ad2491d47292c861132b3d807"
+    },
+    "optimized": {
+      "passed": 140,
+      "seconds": 0.211,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/stop-error-independent-optimized.log",
+      "sha256": "234bb7df22ef6598f0493c40559ac1e70cc249ec689f2dd412c27fd8af775e0e"
+    },
+    "executionBoundary": "New helper receives inert diagnostics only; OS/thread/tracer adapters forbidden. Historical source AST only; earlier tests remain injected/pure/source-only. No real diagnostics stop, host probe/query/thread/process, observer/tracer/provider/daemon, historical body invocation/extraction/compilation for execution, image build or historical harness refresh.",
+    "notRun": [
+      "Full Python selector or whole real diagnostic/query modules",
+      "Real sampler/process/resource settlement",
+      "Historical physical image tests/builds",
+      "Historical traced-run integration",
+      "App Smoke/live observation/designation"
+    ]
+  },
+  "findings": {
+    "blocking": [],
+    "conclusion": "Exact original traced-run error is preserved across this diagnostic-stop boundary without changing tracer invocation, ownership eligibility, waits or execution authority."
+  },
+  "remainingGates": [
+    "Early acquisition and worker startup still outside protected attempt.",
+    "Worker send cleanup/error formatting and diagnostic path/metadata failure can leave ownership/evidence incomplete.",
+    "Actual stop/capture/retention failures do not establish resource or process settlement.",
+    "Durable bounded private evidence, concurrent lifecycle and immutable loaded-runtime closure unresolved.",
+    "Authenticated original session, preventive containment and bootstrap-to-connected/current-image qualification remain absent.",
+    "Prior local/CI original failures remain preserved separately from later passing runs.",
+    "Metadata hold and #779/#793/#794 restrictions remain binding."
+  ],
+  "outcome": "No blocking finding for focused non-live preparation publication. Not runtime qualification, current designation, live authorization, formal security approval or merge approval.",
+  "excludedActions": "No candidate changes, real queries/probes/threads/processes, historical body invocation/extraction/compilation for execution, builds, historical harness refresh, metadata retries/workarounds, CI actions, publication, pin/budget/security/credential changes or denied operations."
+}

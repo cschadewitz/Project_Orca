@@ -1,0 +1,103 @@
+{
+  "record": "nonlive-current-image-observation-preparation-checks",
+  "authority": "none",
+  "baseCommit": "1b77e1a90483f71fcd08084c9f937b2b773854a0",
+  "implementationHashes": {
+    "tools/owned-read-proof/check_nonlive.py": "e3f6204712f678c1a2691dab58847857e8a2f1feac1227b9d93c7217bde471d6",
+    "tools/owned-read-proof/controlled_observation.py": "5f30a4a12d6101652cae1293199c0dd37d023f5df49ce253d23dd49f4ef15c20",
+    "tools/owned-read-proof/controlled_supervisor.py": "dcce704ec9d4e4a5697b889caa10e556f9c8dc9bcc8ae7b0fcc90a1fdcd44dba",
+    "tools/owned-read-proof/test_controlled_aggregate.py": "a15d976992778e672775d6a76933dec74b9696a8b9a6d4a6f9ac7dd010cfbe17",
+    "tools/owned-read-proof/test_controlled_diagnostics.py": "8707bf7fa05c0b50fb476c94875e1f583cb8b92fad9eb167c5c065a03a38bd7c",
+    "tools/owned-read-proof/current_image_inspection.py": "aabdf099633a1ecdf9414fd28980ae0eee562b190e5c1e67e099d9712f794c41",
+    "tools/owned-read-proof/test_current_image_inspection.py": "391b22f124cbc2a3f39419ae720a32b4317f972a4851d0d46b6170b656aaf890"
+  },
+  "unchangedControls": {
+    "tools/owned-read-proof/controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+    "tools/owned-read-proof/build-controlled.mjs": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+    "tools/owned-read-proof/controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+    "tools/owned-read-proof/controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+    "tools/owned-read-proof/controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+    "tools/owned-read-proof/controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+    "tools/owned-read-proof/controlled_v2_model.py": "af289071fc9627bb8f38115916a40740c1a131a756a4afa163d9229f6056df15",
+    "tools/owned-read-proof/run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+    "tools/owned-read-proof/verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310",
+    "tools/owned-read-proof/legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca",
+    "tools/owned-read-proof/test_controlled_connected.py": "3622b8045d59c885b1b5f017351520d9097594689fa39457b556c02010a1819c"
+  },
+  "currentRepositoryImageInputsUnchanged": 195,
+  "outputIdentity": {
+    "controlled-build.json": {
+      "bytes": 48027,
+      "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+    },
+    "controlled-child.mjs": {
+      "bytes": 5713,
+      "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+    },
+    "controlled-producer.mjs": {
+      "bytes": 2248652,
+      "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+    }
+  },
+  "validation": {
+    "initialBeforeReviewFixes": {
+      "selectedMethodsPassed": 32,
+      "seconds": 0.982
+    },
+    "finalFrozenNonlive": {
+      "outerPassed": 376,
+      "historicalChildPassed": 7,
+      "seconds": 43.803,
+      "command": "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH ORCA_LEGACY_IMAGE_FIXTURE=/workspace/orca-legacy-image-fixture timeout --kill-after=5s 180s python3 -B tools/owned-read-proof/check_nonlive.py",
+      "checkout": "/workspace/orca-fence-validation",
+      "currentImageInputsVerified": 387,
+      "separatePythonHarnessFiles": 43,
+      "historicalProtectedInputsUnchanged": 392
+    },
+    "independentNewModule": {
+      "normalPassed": 17,
+      "normalSeconds": 0.557,
+      "optimizedPassed": 17,
+      "optimizedSeconds": 0.537,
+      "boundSeconds": 60,
+      "freshUnlaunchedBuildPerSelection": true,
+      "fixtureAcceptanceMocked": false
+    }
+  },
+  "logs": {
+    "observation-design-targeted.log": {
+      "path": "/tmp/orca-current-main-evidence/observation-design-targeted.log",
+      "sha256": "39f799c1ba7cb597f8e801901775b2e573256d25a141b91e3c2773410da47c0e"
+    },
+    "observation-design-nonlive.log": {
+      "path": "/tmp/orca-current-main-evidence/observation-design-nonlive.log",
+      "sha256": "e860ef8d778a3040041337d64d2b21d8b77c1af37e3bc7ed7f091680efcb69b2"
+    },
+    "observation-design-fixture-inventory.json": {
+      "path": "/tmp/orca-current-main-evidence/observation-design-fixture-inventory.json",
+      "sha256": "44f41bb62dd89ecb8ccbc14ab71e5e4a1f0dca06fd1e5fdd340b728353e4e6d0"
+    },
+    "current-image-inspection-independent-normal.log": {
+      "path": "/tmp/orca-current-main-evidence/current-image-inspection-independent-normal.log",
+      "sha256": "c40f77bd4103fc939f49912e09b41c3d8c9a91b1138491b28672ef3d636a6409"
+    },
+    "current-image-inspection-independent-optimized.log": {
+      "path": "/tmp/orca-current-main-evidence/current-image-inspection-independent-optimized.log",
+      "sha256": "802d90a178b3a5fba4f302f22fc4129c30cad18140791661be36a383c453323d"
+    }
+  },
+  "notRun": [
+    "App Smoke",
+    "Four real-tracer tests excluded by existing non-live selector",
+    "Live observer/tracer/provider/device or production activation",
+    "Current runtime designation or original observed bootstrap receipt",
+    "Formal security approval or merge"
+  ],
+  "limitations": [
+    "Offline fixed-output inspection does not verify loaded/interpreted code identity or current runtime authority.",
+    "Historical positive fixture coverage is regression only.",
+    "Public wrappers now fail before I/O, but historical unreachable launch code retains documented containment/cleanup/loader/privacy gaps.",
+    "Independent normal/optimized tests build disposable exact-byte images in the same managed environment and toolchain; not independent-host verification.",
+    "Ordinary CI does not provision the mandatory local historical Python fixture."
+  ]
+}

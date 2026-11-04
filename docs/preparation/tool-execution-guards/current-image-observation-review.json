@@ -1,0 +1,135 @@
+{
+  "record": "bounded-independent-current-image-inspection-preparation-review",
+  "reviewer": "/root/independent_review",
+  "baseCommit": "1b77e1a90483f71fcd08084c9f937b2b773854a0",
+  "candidateState": "Uncommitted preparation delta, exact file hashes below; no publication by reviewer.",
+  "candidateFiles": {
+    "tools/owned-read-proof/current_image_inspection.py": "aabdf099633a1ecdf9414fd28980ae0eee562b190e5c1e67e099d9712f794c41",
+    "tools/owned-read-proof/test_current_image_inspection.py": "391b22f124cbc2a3f39419ae720a32b4317f972a4851d0d46b6170b656aaf890",
+    "tools/owned-read-proof/controlled_observation.py": "5f30a4a12d6101652cae1293199c0dd37d023f5df49ce253d23dd49f4ef15c20",
+    "tools/owned-read-proof/controlled_supervisor.py": "dcce704ec9d4e4a5697b889caa10e556f9c8dc9bcc8ae7b0fcc90a1fdcd44dba",
+    "tools/owned-read-proof/test_controlled_aggregate.py": "a15d976992778e672775d6a76933dec74b9696a8b9a6d4a6f9ac7dd010cfbe17",
+    "tools/owned-read-proof/test_controlled_diagnostics.py": "8707bf7fa05c0b50fb476c94875e1f583cb8b92fad9eb167c5c065a03a38bd7c",
+    "tools/owned-read-proof/check_nonlive.py": "e3f6204712f678c1a2691dab58847857e8a2f1feac1227b9d93c7217bde471d6",
+    "docs/preparation/tool-execution-guards/current-image-observation-design.md": "8593f279a087524fed02601680e9c374ba9f496878391522785d44de511118b0"
+  },
+  "coverage": "Read complete new inspector, complete 17-method test module, all three wrapper guard additions, both wrapper test adaptations, selector addition, and full design document. Inspected historical refusal/launch/loader/cleanup/receipt code for boundary context. Not a whole-stack, formal security or runtime qualification audit.",
+  "findings": [
+    {
+      "finding": "Unbounded os.listdir allocation before inventory rejection.",
+      "resolution": "Resolved: scandir refuses upon obtaining the fourth entry, with exact-three-name comparison and a regression proving no fifth entry is requested."
+    },
+    {
+      "finding": "Read-opening a candidate special file before type validation.",
+      "resolution": "Resolved: non-following stat plus O_PATH pin and full stamp equality precede read-only trusted-procfd reopen of the validated regular inode. Regression replaces a name with FIFO between stat and pin and checks no non-regular read-open occurs. No runtime fallback on unsupported platforms."
+    },
+    {
+      "finding": "Design overstated cleanup as guaranteeing no descriptor survives any failing call.",
+      "resolution": "Resolved: design distinguishes successful complete cleanup from attempts on failure and expressly disclaims recovery from every possible OS close failure."
+    }
+  ],
+  "implementationAssessment": {
+    "candidateIdentity": "Fixed full native manifest/output hashes and exact byte sizes; exact three-name inventory, regular/single-link/effective-owner/non-group-world-writable files, non-following anchored directory walk, full file stamp checks and parent entry anchors, fresh rechecks and same-byte replacement rejection.",
+    "authorityBoundary": "CandidateInspection is a constructible frozen descriptive object, not ConnectedDesignation. It exposes no bind/association/authorize/execute/launch API and has no authority consumer. Fresh report always says authority none, acceptingToken null, productionEligible/observationAuthorized/loadedImageVerified false. No input paths or raw candidate errors/payloads appear in the report or fixed public refusal.",
+    "entryGuards": "observe remains first-statement blocked; observe_new, diagnose_bootstrap and bootstrap now also refuse before argument inspection, git/build/tempdir/probe/worker work. Direct blocked calls were tested with side effects instrumented to fail. No historical launcher body was executed.",
+    "cleanup": "ExitStack registers each acquired FD before the next operation, then attempts registered callbacks in reverse order even if one close errors. Read failure and close-error regressions verify this behavior. Snapshot owns no persistent descriptors on successful return.",
+    "sourceAndLimits": "Existing historical SOURCE selectors, original receipt/correlation implementation and tests, builder/child/producer, execution bounds and diagnostic controls remain unchanged. check_nonlive adds only this test module; four real-tracer exclusions unchanged.",
+    "fixedBuildScope": "The complete known manifest bytes close the declared inventory for this one known artifact. Inspection does not independently reread 387 source/dependency inputs or prove general build derivation, current loaded module identity or future filesystem immutability."
+  },
+  "independentValidation": {
+    "checkout": "/workspace/orca-independent-current-rebuild",
+    "checkoutCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+    "candidateHarness": "All 43 candidate Python files copied exactly into separate frozen checkout, disjoint from every declared image input; root checkout not edited by reviewer.",
+    "harnessHashesPath": "/tmp/orca-current-main-evidence/current-image-inspection-review-harness.json",
+    "harnessHashesSha256": "f3bc77c706b919fbcb8863c0ae1d853c06ce112b28ea56f74c28998971b98888",
+    "buildInputHashMatchesBeforeAndAfterTests": 387,
+    "commands": [
+      "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH timeout --kill-after=5s 60s python -B -m unittest -v test_current_image_inspection",
+      "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH timeout --kill-after=5s 60s python -B -O -m unittest -v test_current_image_inspection"
+    ],
+    "workingDirectory": "/workspace/orca-independent-current-rebuild/tools/owned-read-proof",
+    "normal": {
+      "passed": 17,
+      "seconds": 0.557,
+      "exitCode": 0,
+      "log": "/tmp/orca-current-main-evidence/current-image-inspection-independent-normal.log",
+      "sha256": "c40f77bd4103fc939f49912e09b41c3d8c9a91b1138491b28672ef3d636a6409"
+    },
+    "optimized": {
+      "passed": 17,
+      "seconds": 0.537,
+      "exitCode": 0,
+      "log": "/tmp/orca-current-main-evidence/current-image-inspection-independent-optimized.log",
+      "sha256": "802d90a178b3a5fba4f302f22fc4129c30cad18140791661be36a383c453323d"
+    },
+    "buildAndExecutionDistinction": "Each test invocation builds one genuine disposable image under the existing 15-second build timeout and inspects/copies/mutates files only; the image is never launched. No observer/tracer/provider/daemon or App Smoke run. No new whole-suite result claimed by reviewer.",
+    "physicalArtifactConstantsIndependentlyRechecked": {
+      "controlled-build.json": {
+        "bytes": 48027,
+        "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+      },
+      "controlled-child.mjs": {
+        "bytes": 5713,
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+      },
+      "controlled-producer.mjs": {
+        "bytes": 2248652,
+        "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+      }
+    },
+    "originalRetainedImagePath": "/tmp/orca-current-main-evidence/independent-current-image"
+  },
+  "remainingGates": [
+    "All normal current-image observation entries remain unconditionally blocked; no current runtime designation or authorization mechanism implemented.",
+    "Future live work needs a separate exact-environment/scope/unchanged-limits decision and independently reviewed authorization binding; no JSON/flag/CLI/env/hash/synthetic closure supplies it.",
+    "Preventive filesystem/network/credential isolation and actual loaded interpreter/module closure are absent. Child static import precedes child self-checks; createRequire/optional externals and already-imported Python code remain relevant.",
+    "Historical launch body still has pre-try acquisition cleanup gaps, sequential final cleanup failure risk, inherited probe/ldd environment and incomplete exception-text sanitization; guards make these paths unreachable here, not repaired.",
+    "Only an original permanently closed bootstrap and independent complete raw replay/correlations can support future connected association. No current original run/receipt exists.",
+    "Trusted same-process Python state, procfs/kernel behavior and source/runtime dependencies remain assumptions; file snapshot checks do not contain arbitrary hostile same-UID or kernel actions."
+  ],
+  "actionsExcluded": "No image execution, live observer/tracer/provider/daemon, current runtime designation, source-pin/limit/security/credential changes, App Smoke, denied #779/#793/#794 routes, forbidden gh lookup, external write, merge or publication.",
+  "outcome": "All identified code/documentation findings resolved. No blocking finding for preparation-only implementation. This is not live qualification, current runtime designation, authorization or formal security approval.",
+  "finalConsistency": {
+    "previousReviewRecordSha256": "f36627b463a5ce62b7abaac3603d9cfbb314bc144ee815769f14155b9e06f88f",
+    "previousDesignSnapshotSha256": "c697d13907fc9be53f8671da871ed5311129d7562116e4402de2c3189a5124bd",
+    "finalDesignSha256": "8593f279a087524fed02601680e9c374ba9f496878391522785d44de511118b0",
+    "reviewedCorrection": "Read amended cleanup paragraph; all descriptors close on success, each registered close is attempted on failure and cleanup errors return no snapshot. No arbitrary-close-recovery claim.",
+    "executableSnapshotsUnchanged": true,
+    "completedCleanupReviewRecordSha256": "337736a76913d6ca56a3e405235d0ae6cb134b00a15616506232a8e3621e6647",
+    "priorDesignSnapshotSha256": "c697d13907fc9be53f8671da871ed5311129d7562116e4402de2c3189a5124bd",
+    "finalChecksSha256": "f26239cec724e9b79c9512d3d3ea6c8a21a4eeadb691ca98d46ceeeb6bf4202f",
+    "finalChecksPath": "docs/preparation/tool-execution-guards/current-image-observation-checks.json",
+    "sourceAndLogHashMismatches": [],
+    "fullParentSuiteLogRechecked": {
+      "outerPassed": 376,
+      "historicalPassed": 7,
+      "seconds": 43.803,
+      "historicalSeconds": 10.618,
+      "rerunByReviewer": false
+    },
+    "finalReadOnlyInputVerification": {
+      "rootCurrentRepositoryInputsAgainstBaseAndManifest": 195,
+      "separateCurrentFrozenDeclaredInputs": 387,
+      "historicalDeclaredInputs": 386,
+      "historicalAdditionalGitInputs": [
+        "tools/owned-read-proof/controlled-child.mjs",
+        "tools/owned-read-proof/build-controlled.mjs",
+        "pnpm-lock.yaml",
+        "package.json",
+        "pnpm-workspace.yaml",
+        "tsconfig.json"
+      ],
+      "historicalDistinctDeclaredAndProtected": 392,
+      "harnessAndReferenceAcrossRootCurrentFrozenHistorical": 44
+    },
+    "logHashesRechecked": {
+      "observation-design-targeted.log": "39f799c1ba7cb597f8e801901775b2e573256d25a141b91e3c2773410da47c0e",
+      "observation-design-nonlive.log": "e860ef8d778a3040041337d64d2b21d8b77c1af37e3bc7ed7f091680efcb69b2",
+      "observation-design-fixture-inventory.json": "44f41bb62dd89ecb8ccbc14ab71e5e4a1f0dca06fd1e5fdd340b728353e4e6d0",
+      "current-image-inspection-independent-normal.log": "c40f77bd4103fc939f49912e09b41c3d8c9a91b1138491b28672ef3d636a6409",
+      "current-image-inspection-independent-optimized.log": "802d90a178b3a5fba4f302f22fc4129c30cad18140791661be36a383c453323d"
+    },
+    "reviewCopyInstruction": "Copy this final local review into repository current-image-observation-review.json. Formatting may alter bytes while preserving JSON values. No recursive self-digest included.",
+    "finalOutcome": "All requested code/design/evidence corrections resolved. No blocking consistency finding for authorized preparation-only publication; live authorization, designation, isolation and original-run qualification obligations remain unmet."
+  }
+}

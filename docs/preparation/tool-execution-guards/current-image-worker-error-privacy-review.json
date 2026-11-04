@@ -1,0 +1,93 @@
+{
+  "record": "bounded-independent-worker-error-privacy-review",
+  "reviewer": "/root/worker_privacy_review",
+  "baseCommit": "8e8cecc2cad5195dc0023cc2338aaf5771a61048",
+  "candidateState": "Uncommitted preparation delta; no repository candidate edits/publication by reviewer.",
+  "candidateFiles": {
+    "tools/owned-read-proof/controlled_supervisor.py": "3e8e09e8e0f4d07273cd4d10488773970f7d97cbe80dc1d4f6977a94043a9f76",
+    "tools/owned-read-proof/test_worker_error_privacy.py": "1733908efc1f9e37a9306aba2d3c99d9e88248a1dc7370e8cb26ba7e1a517fa1",
+    "tools/owned-read-proof/test_finalizer_worker_guard.py": "a55b76e2156046f3e2061c7a6b44521ab835a5e191619c4988f062da045cd636",
+    "tools/owned-read-proof/check_nonlive.py": "2498a25aad141b21f176e832bd771459465df99361a5dd2f108442dfa151fe35",
+    "docs/preparation/tool-execution-guards/current-image-worker-error-privacy.md": "74a032e1c1614446c725499a1f75edea327869e743eed94efc73cc45511d854e"
+  },
+  "reviewCoverage": "Complete five-file source/test/selector/handoff delta and relevant surrounding worker/main/diagnostic ownership paths. Historical integration parsed/read only; not a runtime or whole-stack audit.",
+  "sourceCorrespondence": {
+    "verified": "Reversing only reviewed log/holder, worker-handler/finalizer and two main gate/read changes restores entire observe AST. Removing new close_worker_send restores class AST. All other top-level nodes/imports, original control effect body, tracer arguments, three joins/bounds, outer finalizer and four launch refusals unchanged.",
+    "changedAssertion": "Existing worker-finally AST assertion now requires exact snapshot, clear and one close-helper call; original guard/join/finalizer ownership assertions remain."
+  },
+  "assessment": {
+    "workerHolder": "Separate AttemptCleanupFailures initialized before worker definition/start. Only worker writes its body/cleanup slots; main reads at two sites after existing bounded join and require_control_worker_inactive. No new lock/wait/launch/authority. Trusted original-worker ownership remains a runtime assumption.",
+    "send": "Nonlocal send snapshot cleared before one close-helper invocation. Main eight-handle group does not adopt send; helper catches BaseException and returns no authority. None skipped, zero retained. Single call is source-caller discipline, not a replay-resistant registry; failed close does not establish release.",
+    "precedence": "Original worker body error wins over worker close failure; close-only failure prevents apparent success. Main prior traced/body failure retains priority without reading worker holder; unchanged finalizer retains resources on uncertainty. Observation-order precedence, not total cross-thread chronology.",
+    "privacy": "Removes repr(error) collection and ordinary unhandled send-close propagation at this site. Holder uses existing fixed repr/pickle refusal and no exception truthiness. Original traceback/message may still escape if later caller prints re-raised exception; diagnostic sampler strings and durable privacy remain separate.",
+    "documentation": "Accurately discloses partial privacy, no settlement/concurrency proof, early acquisition/start gaps and red prior CI."
+  },
+  "independentValidation": {
+    "checkout": "/workspace/orca-independent-current-rebuild",
+    "checkoutCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+    "candidatePythonFilesCopiedExactly": 55,
+    "disjointFromDeclaredImageInputs": true,
+    "harnessSnapshot": {
+      "path": "/tmp/orca-current-main-evidence/worker-privacy-independent-harness.json",
+      "sha256": "3e6fa441c52623f7757aae55503424fccb3486c99982c6e7e2e221b0d62aeb66"
+    },
+    "identityEvidence": {
+      "path": "/tmp/orca-current-main-evidence/worker-privacy-independent-identity.json",
+      "sha256": "261e78bfde5f23c0ee9520dc82ebdf01b9b81a0a1f4c6a70aa03f24ed1097cf4"
+    },
+    "declaredBuildInputsVerifiedBeforeAndAfter": 387,
+    "historicalProtectedInputsVerifiedReadOnly": 392,
+    "retainedOutputs": {
+      "controlled-build.json": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977",
+      "controlled-child.mjs": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13",
+      "controlled-producer.mjs": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+    },
+    "candidatePythonUnchangedAfterTests": true,
+    "selection": "test_worker_error_privacy test_stop_error_precedence test_attempt_cleanup test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+    "methodBreakdown": {
+      "newInertHelper": 6,
+      "newSourceOnlyAST": 5,
+      "priorInjectedPureSourceOnly": 140
+    },
+    "commands": [
+      "timeout --kill-after=5s 60s python3 -B -m unittest -v test_worker_error_privacy test_stop_error_precedence test_attempt_cleanup test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy",
+      "timeout --kill-after=5s 60s python3 -B -O -m unittest -v test_worker_error_privacy test_stop_error_precedence test_attempt_cleanup test_finalizer_worker_guard test_retention_rollback test_sparse_rollback test_diagnostic_rollback test_query_rollback test_kernel_runtime_queries.NativeReplayControls test_offline_attempt_model test_offline_cleanup_privacy"
+    ],
+    "normal": {
+      "passed": 151,
+      "seconds": 0.498,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/worker-privacy-independent-normal.log",
+      "sha256": "1c7d6856714a51113b8f1eb2b7ec42a886907251d014285146f12bd1ce390017"
+    },
+    "optimized": {
+      "passed": 151,
+      "seconds": 0.451,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/worker-privacy-independent-optimized.log",
+      "sha256": "30ed747435cca910981fbb9ee16e64aee4eb5f9ca867b1994a61291bf92c2c39"
+    },
+    "executionBoundary": "Two independent Python processes ran inert/pure/source-only selection; new close uses fake OS, forbidden thread/tracer adapters. No real worker/descriptor/host query/probe/process experiment or historical body invocation/extraction/compilation for execution. No image build or historical harness refresh.",
+    "notRun": [
+      "Full Python or real diagnostic/query modules",
+      "Historical physical regression/builds",
+      "Real worker/thread/process/OS settlement",
+      "Live observer/tracer/provider/daemon/App Smoke"
+    ]
+  },
+  "findings": {
+    "blocking": [],
+    "conclusion": "Focused private capture and send-consumption change preserves ownership/uncertainty constraints and exact original errors within stated bounded scope."
+  },
+  "remainingGates": [
+    "Early acquisitions and worker startup remain outside protected attempt.",
+    "Outer callers may print original private exceptions; sampler errors/partial metadata/durable bounded evidence remain unresolved.",
+    "Trusted serial ownership, actual thread/process settlement and concurrent lifecycle are not established by inert tests.",
+    "Authenticated authority, preventive containment, immutable loaded-runtime closure and original lineage/current designation remain absent.",
+    "Base-head CI41293856721 remains failed; no CI retry or test-fixture change in this guard review.",
+    "Prior failure history, metadata unknown hold and #779/#793/#794 restrictions remain binding."
+  ],
+  "outcome": "No blocking finding for non-live preparation publication. Not formal security approval, runtime qualification, live authorization, image designation or merge approval.",
+  "toolErrors": [],
+  "excludedActions": "No candidate edits, new dependencies/builds, historical harness refresh, real probes/threads/processes, historical body invocation/extraction/bypass, CI actions, metadata mutation/workaround, publication, pin/budget/security/access changes or denied operations."
+}

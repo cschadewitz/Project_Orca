@@ -1,0 +1,50 @@
+{
+  "record": "independent-v2-exact-commit-build-review",
+  "reviewer": "/root/independent_review",
+  "sourceCommit": "d2c1626c1b01f9dcac48753048fbdaf2c15c166c",
+  "sourceTree": "04d0bf59062be15b74109710d35677ebc6bf168d",
+  "workspace": "/tmp/orca-current-v2-validation",
+  "image": "/tmp/orca-current-main-evidence/v2-image",
+  "files": {
+    "controlled-build.json": {
+      "bytes": 48027,
+      "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+    },
+    "controlled-child.mjs": {
+      "bytes": 5713,
+      "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+    },
+    "controlled-producer.mjs": {
+      "bytes": 2248652,
+      "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+    }
+  },
+  "inputCounts": {
+    "repository": 195,
+    "dependency": 192
+  },
+  "allInstalledInputsMatch": true,
+  "allRepositoryInputsMatchCommittedBlobs": true,
+  "childMatchesCommittedBlob": true,
+  "producerEqualsOfflineModelSource": "4ebf382fe6738bb11268b47b048a3d7c7a6f2586",
+  "producerInputSha256": "9d96cddcbbc4ebe5c67657a94b7d219d534196db76cb440476f90c9d69ca0d4d",
+  "allThreeOutputsByteIdenticalToPriorFrozenImage": true,
+  "priorFrozenImage": "/tmp/orca-current-main-evidence/frozen-image",
+  "lock": {
+    "committedBytesMatch": true,
+    "repositorySha256": "4dae502c80324f4b15c9af69992e9416cec5232a8f67114706163cbb115df761",
+    "installedSha256": "a2077f20668fef13914cac77e73f0113d9b2783706f0ebec025f3aa7863e220f",
+    "repositoryDocumentCount": 2,
+    "installedDocumentCount": 1,
+    "workspaceDocumentEqual": true,
+    "note": "Committed document 0 pins pnpm 12.4.2; document 1 exactly equals installed workspace lock."
+  },
+  "installedVersions": {
+    "sdk": "1.8.0",
+    "zod": "4.6.7",
+    "tsx": "4.23.15",
+    "vitest": "5.0.5",
+    "typescript": "7.0.2"
+  },
+  "scope": "Independent Python SHA-256 recomputation for all three outputs and all 387 declared inputs; Git blob correspondence for all 195 repository inputs and child at exact d2c1626; independent YAML comparison for installed workspace lock. No build execution, producer launch, observer/tracer, daemon, security approval or activation by reviewer."
+}

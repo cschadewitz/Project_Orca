@@ -1,0 +1,158 @@
+{
+  "record": "independent initial plugin fixture admission review",
+  "reviewer": "/root/independent_review",
+  "baseline": "4f9738623131c12e41d45bd65aa82ad334eedd64",
+  "atUTC": "2026-11-01T11:13:41.891577+00:00",
+  "candidate": {
+    "path": "/workspace/Project_Orca/packages/cli/test/update-bootstrap.test.ts",
+    "bytes": 26019,
+    "sha256": "35fa3b4a750096318b9dac98c4218cd23da71ef27cfe6a4204ce69c4591d7e39"
+  },
+  "scope": "Complete test-file delta review plus independently executed exact seven helper controls; no original CLIserve/daemon test, broader suite, host probe or live observer.",
+  "findings": {
+    "blocking": [],
+    "resolved": [
+      {
+        "finding": "Five-candidate test title initially implied target already had this policy.",
+        "resolution": "Title now states five-candidate bound; comment names protocol precedent while target-only policy is explicit."
+      },
+      {
+        "finding": "Primary lint found incorrect nested caught-error cause and unknown thrown value.",
+        "resolution": "Reviewed cleanupFailed/cleanupFailure storage and outer AggregateError preserving original cause; real own-socket control now requires Error before rethrow, otherwise terminal wrapped failure. No boundary/assertion weakening."
+      }
+    ]
+  },
+  "sourceAssessment": [
+    "fixtureRoot extracts only initial disposable directories/config; ordinary fixture still provisions once then constructs/registers its original owner.",
+    "Target-only admitPluginFixture uses one five-attempt loop, create outside catch, only actual provision inside catch. Non-EADDR propagates retaining base; no assertions or owner/CLI operations inside retry.",
+    "EADDR path awaits exact-base discard; unregister follows successful removal and guarded index. CleanupFailed tracks even undefined thrown values, AggregateError preserves both errors/cause, no resampling on cleanup uncertainty.",
+    "Owner construction follows successful admission outside catch. Existing separate16-attempt first-run allocator unchanged and not nested.",
+    "All original test bodies/source remain byte-identical except target fixture() -> pluginFixture(); post-admission plugin writes, capture, migration, CLI invocation and assertions unchanged.",
+    "Actual socket control owns each server before listen, blocks slot4, captures held status/exacterror and zero durablepublication, reacquires only known0-3 slots once, attempts all owned closes. Control-listen errors/cleanup failures are terminal and unrelated second-candidate provisioning failures wrapped to avoid hidden retry.",
+    "Additional inert controls verify five-cap/order, pending cleanup blocks nextcreate, create EADDR nonretry, noncontention preservation, cleanup aggregate, and owner-construction failure nonretry. Assertions are not retried."
+  ],
+  "independentValidation": {
+    "selection": "^plugin fixture admission ",
+    "passed": 7,
+    "notSelected": 8,
+    "vitestSeconds": 2.41,
+    "wallSeconds": 2.873,
+    "exitCode": 0,
+    "workers": 1,
+    "outerTimeoutSeconds": 60,
+    "killAfterSeconds": 5,
+    "retry": false,
+    "result": {
+      "path": "/tmp/orca-current-main-evidence/cli-fixture-independent-result.json",
+      "bytes": 777,
+      "sha256": "f9c99280edc0f21ed8f13eca920c8e7f4e6bca501d0f2af3d3dced8000547369"
+    },
+    "log": {
+      "path": "/tmp/orca-current-main-evidence/cli-fixture-independent-selected.log",
+      "bytes": 2233,
+      "sha256": "74690bf42a55099e581b467d572651a7069d7a3b76dff807105ffcefd1f39034"
+    },
+    "environment": {
+      "path": "/tmp/orca-current-main-evidence/cli-fixture-independent-environment.json",
+      "bytes": 2710,
+      "sha256": "dbde9270c1fc23dbc79ecbd5106d371c479d940ae3e3bd8157b35d6d3569c976"
+    },
+    "effects": "One real ordinary fixture/owned-loopback control, six inert helper controls; normal production fence identity reads. Globalsetup tempbundle directory only, lazy compiler not invoked by selection. No CLIserve child or daemon launched.",
+    "separateWorktree": "/workspace/orca-cli-admission-independent",
+    "dependencySetup": "Existing frozen links only, no install/build; exact baseline checkout with only test-file tracked modification."
+  },
+  "postChecks": {
+    "declaredFrozenInputsVerifiedBeforeAndAfter": 387,
+    "currentRepositoryInputsVerified": 195,
+    "testFileDisjointFromImageInputs": true,
+    "fourFirstExecutableGuardsUnchanged": [
+      "controlled_supervisor.py:observe",
+      "controlled_supervisor.py:bootstrap",
+      "controlled_observation.py:observe_new",
+      "controlled_observation.py:diagnose_bootstrap"
+    ],
+    "productionConfigurationUnchanged": [
+      {
+        "path": "/workspace/Project_Orca/packages/protocol/src/update-window.ts",
+        "bytes": 34278,
+        "sha256": "bf2d6b5bec7f80e6faf396c9efb3cc64653f5bc19234ef7f370d5aefb7ffc662"
+      },
+      {
+        "path": "/workspace/Project_Orca/packages/protocol/src/first-run-fence.ts",
+        "bytes": 14550,
+        "sha256": "967574f4baf0e0f9688c8b9bd50e7fb82375f979595e493b465b3bf363570f4a"
+      },
+      {
+        "path": "/workspace/Project_Orca/.github/workflows/ci.yml",
+        "bytes": 13689,
+        "sha256": "468f80a02b1163cfef01846f7592e1f7c8854bc0c51a7d9dc9d3ae02002c2c1c"
+      },
+      {
+        "path": "/workspace/Project_Orca/vitest.config.ts",
+        "bytes": 6207,
+        "sha256": "c34bb5f818478027c7cfc1609f546ddfc5fda12518e58bf6bccd272a9a40f389"
+      },
+      {
+        "path": "/workspace/Project_Orca/vitest.global-setup.ts",
+        "bytes": 1091,
+        "sha256": "cd0a22e5dbc9258fca47c8cbb3e12b08abe0d0289499e5951085a2143271b36f"
+      }
+    ],
+    "retainedOutputHashesOnly": [
+      {
+        "path": "/tmp/orca-current-main-evidence/v2-image/controlled-build.json",
+        "bytes": 48027,
+        "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+      },
+      {
+        "path": "/tmp/orca-current-main-evidence/v2-image/controlled-child.mjs",
+        "bytes": 5713,
+        "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+      },
+      {
+        "path": "/tmp/orca-current-main-evidence/v2-image/controlled-producer.mjs",
+        "bytes": 2248652,
+        "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+      }
+    ],
+    "originalTestSourceUnchangedExceptFixtureCall": true,
+    "firstRun16AllocatorByteIdentical": true
+  },
+  "parentEvidenceRetained": [
+    {
+      "path": "/tmp/orca-current-main-evidence/cli-fixture-primary-result.json",
+      "bytes": 2997,
+      "sha256": "d0c2c68a78adfb9fb03095aad931dcadb889adb8f5772f931ec55259b6837499"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/cli-fixture-primary.log",
+      "bytes": 2232,
+      "sha256": "e662784fdface32ba3a07d69e3dafcd7145af47236bd7830d4b48193720e1aa6"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/cli-fixture-initial-lint-failure.json",
+      "bytes": 813,
+      "sha256": "71381df66b6523829cb1607ee48574c9ca684e0e72faf4fdfb046399e6a28fed"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/cli-fixture-read-errors.txt",
+      "bytes": 550,
+      "sha256": "75f5a81a3d62240199bfbf0c12b29525c56da2eb608942e7e3e8b1695a1e1b2a"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/cli-fixture-static-identity.json",
+      "bytes": 2604,
+      "sha256": "3ffa4afdcd46c737e48d8251869f7df32c6335d92480fe6438e229f36b84dc7a"
+    }
+  ],
+  "limitations": [
+    "Production close awaits callbacks but ignores callback errors; neither helper controls nor successful callback prove arbitrary OS-close settlement.",
+    "Real control proves known own slot conflict and momentary partial slot availability only, not historical CI listener identity or global quiescence.",
+    "Post-admission collisions remain possible and visible; original plugin scenario not run locally, so no local plugin startup behavioral proof claimed.",
+    "Five-cap/cleanup-failure controls are inert injections, not real OS failure or all-five ambient contention experiment.",
+    "Independent checkout uses same managed filesystem/toolchain and shared frozen dependencies, not independent platform diversity.",
+    "No image rebuild, designation, runtime qualification, provider implementation or architectural M2 work performed."
+  ],
+  "errors": [],
+  "outcome": "No remaining blocking finding in authorized test-only scope. Exact seven helper controls pass independently; original CI failure remains preserved/unretried. Await final handoff/evidence consistency before publication by parent."
+}

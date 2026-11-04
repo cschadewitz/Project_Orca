@@ -1,0 +1,105 @@
+{
+  "record": "bounded-independent-inert-attempt-and-early-ownership-review",
+  "reviewer": "/root/independent_review",
+  "baseCommit": "e625d9c0e6f5979d50416f31010d4827ca9a387b",
+  "candidateState": "Uncommitted preparation delta identified by exact hashes; no candidate source edits or publication by reviewer.",
+  "candidateFiles": {
+    "tools/owned-read-proof/offline_attempt_model.py": "dea121f343b369140f06e1006ac75ec5a629218660977a625e737c39aa9259ec",
+    "tools/owned-read-proof/test_offline_attempt_model.py": "4d201ed5e1906a68851c2e789172f27a3f13ca57432363e9de5ff5b19a447d9e",
+    "tools/owned-read-proof/check_nonlive.py": "d6c693f73743424f7b78389559e69147c926236c25be560c29b371aaf891800f",
+    "docs/preparation/tool-execution-guards/current-image-early-ownership.md": "b415389a5ebb6fe5281492b50a45f04389da6c69b70c5ab5863c061ab0b05b7e"
+  },
+  "coverage": "Read complete new inert_attempt implementation (offline_attempt_model.py), complete 13-method test module, selector change and full ownership-inventory document. Re-inspected referenced historical supervisor, query-provenance and diagnostic ownership/cleanup paths by source only. Independently ran new 13 plus existing 35 targeted methods normal and optimized. Not a whole-stack, formal security or runtime qualification audit.",
+  "implementationAssessment": {
+    "privateFirstFailure": "Stores first original BaseException by identity and validated exact-string phase; later failures cannot replace it. No str/repr/class-name conversion; private holder repr fixed, pickle rejected, public report excludes exception/phase/traceback and makes no persistence or authorization claim. Raw exceptions remain accessible to trusted same-process code and may retain sensitive traceback frames.",
+    "wholePairOwnership": "CleanupScope reserves registration before internal pair factory, owns the entire returned pair before either endpoint adoption. If second endpoint construction fails, factory consumes its own unreturned first token while preserving acquisition error before rollback error. This is nested-constructor modeling, not a claim that os.pipe returns a partial pair.",
+    "cleanup": "Reverse pair/endpoint order, consume before disposal, attempt remaining endpoints/pairs after failure, no retries, sticky first body/acquisition/cleanup error, stable copied terminal report. Bound/failed/closed admission refuses without creating further tokens. Cleanup-only uncertainty prevents apparent context success.",
+    "sourceIsolation": "Only import is pure CleanupScope. No OS/process imports, caller-supplied acquisition/cleanup adapter, command, path, PID or descriptor API. Neither historical observer module imports this model. Existing first-statement guards, historical private reports/correlation checks and helper code unchanged.",
+    "limits": "PAIR_COUNT=4 models four existing pipe acquisitions; no runtime limit, source selector or image bytes changed. Terminal model-callbacks-returned is explicitly synthetic and cannot assert actual closure, settlement, persistence or observation authorization."
+  },
+  "inventoryReview": {
+    "verifiedEdges": [
+      "Attempt directory and lifetime open/flock before broad cleanup",
+      "Independent exclusion FD local finally does not protect lifetime; close can replace earlier error",
+      "Four pipe pairs and whole-pair/per-end ownership",
+      "Plan/private file writes and nested probe/runtime work before broad cleanup",
+      "Query constructor hidden FDs and append-after-open failure",
+      "Path walk child acquisition before predecessor close and possible retry",
+      "Diagnostics constructor rollback and sequential close failure",
+      "Worker start and tracer callback before main try; shared resource use and settlement",
+      "Leader pidfd/procfd registration",
+      "Final sequential cleanup, bounded join, private report persistence failures"
+    ],
+    "minorCorrection": "Resolved: retained originals/trace reference corrected to supervisor lines 618-622, including trace.touch.",
+    "conclusion": "Inventory matches unchanged base source and correctly defers below-guard integration. An outer cleanup wrapper cannot recover hidden constructor resources or prove worker settlement."
+  },
+  "independentValidation": {
+    "checkout": "/workspace/orca-independent-current-rebuild",
+    "checkoutCommit": "a3b115a589864326eb210926baf8db7d4a9a6d7d",
+    "exactCandidatePythonFilesCopied": 47,
+    "harnessDisjointFromDeclaredImageInputs": true,
+    "harnessSnapshot": {
+      "path": "/tmp/orca-current-main-evidence/inert-attempt-independent-harness.json",
+      "sha256": "5e54adb6acea5d3854f95a1ea0ad859d31347fdf4caa2e8bebdab13c39917be3"
+    },
+    "declaredBuildInputsMatchedBeforeAndAfter": 387,
+    "candidatePythonSnapshotsUnchangedAfterTests": true,
+    "selection": "test_offline_attempt_model test_offline_cleanup_privacy test_current_image_inspection",
+    "methodBreakdown": {
+      "newInertModel": 13,
+      "existingCleanupPrivacy": 18,
+      "existingOfflineInspector": 17
+    },
+    "commands": [
+      "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH timeout --kill-after=5s 60s python -B -m unittest -v test_offline_attempt_model test_offline_cleanup_privacy test_current_image_inspection",
+      "PATH=/workspace/.orca-tools/node-v24.21.0-linux-x64/bin:$PATH timeout --kill-after=5s 60s python -B -O -m unittest -v test_offline_attempt_model test_offline_cleanup_privacy test_current_image_inspection"
+    ],
+    "workingDirectory": "/workspace/orca-independent-current-rebuild/tools/owned-read-proof",
+    "normal": {
+      "passed": 48,
+      "seconds": 0.574,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/inert-attempt-independent-normal.log",
+      "sha256": "1e213664a581a5665dba75a8423f85f76eb49485cbd93825716f94f80b858fad"
+    },
+    "optimized": {
+      "passed": 48,
+      "seconds": 0.583,
+      "exitCode": 0,
+      "path": "/tmp/orca-current-main-evidence/inert-attempt-independent-optimized.log",
+      "sha256": "582c1352f7529366499f3ab8b2d321ba3e684e866453db594562ad9132f9f96a"
+    },
+    "executionBoundary": "New model/cleanup/privacy tests are inert or pure/injected. Existing inspector regressions build disposable genuine images under their unchanged 15-second build bound and inspect copies, never execute images. Direct observation calls only exercise unconditional refusal. No guarded body extracted/invoked, no real observer/tracer/provider/daemon or App Smoke. Same managed host/toolchain, not independent-host execution."
+  },
+  "historicalFilesVerifiedUnchanged": {
+    "controlled_supervisor.py": "dcce704ec9d4e4a5697b889caa10e556f9c8dc9bcc8ae7b0fcc90a1fdcd44dba",
+    "controlled_observation.py": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3",
+    "controlled_connected.py": "606296afd4ffc0e00f732fd7be36bd99c11234bf55b5f2d74343e97ce3c61987",
+    "controlled_contract.py": "789e138300eb5125530a77f63ace1256cab1c91adb002133b57b8dc96eddd31d",
+    "controlled_replay.py": "81e9e755b12be137c3c496114d867ec404a0b1628fac1dc0929d0527c148c9f5",
+    "controlled_timestamps.py": "ed459226b64592b68da1e7593aaca11cb3ae979221109e510a03aaf9cf668196",
+    "controlled_v2_model.py": "af289071fc9627bb8f38115916a40740c1a131a756a4afa163d9229f6056df15",
+    "controlled_diagnostics.py": "c02fb09e9f4c43ad1a54650091ee1ca9efc8067ec5907b467be40c2b3f3c37da",
+    "kernel_runtime_queries.py": "f43e89618e1f12c39d8c6af465d80dc8aed586d838badc65f4423946c39fbdb6",
+    "run.py": "4426aa6d8a110ff3116338b6d822b9418cfdcd34ad1e79e37a279c39b39e5a35",
+    "verify.py": "0497fa5c1a6db9f0ee93ae4f996833578024304a37df8f58b6ac9fb4bac6c310",
+    "offline_cleanup.py": "92ce78e265f9cd8a88a59e34954893cb10292f1a5b017633e25b7a64f3d5aa1a",
+    "current_image_inspection.py": "fd38b7580f6ce7f0433ad10c62ef87b827ecefb76bebbfac5656711b609f985d",
+    "test_controlled_connected.py": "3622b8045d59c885b1b5f017351520d9097594689fa39457b556c02010a1819c",
+    "legacy_image_pin_controls.py": "b9224daf6698aa6a66b4a1e368e47b95f1a669df34535a3e7b96ef09f31d15ca"
+  },
+  "findings": {
+    "blockingImplementationFindings": [],
+    "documentationCorrection": "Exact line-reference correction resolved; no remaining documentation finding."
+  },
+  "remainingGates": [
+    "No real constructor-local FD rollback, worker transfer, process settlement or historical launcher integration established.",
+    "No durable bounded private first-failure capture/persistence or retention protocol implemented.",
+    "Loaded interpreter/module identity, preventive containment, authenticated original-session authority and current runtime designation remain unavailable.",
+    "No original current bootstrap receipt or complete connected raw replay/semantic qualification.",
+    "Trusted mutable model objects, same-process callbacks, interpreter and runtime substrate remain assumptions.",
+    "Held PR809 metadata-update operation remains untouched; no retry, alternate endpoint/account/comment or lookup attempted."
+  ],
+  "outcome": "No blocking finding for the focused inert preparation delta after correction. This is not runtime qualification, formal security approval, launch authorization or merge approval.",
+  "excludedActions": "No candidate edits, image execution, observer/tracer/provider/daemon, historical-body invocation/extraction/bypass, App Smoke, runtime designation, production activation, pins/limits/security/credential changes, #779/#793/#794 action, forbidden gh lookup, held metadata mutation/retry/workaround, merge or publication by reviewer."
+}

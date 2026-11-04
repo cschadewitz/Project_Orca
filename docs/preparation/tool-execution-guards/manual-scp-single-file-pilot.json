@@ -1,0 +1,29 @@
+{
+  "record": "manual-existing-ssh-scp-private-upload-single-file-pilot",
+  "reportedThroughTrustedParentHistory": true,
+  "operator": "Casey",
+  "hostGenerated": true,
+  "hostLocation": "unique /var/tmp pilot directory; exact private path omitted",
+  "files": 1,
+  "bytes": 16777216,
+  "sha256": "080acf35a507ac9849cfcba47dc2ad83e01b75663a516279c8b9d243b719643e",
+  "route": [
+    "user generates nonsecret file on pve2",
+    "user-operated Windows scp through already existing root/password SSH access",
+    "private ChatGPT user upload",
+    "parent materialization and independent byte/hash verification matching pve2"
+  ],
+  "newCredentialsOrAccess": false,
+  "passwordReceivedByAssistant": false,
+  "hostAccessOrPilotRepetitionByThisTask": false,
+  "rawPilotBytesRetainedInThisCheckout": false,
+  "qualification": "one real 16 MiB nonsecret file traversed the manual route; not the proposed two-chunk/index pilot",
+  "notEstablished": [
+    "packet-index.v1 upload acceptance and full inventory/chunk receiver closure",
+    "complete original packet or multi-GiB transport",
+    "private evidence disclosure/custody policy",
+    "source, issuer, original-run or receipt authority",
+    "host controller installation, principal, root, quota or recovery binding",
+    "live observation or in-memory capability continuity"
+  ]
+}

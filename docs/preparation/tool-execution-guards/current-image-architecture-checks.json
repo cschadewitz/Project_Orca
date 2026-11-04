@@ -1,0 +1,170 @@
+{
+  "scope": "Documentation-only M0 architecture prerequisite. Static correspondence checks, no runtime gate closed. No execution authority.",
+  "baseline": "f14eba992bf060320fdc8cf55db066ba327a0baf",
+  "mainPin": "f9e7225e59cfe6e83c539f2ce9922ad0677719f4",
+  "document": {
+    "path": "docs/preparation/tool-execution-guards/current-image-architecture-gates.md",
+    "bytes": 21456,
+    "sha256": "e509704baf9810954c695eea01eb755c0c563e9aed999660142769b45d6a9a7a"
+  },
+  "validation": {
+    "utf8LFAndFinalNewline": true,
+    "noTrailingWhitespace": true,
+    "balancedFence": true,
+    "relativeLinks": [
+      "current-image-observation-design.md",
+      "current-main-qualification-map.md",
+      "current-image-early-ownership.md",
+      "../../../tools/owned-read-proof/run.py",
+      "../../../tools/owned-read-proof/controlled_supervisor.py",
+      "../../../tools/owned-read-proof/controlled_timestamps.py"
+    ],
+    "eightGates": true,
+    "elevenOwnershipStages": true,
+    "trackedBaselineFilesUnchanged": true,
+    "guardCheck": "Python AST inspection only; no import or invocation",
+    "formatter": "Direct pinned Node invokes existing node_modules/prettier/bin/prettier.cjs; final --check required before publication. Markdown ignored by formatter; separate prose checks above."
+  },
+  "guards": [
+    {
+      "path": "tools/owned-read-proof/controlled_supervisor.py",
+      "function": "observe",
+      "firstExecutableStatement": "raise RuntimeError('non-live preparation: observer launch disabled')",
+      "file": {
+        "path": "tools/owned-read-proof/controlled_supervisor.py",
+        "bytes": 50605,
+        "sha256": "3e8e09e8e0f4d07273cd4d10488773970f7d97cbe80dc1d4f6977a94043a9f76"
+      }
+    },
+    {
+      "path": "tools/owned-read-proof/controlled_supervisor.py",
+      "function": "bootstrap",
+      "firstExecutableStatement": "raise RuntimeError('non-live preparation: observer launch disabled')",
+      "file": {
+        "path": "tools/owned-read-proof/controlled_supervisor.py",
+        "bytes": 50605,
+        "sha256": "3e8e09e8e0f4d07273cd4d10488773970f7d97cbe80dc1d4f6977a94043a9f76"
+      }
+    },
+    {
+      "path": "tools/owned-read-proof/controlled_observation.py",
+      "function": "observe_new",
+      "firstExecutableStatement": "raise RuntimeError('non-live preparation: observer launch disabled')",
+      "file": {
+        "path": "tools/owned-read-proof/controlled_observation.py",
+        "bytes": 6999,
+        "sha256": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3"
+      }
+    },
+    {
+      "path": "tools/owned-read-proof/controlled_observation.py",
+      "function": "diagnose_bootstrap",
+      "firstExecutableStatement": "raise RuntimeError('non-live preparation: observer launch disabled')",
+      "file": {
+        "path": "tools/owned-read-proof/controlled_observation.py",
+        "bytes": 6999,
+        "sha256": "6a6f494cc48dd1e3c98fb38a4602121cc14eb419d191f05e5abc6c00b0d45af3"
+      }
+    }
+  ],
+  "retainedImageOutputs": [
+    {
+      "path": "/tmp/orca-current-main-evidence/v2-image/controlled-build.json",
+      "bytes": 48027,
+      "sha256": "889bd46eeec3bf3133bea022591d23ad4a627b2e7bfc73d71fd8c4ecc971d977"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/v2-image/controlled-child.mjs",
+      "bytes": 5713,
+      "sha256": "17fdd509f6702c70229c95df53d669754118379e09ab4d26912466859f102f13"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/v2-image/controlled-producer.mjs",
+      "bytes": 2248652,
+      "sha256": "1c0bffce70e7bb70245962590f2f291b68b6afdd35078caa5fd25fbd573e5ff7"
+    }
+  ],
+  "imageCheckLimitation": "Hashes of retained bytes only in this increment; no rebuild, new physical identity or designation. Prior independent rebuild is separate evidence. No executable or input files changed.",
+  "preservedPriorCIRecords": [
+    {
+      "path": "/tmp/orca-current-main-evidence/inert-attempt-terminal-ci.json",
+      "bytes": 3542,
+      "sha256": "8b356f26476550d72fa948897054c0a0a553a14125f9d1b6f39324ce08bac514"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/inert-ci-recovery-terminal.json",
+      "bytes": 3457,
+      "sha256": "50cca97c402c577c0380b3733934eba1340839ef71c9d5f651f1f61c66dba5be"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/finalizer-worker-terminal-ci.json",
+      "bytes": 12817,
+      "sha256": "a632962d139de060da0db84055fb1cda599467a1c70f1b4fcec027bee1ce9a09"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/stop-error-terminal-outcome.json",
+      "bytes": 2664,
+      "sha256": "6c4a81a3dc278a3ca5a234685985c5c585305edd7e6df86f5facc25aadd390a2"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/worker-privacy-terminal-ci.json",
+      "bytes": 10401,
+      "sha256": "2e0dd65517b5b490e476f68dfdf237c09bc2f40f52ea28587658caa7e0167a3a"
+    },
+    {
+      "path": "/tmp/orca-current-main-evidence/moved-home-terminal-ci.json",
+      "bytes": 10657,
+      "sha256": "41d517c0adcb133899e6f5826ec12201f63d7a5d256511c9184a2d5b598df18f"
+    }
+  ],
+  "priorCIInterpretation": "Original failures remain failures. Later passing runs do not identify original listeners or resolve unknown causes. Latest prior-head run 41296794858 passed first attempt on tyler-3 for f14eba; separate from this documentation head.",
+  "notRun": [
+    "runtime tests",
+    "historical image fixture tests",
+    "build or independent rebuild",
+    "observer/tracer/provider/daemon",
+    "host probes or real threads/process experiments",
+    "App Smoke",
+    "containment instantiation or environment availability inspection"
+  ],
+  "remainingGates": {
+    "G0": "Proof scope undecided: guest-local first vs named existing-host domain. Neither available nor adequate assumed.",
+    "G1": "Named trusted issuer/recovery owner unavailable.",
+    "G2_G3": "Preventive containment and trusted immutable bootstrap/loaded-runtime origin not implemented or qualified.",
+    "G4": "Whole-attempt ownership and budget-compatible durable private protocol unavailable.",
+    "G5_G6": "No genuine current original bootstrap/connected continuity or complete runtime qualification.",
+    "G7": "Actual private storage/custody and independent runtime qualification unavailable."
+  },
+  "nextMilestone": "M1 reviewed available provider/owner contract after G0 decision. Unavailable capability is blocked M1, never permission to construct a fake provider for M2.",
+  "holds": {
+    "prMetadata": "Unknown error classification retained; no retry or workaround.",
+    "priorDenials": ["#779 security review", "#793 merge", "#794 formal approval"],
+    "launchBoundary": "All four first-executable refusals unchanged. No merge or activation."
+  },
+  "errors": [
+    {
+      "action": "Read guessed local file during preliminary source inspection",
+      "target": "tools/owned-read-proof/offline_attempt.py",
+      "exitCode": 2,
+      "toolChunk": "bf2cb9",
+      "stderr": [
+        "sed: can't read tools/owned-read-proof/offline_attempt.py: No such file or directory",
+        "rg: tools/owned-read-proof/offline_attempt.py: No such file or directory (os error 2)"
+      ],
+      "resolution": "rg --files located offline_attempt_model.py. Benign read error, no denial or mutation."
+    },
+    {
+      "action": "pnpm exec prettier --write for two new evidence files",
+      "target": "local formatter; pnpm attempted setup under /home/agent/.local/share/pnpm",
+      "toolChunk": "edda13",
+      "exitCode": 1,
+      "reason": "ENOENT mkdir, nested install exit 254",
+      "classification": "Tooling failure; no policy denial was returned. No package-manager retry.",
+      "fullError": {
+        "path": "/tmp/orca-current-main-evidence/architecture-format-error.txt",
+        "sha256": "e3b61a95140e408e4ef3e8c2d24be4d44cf426258518db237a738e0de259d8a8"
+      },
+      "resolution": "Existing installed prettier invoked directly with pinned Node; passed. No dependency setup required."
+    }
+  ]
+}

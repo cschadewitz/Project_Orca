@@ -1,0 +1,67 @@
+{
+  "record": "bounded-v2-non-live-checks",
+  "authority": "none",
+  "sourceCommit": "d2c1626c1b01f9dcac48753048fbdaf2c15c166c",
+  "sourceTree": "04d0bf59062be15b74109710d35677ebc6bf168d",
+  "checks": [
+    {
+      "name": "Exact-commit frozen non-live Python selection",
+      "status": "failed",
+      "exitCode": 1,
+      "details": "354 run: 350 pass, 1 failure, 3 errors; 31.158s. Four legacy image-designation failures; four real-tracer cases not selected.",
+      "log": "/tmp/orca-current-main-evidence/v2-final-nonlive.log",
+      "logSha256": "d6e88b7b8cd81e6b734b66231d8e6fbbb9fc88ff5978003e1d4b82fc1ff73ae1"
+    },
+    {
+      "name": "Exact-commit optimized v2/refusal/timestamp selection",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "33 passed in 1.897s.",
+      "log": "/tmp/orca-current-main-evidence/v2-final-optimized.log",
+      "logSha256": "38ee0dcaa6adc4dd15db888bd822f9a98479abe0aa6978cad0a5f9527cc14b3f"
+    },
+    {
+      "name": "Remaining disjoint producer tests",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "25 passed, 26 unselected, 107.84s; unchanged producer source in prior frozen checkout. All 51 producer tests now covered across disjoint groups.",
+      "log": "/tmp/orca-current-main-evidence/v2-timeout-diagnosis.log",
+      "logSha256": "70c076a6efdf090806dd484cbefb0c35d2c6ae301fa5d164269d162737011a88"
+    },
+    {
+      "name": "Offline frozen install",
+      "status": "failed",
+      "exitCode": 1,
+      "details": "ERR_PNPM_NO_OFFLINE_META for @babel/types; unavailable local registry metadata, not a security denial.",
+      "log": "/tmp/orca-current-main-evidence/v2-frozen-install.log",
+      "logSha256": "2e79220af549765d668a52b4dd7074a91ff798d6d80ebbb1a02d44aeee4a0a05"
+    },
+    {
+      "name": "Ordinary online frozen install",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "Same frozen lock and policy/lifecycle checks retained; completed in 10.6s.",
+      "log": "/tmp/orca-current-main-evidence/v2-frozen-install-online.log",
+      "logSha256": "e925fbf64c120b77b404d348cda4dc13ee022b83408490dc00bf999c3a68e674"
+    }
+  ],
+  "priorChecks": "current-main-nonlive-checks.json",
+  "distinctVitestPassed": 77,
+  "nonlivePython": {
+    "run": 354,
+    "passed": 350,
+    "failures": 1,
+    "errors": 3
+  },
+  "notRun": [
+    "real tracer cases",
+    "live observer",
+    "live daemon/provider/device",
+    "full repository suite",
+    "native desktop/platform smoke"
+  ],
+  "broadAttempts": "Two prior 180s timeouts remain timeouts. Successful subgroup elapsed times sum to 203.38s; cumulative cost supported, exact prior timeout cause not proven.",
+  "reviewRecordSha256": "79b30a9df37086aba0beff3dcc9c999b55734cb5f91f2eb514f821a2a4b23668",
+  "buildReviewRecordSha256": "84121b98596b3947fa58076619942d1b6c476c53ff9cd08e8f629ae82a57a28d",
+  "automaticApprovalDenials": []
+}
