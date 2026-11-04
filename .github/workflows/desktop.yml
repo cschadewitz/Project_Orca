@@ -192,7 +192,9 @@ jobs:
               raise SystemExit("Exact Node input checksum unavailable or mismatched")
           PY
           done
-          tar -xzf "$headers_scratch/$archive" -C "$headers_scratch"
+          # GNU tar in Git Bash reads a drive-letter archive path as host:path.
+          # Use the verified archive's basename from its directory instead.
+          (cd "$headers_scratch" && tar -xzf "$archive")
           for arch in x64 arm64; do
             mkdir -p "$headers_scratch/node-v${node_version}/$arch"
             cp "$headers_scratch/win-$arch/node.lib" "$headers_scratch/node-v${node_version}/$arch/node.lib"
