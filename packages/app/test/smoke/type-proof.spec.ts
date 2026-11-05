@@ -43,7 +43,7 @@
  */
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -356,7 +356,7 @@ async function faceReport(): Promise<FaceReport> {
 }
 
 /** Flip the bundled-faces toggle and wait for the page to say it has flipped. */
-async function setFaces(faces: "bundled" | "fallback", controlled = true): Promise<void> {
+async function setFaces(faces: "bundled" | "fallback", controlled = false): Promise<void> {
   const toggle = page.getByRole("button", { name: /Bundled faces/ });
   const current = await page.locator(".type-proof").getAttribute("data-faces");
   if (current !== faces) await toggle.click();
@@ -402,7 +402,7 @@ test("every bundled face actually loaded, rather than falling through to the OS"
   expect(unused, "a declared family was never drawn from, so the stacks are not reaching it").toEqual([]);
 });
 
-test("the toggle changes what is drawn, which is what makes the fallback column a control", async () => {
+test("the native toggle changes what is drawn without a font control", async () => {
   /* The width of every declared glyph, bundled and then fallback. If the two agree the page
      was already rendering the fallback — the bundled symbol face carries glyphs Plex and
      the OS stacks do not, so their advances cannot match by accident across the whole set.
@@ -414,6 +414,7 @@ test("the toggle changes what is drawn, which is what makes the fallback column 
   await setFaces("bundled");
   const bundled = await widths();
   await setFaces("fallback");
+  expect(await page.locator(".type-proof").getAttribute("data-control-fonts")).toBeNull();
   const fallback = await widths();
   await setFaces("bundled");
 
@@ -428,13 +429,17 @@ if (process.platform === "linux") {
   test("native Linux fallback remains visible as evidence", async ({}, testInfo) => {
     await setFaces("fallback", false);
     for (const theme of ["light", "dark"]) {
+      const path = testInfo.outputPath(`native-fallback-${theme}.png`);
+      await page.locator(`.type-proof__theme[data-theme="${theme}"]`).screenshot({ path });
       await testInfo.attach(`native-fallback-${theme}`, {
-        body: await page.locator(`.type-proof__theme[data-theme="${theme}"]`).screenshot(),
+        path,
         contentType: "image/png",
       });
     }
+    const path = testInfo.outputPath("native-fallback-fonts.json");
+    await writeFile(path, JSON.stringify(await renderedFonts(page), null, 2));
     await testInfo.attach("native-fallback-fonts", {
-      body: JSON.stringify(await renderedFonts(page), null, 2),
+      path,
       contentType: "application/json",
     });
     await setFaces("bundled");
@@ -447,8 +452,8 @@ for (const faces of ["bundled", "fallback"] as const) {
   for (const theme of ["light", "dark"] as const) {
     // eslint-disable-next-line no-empty-pattern -- Do not request Playwright's separate browser/page fixture.
     test(`the ${theme} column with the bundled faces ${faces === "bundled" ? "on" : "off"}`, async ({}, testInfo) => {
-      await setFaces(faces);
       const control = process.platform === "linux" && faces === "fallback";
+      await setFaces(faces, control);
       if (control) {
         const report = await renderedFonts(page);
         await testInfo.attach("control-fonts", {

@@ -6,6 +6,10 @@ not define a font environment, so Linux now compares a separately owned control
 instead of comparing a sparse host's fonts with another host's snapshot. Native
 fallback screenshots and Chromium's selected fonts remain attached as evidence;
 they are not silently corrected or treated as a glyph-coverage pass.
+The native toggle's width assertion runs without the control. Only Linux fallback
+snapshot comparisons explicitly enable it. Successful runs retain native PNGs and
+the font report under `test-results/app-smoke/`, plus the HTML report and its
+attachments under the workflow's repo-root `playwright-report/` upload path.
 
 The control aliases are `Orca Proof Sans`, `Orca Proof Mono` and `Orca Proof
 Supplement`. They apply only in the smoke spec's explicit control mode. The dev

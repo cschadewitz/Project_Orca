@@ -83,7 +83,12 @@ export default defineConfig({
   workers: 1,
   forbidOnly: !!process.env.CI,
   retries: 0,
-  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
+  // The default HTML folder is relative to the nearest package.json (packages/app),
+  // while the workflow uploads the repo-root folder. Pin it so passing attachments
+  // survive too; native acceptance's explicit output-directory environment still wins.
+  reporter: process.env.CI
+    ? [["list"], ["html", { open: "never", outputFolder: here("../../../../playwright-report") }]]
+    : [["list"]],
   outputDir: here("../../../../test-results/app-smoke"),
   use: { trace: "retain-on-failure" },
   projects: [
