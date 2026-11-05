@@ -1,12 +1,14 @@
 # Readiness for the next private release after v0.6.0
 
-**Status: not ready. Scope, version and candidate are not frozen.** Reconciled on
+**Status: not ready. Scope, version and candidate are not frozen.** Full audit reconciled on
 30 October 2026 against
 `main` at `267be3e50fe3839f50aeff425e3af3ef6e2999c7`, tracked by
 [#773](https://github.com/cschadewitz/Project_Orca/issues/773). It records what a candidate
 has to pass, what depends on which artifacts and features are selected, and what stays
-deferred. It chooses no version, date or candidate. Nothing here was tagged, published,
-uploaded, deployed or dispatched. Apple Silicon/macOS acceptance (M25) is out of scope.
+deferred. The Windows preparation and exploratory receipts were updated on 5 November
+against `main` at `1b728fff47f83adf2c48952a51bf155e7534b5e9`; other audit observations
+retain their dates. This document chooses no version, date or candidate and performs no
+release or deployment. Apple Silicon/macOS acceptance (M25) is out of scope.
 
 The release mechanics are [RELEASING.md](../RELEASING.md). Update and store-compatibility
 operation is [UPDATING.md](../UPDATING.md). This document does not restate either. It
@@ -33,6 +35,7 @@ tests and 13 context-recovery tests passing. CI does not launch or package Elect
 | [#787](https://github.com/cschadewitz/Project_Orca/issues/787), store-rehearsal preparation | [#789](https://github.com/cschadewitz/Project_Orca/pull/789), merge `d791451f8de5c59cfd862f679651376abbed99cf`, reviewed head `f5801acd3921205917dedaa0b34d819f9a9cab41`; 20 focused tests reported after #791 correction; source/offline/synthetic evidence | [Installed rows IL1–IL3 and IW1–IW3](../preparation/store-compatibility-rehearsal/README.md#5-installed-windowslinux-rehearsal-prerequisites-and-expected-evidence), all desktop W rows, cross-epoch procedure and notes decisions; no installed upgrade/restore acceptance |
 | [#357](https://github.com/cschadewitz/Project_Orca/issues/357), required context load | [#801](https://github.com/cschadewitz/Project_Orca/pull/801), merge `267be3e50fe3839f50aeff425e3af3ef6e2999c7`, reviewed head `ab3bd2d816f37913a37047b9de175c7dc8f87658`; 33 focused and 1,042 broader tests reported with declared dependencies | Opt-in protocol-load refusal boundary only. Native checkpoint identity/completeness, restart/compaction fidelity, durable Continue, fresh authorization and uncertain effects remain unaccepted; no provider-support or retention promise |
 | [#772](https://github.com/cschadewitz/Project_Orca/issues/772), artifact preparation | Issue remains open; [#779](https://github.com/cschadewitz/Project_Orca/pull/779) is the existing preparation PR, not a merged or candidate-bound receipt | Static inspection against exact artifact bytes and all selected native/runtime rows remain required. No review retry is performed here |
+| Windows packaging preparation | [#814](https://github.com/cschadewitz/Project_Orca/pull/814), merge `792ff9585c0c82b4d7fd4704c70cc1a449e447a0`, added manual Windows-only Desktop selection; [#815](https://github.com/cschadewitz/Project_Orca/pull/815), merge `1b728fff47f83adf2c48952a51bf155e7534b5e9`, fixed header extraction and test-fixture setup | The successful Windows-only packaging receipt below is at `b4361b1`, not the later merge SHA. It supplies neither a selected candidate nor all-platform or installed acceptance |
 
 The #786/#787 acceptance lists ask for preparation documents, focused offline checks and
 a draft PR reporting limits. Their merged preparation can be marked complete on that
@@ -41,10 +44,11 @@ Existing [#794](https://github.com/cschadewitz/Project_Orca/pull/794) already pr
 private-beta release guidance; it is unmerged in the inspected inventory. This update
 adds no competing guidance issue and performs no review/approval of that PR.
 
-The connected GitHub jobs/logs verify the CI receipt above. A read-only CLI attempt to
-list Desktop runs returned `Forbidden`; App smoke enumeration was not reached. No retry
-or alternate route was used for that listing. Accordingly R5/R6 record missing reviewed
-receipts and historical references, not an assertion that no newer run exists.
+The connected GitHub jobs/logs verify the dated CI receipt above. Workflow enumeration
+was blocked during the 30 October audit. The 5 November reconciliation verifies the
+Windows Desktop receipt below. No selected-build App smoke/type-proof receipt is reviewed
+here. R5/R6 remain open for a selected candidate; historical or exploratory receipts do
+not close those gates.
 
 ## What has changed since v0.6.0
 
@@ -97,13 +101,13 @@ commit (`release: vX.Y.Z` merged into `main`). No such candidate is selected her
 *before merge* exist because a failure there leaves the version bump on `main` with no tag
 (see RELEASING.md "fix forward").
 
-| # | Check | Owner / dependency | Exact evidence source | State reconciled on `267be3e` | Rerun when |
+| # | Check | Owner / dependency | Exact evidence source | Reconciled state and dated reference evidence | Rerun when |
 | --- | --- | --- | --- | --- | --- |
 | R1 | Typecheck, design-token freshness, format, lint, build on the release merge SHA | Release owner; `release-publish.yml` job `check` | That job's log for the merge SHA | Main CI [run 41007719795](https://github.com/cschadewitz/Project_Orca/actions/runs/41007719795) passed on `267be3e`; reference evidence only, not release-merge acceptance | Any commit change |
 | R2 | No-skip CLI/ACP retry acceptance: both named files run, every test passes, zero skips | same; parity enforced by `tools/test/release-workflow.test.js` | Step "Retry admission acceptance (CLI and ACP)" printing `none skipped` | As R1; both named files and 2 tests passed, none skipped | Any commit change |
 | R3 | Full suite with production MCP acceptance required (`ORCA_MCP_REQUIRE_PRODUCTION=1`), after build | same | Step "Test with coverage" in current main CI; corresponding production-MCP release check | As R1; full mode with production MCP required, with suite skips stated above | Any commit change |
 | R4 | Compiled CLI smoke: `node packages/cli/dist/main.js demo` | same | Step "Smoke test the compiled build" | As R1; compiled demo step passed | Any commit change |
-| R5 | Desktop artifacts on Linux (self-hosted x64), macOS and Windows runners, including "The bundled daemon answers authenticated hello" | Release owner; `desktop.yml` (reusable) | `desktop` job of the release run; *before merge*: a `workflow_dispatch` of **Desktop** on the candidate head | **Open.** No selected-build Desktop receipt in this reconciliation. The original audit reported a failed 30 Sep run; current workflow enumeration is unavailable. Main CI is not packaging proof | Any change under `packages/`, the lockfile, `electron-builder.yml` or `desktop.yml` |
+| R5 | Desktop artifacts on Linux (self-hosted x64), macOS and Windows runners, including "The bundled daemon answers authenticated hello" | Release owner; `desktop.yml` (reusable) | `desktop` job of the release run; *before merge*: a `workflow_dispatch` of **Desktop** on the candidate head | **Open.** Windows-only [run 41878358657](https://github.com/cschadewitz/Project_Orca/actions/runs/41878358657) succeeded at `b4361b1`, producing unsigned x64/arm64 assets. This is preparation, not a selected-build all-platform receipt. Main CI is not packaging proof | Any change under `packages/`, the lockfile, `electron-builder.yml` or `desktop.yml` |
 | R6 | Linux Electron smoke plus the Linux/macOS/Windows type-proof matrix | Release owner; `app-smoke.yml` with `ref` | `app-verification` job of the release run; *before merge*: dispatch **App smoke** with `ref` set to the candidate, so the classifier runs the full matrix | **Open.** Original audit references successful `408a21d` (25 Oct); no selected-build smoke/type-proof receipt reviewed here | Any renderer, design, font or app change; never update baselines inside the release run |
 | R7 | Artifact identity: one version read once and stamped into every artifact; tag `vX.Y.Z` absent; Windows architecture assets collision-checked (`tools/deploy/release-assets.py`); `appId` `com.schadewitz.orca` with Windows `dev.orca.desktop` retained; `orca-daemon-X.Y.Z.mjs` present | Release owner | Release run steps "The version being released" and "Tag and release"; #772 helpers for per-file SHA-256 manifests once they exist | Unbound: no selected producing run/attempt, file list or SHA-256 manifest | Any rebuild. A rebuilt artifact is a new candidate even on the same SHA |
 | R8 | Store and compatibility statement matches `release-compatibility.json` | Release owner; fragment authors | `### Store format` in the rendered notes against `release-compatibility.json` at the merge SHA | Drafted by the original audit; #789 source/synthetic findings qualify downgrade, first-open writes and updater paths. Owner wording review and candidate recheck remain | Any change to `release-compatibility.json`, store writers or protocol |
@@ -126,10 +130,22 @@ commit (`release: vX.Y.Z` merged into `main`). No such candidate is selected her
 
 ## Candidate evidence ledger (unbound preparation)
 
-**4 November Windows desktop preparation:** the next personal desktop test targets
-Windows 11 in a fresh workspace. Windows 10 compatibility testing is excluded;
-Apple Silicon remains outside this release. This selects an OS/test scope, not an
-artifact, architecture, version or final candidate. Existing-install update/restore
+**5 November Windows exploratory receipt:** the current personal desktop round targets
+Windows 11; Windows 10 compatibility testing is excluded. The
+[#773 receipt](https://github.com/cschadewitz/Project_Orca/issues/773#issuecomment-6649853644)
+records Casey's Windows 11 AMD64 exploratory use of the unsigned preparatory artifact
+from [Desktop run 41878358657](https://github.com/cschadewitz/Project_Orca/actions/runs/41878358657),
+attempt 1, source `b4361b1558bf0ffa3f45f18be790bbd0c24ae013`. Casey reported installation
+and launch, a fresh throwaway project/workspace connected to the bundled daemon reporting
+`0.6.0`, and a successful agent-free `orca-beta-local-check` run. The visible record step
+set `sampleResult`; its value was not displayed and is unverified. The receipt records
+archive/EXE hash comparisons, not a complete candidate manifest or static inspection.
+
+This personal desktop observation does not replace clean-install checks, a full guide
+walkthrough, shutdown/restart, upgrade/restore, native arm64, signing/trust, Linux or
+selected-candidate acceptance. It does not establish real-agent, approval or guard proof,
+or acceptance of later main `1b728ff`. Candidate ledger cells and coordinator gates remain
+unchecked. Apple Silicon remains outside this release. Existing-install update/restore
 acceptance remains separate. The archive-format/review hold in #779 remains open;
 its stopped investigation is not resumed by packaging preparation. Durable pending
 approval and **Approved — Continue** recovery remain implementation/acceptance gaps
@@ -281,8 +297,9 @@ added later (#686, #674 and #646 by #691). This audit changed only the following
 
 **Blocking gaps for any candidate**
 
-1. No selected-build Desktop receipt reviewed here (R5); latest workflow enumeration
-   is unavailable. Packaging and native acceptance remain open.
+1. No selected-build all-platform Desktop receipt reviewed here (R5). The unsigned
+   Windows reference build and personal exploratory receipt do not establish candidate
+   or clean-install acceptance.
 2. No selected-build App smoke/type-proof receipt reviewed here (R6).
 3. Candidate-bound unsigned/unvalidated wording and tester stop rules need review (R10).
 4. Release milestone/bump or prepare-path decision remains unestablished (R11).

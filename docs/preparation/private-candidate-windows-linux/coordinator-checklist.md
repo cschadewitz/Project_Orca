@@ -5,15 +5,24 @@ round is a small, trusted group. **Nothing here has been decided or done by this
 preparation.** Every box starts unchecked, and testers are **not unblocked** until all
 of them are checked for the specific candidate.
 
-## Evidence reconciliation (30 October 2026)
+## Evidence reconciliation (5 November 2026)
 
 [#790](https://github.com/cschadewitz/Project_Orca/pull/790) merged this preparation;
 [#789](https://github.com/cschadewitz/Project_Orca/pull/789) merged the source/offline/synthetic
 store rehearsal. Neither supplies installed candidate acceptance. The
 [readiness matrix and unbound candidate ledger](../../reviews/2026-10-27-release-readiness.md#candidate-evidence-ledger-unbound-preparation)
 record the verified main reference and the remaining evidence per possible combination.
-No platform set, artifact identity, OS version, support route, retention policy or date has
-been selected. All gates and candidate fill-ins below remain open.
+The current personal desktop round targets Windows 11; Windows 10 testing is excluded.
+No offered platform set, final candidate identity, support route, retention policy or date
+has been selected. All gates and candidate fill-ins below remain open.
+
+[#814](https://github.com/cschadewitz/Project_Orca/pull/814) and
+[#815](https://github.com/cschadewitz/Project_Orca/pull/815) merged Windows packaging
+preparation. The [#773 exploratory receipt](https://github.com/cschadewitz/Project_Orca/issues/773#issuecomment-6649853644)
+records Casey's personal Windows 11 AMD64 launch, bundled-daemon connection and successful
+agent-free sample on the unsigned `b4361b1` artifact. This is not a selected-candidate,
+clean-install or complete G3/G4 receipt, and does not prove a later build. It changes no
+tester warning/consent rules, enables no guard or real agent, and does not resume #779.
 
 When a combination is offered, link its own immutable manifest and separate static,
 installation, launch, onboarding, update and offline-restore receipts into that ledger.
@@ -28,8 +37,8 @@ upgrade and restore remain unverified. No manual migration procedure is chosen h
 For Casey's proposed Windows 11 x64 NSIS / Ubuntu 24.04 Desktop x64 tar.gz test setup,
 use the [disposable Proxmox VM runbook](../release-test-vms/README.md). It adds capacity
 preflight, reusable baselines, independent backup/restore and effort estimates without
-changing the candidate decisions or gates below. Windows 10 x64 remains a separate
-best-effort, unverified compatibility target in that proposal.
+changing the candidate decisions or gates below. Its earlier Windows 10 best-effort
+proposal is historical and does not apply to this round: Windows 10 testing is excluded.
 
 ## 1. Fill-in decisions
 
