@@ -1,0 +1,61 @@
+/** Linux-only screenshot control. These test-owned faces never enter a renderer build. */
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import type { Page } from "@playwright/test";
+
+interface ControlFace {
+  file: string;
+  family: string;
+  weight: string;
+  sha256: string;
+  fontFamily: string;
+}
+const directory = new URL("./control-fonts/", import.meta.url);
+const faces = JSON.parse(readFileSync(new URL("manifest.json", directory), "utf8")) as ControlFace[];
+
+export function controlStyle(): string {
+  const rules = faces.map((face) => {
+    const bytes = readFileSync(new URL(face.file, directory));
+    if (createHash("sha256").update(bytes).digest("hex") !== face.sha256)
+      throw new Error(`The type-proof control font changed: ${face.file}`);
+    return `@font-face { font-family: "${face.family}"; font-weight: ${face.weight}; font-style: normal;
+      font-display: block; src: url(data:font/woff2;base64,${bytes.toString("base64")}) format("woff2"); }`;
+  });
+  return `${rules.join("\n")}
+    .type-proof[data-faces="fallback"][data-control-fonts] {
+      --font-sans: "Orca Proof Supplement", "Orca Proof Sans" !important;
+      --font-mono: "Orca Proof Supplement", "Orca Proof Mono", "Orca Proof Sans" !important;
+    }`;
+}
+
+/** Record what Chromium actually drew, rather than guessing from a CSS stack or fc-match. */
+export async function renderedFonts(page: Page): Promise<
+  {
+    element: string;
+    fonts: { familyName: string; isCustomFont: boolean; glyphCount: number }[];
+  }[]
+> {
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await cdp.send("DOM.enable");
+    await cdp.send("CSS.enable");
+    const { root } = await cdp.send("DOM.getDocument");
+    const { nodeIds } = await cdp.send("DOM.querySelectorAll", {
+      nodeId: root.nodeId,
+      selector:
+        '.type-proof__theme[data-theme="light"] .type-proof__glyph-large, ' +
+        '.type-proof__theme[data-theme="light"] .type-proof__glyph-small > span',
+    });
+    const report = [];
+    for (const nodeId of nodeIds) {
+      const { outerHTML } = await cdp.send("DOM.getOuterHTML", { nodeId });
+      const { fonts } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
+      report.push({ element: outerHTML, fonts });
+    }
+    return report;
+  } finally {
+    await cdp.detach();
+  }
+}
+
+export const controlFontFamilies = [...new Set(faces.map((face) => face.fontFamily))];

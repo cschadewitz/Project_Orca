@@ -721,6 +721,16 @@ about because the obvious reaction to either is to make it behave like the other
 Four baselines per platform: the light column and the dark column, with the bundled faces on
 and off. They are committed beside the spec, in Playwright's own layout:
 
+On Linux the two faces-off fixtures use the explicitly separate control in
+`packages/app/test/smoke/control-fonts/`, with names `type-fallback-control-*.png`.
+Its pinned, independently owned fonts keep a sparse runner's OS fonts from defining the
+comparison. Actual native fallback remains visible in attached screenshots and Chromium
+font reports; those are evidence, not a glyph-coverage pass. The ordinary bundled images
+still use the product fonts and their existing baselines. The control is test-only and
+does not change the app's fallback stacks. See the fixture README for source hashes,
+licences, coverage checks and rebuilding. New control baselines require an exact-ref Tyler
+capture, visual review and an explicit baseline commit before the proof can pass.
+
 ```
 packages/app/test/smoke/type-proof.spec.ts-snapshots/
   type-bundled-light-type-proof-linux.png

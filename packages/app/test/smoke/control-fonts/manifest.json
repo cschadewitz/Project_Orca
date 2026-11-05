@@ -1,0 +1,47 @@
+[
+  {
+    "file": "DejaVuSans.woff2",
+    "family": "Orca Proof Sans",
+    "weight": "400",
+    "source": "DejaVuSans.ttf",
+    "sourceSha256": "57f73e11f51999432bf7ab22ce55b6f945d5eca1bf824404cfa9ec2e3718c84e",
+    "sha256": "b3c3edb1ef255645082329623885caa26472dae1255d7c51650d171966c2de03",
+    "fontFamily": "DejaVu Sans"
+  },
+  {
+    "file": "DejaVuSans-Bold.woff2",
+    "family": "Orca Proof Sans",
+    "weight": "500 700",
+    "source": "DejaVuSans-Bold.ttf",
+    "sourceSha256": "a4c5bc453ca281d90ea079e596da7ae0dfeb5777497c29ec254e76d97ff6f890",
+    "sha256": "6a5087229efe60b68ec49a0e4f854d470196e6e673146a467a9663398ee87a55",
+    "fontFamily": "DejaVu Sans"
+  },
+  {
+    "file": "DejaVuSansMono.woff2",
+    "family": "Orca Proof Mono",
+    "weight": "400",
+    "source": "DejaVuSansMono.ttf",
+    "sourceSha256": "54bf827eb99404e8f430c330ad30f063334f637eba0109b6a18d4f566a8e9dd8",
+    "sha256": "6f90e222b5063a3f6c5d3822c98d42fe334310351019168ee24d6917c140b51f",
+    "fontFamily": "DejaVu Sans Mono"
+  },
+  {
+    "file": "DejaVuSansMono-Bold.woff2",
+    "family": "Orca Proof Mono",
+    "weight": "500 700",
+    "source": "DejaVuSansMono-Bold.ttf",
+    "sourceSha256": "0d3c03d1b667192f91223660a3163325cf83132662fe4d9f7d6e596bf7a995c2",
+    "sha256": "18e4ada59ef35aa22d4d7b3e211c2704f4d10008d5d50b076026752f6ba3e358",
+    "fontFamily": "DejaVu Sans Mono"
+  },
+  {
+    "file": "NotoSansSymbols2-Regular.woff2",
+    "family": "Orca Proof Supplement",
+    "weight": "400",
+    "source": "NotoSansSymbols2-Regular.ttf",
+    "sourceSha256": "876598db5f1e3bef2bc77c4d94c5b0d5d2c1620be4878a06f18fb5434e331688",
+    "sha256": "225d088d58b6bd6edf9bb67aa9a007e52b748e6e68db0f4229d207a782ed2225",
+    "fontFamily": "Noto Sans Symbols2"
+  }
+]
