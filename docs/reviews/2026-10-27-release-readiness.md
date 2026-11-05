@@ -46,9 +46,9 @@ adds no competing guidance issue and performs no review/approval of that PR.
 
 The connected GitHub jobs/logs verify the dated CI receipt above. Workflow enumeration
 was blocked during the 30 October audit. The 5 November reconciliation verifies the
-Windows Desktop receipt below and finds no App smoke run at current main
-`1b728fff47f83adf2c48952a51bf155e7534b5e9`, including manual runs. R5/R6 remain open
-for a selected candidate; historical or exploratory receipts do not close those gates.
+Windows Desktop receipt below. No selected-build App smoke/type-proof receipt is reviewed
+here. R5/R6 remain open for a selected candidate; historical or exploratory receipts do
+not close those gates.
 
 ## What has changed since v0.6.0
 
