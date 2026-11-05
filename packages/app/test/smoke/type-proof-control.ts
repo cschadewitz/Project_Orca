@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
-import type { ViteDevServer } from "vite";
+import type { Plugin, ViteDevServer } from "vite";
 
 interface ControlFace {
   file: string;
@@ -14,6 +14,11 @@ interface ControlFace {
 const directory = new URL("./control-fonts/", import.meta.url);
 const faces = JSON.parse(readFileSync(new URL("manifest.json", directory), "utf8")) as ControlFace[];
 const prefix = "/__orca-type-control/";
+
+/** configureServer runs before Vite's HTML fallback/404 handlers. */
+export function controlFontPlugin(): Plugin {
+  return { name: "orca-type-proof-control", configureServer: mountControlFonts };
+}
 
 /** Serve only manifest entries through the test's existing loopback origin (CSP: self). */
 export function mountControlFonts(server: ViteDevServer): void {

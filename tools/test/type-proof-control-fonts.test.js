@@ -3,12 +3,38 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { expect, it } from "vitest";
-import { controlStyle, mountControlFonts } from "../../packages/app/test/smoke/type-proof-control.js";
+import {
+  controlStyle,
+  controlFontPlugin,
+  mountControlFonts,
+} from "../../packages/app/test/smoke/type-proof-control.js";
+const appRequire = createRequire(new URL("../../packages/app/package.json", import.meta.url));
+const { createServer } = await import(appRequire.resolve("vite"));
 const require = createRequire(new URL("../font-build/package.json", import.meta.url));
 const { create } = require("fontkit");
 const root = new URL("../../packages/app/test/smoke/control-fonts/", import.meta.url);
 const manifest = JSON.parse(readFileSync(new URL("manifest.json", root)));
 const loaded = manifest.map((face) => ({ ...face, bytes: readFileSync(new URL(face.file, root)) }));
+
+it("delivers real font responses before Vite's HTML fallback", async () => {
+  const server = await createServer({
+    configFile: false,
+    plugins: [controlFontPlugin()],
+    logLevel: "silent",
+    server: { host: "127.0.0.1", port: 0, hmr: false },
+  });
+  try {
+    await server.listen();
+    for (const face of loaded) {
+      const response = await fetch(new URL(`__orca-type-control/${face.file}`, server.resolvedUrls.local[0]));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("font/woff2");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(face.bytes);
+    }
+  } finally {
+    await server.close();
+  }
+});
 
 it("serves allowlisted fixture bytes from the existing origin without a CSP exception", () => {
   let middleware;

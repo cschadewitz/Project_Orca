@@ -48,7 +48,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, type ViteDevServer } from "vite";
-import { controlStyle, controlFontFamilies, mountControlFonts, renderedFonts } from "./type-proof-control.js";
+import { controlStyle, controlFontFamilies, controlFontPlugin, renderedFonts } from "./type-proof-control.js";
 
 /**
  * `packages/app` and the repo root, from this file: test/smoke → up two and up four.
@@ -142,9 +142,9 @@ test.beforeAll(async () => {
      people stop running. Vite picks the next free port and tells us which. */
   server = await createServer({
     configFile: join(appDir, "vite.config.ts"),
+    plugins: process.platform === "linux" ? [controlFontPlugin()] : [],
     server: { host: "127.0.0.1", strictPort: false },
   });
-  if (process.platform === "linux") mountControlFonts(server);
   await server.listen();
   const url = server.resolvedUrls?.local[0];
   if (!url) throw new Error("the Vite dev server did not report a local URL");
@@ -439,7 +439,10 @@ for (const faces of ["bundled", "fallback"] as const) {
         for (const entry of report) {
           expect(entry.fonts.length, entry.element).toBeGreaterThan(0);
           for (const font of entry.fonts) {
-            expect(font.isCustomFont, `host font leaked into the control: ${entry.element}`).toBe(true);
+            expect(
+              font.isCustomFont,
+              `host font leaked into the control: ${JSON.stringify(font)} ${entry.element}`,
+            ).toBe(true);
             expect(controlFontFamilies, entry.element).toContain(font.familyName);
           }
         }
