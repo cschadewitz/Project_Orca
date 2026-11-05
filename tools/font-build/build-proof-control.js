@@ -51,6 +51,18 @@ for (const [name, sourceSha256, family, weight, only] of faces) {
   const bytes = readFileSync(join(source, name));
   if (sha256(bytes) !== sourceSha256) throw new Error(`Unexpected upstream bytes: ${name}`);
   const font = fontkit.create(bytes);
+  if (name === "DejaVuSans.ttf") {
+    // The Debian package notice omits Arev. Preserve the pinned font's full nameID 0/13
+    // wording beside all four DejaVu subsets; HarfBuzz drops nameID 13 from the WOFF2s.
+    const { copyright, license } = font.name.records;
+    if (!copyright?.en || !license?.en?.includes("Arev Fonts Copyright"))
+      throw new Error("The pinned DejaVu source is missing its complete redistribution notice");
+    const notice = `${copyright.en.trimEnd()}\n\n${license.en.trimEnd()}\n`
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .join("\n");
+    writeFileSync(new URL("LICENSE-DejaVu.txt", out), notice);
+  }
   const cps = only ?? [...new Set([...text, ...glyphs])].filter((cp) => font.hasGlyphForCodePoint(cp));
   for (const cp of cps) if (!font.hasGlyphForCodePoint(cp)) throw new Error(`${name} lacks U+${cp.toString(16)}`);
   const subset = await subsetFont(bytes, String.fromCodePoint(...cps), { targetFormat: "woff2" });

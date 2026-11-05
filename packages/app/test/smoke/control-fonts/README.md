@@ -23,6 +23,13 @@ supplement contains only those two glyphs. It is not the product's subset, and n
 product file is referenced or copied by the control. The manifest records source
 and output SHA-256 values; the upstream license notices are included beside it.
 
+`LICENSE-DejaVu.txt` is extracted from the pinned `DejaVuSans.ttf` copyright and
+license records (OpenType name IDs 0 and 13), preserving the complete Bitstream
+and Arev/Tavmjong Bah notices. Only trailing whitespace is normalized. The Debian
+package copyright file alone is insufficient: it omits the Arev notice present
+in both Sans source fonts. The subset retains copyright metadata but drops the
+license record, so the complete accompanying notice must remain with the files.
+
 To rebuild, place the five upstream TTFs named in `manifest.json` in a directory
 and run `node tools/font-build/build-proof-control.js /path/to/ttfs`. Unexpected
 source bytes are refused. The build uses the existing locked font-build tooling;

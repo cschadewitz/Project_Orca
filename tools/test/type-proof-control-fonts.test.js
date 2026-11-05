@@ -16,6 +16,20 @@ const root = new URL("../../packages/app/test/smoke/control-fonts/", import.meta
 const manifest = JSON.parse(readFileSync(new URL("manifest.json", root)));
 const loaded = manifest.map((face) => ({ ...face, bytes: readFileSync(new URL(face.file, root)) }));
 
+it("ships the complete pinned upstream DejaVu notice, including Arev", () => {
+  // SHA-256 of nameID 0 + nameID 13 from the pinned DejaVuSans.ttf, with trailing
+  // whitespace normalized. Pin the entire notice so dropping a clause cannot pass.
+  const notice = readFileSync(new URL("LICENSE-DejaVu.txt", root), "utf8");
+  expect(createHash("sha256").update(notice).digest("hex")).toBe(
+    "c37795d61aa45225de5e2ddc0d4bf97e5efa7cb23fb4c96934a9e31f3d5e8f76",
+  );
+  expect(notice).toContain("Arev Fonts Copyright");
+  for (const face of loaded.filter((face) => face.file.startsWith("DejaVu"))) {
+    const copyright = create(face.bytes).name.records.copyright.en;
+    for (const line of copyright.trim().split("\n")) expect(notice).toContain(line.trimEnd());
+  }
+});
+
 it("delivers real font responses before Vite's HTML fallback", async () => {
   const server = await createServer({
     configFile: false,
