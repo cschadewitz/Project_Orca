@@ -47,6 +47,13 @@ export function controlStyle(): string {
     .type-proof[data-faces="fallback"][data-control-fonts] {
       --font-sans: "Orca Proof Supplement", "Orca Proof Sans" !important;
       --font-mono: "Orca Proof Supplement", "Orca Proof Mono", "Orca Proof Sans" !important;
+    }
+    /* The spec hides these clocks at zero width. Their hidden text can still wrap
+       into extra lines (6m versus 6m 1s), changing a connection row's height.
+       Remove that remaining geometry in the separately owned control only. */
+    .type-proof[data-control-fonts] .orca-conn--reconnecting > span:last-child,
+    .type-proof[data-control-fonts] .orca-conn--disconnected > span:last-child {
+      height: 0;
     }`;
 }
 

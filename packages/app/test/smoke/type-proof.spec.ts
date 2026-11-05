@@ -270,7 +270,7 @@ async function layoutSettled(): Promise<void> {
  * then measured: a detail span that still has width is a detail span that is still on the
  * picture.
  */
-async function clockIsNeutralised(): Promise<void> {
+async function clockIsNeutralised(control = false): Promise<void> {
   /* Waited for, not assumed: `evaluateAll` does not auto-wait, and a zero count would
      otherwise read as "the markup moved" when it only meant "not painted yet". */
   const ticker = page.locator(".orca-conn--reconnecting, .orca-conn--disconnected").first();
@@ -299,6 +299,25 @@ async function clockIsNeutralised(): Promise<void> {
     widths.filter((width) => width !== 0),
     "a ticking connection detail still occupies the picture",
   ).toEqual([]);
+  if (control) {
+    const details = page.locator(
+      ".orca-conn--reconnecting > span:last-child, .orca-conn--disconnected > span:last-child",
+    );
+    // Exercise the minute boundary that changes a hidden clock from one unit to two.
+    // Its geometry must stay absent regardless of the live ticker's current value.
+    for (const value of ["6m", "6m 1s ago"]) {
+      const heights = await details.evaluateAll((nodes, text) => {
+        return nodes.map((node) => {
+          const children = [...node.childNodes];
+          node.textContent = text;
+          const height = node.getBoundingClientRect().height;
+          node.replaceChildren(...children);
+          return height;
+        });
+      }, value);
+      expect(heights, "a hidden control clock still changes row height").toEqual(widths.map(() => 0));
+    }
+  }
 }
 
 /** The window showing the renderer, rather than whichever window opened first. */
@@ -358,6 +377,7 @@ async function setFaces(faces: "bundled" | "fallback", controlled = true): Promi
   /* Every picture goes through here, so this is the one place that guarantees none of them
      is taken mid-reflow — the toggle swaps whole families, which moves the page's height. */
   await layoutSettled();
+  if (process.platform === "linux" && faces === "fallback" && controlled) await clockIsNeutralised(true);
 }
 
 /* ------------------------------------------------------------------ the machine checks */
