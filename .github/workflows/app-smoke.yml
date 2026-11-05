@@ -10,6 +10,7 @@
 # only pre-merge workflow. Release calls still run every job against the exact merge commit
 # before publication; a manual run can verify a branch or produce screenshot evidence.
 # The supplied ref makes the existing classifier run the complete type-proof matrix.
+# Manual runs may opt into Tyler for every Linux job. Release calls retain homelab.
 name: App smoke
 
 on:
@@ -20,6 +21,12 @@ on:
         required: true
         type: string
         default: main
+      linux_runner:
+        description: Linux runner pool; Tyler still requires the existing display and sandbox prerequisites.
+        type: choice
+        options: [homelab, tyler]
+        default: homelab
+        required: true
   workflow_call:
     inputs:
       ref:
@@ -36,7 +43,7 @@ concurrency:
 jobs:
   changes:
     name: classify app checks
-    runs-on: [self-hosted, linux, x64, homelab]
+    runs-on: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.linux_runner == 'tyler' && '["self-hosted","linux","x64","tyler"]' || '["self-hosted","linux","x64","homelab"]') }}
     outputs:
       type_proof: ${{ steps.classify.outputs.type_proof }}
     steps:
@@ -81,7 +88,7 @@ jobs:
 
   smoke:
     name: electron smoke test
-    runs-on: [self-hosted, linux, x64, homelab]
+    runs-on: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.linux_runner == 'tyler' && '["self-hosted","linux","x64","tyler"]' || '["self-hosted","linux","x64","homelab"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -181,7 +188,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            runner: [self-hosted, linux, x64, homelab]
+            runner: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.linux_runner == 'tyler' && '["self-hosted","linux","x64","tyler"]' || '["self-hosted","linux","x64","homelab"]') }}
           - os: macos-latest
             runner: macos-latest
           - os: windows-latest
