@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
+import type { ViteDevServer } from "vite";
 
 interface ControlFace {
   file: string;
@@ -12,14 +13,30 @@ interface ControlFace {
 }
 const directory = new URL("./control-fonts/", import.meta.url);
 const faces = JSON.parse(readFileSync(new URL("manifest.json", directory), "utf8")) as ControlFace[];
+const prefix = "/__orca-type-control/";
+
+/** Serve only manifest entries through the test's existing loopback origin (CSP: self). */
+export function mountControlFonts(server: ViteDevServer): void {
+  const assets = new Map(
+    faces.map((face) => {
+      const bytes = readFileSync(new URL(face.file, directory));
+      if (createHash("sha256").update(bytes).digest("hex") !== face.sha256)
+        throw new Error(`The type-proof control font changed: ${face.file}`);
+      return [prefix + face.file, bytes];
+    }),
+  );
+  server.middlewares.use((request, response, next) => {
+    const bytes = assets.get(request.url ?? "");
+    if (!bytes) return next();
+    response.setHeader("Content-Type", "font/woff2");
+    response.end(bytes);
+  });
+}
 
 export function controlStyle(): string {
   const rules = faces.map((face) => {
-    const bytes = readFileSync(new URL(face.file, directory));
-    if (createHash("sha256").update(bytes).digest("hex") !== face.sha256)
-      throw new Error(`The type-proof control font changed: ${face.file}`);
     return `@font-face { font-family: "${face.family}"; font-weight: ${face.weight}; font-style: normal;
-      font-display: block; src: url(data:font/woff2;base64,${bytes.toString("base64")}) format("woff2"); }`;
+      font-display: block; src: url("${prefix}${face.file}") format("woff2"); }`;
   });
   return `${rules.join("\n")}
     .type-proof[data-faces="fallback"][data-control-fonts] {

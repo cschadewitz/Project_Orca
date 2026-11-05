@@ -48,7 +48,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, type ViteDevServer } from "vite";
-import { controlStyle, controlFontFamilies, renderedFonts } from "./type-proof-control.js";
+import { controlStyle, controlFontFamilies, mountControlFonts, renderedFonts } from "./type-proof-control.js";
 
 /**
  * `packages/app` and the repo root, from this file: test/smoke → up two and up four.
@@ -144,6 +144,7 @@ test.beforeAll(async () => {
     configFile: join(appDir, "vite.config.ts"),
     server: { host: "127.0.0.1", strictPort: false },
   });
+  if (process.platform === "linux") mountControlFonts(server);
   await server.listen();
   const url = server.resolvedUrls?.local[0];
   if (!url) throw new Error("the Vite dev server did not report a local URL");

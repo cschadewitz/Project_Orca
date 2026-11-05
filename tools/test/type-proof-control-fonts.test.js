@@ -3,11 +3,54 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { expect, it } from "vitest";
+import { controlStyle, mountControlFonts } from "../../packages/app/test/smoke/type-proof-control.js";
 const require = createRequire(new URL("../font-build/package.json", import.meta.url));
 const { create } = require("fontkit");
 const root = new URL("../../packages/app/test/smoke/control-fonts/", import.meta.url);
 const manifest = JSON.parse(readFileSync(new URL("manifest.json", root)));
 const loaded = manifest.map((face) => ({ ...face, bytes: readFileSync(new URL(face.file, root)) }));
+
+it("serves allowlisted fixture bytes from the existing origin without a CSP exception", () => {
+  let middleware;
+  mountControlFonts({
+    middlewares: {
+      use(handler) {
+        middleware = handler;
+      },
+    },
+  });
+  const styles = controlStyle();
+  for (const face of loaded) {
+    const url = `/__orca-type-control/${face.file}`;
+    expect(styles).toContain(`url("${url}")`);
+    let contentType, body;
+    middleware(
+      { url },
+      {
+        setHeader(name, value) {
+          expect(name).toBe("Content-Type");
+          contentType = value;
+        },
+        end(bytes) {
+          body = bytes;
+        },
+      },
+      () => {
+        throw new Error("known fixture was not served");
+      },
+    );
+    expect(contentType).toBe("font/woff2");
+    expect(body).toEqual(face.bytes);
+  }
+  expect(styles).not.toMatch(/data:|https?:/);
+  for (const url of ["/__orca-type-control/../tokens.json", "/__orca-type-control/missing.woff2"]) {
+    let next = false;
+    middleware({ url }, {}, () => {
+      next = true;
+    });
+    expect(next).toBe(true);
+  }
+});
 const glyphs = new Set();
 function walk(node) {
   if (!node || typeof node !== "object") return;
