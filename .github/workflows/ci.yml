@@ -42,10 +42,12 @@ jobs:
           [[ "$idle" =~ ^[0-9]+$ ]] || idle=0
           if (( idle > 0 )); then
             echo 'labels=["self-hosted","linux","x64","tyler"]' >> "$GITHUB_OUTPUT"
-            # Upper bound on Vitest workers, sized to the runner's memory limit (measured
-            # ~8 GB peak at 16 workers with coverage) rather than its 30-core CPU limit,
-            # since more workers than this ran slower
-            echo 'workers=16' >> "$GITHUB_OUTPUT"
+            # Upper bound on Vitest workers. A sweep of the full suite with coverage on a
+            # 32-core host gave 8 workers: 134 s, 16: 82 s, 20: 75 s, 24: 73 s, 31: 75 s.
+            # Past ~20 the wall time stops improving while summed CPU time keeps rising
+            # (contention) and flakes under load become more likely. Memory was ~8 GB peak
+            # at 16 workers with coverage and has not been re-measured at 20.
+            echo 'workers=20' >> "$GITHUB_OUTPUT"
             # setup-node's `cache: pnpm` restores through GitHub's Actions cache service,
             # which the runners' squid proxy only tunnels. Without it pnpm install fetches
             # tarballs from registry.npmjs.org, which squid caches.

@@ -24,8 +24,10 @@ curl failed is also discarded.
 On the self-hosted runners the pnpm cache is left empty because `setup-node`
 restores through GitHub's Actions cache service, which the runners' proxy only
 tunnels. `pnpm install` fetches from the npm registry instead, and the proxy caches
-those tarballs. The worker count follows the runner's memory limit (about 8 GB peak
-at 16 workers with coverage), not its CPU limit.
+those tarballs. The worker count is 20, where a sweep of the full suite with coverage
+stopped getting faster (8 workers 134 s, 16: 82 s, 20: 75 s, 24: 73 s, 31: 75 s); more
+workers only add CPU contention. Memory was about 8 GB peak at 16 workers with coverage
+and has not been re-measured at 20.
 
 Only `check` moves. `changes` and `pick runner` always run on GitHub-hosted runners.
 
