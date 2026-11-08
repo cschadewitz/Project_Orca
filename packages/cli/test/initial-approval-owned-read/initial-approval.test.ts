@@ -7,12 +7,12 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { fileStores, FileExecutionStore, lapsed } from "@orca/store";
 import { LiveHumanInput, type LiveAnswerAuthority } from "@orca/engine";
-import { CredentialStore } from "../../daemon/src/auth/credentials.js";
-import * as daemonTransport from "../../daemon/src/server.js";
-import * as protectedOwner from "../../daemon/src/protected-scoped-permission-owner.js";
-import * as ownedService from "../../engine/src/owned-file-read-service.js";
-import { runControlledOwnedReadTest } from "./controlled-owned-read-producer-expanded.js";
-import { bootstrap, noSavedGrant, semantics, supervisor } from "./initial-approval-owned-read-fixture.js";
+import { CredentialStore } from "../../../daemon/src/auth/credentials.js";
+import * as daemonTransport from "../../../daemon/src/server.js";
+import * as protectedOwner from "../../../daemon/src/protected-scoped-permission-owner.js";
+import * as ownedService from "../../../engine/src/owned-file-read-service.js";
+import { runControlledOwnedReadTest } from "../controlled-owned-read/producer-expanded.js";
+import { bootstrap, noSavedGrant, semantics, supervisor } from "./fixture.js";
 
 it("Save after the initial preview expires retires the reservation without answering or reading", async () => {
   const b = await bootstrap(),

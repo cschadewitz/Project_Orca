@@ -1,26 +1,14 @@
 /** #396 fresh-process acceptance of the corrected contract: JEV evaluation, credentials, leases and descriptor limits.
- * Split out of restoration-acceptance.test.ts so the scenarios run beside each other. */
+ * Split out of baseline.test.ts so the scenarios run beside each other. */
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { fileStores } from "@orca/store";
 import * as engine from "@orca/engine";
-import { protectedDigests } from "./restoration-acceptance/harness.js";
-import {
-  canaries,
-  prepareJevFixture,
-  prepareRestorationFixture,
-  providerTrace,
-} from "./restoration-acceptance/fixture.js";
-import {
-  fixture,
-  harness,
-  noLeaks,
-  refused,
-  differentProcess,
-  preserveOriginal,
-} from "./restoration-acceptance/support.js";
+import { protectedDigests } from "./harness.js";
+import { canaries, prepareJevFixture, prepareRestorationFixture, providerTrace } from "./fixture.js";
+import { fixture, harness, noLeaks, refused, differentProcess, preserveOriginal } from "./support.js";
 
 describe.skipIf(!Reflect.has(engine, "readPluginRestorationData"))("#396 corrected contract integration", () => {
   it("JEV durable result survives fresh-process resume without reevaluation", async () => {

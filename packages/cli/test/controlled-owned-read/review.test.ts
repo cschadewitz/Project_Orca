@@ -1,5 +1,5 @@
 /** Independent #742 review regressions at 6f208db. The supervisor fixture below mirrors
- * controlled-owned-read.test.ts unchanged (it is not exported). These cases separate
+ * revocation.test.ts unchanged (it is not exported). These cases separate
  * approval recording, delivery, authorization/dispatch and read, and check refusal origin.
  * Local interception is test evidence only; it is not installed confinement or acceptance.
  */
@@ -14,8 +14,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { fileStores } from "@orca/store";
 import * as agents from "@orca/agents";
 import type { ActionEvidenceV1, PolicyEvaluationV1, StrictPermissionRule } from "@orca/core";
-import { resolveManagedRootBinding } from "../src/typed-workspace-gate.js";
-import { runControlledOwnedReadTest, type ControlledReadTestSupervisor } from "./controlled-owned-read-producer.js";
+import { resolveManagedRootBinding } from "../../src/typed-workspace-gate.js";
+import { runControlledOwnedReadTest, type ControlledReadTestSupervisor } from "./producer.js";
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -84,7 +84,7 @@ async function supervisor(
     ].map((path) => [path, identity(path)]),
   );
   const identityBytes = fs.readFileSync(id);
-  const image = new URL("./controlled-owned-read-producer.ts", import.meta.url);
+  const image = new URL("./producer.ts", import.meta.url);
   const imageBytes = fs.readFileSync(image),
     imageStamp = identity(image.pathname);
   const phases: string[] = [],

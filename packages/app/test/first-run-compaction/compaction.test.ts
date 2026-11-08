@@ -2,10 +2,10 @@
 import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { firstRunRequiresExplicitContinuationRecovery } from "../../cli/src/first-run-recovery-fence.js";
-import { inspectFirstRunOwnership, reserveFirstRunOwnership } from "../src/main/first-run/ownership.js";
-import { FirstRunRecovery } from "../src/main/first-run/recovery.js";
-import { journal, launch, listing, refused, selected } from "./first-run-compaction-fixture.js";
+import { firstRunRequiresExplicitContinuationRecovery } from "../../../cli/src/first-run-recovery-fence.js";
+import { inspectFirstRunOwnership, reserveFirstRunOwnership } from "../../src/main/first-run/ownership.js";
+import { FirstRunRecovery } from "../../src/main/first-run/recovery.js";
+import { journal, launch, listing, refused, selected } from "./fixture.js";
 
 it("detects tampering with the checkpoint or the history it binds, and carries reconciliation forward", async () => {
   const path = await selected();

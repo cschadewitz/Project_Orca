@@ -1,5 +1,5 @@
 /** Pending Save prerequisites, refusals and persistence of the fresh standing workflow.
- * Split out of controlled-standing-workflow.test.ts so the scenarios run beside each other, not in sequence.
+ * Split out of core.test.ts so the scenarios run beside each other, not in sequence.
  */
 import fs from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -7,11 +7,11 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { fileStores } from "@orca/store";
 import { LiveHumanInput, type LiveAnswerAuthority } from "@orca/engine";
-import { CredentialStore } from "../../daemon/src/auth/credentials.js";
-import * as daemonTransport from "../../daemon/src/server.js";
-import * as protectedOwner from "../../daemon/src/protected-scoped-permission-owner.js";
-import { runControlledOwnedReadTest } from "./controlled-owned-read-producer-expanded.js";
-import { bootstrap, noSavedGrant, supervisor } from "./controlled-standing-workflow-fixture.js";
+import { CredentialStore } from "../../../daemon/src/auth/credentials.js";
+import * as daemonTransport from "../../../daemon/src/server.js";
+import * as protectedOwner from "../../../daemon/src/protected-scoped-permission-owner.js";
+import { runControlledOwnedReadTest } from "../controlled-owned-read/producer-expanded.js";
+import { bootstrap, noSavedGrant, supervisor } from "./fixture.js";
 
 it.each(["current", "missing-reviewer", "missing-proof", "stale"] as const)(
   "projects persistence-only Save prerequisites through the actual RPC under %s",

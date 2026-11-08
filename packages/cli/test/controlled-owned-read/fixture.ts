@@ -1,7 +1,7 @@
-/** Initial-query intent controls with actual authenticated RPC and disposable physical scope.
- * Test supervisor/bootstrap qualification is an explicit assumption, not independent effect proof.
+/** Real disposable composition. Test supervisor identities/profile are explicit assumptions.
+ * OS reads are independently intercepted by this test; external syscall acceptance is separate.
  */
-/** Shared setup for the initial-approval-owned-read scenarios; split out so the real-time scenario can live in its own file. */
+/** Shared supervisor and bootstrap for the controlled-owned-read scenarios; importing it registers their cleanup. */
 import fs from "node:fs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -10,17 +10,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, expect, vi } from "vitest";
-import { fileStores } from "@orca/store";
-import { resolveManagedRootBinding } from "../src/typed-workspace-gate.js";
-import {
-  runControlledOwnedReadTest,
-  type ControlledReadTestSupervisor,
-} from "./controlled-owned-read-producer-expanded.js";
+import { resolveManagedRootBinding } from "../../src/typed-workspace-gate.js";
+import { runControlledOwnedReadTest, type ControlledReadTestSupervisor } from "./producer.js";
 
-const cleanup: (() => Promise<unknown>)[] = [];
+export const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f();
-  vi.restoreAllMocks();
 });
 export const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 export const content = "disposable candidate bytes";
@@ -85,7 +80,7 @@ export async function supervisor(
     ].map((path) => [path, identity(path)]),
   );
   const identityBytes = fs.readFileSync(id);
-  const image = new URL("./controlled-owned-read-producer-expanded.ts", import.meta.url);
+  const image = new URL("./producer.ts", import.meta.url);
   const imageBytes = fs.readFileSync(image),
     imageStamp = identity(image.pathname);
   const phases: string[] = [],
@@ -170,23 +165,4 @@ export async function bootstrap() {
     },
   };
   return { ...s, result, grant };
-}
-
-export async function noSavedGrant(base: string) {
-  const document = JSON.parse(await readFile(join(base, "workspace/orca.permissions.json"), "utf8")) as {
-    scopedRules: { records: unknown[] };
-  };
-  expect(document.scopedRules.records).toEqual([]);
-}
-
-export async function semantics(base: string, references: string[]) {
-  const stores = fileStores(join(base, "workspace/.orca"));
-  return Promise.all(
-    references.map(async (ref) => {
-      const payload = (await stores.execution.getPayload("controlled", ref, "agent.update")) as {
-        update: { text: string };
-      };
-      return JSON.parse(payload.update.text) as { kind: string; value: Record<string, unknown> };
-    }),
-  );
 }

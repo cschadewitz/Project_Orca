@@ -14,7 +14,7 @@ const require = createRequire(join(repo, "package.json"));
 const { buildSync } = createRequire(require.resolve("tsx/package.json"))("esbuild");
 const result = buildSync({
   absWorkingDir: repo,
-  entryPoints: ["packages/cli/test/controlled-owned-read-producer.ts"],
+  entryPoints: ["packages/cli/test/controlled-owned-read/producer.ts"],
   outfile: join(target, "controlled-producer.mjs"),
   bundle: true,
   splitting: false,

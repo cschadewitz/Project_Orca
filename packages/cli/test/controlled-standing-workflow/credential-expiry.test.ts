@@ -1,8 +1,8 @@
 /** Legacy bounded Save stops when the operator credential expires (20s real TTL per case).
- * Split out of controlled-standing-workflow.test.ts: it waits in real time, so in its own file it runs beside the rest of the suite instead of in front of it.
+ * Split out of core.test.ts: it waits in real time, so in its own file it runs beside the rest of the suite instead of in front of it.
  */
 import { it } from "vitest";
-import { legacyBoundedSave } from "./controlled-standing-workflow-fixture.js";
+import { legacyBoundedSave } from "./fixture.js";
 
 // Not `it.concurrent`: the scenario spies on module exports and `fs.readSync`, which concurrent cases would share.
 it.each([

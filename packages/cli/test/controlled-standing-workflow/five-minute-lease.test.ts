@@ -1,12 +1,12 @@
 /** A five-minute real lease with a distinct post-approval human action.
- * Split out of controlled-standing-workflow.test.ts: it waits in real time, so in its own file it runs beside the rest of the suite instead of in front of it.
+ * Split out of core.test.ts: it waits in real time, so in its own file it runs beside the rest of the suite instead of in front of it.
  */
 import fs from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { fileStores } from "@orca/store";
-import { runControlledOwnedReadTest } from "./controlled-owned-read-producer-expanded.js";
-import { bootstrap, supervisor } from "./controlled-standing-workflow-fixture.js";
+import { runControlledOwnedReadTest } from "../controlled-owned-read/producer-expanded.js";
+import { bootstrap, supervisor } from "./fixture.js";
 
 it("uses a five-minute real lease with a distinct post-approval human action and the same standing grant", async () => {
   const b = await bootstrap();

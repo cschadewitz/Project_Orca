@@ -1,12 +1,12 @@
 /** Opening-publication and pending-grant scenarios of the fresh standing workflow.
- * Split out of controlled-standing-workflow.test.ts so the scenarios run beside each other, not in sequence.
+ * Split out of core.test.ts so the scenarios run beside each other, not in sequence.
  */
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { fileStores, FileExecutionStore, ProtectedEventStore } from "@orca/store";
 import { LiveHumanInput } from "@orca/engine";
-import { runControlledOwnedReadTest } from "./controlled-owned-read-producer-expanded.js";
-import { bootstrap, supervisor } from "./controlled-standing-workflow-fixture.js";
+import { runControlledOwnedReadTest } from "../controlled-owned-read/producer-expanded.js";
+import { bootstrap, supervisor } from "./fixture.js";
 
 it.each([1, 2] as const)(
   "opening publication %s settles before independent private writes start",

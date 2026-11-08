@@ -1,27 +1,14 @@
 /** #396 fresh-process acceptance of the corrected contract: closure restoration, plugin hooks and composition.
- * Split out of restoration-acceptance.test.ts so the scenarios run beside each other. */
+ * Split out of baseline.test.ts so the scenarios run beside each other. */
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { fileStores } from "@orca/store";
 import * as engine from "@orca/engine";
-import { protectedDigests } from "./restoration-acceptance/harness.js";
-import {
-  canaries,
-  prepareJevFixture,
-  prepareRestorationFixture,
-  providerTrace,
-  jevFixtureData,
-} from "./restoration-acceptance/fixture.js";
-import {
-  fixture,
-  harness,
-  noLeaks,
-  refused,
-  differentProcess,
-  preserveOriginal,
-} from "./restoration-acceptance/support.js";
+import { protectedDigests } from "./harness.js";
+import { canaries, prepareJevFixture, prepareRestorationFixture, providerTrace, jevFixtureData } from "./fixture.js";
+import { fixture, harness, noLeaks, refused, differentProcess, preserveOriginal } from "./support.js";
 
 describe.skipIf(!Reflect.has(engine, "readPluginRestorationData"))("#396 corrected contract integration", () => {
   it("restores admitted closure values across processes and runs new admissions with current values", async () => {

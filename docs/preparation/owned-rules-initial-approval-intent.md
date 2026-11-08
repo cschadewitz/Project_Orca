@@ -65,7 +65,7 @@ The focused controls are in:
 
 - `packages/engine/test/post-approval-owned-read.test.ts`: private redemption,
   preview non-execution, retirement, reentrancy, cancellation and owned cleanup.
-- `packages/cli/test/initial-approval-owned-read.test.ts`: actual authenticated
+- `packages/cli/test/initial-approval-owned-read/initial-approval.test.ts`: actual authenticated
   bridge choices, a real-clock wait beyond preview expiry, stale/duplicate handles,
   final acknowledgement, Save isolation and protected proof/authority mutation.
 - `packages/agents/test/acp-permission-lifetime.test.ts`: an ended turn's late

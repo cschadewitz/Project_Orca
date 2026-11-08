@@ -1,16 +1,16 @@
 /** Fresh standing workflow. Real disposable composition. Test supervisor identities/profile are explicit assumptions.
  * OS reads are independently intercepted by this test; external syscall acceptance is separate.
- * The rest of the workflow, including the real-time scenarios, lives in the sibling controlled-standing-workflow-*.test.ts files.
+ * The rest of the workflow, including the real-time scenarios, lives in the sibling test files in this folder.
  */
 import fs from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { fileStores, FileExecutionStore } from "@orca/store";
-import { readPrivateJson } from "../../store/src/protected-file.js";
-import * as daemonTransport from "../../daemon/src/server.js";
-import { runControlledOwnedReadTest } from "./controlled-owned-read-producer-expanded.js";
-import { bootstrap, freshWorkflowRefuses, supervisor } from "./controlled-standing-workflow-fixture.js";
+import { readPrivateJson } from "../../../store/src/protected-file.js";
+import * as daemonTransport from "../../../daemon/src/server.js";
+import { runControlledOwnedReadTest } from "../controlled-owned-read/producer-expanded.js";
+import { bootstrap, freshWorkflowRefuses, supervisor } from "./fixture.js";
 
 it.each(["before", "after"] as const)(
   "a refreshed attestation publication failure %s commit cannot start another invocation",

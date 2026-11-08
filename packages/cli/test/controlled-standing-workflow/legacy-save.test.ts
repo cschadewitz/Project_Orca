@@ -1,15 +1,15 @@
 /** Fresh Save expiry, cancellation and legacy Save ownership of the standing workflow.
- * Split out of controlled-standing-workflow.test.ts so the scenarios run beside each other, not in sequence.
+ * Split out of core.test.ts so the scenarios run beside each other, not in sequence.
  */
 import fs from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { fileStores, FileExecutionStore } from "@orca/store";
-import * as daemonTransport from "../../daemon/src/server.js";
-import * as protectedOwner from "../../daemon/src/protected-scoped-permission-owner.js";
-import { runControlledOwnedReadTest } from "./controlled-owned-read-producer-expanded.js";
-import { bootstrap, legacyBoundedSave, noSavedGrant, supervisor } from "./controlled-standing-workflow-fixture.js";
+import * as daemonTransport from "../../../daemon/src/server.js";
+import * as protectedOwner from "../../../daemon/src/protected-scoped-permission-owner.js";
+import { runControlledOwnedReadTest } from "../controlled-owned-read/producer-expanded.js";
+import { bootstrap, legacyBoundedSave, noSavedGrant, supervisor } from "./fixture.js";
 
 it.each([0, 1])(
   "a fresh Save refuses at expiry plus %s milliseconds",

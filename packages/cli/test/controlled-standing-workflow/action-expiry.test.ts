@@ -1,11 +1,11 @@
 /** Fresh Save acceptance after the original action expires, on the real clock.
- * Split out of controlled-standing-workflow.test.ts: it waits in real time, so in its own file it runs beside the rest of the suite instead of in front of it.
+ * Split out of core.test.ts: it waits in real time, so in its own file it runs beside the rest of the suite instead of in front of it.
  */
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { fileStores } from "@orca/store";
-import { runControlledOwnedReadTest } from "./controlled-owned-read-producer-expanded.js";
-import { bootstrap, supervisor } from "./controlled-standing-workflow-fixture.js";
+import { runControlledOwnedReadTest } from "../controlled-owned-read/producer-expanded.js";
+import { bootstrap, supervisor } from "./fixture.js";
 
 it("waits past the original action expiry on the real clock before fresh Save acceptance", async () => {
   const b = await bootstrap(),

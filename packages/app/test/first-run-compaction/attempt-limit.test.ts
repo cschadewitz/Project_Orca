@@ -2,9 +2,9 @@
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { enterFirstRunWriter, firstRunAttempts } from "@orca/protocol/first-run-fence";
-import { firstRunRequiresExplicitContinuationRecovery } from "../../cli/src/first-run-recovery-fence.js";
-import { inspectFirstRunOwnership, reserveFirstRunOwnership } from "../src/main/first-run/ownership.js";
-import { journal, launch, listing, selected } from "./first-run-compaction-fixture.js";
+import { firstRunRequiresExplicitContinuationRecovery } from "../../../cli/src/first-run-recovery-fence.js";
+import { inspectFirstRunOwnership, reserveFirstRunOwnership } from "../../src/main/first-run/ownership.js";
+import { journal, launch, listing, selected } from "./fixture.js";
 
 it("keeps working past the former 256-attempt limit, and the folded journal still verifies", async () => {
   const path = await selected();

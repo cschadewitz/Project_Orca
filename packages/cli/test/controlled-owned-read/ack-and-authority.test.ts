@@ -6,8 +6,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { fileStores } from "@orca/store";
-import { runControlledOwnedReadTest } from "./controlled-owned-read-producer.js";
-import { bootstrap, supervisor } from "./controlled-owned-read-fixture.js";
+import { runControlledOwnedReadTest } from "./producer.js";
+import { bootstrap, supervisor } from "./fixture.js";
 
 it.each([false, true])(
   "awaits the genuine deferred final ack; lost=%s never grants read authority",
@@ -109,7 +109,7 @@ it.each(["reviewer", "proof", "standing-proof", "actor"] as const)(
           bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 1;
           await writeFile(path, bytes);
         } else {
-          const { CredentialStore } = await import("../../daemon/src/auth/credentials.js");
+          const { CredentialStore } = await import("../../../daemon/src/auth/credentials.js");
           const credentials = new CredentialStore({ file: join(c.base, "credentials.json") });
           const target = credentials
             .list()

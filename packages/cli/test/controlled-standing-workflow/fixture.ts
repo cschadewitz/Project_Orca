@@ -12,13 +12,13 @@ import { afterEach, expect, vi } from "vitest";
 import { fileStores, FileLeaseStore } from "@orca/store";
 import { strictPermissionRuleRevision } from "@orca/agents";
 import type { StrictPermissionRule } from "@orca/core";
-import { CredentialStore } from "../../daemon/src/auth/credentials.js";
-import * as protectedOwner from "../../daemon/src/protected-scoped-permission-owner.js";
-import { resolveManagedRootBinding } from "../src/typed-workspace-gate.js";
+import { CredentialStore } from "../../../daemon/src/auth/credentials.js";
+import * as protectedOwner from "../../../daemon/src/protected-scoped-permission-owner.js";
+import { resolveManagedRootBinding } from "../../src/typed-workspace-gate.js";
 import {
   runControlledOwnedReadTest,
   type ControlledReadTestSupervisor,
-} from "./controlled-owned-read-producer-expanded.js";
+} from "../controlled-owned-read/producer-expanded.js";
 
 const cleanup: (() => Promise<unknown>)[] = [];
 // Registered when a test file imports this module, so every file that uses `supervisor` cleans up.
@@ -88,7 +88,7 @@ export async function supervisor(
     ].map((path) => [path, identity(path)]),
   );
   const identityBytes = fs.readFileSync(id);
-  const image = new URL("./controlled-owned-read-producer-expanded.ts", import.meta.url);
+  const image = new URL("../controlled-owned-read/producer-expanded.ts", import.meta.url);
   const imageBytes = fs.readFileSync(image),
     imageStamp = identity(image.pathname);
   const phases: string[] = [],

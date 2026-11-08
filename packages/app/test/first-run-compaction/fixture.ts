@@ -2,13 +2,13 @@
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect } from "vitest";
-import type { BundledDaemon } from "../src/main/daemon-process.js";
+import type { BundledDaemon } from "../../src/main/daemon-process.js";
 import {
   OWNERSHIP_DIRECTORY,
   inspectFirstRunOwnership,
   reserveFirstRunOwnership,
-} from "../src/main/first-run/ownership.js";
-import { syntheticFirstRunWriter } from "./fixtures/synthetic-first-run-writer.js";
+} from "../../src/main/first-run/ownership.js";
+import { syntheticFirstRunWriter } from "../fixtures/synthetic-first-run-writer.js";
 
 const roots: string[] = [];
 afterEach(async () => {

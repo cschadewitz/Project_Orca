@@ -4,9 +4,9 @@
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { fileStores } from "@orca/store";
-import * as daemonTransport from "../../daemon/src/server.js";
-import { runControlledOwnedReadTest } from "./controlled-owned-read-producer.js";
-import { bootstrap, supervisor } from "./controlled-owned-read-fixture.js";
+import * as daemonTransport from "../../../daemon/src/server.js";
+import { runControlledOwnedReadTest } from "./producer.js";
+import { bootstrap, supervisor } from "./fixture.js";
 
 it.each(["missing", "refusing", "hanging"] as const)(
   "%s standing reviewer disables Save while ordinary answers remain available",

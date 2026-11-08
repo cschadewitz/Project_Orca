@@ -1,9 +1,9 @@
 /** The initial Allow once, held past its preview expiry on the real clock.
- * Split out of initial-approval-owned-read.test.ts: it waits ~57s in real time, so in its own file it runs beside the rest instead of in front of it.
+ * Split out of initial-approval.test.ts: it waits ~57s in real time, so in its own file it runs beside the rest instead of in front of it.
  */
 import { expect, it } from "vitest";
-import { runControlledOwnedReadTest } from "./controlled-owned-read-producer-expanded.js";
-import { bootstrap, noSavedGrant, semantics, supervisor } from "./initial-approval-owned-read-fixture.js";
+import { runControlledOwnedReadTest } from "../controlled-owned-read/producer-expanded.js";
+import { bootstrap, noSavedGrant, semantics, supervisor } from "./fixture.js";
 
 it("the initial Allow once waits beyond its preview expiry on the real clock", async () => {
   const b = await bootstrap(),

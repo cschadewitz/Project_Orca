@@ -21,25 +21,25 @@ import {
   type StandingIntentReviewRequest,
 } from "@orca/agents";
 import { askHumanInput, LiveHumanInput, type HumanInputQuery, type LiveAnswerAuthority } from "@orca/engine";
-import { CredentialStore } from "../../daemon/src/auth/credentials.js";
-import { Authorizer, OwnershipStore, authInvalid, bindPrincipal } from "../../daemon/src/auth/index.js";
-import { scopedPermissionMethods } from "../../daemon/src/scoped-permission-bridge.js";
-import { dispatch } from "../../daemon/src/server.js";
-import { protectedScopedPermissionOwner } from "../../daemon/src/protected-scoped-permission-owner.js";
-import { ownedReadScopedCapture } from "../../daemon/src/owned-read-scoped-capture.js";
+import { CredentialStore } from "../../../daemon/src/auth/credentials.js";
+import { Authorizer, OwnershipStore, authInvalid, bindPrincipal } from "../../../daemon/src/auth/index.js";
+import { scopedPermissionMethods } from "../../../daemon/src/scoped-permission-bridge.js";
+import { dispatch } from "../../../daemon/src/server.js";
+import { protectedScopedPermissionOwner } from "../../../daemon/src/protected-scoped-permission-owner.js";
+import { ownedReadScopedCapture } from "../../../daemon/src/owned-read-scoped-capture.js";
 import {
   createOwnedFileReadServiceForTest,
   type TrustedOwnedReadInvocation,
   type OwnedReadCurrentCapture,
   type OwnedReadReviewPreview,
   type PostApprovalReadAuthority,
-} from "../../engine/src/owned-file-read-service.js";
+} from "../../../engine/src/owned-file-read-service.js";
 import type {
   SyntheticReadOwner,
   SyntheticReadOwnerSnapshot,
   SyntheticFenceEvidence,
-} from "../../engine/src/synthetic-read-fence.js";
-import { createManagedTypedWorkspace, resolveManagedRootBinding } from "../src/typed-workspace-gate.js";
+} from "../../../engine/src/synthetic-read-fence.js";
+import { createManagedTypedWorkspace, resolveManagedRootBinding } from "../../src/typed-workspace-gate.js";
 
 const complete = <T>(value: T) => ({ state: "complete" as const, value });
 const same = (a: unknown, b: unknown) => assert.ok(isDeepStrictEqual(a, b), "controlled original changed");

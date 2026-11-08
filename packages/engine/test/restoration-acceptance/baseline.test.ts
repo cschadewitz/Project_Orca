@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 import { fileStores } from "@orca/store";
 import * as engine from "@orca/engine";
 import { parseWorkflow } from "@orca/core";
-import { protectedDigests } from "./restoration-acceptance/harness.js";
-import { canaries, configure, prepareJevFixture, pluginKinds, type Receipt } from "./restoration-acceptance/fixture.js";
+import { protectedDigests } from "./harness.js";
+import { canaries, configure, prepareJevFixture, pluginKinds, type Receipt } from "./fixture.js";
 import {
   baselineSha,
   candidatePins,
@@ -17,15 +17,8 @@ import {
   pendingAcceptance,
   exercisedAcceptance,
   unverifiedExternalClaims,
-} from "./restoration-acceptance/matrix.js";
-import {
-  fixture,
-  harness,
-  noLeaks,
-  refused,
-  differentProcess,
-  preserveOriginal,
-} from "./restoration-acceptance/support.js";
+} from "./matrix.js";
+import { fixture, harness, noLeaks, refused, differentProcess, preserveOriginal } from "./support.js";
 
 describe("#396 implemented baseline: genuinely fresh engine processes", () => {
   it.each(["builtin", "noop", "declarative"] as const)(

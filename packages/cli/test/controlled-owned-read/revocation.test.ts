@@ -9,8 +9,8 @@ import { expect, it, vi } from "vitest";
 import { fileStores, FileExecutionStore } from "@orca/store";
 import * as agents from "@orca/agents";
 import type { ActionEvidenceV1, PolicyEvaluationV1, StrictPermissionRule } from "@orca/core";
-import { runControlledOwnedReadTest } from "./controlled-owned-read-producer.js";
-import { bootstrap, cleanup, digest, supervisor } from "./controlled-owned-read-fixture.js";
+import { runControlledOwnedReadTest } from "./producer.js";
+import { bootstrap, cleanup, digest, supervisor } from "./fixture.js";
 
 it.each(["policy", "lease"] as const)(
   "refuses actual changed protected %s after Save",
@@ -156,7 +156,7 @@ it.each(["credential", "lease"] as const)(
       if (fault === "lease") {
         expect(await fileStores(join(c.base, "workspace/.orca")).leases.forceRelease("run:controlled")).toBeDefined();
       } else {
-        const { CredentialStore } = await import("../../daemon/src/auth/credentials.js");
+        const { CredentialStore } = await import("../../../daemon/src/auth/credentials.js");
         const credentials = new CredentialStore({ file: join(c.base, "credentials.json") });
         const actor = credentials.list().find((record) => record.principal === "controlled-test-operator")!;
         expect(await credentials.revoke(actor.id)).toBe(true);
@@ -173,7 +173,7 @@ it.each(["credential", "lease"] as const)(
     if (fault === "credential") {
       expect(error).toBeInstanceOf(assert.AssertionError);
       expect((error as Error).stack).toContain("currentCredential");
-      const { CredentialStore } = await import("../../daemon/src/auth/credentials.js");
+      const { CredentialStore } = await import("../../../daemon/src/auth/credentials.js");
       const credentials = new CredentialStore({ file: join(c.base, "credentials.json") });
       const actor = credentials.list().find((record) => record.principal === "controlled-test-operator")!;
       expect(credentials.current(actor.id)).toMatchObject({ ok: false, reason: "revoked" });

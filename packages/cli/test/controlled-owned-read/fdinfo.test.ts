@@ -1,7 +1,7 @@
 /** Source-owned query grammar and cleanup only; no installed qualification. */
 import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
-import { assertControlledLifetimeFdinfo } from "./controlled-owned-read-producer.js";
+import { assertControlledLifetimeFdinfo } from "./producer.js";
 
 const lifetime = 37,
   query = 71;

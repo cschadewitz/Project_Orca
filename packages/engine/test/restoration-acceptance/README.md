@@ -25,10 +25,10 @@ real seam to exist; it does not manufacture support or independent review cleara
 Combine the exact source heads in a disposable checkout before collecting evidence:
 
 ```sh
-ORCA_RESTORATION_CANDIDATE=3054319b37ae61ba22b62ba2f519dc50bf3c0ebc pnpm exec vitest run packages/engine/test/restoration-acceptance.test.ts -t 'corrected contract integration'
+ORCA_RESTORATION_CANDIDATE=3054319b37ae61ba22b62ba2f519dc50bf3c0ebc pnpm exec vitest run packages/engine/test/restoration-acceptance/baseline.test.ts -t 'corrected contract integration'
 pnpm run typecheck
-pnpm exec eslint packages/engine/test/restoration-acceptance.test.ts packages/engine/test/restoration-acceptance/*.ts
-pnpm exec prettier --check packages/engine/test/restoration-acceptance.test.ts packages/engine/test/restoration-acceptance/*.ts
+pnpm exec eslint packages/engine/test/restoration-acceptance/baseline.test.ts packages/engine/test/restoration-acceptance/*.ts
+pnpm exec prettier --check packages/engine/test/restoration-acceptance/baseline.test.ts packages/engine/test/restoration-acceptance/*.ts
 git diff --check
 ```
 
