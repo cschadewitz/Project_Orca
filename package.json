@@ -13,7 +13,6 @@
     "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:durations": "node tools/update-test-durations.js",
     "test:coverage": "vitest run --coverage",
     "test:coverage:renderer": "vitest run --config vitest.renderer.config.ts",
     "app:smoke": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=smoke",

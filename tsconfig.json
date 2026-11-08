@@ -34,7 +34,6 @@
     "vitest.config.ts",
     "vitest.renderer.config.ts",
     "vitest.global-setup.ts",
-    "vitest.sequencer.ts",
     "packages/app/vite.config.ts"
   ]
 }

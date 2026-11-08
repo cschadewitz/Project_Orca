@@ -2,7 +2,6 @@
 import { defineConfig } from "vitest/config";
 import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
-import SeededSequencer from "./vitest.sequencer.js";
 
 const src = (name: string, module: string) =>
   fileURLToPath(new URL(`./packages/${name}/src/${module}.ts`, import.meta.url));
@@ -42,8 +41,6 @@ export default defineConfig({
     // One directory per run that test child processes are prebuilt into, instead of each
     // launch transpiling its TypeScript through tsx (packages/testing/src/child-bundle.ts).
     globalSetup: ["./vitest.global-setup.ts"],
-    // Longest files first even with no cached results (a fresh CI runner): see the file.
-    sequence: { sequencer: SeededSequencer },
     testTimeout: 30_000,
     hookTimeout: 30_000,
     // Vitest's default is one worker per core less one, so the suite's memory footprint is a
