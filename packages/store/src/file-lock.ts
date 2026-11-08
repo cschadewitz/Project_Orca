@@ -9,7 +9,7 @@ export interface FileLockOptions {
   /** Retained for compatibility; a live or unknown owner is never broken by age. */
   staleMs?: number;
   /** Give up, with STORE_LOCK_TIMEOUT, after this long. Default 60 s. */
-  timeoutMs?: number;
+  timeoutMs?: number | undefined;
   onBroken?: (holder: LockHolder) => void;
 }
 export interface LockHolder {
