@@ -726,9 +726,12 @@ separate from Save; with no generation it says activation status is unavailable 
 claiming one. "Takes effect on the next `orca serve`" below is the fallback's sentence,
 not the studio's.
 
-**Every refusal keeps the draft.** A stale target, a refused write or an unacknowledged write
-leaves the draft and the review where they were, and **Read current configuration** re-reads
-without discarding them. The bar is the same `.orca-draftbar` class as the fallback's. It is
+**A refusal keeps the edits, not the review.** A stale target, a refused write or an
+unacknowledged write leaves the person's edits in the draft, but a review is only good for the
+exact candidate and target it was made against. A target change clears the review, a failed
+raw save leaves the draft blocked, and reconciling the form after **Read current
+configuration** invalidates the adapter's review. In each case the next Save needs a fresh
+**Validate and review** of the edits as they now stand. The bar is the same `.orca-draftbar` class as the fallback's. It is
 drawn inline, not through `DraftBar`, so the fallback's `returnFocus` rule is not wired here
 yet: that is a known gap, not a design choice.
 

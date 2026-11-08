@@ -71,15 +71,20 @@ Config's header control.
 The template studio is for authoring prompt templates. It has a catalog of template ids, each
 template's declared context, its versions and known uses, and editable Markdown with front
 matter. It also has fixture inputs for a rendered preview, validation errors from the daemon,
-and a change review. The rest follows the Config pattern:
-- **Unsaved template changes** sit on the same `.orca-draftbar`.
-- **Save reviewed template source** and **Publish reviewed template revision** are separate
-  acts.
-- Apply is the configuration's, not the studio's.
+and a change review. The mounted flow (`template-authoring/surface.tsx`) has three steps, each a
+separate act:
+1. **Save reviewed source** saves one template source at a time. Other edits are kept until that
+   source is saved or explicitly discarded. Saving changes the source only.
+2. **Review saved catalog for Apply** validates the saved catalog.
+3. **Apply reviewed template catalog** activates it for future launches. It is enabled only for
+   the catalog revision that was just reviewed. Admitted runs keep the instructions they
+   captured.
 
-A change to the source, the target or write authority invalidates the review and any pending
-preview. A response that arrives late never lands on a newer draft. Workflow instruction
-assignment (template to workflow node) is reviewed the same way.
+The isolated editor's **Publish reviewed template revision** label is not used on the mounted
+surface. A change to the source, the target or write authority invalidates the review and any
+pending preview, and a response that arrives late never lands on a newer draft. Workflow
+instruction assignment (template to workflow node) has its own **Save reviewed template
+assignment**.
 
 ## Updates
 
