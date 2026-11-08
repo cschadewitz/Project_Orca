@@ -13,7 +13,7 @@ The `pick runner` job (`runs-on: ubuntu-slim`) fetches
 
 | Picker result | `check` runs on | Vitest workers | pnpm cache |
 | --- | --- | --- | --- |
-| idle count above zero | `[self-hosted, linux, x64, tyler]` | 16 | none (see below) |
+| idle count above zero | `[self-hosted, linux, x64, tyler]` | 20 | none (see below) |
 | zero, or any failure | `ubuntu-24.04` | 2 | `setup-node` `cache: pnpm` |
 
 Every failure to ask counts as zero: DNS, a curl timeout, a non-200 response,
