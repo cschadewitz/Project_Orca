@@ -1,0 +1,22 @@
+diff --git a/dist/jsonrpc.js b/dist/jsonrpc.js
+index 646d40a6f22dcdc31187fa8e323ec8d3cd3aed74..a4382cdf69d90f56b0990b69f893c15acec059f1 100644
+--- a/dist/jsonrpc.js
++++ b/dist/jsonrpc.js
+@@ -785,7 +785,7 @@ export class Connection {
+             else {
+                 const response = errorToResult(error);
+                 if ("error" in response) {
+-                    console.error("Error handling notification", message.raw, response.error);
++                    console.error("Error handling notification");
+                 }
+             }
+         }
+@@ -845,7 +845,7 @@ export class Connection {
+             }
+         }
+         else {
+-            console.error("Got response to unknown request", response.id);
++            console.error("Got response to unknown request");
+         }
+     }
+     handleProtocolNotification(message) {

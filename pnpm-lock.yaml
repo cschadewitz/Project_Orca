@@ -162,6 +162,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@agentclientprotocol/sdk@1.8.0': f3364b5c43195735c61bf9911b0fad8ed1883cf38ad0caf4a355c1c5c6d7beec
+
 importers:
 
   .:
@@ -210,7 +213,7 @@ importers:
     dependencies:
       '@agentclientprotocol/sdk':
         specifier: ^1.8.0
-        version: 1.8.0(zod@4.6.7)
+        version: 1.8.0(patch_hash=f3364b5c43195735c61bf9911b0fad8ed1883cf38ad0caf4a355c1c5c6d7beec)(zod@4.6.7)
       '@orca/core':
         specifier: workspace:*
         version: link:../core
@@ -356,13 +359,13 @@ importers:
     devDependencies:
       '@agentclientprotocol/sdk':
         specifier: ^1.8.0
-        version: 1.8.0(zod@4.6.7)
+        version: 1.8.0(patch_hash=f3364b5c43195735c61bf9911b0fad8ed1883cf38ad0caf4a355c1c5c6d7beec)(zod@4.6.7)
 
   packages/integrations:
     dependencies:
       '@agentclientprotocol/sdk':
         specifier: ^1.8.0
-        version: 1.8.0(zod@4.6.7)
+        version: 1.8.0(patch_hash=f3364b5c43195735c61bf9911b0fad8ed1883cf38ad0caf4a355c1c5c6d7beec)(zod@4.6.7)
       '@modelcontextprotocol/server':
         specifier: 2.4.0
         version: 2.4.0
@@ -416,7 +419,7 @@ importers:
     dependencies:
       '@agentclientprotocol/sdk':
         specifier: ^1.8.0
-        version: 1.8.0(zod@4.6.7)
+        version: 1.8.0(patch_hash=f3364b5c43195735c61bf9911b0fad8ed1883cf38ad0caf4a355c1c5c6d7beec)(zod@4.6.7)
       '@orca/agents':
         specifier: workspace:*
         version: link:../agents
@@ -2824,7 +2827,7 @@ packages:
 
 snapshots:
 
-  '@agentclientprotocol/sdk@1.8.0(zod@4.6.7)':
+  '@agentclientprotocol/sdk@1.8.0(patch_hash=f3364b5c43195735c61bf9911b0fad8ed1883cf38ad0caf4a355c1c5c6d7beec)(zod@4.6.7)':
     dependencies:
       zod: 4.6.7
 
