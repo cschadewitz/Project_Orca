@@ -1,181 +1,24 @@
 /** Fresh standing workflow. Real disposable composition. Test supervisor identities/profile are explicit assumptions.
  * OS reads are independently intercepted by this test; external syscall acceptance is separate.
+ * The scenarios that wait in real time live in the sibling controlled-standing-workflow-*.test.ts files.
  */
 import fs from "node:fs";
-import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { fileStores, FileExecutionStore, ProtectedEventStore } from "@orca/store";
 import { readPrivateJson } from "../../store/src/protected-file.js";
 import { LiveHumanInput, type LiveAnswerAuthority } from "@orca/engine";
-import { strictPermissionRuleRevision } from "@orca/agents";
-import type { StrictPermissionRule } from "@orca/core";
 import { CredentialStore } from "../../daemon/src/auth/credentials.js";
 import * as daemonTransport from "../../daemon/src/server.js";
 import * as protectedOwner from "../../daemon/src/protected-scoped-permission-owner.js";
-import { resolveManagedRootBinding } from "../src/typed-workspace-gate.js";
+import { runControlledOwnedReadTest } from "./controlled-owned-read-producer-expanded.js";
 import {
-  runControlledOwnedReadTest,
-  type ControlledReadTestSupervisor,
-} from "./controlled-owned-read-producer-expanded.js";
-
-const cleanup: (() => Promise<unknown>)[] = [];
-afterEach(async () => {
-  for (const f of cleanup.splice(0).reverse()) await f();
-});
-const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
-const content = "disposable candidate bytes";
-async function supervisor(
-  lane: "bootstrap" | "connected",
-  previous?: { evidenceRef: string; assertCurrent(): undefined },
-  fault?: ControlledReadTestSupervisor["fault"],
-) {
-  const base = await mkdtemp(join(tmpdir(), "orca-controlled-test-"));
-  cleanup.push(() => rm(base, { recursive: true, force: true }));
-  for (const path of ["workspace", "workspace/.orca", "workspace/.orca/workspace-identity", "control", "releases"])
-    await mkdir(join(base, path), { mode: 0o700 });
-  const id = join(base, "workspace/.orca/workspace-identity/id");
-  await writeFile(id, `${randomUUID()}\n`, { mode: 0o600 });
-  const binding = resolveManagedRootBinding(
-    [
-      { role: "config", path: join(base, "workspace") },
-      { role: "sidecar", path: join(base, "workspace/orca.permissions.json") },
-      { role: "store", path: join(base, "workspace/.orca") },
-    ],
-    join(base, "control"),
-    join(base, "releases"),
-  );
-  await writeFile(join(base, "control/never-typed"), `${digest(await readFile(id))}\n${binding.rootBindingRef}\n`, {
-    mode: 0o600,
-  });
-  // A real supervisor-owned flock, not a boolean lifetime substitute.
-  const lock = join(base, "lifetime.lock");
-  const holder = spawn(
-    "python3",
-    [
-      "-c",
-      "import os,fcntl,sys\nf=os.open(sys.argv[1],os.O_CREAT|os.O_RDWR,0o600)\nfcntl.flock(f,fcntl.LOCK_EX)\nprint(f,flush=True)\nsys.stdin.read()",
-      lock,
-    ],
-    { stdio: ["pipe", "pipe", "pipe"] },
-  );
-  cleanup.push(async () => {
-    holder.stdin.end();
-    if (holder.exitCode === null) await new Promise<void>((resolve) => holder.once("exit", () => resolve()));
-  });
-  const fd = await new Promise<number>((resolve, reject) => {
-    holder.stdout.once("data", (b: Buffer) => resolve(Number(b.toString().trim())));
-    holder.once("error", reject);
-  });
-  const identity = (path: string) => {
-    const info = fs.lstatSync(path, { bigint: true });
-    return [info.dev, info.ino, info.mode, info.uid, info.gid].join(":");
-  };
-  const originals = new Map(
-    [
-      base,
-      ...[
-        "workspace",
-        "workspace/.orca",
-        "workspace/.orca/workspace-identity",
-        "control",
-        "releases",
-        "lifetime.lock",
-        "workspace/.orca/workspace-identity/id",
-      ].map((p) => join(base, p)),
-    ].map((path) => [path, identity(path)]),
-  );
-  const identityBytes = fs.readFileSync(id);
-  const image = new URL("./controlled-owned-read-producer-expanded.ts", import.meta.url);
-  const imageBytes = fs.readFileSync(image),
-    imageStamp = identity(image.pathname);
-  const phases: string[] = [],
-    observed: { phase: string; offset: number; length: number; bytes: string }[] = [];
-  let phase = "outside";
-  const check = (): undefined => {
-    assert.equal(holder.exitCode, null);
-    assert.match(fs.readFileSync(`/proc/${holder.pid}/fdinfo/${fd}`, "utf8"), /FLOCK\s+ADVISORY\s+WRITE /);
-    for (const [path, stamp] of originals) assert.equal(identity(path), stamp);
-    assert.equal(digest(fs.readFileSync(id)), digest(identityBytes));
-    assert.equal(identity(image.pathname), imageStamp);
-    assert.equal(digest(fs.readFileSync(image)), digest(imageBytes));
-    return undefined;
-  };
-  const originalRead = fs.readSync;
-  const spy = vi.spyOn(fs, "readSync").mockImplementation(((
-    descriptor: number,
-    bytes: NodeJS.ArrayBufferView,
-    offset: number,
-    length: number,
-    position: number | null,
-  ) => {
-    const result = originalRead(descriptor, bytes, offset, length, position);
-    const info = fs.fstatSync(descriptor);
-    if (
-      info.isFile() &&
-      info.nlink === 0 &&
-      info.size === Buffer.byteLength(content) &&
-      (info.mode & 0o777) === 0o400
-    ) {
-      observed.push({
-        phase,
-        offset: position!,
-        length,
-        bytes: Buffer.from(bytes.buffer, bytes.byteOffset + offset, result).toString(),
-      });
-    }
-    return result;
-  }) as typeof fs.readSync);
-  cleanup.push(async () => spy.mockRestore());
-  const options: ControlledReadTestSupervisor = {
-    content,
-    offset: 2,
-    length: 4,
-    assertCurrent: check,
-    ...(previous ? { bootstrap: previous } : {}),
-    ...(fault ? { fault } : {}),
-    phase: async (name, work) => {
-      phases.push(name);
-      phase = name;
-      try {
-        await work();
-      } finally {
-        phase = "outside";
-      }
-    },
-  };
-  return { base, lane, options, phases, observed, check, holder, image, originals, restore: () => spy.mockRestore() };
-}
-async function bootstrap() {
-  const s = await supervisor("bootstrap");
-  const result = await runControlledOwnedReadTest(s.base, "bootstrap", s.options);
-  expect(s.observed).toEqual([{ phase: "bootstrap", offset: 2, length: 4, bytes: "spos" }]);
-  expect(result.authorizationRefs).toHaveLength(1);
-  s.restore();
-  const ref = result.authorizationRefs[0]!;
-  const protectedBytes = fs.readFileSync(
-    join(s.base, "workspace/.orca/private-execution", `${encodeURIComponent(ref)}.payload.json`),
-  );
-  const grant = {
-    evidenceRef: `test-supervisor-bootstrap:${digest(protectedBytes)}`,
-    assertCurrent: (): undefined => {
-      s.check();
-      assert.equal(
-        digest(
-          fs.readFileSync(join(s.base, "workspace/.orca/private-execution", `${encodeURIComponent(ref)}.payload.json`)),
-        ),
-        digest(protectedBytes),
-      );
-      assert.deepEqual(s.observed, [{ phase: "bootstrap", offset: 2, length: 4, bytes: "spos" }]);
-      return undefined;
-    },
-  };
-  return { ...s, result, grant };
-}
+  bootstrap,
+  freshWorkflowRefuses,
+  legacyBoundedSave,
+  supervisor,
+} from "./controlled-standing-workflow-fixture.js";
 
 it.each([1, 2] as const)(
   "opening publication %s settles before independent private writes start",
@@ -753,100 +596,7 @@ it.each([
   ["review", "cancel"],
   ["verify-first", "cancel"],
   ["verify-approval", "cancel"],
-  ["review", "credential-expiry"],
-  ["verify-first", "credential-expiry"],
-  ["verify-approval", "credential-expiry"],
-] as const)(
-  "legacy bounded Save %s stops on %s without late publication",
-  async (stage, ending) => {
-    const b = await bootstrap(),
-      c = await supervisor("connected", b.grant);
-    Object.assign(c.options, {
-      ownerDurationMs: 300000,
-      ...(ending === "credential-expiry" ? { operatorCredentialTtlMs: 20000 } : {}),
-    });
-    let release!: () => void, entered!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const started = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    let invalidate!: () => void, late: Promise<unknown> | undefined;
-    let scope: { signal?: AbortSignal } | undefined;
-    const realFactory = protectedOwner.protectedScopedPermissionOwner;
-    const spy = vi.spyOn(protectedOwner, "protectedScopedPermissionOwner").mockImplementation((options) => {
-      invalidate = () => options.live.close();
-      const method = stage === "review" ? "reviewStandingGrant" : "verifyStandingGrantReview";
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- Reflect.apply retains the original capture-port receiver.
-      const original = options.captures[method]!;
-      let calls = 0;
-      Object.assign(options.captures, {
-        standingGrantReviewScope: "owned-v1",
-        [method]: (...args: unknown[]) => {
-          if (++calls !== (stage === "verify-approval" ? 2 : 1)) return Reflect.apply(original, options.captures, args);
-          scope = args.at(-1) as { signal?: AbortSignal };
-          entered();
-          return (late = gate.then(() => Reflect.apply(original, options.captures, args)));
-        },
-      });
-      return realFactory(options);
-    });
-    let settled = false;
-    const running = runControlledOwnedReadTest(c.base, "connected", c.options).finally(() => {
-      settled = true;
-    });
-    void running.catch(() => undefined);
-    try {
-      await Promise.race([
-        started,
-        running.then(() => {
-          throw new Error("Reviewer gate not reached");
-        }),
-      ]);
-      const operator = new CredentialStore({ file: join(c.base, "credentials.json") })
-        .list()
-        .find((item) => item.principal === "controlled-test-operator")!;
-      if (ending === "cancel") invalidate();
-      const waitMs = ending === "cancel" ? 2000 : Math.max(1, Date.parse(operator.expiresAt!) - Date.now() + 2000);
-      let timer!: ReturnType<typeof setTimeout>;
-      const completed = await Promise.race([
-        running.then(
-          () => true,
-          () => true,
-        ),
-        new Promise<false>((resolve) => {
-          timer = setTimeout(() => resolve(false), waitMs);
-        }),
-      ]).finally(() => clearTimeout(timer));
-      expect(completed).toBe(true);
-      expect(settled).toBe(true);
-      expect(scope?.signal?.aborted).toBe(true);
-      if (ending === "credential-expiry") expect(Date.now()).toBeGreaterThanOrEqual(Date.parse(operator.expiresAt!));
-      await expect(running).rejects.toThrow();
-      const dir = join(c.base, "workspace/.orca/private-execution");
-      const before = (await readdir(dir)).sort();
-      release();
-      await late?.catch(() => undefined);
-      expect((await readdir(dir)).sort()).toEqual(before);
-      const document = JSON.parse(await readFile(join(c.base, "workspace/orca.permissions.json"), "utf8")) as {
-        scopedRules: { records: unknown[] };
-      };
-      expect(document.scopedRules.records).toEqual([]);
-      expect(c.observed).toEqual([]);
-      const stores = fileStores(join(c.base, "workspace/.orca"));
-      expect(await stores.events.readTypes("controlled", ["human.answered"])).toEqual([]);
-      // Successful operator removal after settlement also proves the mutex was released.
-      expect(await stores.leases.forceRelease("run:controlled")).toMatchObject({ resource: "run:controlled" });
-    } finally {
-      release();
-      await late?.catch(() => undefined);
-      await running.catch(() => undefined);
-      spy.mockRestore();
-    }
-  },
-  45000,
-);
+] as const)("legacy bounded Save %s stops on %s without late publication", legacyBoundedSave, 45000);
 
 it("legacy Save without an owned-review contract refuses before invoking reviewers while Deny remains available", async () => {
   const b = await bootstrap(),
@@ -1066,35 +816,6 @@ it("holds Save ownership until an already-started protected review publication s
   await noSavedGrant(c.base);
 }, 30000);
 
-it("waits past the original action expiry on the real clock before fresh Save acceptance", async () => {
-  const b = await bootstrap(),
-    c = await supervisor("connected", b.grant);
-  Object.assign(c.options, { ownerDurationMs: 300000, pendingSaveIntent: true, waitBeforeSaveExpiry: true });
-  const started = performance.now();
-  const result = await runControlledOwnedReadTest(c.base, "connected", c.options);
-  expect(performance.now() - started).toBeGreaterThan(55000);
-  expect(result.receipts.length).toBe(2);
-  expect(c.observed.map((item) => item.phase)).toEqual(["human-read", "rule-read"]);
-  const stores = fileStores(join(c.base, "workspace/.orca"));
-  const events = await stores.events.readTypes("controlled", ["agent.permission"]);
-  const marker = events.find((event) => event.type === "agent.permission" && event.payload.scopedApprovalRef)!;
-  const payload = (await stores.execution.getPayload(
-    "controlled",
-    marker.executionPayloadRef!,
-    "agent.permission",
-  )) as {
-    entry: {
-      version: number;
-      acceptedAt: string;
-      action: { expiresAt: string };
-      saveAuthority: { issuedAt: number; expiresAt: number };
-    };
-  };
-  expect(payload.entry.version).toBe(3);
-  expect(Date.parse(payload.entry.acceptedAt)).toBeGreaterThanOrEqual(Date.parse(payload.entry.action.expiresAt));
-  expect(Date.parse(payload.entry.acceptedAt)).toBeLessThan(payload.entry.saveAuthority.expiresAt);
-}, 90000);
-
 it.each(["before", "after"] as const)(
   "a refreshed attestation publication failure %s commit cannot start another invocation",
   async (boundary) => {
@@ -1216,86 +937,6 @@ it("refuses a symlink substituted for the final runs directory", async () => {
   expect(fs.lstatSync(target).isSymbolicLink()).toBe(true);
 }, 30000);
 
-it("uses a five-minute real lease with a distinct post-approval human action and the same standing grant", async () => {
-  const b = await bootstrap();
-  const c = await supervisor("connected", b.grant);
-  Object.assign(c.options, { ownerDurationMs: 300000, waitAfterSaveExpiry: true });
-  const phase = c.options.phase.bind(c.options);
-  c.options.phase = async (name, work) => {
-    const started = performance.now();
-    process.stdout.write(JSON.stringify({ record: "standing-workflow-phase", phase: name, state: "started" }) + "\n");
-    try {
-      await phase(name, work);
-    } finally {
-      process.stdout.write(
-        JSON.stringify({
-          record: "standing-workflow-phase",
-          phase: name,
-          state: "settled",
-          elapsedMs: Math.round(performance.now() - started),
-        }) + "\n",
-      );
-    }
-  };
-  const result = await runControlledOwnedReadTest(c.base, "connected", c.options);
-  expect(c.phases).toEqual(["save", "human-read", "rule-read"]);
-  expect(c.observed.map((effect) => ({ phase: effect.phase, bytes: effect.bytes }))).toEqual([
-    { phase: "human-read", bytes: "spos" },
-    { phase: "rule-read", bytes: "spos" },
-  ]);
-  const stores = fileStores(join(c.base, "workspace/.orca"));
-  const records = await Promise.all(
-    result.semanticRefs.map(async (ref) => {
-      const payload = (await stores.execution.getPayload("controlled", ref, "agent.update")) as {
-        update: { text: string };
-      };
-      return JSON.parse(payload.update.text) as { kind: string; value: Record<string, unknown> };
-    }),
-  );
-  const captures = records
-    .filter((record) => record.kind === "controlled-capture-v1")
-    .map(
-      (record) =>
-        record.value.action as {
-          actionId: string;
-          expiresAt: string;
-          invocation: { invocationId: string };
-        },
-    );
-  expect(captures).toHaveLength(3);
-  expect(new Set(captures.map((action) => action.actionId)).size).toBe(3);
-  expect(captures[1]!.invocation.invocationId).toBe("controlled-fresh-human-invocation");
-  expect(captures[2]!.invocation.invocationId).toBe("controlled-rule-invocation");
-  const issued = records.find((record) => record.kind === "controlled-fresh-authority-v1")!.value as {
-    observedAt: number;
-    leaseExpiresAt: number;
-    lease: { guardedTtlMs: number };
-  };
-  expect(issued.lease.guardedTtlMs).toBe(300000);
-  expect(issued.observedAt).toBeGreaterThan(Date.parse(captures[0]!.expiresAt));
-  expect(Date.parse(captures[1]!.expiresAt)).toBeGreaterThan(issued.observedAt);
-  // Factory observation precedes an awaited protected write. It is not the
-  // execution-window origin; the fresh capture's precise cap is tested separately.
-  expect(Date.parse(captures[1]!.expiresAt)).toBeLessThanOrEqual(issued.leaseExpiresAt);
-  expect(records.findIndex((record) => record.kind === "controlled-deferred-intent-v1")).toBeLessThan(
-    records.findIndex((record) => record.kind === "controlled-final-delivery-ack-v1"),
-  );
-  expect(records.findIndex((record) => record.kind === "controlled-final-delivery-ack-v1")).toBeLessThan(
-    records.findIndex((record) => record.kind === "controlled-fresh-authority-v1"),
-  );
-  const questions = await stores.events.readTypes("controlled", ["human.requested"]);
-  const answers = await stores.events.readTypes("controlled", ["human.answered"]);
-  expect(questions).toHaveLength(2);
-  expect(answers).toHaveLength(1);
-  if (answers[0]?.type === "human.answered" && questions[1]?.type === "human.requested")
-    expect(answers[0].payload.requestId).toBe(questions[1].payload.requestId);
-  const sidecar = JSON.parse(fs.readFileSync(join(c.base, "workspace/orca.permissions.json"), "utf8")) as {
-    scopedRules: { records: { rule: { version: number; expiresAt: null } }[] };
-  };
-  expect(sidecar.scopedRules.records).toHaveLength(1);
-  expect(sidecar.scopedRules.records[0]!.rule).toMatchObject({ version: 2, expiresAt: null });
-}, 90000);
-
 it("the fresh workflow refuses a lease actually removed after the owned answer settles", async () => {
   const b = await bootstrap(),
     c = await supervisor("connected", b.grant);
@@ -1343,58 +984,8 @@ it("the fresh workflow refuses a lease actually removed after the owned answer s
   expect(kinds).not.toContain("controlled-authorization-v1");
 }, 30000);
 
-it.each(["operator-revoked", "lease-lock-contention", "physical-changed", "policy-tampered", "lost-ack"] as const)(
+it.each(["operator-revoked", "physical-changed", "policy-tampered", "lost-ack"] as const)(
   "the fresh workflow refuses %s between intent and fresh execution",
-  async (fault) => {
-    const b = await bootstrap();
-    const c = await supervisor("connected", b.grant, fault === "lost-ack" ? "lost-ack" : undefined);
-    let factoryReached = 0,
-      leaseLockTimedOut = false;
-    Object.assign(c.options, {
-      ownerDurationMs: 300000,
-      beforeFreshAuthority: async () => {
-        factoryReached++;
-        if (fault === "operator-revoked") {
-          const credentials = new CredentialStore({ file: join(c.base, "credentials.json") });
-          const operator = credentials.list().find((record) => record.principal === "controlled-test-operator")!;
-          expect(await credentials.revoke(operator.id)).toBe(true);
-        }
-        if (fault === "lease-lock-contention") {
-          // The factory still owns the mutation mutex here. This intentionally
-          // proves non-stealing lock refusal, not successful lease removal.
-          const leases = fileStores(join(c.base, "workspace/.orca")).leases;
-          const before = await leases.get("run:controlled");
-          expect(before).toBeDefined();
-          try {
-            await leases.forceRelease("run:controlled");
-            throw new Error("Contended operator release unexpectedly completed");
-          } catch (error) {
-            expect(error).toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
-            expect(await leases.get("run:controlled")).toEqual(before);
-            leaseLockTimedOut = true;
-            throw error;
-          }
-        }
-        if (fault === "physical-changed")
-          await fs.promises.appendFile(join(c.base, "workspace/.orca/workspace-identity/id"), "changed");
-        if (fault === "policy-tampered") {
-          const path = join(c.base, "workspace/orca.permissions.json");
-          const document = JSON.parse(await readFile(path, "utf8")) as {
-            scopedRules: { records: { rule: StrictPermissionRule }[] };
-          };
-          const record = document.scopedRules.records[0]!;
-          const revoked = { ...record.rule, status: "revoked" as const };
-          record.rule = { ...revoked, ruleRevision: strictPermissionRuleRevision(revoked) };
-          await writeFile(path, JSON.stringify(document));
-        }
-      },
-    });
-    await expect(runControlledOwnedReadTest(c.base, "connected", c.options)).rejects.toThrow();
-    expect(factoryReached).toBe(fault === "lost-ack" ? 0 : 1);
-    expect(leaseLockTimedOut).toBe(fault === "lease-lock-contention");
-    expect(c.observed).toEqual([]);
-    const stores = fileStores(join(c.base, "workspace/.orca"));
-    expect(await stores.events.readTypes("controlled", ["human.answered"])).toHaveLength(1);
-  },
+  freshWorkflowRefuses,
   90000,
 );
