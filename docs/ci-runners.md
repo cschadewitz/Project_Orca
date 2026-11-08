@@ -31,6 +31,21 @@ and has not been re-measured at 20.
 
 Only `check` moves. `changes` and `pick runner` always run on GitHub-hosted runners.
 
+## Vitest file-order cache
+
+Vitest starts the longest test files first, from the per-file durations it cached on
+earlier runs (`node_modules/.vite/vitest/<hash>/results.json`). An ephemeral runner has
+no earlier run. Without the cache the full suite with coverage at 20 workers took about
+98 s, against about 79 s with it (three runs each; the machine was not idle).
+
+The runners keep one copy in the `vitest-order` volume, mounted read-only for jobs at
+`/var/cache/vitest-order`; the `check` job copies it into place before the tests run.
+Jobs never write it. `start.sh` (root) updates it after a job exits, only when GitHub
+reports that this runner just completed a successful `push` to `main` and the workspace
+is at that commit, and only from entries it rebuilds itself (passing files, numeric
+durations, at most 5000, none older than 30 days). The file only orders test files: a
+missing, stale or wrong one costs speed, never correctness.
+
 ## Known limit: the idle count is a snapshot
 
 The choice is made once, when `pick runner` runs. If another job takes the last idle

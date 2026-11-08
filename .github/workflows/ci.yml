@@ -160,6 +160,23 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
+      # Vitest starts the longest files first from the results it cached on earlier runs.
+      # The ephemeral self-hosted runners have none, so they mount one read-only, filled
+      # from successful pushes to main (docs/ci-runners.md). Vitest reads it only to order
+      # files: a missing or stale file costs speed, never correctness. The directory name
+      # is the sha1 of the root project's empty name.
+      - name: Restore Vitest file-order cache
+        # Only where the picker chose the homelab runners: the same labels `runs-on` used.
+        if: needs.changes.outputs.code != 'false' && contains(fromJSON(needs.runner.outputs.labels), 'tyler')
+        continue-on-error: true
+        run: |
+          src=/var/cache/vitest-order/results.json
+          dir=node_modules/.vite/vitest/da39a3ee5e6b4b0d3255bfef95601890afd80709
+          if [ -f "$src" ]; then
+            mkdir -p "$dir"
+            cp "$src" "$dir/results.json"
+          fi
+
       # Exact-candidate affected-package proposals reduce PR tests. Main and unknowns stay full.
       - name: Plan test execution
         id: selection
