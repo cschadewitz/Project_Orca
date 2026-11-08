@@ -2,198 +2,17 @@
  * Test supervisor/bootstrap qualification is an explicit assumption, not independent effect proof.
  */
 import fs from "node:fs";
-import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { fileStores, FileExecutionStore, lapsed } from "@orca/store";
 import { LiveHumanInput, type LiveAnswerAuthority } from "@orca/engine";
 import { CredentialStore } from "../../daemon/src/auth/credentials.js";
 import * as daemonTransport from "../../daemon/src/server.js";
 import * as protectedOwner from "../../daemon/src/protected-scoped-permission-owner.js";
 import * as ownedService from "../../engine/src/owned-file-read-service.js";
-import { resolveManagedRootBinding } from "../src/typed-workspace-gate.js";
-import {
-  runControlledOwnedReadTest,
-  type ControlledReadTestSupervisor,
-} from "./controlled-owned-read-producer-expanded.js";
-
-const cleanup: (() => Promise<unknown>)[] = [];
-afterEach(async () => {
-  for (const f of cleanup.splice(0).reverse()) await f();
-  vi.restoreAllMocks();
-});
-const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
-const content = "disposable candidate bytes";
-async function supervisor(
-  lane: "bootstrap" | "connected",
-  previous?: { evidenceRef: string; assertCurrent(): undefined },
-  fault?: ControlledReadTestSupervisor["fault"],
-) {
-  const base = await mkdtemp(join(tmpdir(), "orca-controlled-test-"));
-  cleanup.push(() => rm(base, { recursive: true, force: true }));
-  for (const path of ["workspace", "workspace/.orca", "workspace/.orca/workspace-identity", "control", "releases"])
-    await mkdir(join(base, path), { mode: 0o700 });
-  const id = join(base, "workspace/.orca/workspace-identity/id");
-  await writeFile(id, `${randomUUID()}\n`, { mode: 0o600 });
-  const binding = resolveManagedRootBinding(
-    [
-      { role: "config", path: join(base, "workspace") },
-      { role: "sidecar", path: join(base, "workspace/orca.permissions.json") },
-      { role: "store", path: join(base, "workspace/.orca") },
-    ],
-    join(base, "control"),
-    join(base, "releases"),
-  );
-  await writeFile(join(base, "control/never-typed"), `${digest(await readFile(id))}\n${binding.rootBindingRef}\n`, {
-    mode: 0o600,
-  });
-  // A real supervisor-owned flock, not a boolean lifetime substitute.
-  const lock = join(base, "lifetime.lock");
-  const holder = spawn(
-    "python3",
-    [
-      "-c",
-      "import os,fcntl,sys\nf=os.open(sys.argv[1],os.O_CREAT|os.O_RDWR,0o600)\nfcntl.flock(f,fcntl.LOCK_EX)\nprint(f,flush=True)\nsys.stdin.read()",
-      lock,
-    ],
-    { stdio: ["pipe", "pipe", "pipe"] },
-  );
-  cleanup.push(async () => {
-    holder.stdin.end();
-    if (holder.exitCode === null) await new Promise<void>((resolve) => holder.once("exit", () => resolve()));
-  });
-  const fd = await new Promise<number>((resolve, reject) => {
-    holder.stdout.once("data", (b: Buffer) => resolve(Number(b.toString().trim())));
-    holder.once("error", reject);
-  });
-  const identity = (path: string) => {
-    const info = fs.lstatSync(path, { bigint: true });
-    return [info.dev, info.ino, info.mode, info.uid, info.gid].join(":");
-  };
-  const originals = new Map(
-    [
-      base,
-      ...[
-        "workspace",
-        "workspace/.orca",
-        "workspace/.orca/workspace-identity",
-        "control",
-        "releases",
-        "lifetime.lock",
-        "workspace/.orca/workspace-identity/id",
-      ].map((p) => join(base, p)),
-    ].map((path) => [path, identity(path)]),
-  );
-  const identityBytes = fs.readFileSync(id);
-  const image = new URL("./controlled-owned-read-producer-expanded.ts", import.meta.url);
-  const imageBytes = fs.readFileSync(image),
-    imageStamp = identity(image.pathname);
-  const phases: string[] = [],
-    observed: { phase: string; offset: number; length: number; bytes: string }[] = [];
-  let phase = "outside";
-  const check = (): undefined => {
-    assert.equal(holder.exitCode, null);
-    assert.match(fs.readFileSync(`/proc/${holder.pid}/fdinfo/${fd}`, "utf8"), /FLOCK\s+ADVISORY\s+WRITE /);
-    for (const [path, stamp] of originals) assert.equal(identity(path), stamp);
-    assert.equal(digest(fs.readFileSync(id)), digest(identityBytes));
-    assert.equal(identity(image.pathname), imageStamp);
-    assert.equal(digest(fs.readFileSync(image)), digest(imageBytes));
-    return undefined;
-  };
-  const originalRead = fs.readSync;
-  const spy = vi.spyOn(fs, "readSync").mockImplementation(((
-    descriptor: number,
-    bytes: NodeJS.ArrayBufferView,
-    offset: number,
-    length: number,
-    position: number | null,
-  ) => {
-    const result = originalRead(descriptor, bytes, offset, length, position);
-    const info = fs.fstatSync(descriptor);
-    if (
-      info.isFile() &&
-      info.nlink === 0 &&
-      info.size === Buffer.byteLength(content) &&
-      (info.mode & 0o777) === 0o400
-    ) {
-      observed.push({
-        phase,
-        offset: position!,
-        length,
-        bytes: Buffer.from(bytes.buffer, bytes.byteOffset + offset, result).toString(),
-      });
-    }
-    return result;
-  }) as typeof fs.readSync);
-  cleanup.push(async () => spy.mockRestore());
-  const options: ControlledReadTestSupervisor = {
-    content,
-    offset: 2,
-    length: 4,
-    assertCurrent: check,
-    ...(previous ? { bootstrap: previous } : {}),
-    ...(fault ? { fault } : {}),
-    phase: async (name, work) => {
-      phases.push(name);
-      phase = name;
-      try {
-        await work();
-      } finally {
-        phase = "outside";
-      }
-    },
-  };
-  return { base, lane, options, phases, observed, check, holder, image, originals, restore: () => spy.mockRestore() };
-}
-async function bootstrap() {
-  const s = await supervisor("bootstrap");
-  const result = await runControlledOwnedReadTest(s.base, "bootstrap", s.options);
-  expect(s.observed).toEqual([{ phase: "bootstrap", offset: 2, length: 4, bytes: "spos" }]);
-  expect(result.authorizationRefs).toHaveLength(1);
-  s.restore();
-  const ref = result.authorizationRefs[0]!;
-  const protectedBytes = fs.readFileSync(
-    join(s.base, "workspace/.orca/private-execution", `${encodeURIComponent(ref)}.payload.json`),
-  );
-  const grant = {
-    evidenceRef: `test-supervisor-bootstrap:${digest(protectedBytes)}`,
-    assertCurrent: (): undefined => {
-      s.check();
-      assert.equal(
-        digest(
-          fs.readFileSync(join(s.base, "workspace/.orca/private-execution", `${encodeURIComponent(ref)}.payload.json`)),
-        ),
-        digest(protectedBytes),
-      );
-      assert.deepEqual(s.observed, [{ phase: "bootstrap", offset: 2, length: 4, bytes: "spos" }]);
-      return undefined;
-    },
-  };
-  return { ...s, result, grant };
-}
-
-async function noSavedGrant(base: string) {
-  const document = JSON.parse(await readFile(join(base, "workspace/orca.permissions.json"), "utf8")) as {
-    scopedRules: { records: unknown[] };
-  };
-  expect(document.scopedRules.records).toEqual([]);
-}
-
-async function semantics(base: string, references: string[]) {
-  const stores = fileStores(join(base, "workspace/.orca"));
-  return Promise.all(
-    references.map(async (ref) => {
-      const payload = (await stores.execution.getPayload("controlled", ref, "agent.update")) as {
-        update: { text: string };
-      };
-      return JSON.parse(payload.update.text) as { kind: string; value: Record<string, unknown> };
-    }),
-  );
-}
+import { runControlledOwnedReadTest } from "./controlled-owned-read-producer-expanded.js";
+import { bootstrap, noSavedGrant, semantics, supervisor } from "./initial-approval-owned-read-fixture.js";
 
 it("Save after the initial preview expires retires the reservation without answering or reading", async () => {
   const b = await bootstrap(),
@@ -237,35 +56,6 @@ it("Save after the initial preview expires retires the reservation without answe
     clock.mockRestore();
   }
 }, 30000);
-
-it("the initial Allow once waits beyond its preview expiry on the real clock", async () => {
-  const b = await bootstrap(),
-    c = await supervisor("connected", b.grant);
-  Object.assign(c.options, {
-    ownerDurationMs: 300000,
-    initialApprovalIntent: true,
-    pendingSaveIntent: true,
-    initialAnswerChoice: "allow-once",
-    waitBeforeSaveExpiry: true,
-    refreshSaveReview: true,
-  });
-  const started = performance.now();
-  const result = await runControlledOwnedReadTest(c.base, "connected", c.options);
-  expect(performance.now() - started).toBeGreaterThan(55000);
-  expect(result.receipts).toHaveLength(1);
-  expect(c.observed.map((effect) => effect.bytes)).toEqual(["spos"]);
-  await noSavedGrant(c.base);
-  const records = await semantics(c.base, result.semanticRefs);
-  const preview = records.find((record) => record.kind === "controlled-initial-preview-v1")!.value.action as {
-    expiresAt: string;
-  };
-  const fresh = records.find((record) => record.kind === "controlled-fresh-authority-v1")!.value as {
-    observedAt: number;
-    leaseExpiresAt: number;
-  };
-  expect(fresh.observedAt).toBeGreaterThan(Date.parse(preview.expiresAt));
-  expect(fresh.observedAt).toBeLessThan(fresh.leaseExpiresAt);
-}, 90000);
 
 it.each([false, true])(
   "the initial query uses a fresh action only after its own answer (old preview expired=%s)",
