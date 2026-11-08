@@ -1,7 +1,16 @@
 """Reviewed grammar for the connected Save / Allow Once / fresh-rule lane.
 
-replay_and_count() consumes the *entire* producer journal and the *entire*
-independent observer stream before any count exists. Counting is not exposed
+replay_and_count() consumes the *entire* producer journal, the *entire*
+independent observer stream and the *entire* supervisor stream before any count
+exists. The observer and supervisor streams must each start no later than the
+session start and end no earlier than settlement, and must name the session's
+authorization statement. The observer must also be continuous: no two
+consecutive observer records (start, effects, liveness records, end) may be
+further apart than OBSERVER_MAX_SILENCE_NS. Every producer boundary-check record
+must match, in order, a check the supervisor's own verifier performed no later
+than the producer recorded it; every recorded human answer must match an answer
+the supervisor sent. A producer record alone never establishes a check or
+answer. Counting is not exposed
 separately, so no aggregate can be computed from a replay it did not perform
 (the aggregate cannot assume its own prerequisite). Unknown kinds or fields,
 gaps, duplicates, reordering, unattributed effects, missing authority checks,
@@ -13,13 +22,17 @@ this journal; mapping it is an open obligation. Counts produced from any journal
 are facts about that journal only. They are not authority, and a synthetic
 journal is simulated evidence.
 
-Clock assumption: producer and observer timestamps come from the same
-CLOCK_MONOTONIC namespace on the same host.
+Clock assumption: producer, observer and supervisor timestamps come from the
+same CLOCK_MONOTONIC namespace on the same host.
+
+Open gap (refused, not assumed): no reviewed supervisor-side human answer
+channel exists, so require_lane_counts() has no non-simulated success path.
 """
 import json
 import re
 
-from bounds import JOURNAL_BYTES_LIMIT, JOURNAL_LINE_LIMIT, JOURNAL_RECORD_LIMIT, OWNER_NS, RUN_NS
+from bounds import (JOURNAL_BYTES_LIMIT, JOURNAL_LINE_LIMIT, JOURNAL_RECORD_LIMIT, OBSERVER_MAX_SILENCE_NS,
+                    OWNER_NS, RUN_NS)
 from reasons import Refusal, require
 
 PHASES = ('save', 'human-read', 'rule-read')
@@ -71,11 +84,21 @@ PRODUCER = {
                         'cleanup': lambda v: v in ('complete', 'uncertain')},
 }
 OBSERVER = {
-    'observer.start': {'identitySha256': _hex},
+    'observer.start': {'identitySha256': _hex, 'authorityStatementSha256': _hex},
     'effect.observed': {'op': lambda v: v in ('read', 'write', 'exec', 'connect', 'unlink', 'mkdir', 'rename',
                                               'chmod', 'link'),
                         'resourceSha256': _hex, 'contentSha256': _hex},
+    # Liveness: the observer emits at least one record per OBSERVER_MAX_SILENCE_NS while tracing.
+    'observer.alive': {'tracing': lambda v: v is True},
     'observer.end': {'complete': lambda v: v is True, 'records': lambda v: type(v) is int},
+}
+SUPERVISOR = {
+    'supervisor.start': {'authorityStatementSha256': _hex},
+    'authority.checked': {'boundary': lambda v: v in ('pre-dispatch', 'phase', 'final'),
+                          'phase': lambda v: v in ('session',) + PHASES, 'invocationId': _nid,
+                          'statementSha256': _hex},
+    'human.answer.sent': {'callbackId': _id, 'answer': lambda v: type(v) is str},
+    'supervisor.end': {'records': lambda v: type(v) is int},
 }
 
 # Exact per-invocation order for each phase. Save has no invocation at all.
@@ -139,18 +162,30 @@ def _validate_expected(expected):
                 all(_hex(v) for v in expected[key].values()), 'journal_field')
 
 
-def replay_and_count(producer_bytes, observer_bytes, expected):
-    """Replay both complete streams and return separate per-phase facts."""
+def _framed(stream, first, last):
+    require(len(stream) >= 2 and stream[0]['kind'] == first and stream[-1]['kind'] == last, 'journal_incomplete')
+    require(stream[-1]['records'] == len(stream) and
+            all(r['kind'] not in (first, last) for r in stream[1:-1]), 'journal_incomplete')
+
+
+def replay_and_count(producer_bytes, observer_bytes, supervisor_bytes, expected):
+    """Replay all three complete streams and return separate per-phase facts."""
     _validate_expected(expected)
     producer = _parse(producer_bytes, PRODUCER, True)
     observer = _parse(observer_bytes, OBSERVER, False)
+    supervisor = _parse(supervisor_bytes, SUPERVISOR, False)
 
     # Observer completeness: framed by start/end, end declares the exact count.
     require(len(observer) >= 2 and observer[0]['kind'] == 'observer.start' and
             observer[-1]['kind'] == 'observer.end', 'journal_incomplete')
     require(observer[-1]['records'] == len(observer) and
-            all(r['kind'] == 'effect.observed' for r in observer[1:-1]), 'journal_incomplete')
+            all(r['kind'] in ('effect.observed', 'observer.alive') for r in observer[1:-1]), 'journal_incomplete')
+    # Continuity: no silence longer than the bound anywhere between observer start and end.
+    gaps = [b['t'] - a['t'] for a, b in zip(observer, observer[1:], strict=False)]
+    require(all(0 <= gap <= OBSERVER_MAX_SILENCE_NS for gap in gaps), 'journal_observer_window')
+    effects = [r for r in observer[1:-1] if r['kind'] == 'effect.observed']
     require(observer[0]['identitySha256'] == expected['identitySha256'], 'journal_attribution')
+    _framed(supervisor, 'supervisor.start', 'supervisor.end')
 
     # Producer framing.
     require(len(producer) >= 2 and producer[0]['kind'] == 'session.start' and
@@ -160,6 +195,12 @@ def replay_and_count(producer_bytes, observer_bytes, expected):
     for key in ('authorityStatementSha256', 'identitySha256', 'planSha256'):
         require(start[key] == expected[key], 'journal_attribution')
     statement = start['authorityStatementSha256']
+    settled = producer[-1]
+    for stream in (observer, supervisor):
+        require(stream[0]['authorityStatementSha256'] == statement, 'journal_attribution')
+        # Independent streams must cover the whole session: from before it starts to after settlement.
+        require(stream[0]['t'] <= start['t'] and stream[-1]['t'] >= settled['t'], 'journal_observer_window')
+    _corroborate(producer, supervisor)
     # Every boundary check (phase, pre-dispatch and final) must name the session's statement.
     for record in producer:
         if record['kind'] == 'authority.checked':
@@ -168,7 +209,6 @@ def replay_and_count(producer_bytes, observer_bytes, expected):
     require(final_check['kind'] == 'authority.checked' and final_check['boundary'] == 'final' and
             final_check['phase'] == 'session' and final_check['invocationId'] is None,
             'journal_authority_check_missing')
-    settled = producer[-1]
     require(settled['processes'] == 0 and settled['openResources'] == 0 and settled['cleanup'] == 'complete',
             'journal_settlement')
 
@@ -243,7 +283,7 @@ def replay_and_count(producer_bytes, observer_bytes, expected):
     require(facts['human-read']['turnId'] != facts['rule-read']['turnId'], 'journal_attribution')
 
     # Attribute every observed effect to exactly one dispatch window.
-    for effect in observer[1:-1]:
+    for effect in effects:
         require(effect['op'] == 'read', 'journal_unexpected_mutation')
         owners = [w for w in windows if w[1] <= effect['t'] <= w[2]]
         require(len(owners) == 1, 'journal_effect_unattributed')
@@ -253,10 +293,27 @@ def replay_and_count(producer_bytes, observer_bytes, expected):
         facts[phase]['effectsObserved'] += 1
         facts[phase]['targetReads'] += 1
     save_window = facts['save']
-    save_effects = [e for e in observer[1:-1] if save_window['begin'] <= e['t'] <= save_window['end']]
+    save_effects = [e for e in effects if save_window['begin'] <= e['t'] <= save_window['end']]
     facts['save'].update(answersRecorded=0, nativeDeliveries=0, executionsStarted=0, executionsCompleted=0,
                          effectsObserved=len(save_effects), targetReads=len(save_effects))
     return facts
+
+
+def _corroborate(producer, supervisor):
+    """Producer checks and answers must equal, in order, what the supervisor itself did."""
+    prod_checks = [r for r in producer if r['kind'] == 'authority.checked']
+    sup_checks = [r for r in supervisor if r['kind'] == 'authority.checked']
+    require(len(prod_checks) == len(sup_checks), 'journal_authority_check_missing')
+    for p, s in zip(prod_checks, sup_checks, strict=True):
+        require((p['boundary'], p['phase'], p['invocationId'], p['statementSha256']) ==
+                (s['boundary'], s['phase'], s['invocationId'], s['statementSha256']) and s['t'] <= p['t'],
+                'journal_authority_check_missing')
+    answers = [r for r in producer if r['kind'] == 'answer.recorded']
+    sent = [r for r in supervisor if r['kind'] == 'human.answer.sent']
+    require(len(answers) == len(sent), 'journal_attribution')
+    for p, s in zip(answers, sent, strict=True):
+        require((p['callbackId'], p['answer']) == (s['callbackId'], s['answer']) and s['t'] <= p['t'],
+                'journal_attribution')
 
 
 def _phase_slice(producer, cursor, phase):
@@ -280,8 +337,14 @@ def _phase_window(producer, phase):
     return {'begin': begin, 'end': end}
 
 
-def require_lane_counts(facts):
-    """The three separate required results. Each is checked independently."""
+def require_lane_counts(facts, *, simulated=False):
+    """The three separate required results, each checked independently.
+
+    Only simulated evaluation exists: an observed result would need a reviewed
+    supervisor-side human answer channel and authenticated stream custody, which
+    are not implemented, so any other call refuses.
+    """
+    require(simulated is True, 'prerequisite_missing')
     save, once, fresh = facts['save'], facts['human-read'], facts['rule-read']
     require(save['invocations'] == 0 and save['targetReads'] == 0 and save['executionsStarted'] == 0 and
             save['executionsCompleted'] == 0 and save['answersRecorded'] == 0 and
@@ -293,4 +356,5 @@ def require_lane_counts(facts):
             fresh['nativeDeliveries'] == 0 and fresh['executionsStarted'] == 1 and
             fresh['executionsCompleted'] == 1 and fresh['effectsObserved'] == 1 and fresh['targetReads'] == 1 and
             fresh['invocationId'] != once['invocationId'], 'journal_count')
-    return {'save': 0, 'allowOnce': 1, 'freshRule': 1, 'authority': 'none', 'productionEligible': False}
+    return {'save': 0, 'allowOnce': 1, 'freshRule': 1, 'evidenceClass': 'simulated', 'authority': 'none',
+            'productionEligible': False}

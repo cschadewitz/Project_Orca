@@ -10,7 +10,15 @@
 // serve only those in-memory bytes for import, dynamic import, require and
 // createRequire; anything unlisted, any non-allowlisted builtin and any native
 // addon refuses. Later changes to files on disk cannot change what is served.
-// Hook registration is then locked and WebAssembly is removed.
+// Hook registration is then locked and WebAssembly is removed. The CommonJS
+// compile path is guarded: Module.prototype._compile only compiles the exact
+// reviewed source of a served file while the original wrapper is in place, and
+// Module._load, _extensions, _resolveFilename, prototype.require and the
+// wrapper array cannot be replaced. Reviewed bytes that name these internals
+// (`_compile`, `_extensions`, `Module.wrap`, `Module._load`) are refused
+// statically. The loader refuses to run unless node was started with exactly
+// --permission, --no-addons and --disallow-code-generation-from-strings plus
+// --allow-fs-read, with no NODE_OPTIONS and no write/child/worker permission.
 //
 // Trust assumptions: the Node/V8 binary and its builtins, this loader file (its
 // bytes are bound by the supervisor before launch), and same-process integrity
@@ -21,7 +29,7 @@ import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import Module, { isBuiltin, registerHooks, syncBuiltinESMExports } from "node:module";
 import { isAbsolute, normalize, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const MAX_MODULES = 32;
 const MAX_MODULE_BYTES = 256 * 1024 * 1024;
@@ -77,6 +85,23 @@ function readExact(path, bytes) {
     closeSync(fd);
   }
 }
+
+const REQUIRED_FLAGS = ["--permission", "--no-addons", "--disallow-code-generation-from-strings"];
+const OPTIONAL_FLAGS = new Set(["--no-experimental-require-module", "--no-experimental-detect-module"]);
+{
+  const argv = process.execArgv;
+  const ok =
+    process.env.NODE_OPTIONS === undefined &&
+    REQUIRED_FLAGS.every((flag) => argv.filter((a) => a === flag).length === 1) &&
+    argv.filter((a) => a.startsWith("--allow-fs-read=")).length === 1 &&
+    argv.every((a) => REQUIRED_FLAGS.includes(a) || OPTIONAL_FLAGS.has(a) || a.startsWith("--allow-fs-read=")) &&
+    process.permission !== undefined &&
+    !process.permission.has("fs.write") &&
+    !process.permission.has("child") &&
+    !process.permission.has("worker");
+  if (!ok) refuse("loader_flags");
+}
+const INTERNALS = /\b_compile\b|\b_extensions\b|\bModule\.wrap\b|\bModule\._load\b/;
 
 const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 const [manifestPath, manifestSha256, entryPath] = process.argv.slice(2);
@@ -138,6 +163,7 @@ for (const entry of manifest.modules) {
   const absolute = manifest.root + sep + entry.path;
   const source = readExact(absolute, entry.bytes);
   if (sha256(source) !== entry.sha256) refuse("loader_digest_mismatch");
+  if (INTERNALS.test(source.toString("latin1"))) refuse("loader_compile_reference");
   const url = pathToFileURL(absolute).href;
   if (served.has(url)) refuse("loader_manifest_invalid");
   served.set(url, { source, format: entry.format });
@@ -173,6 +199,36 @@ registerHooks({
 const locked = () => refuse("loader_builtin_denied");
 for (const name of ["register", "registerHooks"]) {
   Object.defineProperty(Module, name, { value: locked, writable: false, configurable: false });
+}
+// CommonJS compile path: only exact reviewed source of a served file, original wrapper.
+const reviewedCjs = new Map();
+for (const [url, entry] of served) {
+  if (entry.format === "commonjs") reviewedCjs.set(fileURLToPath(url), entry.source.toString("utf8"));
+}
+const originalCompile = Module.prototype._compile;
+const originalWrap = Module.wrap;
+const wrapperText = Module.wrapper.slice();
+Object.freeze(Module.wrapper);
+function guardedCompile(content, filename, ...rest) {
+  const expected = reviewedCjs.get(filename);
+  if (
+    expected === undefined ||
+    (content !== expected && content !== expected.replace(/^\uFEFF/, "")) ||
+    Module.wrap !== originalWrap ||
+    Module.wrapper.length !== wrapperText.length ||
+    Module.wrapper.some((part, i) => part !== wrapperText[i])
+  ) {
+    refuse("loader_compile_denied");
+  }
+  return originalCompile.call(this, content, filename, ...rest);
+}
+Object.defineProperty(Module.prototype, "_compile", { value: guardedCompile, writable: false, configurable: false });
+for (const name of ["require", "load"]) {
+  Object.defineProperty(Module.prototype, name, { writable: false, configurable: false });
+}
+Object.freeze(Module._extensions);
+for (const name of ["_load", "_extensions", "_resolveFilename", "_findPath", "_nodeModulePaths", "prototype"]) {
+  Object.defineProperty(Module, name, { writable: false, configurable: false });
 }
 syncBuiltinESMExports();
 delete globalThis.WebAssembly;

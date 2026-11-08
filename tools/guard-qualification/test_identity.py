@@ -28,14 +28,14 @@ def sample():
         'tool': {'name': 'owned-file-read', 'schemaSha256': h('schema'), 'codec': 'orca-owned-read-v1',
                  'codecVersion': 1},
         'executionPath': 'orca-owned-file-read-service',
-        'host': {'os': 'linux', 'arch': 'x86_64', 'kernelRelease': '6.1.0', 'hostIdSha256': h('host')},
+        'host': {'os': 'linux', 'arch': 'x86_64', 'kernelRelease': '6.1.0', 'hostIdSha256': h('host'),
+                 'requirements': list(idn.HOST_REQUIREMENTS)},
         'runtime': {'node': {'version': 'v22.23.4', 'exeSha256': h('node')},
                     'python': {'version': '3.13.18', 'exeSha256': h('python')}},
         'loader': {'manifestSha256': h('manifest'), 'moduleCount': 2, 'loaderSha256': h('loader')},
         'profile': {'id': 'strict-owned-read-v1', 'sha256': h('profile')},
         'containment': {'mechanism': 'unshare-pivot-root-v1', 'specSha256': h('spec'),
                         'namespaces': ['cgroup', 'ipc', 'mnt', 'net', 'pid', 'user', 'uts']},
-        'session': {'authorizationSha256': h('auth'), 'sessionIdSha256': h('session')},
     }
 
 
@@ -66,7 +66,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_every_field_drift_invalidates(self):
         paths = list(leaves(sample()))
-        self.assertEqual(len(paths), 42)
+        self.assertEqual(len(paths), 41)
         for path in paths:
             with self.subTest(path='.'.join(path)):
                 measured = sample()
@@ -120,6 +120,83 @@ class IdentityTests(unittest.TestCase):
                 handle.write('x')
             self.assertFalse(idn.measure_source(repo)['clean'])
         self.refuses('source_unavailable', idn.measure_source, '/nonexistent-repo')
+
+    def _repo(self, tmp):
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t', GIT_COMMITTER_NAME='t',
+                   GIT_COMMITTER_EMAIL='t@t')
+        with open(os.path.join(tmp, 'f'), 'w') as handle:
+            handle.write('reviewed\n')
+        for args in (['init', '-q'], ['add', 'f'], ['commit', '-q', '-m', 'x']):
+            subprocess.run(['git', '-C', tmp, *args], check=True, env=env)
+        self.assertTrue(idn.measure_source(tmp)['clean'])
+
+    def test_m2_skip_worktree_and_assume_unchanged_cannot_hide_changes(self):
+        # Reviewer M2: skip-worktree made a modified tree report clean.
+        for flag in ('--skip-worktree', '--assume-unchanged'):
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as repo:
+                self._repo(repo)
+                subprocess.run(['git', '-C', repo, 'update-index', flag, 'f'], check=True)
+                with open(os.path.join(repo, 'f'), 'w') as handle:
+                    handle.write('changed\n')
+                self.assertFalse(idn.measure_source(repo)['clean'])
+
+    def test_m2_repository_configured_commands_are_not_run(self):
+        # Reviewer M2: core.fsmonitor (and similar) ran repository-controlled commands.
+        with tempfile.TemporaryDirectory() as repo, tempfile.TemporaryDirectory() as out:
+            self._repo(repo)
+            marker = os.path.join(out, 'ran')
+            hook = os.path.join(out, 'monitor.sh')
+            with open(hook, 'w') as handle:
+                handle.write('#!/bin/sh\ntouch %s\n' % marker)
+            os.chmod(hook, 0o755)
+            subprocess.run(['git', '-C', repo, 'config', 'core.fsmonitor', hook], check=True)
+            with open(os.path.join(repo, '.gitattributes'), 'w') as handle:
+                handle.write('f filter=evil\n')
+            subprocess.run(['git', '-C', repo, 'config', 'filter.evil.clean', 'touch %s; cat' % marker], check=True)
+            idn.measure_source(repo)
+            self.assertFalse(os.path.exists(marker))
+
+    def test_l5_missing_machine_id_refuses(self):
+        # Reviewer L5: a missing machine id silently became an empty host id.
+        from unittest import mock
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if path == '/etc/machine-id':
+                raise FileNotFoundError(path)
+            return real_open(path, *args, **kwargs)
+        with mock.patch('builtins.open', fake_open):
+            self.refuses('identity_incomplete', idn.measure_host)
+
+    def test_cal6_host_requirements_are_stated_and_probed(self):
+        # Cal: the procfs child-enumeration interface was missing on another host. The tuple
+        # names what the boundary needs, and a missing /proc refuses with an allowlisted code.
+        from unittest import mock
+        self.assertNotIn('proc-children', idn.HOST_REQUIREMENTS)
+        self.assertEqual(idn.measure_host()['requirements'], list(idn.HOST_REQUIREMENTS))
+        real_open = open
+
+        def no_children(path, *args, **kwargs):
+            if str(path).endswith('/children'):
+                raise FileNotFoundError(path)
+            return real_open(path, *args, **kwargs)
+        with mock.patch('builtins.open', no_children):
+            self.assertEqual(idn.measure_host()['requirements'], list(idn.HOST_REQUIREMENTS))
+
+        def no_proc(path, *args, **kwargs):
+            if str(path).startswith('/proc/'):
+                raise PermissionError(path)
+            return real_open(path, *args, **kwargs)
+        with mock.patch('builtins.open', no_proc):
+            self.refuses('procfs_unavailable', idn.measure_host)
+        with mock.patch.object(idn.platform, 'release', lambda: '5.10.0'):
+            self.refuses('containment_unavailable', idn.measure_host)
+        missing = sample()
+        del missing['host']['requirements']
+        self.refuses('identity_incomplete', idn.validate, missing)
+        reordered = sample()
+        reordered['host']['requirements'] = list(reversed(idn.HOST_REQUIREMENTS))
+        self.refuses('identity_malformed', idn.validate, reordered)
 
     def test_file_digest_refuses_symlink_and_special_files(self):
         with tempfile.TemporaryDirectory() as tmp:

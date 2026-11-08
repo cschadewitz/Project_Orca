@@ -21,7 +21,7 @@ def expected():
 
 
 def records():
-    """Return (producer records, observer records) for a valid simulated run."""
+    """Return (producer, observer) records for a valid simulated run. See supervisor()."""
     e = expected()
     st = e['authorityStatementSha256']
     prod = [dict(kind='session.start', phase='session', authorityStatementSha256=st,
@@ -71,7 +71,7 @@ def records():
              dict(kind='session.settled', phase='session', processes=0, openResources=0, cleanup='complete')]
     for n, r in enumerate(prod):
         r['seq'], r['t'] = n, 1000 + n * 1000
-    obs = [dict(kind='observer.start', identitySha256=e['identitySha256'])]
+    obs = [dict(kind='observer.start', identitySha256=e['identitySha256'], authorityStatementSha256=st)]
     for inv, key in (('inv-a', 'humanRead'), ('inv-b', 'ruleRead')):
         started = next(r for r in prod if r['kind'] == 'dispatch.started' and r['invocationId'] == inv)
         obs.append(dict(kind='effect.observed', op='read', resourceSha256=e[key]['resourceSha256'],
@@ -81,6 +81,32 @@ def records():
         r['seq'] = n
         r.setdefault('t', 500 if n == 0 else prod[-1]['t'] + 1)
     return prod, obs
+
+
+def supervisor(prod):
+    """The supervisor's own records for a producer journal: its verifier's check log
+    (each check slightly before the producer records it) and the human answers it sent."""
+    st = prod[0]['authorityStatementSha256']
+    rows = [dict(kind='supervisor.start', authorityStatementSha256=st, t=400)]
+    for r in prod:
+        if r['kind'] == 'authority.checked':
+            rows.append(dict(kind='authority.checked', boundary=r['boundary'], phase=r['phase'],
+                             invocationId=r['invocationId'], statementSha256=r['statementSha256'], t=r['t'] - 1))
+        elif r['kind'] == 'answer.recorded':
+            rows.append(dict(kind='human.answer.sent', callbackId=r['callbackId'], answer=r['answer'], t=r['t'] - 1))
+    rows.append(dict(kind='supervisor.end', records=len(rows) + 1, t=prod[-1]['t'] + 2))
+    return renumber(rows)
+
+
+def keep_alive(obs, step):
+    """Insert observer liveness records so no two observer records are more than `step` apart."""
+    out = [obs[0]]
+    for row in obs[1:]:
+        while row['t'] - out[-1]['t'] > step:
+            out.append(dict(kind='observer.alive', tracing=True, t=out[-1]['t'] + step))
+        out.append(row)
+    out[-1]['records'] = len(out)
+    return renumber(out)
 
 
 def encode(rows):

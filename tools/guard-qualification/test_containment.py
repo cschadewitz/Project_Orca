@@ -38,7 +38,15 @@ PROBE = textwrap.dedent('''
 ''')
 
 
-def scenario(body, base, prelude=''):
+def outer_mount_namespace():
+    """Run a scenario in its own private mount namespace so its fixture mounts never touch the host."""
+    unshare = shutil.which('unshare', path='/usr/bin:/bin')
+    if os.geteuid() == 0:
+        return [unshare, '--mount', '--propagation', 'private']
+    return [unshare, '--user', '--map-root-user', '--mount', '--propagation', 'private']
+
+
+def scenario(body, base, prelude='', outer=False):
     code = textwrap.dedent('''
         import json, os, subprocess, sys
         sys.path.insert(0, %r)
@@ -49,7 +57,8 @@ def scenario(body, base, prelude=''):
         out = {}
     ''' % (HERE, base, PY, ENV, PROBE, NODE_DIR)) + textwrap.dedent(prelude) + textwrap.dedent(body) + \
         '\nprint(json.dumps(out))\n'
-    result = subprocess.run([sys.executable, '-I', '-c', code], capture_output=True, text=True, timeout=60)
+    argv = (outer_mount_namespace() if outer else []) + [sys.executable, '-I', '-c', code]
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
         raise AssertionError('scenario failed: ' + result.stderr[-2000:])
     return json.loads(result.stdout.strip().splitlines()[-1])
@@ -60,9 +69,12 @@ ledger = AcquisitionLedger(subreaper=True)
 try:
     with ledger:
         ws = ledger.private_dir(BASE, 'ws')
-        spec = containment.make_spec(workspace=ws, snapshot=SNAP, runtime_dirs=RUNTIME, argv=ARGV, env=ENV_)
+        spec = containment.make_spec(workspace=ws, snapshot=SNAP, snapshot_digests=DIGESTS, runtime_dirs=RUNTIME,
+                                     argv=ARGV, env=ENV_)
         out['specSha256'] = containment.spec_digest(spec)
-        owned = containment.launch_contained(ledger, spec, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        owned = containment.launch_contained(ledger, spec, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                             stderr=subprocess.PIPE)
+        INTERACT(owned)
         out['stdout'] = owned.popen.stdout.read().decode()
         out['stderr'] = owned.popen.stderr.read().decode()[-400:]
         out['ran'] = os.path.exists(os.path.join(ws, 'ran'))
@@ -71,6 +83,17 @@ except Refusal as error:
     out['ran'] = os.path.exists(os.path.join(BASE, 'ws', 'ran'))
 out['settlement'] = ledger.close().report()
 '''
+
+
+def snapshot_digests(root):
+    import hashlib
+    out = {}
+    for directory, _, files in os.walk(root):
+        for name in files:
+            path = os.path.join(directory, name)
+            with open(path, 'rb') as handle:
+                out[os.path.relpath(path, root)] = hashlib.sha256(handle.read()).hexdigest()
+    return out
 
 
 class ContainmentTests(unittest.TestCase):
@@ -82,10 +105,13 @@ class ContainmentTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_probe(self, prelude='', snap=None, runtime=('/usr',), argv=None, env=None):
-        setup = 'SNAP, RUNTIME, ARGV, ENV_ = %r, %r, %r, %r\n' % (
-            snap, list(runtime), argv or [PY, '-I', '-S', '-c', PROBE], env or ENV)
-        return scenario(RUN, self.base, prelude + setup)
+    def run_probe(self, prelude='', snap=None, runtime=('/usr',), argv=None, env=None, digests=None, outer=False,
+                  interact='lambda owned: owned.popen.stdin.close()'):
+        if snap is not None and digests is None:
+            digests = snapshot_digests(snap)
+        setup = 'SNAP, RUNTIME, ARGV, ENV_, DIGESTS = %r, %r, %r, %r, %r\nINTERACT = %s\n' % (
+            snap, list(runtime), argv or [PY, '-I', '-S', '-c', PROBE], env or ENV, digests, interact)
+        return scenario(RUN, self.base, setup + prelude, outer=outer)
 
     def test_candidate_runs_only_inside_verified_boundary(self):
         out = self.run_probe()
@@ -182,6 +208,136 @@ containment._contained_init_pid = lambda owned: (_ for _ in ()).throw(Refusal('c
         out = self.run_probe("containment.DEFAULT_DENY = containment.DEFAULT_DENY + ('/usr/lib',)\n")
         self.assertEqual(out['refusal'], 'containment_spec_invalid')
         self.assertFalse(out['ran'])
+
+    def test_h1_nested_writable_mount_under_runtime_dir_is_read_only(self):
+        # Reviewer H1 / Cal 2: a writable mount nested under a runtime directory stayed
+        # writable inside, and the write landed on the host. Privileged fixture: the
+        # nested tmpfs exists only in this scenario's private mount namespace.
+        prelude = '''
+for cmd in (['mount', '-t', 'tmpfs', 'none', '/opt'], ['mkdir', '-p', '/opt/rt/sub'],
+            ['mount', '-t', 'tmpfs', 'none', '/opt/rt/sub']):
+    subprocess.run(cmd, check=True)
+'''
+        probe = ("import json\nres = {}\nfor p in ('/opt/rt/sub/pwned', '/opt/rt/top'):\n"
+                 "    try:\n        open(p, 'w').write('x'); res[p] = 'written'\n"
+                 "    except OSError as e:\n        res[p] = e.errno\nprint(json.dumps(res))\n")
+        body_check = "\nout['hostSees'] = os.path.exists('/opt/rt/sub/pwned')\n"
+        setup = 'SNAP, RUNTIME, ARGV, ENV_, DIGESTS = %r, %r, %r, %r, %r\nINTERACT = %s\n' % (
+            None, ['/usr', '/opt/rt'], [PY, '-I', '-S', '-c', probe], ENV, None,
+            'lambda owned: owned.popen.stdin.close()')
+        out = scenario(RUN + body_check, self.base, setup + prelude, outer=True)
+        self.assertNotIn('refusal', out, out)
+        result = json.loads(out['stdout'])
+        self.assertEqual(result, {'/opt/rt/sub/pwned': 30, '/opt/rt/top': 30})  # EROFS
+        self.assertFalse(out['hostSees'])
+
+    def test_h1_mountinfo_check_refuses_if_recursive_setattr_is_missing(self):
+        # The independent mountinfo check must catch a preflight whose read-only step is not
+        # recursive (the reviewer's original bug), before the candidate runs.
+        weakened = os.path.join(self.base, 'weak_preflight.py')
+        with open(os.path.join(HERE, 'contained_preflight.py')) as handle:
+            text = handle.read()
+        self.assertEqual(text.count('setattr_mount(target, attrs, recursive=True)'), 1)
+        with open(weakened, 'w') as handle:
+            handle.write(text.replace('setattr_mount(target, attrs, recursive=True)',
+                                      'setattr_mount(target, attrs, recursive=False)'))
+        prelude = '''
+containment.PREFLIGHT = %r
+for cmd in (['mount', '-t', 'tmpfs', 'none', '/opt'], ['mkdir', '-p', '/opt/rt/sub'],
+            ['mount', '-t', 'tmpfs', 'none', '/opt/rt/sub']):
+    subprocess.run(cmd, check=True)
+''' % weakened
+        out = self.run_probe(prelude, runtime=('/usr', '/opt/rt'), outer=True)
+        self.assertEqual(out['refusal'], 'containment_root_writable')
+        self.assertFalse(out['ran'])
+        self.assertEqual(out['settlement']['status'], 'settled')
+
+    def test_m9_host_changes_to_snapshot_after_launch_are_not_visible(self):
+        # Reviewer M9: host writes to the snapshot showed through the read-only bind.
+        snap = os.path.join(self.base, 'snap')
+        os.mkdir(snap)
+        with open(os.path.join(snap, 'data.txt'), 'w') as handle:
+            handle.write('reviewed')
+        probe = ("import sys\nprint('ready', flush=True)\nsys.stdin.readline()\n"
+                 "print(open('/snapshot/data.txt').read())\n")
+        interact = ('lambda owned: (owned.popen.stdout.readline(), open(%r, "w").write("tampered"), '
+                    'owned.popen.stdin.write(b"go\\n"), owned.popen.stdin.close())' % os.path.join(snap, 'data.txt'))
+        out = self.run_probe(snap=snap, argv=[PY, '-I', '-S', '-c', probe], interact=interact)
+        self.assertNotIn('refusal', out, out)
+        self.assertEqual(out['stdout'].strip(), 'reviewed')
+        with open(os.path.join(snap, 'data.txt')) as handle:
+            self.assertEqual(handle.read(), 'tampered')
+
+    def test_m9_snapshot_must_match_reviewed_digests(self):
+        snap = os.path.join(self.base, 'snap')
+        os.mkdir(snap)
+        with open(os.path.join(snap, 'data.txt'), 'w') as handle:
+            handle.write('reviewed')
+        digests = snapshot_digests(snap)
+        with open(os.path.join(snap, 'data.txt'), 'w') as handle:
+            handle.write('changed before launch')
+        out = self.run_probe(snap=snap, digests=digests)
+        self.assertEqual(out['refusal'], 'containment_snapshot_mismatch')
+        self.assertFalse(out['ran'])
+        with open(os.path.join(snap, 'extra'), 'w') as handle:
+            handle.write('x')
+        out = self.run_probe(snap=snap, digests=dict(digests, **{'data.txt': snapshot_digests(snap)['data.txt']}))
+        self.assertEqual(out['refusal'], 'containment_snapshot_mismatch')
+
+    def test_l4_no_shared_host_side_root_directory(self):
+        # Reviewer L4: a fixed /tmp/.orca-contained-root was created on the host and left behind.
+        if os.path.isdir('/tmp/.orca-contained-root') and os.geteuid() == 0:
+            os.rmdir('/tmp/.orca-contained-root')
+        out = self.run_probe()
+        self.assertNotIn('refusal', out, out)
+        self.assertFalse(os.path.exists('/tmp/.orca-contained-root'))
+
+    def test_l7_launch_errors_are_allowlisted_refusals(self):
+        # Reviewer L7: launch_contained could raise raw exceptions.
+        out = self.run_probe("import ledger as L\n"
+                             "L.os.pipe2 = lambda flags: (_ for _ in ()).throw(OSError(24, 'raw'))\n")
+        self.assertEqual(out['refusal'], 'containment_startup_failed')
+        # Replace only containment's view of select, so the ledger's own settlement is unaffected.
+        out = self.run_probe("import types\ncontainment.select = types.SimpleNamespace(\n"
+                             "    select=lambda *a: (_ for _ in ()).throw(OSError(4, 'raw')))\n")
+        self.assertEqual(out['refusal'], 'containment_startup_failed')
+        self.assertEqual(out['settlement']['status'], 'settled')
+
+    def test_cal6_no_proc_children_interface_needed(self):
+        # Cal: on a host without CONFIG_PROC_CHILDREN the offline selector failed. Simulate the
+        # interface being absent for every reader in the supervisor process.
+        prelude = """
+import builtins
+_open = builtins.open
+def no_children(path, *args, **kwargs):
+    if isinstance(path, (str, bytes)) and os.fsdecode(path).endswith('/children'):
+        raise FileNotFoundError(2, 'CONFIG_PROC_CHILDREN absent')
+    return _open(path, *args, **kwargs)
+builtins.open = no_children
+"""
+        out = self.run_probe(prelude)
+        self.assertNotIn('refusal', out, out)
+        self.assertTrue(out['ran'])
+        self.assertEqual(out['settlement']['status'], 'settled')
+
+    def test_cal6_unreadable_proc_refuses_with_allowlisted_reason(self):
+        prelude = """
+import types
+class OsView(types.ModuleType):
+    def __getattr__(self, name):
+        return getattr(os, name)
+view = OsView('os_view')
+def listdir(path='.'):
+    if path == '/proc':
+        raise PermissionError(13, 'procfs hidden')
+    return os.listdir(path)
+view.listdir = listdir
+containment.os = view
+"""
+        out = self.run_probe(prelude)
+        self.assertEqual(out['refusal'], 'procfs_unavailable')
+        self.assertFalse(out['ran'])
+        self.assertEqual(out['settlement']['status'], 'settled')
 
 
 if __name__ == '__main__':

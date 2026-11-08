@@ -1,7 +1,7 @@
 {
   "record": "guard-proof-exact-identity-matrix",
   "status": "incomplete-not-qualified",
-  "note": "Reviewed tuple for the one supported lane. Null means not yet fixed or not yet measured; identity.validate() refuses it with identity_incomplete. Values are pathname snapshots and builder outputs, not loaded identity, and grant nothing.",
+  "note": "Reviewed tuple for the one supported lane. Null means not yet fixed or not yet measured; identity.validate() refuses it with identity_incomplete. The tuple has no session or authorization field: it is measured first, the frozen plan names its digest, and the signed authorization names the plan, identity and ledger digests. Values are pathname snapshots and builder outputs, not loaded identity, and grant nothing. host.requirements names the kernel interfaces the boundary needs (Linux 5.12+ mount_setattr, pidfd_open, a readable /proc/<pid>/stat, unprivileged user namespaces). The /proc/<pid>/task/<tid>/children interface (CONFIG_PROC_CHILDREN) is not required; a host without a readable /proc refuses with procfs_unavailable.",
   "baseMain": {
     "commit": "c41c878170767f122107558d2d719e428661eb73",
     "tree": "a1c46ed56074ddd7cfdcb16e97d500e9f072ed35"
@@ -53,7 +53,8 @@
       "os": "linux",
       "arch": null,
       "kernelRelease": null,
-      "hostIdSha256": null
+      "hostIdSha256": null,
+      "requirements": ["mount-setattr", "pidfd", "proc-pid-stat", "unprivileged-user-namespaces"]
     },
     "runtime": {
       "node": {
@@ -68,7 +69,7 @@
     "loader": {
       "manifestSha256": null,
       "moduleCount": null,
-      "loaderSha256": "af3dd413be87d3523f9055ecf7858f459568677dca9ec0c0e3d5cb1da1a2c9ca"
+      "loaderSha256": "aee90854e3ecfb9d229ca648dd98c45a52b8d3c392d3d95cad817ea6df1864b5"
     },
     "profile": {
       "id": "orca-owned-file-read-v1",
@@ -78,10 +79,6 @@
       "mechanism": "unshare-pivot-root-v1",
       "specSha256": null,
       "namespaces": ["cgroup", "ipc", "mnt", "net", "pid", "user", "uts"]
-    },
-    "session": {
-      "authorizationSha256": null,
-      "sessionIdSha256": null
     }
   },
   "buildMeasurement": {

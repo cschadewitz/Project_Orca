@@ -56,6 +56,53 @@ class ReasonTests(unittest.TestCase):
         with self.assertRaises(Refusal):
             PrivateEvidence('/tmp', limit=bounds.PRIVATE_EVIDENCE_LIMIT + 1)
 
+    def test_cal4_partial_writes_are_accounted_and_removed(self):
+        # Cal 4: a partial write followed by an error left unaccounted bytes on disk.
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chmod(tmp, 0o700)
+            evidence = PrivateEvidence(tmp, limit=10)
+            real_write, calls = os.write, []
+
+            def flaky(fd, data):
+                calls.append(len(data))
+                if len(calls) == 1:
+                    return real_write(fd, bytes(data[:4]))
+                raise OSError(5, 'raw device error /dev/sda secret')
+            try:
+                with mock.patch('os.write', flaky):
+                    with self.assertRaises(Refusal) as caught:
+                        evidence.write('a', b'x' * 8)
+                self.assertEqual(caught.exception.code, 'evidence_write_failed')
+                self.assertEqual(os.listdir(tmp), [])
+                with mock.patch('os.fsync', side_effect=OSError(5, 'fsync')):
+                    with self.assertRaises(Refusal) as caught:
+                        evidence.write('b', b'y' * 2)
+                self.assertEqual(caught.exception.code, 'evidence_write_failed')
+                evidence.write('c', b'z' * 8)
+                with self.assertRaises(Refusal):
+                    evidence.write('d', b'w' * 3)
+                on_disk = sum(os.path.getsize(os.path.join(tmp, n)) for n in os.listdir(tmp))
+                self.assertLessEqual(on_disk, 10)
+            finally:
+                evidence.close()
+
+    def test_l6_evidence_directory_checked_on_the_opened_descriptor(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as good, tempfile.TemporaryDirectory() as loose:
+            os.chmod(good, 0o700)
+            os.chmod(loose, 0o755)
+            stat_good = os.lstat(good)
+            with mock.patch('os.lstat', return_value=stat_good):
+                with self.assertRaises(Refusal):
+                    PrivateEvidence(loose)
+
+    def test_l8_callers_cannot_assert_observed_evidence(self):
+        for cls in ('observed', 'production-qualified'):
+            with self.assertRaises(Refusal):
+                public_summary(evidenceClass=cls)
+        self.assertEqual(public_summary(evidenceClass='simulated')['evidenceClass'], 'simulated')
+
 
 class BoundsTests(unittest.TestCase):
     def test_existing_limits_are_mirrored_unchanged(self):

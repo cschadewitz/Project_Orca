@@ -8,6 +8,20 @@ it to exec the candidate. Any failure refuses before candidate code is loaded;
 there is no fallback to an uncontained launch. Tracing is not part of this
 boundary, and process groups or rlimits are not treated as containment.
 
+Every mount inside the boundary except /workspace is made read-only
+recursively (mount_setattr AT_RECURSIVE), and the preflight re-reads
+/proc/self/mountinfo after pivot_root and refuses unless that holds. The reviewed
+snapshot is copied into a private tmpfs and checked file by file against the
+spec's reviewed digests before release, so host-side changes after the copy are
+not visible inside. The staging root is a tmpfs mounted inside the private mount
+namespace; nothing is created on the host.
+
+Host requirements: Linux with unprivileged user namespaces, mount_setattr(2)
+(5.12+), pidfd_open(2) and a readable /proc. The /proc/<pid>/task/<tid>/children
+interface (CONFIG_PROC_CHILDREN) is not required; descendants are found by
+scanning /proc/<pid>/stat, and a /proc that cannot be read refuses with
+procfs_unavailable.
+
 Not provided here (remaining obligations, see the gap matrix): seccomp syscall
 filtering, cgroup memory/pids limits, and a disposable VM boundary against the
 kernel itself. The trusted substrate is the host kernel, util-linux `unshare`,
@@ -16,11 +30,13 @@ this Python interpreter and the preflight script bytes (bound by spec digest).
 import hashlib
 import json
 import os
+import re
 import select
 import shutil
+import subprocess
 import sys
 
-from bounds import PREFLIGHT_SECONDS
+from bounds import PREFLIGHT_SECONDS, SNAPSHOT_BYTE_LIMIT, SNAPSHOT_MAX_FILES
 from identity import canonical
 from reasons import Refusal, require
 
@@ -29,8 +45,10 @@ PREFLIGHT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'contained_
 NAMESPACES = ('cgroup', 'ipc', 'mnt', 'net', 'pid', 'user', 'uts')
 UNSHARE_FLAGS = ('--user', '--map-root-user', '--mount', '--pid', '--net', '--ipc', '--uts', '--cgroup',
                  '--fork', '--kill-child')
-SPEC_KEYS = frozenset(('version', 'workspace', 'snapshot', 'runtimeDirs', 'env', 'argv', 'hostNamespaces',
-                       'denyPaths', 'allowedFds'))
+SPEC_KEYS = frozenset(('version', 'workspace', 'snapshot', 'snapshotDigests', 'snapshotByteLimit', 'runtimeDirs',
+                       'env', 'argv', 'hostNamespaces', 'denyPaths', 'allowedFds'))
+STAGING = '/tmp'  # tmpfs mounted here inside the private mount namespace only
+_HEX64 = re.compile('[0-9a-f]{64}')
 ENV_KEYS = frozenset(('PATH', 'HOME', 'LANG', 'TZ', 'NODE_OPTIONS_FORBIDDEN'))
 DEFAULT_DENY = ('/root', '/home', '/run', '/var/run', '/tmp', '/mnt', '/etc', '/var', '/srv', '/media',
                 '/opt/claude-code', '/opt/env-runner', '/old_root', '/nix', '/proc/1/root/root')
@@ -40,8 +58,10 @@ def host_namespaces():
     return {ns: os.stat('/proc/self/ns/' + ns).st_ino for ns in NAMESPACES}
 
 
-def make_spec(*, workspace, snapshot, runtime_dirs, argv, env, deny_paths=None):
-    spec = {'version': 1, 'workspace': workspace, 'snapshot': snapshot, 'runtimeDirs': list(runtime_dirs),
+def make_spec(*, workspace, snapshot, snapshot_digests, runtime_dirs, argv, env, deny_paths=None):
+    spec = {'version': 1, 'workspace': workspace, 'snapshot': snapshot,
+            'snapshotDigests': None if snapshot_digests is None else dict(snapshot_digests),
+            'snapshotByteLimit': SNAPSHOT_BYTE_LIMIT, 'runtimeDirs': list(runtime_dirs),
             'env': dict(env), 'argv': list(argv), 'hostNamespaces': host_namespaces(),
             'denyPaths': list(DEFAULT_DENY if deny_paths is None else deny_paths), 'allowedFds': [0, 1, 2]}
     validate_spec(spec)
@@ -53,8 +73,18 @@ def validate_spec(spec):
     paths = [spec['workspace'], *spec['runtimeDirs']] + ([spec['snapshot']] if spec['snapshot'] else [])
     require(all(type(p) is str and os.path.isabs(p) and os.path.normpath(p) == p and '\0' not in p
                 for p in paths), 'containment_spec_invalid')
-    require(all(p not in ('/', '/proc', '/sys', '/dev') for p in spec['runtimeDirs']),
-            'containment_spec_invalid')
+    require(all(p not in ('/', '/proc', '/sys', '/dev') and p != STAGING and not p.startswith(STAGING + '/')
+                for p in spec['runtimeDirs']), 'containment_spec_invalid')
+    require(spec['snapshotByteLimit'] == SNAPSHOT_BYTE_LIMIT, 'containment_spec_invalid')
+    digests = spec['snapshotDigests']
+    if spec['snapshot'] is None:
+        require(digests is None, 'containment_spec_invalid')
+    else:
+        require(type(digests) is dict and 0 < len(digests) <= SNAPSHOT_MAX_FILES, 'containment_spec_invalid')
+        for rel, digest in digests.items():
+            require(type(rel) is str and type(digest) is str and _HEX64.fullmatch(digest) is not None
+                    and rel and not rel.startswith('/') and '\0' not in rel
+                    and all(part not in ('', '.', '..') for part in rel.split('/')), 'containment_spec_invalid')
     require(type(spec['env']) is dict and set(spec['env']) <= ENV_KEYS and
             all(type(v) is str for v in spec['env'].values()), 'containment_env')
     require(type(spec['argv']) is list and spec['argv'] and all(type(a) is str for a in spec['argv'])
@@ -91,23 +121,57 @@ def _read_report(fd, deadline_seconds):
         raise Refusal('containment_preflight_failed') from None
 
 
+def _ppid(pid):
+    with open('/proc/%d/stat' % pid, 'rb') as handle:
+        return int(handle.read().rsplit(b')', 1)[1].split()[1])
+
+
 def _contained_init_pid(owned):
-    """Host PID of the namespace init: the only child of our unreaped unshare process."""
+    """Host PID of the namespace init: the only child of our unreaped unshare process.
+
+    Found by scanning /proc/<pid>/stat, not /proc/<pid>/task/*/children, which
+    needs CONFIG_PROC_CHILDREN and is absent on some hosts.
+    """
     pid = owned.popen.pid
+    try:
+        names = os.listdir('/proc')
+    except OSError:
+        raise Refusal('procfs_unavailable') from None
     children = set()
-    for task in os.listdir('/proc/%d/task' % pid):
-        with open('/proc/%d/task/%s/children' % (pid, task), 'rb') as handle:
-            children.update(int(x) for x in handle.read().split())
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            if _ppid(int(name)) == pid:
+                children.add(int(name))
+        except (FileNotFoundError, ProcessLookupError, IndexError, ValueError):
+            continue
+        except OSError:
+            raise Refusal('procfs_unavailable') from None
     require(len(children) == 1, 'containment_startup_failed')
     child = children.pop()
-    with open('/proc/%d/stat' % child, 'rb') as handle:
-        ppid = int(handle.read().rsplit(b')', 1)[1].split()[1])
-    require(ppid == pid, 'containment_startup_failed')
+    try:
+        require(_ppid(child) == pid, 'containment_startup_failed')
+    except OSError:
+        raise Refusal('containment_startup_failed') from None
     return child
 
 
-def launch_contained(ledger, spec, *, stdout, stderr):
-    """Start the candidate inside the verified boundary. Returns the owned unshare process."""
+def launch_contained(ledger, spec, *, stdin=subprocess.DEVNULL, stdout, stderr):
+    """Start the candidate inside the verified boundary. Returns the owned unshare process.
+
+    Every failure, including an unexpected exception, is an allowlisted refusal;
+    the ledger owns anything acquired and settles it on close.
+    """
+    try:
+        return _launch(ledger, spec, stdin=stdin, stdout=stdout, stderr=stderr)
+    except Refusal:
+        raise
+    except Exception:
+        raise Refusal('containment_startup_failed') from None
+
+
+def _launch(ledger, spec, *, stdin, stdout, stderr):
     validate_spec(spec)
     unshare = shutil.which('unshare', path='/usr/bin:/bin')
     require(unshare is not None, 'containment_unavailable')
@@ -116,7 +180,7 @@ def launch_contained(ledger, spec, *, stdout, stderr):
     argv = [unshare, *UNSHARE_FLAGS, '--', PYTHON, '-I', '-S', PREFLIGHT,
             json.dumps(spec, sort_keys=True), str(report_w.fd), str(release_r.fd)]
     owned = ledger.spawn(argv, env=dict(spec['env']), cwd='/', pass_fds=(report_w.fd, release_r.fd),
-                         stdout=stdout, stderr=stderr)
+                         stdin=stdin, stdout=stdout, stderr=stderr)
     report_w.close()
     release_r.close()
     report = _read_report(report_r.fd, PREFLIGHT_SECONDS)
@@ -129,7 +193,10 @@ def launch_contained(ledger, spec, *, stdout, stderr):
     require(type(observed) is dict and set(observed) == set(spec['hostNamespaces']), 'containment_preflight_failed')
     init = _contained_init_pid(owned)
     for ns, host_ino in spec['hostNamespaces'].items():
-        outside = os.stat('/proc/%d/ns/%s' % (init, ns)).st_ino
+        try:
+            outside = os.stat('/proc/%d/ns/%s' % (init, ns)).st_ino
+        except OSError:
+            raise Refusal('containment_startup_failed') from None
         require(outside == observed[ns] and outside != host_ino, 'containment_namespace_shared')
     os.write(release_w.fd, b'G')
     release_w.close()

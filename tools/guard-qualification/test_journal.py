@@ -4,13 +4,15 @@ import json
 import unittest
 
 import journal_fixture as fx
-from bounds import OWNER_NS, RUN_NS
+from bounds import OBSERVER_MAX_SILENCE_NS, OWNER_NS, RUN_NS
 from journal import replay_and_count, require_lane_counts
 from reasons import Refusal
 
 
-def run(prod, obs, expected=None):
-    return require_lane_counts(replay_and_count(fx.encode(prod), fx.encode(obs), expected or fx.expected()))
+def run(prod, obs, expected=None, sup=None):
+    sup = fx.supervisor(prod) if sup is None else sup
+    facts = replay_and_count(fx.encode(prod), fx.encode(obs), fx.encode(sup), expected or fx.expected())
+    return require_lane_counts(facts, simulated=True)
 
 
 def find(rows, kind, phase=None):
@@ -18,15 +20,16 @@ def find(rows, kind, phase=None):
 
 
 class JournalTests(unittest.TestCase):
-    def refuses(self, code, prod=None, obs=None, expected=None, raw=None):
+    def refuses(self, code, prod=None, obs=None, expected=None, raw=None, sup=None):
         p, o = fx.records()
         prod = p if prod is None else prod
         obs = o if obs is None else obs
         with self.assertRaises(Refusal) as caught:
             if raw is not None:
-                require_lane_counts(replay_and_count(raw[0], raw[1], expected or fx.expected()))
+                require_lane_counts(replay_and_count(raw[0], raw[1], fx.encode(fx.supervisor(p)),
+                                                     expected or fx.expected()), simulated=True)
             else:
-                run(prod, obs, expected)
+                run(prod, obs, expected, sup)
         self.assertEqual(caught.exception.code, code)
 
     def mutate(self, code, change, observer=False):
@@ -36,8 +39,9 @@ class JournalTests(unittest.TestCase):
 
     def test_simulated_positive_counts_are_separate_facts(self):
         prod, obs = fx.records()
-        facts = replay_and_count(fx.encode(prod), fx.encode(obs), fx.expected())
+        facts = replay_and_count(fx.encode(prod), fx.encode(obs), fx.encode(fx.supervisor(prod)), fx.expected())
         self.assertEqual(run(prod, obs)['save'], 0)
+        self.assertEqual(run(prod, obs)['evidenceClass'], 'simulated')
         self.assertEqual((facts['human-read']['answersRecorded'], facts['human-read']['nativeDeliveries'],
                           facts['human-read']['executionsStarted'], facts['human-read']['executionsCompleted'],
                           facts['human-read']['effectsObserved']), (1, 1, 1, 1, 1))
@@ -209,16 +213,82 @@ class JournalTests(unittest.TestCase):
         prod, obs = fx.records()
         stretch(prod, OWNER_NS, prod.index(find(prod, 'dispatch.completed', 'rule-read')))
         obs[-1]['t'] = prod[-1]['t'] + 1
-        self.refuses('journal_timing', prod, obs)
+        self.refuses('journal_timing', prod, fx.keep_alive(obs, OBSERVER_MAX_SILENCE_NS))
         prod, obs = fx.records()
         stretch(prod, RUN_NS, len(prod) - 1)
         obs[-1]['t'] = prod[-1]['t'] + 1
-        self.refuses('journal_timing', prod, obs)
+        self.refuses('journal_timing', prod, fx.keep_alive(obs, OBSERVER_MAX_SILENCE_NS))
 
     def test_uncertain_settlement_refuses(self):
         self.mutate('journal_settlement', lambda p: p[-1].__setitem__('cleanup', 'uncertain'))
         self.mutate('journal_settlement', lambda p: p[-1].__setitem__('processes', 1))
         self.mutate('journal_settlement', lambda p: p[-1].__setitem__('openResources', 2))
+
+    def test_h2_observer_must_cover_the_whole_session(self):
+        # Reviewer H2: an observer that started after Save still yielded Save = 0.
+        prod, obs = fx.records()
+        obs[0]['t'] = find(prod, 'phase.end', 'save')['t'] + 1
+        self.refuses('journal_observer_window', prod, obs)
+        prod, obs = fx.records()
+        obs[-1]['t'] = prod[-1]['t'] - 1
+        self.refuses('journal_observer_window', prod, obs)
+
+    def test_cal1_observer_coverage_must_be_continuous(self):
+        # Cal 1: start-before-session and end-after-settlement is not enough; an observer that
+        # went silent in between (detached, stalled) must not establish Save = 0.
+        from bounds import NS
+        prod, obs = fx.records()
+        for row in prod + obs[1:]:
+            row['t'] += 3 * NS  # the observer starts at t=500, then is silent for about 3 s
+        self.refuses('journal_observer_window', prod, obs)
+        filled = fx.keep_alive(obs, OBSERVER_MAX_SILENCE_NS * 3 // 5)
+        self.assertEqual(run(prod, filled)['save'], 0)  # liveness records restore continuity
+        gap = copy.deepcopy(filled)
+        del gap[3]  # one missing liveness record re-opens a silence longer than the bound
+        gap[-1]['records'] = len(gap)
+        fx.renumber(gap)
+        self.refuses('journal_observer_window', prod, gap)
+        stalled = copy.deepcopy(filled)
+        stalled[2]['tracing'] = False
+        self.refuses('journal_field', prod, stalled)
+
+    def test_h2_observer_is_bound_to_the_session(self):
+        self.mutate('journal_attribution',
+                    lambda o: o[0].__setitem__('authorityStatementSha256', fx.h('other')), observer=True)
+
+    def test_m8_producer_check_records_need_supervisor_corroboration(self):
+        # Reviewer M8: a forged producer boundary-check record passed.
+        prod, obs = fx.records()
+        sup = fx.supervisor(prod)
+        sup = fx.renumber([r for r in sup if not (r['kind'] == 'authority.checked' and
+                                                  r['boundary'] == 'pre-dispatch' and r['phase'] == 'rule-read')])
+        sup[-1]['records'] -= 1
+        self.refuses('journal_authority_check_missing', prod, obs, sup=sup)
+        prod, obs = fx.records()
+        sup = fx.supervisor(prod)
+        late = next(r for r in sup if r['kind'] == 'authority.checked' and r['boundary'] == 'phase')
+        late['t'] += 5
+        self.refuses('journal_authority_check_missing', prod, obs, sup=sup)
+        prod, obs = fx.records()
+        sup = fx.supervisor(prod)
+        next(r for r in sup if r['kind'] == 'human.answer.sent')['answer'] = 'deny'
+        self.refuses('journal_attribution', prod, obs, sup=sup)
+        prod, obs = fx.records()
+        sup = fx.supervisor(prod)
+        sup = fx.renumber([r for r in sup if r['kind'] != 'human.answer.sent'])
+        sup[-1]['records'] -= 1
+        self.refuses('journal_attribution', prod, obs, sup=sup)
+        prod, obs = fx.records()
+        sup = fx.supervisor(prod)
+        sup[0]['t'] = prod[0]['t'] + 1
+        self.refuses('journal_observer_window', prod, obs, sup=sup)
+
+    def test_m8_no_non_simulated_success_path_exists(self):
+        prod, obs = fx.records()
+        facts = replay_and_count(fx.encode(prod), fx.encode(obs), fx.encode(fx.supervisor(prod)), fx.expected())
+        with self.assertRaises(Refusal) as caught:
+            require_lane_counts(facts)
+        self.assertEqual(caught.exception.code, 'prerequisite_missing')
 
     def test_public_result_is_not_authority(self):
         prod, obs = fx.records()

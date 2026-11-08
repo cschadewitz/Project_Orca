@@ -7,14 +7,22 @@ settlement; success is refused when any cleanup or process outcome is uncertain.
 
 Processes are signalled only through pidfds opened while the target is this
 supervisor's unreaped child, so a numeric PID can never refer to a reused
-process. Process groups are never signalled. In subreaper mode the supervisor
-must be dedicated (no pre-existing children); orphaned descendants are then
-re-parented to it and swept through pidfds until none remain.
+process. Process groups are never signalled. Spawning requires subreaper mode
+in a dedicated supervisor (no pre-existing children): orphaned descendants are
+then re-parented to it and swept through pidfds, and settlement additionally
+requires waitid(P_ALL) to report that no child of any kind remains.
+
+Children are discovered by scanning /proc/<pid>/stat for this PID as parent,
+unioned with /proc/self/task/*/children where that interface exists; the
+children interface (CONFIG_PROC_CHILDREN) is optional. A mounted procfs with
+per-process stat files is a host requirement: without it construction refuses
+with procfs_unavailable. The final no-children check does not use procfs.
 
 Assumptions: Linux >= 5.4 pidfd/waitid(P_PIDFD); this process is the only code
 that reaps its children (no os.wait(-1), SIGCHLD not ignored); a descendant can
 only escape the sweep by being started by an unrelated service, which
-containment must prevent.
+containment must prevent. cgroup-based tracking (cgroup.procs of a delegated
+cgroup) is not implemented.
 """
 import ctypes
 import os
@@ -33,16 +41,51 @@ SWEEP_ROUNDS = MAX_OWNED_PROCESSES
 _PENDING = object()
 
 
-def _children():
-    """PIDs of this process's unreaped children, across all threads."""
+def _children_file():
+    """PIDs listed by /proc/self/task/*/children (optional kernel interface)."""
     out = set()
     for task in os.listdir('/proc/self/task'):
-        try:
-            with open('/proc/self/task/%s/children' % task, 'rb') as handle:
-                out.update(int(item) for item in handle.read().split())
-        except FileNotFoundError:
-            continue
+        with open('/proc/self/task/%s/children' % task, 'rb') as handle:
+            out.update(int(item) for item in handle.read().split())
     return out
+
+
+def _proc_scan():
+    """PIDs whose /proc/<pid>/stat names this process as parent."""
+    me, out = os.getpid(), set()
+    for name in os.listdir('/proc'):
+        if not name.isdigit():
+            continue
+        try:
+            with open('/proc/%s/stat' % name, 'rb') as handle:
+                fields = handle.read().rsplit(b')', 1)[1].split()
+        except (FileNotFoundError, ProcessLookupError, IndexError):
+            continue
+        if int(fields[1]) == me:
+            out.add(int(name))
+    return out
+
+
+def _children():
+    """This process's unreaped children; refuses if procfs cannot be read."""
+    try:
+        found = _proc_scan()
+    except OSError:
+        raise Refusal('procfs_unavailable') from None
+    try:
+        found |= _children_file()
+    except OSError:
+        pass  # optional interface; the stat scan and waitid(P_ALL) remain
+    return found
+
+
+def _no_children_remain():
+    """True only when the kernel reports this process has no children at all."""
+    try:
+        os.waitid(os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        return True
+    return False
 
 
 class Settlement:
@@ -93,7 +136,7 @@ class AcquisitionLedger:
         require(signal.getsignal(signal.SIGCHLD) not in (signal.SIG_IGN,), 'sigchld_ignored')
         require(hasattr(os, 'pidfd_open') and hasattr(os, 'P_PIDFD'), 'pidfd_unavailable')
         if subreaper:
-            require(not _children(), 'supervisor_not_dedicated')
+            require(not _children() and _no_children_remain(), 'supervisor_not_dedicated')
             libc = ctypes.CDLL(None, use_errno=True)
             require(libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0, 'supervisor_not_dedicated')
         self._subreaper = subreaper
@@ -120,15 +163,18 @@ class AcquisitionLedger:
         return self.acquire(lambda: os.open(path, flags | os.O_CLOEXEC, mode, dir_fd=dir_fd), os.close, 'fd')
 
     def pipe(self):
-        """Two CLOEXEC pipe ends, each registered before the next acquisition."""
-        fds = []
-
-        def make():
-            fds.extend(os.pipe2(os.O_CLOEXEC))
-            return OwnedFd(fds[0])
-        read_end = self.acquire(make, OwnedFd.close, 'fd')
-        write_end = self.acquire(lambda: OwnedFd(fds[1]), OwnedFd.close, 'fd')
-        return read_end, write_end
+        """Two CLOEXEC pipe ends: both slots reserved before the pipe exists, or nothing."""
+        require(self._state == 'open', 'ledger_closed')
+        require(len(self._items) + 2 <= self._budget, 'resource_budget_exceeded')
+        read_entry, write_entry = ['fd', OwnedFd.close, _PENDING], ['fd', OwnedFd.close, _PENDING]
+        self._items.extend((read_entry, write_entry))
+        try:
+            read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
+        except BaseException:
+            self._uncertain.append('acquisition_failed')
+            raise
+        read_entry[2], write_entry[2] = OwnedFd(read_fd), OwnedFd(write_fd)
+        return read_entry[2], write_entry[2]
 
     def private_dir(self, parent, name):
         """Create an owner-only directory and register its removal (skipped if unsettled)."""
@@ -136,7 +182,11 @@ class AcquisitionLedger:
 
         def make():
             os.mkdir(name, 0o700, dir_fd=parent_fd)
-            info = os.lstat(name, dir_fd=parent_fd)
+            fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+            try:
+                info = os.fstat(fd)
+            finally:
+                os.close(fd)
             require(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700, 'acquisition_failed')
             return name
 
@@ -150,6 +200,7 @@ class AcquisitionLedger:
     def spawn(self, argv, *, env, cwd, pass_fds=(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
               stderr=subprocess.DEVNULL):
         """Start a process with an exact environment, closed inherited FDs and a pidfd."""
+        require(self._subreaper, 'supervisor_not_dedicated')
         require(len(self._processes) < MAX_OWNED_PROCESSES, 'resource_budget_exceeded')
         require(type(env) is dict and all(type(k) is str and type(v) is str for k, v in env.items()),
                 'acquisition_failed')
@@ -182,14 +233,16 @@ class AcquisitionLedger:
 
     def _settle_process(self, owned):
         try:
-            if owned.status is None:
-                if not owned.poll_exit(0):
-                    signal.pidfd_send_signal(owned.pidfd, signal.SIGKILL)
-                    require(owned.poll_exit(PROCESS_KILL_WAIT_SECONDS), 'process_unsettled')
-                self._reap(owned)
+            try:
+                if owned.status is None:
+                    if not owned.poll_exit(0):
+                        signal.pidfd_send_signal(owned.pidfd, signal.SIGKILL)
+                        require(owned.poll_exit(PROCESS_KILL_WAIT_SECONDS), 'process_unsettled')
+                    self._reap(owned)
+            finally:
+                os.close(owned.pidfd)
         finally:
-            os.close(owned.pidfd)
-        if self._subreaper:
+            # Always attempt the descendant sweep, even when killing or reaping failed.
             self._sweep_descendants()
 
     def _sweep_descendants(self):
@@ -198,7 +251,10 @@ class AcquisitionLedger:
             if not found:
                 return
             for pid in found:
-                pidfd = os.pidfd_open(pid)  # unreaped child of ours: PID pinned
+                try:
+                    pidfd = os.pidfd_open(pid)  # unreaped child of ours: PID pinned
+                except OSError:
+                    raise Refusal('descendant_unsettled') from None
                 try:
                     signal.pidfd_send_signal(pidfd, signal.SIGKILL)
                     ready, _, _ = select.select([pidfd], [], [], PROCESS_KILL_WAIT_SECONDS)
@@ -228,6 +284,14 @@ class AcquisitionLedger:
                     self._process_uncertain = True
                 code = code_of(error)
                 self._uncertain.append(code if code != 'unlisted_reason' else 'cleanup_failed')
+        if self._processes and not self._process_uncertain:
+            # Authoritative final check that does not depend on procfs enumeration.
+            try:
+                self._sweep_descendants()
+                require(_no_children_remain(), 'descendant_unsettled')
+            except BaseException as error:
+                code = code_of(error)
+                self._uncertain.append(code if code != 'unlisted_reason' else 'descendant_unsettled')
         status = 'uncertain' if self._uncertain else 'settled'
         self._settlement = Settlement(status, self._uncertain, attempted, failed, self._body_failed)
         self._state = 'closed'

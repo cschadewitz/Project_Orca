@@ -37,6 +37,10 @@ _HEX64 = re.compile(r'[0-9a-f]{64}')
 _TEXT = re.compile(r'[A-Za-z0-9][A-Za-z0-9._+:/@-]{0,127}')
 _NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
 NAMESPACES = ('cgroup', 'ipc', 'mnt', 'net', 'pid', 'user', 'uts')
+# Host kernel interfaces the boundary depends on, stated in the tuple so a host that
+# lacks one cannot match. /proc/<pid>/task/<tid>/children (CONFIG_PROC_CHILDREN) is
+# deliberately not required: descendants are found by scanning /proc/<pid>/stat.
+HOST_REQUIREMENTS = ('mount-setattr', 'pidfd', 'proc-pid-stat', 'unprivileged-user-namespaces')
 
 # Leaf validators keyed by dotted path; '*' marks a map of named outputs.
 SCHEMA = {
@@ -52,7 +56,8 @@ SCHEMA = {
     'tool': {'name': _TEXT, 'schemaSha256': _HEX64, 'codec': _TEXT,
              'codecVersion': lambda v: type(v) is int and 0 < v < 1000},
     'executionPath': lambda v: v in SUPPORTED_EXECUTION_PATHS,
-    'host': {'os': lambda v: v == 'linux', 'arch': _TEXT, 'kernelRelease': _TEXT, 'hostIdSha256': _HEX64},
+    'host': {'os': lambda v: v == 'linux', 'arch': _TEXT, 'kernelRelease': _TEXT, 'hostIdSha256': _HEX64,
+             'requirements': lambda v: v == list(HOST_REQUIREMENTS)},
     'runtime': {'node': {'version': _TEXT, 'exeSha256': _HEX64},
                 'python': {'version': _TEXT, 'exeSha256': _HEX64}},
     'loader': {'manifestSha256': _HEX64, 'moduleCount': lambda v: type(v) is int and 0 < v <= 32,
@@ -61,7 +66,6 @@ SCHEMA = {
     'containment': {'mechanism': _TEXT, 'specSha256': _HEX64,
                     'namespaces': lambda v: type(v) is list and v == sorted(set(v)) and
                     set(v) >= {'ipc', 'mnt', 'net', 'pid', 'user', 'uts'} and set(v) <= set(NAMESPACES)},
-    'session': {'authorizationSha256': _HEX64, 'sessionIdSha256': _HEX64},
 }
 
 
@@ -153,26 +157,82 @@ def require_supported_route(route):
 
 # Measurement helpers. Each returns only bounded, typed values.
 
-_GIT_ENV = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1', 'HOME': '/nonexistent',
-            'GIT_OPTIONAL_LOCKS': '0'}
+_GIT_ENV = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
+            'GIT_ATTR_NOSYSTEM': '1', 'HOME': '/nonexistent', 'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0'}
+# Command-line configuration overrides repository configuration, so the
+# repository cannot make these measurements run its own commands. Content is
+# hashed here from raw bytes; Git's clean/smudge filters are never invoked.
+_GIT_SAFE = ('-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.untrackedCache=false',
+             '-c', 'core.attributesFile=/dev/null', '-c', 'core.splitIndex=false', '-c', 'diff.external=',
+             '-c', 'core.sshCommand=false', '-c', 'protocol.allow=never')
+_MODES = {'100644': 0, '100755': 1, '120000': 2}
 
 
 def _git(repo, *args):
     try:
-        result = subprocess.run(['git', '-C', repo, *args], env=_GIT_ENV, capture_output=True,
-                                timeout=30, check=False, stdin=subprocess.DEVNULL)
+        result = subprocess.run(['git', *_GIT_SAFE, '-C', repo, *args], env=_GIT_ENV, capture_output=True,
+                                timeout=60, check=False, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         raise Refusal('source_unavailable') from None
-    require(result.returncode == 0 and len(result.stdout) <= 1024 * 1024, 'source_unavailable')
+    require(len(result.stdout) <= 64 * 1024 * 1024, 'source_unavailable')
+    return result
+
+
+def _git_ok(repo, *args):
+    result = _git(repo, *args)
+    require(result.returncode == 0, 'source_unavailable')
     return result.stdout
 
 
+def _worktree_matches(repo, mode, sha, path):
+    """Hash the working file's raw bytes as a Git blob; no filters, no symlink following."""
+    full = os.path.join(repo, path)
+    try:
+        if mode == '120000':
+            data = os.fsencode(os.readlink(full))
+        else:
+            fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+            try:
+                info = os.fstat(fd)
+                if (info.st_mode & 0o170000) != 0o100000 or bool(info.st_mode & 0o111) != (mode == '100755'):
+                    return False
+                chunks, total = [], 0
+                while True:
+                    chunk = os.read(fd, 1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > 256 * 1024 * 1024:
+                        return False
+                    chunks.append(chunk)
+                data = b''.join(chunks)
+            finally:
+                os.close(fd)
+    except OSError:
+        return False
+    return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest() == sha
+
+
 def measure_source(repo):
-    commit = _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
-    tree = _git(repo, 'rev-parse', '--verify', 'HEAD^{tree}').decode().strip()
-    status = _git(repo, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=no')
+    """Commit, tree and whether the worktree equals HEAD byte for byte (fail closed)."""
+    commit = _git_ok(repo, 'rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
+    tree = _git_ok(repo, 'rev-parse', '--verify', 'HEAD^{tree}').decode().strip()
     require(_HEX40.fullmatch(commit) and _HEX40.fullmatch(tree), 'source_unavailable')
-    return {'commit': commit, 'tree': tree, 'clean': status == b''}
+    clean = _git_ok(repo, 'rev-parse', '--show-object-format').strip() == b'sha1'
+    # Index flags: anything but plain 'H' (skip-worktree 'S', assume-unchanged lowercase, ...) is dirty.
+    tags = [entry[:2] for entry in _git_ok(repo, 'ls-files', '-z', '-v').split(b'\0') if entry]
+    clean = clean and all(tag == b'H ' for tag in tags)
+    # Index equals HEAD's tree (compares objects only; no worktree access).
+    clean = clean and _git(repo, 'diff-index', '--cached', '--quiet', '--no-ext-diff', 'HEAD', '--').returncode == 0
+    staged = [entry for entry in _git_ok(repo, 'ls-files', '-z', '--stage').split(b'\0') if entry]
+    for entry in staged:
+        meta, path = entry.split(b'\t', 1)
+        mode, sha, stage = meta.decode().split()
+        if not clean:
+            break
+        clean = stage == '0' and mode in _MODES and _worktree_matches(repo, mode, sha, os.fsdecode(path))
+    clean = clean and _git_ok(repo, 'ls-files', '-z', '--others', '--exclude-standard') == b''
+    return {'commit': commit, 'tree': tree, 'clean': bool(clean)}
 
 
 def file_digest(path, limit=256 * 1024 * 1024):
@@ -202,8 +262,30 @@ def measure_host():
     uname = platform.uname()
     try:
         with open('/etc/machine-id', 'rb') as handle:
-            machine = handle.read(256)
+            machine = handle.read(256).strip()
     except OSError:
-        machine = b''
+        raise Refusal('identity_incomplete') from None
+    require(re.fullmatch(rb'[0-9a-f]{32}', machine) is not None, 'identity_incomplete')
     return {'os': uname.system.lower(), 'arch': uname.machine, 'kernelRelease': uname.release,
-            'hostIdSha256': hashlib.sha256(b'orca-host-id-v1\0' + machine.strip()).hexdigest()}
+            'hostIdSha256': hashlib.sha256(b'orca-host-id-v1\0' + machine).hexdigest(),
+            'requirements': _host_requirements()}
+
+
+def _host_requirements():
+    """Probe what can be probed without privilege; refuse rather than report a missing interface."""
+    require(hasattr(os, 'pidfd_open') and hasattr(os, 'P_PIDFD'), 'pidfd_unavailable')
+    try:
+        require(any(name.isdigit() for name in os.listdir('/proc')), 'procfs_unavailable')
+        with open('/proc/self/stat', 'rb') as handle:
+            fields = handle.read().rsplit(b')', 1)[1].split()
+        require(int(fields[1]) == os.getppid(), 'procfs_unavailable')
+    except (OSError, IndexError, ValueError):
+        raise Refusal('procfs_unavailable') from None
+    try:
+        with open('/proc/sys/user/max_user_namespaces', 'rb') as handle:
+            require(int(handle.read()) > 0, 'containment_unavailable')
+    except (OSError, ValueError):
+        raise Refusal('containment_unavailable') from None
+    release = tuple(int(x) for x in re.findall(r'\d+', platform.release())[:2])
+    require(len(release) == 2 and release >= (5, 12), 'containment_unavailable')  # mount_setattr(2)
+    return list(HOST_REQUIREMENTS)

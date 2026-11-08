@@ -2,7 +2,7 @@
 
 The first group mirrors limits already documented for the controlled owned-read
 lane (draft PR #809, tools/owned-read-proof): they are copied, never widened, and
-test_bounds.py pins the values. The second group consists of new bounds that only
+BoundsTests in test_reasons.py pin the values. The second group consists of new bounds that only
 restrict this preparation code; none of them extends an existing owner, run,
 trace, metadata, process or cleanup budget.
 """
@@ -32,5 +32,8 @@ AUTHORIZATION_STATEMENT_LIMIT = 16 * 1024
 PRIVATE_EVIDENCE_LIMIT = REPORT_LIMIT + CLOCK_PROBE_TRACE_LIMIT
 LOADER_MODULE_LIMIT = MAX_RUNTIME_ASSETS
 PREFLIGHT_SECONDS = 5
+SNAPSHOT_MAX_FILES = LOADER_MODULE_LIMIT + 2  # reviewed modules plus loader and manifest
+SNAPSHOT_BYTE_LIMIT = RUNTIME_ASSET_LIMIT
 PROCESS_KILL_WAIT_SECONDS = WORKER_JOIN_SECONDS
 MAX_OWNED_PROCESSES = 8
+OBSERVER_MAX_SILENCE_NS = WORKER_JOIN_SECONDS * NS  # longest allowed gap between observer records

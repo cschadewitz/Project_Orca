@@ -188,6 +188,86 @@ class LedgerTests(unittest.TestCase):
         self.assertNotIn('disposed', out)
         self.assertEqual((out['s']['status'], out['s']['reason']), ('uncertain', 'acquisition_failed'))
 
+    def test_m3_spawn_requires_a_dedicated_subreaper_supervisor(self):
+        # Reviewer M3: without subreaper mode a background descendant outlived a 'settled' ledger.
+        out = scenario('''
+            ledger = AcquisitionLedger()
+            try:
+                ledger.spawn(['/bin/sh', '-c', 'sleep 30 & exit 0'], env={}, cwd=BASE)
+            except Refusal as e:
+                out['code'] = e.code
+            out['s'] = ledger.close().report()
+        ''', self.tmp.name)
+        self.assertEqual(out['code'], 'supervisor_not_dedicated')
+        self.assertEqual(out['s']['attempted'], 0)
+
+    def test_l1_pipe_reserves_both_slots_or_acquires_nothing(self):
+        # Reviewer L1 / Cal 3: with budget 1 the second pipe end leaked and settlement said settled.
+        out = scenario('''
+            before = len(os.listdir('/proc/self/fd'))
+            ledger = AcquisitionLedger(budget=1)
+            try:
+                ledger.pipe()
+            except Refusal as e:
+                out['code'] = e.code
+            out['leaked'] = len(os.listdir('/proc/self/fd')) - before
+            out['s'] = ledger.close().report()
+            ledger = AcquisitionLedger(budget=2)
+            r, w = ledger.pipe()
+            out['ok'] = [r.fd is not None, w.fd is not None]
+            out['s2'] = ledger.close().report()
+        ''', self.tmp.name)
+        self.assertEqual((out['code'], out['leaked']), ('resource_budget_exceeded', 0))
+        self.assertEqual(out['s']['attempted'], 0)
+        self.assertEqual(out['ok'], [True, True])
+        self.assertEqual((out['s2']['status'], out['s2']['attempted']), ('settled', 2))
+
+    def test_l2_failed_reap_still_sweeps_descendants(self):
+        # Reviewer L2: an exception while reaping skipped the descendant sweep.
+        out = scenario('''
+            import ledger as L
+            ledger = L.AcquisitionLedger(subreaper=True)
+            r, w = os.pipe()
+            p = ledger.spawn(['/bin/sh', '-c', '(sleep 30 & echo $!) ; sleep 30'],
+                             env={'PATH': '/usr/bin:/bin'}, cwd=BASE, stdout=w)
+            os.close(w)
+            grand = int(os.read(r, 64).split()[0])
+            original = L.AcquisitionLedger._reap
+            def failing(self, owned):
+                original(self, owned)
+                raise Refusal('process_unsettled')
+            L.AcquisitionLedger._reap = failing
+            out['s'] = ledger.close().report()
+            out['grand'] = alive(grand)
+        ''', self.tmp.name)
+        self.assertEqual(out['s']['status'], 'uncertain')
+        self.assertFalse(out['grand'])
+
+    def test_l3_descendants_found_without_proc_children_interface(self):
+        # Reviewer L3 / Cal: /proc/*/task/*/children (CONFIG_PROC_CHILDREN) may be absent or unreliable.
+        out = scenario('''
+            import ledger as L
+            def missing(*a):
+                raise FileNotFoundError('no children file')
+            L._children_file = missing
+            with L.AcquisitionLedger(subreaper=True) as ledger:
+                r, w = os.pipe()
+                ledger.spawn(['/bin/sh', '-c', '(setsid sleep 30 & echo $!) ; sleep 30'],
+                             env={'PATH': '/usr/bin:/bin'}, cwd=BASE, stdout=w)
+                os.close(w)
+                grand = int(os.read(r, 64).split()[0])
+            out['s'] = ledger.close().report()
+            out['grand'] = alive(grand)
+            L._proc_scan = missing
+            try:
+                L.AcquisitionLedger(subreaper=True)
+            except Refusal as e:
+                out['noproc'] = e.code
+        ''', self.tmp.name)
+        self.assertEqual(out['s']['status'], 'settled')
+        self.assertFalse(out['grand'])
+        self.assertEqual(out['noproc'], 'procfs_unavailable')
+
 
 if __name__ == '__main__':
     unittest.main()

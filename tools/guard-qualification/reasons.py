@@ -23,25 +23,28 @@ REASONS = frozenset((
     'authorization_lifetime_exceeded', 'authorization_replayed', 'authorization_revoked',
     'authority_unregistered', 'authority_copied', 'context_changed', 'plan_mismatch',
     'identity_mismatch', 'lane_not_authorized', 'boundary_unknown', 'authority_closed',
-    'ledger_unavailable',
+    'ledger_unavailable', 'ledger_mismatch', 'run_envelope_mismatch',
     # ownership / cleanup
     'supervisor_not_dedicated', 'sigchld_ignored', 'pidfd_unavailable', 'acquisition_failed',
     'resource_budget_exceeded', 'cleanup_failed', 'cleanup_uncertain', 'process_unsettled',
-    'descendant_unsettled', 'ledger_closed', 'body_failed', 'preserved_unsettled',
+    'descendant_unsettled', 'ledger_closed', 'body_failed', 'preserved_unsettled', 'procfs_unavailable',
+    'evidence_write_failed',
     # containment
     'containment_unavailable', 'containment_namespace_shared', 'containment_network',
     'containment_fd_inherited', 'containment_env', 'containment_path_visible',
     'containment_root_writable', 'containment_workspace', 'containment_preflight_failed',
-    'containment_startup_failed', 'containment_spec_invalid',
+    'containment_startup_failed', 'containment_spec_invalid', 'containment_snapshot_mismatch',
+    'containment_mount_unexpected',
     # loaded code
     'loader_manifest_invalid', 'loader_digest_mismatch', 'loader_module_unlisted',
     'loader_builtin_denied', 'loader_symlink', 'loader_format_unknown', 'loader_failed',
+    'loader_flags', 'loader_compile_reference', 'loader_compile_denied',
     # journal / replay
     'journal_malformed', 'journal_oversize', 'journal_unknown_kind', 'journal_field',
     'journal_order', 'journal_incomplete', 'journal_duplicate', 'journal_attribution',
     'journal_effect_unattributed', 'journal_effect_mismatch', 'journal_timing',
     'journal_authority_check_missing', 'journal_count', 'journal_settlement', 'journal_input_changed',
-    'journal_unexpected_mutation',
+    'journal_unexpected_mutation', 'journal_observer_window',
     # composition
     'prerequisite_missing', 'live_observation_not_authorized',
 ))
@@ -53,6 +56,9 @@ _SAFE_KEYS = frozenset((
     'nativeDeliveries', 'executionsStarted', 'executionsCompleted', 'effectsObserved',
     'targetReads', 'decision', 'records', 'clean'))
 EVIDENCE_CLASSES = frozenset(('implemented', 'simulated', 'observed', 'production-qualified'))
+# A caller may only describe its result as implemented or simulated. No code path
+# here can establish 'observed', and 'production-qualified' is never emitted.
+CALLER_EVIDENCE_CLASSES = frozenset(('implemented', 'simulated'))
 
 
 class Refusal(Exception):
@@ -91,7 +97,7 @@ def _safe_value(key, value):
         if key == 'reason':
             return value in REASONS
         if key == 'evidenceClass':
-            return value in EVIDENCE_CLASSES
+            return value in CALLER_EVIDENCE_CLASSES
         return value in REASONS or re.fullmatch(r'[a-z][a-z0-9-]{0,47}', value) is not None
     return value is None
 
@@ -100,7 +106,6 @@ def public_summary(**fields):
     """Return a bounded public summary. Callers cannot set authority or eligibility fields."""
     for key, value in fields.items():
         require(key in _SAFE_KEYS and _safe_value(key, value), 'unlisted_reason')
-    require(fields.get('evidenceClass', 'implemented') != 'production-qualified', 'unlisted_reason')
     summary = dict(fields)
     summary.update(authority='none', productionEligible=False, observationAuthorized=False,
                    qualified=False)
@@ -108,14 +113,25 @@ def public_summary(**fields):
 
 
 class PrivateEvidence:
-    """Owner-only bounded evidence directory; content never enters public output."""
+    """Owner-only bounded evidence directory; content never enters public output.
+
+    Bytes are charged against the limit before they are written, so a failed or
+    partial write can never let the directory exceed it. A failed record is
+    removed; if removal also fails the store becomes unusable.
+    """
 
     def __init__(self, directory, limit=PRIVATE_EVIDENCE_LIMIT):
         require(type(limit) is int and 0 < limit <= PRIVATE_EVIDENCE_LIMIT, 'resource_budget_exceeded')
-        info = os.lstat(directory)
-        require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and
-                stat.S_IMODE(info.st_mode) == 0o700, 'acquisition_failed')
-        self._dir = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError:
+            raise Refusal('acquisition_failed') from None
+        info = os.fstat(fd)
+        if not (stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and
+                stat.S_IMODE(info.st_mode) == 0o700):
+            os.close(fd)
+            raise Refusal('acquisition_failed')
+        self._dir = fd
         self._limit, self._used, self._names = limit, 0, set()
 
     def close(self):
@@ -134,13 +150,25 @@ class PrivateEvidence:
                          0o600, dir_fd=self._dir)
         except OSError:
             raise Refusal('acquisition_failed') from None
-        try:
-            view = memoryview(data)
-            while view:
-                view = view[os.write(fd, view):]
-            os.fsync(fd)
-        finally:
-            os.close(fd)
         self._names.add(name)
-        self._used += len(data)
+        self._used += len(data)  # charged before any byte is written
+        try:
+            try:
+                view = memoryview(data)
+                while view:
+                    written = os.write(fd, view)
+                    if written <= 0:
+                        raise OSError('short write')
+                    view = view[written:]
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except OSError:
+            try:
+                os.unlink(name, dir_fd=self._dir)
+                self._used -= len(data)  # refund only once the partial record is gone
+            except OSError:
+                fd, self._dir = self._dir, None  # unaccounted state: refuse all further writes
+                os.close(fd)
+            raise Refusal('evidence_write_failed') from None
         return {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
