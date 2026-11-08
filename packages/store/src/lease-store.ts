@@ -333,6 +333,8 @@ export class FileLeaseStore implements LeaseStore {
   constructor(
     private readonly dir: string,
     readonly clock: Clock = systemClock,
+    /** How long a mutation waits for the cross-process mutex before STORE_LOCK_TIMEOUT. Defaults to the lock's own 60 s. */
+    private readonly lockTimeoutMs?: number,
   ) {}
 
   /** Resources are opaque strings; encode them so one can never escape the directory. */
@@ -343,7 +345,10 @@ export class FileLeaseStore implements LeaseStore {
   private async exclusive<T>(resource: string, action: () => Promise<T>): Promise<T> {
     await mkdir(join(this.dir, "leases"), { recursive: true });
     // A live process may be suspended inside a mutation. Age cannot safely revoke its lock.
-    return withFileLock(`${this.file(resource)}.mutation.lock`, action, { staleMs: Infinity });
+    return withFileLock(`${this.file(resource)}.mutation.lock`, action, {
+      staleMs: Infinity,
+      timeoutMs: this.lockTimeoutMs,
+    });
   }
 
   withOwnership<T>(lease: Lease, write: () => Promise<T>): Promise<T> {

@@ -199,6 +199,11 @@ export interface ControlledReadTestSupervisor {
   readonly waitBeforeSaveExpiry?: true;
   /** Short-lived real credential fixture for Save expiry/settlement controls. */
   readonly operatorCredentialTtlMs?: 5000 | 20000;
+  /**
+   * Lifetime of the original action the scenario captures, which the real-clock scenarios wait out.
+   * Defaults to 55 s, under the 60 s Save authority bound; shorter values shorten that wait only (5 s floor: setup must finish before the action lapses).
+   */
+  readonly actionTtlMs?: number;
   /** Optional test synchronization: retain final genuine lease ack until released/rejected. */
   settleOriginalDelivery?(): Promise<void>;
 }
@@ -261,6 +266,8 @@ export async function runControlledOwnedReadTest(
   assert.ok(
     operatorCredentialTtlMs === undefined || operatorCredentialTtlMs === 5000 || operatorCredentialTtlMs === 20000,
   );
+  const actionTtlMs = supervisor.actionTtlMs ?? 55000;
+  assert.ok(Number.isInteger(actionTtlMs) && actionTtlMs >= 5000 && actionTtlMs <= 55000);
   const ownerDurationMs = supervisor.ownerDurationMs;
   assert.ok(ownerDurationMs === undefined || ownerDurationMs === 300000);
   const beforeFreshAuthority = supervisor.beforeFreshAuthority?.bind(supervisor);
@@ -1154,7 +1161,7 @@ export async function runControlledOwnedReadTest(
         cwd: config,
         workspaceRef: active.workspaceRef,
         relevantStateRefs: [],
-        expiresAt: new Date(Date.now() + 55000).toISOString(),
+        expiresAt: new Date(Date.now() + actionTtlMs).toISOString(),
       };
       const original = createOriginal(snapshot);
       service = createOwnedFileReadServiceForTest({
