@@ -258,7 +258,11 @@ jobs:
             exit 1
           fi
           profile=$(mktemp -d)
-          setsid xvfb-run -a packages/app/dist/release/linux-unpacked/orca \
+          # Without an explicit target or a verified first-run selection the app opens
+          # disconnected for setup by design (src/main/index.ts), so give it a disposable
+          # workspace: that is the explicit target that makes it start its bundled daemon.
+          workspace=$(mktemp -d)
+          ORCA_WORKSPACE="$workspace" setsid xvfb-run -a packages/app/dist/release/linux-unpacked/orca \
             --user-data-dir="$profile" > app.log 2>&1 &
           app=$!
           # The display, app and bundled daemon share this job's own process group.
