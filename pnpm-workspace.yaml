@@ -19,3 +19,6 @@ allowBuilds:
   "@ibm/plex-sans": false
   "@ibm/plex-mono": false
   electron-winstaller: false
+
+patchedDependencies:
+  "@agentclientprotocol/sdk@1.8.0": patches/@agentclientprotocol__sdk@1.8.0.patch
