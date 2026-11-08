@@ -700,7 +700,39 @@ take attention only inside a window that already has focus, and nothing raises a
 anybody" is guaranteed rather than remembered. A click comes back with the item it was about
 and is resolved through the route table, like every other way of arriving at an object.
 
-## Config surface (as built, v0.5.0)
+## Config surface (as built, 0.7.0)
+
+**The configuration studio is the surface; the v0.5.0 form is its fallback.** With the
+authenticated daemon connection, or a `config.get` that carries a `formSchema`, Config is
+`ConfigurationStudioSurface` (`config/configuration-studio-surface.tsx`); only an older daemon
+gets the v0.5.0 surface described in the next section, which `config/config-surface.tsx` keeps
+as `LegacyConfigSurface`. The studio's object header holds **Launch work** (guided launch, see
+`90-setup-launch-and-maintenance.md`), then a segmented control of **Templates**, **Form** and
+**Raw**. Under the header, before the document, sit the first-run project setup and the local
+diagnostics sections (also in that file); the permission sidecar and the application preferences
+follow the document, as they did before.
+
+**Save is reviewed, and Apply is a separate act** (#332, `docs/configuration-generations.md`).
+The draft bar reads "Draft retained in this window" and carries **Validate and review**,
+**Save reviewed changes** (primary) and **Discard draft**. Validate returns a review: the
+changed paths in `mono-id` with their kind, with the values withheld, and **Review private
+YAML** to see the exact candidate bytes that Save will send. A change to permission policy adds
+one checkbox, "Confirm the reviewed permission-policy changes", and Save stays disabled until it
+is ticked. Save is `config.set` and only saves. Once a save lands, **Apply saved configuration**
+(`config.apply`) is offered on its own, gated by the method being in `hello.methods`. The
+studio prints the saved source's generation state (`active`, `pending`, `restart-required`,
+`invalid`), the saved revision and the active generation in `mono-id`, and says that Apply is
+separate from Save; with no generation it says activation status is unavailable rather than
+claiming one. "Takes effect on the next `orca serve`" below is the fallback's sentence,
+not the studio's.
+
+**Every refusal keeps the draft.** A stale target, a refused write or an unacknowledged write
+leaves the draft and the review where they were, and **Read current configuration** re-reads
+without discarding them. The bar is the same `.orca-draftbar` class as the fallback's. It is
+drawn inline, not through `DraftBar`, so the fallback's `returnFocus` rule is not wired here
+yet: that is a known gap, not a design choice.
+
+## Config surface (as built, v0.5.0 — the fallback)
 
 **Two documents, one screen** (#175, #266). `config.get` answers with `orca.config.yaml` and
 the ADR 0009 permission sidecar beside it, each with its own path, its own content-hash
