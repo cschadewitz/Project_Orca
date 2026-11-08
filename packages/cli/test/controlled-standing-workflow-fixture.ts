@@ -321,3 +321,13 @@ export async function freshWorkflowRefuses(fault: FreshWorkflowFault) {
   const stores = fileStores(join(c.base, "workspace/.orca"));
   expect(await stores.events.readTypes("controlled", ["human.answered"])).toHaveLength(1);
 }
+
+/** The scenario left no saved grant behind: no scoped rule and no approval marker. */
+export async function noSavedGrant(base: string) {
+  const document = JSON.parse(await readFile(join(base, "workspace/orca.permissions.json"), "utf8")) as {
+    scopedRules: { records: unknown[] };
+  };
+  expect(document.scopedRules.records.length).toBe(0);
+  const events = await fileStores(join(base, "workspace/.orca")).events.readTypes("controlled", ["agent.permission"]);
+  expect(events.filter((event) => event.type === "agent.permission" && event.payload.scopedApprovalRef).length).toBe(0);
+}
