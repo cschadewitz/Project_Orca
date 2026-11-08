@@ -2,11 +2,29 @@
 #
 # This is "Future step 2/3" of docs/windows-signing-runbook.md, kept apart from
 # `desktop.yml` on purpose. The ordinary Desktop lane and the release path stay unsigned and
-# untouched; only this one job, in the protected `windows-signing` environment, can ask
-# GitHub for an OIDC token, and it can only exchange that token for the Azure identity whose
-# single role is Certificate Profile Signer on one certificate profile. There is no client
-# secret anywhere: `azure/login` trades the GitHub token for an Azure CLI session, and the
-# TrustedSigning PowerShell module that electron-builder drives picks that session up.
+# untouched. There is no client secret anywhere: `azure/login` trades a GitHub OIDC token for
+# an Azure CLI session, and the TrustedSigning PowerShell module that electron-builder drives
+# picks that session up. Federation should accept only this repository's `windows-signing`
+# environment, and the Azure identity's single role is Certificate Profile Signer on one
+# certificate profile.
+#
+# Trust boundary. `id-token: write` is a job-level grant: once a job has it, *every* step in
+# that job (and every process those steps start) can request an OIDC token. So the work is
+# split in two:
+#
+#   prepare  no OIDC, no environment. Installs dependencies with their lifecycle scripts,
+#            builds the workspace, the daemon and the native addons, probes the daemon, and
+#            uploads the build output as one tarball whose SHA-256 is a job output.
+#   sign     OIDC, protected environment. Checks out the same commit, installs dependencies
+#            with `--ignore-scripts` (no dependency lifecycle code runs), refuses the tarball
+#            unless its digest matches what `prepare` reported for this run and commit, then
+#            packages and signs.
+#
+# What still runs inside the token-capable job, and so is the reviewed boundary: pnpm itself,
+# the locked electron-builder and its dependencies (including Electron's download), this
+# repository's builder hooks at the checked-out commit, the TrustedSigning module the builder
+# installs, the Windows SDK signtool and the actions pinned below. The builder integration
+# signs inner executables during packaging, so packaging cannot move out of this job.
 #
 # Manual dispatch from `main` only. The output is an artifact for inspection on a clean
 # Windows VM (runbook "Future step 4"); nothing here creates a release, uploads to a feed or
@@ -31,41 +49,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sign:
-    name: windows-signed
-    # Refuse anything but main before the environment is even requested, so a dispatch from
-    # a feature branch never reaches the reviewer or the token. The environment's own
-    # deployment-branch rule is the second, independent check.
+  prepare:
+    name: windows-signed (prepare, no OIDC)
     if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
-    environment: windows-signing
     permissions:
       contents: read
-      id-token: write
-    env:
-      WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
-      WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
-      WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
-      WINDOWS_SIGNING_PUBLISHER_CN: ${{ vars.WINDOWS_SIGNING_PUBLISHER_CN }}
+    outputs:
+      bundle-sha256: ${{ steps.bundle.outputs.sha256 }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       # The exact commit the dispatch resolved, not a moving ref.
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-
-      - name: Signing configuration is present
-        shell: bash
-        run: |
-          set -euo pipefail
-          missing=0
-          for name in WINDOWS_SIGNING_ENDPOINT WINDOWS_SIGNING_ACCOUNT WINDOWS_SIGNING_PROFILE WINDOWS_SIGNING_PUBLISHER_CN; do
-            if [ -z "${!name}" ]; then echo "::error::environment variable $name is not set on windows-signing"; missing=1; fi
-          done
-          case "$WINDOWS_SIGNING_ENDPOINT" in https://*.codesigning.azure.net/) ;; *)
-            echo "::error::WINDOWS_SIGNING_ENDPOINT must look like https://<region>.codesigning.azure.net/"; missing=1 ;;
-          esac
-          exit "$missing"
 
       - uses: pnpm/action-setup@v6
 
@@ -74,8 +72,6 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      # No Electron download cache here: a signing job should not restore state another
-      # workflow wrote.
       - run: pnpm install --frozen-lockfile
 
       - name: The version to stamp
@@ -132,8 +128,99 @@ jobs:
           done
           node tools/packaged-windows/stage-native-addons.js --headers "$headers_scratch/node-v${node_version}"
 
-      # The only step with Azure access. Everything before it ran without a token being
-      # requested; the session it creates is cleaned up by the action's post step.
+      # Every package's build output (which includes the app's dist/, the bundled daemon and
+      # the staged native addons), as one tarball. Relative paths only: GNU tar in Git Bash
+      # reads a drive-letter path as host:path.
+      - name: Bundle the build output
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -cf windows-signed-build.tar --exclude='*.tsbuildinfo' packages/*/dist
+          sha=$(sha256sum windows-signed-build.tar | cut -d' ' -f1)
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "build bundle sha256 $sha for ${{ github.sha }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-signed-build-${{ github.sha }}
+          path: windows-signed-build.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  sign:
+    name: windows-signed (sign)
+    needs: prepare
+    # Refuse anything but main before the environment is even requested, so a dispatch from
+    # a feature branch never reaches the reviewer or the token. The environment's own
+    # deployment-branch rule is the second, independent check.
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    environment: windows-signing
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+      WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+      WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
+      WINDOWS_SIGNING_PUBLISHER_CN: ${{ vars.WINDOWS_SIGNING_PUBLISHER_CN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Signing configuration is present
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in WINDOWS_SIGNING_ENDPOINT WINDOWS_SIGNING_ACCOUNT WINDOWS_SIGNING_PROFILE WINDOWS_SIGNING_PUBLISHER_CN; do
+            if [ -z "${!name}" ]; then echo "::error::environment variable $name is not set on windows-signing"; missing=1; fi
+          done
+          case "$WINDOWS_SIGNING_ENDPOINT" in https://*.codesigning.azure.net/) ;; *)
+            echo "::error::WINDOWS_SIGNING_ENDPOINT must look like https://<region>.codesigning.azure.net/"; missing=1 ;;
+          esac
+          exit "$missing"
+
+      - uses: pnpm/action-setup@v6
+
+      # No dependency cache: a signing job should not restore state another workflow wrote.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # The lockfile's exact packages, but none of their install/postinstall scripts. The
+      # build output those scripts would matter for comes from `prepare`.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-signed-build-${{ github.sha }}
+
+      # Source-bound: the tarball must be the one `prepare` built from this commit in this
+      # run, by digest, before a single file of it is unpacked.
+      - name: Verify and unpack the build output
+        shell: bash
+        env:
+          EXPECTED_SHA256: ${{ needs.prepare.outputs.bundle-sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::prepare reported no valid bundle digest"; exit 1; }
+          echo "$EXPECTED_SHA256  windows-signed-build.tar" | sha256sum -c -
+          if tar -tf windows-signed-build.tar | grep -Ev '^packages/[a-z0-9-]+/dist(/|$)' | grep -q .; then
+            echo "::error::build bundle contains paths outside packages/*/dist"; exit 1
+          fi
+          if tar -tf windows-signed-build.tar | grep -q '\.\./'; then
+            echo "::error::build bundle contains parent-directory paths"; exit 1
+          fi
+          tar -xf windows-signed-build.tar
+          rm windows-signed-build.tar
+
+      # Creates the Azure CLI session the signer uses; the action's post step logs it out.
+      # Every step of this job could request an OIDC token (see the header), which is why
+      # the steps above run no dependency lifecycle scripts.
       - name: Azure login (OIDC, no secret)
         uses: azure/login@v3
         with:
@@ -147,7 +234,7 @@ jobs:
       - name: Package and sign
         shell: bash
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           channel=latest

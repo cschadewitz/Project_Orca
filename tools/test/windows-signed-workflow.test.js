@@ -66,8 +66,9 @@ it.skipIf(process.platform === "win32")(
 it("keeps signing authority in one protected, main-only, unpublished job", () => {
   expect(Object.keys(signed.on)).toEqual(["workflow_dispatch"]);
   expect(signed.permissions).toEqual({ contents: "read" });
-  expect(Object.keys(signed.jobs)).toEqual(["sign"]);
+  expect(Object.keys(signed.jobs)).toEqual(["prepare", "sign"]);
   const job = signed.jobs.sign;
+  expect(job.needs).toBe("prepare");
   expect(job.if).toBe("github.ref == 'refs/heads/main'");
   expect(job.environment).toBe("windows-signing");
   expect(job.permissions).toEqual({ contents: "read", "id-token": "write" });
@@ -79,9 +80,47 @@ it("keeps signing authority in one protected, main-only, unpublished job", () =>
   expect(secretSteps.map((s) => s.name)).toEqual(["Azure login (OIDC, no secret)"]);
 });
 
+it("builds in a job that cannot request an OIDC token", () => {
+  const prepare = signed.jobs.prepare;
+  expect(prepare.if).toBe("github.ref == 'refs/heads/main'");
+  expect(prepare.permissions).toEqual({ contents: "read" });
+  expect(prepare.environment).toBeUndefined();
+  expect(JSON.stringify(prepare)).not.toMatch(/id-token|secrets\.|azure/i);
+  for (const name of ["Build", "Build the bundled daemon", "The bundled daemon answers authenticated hello"])
+    expect(step(signed, "prepare", name)).toBeDefined();
+  expect(prepare.steps.find((s) => s.run === "pnpm install --frozen-lockfile")).toBeDefined();
+});
+
+it("runs no dependency lifecycle scripts and restores no cache where the token is available", () => {
+  const steps = signed.jobs.sign.steps;
+  const installs = steps.filter((s) => /pnpm install/.test(s.run ?? ""));
+  expect(installs.map((s) => s.run)).toEqual(["pnpm install --frozen-lockfile --ignore-scripts"]);
+  for (const s of steps) {
+    expect(s.with?.cache).toBeUndefined();
+    expect(s.run ?? "").not.toMatch(/pnpm (run )?build\b|build:daemon|stage-native-addons/);
+  }
+});
+
+it("unpacks only the digest-checked build output of the same run, before Azure login", () => {
+  const steps = signed.jobs.sign.steps;
+  const index = (name) => steps.findIndex((s) => s.name === name);
+  const unpack = step(signed, "sign", "Verify and unpack the build output");
+  expect(unpack.env.EXPECTED_SHA256).toBe("${{ needs.prepare.outputs.bundle-sha256 }}");
+  expect(signed.jobs.prepare.outputs["bundle-sha256"]).toBe("${{ steps.bundle.outputs.sha256 }}");
+  const download = steps.find((s) => String(s.uses).startsWith("actions/download-artifact@"));
+  expect(download.with.name).toBe("windows-signed-build-${{ github.sha }}");
+  const upload = signed.jobs.prepare.steps.find((s) => String(s.uses).startsWith("actions/upload-artifact@"));
+  expect(upload.with.name).toBe(download.with.name);
+  const run = unpack.run;
+  expect(run.indexOf("sha256sum -c")).toBeGreaterThan(-1);
+  expect(run.indexOf("sha256sum -c")).toBeLessThan(run.indexOf("tar -xf"));
+  expect(index("Verify and unpack the build output")).toBeLessThan(index("Azure login (OIDC, no secret)"));
+  expect(index("Azure login (OIDC, no secret)")).toBeLessThan(index("Package and sign"));
+});
+
 it("stages native addons exactly as the unsigned Desktop lane does", () => {
   const name = "Stage native addons for all requested Windows architectures";
-  expect(step(signed, "sign", name).run).toBe(step(desktop, "package", name).run);
+  expect(step(signed, "prepare", name).run).toBe(step(desktop, "package", name).run);
 });
 
 it("leaves the ordinary Desktop lane unsigned", () => {
