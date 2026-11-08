@@ -30,10 +30,16 @@ on:
   workflow_dispatch:
     inputs:
       platform:
-        description: Platforms to package (Windows-only is preparation, not release acceptance).
+        description: Platforms to package (reduced selections are preparation, not release acceptance).
         type: choice
-        options: [all, windows]
+        options: [all, windows, windows-linux]
         default: all
+        required: true
+      linux_runner:
+        description: Linux runner pool; Tyler still requires the existing display and sandbox prerequisites.
+        type: choice
+        options: [homelab, tyler]
+        default: homelab
         required: true
 
 permissions:
@@ -61,6 +67,7 @@ jobs:
         env:
           DESKTOP_EVENT_NAME: ${{ github.event_name }}
           DESKTOP_PLATFORM: ${{ inputs.platform || 'all' }}
+          DESKTOP_LINUX_RUNNER: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_runner || 'homelab' }}
         run: |
           set -euo pipefail
           matrix=$(node tools/desktop-matrix.js)

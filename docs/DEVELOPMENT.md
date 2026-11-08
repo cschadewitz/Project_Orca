@@ -113,7 +113,18 @@ For a manual Windows packaging rehearsal, select **Desktop → Run workflow →
 platform: windows** on the branch being tested. This runs only the existing Windows
 packaging leg (both x64 and arm64); it does not install or launch either artifact
 on Windows 11. The default `all` and release workflow calls retain all three
-platforms. Record the resolved source SHA, version, run/attempt, artifact file sizes
+platforms.
+
+For Windows/Linux preparation, select **platform: windows-linux** and
+**linux_runner: tyler**. This packages both Windows architectures and the existing
+Linux targets, without a Mac packaging job. The Linux leg retains its display and
+Chromium sandbox prerequisites and packaged-app daemon-start check; provision the
+runner rather than bypassing those checks. The runner option applies only to manual
+dispatches. Defaults and release calls retain the full matrix and homelab routing;
+reusable calls reject reduced matrices or a different Linux pool. These packaging
+checks do not establish fresh-install acceptance on Windows 11 or Ubuntu 24.04.
+
+Record the resolved source SHA, version, run/attempt, artifact file sizes
 and hashes before handing a package to a tester. A fresh-workspace Windows 11 test
 does not establish existing-install update, rollback, signing or guard acceptance.
 
