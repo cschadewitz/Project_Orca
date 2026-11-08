@@ -1,1 +1,0 @@
-Reduce diagnostic metadata and report allocation churn by growing reusable payload storage to demand within the existing memory ceilings. Production capture remains disabled pending native/resource acceptance.

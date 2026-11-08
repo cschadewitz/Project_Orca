@@ -1,1 +1,0 @@
-First-run configuration review now separates local executable observations from unknown provider/version/sign-in evidence, explains ACP and recovery handoff, preserves the #594 exact-command hold, and supports cancelling an unbound review. Truncated Mach-O headers no longer imply an architecture mismatch.

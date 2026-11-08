@@ -1,1 +1,0 @@
-Windows diagnostic key wrappers now use asynchronous current-user DPAPI protection without depending on Electron's delayed first-profile Local State write. Preserved Electron wrappers retain their existing read authority. Diagnostics capture remains disabled.
