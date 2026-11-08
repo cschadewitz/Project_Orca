@@ -21,7 +21,8 @@ pnpm run typecheck           # tsc --noEmit over every package + tests, then aga
                               # a plain Node package never needs
 pnpm run lint                # eslint (type-aware) over the same set, then the CSS token
                               # check; --fix as `pnpm run lint:fix` (eslint only)
-pnpm run format              # prettier --write . (`format:check` to only report)
+pnpm run format              # prettier --write . (`format:check` to only report; runs prettier in parallel over tracked files)
+pnpm run test:durations      # refresh vitest.durations.json, the file-order seed for runners with a cold Vitest cache
 pnpm test                    # vitest: unit tests + e2e against a real ACP subprocess
 pnpm run test:coverage       # the same run, with coverage and its thresholds
 pnpm run build               # tsc -b project references -> packages/*/dist
