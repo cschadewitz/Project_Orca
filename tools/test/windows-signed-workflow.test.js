@@ -1,8 +1,11 @@
 /** The signed Windows spike: resolve its builder overrides and hold its boundaries in place. */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createRequire } from "node:module";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { verifyPackagedUpdatePublishers, verifyUpdatePublisher } from "../packaged-windows/verify-update-publisher.js";
 
 const appRequire = createRequire(new URL("../../packages/app/package.json", import.meta.url));
 const builderRequire = createRequire(appRequire.resolve("electron-builder"));
@@ -84,4 +87,49 @@ it("stages native addons exactly as the unsigned Desktop lane does", () => {
 it("leaves the ordinary Desktop lane unsigned", () => {
   expect(JSON.stringify(desktop)).not.toMatch(/azureSignOptions|id-token|forceCodeSigning/);
   expect(read("packages/app/electron-builder.yml").win.azureSignOptions).toBeUndefined();
+});
+
+describe("the packaged updater publisher check", () => {
+  const cn = "Jane Q. Example";
+  const config = (publisher) =>
+    `provider: generic\nurl: https://updates.invalid/\nchannel: latest-x64\n${publisher}updaterCacheDirName: orca-updater\n`;
+
+  it("accepts exactly the approved CN, as a list or a string", () => {
+    expect(() => verifyUpdatePublisher(config(`publisherName:\n  - ${cn}\n`), cn)).not.toThrow();
+    expect(() => verifyUpdatePublisher(config(`publisherName: "${cn}"\n`), cn)).not.toThrow();
+  });
+
+  it.each([
+    ["missing", ""],
+    ["empty", "publisherName: []\n"],
+    ["a different CN", "publisherName:\n  - Someone Else\n"],
+    ["a CN that merely contains it", `publisherName:\n  - ${cn} Ltd\n`],
+    ["an extra entry beside it", `publisherName:\n  - ${cn}\n  - Someone Else\n`],
+    ["only mentioned elsewhere", `# signed by ${cn}\n`],
+  ])("refuses a publisherName that is %s", (_, publisher) => {
+    expect(() => verifyUpdatePublisher(config(publisher), cn)).toThrow();
+  });
+
+  it("checks every packaged app-update.yml and refuses when there is none", () => {
+    const root = mkdtempSync(join(tmpdir(), "orca-update-publisher-"));
+    try {
+      expect(() => verifyPackagedUpdatePublishers(root, cn)).toThrow(/No packaged app-update.yml/);
+      const good = join(root, "win-unpacked", "resources");
+      mkdirSync(good, { recursive: true });
+      writeFileSync(join(good, "app-update.yml"), config(`publisherName:\n  - ${cn}\n`));
+      expect(verifyPackagedUpdatePublishers(root, cn)).toHaveLength(1);
+      const bad = join(root, "win-arm64-unpacked", "resources");
+      mkdirSync(bad, { recursive: true });
+      writeFileSync(join(bad, "app-update.yml"), config("publisherName:\n  - Someone Else\n"));
+      expect(() => verifyPackagedUpdatePublishers(root, cn)).toThrow(/win-arm64-unpacked/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("is what the workflow runs, for each architecture", () => {
+    expect(step(signed, "sign", "Verify signatures and updater publisher").run).toContain(
+      "node tools/packaged-windows/verify-update-publisher.js --root $root --publisher $expected",
+    );
+  });
 });

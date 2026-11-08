@@ -167,6 +167,24 @@ jobs:
               -c.win.azureSignOptions.timestampRfc3161=http://timestamp.acs.microsoft.com
           done
 
+      # The builder installs TrustedSigning with only a minimum version, so record what this
+      # run actually used. Runs even when packaging failed, since that is when it matters.
+      - name: Record signing tool versions
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          "pwsh $($PSVersionTable.PSVersion)"
+          Get-InstalledModule -Name TrustedSigning -AllVersions -ErrorAction SilentlyContinue |
+            ForEach-Object { "TrustedSigning module $($_.Version) from $($_.Repository)" }
+          $module = Get-Module -ListAvailable -Name TrustedSigning | Sort-Object Version -Descending | Select-Object -First 1
+          if ($module) {
+            "TrustedSigning loaded from $($module.ModuleBase)"
+            Get-ChildItem -Path $module.ModuleBase -Recurse -File -Include *.dll, *.exe -ErrorAction SilentlyContinue |
+              ForEach-Object { "  $($_.Name) $($_.VersionInfo.FileVersion)" }
+          } else { "::warning::TrustedSigning module not installed" }
+          "az $((az version --output json | ConvertFrom-Json).'azure-cli')"
+          "node $(node --version)"
+
       # Runner-side evidence only; the runbook's acceptance gate is a clean VM. Every .exe
       # must carry a valid, timestamped signature from the expected CN, and the packaged
       # updater config must name that publisher. Other PE files (.dll, .node) are listed
@@ -199,11 +217,9 @@ jobs:
             Get-ChildItem -Path $root -Recurse -File -Include *.dll, *.node | ForEach-Object {
               "{0,-8} {1,-6} (not gated) {2}" -f (Get-AuthenticodeSignature -LiteralPath $_.FullName).Status, $arch, $_.FullName
             }
-            $updateConfig = Get-ChildItem -Path $root -Recurse -File -Filter app-update.yml | Select-Object -First 1
-            if (-not $updateConfig) { "::error::no packaged app-update.yml under $root"; $failed = $true }
-            elseif (-not (Select-String -LiteralPath $updateConfig.FullName -SimpleMatch $expected -Quiet)) {
-              "::error::$($updateConfig.FullName) does not name publisher '$expected'"; $failed = $true
-            } else { "app-update.yml names the publisher: $($updateConfig.FullName)" }
+            # Parsed, not grepped: publisherName must be exactly the approved CN, no extra entries.
+            node tools/packaged-windows/verify-update-publisher.js --root $root --publisher $expected
+            if ($LASTEXITCODE -ne 0) { "::error::packaged updater publisher check failed for $arch"; $failed = $true }
           }
           if ($failed) { exit 1 }
 
