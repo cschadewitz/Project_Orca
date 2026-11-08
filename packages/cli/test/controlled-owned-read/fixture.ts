@@ -9,7 +9,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, expect, vi } from "vitest";
+import { afterEach, expect } from "vitest";
+import { interceptReadSync } from "../intercept-read-sync.js";
 import { resolveManagedRootBinding } from "../../src/typed-workspace-gate.js";
 import { runControlledOwnedReadTest, type ControlledReadTestSupervisor } from "./producer.js";
 
@@ -96,7 +97,7 @@ export async function supervisor(
     return undefined;
   };
   const originalRead = fs.readSync;
-  const spy = vi.spyOn(fs, "readSync").mockImplementation(((
+  const spy = interceptReadSync(((
     descriptor: number,
     bytes: NodeJS.ArrayBufferView,
     offset: number,

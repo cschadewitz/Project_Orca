@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, expect, vi } from "vitest";
+import { interceptReadSync } from "../intercept-read-sync.js";
 import { fileStores, FileLeaseStore } from "@orca/store";
 import { strictPermissionRuleRevision } from "@orca/agents";
 import type { StrictPermissionRule } from "@orca/core";
@@ -104,7 +105,7 @@ export async function supervisor(
     return undefined;
   };
   const originalRead = fs.readSync;
-  const spy = vi.spyOn(fs, "readSync").mockImplementation(((
+  const spy = interceptReadSync(((
     descriptor: number,
     bytes: NodeJS.ArrayBufferView,
     offset: number,
