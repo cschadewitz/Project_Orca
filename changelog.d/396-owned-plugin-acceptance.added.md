@@ -1,0 +1,1 @@
+- Add an authenticated trusted-only installed-plugin serve adapter and an unapproved provider-free M10 candidate/independent launcher preparation for parent-owned restart acceptance.

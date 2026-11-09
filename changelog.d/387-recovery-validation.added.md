@@ -1,0 +1,1 @@
+Added an internal, disabled recovery inventory and manifest validator for explicitly supplied owned roots, with bounded read-only observations and synthetic protected-state round-trip checks. This does not enable production backup, restore or execution recovery.

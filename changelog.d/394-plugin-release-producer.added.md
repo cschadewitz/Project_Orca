@@ -1,0 +1,1 @@
+Add local deterministic ESM plugin release candidate production with dependency graph checks and installed verifier/bootstrap coverage. Candidate digests remain unapproved; independent release approval and startup pin delivery are still required for supported custom-plugin recovery.

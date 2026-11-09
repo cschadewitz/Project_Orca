@@ -1,0 +1,1 @@
+Add an opt-in, fixture-tested authenticated daemon/MCP resource-read contract using the shared host snapshot. The proposed host telemetry grant is separate from caller-visible workstream authority and excluded from every preset; production collectors and grants remain unmounted pending policy review and integration.
