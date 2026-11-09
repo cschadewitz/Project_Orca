@@ -141,7 +141,13 @@ export function makeElf(machine) {
 export const daemon = (version) =>
   text(`// synthetic daemon\nvar ORCA_VERSION = true ? "${version}" : fallback();\nexport {};\n`);
 
-function tarHeader(name, { type = "0", size = 0, mode = 0o644, linkName = "" }) {
+const TAR_MAGIC = { posix: "ustar\x0000", gnu: "ustar  \x00", v7: "\0\0\0\0\0\0\0\0" };
+
+/** One 512-byte tar header. `format` picks the magic; `prefix` fills bytes 345-499. */
+export function tarHeader(
+  name,
+  { type = "0", size = 0, mode = 0o644, linkName = "", format = "posix", prefix = "" } = {},
+) {
   const header = Buffer.alloc(512);
   header.write(name, 0, 100, "utf8");
   header.write(mode.toString(8).padStart(7, "0") + "\0", 100, "ascii");
@@ -151,7 +157,8 @@ function tarHeader(name, { type = "0", size = 0, mode = 0o644, linkName = "" }) 
   header.write("00000000000\0", 136, "ascii");
   header.write(type, 156, "ascii");
   header.write(linkName, 157, 100, "utf8");
-  header.write("ustar\0" + "00", 257, "ascii");
+  header.write(TAR_MAGIC[format], 257, "latin1");
+  header.write(prefix, 345, 155, "utf8");
   header.fill(0x20, 148, 156);
   let sum = 0;
   for (const byte of header) sum += byte;
@@ -161,37 +168,64 @@ function tarHeader(name, { type = "0", size = 0, mode = 0o644, linkName = "" }) 
 
 const pad = (body) => Buffer.concat([body, Buffer.alloc((512 - (body.length % 512)) % 512)]);
 
-const paxRecord = (value) => {
+export const paxRecord = (value) => {
   let length = Buffer.byteLength(value) + 3;
   while (Buffer.byteLength(`${length} ${value}\n`) !== length) length = Buffer.byteLength(`${length} ${value}\n`);
   return `${length} ${value}\n`;
 };
 
-/** A gzip tar. Names over 100 bytes use a pax `path` record, as GNU tar and node-tar do. */
+/** A header plus its padded body, for hand-built tar streams. */
+export function tarBlock(name, body = "", options = {}) {
+  const bytes = Buffer.from(body);
+  return Buffer.concat([tarHeader(name, { ...options, size: bytes.length }), pad(bytes)]);
+}
+
+/** A PAX `x` header whose body is the given records (`[key, value]` pairs or raw text). */
+export const paxBlock = (records) =>
+  tarBlock(
+    "PaxHeader",
+    typeof records === "string" ? records : records.map(([key, value]) => paxRecord(`${key}=${value}`)).join(""),
+    { type: "x" },
+  );
+
+/** A GNU `L`/`K` header carrying `value` plus its terminating NUL, on GNU magic. */
+export const gnuLongBlock = (type, value) => tarBlock("././@LongLink", `${value}\0`, { type, format: "gnu" });
+
+/** Gzip hand-built blocks; `end` is what follows them (default: two zero blocks). */
+export const tarGz = (blocks, { end = Buffer.alloc(1024) } = {}) => gzipSync(Buffer.concat([...blocks, end]));
+
+/**
+ * A gzip tar. Names or link targets over 99 bytes use a pax `path`/`linkpath` record, as
+ * node-tar and GNU tar's posix format do.
+ */
 export function makeTarGz(entries, { globalPax } = {}) {
   const blocks = [];
   if (globalPax) {
-    const body = Buffer.from(
-      Object.entries(globalPax)
-        .map(([key, value]) => paxRecord(`${key}=${value}`))
-        .join(""),
-    );
-    blocks.push(tarHeader("GlobalPaxHeader", { type: "g", size: body.length }), pad(body));
+    const body = Object.entries(globalPax)
+      .map(([key, value]) => paxRecord(`${key}=${value}`))
+      .join("");
+    blocks.push(tarBlock("GlobalPaxHeader", body, { type: "g" }));
   }
   for (const entry of entries) {
     const body = entry.body ? Buffer.from(entry.body) : Buffer.alloc(0);
-    if (Buffer.byteLength(entry.name) > 99) {
-      const pax = Buffer.from(paxRecord(`path=${entry.name}`));
-      blocks.push(tarHeader("PaxHeader", { type: "x", size: pax.length }), pad(pax));
-    }
+    const records = [];
+    if (Buffer.byteLength(entry.name) > 99) records.push(["path", entry.name]);
+    if (entry.linkName && Buffer.byteLength(entry.linkName) > 99) records.push(["linkpath", entry.linkName]);
+    // Test hook: extra per-member PAX records, e.g. keys outside the contract.
+    if (entry.pax) records.push(...entry.pax);
+    if (records.length) blocks.push(paxBlock(records));
     const type = { file: "0", directory: "5", symlink: "2", hardlink: "1" }[entry.kind ?? "file"];
     blocks.push(
-      tarHeader(entry.name.slice(0, 99), { type, size: body.length, mode: entry.mode, linkName: entry.linkName }),
+      tarHeader(entry.name.slice(0, 99), {
+        type,
+        size: body.length,
+        mode: entry.mode,
+        linkName: (entry.linkName ?? "").slice(0, 99),
+      }),
     );
     if (body.length) blocks.push(pad(body));
   }
-  blocks.push(Buffer.alloc(1024));
-  return gzipSync(Buffer.concat(blocks));
+  return tarGz(blocks);
 }
 
 /** ZIP extra fields, including a valid Info-ZIP alternate Unicode pathname. */

@@ -218,6 +218,59 @@ describe("content refusals", () => {
     expect(refusal(report, linux)).toMatch(/tar_global_pax_unsupported/);
   });
 
+  describe("tar/PAX contract in a packaged Linux archive", () => {
+    const top = `ORCA-${VERSION}`;
+    const deep = `${top}/resources/${"long-directory-name/".repeat(8)}payload.txt`;
+
+    it("accepts safe long PAX paths and link targets inside the archive root", () => {
+      expect(Buffer.byteLength(deep)).toBeGreaterThan(155);
+      const report = run({
+        [linux]: linuxArchive(VERSION, "x64", {
+          extra: [
+            { name: deep, body: "x" },
+            { name: `${top}/resources/deep-link`, kind: "symlink", linkName: deep.slice(top.length + 11) },
+          ],
+        }),
+      });
+      expect(report.artifacts[0]).toMatchObject({ file: linux, status: "consistent" });
+    });
+
+    it.each([
+      ["a long PAX path", { name: `${top}/${"x/".repeat(60)}../../../../${"../".repeat(60)}escape`, body: "x" }],
+      ["a long PAX linkpath", { name: `${top}/link`, kind: "symlink", linkName: `${"../".repeat(40)}etc/passwd` }],
+    ])("refuses %s that escapes the archive root", (_, entry) => {
+      expect(refusal(run({ [linux]: linuxArchive(VERSION, "x64", { extra: [entry] }) }), linux)).toMatch(
+        /archive_path_escapes|archive_link_escapes/,
+      );
+    });
+
+    it("refuses a long path that traverses a stored symlink ancestor", () => {
+      const report = run({
+        [linux]: linuxArchive(VERSION, "x64", {
+          extra: [
+            { name: `${top}/${"a".repeat(120)}`, kind: "symlink", linkName: "." },
+            { name: `${top}/${"a".repeat(120)}/file`, body: "x" },
+          ],
+        }),
+      });
+      expect(refusal(report, linux)).toMatch(/archive_ancestor_not_directory/);
+    });
+
+    it.each([
+      ["size", "0"],
+      ["GNU.sparse.map", "0,1"],
+      ["mtime", "0"],
+    ])("refuses per-member PAX %s with a report rather than ignoring it", (key, value) => {
+      const report = run({
+        [linux]: linuxArchive(VERSION, "x64", {
+          extra: [{ name: `${top}/resources/x`, body: "x", pax: [[key, value]] }],
+        }),
+      });
+      expect(report.status).toBe("refused");
+      expect(refusal(report, linux)).toMatch(/tar_pax_key_unsupported/);
+    });
+  });
+
   it("refuses archive-root-relative ASAR link escapes in a packaged application", () => {
     const report = run({
       [linux]: linuxArchive(VERSION, "x64", { asar: appAsar(VERSION, { "extra/link": { link: "../outside" } }) }),

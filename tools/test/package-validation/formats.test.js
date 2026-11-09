@@ -15,11 +15,17 @@ import {
 } from "../../package-validation/formats.js";
 import {
   blockmap,
+  gnuLongBlock,
   makeAsar,
   makeElf,
   makePe,
   makeTarGz,
   makeZip,
+  paxBlock,
+  paxRecord,
+  tarBlock,
+  tarGz,
+  tarHeader,
   unicodePathExtra,
   updateMetadata,
   zipExtra,
@@ -81,6 +87,235 @@ describe("tar.gz", () => {
       expect(() => readTarGz(bytes)).toThrow(/tar_global_pax_unsupported/);
     },
   );
+});
+
+// The tar/PAX contract (docs/preparation/windows-linux-release-artifacts/README.md):
+// each supported form is read, everything outside it is refused with a named code.
+describe("tar.gz contract", () => {
+  const read = (blocks, options) => readTarGz(tarGz(blocks, options));
+  const names = (blocks) => read(blocks).map((m) => [m.name, m.kind, m.linkName]);
+  const longDir = `top/${"d".repeat(150)}/${"e".repeat(150)}`;
+
+  describe("supported", () => {
+    it("reads POSIX ustar files, directories, symlinks, hardlinks and the old NUL file type", () => {
+      const nulType = tarHeader("top/old", { type: "\0" });
+      expect(
+        names([
+          tarBlock("top/", "", { type: "5" }),
+          tarBlock("top/a", "x"),
+          tarBlock("top/s", "", { type: "2", linkName: "a" }),
+          tarBlock("top/h", "", { type: "1", linkName: "top/a" }),
+          nulType,
+        ]),
+      ).toEqual([
+        ["top/", "directory", undefined],
+        ["top/a", "file", undefined],
+        ["top/s", "symlink", "a"],
+        ["top/h", "hardlink", "top/a"],
+        ["top/old", "file", undefined],
+      ]);
+    });
+    it("joins the POSIX ustar prefix to the name (paths up to 255 bytes)", () => {
+      const prefix = `top/${"p".repeat(140)}`;
+      expect(names([tarBlock("file.txt", "x", { prefix })])).toEqual([[`${prefix}/file.txt`, "file", undefined]]);
+    });
+    it("reads a long PAX path and linkpath on POSIX members", () => {
+      const target = `${"t".repeat(200)}/payload`;
+      expect(
+        names([
+          paxBlock([["path", `${longDir}/file`]]),
+          tarBlock("ignored-stored-name", "x"),
+          paxBlock([
+            ["path", `${longDir}/link`],
+            ["linkpath", target],
+          ]),
+          tarBlock("ignored-link", "", { type: "2", linkName: "ignored-target" }),
+        ]),
+      ).toEqual([
+        [`${longDir}/file`, "file", undefined],
+        [`${longDir}/link`, "symlink", target],
+      ]);
+    });
+    it("reads multibyte UTF-8 PAX paths with byte-counted record lengths", () => {
+      const path = `top/${"é".repeat(80)}/file`;
+      expect(names([paxBlock([["path", path]]), tarBlock("x", "y")])).toEqual([[path, "file", undefined]]);
+    });
+    it("reads GNU L/K long names on GNU members and ignores the GNU header's prefix bytes", () => {
+      const target = `${"t".repeat(200)}/payload`;
+      // In a GNU header, bytes 345.. are atime/ctime; they must never become a path prefix.
+      const atime = "14000000000";
+      expect(
+        names([
+          gnuLongBlock("L", `${longDir}/file`),
+          tarBlock("stored", "x", { format: "gnu" }),
+          gnuLongBlock("L", `${longDir}/link`),
+          gnuLongBlock("K", target),
+          tarBlock("stored-link", "", { type: "2", linkName: "x", format: "gnu" }),
+          tarBlock("short", "x", { format: "gnu", prefix: atime }),
+        ]),
+      ).toEqual([
+        [`${longDir}/file`, "file", undefined],
+        [`${longDir}/link`, "symlink", target],
+        ["short", "file", undefined],
+      ]);
+    });
+    it("accepts zero padding after the end-of-archive marker, as tar record blocking writes it", () => {
+      expect(names([tarBlock("a", "x")], { end: Buffer.alloc(10240) })).toEqual([["a", "file", undefined]]);
+    });
+  });
+
+  describe("refused", () => {
+    const refuses = (blocks, code, options) => expect(() => read(blocks, options)).toThrow(code);
+    it.each([
+      ["size", "0"],
+      ["size", "99999"],
+      ["GNU.sparse.map", "0,512"],
+      ["GNU.sparse.major", "1"],
+      ["GNU.sparse.name", "top/real"],
+      ["GNU.sparse.realsize", "4096"],
+      ["mtime", "1700000000.5"],
+      ["atime", "1700000000"],
+      ["uid", "0"],
+      ["hdrcharset", "BINARY"],
+      ["SCHILY.xattr.user.x", "y"],
+      ["LIBARCHIVE.creationtime", "1"],
+    ])("refuses per-member PAX key %s outside the allowlist", (key, value) => {
+      refuses([paxBlock([[key, value]]), tarBlock("a", "x")], /tar_pax_key_unsupported/);
+      refuses(
+        [
+          paxBlock([
+            ["path", "top/a"],
+            [key, value],
+          ]),
+          tarBlock("a", "x"),
+        ],
+        /tar_pax_key_unsupported/,
+      );
+    });
+    it.each([
+      ["no trailing newline", "12 path=abcd", "record framing"],
+      ["length too short", "10 path=abcd\n", "record framing"],
+      ["length too long", "14 path=abcd\n", "record framing"],
+      ["leading zero", "013 path=abcd\n", "record length"],
+      ["signed length", "+13 path=abcd\n", "record length"],
+      ["missing space", "13path=abcd\n", "record length"],
+      ["no key", paxRecord("=abcd"), "record key"],
+      ["no equals", paxRecord("pathabcd"), "record key"],
+      ["empty value", paxRecord("path="), "empty path"],
+      ["trailing junk", `${paxRecord("path=top/a")}junk`, "record length"],
+      [
+        "invalid UTF-8",
+        Buffer.concat([Buffer.from("11 path="), Buffer.from([0xff, 0xfe]), Buffer.from("\n")]).toString("latin1"),
+        "record encoding",
+      ],
+      ["embedded NUL", paxRecord("path=a\0b"), "record encoding"],
+      ["embedded newline", paxRecord("path=a\nb"), "record encoding"],
+      ["duplicate key", paxRecord("path=top/a") + paxRecord("path=top/b"), "duplicate path"],
+      ["empty header", "", "empty extended header"],
+    ])("refuses PAX record framing: %s", (_, body, detail) => {
+      const block = tarBlock("PaxHeader", Buffer.from(body, "latin1"), { type: "x" });
+      refuses([block, tarBlock("a", "x")], new RegExp(`tar_pax_invalid: ${detail}`));
+    });
+    it("refuses global PAX headers, even benign ones", () => {
+      refuses([tarBlock("g", paxRecord("comment=x"), { type: "g" }), tarBlock("a", "x")], /tar_global_pax_unsupported/);
+    });
+    it.each([
+      ["x", () => [paxBlock([["path", "a"]]), paxBlock([["path", "b"]])]],
+      ["L", () => [gnuLongBlock("L", "a"), gnuLongBlock("L", "b")]],
+      ["K", () => [gnuLongBlock("K", "a"), gnuLongBlock("K", "b")]],
+    ])("refuses a repeated %s header before one member", (_, blocks) => {
+      const format = _ === "x" ? "posix" : "gnu";
+      refuses([...blocks(), tarBlock("m", "", { type: "2", linkName: "t", format })], /tar_extended_header_repeated/);
+    });
+    it.each([
+      ["x", () => paxBlock([["path", "a"]])],
+      ["L", () => gnuLongBlock("L", "a")],
+      ["K", () => gnuLongBlock("K", "a")],
+    ])("refuses a dangling %s header at the end of the archive", (_, block) => {
+      refuses(
+        [tarBlock("first", "x", { format: _ === "x" ? "posix" : "gnu" }), block()],
+        /tar_extended_header_dangling/,
+      );
+    });
+    it("refuses mixing GNU long names with PAX headers or POSIX members (no precedence rule)", () => {
+      refuses(
+        [gnuLongBlock("L", "gnu/name"), paxBlock([["path", "pax/name"]]), tarBlock("a", "x")],
+        /tar_extended_header_mixed/,
+      );
+      refuses(
+        [paxBlock([["path", "pax/name"]]), gnuLongBlock("L", "gnu/name"), tarBlock("a", "x", { format: "gnu" })],
+        /tar_extended_header_mixed/,
+      );
+      refuses([gnuLongBlock("L", "gnu/name"), tarBlock("a", "x")], /tar_extended_header_mixed/);
+      refuses([paxBlock([["path", "pax/name"]]), tarBlock("a", "x", { format: "gnu" })], /tar_extended_header_mixed/);
+      const gnuMagicPax = tarBlock("PaxHeader", paxRecord("path=a"), { type: "x", format: "gnu" });
+      refuses([gnuMagicPax, tarBlock("a", "x", { format: "gnu" })], /tar_extended_header_mixed/);
+    });
+    it("refuses link targets supplied for non-link members", () => {
+      refuses([paxBlock([["linkpath", "elsewhere"]]), tarBlock("a", "x")], /tar_extended_header_invalid/);
+      refuses(
+        [gnuLongBlock("K", "elsewhere"), tarBlock("a", "", { type: "5", format: "gnu" })],
+        /tar_extended_header_invalid/,
+      );
+    });
+    it.each([
+      ["missing NUL", "name"],
+      ["embedded NUL", "na\0me\0"],
+      ["empty", "\0"],
+    ])("refuses a malformed GNU long name: %s", (_, body) => {
+      refuses(
+        [tarBlock("././@LongLink", body, { type: "L", format: "gnu" }), tarBlock("a", "x", { format: "gnu" })],
+        /tar_gnu_long_invalid/,
+      );
+    });
+    it.each([
+      ["S", "GNU sparse"],
+      ["7", "contiguous"],
+      ["3", "character device"],
+      ["4", "block device"],
+      ["6", "FIFO"],
+      ["D", "GNU dumpdir"],
+      ["M", "GNU multivolume"],
+      ["V", "GNU volume label"],
+    ])("refuses member type %s (%s)", (type) => {
+      refuses([tarBlock("a", "", { type })], /tar_member_unsupported/);
+    });
+    it("refuses V7 and unknown header magic", () => {
+      refuses([tarBlock("a", "x", { format: "v7" })], /tar_header_unsupported/);
+      const odd = tarHeader("a");
+      odd.write("ustar\x0001", 257, "latin1");
+      let sum = 0;
+      odd.fill(0x20, 148, 156);
+      for (const byte of odd) sum += byte;
+      odd.write(sum.toString(8).padStart(6, "0") + "\0 ", 148, "ascii");
+      refuses([odd], /tar_header_unsupported/);
+    });
+    it("refuses bodies on directory and link members", () => {
+      refuses([tarBlock("d/", "x", { type: "5" })], /tar_header_invalid/);
+      refuses([tarBlock("s", "x", { type: "2", linkName: "t" })], /tar_header_invalid/);
+    });
+    it("refuses a missing, short or followed end-of-archive marker", () => {
+      refuses([tarBlock("a", "x")], /tar_end_invalid/, { end: Buffer.alloc(0) });
+      refuses([tarBlock("a", "x")], /tar_end_invalid/, { end: Buffer.alloc(512) });
+      refuses([tarBlock("a", "x")], /tar_end_invalid/, {
+        end: Buffer.concat([Buffer.alloc(1024), tarBlock("hidden", "x")]),
+      });
+      refuses([tarBlock("a", "x")], /tar_end_invalid/, { end: Buffer.concat([Buffer.alloc(1024), Buffer.from([1])]) });
+      refuses([tarBlock("a", "x")], /tar_end_invalid/, { end: Buffer.alloc(1100) });
+      refuses([tarBlock("a", "x")], /tar_end_invalid/, {
+        end: Buffer.concat([Buffer.alloc(512), tarBlock("hidden", "x"), Buffer.alloc(1024)]),
+      });
+    });
+    it("refuses a non-octal (GNU base-256) size field", () => {
+      const header = tarHeader("a");
+      header[124] = 0x80;
+      let sum = 0;
+      header.fill(0x20, 148, 156);
+      for (const byte of header) sum += byte;
+      header.write(sum.toString(8).padStart(6, "0") + "\0 ", 148, "ascii");
+      refuses([header], /tar_header_invalid/);
+    });
+  });
 });
 
 describe("zip", () => {

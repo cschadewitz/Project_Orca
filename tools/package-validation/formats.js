@@ -68,26 +68,69 @@ function octal(block, start, length) {
   return text ? Number.parseInt(text, 8) : 0;
 }
 
+/**
+ * The tar/PAX subset this reader accepts. Anything outside it is refused with a named code,
+ * never ignored. The contract and its support matrix are in
+ * docs/preparation/windows-linux-release-artifacts/README.md ("Tar/PAX contract").
+ */
+// Per-member PAX keys that are honored. Every other key (`size`, `GNU.sparse.*`, `mtime`,
+// `hdrcharset`, vendor keys...) is refused rather than silently dropped.
+const PAX_KEYS = new Set(["path", "linkpath"]);
+const MAX_PAX_BYTES = 64 * 1024;
+const MAX_LONG_NAME_BYTES = 4096 + 1;
+const POSIX_MAGIC = Buffer.from("ustar\x0000", "latin1");
+const GNU_MAGIC = Buffer.from("ustar  \x00", "latin1");
+const MEMBER_KINDS = { 0: "file", 5: "directory", 2: "symlink", 1: "hardlink" };
+
+/** Strict PAX extended-header framing: `<decimal length> <key>=<value>\n`, exactly. */
 function paxRecords(bytes) {
-  const records = {};
+  if (bytes.length > MAX_PAX_BYTES) fail("tar_pax_invalid", "extended header too large");
+  const records = Object.create(null);
   let offset = 0;
   while (offset < bytes.length) {
     const space = bytes.indexOf(0x20, offset);
-    if (space === -1) fail("tar_pax_invalid");
-    const length = Number(bytes.subarray(offset, space).toString("ascii"));
-    if (!Number.isInteger(length) || length <= 0 || offset + length > bytes.length) fail("tar_pax_invalid");
-    const record = bytes.subarray(space + 1, offset + length - 1).toString("utf8");
+    const digits = space === -1 ? "" : bytes.subarray(offset, space).toString("latin1");
+    if (!/^[1-9][0-9]{0,5}$/.test(digits)) fail("tar_pax_invalid", "record length");
+    const length = Number(digits);
+    const end = offset + length;
+    if (end > bytes.length || space + 1 >= end - 1 || bytes[end - 1] !== 0x0a)
+      fail("tar_pax_invalid", "record framing");
+    const raw = bytes.subarray(space + 1, end - 1);
+    const record = raw.toString("utf8");
+    if (!Buffer.from(record, "utf8").equals(raw) || record.includes("\0") || record.includes("\n"))
+      fail("tar_pax_invalid", "record encoding");
     const equals = record.indexOf("=");
-    if (equals === -1) fail("tar_pax_invalid");
-    records[record.slice(0, equals)] = record.slice(equals + 1);
-    offset += length;
+    if (equals <= 0) fail("tar_pax_invalid", "record key");
+    const key = record.slice(0, equals);
+    const value = record.slice(equals + 1);
+    if (!PAX_KEYS.has(key)) fail("tar_pax_key_unsupported", JSON.stringify(key));
+    if (key in records) fail("tar_pax_invalid", `duplicate ${key}`);
+    // An empty value means "delete the default" in POSIX; nothing here has a default to delete.
+    if (!value) fail("tar_pax_invalid", `empty ${key}`);
+    records[key] = value;
+    offset = end;
   }
+  if (!Object.keys(records).length) fail("tar_pax_invalid", "empty extended header");
   return records;
 }
 
+/** A GNU `L`/`K` body: the name followed by exactly one terminating NUL. */
+function gnuLongValue(body, type) {
+  if (
+    body.length < 2 ||
+    body.length > MAX_LONG_NAME_BYTES ||
+    body[body.length - 1] !== 0 ||
+    body.indexOf(0) !== body.length - 1
+  )
+    fail("tar_gnu_long_invalid", type);
+  const value = body.subarray(0, body.length - 1).toString("utf8");
+  if (!Buffer.from(value, "utf8").equals(body.subarray(0, body.length - 1))) fail("tar_gnu_long_invalid", type);
+  return value;
+}
+
 /**
- * The members of a gzip-compressed POSIX/GNU tar, in order. File bodies are views into the
- * decompressed buffer. Unknown member types and sparse files are refused.
+ * The members of a gzip-compressed tar, in order, within the contract above. File bodies
+ * are views into the decompressed buffer.
  */
 export function readTarGz(compressed) {
   let tar;
@@ -98,15 +141,21 @@ export function readTarGz(compressed) {
   }
   const members = [];
   let offset = 0;
-  let longName;
-  let longLink;
-  let pax = {};
+  // Extended headers waiting for the member they describe; at most one of each.
+  let pending = {};
+  let ended = false;
   while (offset + 512 <= tar.length) {
     const header = tar.subarray(offset, offset + 512);
-    if (header.every((byte) => byte === 0)) break;
+    if (header.every((byte) => byte === 0)) {
+      ended = true;
+      break;
+    }
     let sum = 0;
     for (let i = 0; i < 512; i++) sum += i >= 148 && i < 156 ? 0x20 : header[i];
     if (sum !== octal(header, 148, 8)) fail("tar_header_invalid", "checksum mismatch");
+    const magic = header.subarray(257, 265);
+    const format = magic.equals(POSIX_MAGIC) ? "posix" : magic.equals(GNU_MAGIC) ? "gnu" : undefined;
+    if (!format) fail("tar_header_unsupported", "neither POSIX ustar nor GNU magic");
     const type = String.fromCharCode(header[156] || 0x30);
     const size = octal(header, 124, 12);
     const bodyStart = offset + 512;
@@ -114,37 +163,48 @@ export function readTarGz(compressed) {
     if (bodyEnd > tar.length) fail("tar_truncated");
     const body = tar.subarray(bodyStart, bodyEnd);
     offset = bodyStart + Math.ceil(size / 512) * 512;
-    if (type === "L" || type === "K") {
-      const value = cString(body, 0, body.length);
-      if (type === "L") longName = value;
-      else longLink = value;
-      continue;
-    }
-    if (type === "x") {
-      pax = paxRecords(body);
-      continue;
-    }
-    // Ignoring a global linkpath/path/size changes the meaning of later members.
-    // Global PAX is outside this bounded reader's supported subset, even if benign.
+    if (offset > tar.length) fail("tar_truncated");
+    // Global PAX changes the meaning of every later member, even when it looks benign.
     if (type === "g") fail("tar_global_pax_unsupported");
-    const prefix = header.subarray(257, 263).toString("ascii").startsWith("ustar") ? cString(header, 345, 155) : "";
+    if (type === "x" || type === "L" || type === "K") {
+      // PAX headers belong to POSIX ustar members, GNU long names to GNU members. A mixed
+      // archive would need a precedence rule between them; this reader has none, so it refuses.
+      if ((type === "x") !== (format === "posix")) fail("tar_extended_header_mixed", type);
+      if (type in pending) fail("tar_extended_header_repeated", type);
+      pending[type] = type === "x" ? paxRecords(body) : gnuLongValue(body, type);
+      continue;
+    }
+    const kind = MEMBER_KINDS[type];
+    if (!kind) fail("tar_member_unsupported", `type ${JSON.stringify(type)}`);
+    if (pending.x && format !== "posix") fail("tar_extended_header_mixed", "x before a GNU member");
+    if ((pending.L !== undefined || pending.K !== undefined) && format !== "gnu")
+      fail("tar_extended_header_mixed", "GNU long name before a POSIX member");
+    // The ustar prefix (345-499) exists only in POSIX headers; in GNU headers those bytes
+    // are atime/ctime/offset fields and are never part of the name.
+    const prefix = format === "posix" ? cString(header, 345, 155) : "";
     const stored = cString(header, 0, 100);
-    const name = pax.path ?? longName ?? (prefix ? `${prefix}/${stored}` : stored);
-    const linkName = pax.linkpath ?? longLink ?? cString(header, 157, 100);
-    longName = longLink = undefined;
-    pax = {};
-    const kind = { 0: "file", 7: "file", 5: "directory", 2: "symlink", 1: "hardlink" }[type];
-    if (!kind) fail("tar_member_unsupported", `type ${JSON.stringify(type)} at ${JSON.stringify(name)}`);
+    const name = pending.x?.path ?? pending.L ?? (prefix ? `${prefix}/${stored}` : stored);
+    const isLink = kind === "symlink" || kind === "hardlink";
+    if (!isLink && (pending.x?.linkpath !== undefined || pending.K !== undefined))
+      fail("tar_extended_header_invalid", `link target on a ${kind}`);
+    if (kind !== "file" && size !== 0) fail("tar_header_invalid", `${kind} with a body`);
+    const linkName = pending.x?.linkpath ?? pending.K ?? cString(header, 157, 100);
+    pending = {};
     if (members.length >= MAX_ENTRIES) fail("tar_too_many_entries");
     members.push({
       name,
       kind,
       mode: octal(header, 100, 8),
       size,
-      linkName: kind.endsWith("link") ? linkName : undefined,
+      linkName: isLink ? linkName : undefined,
       body,
     });
   }
+  if (Object.keys(pending).length) fail("tar_extended_header_dangling", Object.keys(pending).join(""));
+  // End of archive: two zero blocks, then nothing but zero padding to the end of the stream.
+  if (!ended || offset + 1024 > tar.length) fail("tar_end_invalid", "missing end-of-archive blocks");
+  if (tar.length % 512 !== 0 || !tar.subarray(offset).every((byte) => byte === 0))
+    fail("tar_end_invalid", "data after the end-of-archive marker");
   if (!members.length) fail("tar_empty");
   return members;
 }

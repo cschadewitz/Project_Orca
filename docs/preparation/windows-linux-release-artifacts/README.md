@@ -121,8 +121,8 @@ It refuses, rather than skips, when:
 | Installer, metadata, blockmap | All three counterparts required; PE image; Authenticode table *absent → unsigned* or *present → unverified*; `latest-ARCH.yml` (stable) or `prerelease-ARCH.yml` channel, version, path, SHA-512 and size equal the supplied installer; blockmap chunks cover the installer exactly |
 | AppImage | ELF runtime for x64 and a squashfs payload marker; contents not inspected |
 
-The supported format subset is conservative. Global PAX headers are refused rather than
-ignored. ZIP per-disk and total EOCD counts must agree, and the parsed records must consume
+The supported format subset is conservative. Tar follows the [tar/PAX contract](#tarpax-contract)
+below. ZIP per-disk and total EOCD counts must agree, and the parsed records must consume
 the full declared central directory up to EOCD; its comment length must match the supplied
 bytes. Local filenames, flags and methods must agree with their central records. Both local
 and central extra-field areas are checked as bounded records: only timestamp/owner tags
@@ -148,6 +148,99 @@ Recorded, not judged: entry counts, ASAR and header digests, daemon digests per 
 (Linux vs Windows builds come from different runners and may legitimately differ),
 `app-update.yml` feed URL and whether `publisherName` is present, the Linux
 `chrome-sandbox` mode, and declaration files that ship.
+
+### Tar/PAX contract
+
+`readTarGz` (`tools/package-validation/formats.js`) reads one defined subset and refuses
+everything else with a named code. A refusal is not a partial success: the artifact is
+`refused` and so is the report. Containment, duplicate, ancestor and bounds checks in
+`inspect.js` apply unchanged to the *effective* path and link target that this contract
+produces, so a long path is checked exactly like a short one.
+
+Accepted forms:
+
+- **Compression:** one gzip stream, decompressed with a 1.5 GiB output cap.
+- **Headers:** POSIX ustar (`ustar\0` + version `00`) or old-GNU (`ustar  \0`). V7 (no
+  magic) and any other magic/version are refused (`tar_header_unsupported`). The header
+  checksum must match; numeric fields must be octal (GNU base-256 is refused).
+- **Member types:** `0` and NUL (regular file), `5` (directory), `2` (symlink), `1`
+  (hardlink). Directories and links must have size 0. Every other type is refused
+  (`tar_member_unsupported`), including `7` (contiguous), `3`/`4`/`6` (devices, FIFO) and
+  GNU `S`, `D`, `M`, `N`, `V`.
+- **Extended headers:** per-member PAX `x` only on POSIX archives' members, GNU `L`/`K` only
+  on old-GNU members. Global PAX `g` is refused (`tar_global_pax_unsupported`), even when
+  benign, because it changes the meaning of every later member.
+
+Effective names, in order of precedence within one header format:
+
+- **POSIX member:** PAX `path`, else the ustar `prefix` (bytes 345–499) + `/` + `name`, else
+  `name`. Link target: PAX `linkpath`, else the `linkname` field.
+- **Old-GNU member:** GNU `L`, else `name`. Link target: GNU `K`, else `linkname`. Bytes
+  345–499 of an old-GNU header are atime/ctime/offset fields and are **never** a prefix.
+- **GNU long names and PAX together:** there is no precedence rule between them. A PAX
+  header before a GNU member, a GNU `L`/`K` before a POSIX member, or either kind carried
+  in a header of the other format is refused (`tar_extended_header_mixed`).
+
+PAX rules:
+
+- **Key allowlist:** `path` and `linkpath` only. Any other key is refused
+  (`tar_pax_key_unsupported`). That includes `size` (POSIX lets it override the header's
+  size field; this reader takes the body length from the header and does not implement the
+  override), every `GNU.sparse.*` key (the member would otherwise be read as a regular file
+  whose body is a sparse map), `mtime`/`atime`/`ctime`, `uid`/`gid`/`uname`/`gname`,
+  `hdrcharset`, `comment`, and vendor keys (`SCHILY.*`, `LIBARCHIVE.*`). The real producer
+  output below uses no PAX at all, so nothing beyond the two long-path keys is needed.
+- **Record framing:** each record is exactly `<length> <key>=<value>\n`, where `<length>`
+  is a decimal with no sign, leading zero or padding and counts the whole record in bytes;
+  the newline must be the last byte; the records must tile the header body exactly.
+  Values must be valid UTF-8 without NUL or newline and non-empty. A key may appear once.
+  The header body is capped at 64 KiB and must hold at least one record
+  (`tar_pax_invalid`).
+- **`linkpath` (or GNU `K`) before a member that is not a link** is refused
+  (`tar_extended_header_invalid`).
+
+GNU long-name rules: the `L`/`K` body is the name plus exactly one terminating NUL, valid
+UTF-8, at most 4096 bytes of name (`tar_gnu_long_invalid`).
+
+Repeated and dangling headers: at most one `x`, one `L` and one `K` may precede one member
+(`tar_extended_header_repeated`). An extended header with no member after it is refused
+(`tar_extended_header_dangling`).
+
+End of archive: the archive must end with two zero blocks, and every byte after the first
+zero block must be zero and the stream a multiple of 512 bytes, so record padding is
+accepted but nothing can hide after the end marker (`tar_end_invalid`). A truncated body or
+header is `tar_truncated`; an archive with no members is `tar_empty`.
+
+Bounds: 100,000 members, 4096-byte effective paths and link targets (checked by
+`containedPath`/`containedLink`), 64 KiB PAX headers, 4 KiB GNU long names, the gzip output
+cap above.
+
+#### Support matrix
+
+Tests are in `tools/test/package-validation/formats.test.js` ("tar.gz contract") and
+`inspect.test.js` ("tar/PAX contract in a packaged Linux archive").
+
+| Form | Status | Evidence |
+| --- | --- | --- |
+| POSIX ustar regular files and directories, short names | **Supported** | Fixtures; real Linux x64 and arm64 `tar.gz` from main `b4f36ca` (the receipt below): all 77 headers are this form |
+| POSIX ustar symlinks and hardlinks | **Supported** | Fixtures only; the real output has none |
+| ustar `prefix` + `name` (paths to 255 bytes) | **Supported** | Fixtures only |
+| Per-member PAX `path` / `linkpath` (long and multibyte UTF-8 paths) | **Supported** | Fixtures only, including a 300-byte path, a 200-byte link target and inspector-level containment |
+| Old-GNU members with GNU `L` / `K` long names | **Supported** | Fixtures only |
+| Zero padding after the end marker (tar record blocking) | **Supported** | Fixtures; real output ends with exactly two zero blocks |
+| Long paths or link targets that escape the root, or traverse a stored link/file ancestor | **Refused** (`archive_path_escapes`, `archive_link_escapes`, `archive_ancestor_not_directory`) | Fixtures, inspector level |
+| PAX keys other than `path`/`linkpath`, including `size`, `GNU.sparse.*`, `mtime` | **Refused** (`tar_pax_key_unsupported`) | Fixtures, reader and inspector level |
+| Global PAX `g` | **Refused** (`tar_global_pax_unsupported`) | Fixtures |
+| Malformed PAX framing, duplicate keys, empty values or headers | **Refused** (`tar_pax_invalid`) | Fixtures (15 framing cases) |
+| GNU long names mixed with PAX or POSIX members | **Refused** (`tar_extended_header_mixed`) | Fixtures |
+| Repeated or dangling `x` / `L` / `K` | **Refused** | Fixtures |
+| Link target on a non-link member; body on a directory or link | **Refused** | Fixtures |
+| V7 or unknown magic; GNU base-256 numbers; types `7`, `3`, `4`, `6`, `S`, `D`, `M`, `V` and anything else | **Refused** | Fixtures |
+| Missing or short end marker; non-zero bytes or a header after it | **Refused** (`tar_end_invalid`) | Fixtures |
+| PAX `mtime`/`atime`/`ctime` alongside `path` (node-tar and GNU `--format=posix` long-path output) | **Not yet validated** | Refused today. If a future producer emits them for long paths, add them to the allowlist as validated inert decimals with tests, not by ignoring them |
+| Multi-member gzip, or bytes after the gzip stream | **Not yet validated** | Behavior is whatever Node's `gunzipSync` does; not covered by a test |
+| Real producer output that uses long names (PAX or GNU) | **Not yet validated** | The current producer emits none (77 short ustar headers) |
+| Windows `.zip` from a real producer | **Not yet validated** | Fixture-only; see "Limits" |
 
 ### Self-check on a local, non-candidate build
 
