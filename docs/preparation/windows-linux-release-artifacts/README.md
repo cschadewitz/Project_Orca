@@ -1,7 +1,8 @@
 # Windows/Linux release-artifact test plan (preparation)
 
 Preparation for [#772](https://github.com/cschadewitz/Project_Orca/issues/772). Prepared
-from main `4d5176c8d57c37f974517900935e6e28ea234082` on 27 October 2026.
+from main `4d5176c8d57c37f974517900935e6e28ea234082` on 27 October 2026; re-checked
+against main `b4f36cabbd26465ad4742dd0581976a95f0f073b` on 9 November 2026.
 
 This plan **does not choose a release version and does not designate any artifact as the
 final candidate.** Candidate acceptance is coordinated separately, and the overarching
@@ -246,29 +247,62 @@ Tests are in `tools/test/package-validation/formats.test.js` ("tar.gz contract")
 | Real producer output that uses long names (PAX or GNU) | **Not yet validated** | The current producer emits none (77 short ustar headers) |
 | Windows `.zip` from a real producer | **Not yet validated** | Fixture-only; see "Limits" |
 
-### Self-check on a local, non-candidate build
+### Real-producer compatibility receipt (9 November 2026, not a candidate)
 
-To check the helper against real electron-builder output rather than only fixtures, an
-unsigned Linux x64 `tar.gz` and AppImage were built locally from `4d5176c` with the
-repository's unmodified `electron-builder.yml`, Electron 44.9.1, Node 24.21.0 and
-`--publish never`, stamped 0.6.0 as `desktop.yml` would. These are local validation
-outputs only; they were not uploaded and are not a candidate. The helper reported all three
-supplied files (tarball, AppImage, standalone daemon) `consistent`: 1,618 tar entries;
-1,475 ASAR files with matching recorded integrity; 24 production packages; eight fonts; CSP
-equal to source; daemon stamp `0.6.0`, byte-identical in the tarball and standalone file.
-It also recorded:
+This is the decision record's real-output receipt for the final parser. It is a local
+validation build only: nothing was uploaded, and **it is not a release candidate** and
+designates nothing.
 
-- `dist/preload/index.d.cts` and dependency typings ship, because `files` excludes only
-  `*.d.ts`. Harmless; noted for the packaging owner, not changed here.
-- `chrome-sandbox` is mode `755` in the archive, not setuid. The Chromium sandbox then
-  depends on unprivileged user namespaces on the target host (see L1).
-- `app-update.yml` names the deliberately unusable `https://updates.invalid/` and has no
-  `publisherName`.
-- electron-builder also writes `latest-linux.yml`; `desktop.yml` does not upload it.
+| Item | Value |
+| --- | --- |
+| Producer source | main `b4f36cabbd26465ad4742dd0581976a95f0f073b`, clean checkout (no tracked changes), unmodified `packages/app/electron-builder.yml` |
+| Inspector | branch `claude/fervent-euler-f9zivo` at merge `ae94cfb02daaad90b43814bb08620d96d8ce8ca6` (main `b4f36ca` merged in). `tools/package-validation/` is unchanged by that merge and by every later commit on the branch: `formats.js` SHA-256 `96d900a1645aa2af921a829a86b4578c3ea1eee03df71838f1ad1517e9b345b3`, `inspect.js` `fd1e4f6d641ed84af93f48adedcc5a395c3e0dfcbfb5e984172d2654de3d0217` |
+| Host and tools | Linux x64; Node 24.21.0; pnpm 12.4.2; electron-builder / app-builder-lib 26.18.0; Electron 44.10.0; `@electron/asar` 3.4.1; node-tar 7.5.22 in the lockfile |
+| Producer commands | As `desktop.yml`'s Linux leg: `pnpm install --frozen-lockfile`, `pnpm run build`, `pnpm --filter @orca/app run build:daemon`, `pnpm --filter @orca/app exec electron-builder --publish never -c.extraMetadata.version=0.6.0`, then `cp packages/app/dist/daemon/orca-daemon.mjs packages/app/dist/release/orca-daemon-0.6.0.mjs`. The first `electron-builder` attempt failed on a `504 Gateway Time-out` from a download through the network proxy; the identical command was run once more and succeeded. No configuration was changed |
+| Artifacts (SHA-256, computed twice: `sha256sum` and `openssl dgst -sha256`, which agreed) | `ORCA-0.6.0-linux-x64.tar.gz` `b97201289cca23faf57e28627b837091dc34c43d3d5cd73ec2e7cf6882e3fd30` (123,542,523 bytes); `ORCA-0.6.0-linux-x86_64.AppImage` `f54844d74583055a07e8759fff0d8e27f3befdc691a4de688758fb90c7e0cdec` (129,970,685); `ORCA-0.6.0-linux-arm64.tar.gz` `755d683cde9f839317f1d5d09349b002cb2f7fa7b1a8db2970b35b83bd6f58d4` (124,430,156); `orca-daemon-0.6.0.mjs` `d6d1ca0d1fc342f855d21e4a20628fd8820c1c92a36cdc1b4af5dcb11cbfc0a4` (3,642,836) |
+| Command | `node tools/package-validation/inspect.js --candidate candidate.json --source <checkout at b4f36ca> --artifact <each of the four files> --out report.json` (no `--allow-partial`) |
+| Result | Exit 0, report `status: consistent`, `complete: true`, no cross-check failures. Every artifact `consistent` |
+| Negative control | The same tarball against a manifest with one changed hex digit: `refused: artifact_hash_mismatch`, exit 1 |
 
-No Windows zip or installer could be built here: Windows packaging requires the MSVC-built
-native diagnostics addons. Windows static checks are therefore exercised only on synthetic
-fixtures until run on real candidate output.
+Observations from the report and the tar headers:
+
+- **Tar form:** each `tar.gz` has 77 members (73 regular files, 4 directories), all POSIX
+  ustar headers (`ustar\0` `00`). There are no PAX (`x` or `g`) headers, no GNU `L`/`K`
+  headers, no ustar `prefix`, no links, and exactly two zero blocks after the last member.
+  The unchanged producer output sits wholly inside the "Supported" rows of the
+  [support matrix](#support-matrix); it needs none of the long-path forms.
+- **ASAR:** 1,618 entries; all 1,475 packed files carry and match whole-file and per-block
+  SHA-256 integrity, which the inspector now requires; no unpacked entries; 24 production
+  packages; eight fonts; CSP equal to the source.
+- **Daemon:** stamp `0.6.0`; byte-identical in both tarballs and the standalone file.
+- Unchanged from the earlier self-check: `dist/preload/index.d.cts` and 124 dependency
+  typings ship, because `files` excludes only `*.d.ts` (harmless; for the packaging
+  owner); `chrome-sandbox` is mode `755`, not setuid, so the Chromium sandbox depends on
+  unprivileged user namespaces on the host (see L1); `app-update.yml` names
+  `https://updates.invalid/` with no `publisherName`; electron-builder also writes
+  `latest-linux.yml`, which `desktop.yml` does not upload and the inspector was not given.
+
+Coverage and gaps:
+
+- **Covered:** Linux x64 `tar.gz` and AppImage (ELF runtime and squashfs marker only;
+  AppImage contents are not inspected), and the standalone daemon.
+- **arm64 is a gap.** The arm64 `tar.gz` above came out of the same x64 `electron-builder`
+  run, because the unmodified config lists both architectures. It passed, but it was
+  packaged on an x64 host, not by the arm64 leg of `desktop.yml`, and no arm64 AppImage is
+  configured. Treat it as a format observation, not arm64 evidence.
+- **Windows is a gap.** No Windows zip, installer, blockmap or `latest-ARCH.yml` was built:
+  Windows packaging needs the MSVC-built native diagnostics addons. Every Windows static
+  check is still fixture-only, and the ZIP subset has not met a real electron-builder zip.
+- Producer output from CI runners (as opposed to this local build) has not been inspected.
+
+### Earlier self-check (27 October 2026, superseded)
+
+Before the tar/PAX contract, an unsigned Linux x64 `tar.gz` and AppImage were built
+locally from `4d5176c` (Electron 44.9.1, Node 24.21.0, `--publish never`, stamped 0.6.0)
+and reported `consistent`. That report's "1,618 entries" was the ASAR entry count, not the
+tar member count: the tree's member count was overwritten in the report, which now has a
+separate `asarEntries`. The result predates the later parser restrictions and is kept only
+as history; the receipt above replaces it.
 
 ## Runtime procedures (not run in this preparation)
 
@@ -511,12 +545,13 @@ boundary in UPDATING.md and is not part of this plan.
 
 ## Remaining native runs
 
-None of these was run in this preparation. Each needs a disposable environment and, for the
+None of these was run in this preparation, apart from the non-candidate Linux x64 static
+receipt [above](#real-producer-compatibility-receipt-9-november-2026-not-a-candidate). Each needs a disposable environment and, for the
 update tests, a coordinator decision on N, N+1 and the test feed.
 
 | Run | Platform | Status |
 | --- | --- | --- |
-| S on real candidate output, all Windows/Linux files | Any | Not run (no candidate designated) |
+| S on real candidate output, all Windows/Linux files | Any | Not run (no candidate designated). Local non-candidate Linux x64 receipt only; arm64 and Windows are gaps |
 | L1, L2, L3 | Linux x64 and arm64 | Not run |
 | L4 | Node 24 host | Not run for a candidate (`desktop.yml` already runs it on build output) |
 | W1–W5 | Windows x64 and arm64 | Not run |
@@ -534,5 +569,8 @@ update tests, a coordinator decision on N, N+1 and the test feed.
 - It does not read AppImage (squashfs) contents, unpacked ASAR entries, or NSIS payloads.
 - The Electron runtime list is a presence check of a few core files, not a version check.
 - Window hardening is a text check of the packaged main script; L2 observes enforcement.
+- Tar input is limited to the [tar/PAX contract](#tarpax-contract). A refusal there is a
+  prompt to extend the contract with tests, or to evaluate a maintained reader in a
+  separately scoped follow-up, never to ignore the unsupported semantics.
 - Zip64 archives are refused rather than read; current Windows zips are well under its
   limits, and a refusal here is a prompt to extend the reader, not to skip the check.
