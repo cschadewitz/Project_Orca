@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { NOT_ESTABLISHED, classify, daemonVersion, inspect } from "../../package-validation/inspect.js";
 import {
+  FONTS,
   appAsar,
   appImage,
   blockmap,
@@ -268,6 +269,48 @@ describe("content refusals", () => {
       });
       expect(report.status).toBe("refused");
       expect(refusal(report, linux)).toMatch(/tar_pax_key_unsupported/);
+    });
+  });
+
+  describe("ASAR integrity and malformed packaged files (refused with a report, never a crash)", () => {
+    const withAsar = (asar) => run({ [linux]: linuxArchive(VERSION, "x64", { asar }) });
+
+    it.each([
+      ["missing on one packed file", { "dist/bridge.js": null }, /asar_integrity_missing/],
+      [
+        "missing block hashes",
+        { "dist/bridge.js": { algorithm: "SHA256", hash: "0".repeat(64) } },
+        /asar_integrity_invalid/,
+      ],
+      [
+        "a different algorithm",
+        { "dist/bridge.js": { algorithm: "SHA1", hash: "0", blockSize: 4194304, blocks: ["0"] } },
+        /asar_integrity_invalid/,
+      ],
+    ])("refuses ASAR integrity %s", (_, integrity, code) => {
+      expect(refusal(withAsar(appAsar(VERSION, {}, { integrity })), linux)).toMatch(code);
+    });
+
+    it("counts integrity on every packed file", () => {
+      const linuxResult = run({ [linux]: linuxArchive(VERSION, "x64") }).artifacts[0];
+      const files = 8 + Object.keys(FONTS).length; // appAsar's packed files plus its font faces
+      expect(linuxResult.checks).toContain(`asar-integrity:${files}-files`);
+    });
+
+    it.each([
+      ["package.json that is not JSON", { "package.json": "{not json" }, /asar_package_invalid/],
+      ["package.json that is null", { "package.json": "null" }, /asar_package_invalid/],
+      ["package.json that is an array", { "package.json": "[]" }, /asar_package_invalid/],
+      [
+        "an unpacked renderer font",
+        { "dist/renderer/assets/extra-h4sh.woff2": { unpacked: true, size: 4 } },
+        /renderer_font_unreadable/,
+      ],
+      ["an unpacked index.html", { "dist/renderer/index.html": { unpacked: true, size: 4 } }, /asar_entry_missing/],
+    ])("refuses %s", (_, overrides, code) => {
+      const report = withAsar(appAsar(VERSION, overrides));
+      expect(report.status).toBe("refused");
+      expect(refusal(report, linux)).toMatch(code);
     });
   });
 

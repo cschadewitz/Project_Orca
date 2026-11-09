@@ -70,7 +70,7 @@ export function makeSource(version) {
 }
 
 /** An ASAR archive with per-file SHA-256 integrity, in electron's header-pickle layout. */
-export function makeAsar(files, { tamper } = {}) {
+export function makeAsar(files, { tamper, integrity = {} } = {}) {
   const tree = { files: {} };
   const bodies = [];
   let offset = 0;
@@ -83,12 +83,21 @@ export function makeAsar(files, { tamper } = {}) {
       node.files[last] = { link: value.link };
       continue;
     }
+    if (value && typeof value === "object" && value.unpacked) {
+      node.files[last] = { size: value.size ?? 0, unpacked: true };
+      continue;
+    }
     const body = Buffer.from(value);
     node.files[last] = {
       size: body.length,
       offset: String(offset),
       integrity: { algorithm: "SHA256", hash: sha256(body), blockSize: 4 * 1024 * 1024, blocks: [sha256(body)] },
     };
+    // Test hook: `integrity: { [path]: null | {...} }` drops or replaces a file's record.
+    if (path in integrity) {
+      if (integrity[path] === null) delete node.files[last].integrity;
+      else node.files[last].integrity = integrity[path];
+    }
     bodies.push(body);
     offset += body.length;
   }
@@ -293,7 +302,7 @@ export function makeZip(entries, { corruptCrc } = {}) {
 }
 
 /** The ASAR contents of a packaged app at `version`, with optional deliberate defects. */
-export function appAsar(version, overrides = {}) {
+export function appAsar(version, overrides = {}, asarOptions = {}) {
   const files = {
     "package.json": JSON.stringify({
       name: "@orca/app",
@@ -315,7 +324,7 @@ export function appAsar(version, overrides = {}) {
     if (body === undefined) delete files[path];
     else files[path] = body;
   }
-  return makeAsar(files);
+  return makeAsar(files, asarOptions);
 }
 
 export { html as rendererHtml };

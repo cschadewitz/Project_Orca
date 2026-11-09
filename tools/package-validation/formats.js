@@ -360,21 +360,32 @@ export function readAsar(bytes) {
   return { files, read, headerSha256: sha256(bytes.subarray(16, 16 + length)) };
 }
 
-/** ASAR per-file integrity, where the packer recorded it: whole-file and per-block SHA-256. */
+/**
+ * ASAR per-file integrity: whole-file and per-block SHA-256. Every packed (not unpacked)
+ * file must carry a complete record; a missing or partial record is refused, not skipped.
+ * Returns the number of files checked, which is then every packed file.
+ */
 export function checkAsarIntegrity(asar) {
   let checked = 0;
   for (const [path, entry] of asar.files) {
-    if (entry.kind !== "file" || entry.unpacked || !entry.integrity) continue;
+    if (entry.kind !== "file" || entry.unpacked) continue;
+    if (!entry.integrity) fail("asar_integrity_missing", path);
     const { algorithm, hash, blockSize, blocks } = entry.integrity;
+    if (
+      algorithm !== "SHA256" ||
+      typeof hash !== "string" ||
+      !Number.isSafeInteger(blockSize) ||
+      blockSize <= 0 ||
+      !Array.isArray(blocks)
+    )
+      fail("asar_integrity_invalid", path);
     const body = asar.read(path);
-    if (algorithm !== "SHA256" || hash !== sha256(body)) fail("asar_integrity_mismatch", path);
-    if (Array.isArray(blocks) && Number.isSafeInteger(blockSize) && blockSize > 0) {
-      const expected = Math.max(1, Math.ceil(body.length / blockSize));
-      if (blocks.length !== expected) fail("asar_integrity_mismatch", path);
-      for (let i = 0; i < blocks.length; i++)
-        if (blocks[i] !== sha256(body.subarray(i * blockSize, (i + 1) * blockSize)))
-          fail("asar_integrity_mismatch", path);
-    }
+    if (hash !== sha256(body)) fail("asar_integrity_mismatch", path);
+    const expected = Math.max(1, Math.ceil(body.length / blockSize));
+    if (blocks.length !== expected) fail("asar_integrity_mismatch", path);
+    for (let i = 0; i < blocks.length; i++)
+      if (blocks[i] !== sha256(body.subarray(i * blockSize, (i + 1) * blockSize)))
+        fail("asar_integrity_mismatch", path);
     checked++;
   }
   return checked;

@@ -112,7 +112,7 @@ It refuses, rather than skips, when:
 | --- | --- |
 | Artifact-to-commit identity | Manifest SHA-256 for every file; source at manifest commit; version agreement across manifest, source, ASAR and daemon |
 | Archive contents | Every tar/zip member and link contained in the archive root; drive-prefixed/UNC link targets and traversal through stored link or file ancestors refused regardless of entry order; one `resources/app.asar`; Linux `orca` ELF / Windows `ORCA.exe` PE for the named architecture |
-| ASAR contents | Recorded per-file SHA-256 integrity; `asar-has:*` entrypoints; `asar-excludes:*` source maps, `.d.ts`, build state, `dist/daemon|release|diagnostics-native`, native addons, development packages; `asar-dependency:*` for each declared production dependency |
+| ASAR contents | Per-file SHA-256 integrity (whole file and every block) required on every packed file, a missing or partial record refused; `asar-has:*` entrypoints; `asar-excludes:*` source maps, `.d.ts`, build state, `dist/daemon|release|diagnostics-native`, native addons, development packages; `asar-dependency:*` for each declared production dependency |
 | Native dependencies and resources | `electron-runtime:*` presence; Windows `native-diagnostics:*` — exactly three `.node` PE32+ DLLs for the architecture plus a manifest that passes the packaging hook's closed check against the source; Linux has no `resources/native` |
 | Bundled daemon | Exactly one file under `resources/daemon/`, at `orca-daemon.mjs`, with one version stamp equal to the candidate; byte-identical across one runner's outputs (Linux tarballs and the standalone `.mjs`; the two Windows zips) |
 | Fonts | Every `packages/design/fonts/*.woff2` byte-identical in the packaged renderer, and no extra faces |
@@ -143,6 +143,10 @@ Member paths and link targets must use printable ASCII without reserved device n
 alternate data streams, trailing dots/spaces or `~` short-name aliases. This deliberately
 refuses uncertain spellings rather than guessing a target filesystem's Unicode or 8.3
 configuration. Linux destination indexing remains case-sensitive.
+
+An unexpected malformed packaged file (an ASAR `package.json` that is not a JSON object, an
+unpacked renderer font or entrypoint) is a named refusal in the report, not a crash: the
+report is always written and says why.
 
 Recorded, not judged: entry counts, ASAR and header digests, daemon digests per artifact
 (Linux vs Windows builds come from different runners and may legitimately differ),

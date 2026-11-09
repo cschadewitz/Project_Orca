@@ -192,6 +192,27 @@ export function daemonVersion(bytes) {
   return stamps[0][1];
 }
 
+/** A packed ASAR body, or a refusal: an absent or unpacked entry has no bytes to check. */
+function packedBody(asar, path, code = "asar_entry_missing") {
+  const body = asar.read(path);
+  if (!body) fail(code, path);
+  return body;
+}
+
+/** The packaged `package.json` as a plain object, or a refusal instead of a parser exception. */
+function asarPackageJson(asar) {
+  let manifest;
+  try {
+    manifest = JSON.parse(packedBody(asar, "package.json").toString("utf8"));
+  } catch (error) {
+    if (error instanceof ValidationError) throw error;
+    fail("asar_package_invalid", "package.json is not JSON");
+  }
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest))
+    fail("asar_package_invalid", "package.json is not an object");
+  return manifest;
+}
+
 function inspectAsar(bytes, source, expectedVersion) {
   const asar = readAsar(bytes);
   const names = [...asar.files.keys()];
@@ -207,7 +228,7 @@ function inspectAsar(bytes, source, expectedVersion) {
     const leaked = names.filter((name) => pattern.test(name));
     check(`asar-excludes:${why}`, !leaked.length, "asar_forbidden_entry", `${why}: ${leaked.slice(0, 3).join(", ")}`);
   }
-  const manifest = JSON.parse(asar.read("package.json").toString("utf8"));
+  const manifest = asarPackageJson(asar);
   check("asar-package-name", manifest.name === source.app.name, "asar_package_mismatch", "name");
   check("asar-package-main", manifest.main === source.app.main, "asar_package_mismatch", "main");
   check("asar-package-version", manifest.version === expectedVersion, "asar_version_mismatch", manifest.version);
@@ -218,7 +239,7 @@ function inspectAsar(bytes, source, expectedVersion) {
       "asar_dependency_missing",
       dependency,
     );
-  const html = asar.read("dist/renderer/index.html").toString("utf8");
+  const html = packedBody(asar, "dist/renderer/index.html").toString("utf8");
   const csp = contentSecurityPolicy(html);
   check("renderer-csp-matches-source", csp === source.csp, "csp_mismatch", csp);
   check("renderer-csp-no-unsafe", !/'unsafe-(?:inline|eval)'|\*/.test(csp), "csp_weakened", csp);
@@ -236,7 +257,7 @@ function inspectAsar(bytes, source, expectedVersion) {
       reference,
     );
   const packagedFonts = names.filter((name) => name.startsWith("dist/renderer/") && name.endsWith(".woff2"));
-  const fontDigests = new Set(packagedFonts.map((name) => sha256(asar.read(name))));
+  const fontDigests = new Set(packagedFonts.map((name) => sha256(packedBody(asar, name, "renderer_font_unreadable"))));
   for (const font of source.fonts)
     check(`renderer-font:${font.name}`, fontDigests.has(font.sha256), "renderer_font_missing", font.name);
   check(
@@ -245,7 +266,7 @@ function inspectAsar(bytes, source, expectedVersion) {
     "renderer_font_unexpected",
     `${packagedFonts.length}`,
   );
-  const main = asar.read("dist/main/index.js").toString("utf8");
+  const main = packedBody(asar, "dist/main/index.js").toString("utf8");
   // Static text only; enforcement is a runtime observation in the plan.
   check(
     "main-window-static-hardening",
