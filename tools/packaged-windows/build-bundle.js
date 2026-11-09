@@ -104,6 +104,10 @@ export function destinationFor(root, name) {
     segments.some((segment) => segment === "" || segment === "." || segment === "..")
   )
     throw new Error(`${JSON.stringify(name)} is not a path under packages/<package>/dist`);
+  // electron-builder's output directory (directories.output). Pre-seeding it could plant an
+  // installer, update metadata or a blockmap beside, or instead of, what the signer produced.
+  if (segments[1].toLowerCase() === "app" && segments[3]?.toLowerCase() === "release")
+    throw new Error(`${JSON.stringify(name)} is inside the builder's output directory`);
   const base = resolve(root);
   const target = resolve(base, ...segments);
   const rel = relative(base, target);

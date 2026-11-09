@@ -119,6 +119,8 @@ it("unpacks only the digest-checked build output of the same run, before Azure l
   expect(unpack.run).not.toMatch(/tar -[tx]|grep/);
   expect(index("Verify and unpack the build output")).toBeLessThan(index("Azure login (OIDC, no secret)"));
   expect(index("Azure login (OIDC, no secret)")).toBeLessThan(index("Package and sign"));
+  expect(index("The builder output directory is empty")).toBeLessThan(index("Package and sign"));
+  expect(step(signed, "prepare", "Bundle the build output").run).toContain("--exclude=packages/app/dist/release");
 });
 
 it("stages native addons exactly as the unsigned Desktop lane does", () => {
