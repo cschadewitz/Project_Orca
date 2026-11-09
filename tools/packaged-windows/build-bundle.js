@@ -32,19 +32,25 @@ function checksumOk(header) {
   return sum === stored;
 }
 
+// Pax record lengths count bytes, so the records are split on the raw buffer and only each
+// complete record is decoded: a multi-byte path must not shift the next record's start.
 function paxPath(data) {
   let path;
-  let rest = data.toString("utf8");
-  while (rest.length) {
-    const space = rest.indexOf(" ");
-    const length = Number.parseInt(rest.slice(0, space), 10);
-    if (!(space > 0 && length > space)) throw new Error("malformed pax header");
-    const record = rest.slice(space + 1, length - 1);
+  let offset = 0;
+  while (offset < data.length) {
+    const space = data.indexOf(0x20, offset);
+    const digits = space > offset ? data.subarray(offset, space).toString("latin1") : "";
+    const length = /^[0-9]+$/.test(digits) ? Number.parseInt(digits, 10) : NaN;
+    const end = offset + length;
+    if (!(length > space - offset + 1 && end <= data.length && data[end - 1] === 0x0a))
+      throw new Error("malformed pax header");
+    const record = data.subarray(space + 1, end - 1).toString("utf8");
     const eq = record.indexOf("=");
+    if (eq < 1) throw new Error("malformed pax header");
     const key = record.slice(0, eq);
     if (key === "path") path = record.slice(eq + 1);
     else if (key === "linkpath") throw new Error("pax linkpath is not accepted");
-    rest = rest.slice(length);
+    offset = end;
   }
   return path;
 }
@@ -142,6 +148,13 @@ export function verifyAndExtract(archivePath, expectedSha256, root) {
     seen.add(key);
     return { ...entry, target };
   });
+  // A file entry may not also be the parent of another entry (`dist/a` then `dist/a/b`),
+  // or the second write would fail after the first had landed.
+  const files = new Set(planned.filter((entry) => !entry.directory).map((entry) => entry.target.toLowerCase()));
+  for (const { name, target } of planned) {
+    for (let parent = dirname(target); parent.length > resolve(root).length; parent = dirname(parent))
+      if (files.has(parent.toLowerCase())) throw new Error(`${JSON.stringify(name)} sits under a file entry`);
+  }
   for (const { target, directory } of planned) {
     refuseLinkedParents(root, target);
     let exists = false;

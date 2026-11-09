@@ -3,11 +3,12 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { readEntries, verifyAndExtract } from "../packaged-windows/build-bundle.js";
 
-const script = new URL("../packaged-windows/build-bundle.js", import.meta.url);
+const scriptPath = fileURLToPath(new URL("../packaged-windows/build-bundle.js", import.meta.url));
 const sha = (buffer) => createHash("sha256").update(buffer).digest("hex");
 let work;
 let root;
@@ -29,7 +30,8 @@ function gnuTar(files, extra = []) {
     writeFileSync(join(src, path), content);
   }
   const out = join(work, `bundle-${Math.random().toString(16).slice(2)}.tar`);
-  execFileSync("tar", ["-cf", out, ...extra, "-C", src, ...Object.keys(files)]);
+  // Relative archive and source names: GNU tar in Git Bash reads a drive-letter path as host:path.
+  execFileSync("tar", ["-cf", basename(out), ...extra, "-C", basename(src), ...Object.keys(files)], { cwd: work });
   return out;
 }
 
@@ -131,7 +133,7 @@ it("refuses a real GNU tar symlink entry", () => {
   mkdirSync(join(src, "packages/app/dist"), { recursive: true });
   symlinkSync("../../../tools", join(src, "packages/app/dist/tools"));
   const archive = join(work, "link.tar");
-  execFileSync("tar", ["-cf", archive, "-C", src, "packages"]);
+  execFileSync("tar", ["-cf", basename(archive), "-C", basename(src), "packages"], { cwd: work });
   expect(() => run(archive)).toThrow(/not a file or directory/);
 });
 
@@ -186,16 +188,53 @@ it("honours a pax path override and judges the overriding name", () => {
   expect(() => run(archive)).toThrow(/tools\/hook\.js/);
 });
 
+it("refuses a file entry that is also another entry's parent, before writing either", () => {
+  const archive = rawTar([
+    { name: "packages/app/dist/a", data: Buffer.from("file") },
+    { name: "packages/app/dist/a/child.js", data: Buffer.from("child") },
+  ]);
+  expect(() => run(archive)).toThrow(/sits under a file entry/);
+  expect(existsSync(join(root, "packages/app/dist"))).toBe(false);
+});
+
+it("reads pax records by byte length, so a Unicode path round-trips", () => {
+  const name = `packages/app/dist/${"ü".repeat(60)}/ファイル.js`;
+  const record = (key, value) => {
+    const body = Buffer.from(` ${key}=${value}\n`);
+    let length = body.length + 2;
+    while (Buffer.byteLength(`${length}`) + body.length !== length) length++;
+    return Buffer.concat([Buffer.from(`${length}`), body]);
+  };
+  const archive = rawTar([
+    {
+      name: "PaxHeader",
+      type: "x",
+      data: Buffer.concat([record("mtime", "1"), record("path", name), record("uname", "ü")]),
+    },
+    { name: "packages/app/dist/placeholder", data: Buffer.from("u") },
+  ]);
+  expect(run(archive)).toBe(1);
+  expect(readFileSync(join(root, name), "utf8")).toBe("u");
+});
+
+it("refuses a pax record whose byte length is wrong", () => {
+  const archive = rawTar([
+    { name: "PaxHeader", type: "x", data: Buffer.from("99 path=packages/app/dist/x.js\n") },
+    { name: "packages/app/dist/x.js", data: Buffer.from("x") },
+  ]);
+  expect(() => run(archive)).toThrow(/malformed pax/);
+});
+
 it("fails closed through the command line the workflow runs", () => {
   const files = {};
   for (let i = 0; i < 5000; i++) files[`tools/overwrite-${i}.js`] = "x\n";
   const archive = gnuTar(files);
-  const args = [script.pathname, "--bundle", archive, "--sha256", sha(readFileSync(archive)), "--root", root];
+  const args = [scriptPath, "--bundle", archive, "--sha256", sha(readFileSync(archive)), "--root", root];
   expect(() => execFileSync(process.execPath, args, { stdio: "pipe" })).toThrow();
   expect(existsSync(join(root, "tools/overwrite-0.js"))).toBe(false);
   const good = gnuTar({ "packages/app/dist/main.js": "main\n" });
   const out = execFileSync(process.execPath, [
-    script.pathname,
+    scriptPath,
     "--bundle",
     good,
     "--sha256",
