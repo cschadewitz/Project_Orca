@@ -112,9 +112,11 @@ it("unpacks only the digest-checked build output of the same run, before Azure l
   expect(download.with.name).toBe("windows-signed-build-${{ github.sha }}");
   const upload = signed.jobs.prepare.steps.find((s) => String(s.uses).startsWith("actions/upload-artifact@"));
   expect(upload.with.name).toBe(download.with.name);
-  const run = unpack.run;
-  expect(run.indexOf("sha256sum -c")).toBeGreaterThan(-1);
-  expect(run.indexOf("sha256sum -c")).toBeLessThan(run.indexOf("tar -xf"));
+  expect(unpack.run).toContain(
+    'node tools/packaged-windows/build-bundle.js --bundle windows-signed-build.tar --sha256 "$EXPECTED_SHA256" --root .',
+  );
+  // No shell listing filters: those can fail open under pipefail (see build-bundle.test.js).
+  expect(unpack.run).not.toMatch(/tar -[tx]|grep/);
   expect(index("Verify and unpack the build output")).toBeLessThan(index("Azure login (OIDC, no secret)"));
   expect(index("Azure login (OIDC, no secret)")).toBeLessThan(index("Package and sign"));
 });

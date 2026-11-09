@@ -210,22 +210,16 @@ jobs:
           name: windows-signed-build-${{ github.sha }}
 
       # Source-bound: the tarball must be the one `prepare` built from this commit in this
-      # run, by digest, before a single file of it is unpacked.
+      # run, by digest. The checked-out verifier then reads every entry (files and
+      # directories only, each under packages/<pkg>/dist, no links, no duplicates, nothing
+      # that already exists) and writes nothing unless the whole archive passes.
       - name: Verify and unpack the build output
         shell: bash
         env:
           EXPECTED_SHA256: ${{ needs.prepare.outputs.bundle-sha256 }}
         run: |
           set -euo pipefail
-          [[ "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::prepare reported no valid bundle digest"; exit 1; }
-          echo "$EXPECTED_SHA256  windows-signed-build.tar" | sha256sum -c -
-          if tar -tf windows-signed-build.tar | grep -Ev '^packages/[a-z0-9-]+/dist(/|$)' | grep -q .; then
-            echo "::error::build bundle contains paths outside packages/*/dist"; exit 1
-          fi
-          if tar -tf windows-signed-build.tar | grep -q '\.\./'; then
-            echo "::error::build bundle contains parent-directory paths"; exit 1
-          fi
-          tar -xf windows-signed-build.tar
+          node tools/packaged-windows/build-bundle.js --bundle windows-signed-build.tar --sha256 "$EXPECTED_SHA256" --root .
           rm windows-signed-build.tar
 
       # Creates the Azure CLI session the signer uses; the action's post step logs it out.
