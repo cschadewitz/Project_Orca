@@ -111,6 +111,8 @@ it.each([
   ["an uppercase package name", "packages/APP/dist/x.js"],
   ["a file in the builder output directory", "packages/app/dist/release/x64/ORCA-Setup.exe"],
   ["the builder output directory, differently cased", "packages/app/dist/Release/latest-x64.yml"],
+  ["a segment with a trailing dot", "packages/app/dist/release./x.exe"],
+  ["a segment with a trailing space", "packages/app/dist/release /x.exe"],
 ])("refuses %s", (_, name) => {
   const archive = rawTar([{ name, data: Buffer.from("x\n") }]);
   expect(() => run(archive)).toThrow();

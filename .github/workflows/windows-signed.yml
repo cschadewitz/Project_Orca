@@ -220,6 +220,14 @@ jobs:
           node tools/packaged-windows/build-bundle.js --bundle windows-signed-build.tar --sha256 "$EXPECTED_SHA256" --root .
           rm windows-signed-build.tar
 
+      # The builder's output must start empty, so everything verified and uploaded below
+      # is what this job's signer produced.
+      - name: The builder output directory is empty
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -e packages/app/dist/release ] || [ -L packages/app/dist/release ]; then echo "::error::packages/app/dist/release exists before packaging"; exit 1; fi
+
       # Creates the Azure CLI session the signer uses; the action's post step logs it out.
       # Every step of this job could request an OIDC token (see the header), which is why
       # the steps above run no dependency lifecycle scripts.
@@ -229,14 +237,6 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      # The builder's output must start empty, so everything verified and uploaded below
-      # is what this job's signer produced.
-      - name: The builder output directory is empty
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -e packages/app/dist/release ]; then echo "::error::packages/app/dist/release exists before packaging"; exit 1; fi
 
       # Same per-architecture loop as desktop.yml's Package step, plus the signed-lane
       # overlay from the runbook. forceCodeSigning makes a missing or failed signature a

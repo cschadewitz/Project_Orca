@@ -119,7 +119,11 @@ it("unpacks only the digest-checked build output of the same run, before Azure l
   expect(unpack.run).not.toMatch(/tar -[tx]|grep/);
   expect(index("Verify and unpack the build output")).toBeLessThan(index("Azure login (OIDC, no secret)"));
   expect(index("Azure login (OIDC, no secret)")).toBeLessThan(index("Package and sign"));
-  expect(index("The builder output directory is empty")).toBeLessThan(index("Package and sign"));
+  expect(index("Verify and unpack the build output")).toBeLessThan(index("The builder output directory is empty"));
+  expect(index("The builder output directory is empty")).toBeLessThan(index("Azure login (OIDC, no secret)"));
+  expect(step(signed, "sign", "The builder output directory is empty").run).toMatch(
+    /\[ -e packages\/app\/dist\/release \] \|\| \[ -L packages\/app\/dist\/release \]/,
+  );
   expect(step(signed, "prepare", "Bundle the build output").run).toContain("--exclude=packages/app/dist/release");
 });
 
