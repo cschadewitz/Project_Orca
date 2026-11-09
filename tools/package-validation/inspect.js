@@ -278,7 +278,7 @@ function inspectAsar(bytes, source, expectedVersion) {
     observations: {
       asarSha256: sha256(bytes),
       asarHeaderSha256: asar.headerSha256,
-      entries: names.length,
+      asarEntries: names.length,
       unpackedEntries: names.filter((name) => asar.files.get(name).unpacked),
       // `files` excludes `*.d.ts` only; the app's own `.d.cts` and dependencies' typings ship.
       appDeclarationFiles: names.filter((name) => name.startsWith("dist/") && /\.d\.[cm]ts$/.test(name)),

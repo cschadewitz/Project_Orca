@@ -291,6 +291,12 @@ describe("content refusals", () => {
       expect(refusal(withAsar(appAsar(VERSION, {}, { integrity })), linux)).toMatch(code);
     });
 
+    it("reports tar members and ASAR entries separately", () => {
+      const { observations } = run({ [linux]: linuxArchive(VERSION, "x64") }).artifacts[0];
+      expect(observations.entries).toBe(10); // the tar members linuxArchive writes
+      expect(observations.asarEntries).toBeGreaterThan(observations.entries);
+    });
+
     it("counts integrity on every packed file", () => {
       const linuxResult = run({ [linux]: linuxArchive(VERSION, "x64") }).artifacts[0];
       const files = 8 + Object.keys(FONTS).length; // appAsar's packed files plus its font faces
