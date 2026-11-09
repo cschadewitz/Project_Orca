@@ -1,11 +1,13 @@
 /** In-place opt-in choices inside AnswerCard. No registration, transport, storage or authority creation. */
 import { useEffect, useLayoutEffect, useRef, useState, type JSX } from "react";
-import { Button, KeyValueList, ObjectId, Text } from "../ui/index.js";
+import { Button, counted, KeyValueList, ObjectId, Text } from "../ui/index.js";
 import { useTransientLayer } from "../layers-context.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import {
   copyScopedReviewScope,
+  scopedPendingExecutionWindow,
   scopedReviewUnavailable,
+  scopedSaveReviewUnavailable,
   type ScopedRuleReview,
   type ScopedRuleReviewPort,
 } from "./scoped-rule-review.js";
@@ -83,19 +85,25 @@ export function ScopedRuleChoices({
       setOutcome("Review failed. No choice was sent.");
     }
   };
-  const reason =
+  const commonReason =
     cannotWrite ??
     (lock.current
       ? phase === "settled"
         ? "Refresh authoritative state before reviewing this input again."
         : "A choice is awaiting confirmation."
-      : review
-        ? scopedReviewUnavailable(review, Date.now())
-        : "Review the exact scope first.");
+      : !review
+        ? "Review the exact scope first."
+        : undefined);
+  const reason = commonReason ?? (review ? scopedReviewUnavailable(review, Date.now()) : undefined);
+  const saveReason = commonReason ?? (review ? scopedSaveReviewUnavailable(review, Date.now()) : undefined);
+  const executionWindow = review ? scopedPendingExecutionWindow(review) : undefined;
   const choose = async (choice: "allowOnce" | "deny" | "createRule") => {
     if (lock.current || cannotWrite || !review || phase === "settled") return;
     // Denial does not require positive scope/coverage, but still requires the owner's current capability.
-    const blocked = scopedReviewUnavailable(review, Date.now());
+    const blocked =
+      choice === "createRule"
+        ? scopedSaveReviewUnavailable(review, Date.now())
+        : scopedReviewUnavailable(review, Date.now());
     if (choice !== "deny" && blocked) {
       setOutcome(blocked);
       return;
@@ -121,7 +129,11 @@ export function ScopedRuleChoices({
         setSaved(true);
         lock.current = false;
         setPhase("saved");
-      } else setPhase("settled");
+      } else {
+        // Nothing was sent on a stale result, so the input can be reviewed again; everything else stays latched.
+        if (result === "stale") lock.current = false;
+        setPhase("settled");
+      }
       const message =
         result === "confirmed"
           ? choice === "createRule"
@@ -133,7 +145,7 @@ export function ScopedRuleChoices({
             ? "Acknowledgement is uncertain. Refresh authoritative state before taking another action. Do not repeat this choice."
             : result === "stale"
               ? "The reviewed scope or authority changed. Nothing is confirmed; review again."
-              : "The choice was refused. No success is confirmed; review again.";
+              : "The choice was refused. No success is confirmed. Refresh authoritative state before taking another action.";
       setOutcome(message);
       announce(message);
     } catch {
@@ -194,6 +206,12 @@ export function ScopedRuleChoices({
                 }}
               />
               <Text style="caption">Reported coverage does not establish installed support or confirm execution.</Text>
+              {executionWindow !== undefined && (
+                <Text style="caption">
+                  The execution window starts after approval and current checks. Execution then has up to{" "}
+                  {counted(executionWindow / 1000, "second")}. Current checks may refuse this request.
+                </Text>
+              )}
               {review.decision.coverage.reference && (
                 <Text style="caption">
                   Coverage reference <ObjectId id={review.decision.coverage.reference.id} variant="full" />
@@ -215,7 +233,8 @@ export function ScopedRuleChoices({
                   <ObjectId id={review.decision.matchedRule.revision.id} variant="full" />
                 </Text>
               )}
-              {reason && <Text style="caption">{reason}</Text>}
+              {reason && <Text style="caption">Allow once: {reason}</Text>}
+              {saveReason && saveReason !== reason && <Text style="caption">Save: {saveReason}</Text>}
             </>
           )}
           {phase !== "settled" && phase !== "saved" && (
@@ -235,8 +254,8 @@ export function ScopedRuleChoices({
                     </Button>
                   </span>
                   <Button
-                    disabled={reason !== undefined || !review?.createRule}
-                    disabledReason={reason ?? "Scoped rule creation is unavailable."}
+                    disabled={saveReason !== undefined || !review?.createRule}
+                    disabledReason={saveReason ?? "Scoped rule creation is unavailable."}
                     onClick={() => void choose("createRule")}
                   >
                     Save scoped rule
@@ -264,8 +283,8 @@ export function ScopedRuleChoices({
                   </Button>
                   {!saved && (
                     <Button
-                      disabled={reason !== undefined || !review?.createRule}
-                      disabledReason={reason ?? "Scoped rule creation is unavailable."}
+                      disabled={saveReason !== undefined || !review?.createRule}
+                      disabledReason={saveReason ?? "Scoped rule creation is unavailable."}
                       onClick={() => setPhase("confirm")}
                     >
                       Create scoped rule

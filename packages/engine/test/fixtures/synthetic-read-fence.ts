@@ -72,12 +72,12 @@ export class SyntheticPolicy implements PolicyPortV1 {
   }
 }
 
-export async function syntheticReadFixture() {
+export async function syntheticReadFixture(leaseTtlMs = 60_000) {
   const clock = new FakeClock();
   const abort = new AbortController();
   const caller = new AbortController();
   const leases = new InMemoryLeaseStore(clock);
-  const lease = await leases.acquire({ resource: "run:synthetic-run", holder: "synthetic-owner", ttlMs: 60_000 });
+  const lease = await leases.acquire({ resource: "run:synthetic-run", holder: "synthetic-owner", ttlMs: leaseTtlMs });
   const store = new InMemoryExecutionStore();
   await store.putInputs({
     runId: "synthetic-run",

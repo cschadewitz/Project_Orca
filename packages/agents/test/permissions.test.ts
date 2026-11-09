@@ -71,6 +71,20 @@ function rules(kind: string, title: string, ...paths: string[]): PermissionRule[
 /** A policy of nothing but the derived rules, defaulting to "ask" so only a match allows. */
 const onlyDerived = (derived: PermissionRule[]): PermissionPolicy => ({ default: "ask", rules: derived });
 
+it("ordinary workspace reads resolve without invoking a human approval callback", async () => {
+  let asked = false;
+  const result = await resolvePermission(DEFAULT_PERMISSION_POLICY, {
+    request: req("read", "Read source", `${WS}/src/main.ts`),
+    scope: { workspaceCwd: WS },
+    ask: async () => {
+      asked = true;
+      return "once";
+    },
+  });
+  expect(result).toMatchObject({ decision: "allow", response: { outcome: { outcome: "selected", optionId: "once" } } });
+  expect(asked).toBe(false);
+});
+
 describe("deriving a rule: it must not be broader than the request", () => {
   it("scopes an edit to the one file, not to its directory and not to the filesystem", () => {
     const derived = rules("edit", "Edit agent.ts", `${WS}/packages/core/src/model/agent.ts`);

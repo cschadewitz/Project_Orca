@@ -35,14 +35,20 @@
  * connection rows that tick — is taken out of the picture below (`NO_CLOCK`) rather than
  * budgeted for in the threshold. `docs/DEVELOPMENT.md` ("Screenshot baselines") has how the
  * baselines are created and the one honest way to update them.
+ *
+ * Linux's fallback picture is a separately pinned test control, because two Linux hosts
+ * need not have the same fonts (Tyler run 41972625803). Native fallback still has its own
+ * screenshots and actual-font report as evidence. The control never supplies product
+ * fonts or changes the dev surface's fallback stacks. See `control-fonts/README.md`.
  */
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, type ViteDevServer } from "vite";
+import { controlStyle, controlFontFamilies, controlFontPlugin, renderedFonts } from "./type-proof-control.js";
 
 /**
  * `packages/app` and the repo root, from this file: test/smoke → up two and up four.
@@ -115,6 +121,7 @@ let server: ViteDevServer;
 let app: ElectronApplication;
 let page: Page;
 let userData: string;
+let controlInstalled = false;
 
 /** Run a command to completion, failing the suite if it fails (the shape `scripts/dev.js` uses). */
 function run(command: string, args: string[], cwd: string): Promise<void> {
@@ -135,6 +142,7 @@ test.beforeAll(async () => {
      people stop running. Vite picks the next free port and tells us which. */
   server = await createServer({
     configFile: join(appDir, "vite.config.ts"),
+    plugins: process.platform === "linux" ? [controlFontPlugin()] : [],
     server: { host: "127.0.0.1", strictPort: false },
   });
   await server.listen();
@@ -262,7 +270,7 @@ async function layoutSettled(): Promise<void> {
  * then measured: a detail span that still has width is a detail span that is still on the
  * picture.
  */
-async function clockIsNeutralised(): Promise<void> {
+async function clockIsNeutralised(control = false): Promise<void> {
   /* Waited for, not assumed: `evaluateAll` does not auto-wait, and a zero count would
      otherwise read as "the markup moved" when it only meant "not painted yet". */
   const ticker = page.locator(".orca-conn--reconnecting, .orca-conn--disconnected").first();
@@ -291,6 +299,25 @@ async function clockIsNeutralised(): Promise<void> {
     widths.filter((width) => width !== 0),
     "a ticking connection detail still occupies the picture",
   ).toEqual([]);
+  if (control) {
+    const details = page.locator(
+      ".orca-conn--reconnecting > span:last-child, .orca-conn--disconnected > span:last-child",
+    );
+    // Exercise the minute boundary that changes a hidden clock from one unit to two.
+    // Its geometry must stay absent regardless of the live ticker's current value.
+    for (const value of ["6m", "6m 1s ago"]) {
+      const heights = await details.evaluateAll((nodes, text) => {
+        return nodes.map((node) => {
+          const children = [...node.childNodes];
+          node.textContent = text;
+          const height = node.getBoundingClientRect().height;
+          node.replaceChildren(...children);
+          return height;
+        });
+      }, value);
+      expect(heights, "a hidden control clock still changes row height").toEqual(widths.map(() => 0));
+    }
+  }
 }
 
 /** The window showing the renderer, rather than whichever window opened first. */
@@ -329,15 +356,28 @@ async function faceReport(): Promise<FaceReport> {
 }
 
 /** Flip the bundled-faces toggle and wait for the page to say it has flipped. */
-async function setFaces(faces: "bundled" | "fallback"): Promise<void> {
+async function setFaces(faces: "bundled" | "fallback", controlled = false): Promise<void> {
   const toggle = page.getByRole("button", { name: /Bundled faces/ });
   const current = await page.locator(".type-proof").getAttribute("data-faces");
   if (current !== faces) await toggle.click();
   await expect(page.locator(".type-proof")).toHaveAttribute("data-faces", faces);
+  if (process.platform === "linux") {
+    if (faces === "fallback" && controlled && !controlInstalled) {
+      await page.addStyleTag({ content: controlStyle() });
+      controlInstalled = true;
+    }
+    await page.locator(".type-proof").evaluate(
+      (root, enabled) => {
+        root.toggleAttribute("data-control-fonts", enabled);
+      },
+      faces === "fallback" && controlled,
+    );
+  }
   await fontsSettled();
   /* Every picture goes through here, so this is the one place that guarantees none of them
      is taken mid-reflow — the toggle swaps whole families, which moves the page's height. */
   await layoutSettled();
+  if (process.platform === "linux" && faces === "fallback" && controlled) await clockIsNeutralised(true);
 }
 
 /* ------------------------------------------------------------------ the machine checks */
@@ -362,7 +402,7 @@ test("every bundled face actually loaded, rather than falling through to the OS"
   expect(unused, "a declared family was never drawn from, so the stacks are not reaching it").toEqual([]);
 });
 
-test("the toggle changes what is drawn, which is what makes the fallback column a control", async () => {
+test("the native toggle changes what is drawn without a font control", async () => {
   /* The width of every declared glyph, bundled and then fallback. If the two agree the page
      was already rendering the fallback — the bundled symbol face carries glyphs Plex and
      the OS stacks do not, so their advances cannot match by accident across the whole set.
@@ -374,6 +414,7 @@ test("the toggle changes what is drawn, which is what makes the fallback column 
   await setFaces("bundled");
   const bundled = await widths();
   await setFaces("fallback");
+  expect(await page.locator(".type-proof").getAttribute("data-control-fonts")).toBeNull();
   const fallback = await widths();
   await setFaces("bundled");
 
@@ -383,18 +424,62 @@ test("the toggle changes what is drawn, which is what makes the fallback column 
   expect(changed, "turning the bundled faces off changed nothing, so they were never on").toBeGreaterThan(0);
 });
 
+if (process.platform === "linux") {
+  // eslint-disable-next-line no-empty-pattern -- Playwright requires destructuring; Electron owns the page.
+  test("native Linux fallback remains visible as evidence", async ({}, testInfo) => {
+    await setFaces("fallback", false);
+    for (const theme of ["light", "dark"]) {
+      const path = testInfo.outputPath(`native-fallback-${theme}.png`);
+      await page.locator(`.type-proof__theme[data-theme="${theme}"]`).screenshot({ path });
+      await testInfo.attach(`native-fallback-${theme}`, {
+        path,
+        contentType: "image/png",
+      });
+    }
+    const path = testInfo.outputPath("native-fallback-fonts.json");
+    await writeFile(path, JSON.stringify(await renderedFonts(page), null, 2));
+    await testInfo.attach("native-fallback-fonts", {
+      path,
+      contentType: "application/json",
+    });
+    await setFaces("bundled");
+  });
+}
+
 /* ------------------------------------------------------------------ the pictures */
 
 for (const faces of ["bundled", "fallback"] as const) {
   for (const theme of ["light", "dark"] as const) {
-    test(`the ${theme} column with the bundled faces ${faces === "bundled" ? "on" : "off"}`, async () => {
-      await setFaces(faces);
+    // eslint-disable-next-line no-empty-pattern -- Do not request Playwright's separate browser/page fixture.
+    test(`the ${theme} column with the bundled faces ${faces === "bundled" ? "on" : "off"}`, async ({}, testInfo) => {
+      const control = process.platform === "linux" && faces === "fallback";
+      await setFaces(faces, control);
+      if (control) {
+        const report = await renderedFonts(page);
+        await testInfo.attach("control-fonts", {
+          body: JSON.stringify(report, null, 2),
+          contentType: "application/json",
+        });
+        expect(report.length, "the control must cover the glyphs large, sans and mono").toBeGreaterThan(0);
+        for (const entry of report) {
+          expect(entry.fonts.length, entry.element).toBeGreaterThan(0);
+          for (const font of entry.fonts) {
+            expect(
+              font.isCustomFont,
+              `host font leaked into the control: ${JSON.stringify(font)} ${entry.element}`,
+            ).toBe(true);
+            expect(controlFontFamilies, entry.element).toContain(font.familyName);
+          }
+        }
+      }
       /* The column as a locator, not the page: it bounds the image to the thing under test
          and leaves out the header, whose toggle caption changes with the state and whose
          link is the only interactive element on the page. */
       const column = page.locator(`.type-proof__theme[data-theme="${theme}"]`);
       await expect(column).toBeVisible();
-      await expect(column).toHaveScreenshot(`type-${faces}-${theme}.png`, { animations: "disabled" });
+      await expect(column).toHaveScreenshot(`type-${control ? "fallback-control" : faces}-${theme}.png`, {
+        animations: "disabled",
+      });
     });
   }
 }

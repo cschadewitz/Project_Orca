@@ -1,0 +1,10 @@
+        this.connection.onRequest(CommandExecutionApprovalRequest, async (params) => {
+            if (this.isStaleTurn(params.threadId, params.turnId)) {
+                return { decision: "cancel" };
+            }
+            const handler = this.approvalHandlers.get(params.threadId);
+            if (!handler) {
+                return { decision: "cancel" };
+            }
+            return await handler.handleCommandExecution(params);
+        });

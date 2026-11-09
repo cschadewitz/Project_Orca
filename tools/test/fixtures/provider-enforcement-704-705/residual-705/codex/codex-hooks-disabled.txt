@@ -1,0 +1,6 @@
+        if !enabled {
+            discovered.handlers.retain(|handler| handler.builtin);
+            // Disabled ordinary hooks must not emit warnings or reject session startup.
+            discovered.warnings.clear();
+            discovered.required_load_errors.clear();
+        }

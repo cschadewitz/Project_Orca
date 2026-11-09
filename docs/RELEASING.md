@@ -193,16 +193,16 @@ them. This is a follow-up, not an oversight, and it stays written here until it 
   come off `null`/`false` and the workflow gains a keychain step.
 
 - **Windows** shows a SmartScreen "unrecognised app" warning on the NSIS installer, and will
-  keep showing it for a while after signing starts: SmartScreen reputation is earned per
-  certificate over downloads, not granted by a signature.
+  may still show warnings after signing starts: a valid signature authenticates a publisher
+  but does not guarantee SmartScreen reputation or bypass enterprise policy.
 
-  Signing needs a code-signing certificate. Microsoft now requires the private key on an
-  HSM, so the practical routes are a cloud signing service — Azure Trusted Signing, which
-  wants **`AZURE_TENANT_ID`**, **`AZURE_CLIENT_ID`** and **`AZURE_CLIENT_SECRET`** — or a
-  token-backed certificate, which does not fit a hosted runner. A plain `.pfx` in
-  **`WINDOWS_CERTIFICATE_PFX`** with **`WINDOWS_CERTIFICATE_PASSWORD`** still works for a
-  self-signed or internal CA certificate, which is enough to test the plumbing and nothing
-  more.
+  The [Windows signing runbook](windows-signing-runbook.md) covers publisher choice,
+  Azure Artifact Signing eligibility/cost, owner-led enrollment, least-privilege OIDC CI,
+  builder 26 compatibility, timestamps, updater publisher matching and native acceptance.
+  The proposed cloud route keeps keys service-managed and needs no client secret. A
+  publicly trusted CA's cloud/HSM offering is an alternative if Azure is unsuitable;
+  self-signed/internal certificates do not establish public publisher trust. No route is
+  provisioned or enabled by the runbook.
 
 - **Linux** has nothing to sign against. An AppImage can carry a detached GPG signature, and
   almost nothing verifies one; it is not on the list.

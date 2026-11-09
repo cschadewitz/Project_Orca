@@ -9,12 +9,16 @@ export function cliHumanInput(
   return {
     async ask(q) {
       const rl = readline.createInterface({ input, output });
+      // Show what the run published, never the authoritative text: a terminal is a reader
+      // like `orca status`. Answers still resolve against the authoritative option ids.
+      const shown = q.presentation ?? q;
       try {
-        output.write(`\n[orca] ${q.kind} for run ${q.runId} / step ${q.stepRunId}\n${q.question}\n`);
-        if (q.options.length)
+        output.write(`\n[orca] ${q.kind} for run ${q.runId} / step ${q.stepRunId}\n${shown.question}\n`);
+        if (shown.options.length)
           output.write(
-            q.options.map((o, i) => `  ${i + 1}. ${o.label}${o.consequence ? ` - ${o.consequence}` : ""}`).join("\n") +
-              "\n",
+            shown.options
+              .map((o, i) => `  ${i + 1}. ${o.label}${o.consequence ? ` - ${o.consequence}` : ""}`)
+              .join("\n") + "\n",
           );
         for (;;) {
           if (q.signal?.aborted) throw humanInputCancelled(q.signal);

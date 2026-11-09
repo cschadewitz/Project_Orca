@@ -42,11 +42,30 @@ afterEach(async () => {
   for (const server of servers.splice(0)) await new Promise<void>((resolve) => server.close(() => resolve()));
   for (const path of roots.splice(0)) await rm(path, { recursive: true, force: true });
 });
+async function availableWorkspace() {
+  let occupied: unknown;
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const root = await mkdtemp(join(process.cwd(), ".orca-same-boot-test-"));
+    roots.push(root);
+    const path = join(root, "workspace");
+    await mkdir(path);
+    let fence;
+    try {
+      // Select a fresh disposable identity before reservation; production keeps its fixed mapping.
+      fence = await acquireFirstRunFence(fenceDirectory(path), () => undefined);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+      occupied = error;
+      await rm(root, { recursive: true, force: true });
+      continue;
+    }
+    await new Promise<void>((resolve) => fence.close(() => resolve()));
+    return { root, path };
+  }
+  throw new Error("No free initial fixture fence after 16 fresh workspaces", { cause: occupied });
+}
 async function fixture() {
-  const root = await mkdtemp(join(process.cwd(), ".orca-same-boot-test-"));
-  roots.push(root);
-  const path = join(root, "workspace");
-  await mkdir(path);
+  const { root, path } = await availableWorkspace();
   await writeFile(
     join(path, "orca.config.yaml"),
     JSON.stringify({

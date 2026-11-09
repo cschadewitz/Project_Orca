@@ -1,0 +1,7 @@
+{
+  "defaultGenerateMap": null,
+  "patched_1_2_2": "rejected: Section offset line must not exceed 10000000.",
+  "embedded_via_explicit_inputSourceMap": "accepted (composed map returned)",
+  "patched_fractional": "rejected: Section offset line and column must be non-negative integers.",
+  "embedded_fractional": "accepted"
+}

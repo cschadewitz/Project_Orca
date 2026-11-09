@@ -14,7 +14,10 @@ import { PERMISSION_ASK } from "./fixtures-inputs.js";
 
 const publicId = "00000000-0000-4000-8000-000000000001";
 const complete = <T,>(value: T) => ({ state: "complete", value });
-function view(patch: Record<string, unknown> = {}) {
+function view(
+  patch: Record<string, unknown> = {},
+  reference: (kind: string) => { id: string } = () => ({ id: publicId }),
+) {
   return projectGuardDecision(
     {
       coverage: {
@@ -42,8 +45,41 @@ function view(patch: Record<string, unknown> = {}) {
       unsupported: complete(false),
       ...patch,
     },
-    { requiredDisclosure: () => "complete", reference: () => ({ id: publicId }) },
+    { requiredDisclosure: () => "complete", reference },
     Date.now(),
+  );
+}
+const ruleIds: Record<string, string> = {
+  coverage: "00000000-0000-4000-8000-0000000000c0",
+  rule: "00000000-0000-4000-8000-0000000000a1",
+  revision: "00000000-0000-4000-8000-0000000000b2",
+};
+/** A stored-rule allow matched by a specific rule revision; every private reference is replaced. */
+function matched(patch: Record<string, unknown> = {}) {
+  const stamp = {
+    capturedGeneration: "g",
+    currentPolicyRevision: "p",
+    authorityRevision: "a",
+    revocationEpoch: "r",
+    leaseEpoch: "l",
+  };
+  return view(
+    {
+      verdict: {
+        version: 1,
+        actionBindingRef: "private-binding",
+        coverageId: "private-coverage",
+        authority: stamp,
+        outcome: "allow",
+        authorizedBy: { kind: "rule", ruleId: "private-rule-SECRET", ruleRevision: "private-revision-SECRET" },
+      },
+      currentAuthority: complete(true),
+      authorityKind: complete("stored-rule"),
+      expiresAt: complete(new Date(Date.now() + 3_600_000).toISOString()),
+      revocation: complete("active"),
+      ...patch,
+    },
+    (kind) => ({ id: ruleIds[kind] ?? publicId }),
   );
 }
 function reviewed(patch: Partial<ScopedRuleReview> = {}): ScopedRuleReview {
@@ -230,6 +266,125 @@ describe("inactive scoped choices in the existing permission card", () => {
     await open();
     expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).toBe("true");
+  });
+  it("requests fresh checks for a coherent pending intent without claiming review or execution passed", async () => {
+    const review = reviewed({ requiredReview: "unavailable", pendingExecutionIntent: true, executionWindowMs: 55000 });
+    const host = mount(review);
+    await open();
+    expect(screen.getByText(/execution window starts after approval and current checks/).textContent).toContain(
+      "55\u00a0seconds",
+    );
+    expect(screen.getByText(/Current checks may refuse this request/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).not.toBe("true");
+    expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).toBe("true");
+    expect(review.allowOnce).not.toHaveBeenCalled();
+    click("Allow once");
+    await screen.findByText(/One-time answer recorded.*Execution is not confirmed/);
+    expect(review.allowOnce).toHaveBeenCalledTimes(1);
+    expect(review.createRule).not.toHaveBeenCalled();
+    expect(host.onAnswer).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["missing flag", { pendingExecutionIntent: undefined }],
+    ["false flag", { pendingExecutionIntent: false as never }],
+    ["missing window", { executionWindowMs: undefined }],
+    ["zero window", { executionWindowMs: 0 }],
+    ["negative window", { executionWindowMs: -1 }],
+    ["oversize window", { executionWindowMs: 60001 }],
+    ["fractional window", { executionWindowMs: 1.5 }],
+    ["NaN window", { executionWindowMs: NaN }],
+    ["infinite window", { executionWindowMs: Infinity }],
+    ["failed review", { requiredReview: "failed" as const }],
+    ["stale", { isCurrent: () => false }],
+    ["expired handle", { reviewUntil: 1 }],
+    ["expired grant", { decision: view({ expiresAt: complete("2020-01-01T00:00:00Z") }) }],
+    ["revoked", { decision: view({ revocation: complete("revoked") }) }],
+    ["unsupported", { decision: view({ unsupported: complete(true) }) }],
+    ["unverified", { decision: view({ coverage: undefined }) }],
+    [
+      "withheld disclosure",
+      {
+        decision: projectGuardDecision(
+          {},
+          { requiredDisclosure: () => "unavailable", reference: () => undefined },
+          Date.now(),
+        ),
+      },
+    ],
+    ["missing owner capability", { allowOnce: undefined }],
+  ] as const)("pending execution does not bypass %s", async (_name, patch) => {
+    const review = reviewed({
+      requiredReview: "unavailable",
+      pendingExecutionIntent: true,
+      executionWindowMs: 55000,
+      ...patch,
+    });
+    mount(review);
+    await open();
+    expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).toBe("true");
+    click("Allow once");
+    if (review.allowOnce) expect(review.allowOnce).not.toHaveBeenCalled();
+    expect(review.createRule).not.toHaveBeenCalled();
+  });
+  it("keeps Deny independent and Save eligibility unchanged when the execution projection is malformed", async () => {
+    const review = reviewed({
+      requiredReview: "unavailable",
+      pendingExecutionIntent: true,
+      saveEligibility: "eligible",
+    });
+    mount(review);
+    await open();
+    expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).toBe("true");
+    expect(screen.queryByText(/execution window starts/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).not.toBe("true");
+    click("Deny");
+    await screen.findByText(/Denial recorded/);
+    expect(review.deny).toHaveBeenCalledTimes(1);
+    expect(review.allowOnce).not.toHaveBeenCalled();
+    expect(review.createRule).not.toHaveBeenCalled();
+  });
+  it("a pending intent rechecks the owner capability when Allow once is selected", async () => {
+    let current = true;
+    const review = reviewed({
+      requiredReview: "unavailable",
+      pendingExecutionIntent: true,
+      executionWindowMs: 60000,
+      isCurrent: () => current,
+    });
+    mount(review);
+    await open();
+    current = false;
+    click("Allow once");
+    expect(review.allowOnce).not.toHaveBeenCalled();
+    expect(screen.getByText(/This review is stale/)).toBeTruthy();
+  });
+  it.each([
+    ["stale", { isCurrent: () => false }],
+    ["revoked", { decision: view({ revocation: complete("revoked") }) }],
+    ["unverified", { decision: view({ coverage: undefined }) }],
+    ["expired", { reviewUntil: 1 }],
+    ["failed", { requiredReview: "failed" as const }],
+  ] as const)("Save eligibility does not bypass the shared %s veto", async (_name, patch) => {
+    const review = reviewed({ requiredReview: "unavailable", saveEligibility: "eligible", ...patch });
+    mount(review);
+    await open();
+    expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).toBe("true");
+    click("Create scoped rule");
+    expect(review.createRule).not.toHaveBeenCalled();
+    expect(review.allowOnce).not.toHaveBeenCalled();
+  });
+
+  it("rechecks persistence-only Save freshness at confirmation time", async () => {
+    let current = true;
+    const review = reviewed({ requiredReview: "unavailable", saveEligibility: "eligible", isCurrent: () => current });
+    mount(review);
+    await open();
+    click("Create scoped rule");
+    current = false;
+    click("Save scoped rule");
+    expect(review.createRule).not.toHaveBeenCalled();
+    expect(review.allowOnce).not.toHaveBeenCalled();
+    expect(screen.getByText(/This review is stale/)).toBeTruthy();
   });
   it("rechecks owner authority and expiry at save time", async () => {
     let current = true;
@@ -437,7 +592,7 @@ describe("inactive scoped choices in the existing permission card", () => {
     await open();
     click("Allow once");
     expect(review.allowOnce).not.toHaveBeenCalled();
-    expect(screen.getByText("Exact scope disclosure is unavailable.")).toBeTruthy();
+    expect(screen.getByText("Allow once: Exact scope disclosure is unavailable.")).toBeTruthy();
   });
   it("preserves the explicit revision and read-only boundaries", () => {
     const port = { scopeKey: "a", review: vi.fn(async () => reviewed()) };
@@ -450,5 +605,99 @@ describe("inactive scoped choices in the existing permission card", () => {
     host.change({ scopedRuleReview: port, cannotWrite: "Read-only connection." });
     click("Review permission");
     expect(port.review).not.toHaveBeenCalled();
+  });
+});
+
+describe("scoped choice boundaries", () => {
+  it("shows the matched rule, its revision and the effective scope without private references", async () => {
+    mount(reviewed({ decision: matched() }));
+    await open();
+    const text = document.body.textContent ?? "";
+    expect(text).toMatch(new RegExp(`Matched rule ${ruleIds.rule!}\\s*revision\\s*${ruleIds.revision!}`));
+    expect(text).toContain("stored-rule");
+    expect(text).toContain("/synthetic/reviewed.txt only");
+    expect(text).toContain("temporary workspace; no network");
+    expect(text).not.toMatch(/SECRET|private-|rm -rf/);
+  });
+  it.each([
+    ["revoked", { revocation: complete("revoked") }, "revoked"],
+    ["expired", { expiresAt: complete("2020-01-01T00:00:00Z") }, "expired"],
+  ] as const)("a %s matched rule stays identified but cannot authorize a positive choice", async (_n, patch, word) => {
+    const review = reviewed({ decision: matched(patch) });
+    mount(review);
+    await open();
+    expect(document.body.textContent).toContain(word);
+    expect(screen.getByText("Allow once: The reviewed grant expired or was revoked.")).toBeTruthy();
+    click("Allow once");
+    click("Create scoped rule");
+    expect(review.allowOnce).not.toHaveBeenCalled();
+    expect(review.createRule).not.toHaveBeenCalled();
+  });
+  it.each(["Allow once", "Deny"] as const)("latches duplicate %s clicks to one owner call", async (name) => {
+    const pending = deferred<ScopedChoiceResult>();
+    const review = reviewed({ allowOnce: vi.fn(() => pending.promise), deny: vi.fn(() => pending.promise) });
+    mount(review);
+    await open();
+    act(() => {
+      click(name);
+      click(name);
+    });
+    click(name === "Deny" ? "Allow once" : "Deny");
+    expect(review.allowOnce).toHaveBeenCalledTimes(name === "Allow once" ? 1 : 0);
+    expect(review.deny).toHaveBeenCalledTimes(name === "Deny" ? 1 : 0);
+    // A pending one-time answer cannot be cancelled or closed away from under the owner.
+    click("Cancel review");
+    act(() => {
+      expect(h.layers.closeTop()).toBe("kept");
+    });
+    await act(async () => {
+      pending.resolve("confirmed");
+    });
+    expect(review.createRule).not.toHaveBeenCalled();
+    expect(
+      (review.allowOnce as ReturnType<typeof vi.fn>).mock.calls.length +
+        (review.deny as ReturnType<typeof vi.fn>).mock.calls.length,
+    ).toBe(1);
+  });
+  it("a stale result (nothing sent) reports it and lets the person review again", async () => {
+    const review = reviewed({ allowOnce: vi.fn(async () => "stale" as const) });
+    const host = mount(review);
+    await open();
+    click("Allow once");
+    await screen.findByText(/Nothing is confirmed; review again/);
+    click("Close review");
+    expect(screen.getByRole("button", { name: "Review permission" }).getAttribute("aria-disabled")).not.toBe("true");
+    await open();
+    expect(host.port.review).toHaveBeenCalledTimes(2);
+    expect(review.allowOnce).toHaveBeenCalledTimes(1);
+  });
+  it("moves focus from a settled choice to the region and back to the trigger on close", async () => {
+    const review = reviewed({ deny: vi.fn(async () => "refused" as const) });
+    mount(review);
+    await open();
+    const deny = screen.getByRole("button", { name: "Deny" });
+    deny.focus();
+    click("Deny");
+    await screen.findByText(/The choice was refused/);
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Scoped permission review");
+    const close = screen.getByRole("button", { name: "Close review" });
+    close.focus();
+    click("Close review");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Review permission" }));
+  });
+  it("unmounting during a pending one-time answer cancels the review and claims nothing late", async () => {
+    const pending = deferred<ScopedChoiceResult>();
+    const cancel = vi.fn(async () => undefined);
+    const review = reviewed({ allowOnce: vi.fn(() => pending.promise), cancel });
+    const host = mount(review);
+    await open();
+    click("Allow once");
+    host.unmount();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      pending.resolve("confirmed");
+    });
+    expect(document.body.textContent).not.toContain("One-time answer recorded");
+    expect(review.createRule).not.toHaveBeenCalled();
   });
 });

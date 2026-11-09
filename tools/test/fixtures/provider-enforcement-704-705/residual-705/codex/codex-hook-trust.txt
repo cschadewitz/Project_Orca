@@ -1,0 +1,28 @@
+fn hook_trust_status(
+    is_managed: bool,
+    is_builtin: bool,
+    current_hash: &str,
+    trusted_hash: Option<&str>,
+) -> HookTrustStatus {
+    if is_builtin {
+        HookTrustStatus::Trusted
+    } else if is_managed {
+        HookTrustStatus::Managed
+    } else {
+        match trusted_hash {
+            Some(trusted_hash) if trusted_hash == current_hash => HookTrustStatus::Trusted,
+            Some(_) => HookTrustStatus::Modified,
+            None => HookTrustStatus::Untrusted,
+        }
+    }
+}
+
+fn hook_enabled(is_managed: bool, is_builtin: bool, state: Option<&HookStateToml>) -> bool {
+    is_builtin || is_managed || state.and_then(|state| state.enabled) != Some(false)
+}
+
+fn hook_trusted_hash(is_managed: bool, state: Option<&HookStateToml>) -> Option<&str> {
+    (!is_managed)
+        .then(|| state.and_then(|state| state.trusted_hash.as_deref()))
+        .flatten()
+}

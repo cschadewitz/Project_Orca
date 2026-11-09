@@ -59,7 +59,8 @@ export async function askHuman(
   return askHumanInput({
     ...(revision && ctx.declareRevision ? { onRequested: ctx.declareRevision } : {}),
     port: ctx.humanInput,
-    emit: (e) => ctx.emit(e),
+    // The run's emit, unlike the step's, returns the published event a port can show.
+    emit: (e) => ctx.run.emit(e),
     clock: ctx.clock,
     runId: ctx.run.id,
     stepRunId: ctx.step.id,

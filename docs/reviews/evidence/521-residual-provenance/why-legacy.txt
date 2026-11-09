@@ -1,0 +1,65 @@
+global-agent@3.0.0
+└─┬ @electron/get@3.1.0
+  └─┬ app-builder-lib@26.18.0
+    ├─┬ dmg-builder@26.18.0
+    │ ├── app-builder-lib@26.18.0 [circular]
+    │ └─┬ electron-builder@26.18.0
+    │   └── @orca/app@0.1.0 (devDependencies)
+    ├── electron-builder@26.18.0 [deduped]
+    └─┬ electron-builder-squirrel-windows@26.18.0
+      └── app-builder-lib@26.18.0 [circular]
+
+got@11.8.6
+└─┬ @electron/get@3.1.0
+  └─┬ app-builder-lib@26.18.0
+    ├─┬ dmg-builder@26.18.0
+    │ ├── app-builder-lib@26.18.0 [circular]
+    │ └─┬ electron-builder@26.18.0
+    │   └── @orca/app@0.1.0 (devDependencies)
+    ├── electron-builder@26.18.0 [deduped]
+    └─┬ electron-builder-squirrel-windows@26.18.0
+      └── app-builder-lib@26.18.0 [circular]
+
+http-cache-semantics@4.3.0
+└─┬ cacheable-request@7.0.4
+  └─┬ got@11.8.6
+    └─┬ @electron/get@3.1.0
+      └─┬ app-builder-lib@26.18.0
+        ├─┬ dmg-builder@26.18.0
+        │ ├── app-builder-lib@26.18.0 [circular]
+        │ └─┬ electron-builder@26.18.0
+        │   └── @orca/app@0.1.0 (devDependencies)
+        ├── electron-builder@26.18.0 [deduped]
+        └─┬ electron-builder-squirrel-windows@26.18.0
+          └── app-builder-lib@26.18.0 [circular]
+
+roarr@2.15.4
+└─┬ global-agent@3.0.0
+  └─┬ @electron/get@3.1.0
+    └─┬ app-builder-lib@26.18.0
+      ├─┬ dmg-builder@26.18.0
+      │ ├── app-builder-lib@26.18.0 [circular]
+      │ └─┬ electron-builder@26.18.0
+      │   └── @orca/app@0.1.0 (devDependencies)
+      ├── electron-builder@26.18.0 [deduped]
+      └─┬ electron-builder-squirrel-windows@26.18.0
+        └── app-builder-lib@26.18.0 [circular]
+
+sprintf-js@1.1.3
+└─┬ roarr@2.15.4
+  └─┬ global-agent@3.0.0
+    └─┬ @electron/get@3.1.0
+      └─┬ app-builder-lib@26.18.0
+        ├─┬ dmg-builder@26.18.0
+        │ ├── app-builder-lib@26.18.0 [circular]
+        │ └─┬ electron-builder@26.18.0
+        │   └── @orca/app@0.1.0 (devDependencies)
+        ├── electron-builder@26.18.0 [deduped]
+        └─┬ electron-builder-squirrel-windows@26.18.0
+          └── app-builder-lib@26.18.0 [circular]
+
+Found 1 version of global-agent
+Found 1 version of got
+Found 1 version of http-cache-semantics
+Found 1 version of roarr
+Found 1 version of sprintf-js

@@ -1,5 +1,14 @@
 # Optional beta report
 
+> **Superseded diagnostics wording, 27 October 2026**
+> ([#786](https://github.com/cschadewitz/Project_Orca/issues/786)): mentions of a #416
+> *preview* below predate the owner's 9 October Save/export-only decision. There is no
+> in-app report viewer, and current source keeps production capture disabled
+> (`DIAGNOSTICS_PRODUCTION_ENABLED = false`). Do not ask testers to preview, enable or
+> export diagnostics. For Windows/Linux private candidates use
+> [private-candidate-windows-linux](../private-candidate-windows-linux/README.md).
+> The content below is otherwise unchanged.
+
 Copy the block below for a success, bug, confusing step or feature idea. Use one
 report per experience. Every field is optional: `unknown`, `not tested` and
 `prefer not to share` are valid. Do not fetch missing details from logs or private

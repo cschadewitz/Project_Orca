@@ -83,6 +83,7 @@ import { FIXTURE, startDemoDaemon, type Daemon } from "./daemon.js";
 interface SmokeWindow {
   orca?: {
     platform: string;
+    scopedPermissions?: { call: unknown };
     daemonConnection: { read: () => { epoch: number } };
     hello: () => Promise<{ ok: true; result: { capabilities: string[] } } | { ok: false; error: unknown }>;
     /** Only the part the pane-boundary test reads back: the sizes a drag left behind (#276). */
@@ -210,6 +211,7 @@ test("the window comes up on the built renderer with a bridge in it", async () =
       present: typeof orca === "object",
       platform: orca?.platform,
       methods: orca ? Object.keys(orca).sort() : [],
+      scopedPermissionMethods: orca?.scopedPermissions ? Object.keys(orca.scopedPermissions).sort() : [],
     };
   });
   expect(bridge.present).toBe(true);
@@ -248,6 +250,9 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     "platform",
     "preferences",
     "runs",
+    // #702/#706's opaque review commands (3f72ee46), validated by the closed main-process
+    // dispatcher. This bridge does not register the family on the production daemon.
+    "scopedPermissions",
     "templates",
     // `updates` is v0.6.0's desktop updater (#306): read, act, subscribe and the unsaved-
     // draft challenge. No feed URL, credential or install command crosses it.
@@ -256,6 +261,7 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     "workflows",
     "workspace",
   ]);
+  expect(bridge.scopedPermissionMethods).toEqual(["call"]);
 
   // Renderer assets really loaded off file://, rather than the CSP blocking them.
   await expect(page.locator(".orca-body")).toBeVisible();

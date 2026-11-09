@@ -6,6 +6,7 @@ import { SCOPED_PERMISSION_CONTRACTS, type ScopedPermissionMethod } from "@orca/
 import { projectGuardDecision } from "../../../protocol/src/guard-decision-projection.js";
 import type { ScopedPermissionBridge } from "../../src/scoped-permission-bridge.js";
 import { PermissionCard } from "../src/attention/permission-card.js";
+import { scopedRulePort } from "../src/attention/scoped-rule-port.js";
 import { harness, type Harness } from "./harness.js";
 import { fakeBridge } from "./fake-bridge.js";
 import { PERMISSION_ASK } from "./fixtures-inputs.js";
@@ -59,7 +60,15 @@ const target = {
   workspaceId: "11111111-1111-4111-8111-111111111111",
   instanceId: "22222222-2222-4222-8222-222222222222",
 };
-function fixture() {
+function fixture(
+  standingReview?: "available" | "unavailable",
+  prerequisites: {
+    requiredReview?: "passed" | "failed" | "unavailable";
+    saveEligibility?: "eligible" | "unavailable";
+    pendingExecutionIntent?: true;
+    executionWindowMs?: number;
+  } = {},
+) {
   const fake = fakeBridge({
     connection: {
       state: "live",
@@ -81,11 +90,16 @@ function fixture() {
   let stale = false;
   let mismatch = false;
   let pause: Promise<void> | undefined;
+  let reviewPause: Promise<void> | undefined;
+  let lostAs: { code: "AGENT_TRANSPORT" | "PROTOCOL_MESSAGE"; message: string } | undefined;
+  let chooseOutcome: "uncertain" | undefined;
+  let refusal: string | undefined;
   const call = vi.fn(async (method: ScopedPermissionMethod, raw: unknown) => {
     const params = SCOPED_PERMISSION_CONTRACTS[method].params.parse(raw) as Record<string, unknown>;
     calls.push({ method, params });
     if (method === "scopedPermissions.review") {
       if (stale) return { ok: false, error: { code: "CONFIG_STALE", message: "Synthetic review unavailable" } };
+      await reviewPause;
       const handle = `00000000-0000-4000-8000-${String(++counter).padStart(12, "0")}`;
       handles.set(handle, "ready");
       return {
@@ -103,24 +117,35 @@ function fixture() {
             coverage: "Synthetic verified boundary",
           },
           reviewUntil: Date.now() + 60000,
-          requiredReview: "passed",
+          requiredReview: prerequisites.requiredReview ?? "passed",
+          ...(prerequisites.saveEligibility ? { saveEligibility: prerequisites.saveEligibility } : {}),
+          ...(prerequisites.pendingExecutionIntent ? { pendingExecutionIntent: true } : {}),
+          ...(prerequisites.executionWindowMs !== undefined
+            ? { executionWindowMs: prerequisites.executionWindowMs }
+            : {}),
+          ...(standingReview ? { standingReview } : {}),
           decision: view(),
         }),
       };
     }
     const handle = params.handle as string;
     if (method === "scopedPermissions.cancel") {
+      // Mirrors the owner: a claimed (pending) choice cannot be cancelled.
+      if (handles.get(handle) === "pending")
+        return { ok: false, error: { code: "CONFIG_STALE", message: "Synthetic pending" } };
       handles.set(handle, "cancelled");
       return { ok: true, result: { outcome: "cancelled" } };
     }
     if (method === "scopedPermissions.choose") {
-      if (stale || handles.get(handle) !== "ready")
-        return { ok: false, error: { code: "CONFIG_STALE", message: "Synthetic stale review" } };
+      if (stale || refusal !== undefined || handles.get(handle) !== "ready")
+        return { ok: false, error: { code: "CONFIG_STALE", message: refusal ?? "Synthetic stale review" } };
       handles.set(handle, "pending");
       await pause;
-      const outcome = (params.choice === "save") !== mismatch ? "saved" : "answered";
+      const outcome = chooseOutcome ?? ((params.choice === "save") !== mismatch ? "saved" : "answered");
       handles.set(handle, outcome);
       if (lost) throw new Error("PRIVATE_LOST_ACK");
+      // The real main process resolves, never rejects: a lost reply after dispatch arrives as an error code.
+      if (lostAs) return { ok: false, error: lostAs };
       return { ok: true, result: { outcome } };
     }
     throw new Error("Unexpected synthetic transport method");
@@ -129,9 +154,10 @@ function fixture() {
   restore = fake.install();
   h = harness();
   const onAnswer = vi.fn();
+  let input = PERMISSION_ASK;
   const element = () => (
     <h.Providers>
-      <PermissionCard input={PERMISSION_ASK} placement="inbox" onAnswer={onAnswer} />
+      <PermissionCard input={input} placement="inbox" onAnswer={onAnswer} />
     </h.Providers>
   );
   const host = render(element());
@@ -142,6 +168,30 @@ function fixture() {
     onAnswer,
     host,
     rerender: () => host.rerender(element()),
+    select: (next: typeof PERMISSION_ASK) => {
+      input = next;
+      host.rerender(element());
+    },
+    loseReplyAs: (code: "AGENT_TRANSPORT" | "PROTOCOL_MESSAGE") => {
+      lostAs = { code, message: "PRIVATE_SOCKET_DETAIL" };
+    },
+    deliverReplies: () => {
+      lost = false;
+      lostAs = undefined;
+    },
+    persistenceUncertain: () => {
+      chooseOutcome = "uncertain";
+    },
+    refuseWith: (message: string) => {
+      refusal = message;
+    },
+    holdReview: () => {
+      let release!: () => void;
+      reviewPause = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return release;
+    },
     lose: () => {
       lost = true;
     },
@@ -171,6 +221,86 @@ async function save() {
   click("Save scoped rule");
   await screen.findByText(/Scoped rule saved/);
 }
+it("an unavailable standing reviewer disables Save and preserves the one-time answer", async () => {
+  const f = fixture("unavailable");
+  await open();
+  expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).toBe("true");
+  expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).not.toBe("true");
+  click("Allow once");
+  await waitFor(() => expect(f.calls.some((call) => call.params.choice === "allow-once")).toBe(true));
+  expect(f.calls.some((call) => call.params.choice === "save")).toBe(false);
+});
+
+it("confirms a persistence-only Save without enabling or sending an execution answer", async () => {
+  const f = fixture("available", { requiredReview: "unavailable", saveEligibility: "eligible" });
+  await open();
+  expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).toBe("true");
+  expect(screen.getByRole("button", { name: "Deny" }).getAttribute("aria-disabled")).not.toBe("true");
+  expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).not.toBe("true");
+  click("Allow once");
+  click("Create scoped rule");
+  click("Save scoped rule");
+  await screen.findByText(/Scoped rule saved/);
+  expect(
+    f.calls.filter((call) => call.method === "scopedPermissions.choose").map((call) => call.params.choice),
+  ).toEqual(["save"]);
+  expect(f.onAnswer).not.toHaveBeenCalled();
+});
+
+it("carries the pending intent projection but sends only the owner's opaque one-time choice", async () => {
+  const f = fixture("available", {
+    requiredReview: "unavailable",
+    pendingExecutionIntent: true,
+    executionWindowMs: 55000,
+  });
+  await open();
+  expect(screen.getByText(/execution window starts after approval and current checks/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).not.toBe("true");
+  click("Allow once");
+  await screen.findByText(/One-time answer recorded.*Execution is not confirmed/);
+  const choices = f.calls.filter((call) => call.method === "scopedPermissions.choose");
+  expect(choices).toHaveLength(1);
+  expect(choices[0]!.params.choice).toBe("allow-once");
+  expect(Object.keys(choices[0]!.params).sort()).toEqual(["choice", "handle", "target"]);
+  expect(f.onAnswer).not.toHaveBeenCalled();
+});
+
+it.each([{ pendingExecutionIntent: true as const }, { executionWindowMs: 55000 }])(
+  "an incomplete pending projection cannot enable execution: %j",
+  async (projection) => {
+    const f = fixture("available", { requiredReview: "unavailable", ...projection });
+    await open();
+    expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).toBe("true");
+    click("Allow once");
+    expect(f.calls.some((call) => call.params.choice === "allow-once")).toBe(false);
+  },
+);
+
+it.each([
+  ["available", "unavailable", "unavailable"],
+  ["unavailable", "unavailable", "eligible"],
+  ["available", "unavailable", undefined],
+  ["available", "failed", "eligible"],
+] as const)(
+  "blocks Save for reviewer %s, execution review %s, Save projection %s",
+  async (standing, required, eligibility) => {
+    const f = fixture(standing, { requiredReview: required, ...(eligibility ? { saveEligibility: eligibility } : {}) });
+    await open();
+    expect(screen.getByRole("button", { name: "Create scoped rule" }).getAttribute("aria-disabled")).toBe("true");
+    click("Create scoped rule");
+    expect(f.calls.some((call) => call.params.choice === "save")).toBe(false);
+    expect(f.onAnswer).not.toHaveBeenCalled();
+  },
+);
+
+it("rejects unknown Save eligibility projections in the strict protocol schema", () => {
+  const projection = SCOPED_PERMISSION_CONTRACTS["scopedPermissions.review"].result.shape.saveEligibility;
+  expect(projection.safeParse(undefined).success).toBe(true);
+  expect(projection.safeParse("eligible").success).toBe(true);
+  expect(projection.safeParse("passed").success).toBe(false);
+  expect(projection.safeParse({ authority: true }).success).toBe(false);
+});
+
 it("confirms save only, then loads a fresh handle for a separately selected answer", async () => {
   const f = fixture();
   await save();
@@ -305,4 +435,188 @@ it("a refused fresh review cannot reuse the saved handle or resend save", async 
   click("Allow once");
   expect(screen.queryByRole("button", { name: "Create scoped rule" })).toBeNull();
   expect(f.calls.filter((c) => c.method === "scopedPermissions.choose")).toHaveLength(1);
+});
+
+const chooseCalls = (f: ReturnType<typeof fixture>) => f.calls.filter((c) => c.method === "scopedPermissions.choose");
+async function pick(choice: "save" | "allow-once" | "deny") {
+  await open();
+  if (choice === "save") {
+    click("Create scoped rule");
+    click("Save scoped rule");
+  } else click(choice === "allow-once" ? "Allow once" : "Deny");
+}
+
+it.each([
+  ["save", "AGENT_TRANSPORT"],
+  ["allow-once", "AGENT_TRANSPORT"],
+  ["deny", "AGENT_TRANSPORT"],
+  ["save", "PROTOCOL_MESSAGE"],
+  ["allow-once", "PROTOCOL_MESSAGE"],
+] as const)("a %s reply lost after dispatch (%s) is uncertain, never a refusal", async (choice, code) => {
+  const f = fixture();
+  f.loseReplyAs(code);
+  await pick(choice);
+  // The owner recorded the choice; only the reply was lost on the way back.
+  await screen.findByText(/Acknowledgement is uncertain/);
+  expect(screen.queryByText(/refused|Scoped rule saved|One-time answer recorded|Denial recorded/)).toBeNull();
+  expect(document.body.textContent).not.toContain("PRIVATE_SOCKET_DETAIL");
+  click("Close review");
+  click("Review permission");
+  expect(chooseCalls(f)).toHaveLength(1);
+});
+
+it("a persistence failure reported by the owner never claims a saved rule or unlocks an answer", async () => {
+  const f = fixture();
+  f.persistenceUncertain();
+  await pick("save");
+  await screen.findByText(/Acknowledgement is uncertain/);
+  expect(screen.queryByText(/Scoped rule saved/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Review separate answer" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+  // The reviewed scope stays on screen so the person can still see what was attempted.
+  expect(screen.getByText("One disposable file")).toBeTruthy();
+  expect(chooseCalls(f).map((c) => c.params.choice)).toEqual(["save"]);
+});
+
+it("an owner refusal keeps the reviewed scope, hides private detail and gives guidance the screen can follow", async () => {
+  const f = fixture();
+  f.refuseWith("PRIVATE_POLICY_PATH /secret/rules.json");
+  await pick("save");
+  const message = await screen.findByText(/The choice was refused/);
+  // A refusal after the owner claimed the handle can still follow a commit, so the input stays latched
+  // and the message must point at what the latched screen offers rather than at another review.
+  expect(message.textContent).not.toMatch(/review again/i);
+  expect(message.textContent).toMatch(/Refresh authoritative state/);
+  expect(document.body.textContent).not.toContain("PRIVATE_POLICY_PATH");
+  expect(screen.getByText("One disposable file")).toBeTruthy();
+  expect(screen.queryByText(/Scoped rule saved/)).toBeNull();
+  click("Close review");
+  expect(screen.getByRole("button", { name: "Review permission" }).getAttribute("aria-disabled")).toBe("true");
+  click("Review permission");
+  expect(f.calls.filter((c) => c.method === "scopedPermissions.review")).toHaveLength(1);
+});
+
+it("Allow once and Deny each send exactly their own one-time choice and never a standing save", async () => {
+  for (const [choice, label] of [
+    ["allow-once", "One-time answer recorded"],
+    ["deny", "Denial recorded"],
+  ] as const) {
+    const f = fixture();
+    await pick(choice);
+    await screen.findByText(new RegExp(label));
+    expect(chooseCalls(f).map((c) => c.params.choice)).toEqual([choice]);
+    expect(f.calls.some((c) => c.method === "scopedPermissions.inspect")).toBe(false);
+    expect(screen.queryByRole("button", { name: /Always/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create scoped rule" })).toBeNull();
+    expect(f.onAnswer).not.toHaveBeenCalled();
+    cleanup();
+    h.dispose();
+    restore();
+  }
+});
+
+it("a review reply that arrives after reconnect is dropped and its orphaned handle cancelled", async () => {
+  const f = fixture();
+  const release = f.holdReview();
+  click("Review permission");
+  await waitFor(() => expect(f.calls.some((c) => c.method === "scopedPermissions.review")).toBe(true));
+  f.fake.connect({ ...f.fake.connection, generation: 2 });
+  await act(async () => {
+    release();
+  });
+  await screen.findByText(/Review is unavailable. No choice was sent/);
+  expect(screen.queryByText("Read fixture")).toBeNull();
+  await waitFor(() => expect([...f.handles.values()]).toEqual(["cancelled"]));
+  expect(chooseCalls(f)).toHaveLength(0);
+});
+
+it("reconnect after an uncertain acknowledgement reviews afresh and never reuses the old handle", async () => {
+  const f = fixture();
+  f.lose();
+  await pick("save");
+  await screen.findByText(/Acknowledgement is uncertain/);
+  const first = chooseCalls(f)[0]!.params.handle;
+  f.deliverReplies();
+  f.fake.connect({ ...f.fake.connection, generation: 2 });
+  f.rerender();
+  expect(screen.queryByText(/Acknowledgement is uncertain/)).toBeNull();
+  await open();
+  const reviews = f.calls.filter((c) => c.method === "scopedPermissions.review");
+  expect(reviews).toHaveLength(2);
+  expect(screen.queryByText(/Scoped rule saved/)).toBeNull();
+  click("Deny");
+  await screen.findByText(/Denial recorded/);
+  const choices = chooseCalls(f);
+  expect(choices.map((c) => c.params.choice)).toEqual(["save", "deny"]);
+  expect(choices[1]!.params.handle).not.toBe(first);
+});
+
+it("reload with an open review cancels its handle; a reload mid-choice claims nothing", async () => {
+  const f = fixture();
+  await open();
+  f.host.unmount();
+  await waitFor(() => expect([...f.handles.values()]).toEqual(["cancelled"]));
+  const reloaded = render(
+    <h.Providers>
+      <PermissionCard input={PERMISSION_ASK} placement="inbox" onAnswer={f.onAnswer} />
+    </h.Providers>,
+  );
+  await open();
+  const release = f.hold();
+  click("Allow once");
+  reloaded.unmount();
+  await act(async () => {
+    release();
+  });
+  // The owner refused to cancel a claimed choice, and nothing on screen claimed its outcome.
+  expect([...f.handles.values()]).toEqual(["cancelled", "answered"]);
+  expect(document.body.textContent).not.toMatch(/One-time answer recorded|Scoped rule saved/);
+  expect(chooseCalls(f)).toHaveLength(1);
+});
+
+it("changing the selected input while a choice is pending drops the late acknowledgement", async () => {
+  const f = fixture();
+  await open();
+  const release = f.hold();
+  click("Allow once");
+  f.select({
+    ...PERMISSION_ASK,
+    id: "ask-2",
+    live: { ...PERMISSION_ASK.live!, target: { ...PERMISSION_ASK.live!.target, requestId: "ask-2" } },
+  });
+  expect(screen.getByRole("button", { name: "Review permission" }).getAttribute("aria-disabled")).not.toBe("true");
+  await act(async () => {
+    release();
+  });
+  expect(screen.queryByText(/One-time answer recorded/)).toBeNull();
+  await open();
+  const reviews = f.calls.filter((c) => c.method === "scopedPermissions.review");
+  expect(reviews.at(-1)!.params.input).toMatchObject({ requestId: "ask-2" });
+  expect(chooseCalls(f)).toHaveLength(1);
+});
+
+it.each([
+  ["no identity", { ok: true, result: { protocol: { major: 1, minor: 0 }, orcaVersion: "x", capabilities: [] } }],
+  ["failed hello", { ok: false, error: { code: "AUTH_FORBIDDEN", message: "PRIVATE_TOKEN_HINT" } }],
+] as const)("unavailable authority (%s) sends no review and no choice", async (_name, hello) => {
+  const f = fixture();
+  f.fake.script({ hello: async () => hello as never });
+  click("Review permission");
+  await screen.findByText(/Review is unavailable. No choice was sent/);
+  expect(f.calls).toHaveLength(0);
+  expect(document.body.textContent).not.toContain("PRIVATE_TOKEN_HINT");
+  expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).toBe("true");
+});
+
+it("no port is offered without the advertised method, a live connection or the scoped bridge", () => {
+  const f = fixture();
+  const input = PERMISSION_ASK.live!.target;
+  expect(scopedRulePort(f.fake.bridge, input)).toBeDefined();
+  f.fake.connect({ ...f.fake.connection, methods: [] });
+  expect(scopedRulePort(f.fake.bridge, input)).toBeUndefined();
+  f.fake.connect({ ...f.fake.connection, methods: ["scopedPermissions.review"], state: "reconnecting" });
+  expect(scopedRulePort(f.fake.bridge, input)).toBeUndefined();
+  f.fake.connect({ ...f.fake.connection, state: "live" });
+  const { scopedPermissions: _omitted, ...withoutScoped } = f.fake.bridge;
+  expect(scopedRulePort(withoutScoped, input)).toBeUndefined();
 });

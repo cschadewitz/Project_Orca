@@ -14,6 +14,7 @@ import {
   type Clock,
   type GateOption,
   type GateOptionInput,
+  type OrcaEvent,
   type OrcaEventInput,
 } from "@orca/core";
 import type { LiveInputBinding } from "./live-input.js";
@@ -37,6 +38,12 @@ export interface HumanInputQuery {
    */
   permissionOptions?: readonly Pick<PermissionOption, "optionId" | "kind">[];
   context: Record<string, unknown>;
+  /**
+   * What `human.requested` published: the same text with sensitive launch values withheld.
+   * A port that shows the question to a person shows this, as `orca answer` and the app
+   * do; ids and `options` order are unchanged. Absent until the request is published.
+   */
+  presentation?: Pick<HumanInputQuery, "question" | "options" | "context">;
   /**
    * Fires when the run is cancelled while the question is still open. Ports
    * that park questions (a queue, a chat thread, a web UI) should drop the
@@ -211,7 +218,7 @@ export async function askHumanInput(opts: {
   void waiting?.catch(() => undefined);
   let requested = false;
   try {
-    await emit({
+    const published = await emit({
       type: "human.requested",
       payload: {
         stepRunId,
@@ -225,6 +232,13 @@ export async function askHumanInput(opts: {
       },
     });
     requested = true;
+    const event = published as OrcaEvent | undefined;
+    if (event?.type === "human.requested" && event.payload.requestId === query.requestId)
+      query.presentation = {
+        question: event.payload.question,
+        options: event.payload.options,
+        context: event.payload.context,
+      };
     await opts.onRequested?.(query);
     await emit({ type: "step.waiting", payload: { stepRunId, on: "human-input", detail: query.requestId } });
     publish();

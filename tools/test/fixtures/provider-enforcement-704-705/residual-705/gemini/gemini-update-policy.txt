@@ -1,0 +1,88 @@
+export async function updatePolicy(
+  tool: AnyDeclarativeTool,
+  outcome: ToolConfirmationOutcome,
+  confirmationDetails: SerializableConfirmationDetails | undefined,
+  context: AgentLoopContext,
+  messageBus: MessageBus,
+  toolInvocation?: AnyToolInvocation,
+): Promise<void> {
+  const currentMode = context.config.getApprovalMode();
+
+  // Mode Transitions (AUTO_EDIT)
+  if (isAutoEditTransition(tool, outcome)) {
+    context.config.setApprovalMode(ApprovalMode.AUTO_EDIT);
+  }
+
+  // Determine persist scope if we are persisting.
+  let persistScope: 'workspace' | 'user' | undefined;
+  let modes: ApprovalMode[] | undefined;
+
+  // If this is an 'Always Allow' selection, we restrict it to the current mode
+  // and more permissive modes.
+  if (
+    outcome === ToolConfirmationOutcome.ProceedAlways ||
+    outcome === ToolConfirmationOutcome.ProceedAlwaysTool ||
+    outcome === ToolConfirmationOutcome.ProceedAlwaysServer ||
+    outcome === ToolConfirmationOutcome.ProceedAlwaysAndSave
+  ) {
+    const modeIndex = MODES_BY_PERMISSIVENESS.indexOf(currentMode);
+    if (modeIndex !== -1) {
+      modes = MODES_BY_PERMISSIVENESS.slice(modeIndex);
+    }
+  }
+
+  if (outcome === ToolConfirmationOutcome.ProceedAlwaysAndSave) {
+    // If folder is trusted and workspace policies are enabled, we prefer workspace scope.
+    if (
+      context.config &&
+      context.config.isTrustedFolder() &&
+      context.config.getWorkspacePoliciesDir() !== undefined
+    ) {
+      persistScope = 'workspace';
+    } else {
+      persistScope = 'user';
+    }
+  }
+
+  // Specialized Tools (MCP)
+  if (confirmationDetails?.type === 'mcp') {
+    await handleMcpPolicyUpdate(
+      tool,
+      outcome,
+      confirmationDetails,
+      messageBus,
+      persistScope,
+      modes,
+    );
+    return;
+  }
+
+  // Generic Fallback (Shell, Info, etc.)
+  await handleStandardPolicyUpdate(
+    tool,
+    outcome,
+    confirmationDetails,
+    messageBus,
+    persistScope,
+    toolInvocation,
+    context.config,
+    modes,
+  );
+}
+
+/**
+ * Returns true if the user's 'Always Allow' selection for a specific tool
+ * should trigger a session-wide transition to AUTO_EDIT mode.
+ */
+function isAutoEditTransition(
+  tool: AnyDeclarativeTool,
+  outcome: ToolConfirmationOutcome,
+): boolean {
+  // TODO: This is a temporary fix to enable AUTO_EDIT mode for specific
+  // tools. We should refactor this so that callbacks can be removed from
+  // tools.
+  return (
+    outcome === ToolConfirmationOutcome.ProceedAlways &&
+    EDIT_TOOL_NAMES.has(tool.name)
+  );
+}

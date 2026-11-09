@@ -1,0 +1,113 @@
+{
+  "checkedAt": "2026-10-27T01:15:47Z",
+  "packages": {
+    "magicast@0.5.5": {
+      "tarballSha512SRI": "sha512-UicdXN8zQ3JHlxVq+28afMXPr1z7WNY6+7EJnzTdQWkTAlMLF5fNCCKxJHBQwGaNGR11581EiQmQzx73+MvszA==",
+      "tarballSha256": "5561d86abd904681f987e64f2a9ffc203da3d2067db88c174580864462c7dbec",
+      "lockIntegrity": "sha512-UicdXN8zQ3JHlxVq+28afMXPr1z7WNY6+7EJnzTdQWkTAlMLF5fNCCKxJHBQwGaNGR11581EiQmQzx73+MvszA==",
+      "lockMatches": true,
+      "installedTreeEqualsTarball": true,
+      "embeddedBundle": {
+        "file": "dist/builders-CDdrUKLb.js",
+        "sha256": "6d589e4c1b4c89141d67698af6750c470184c575553029c80b110e8e091d553c",
+        "regionMarkers": "node_modules/.pnpm/source-map-js@1.2.1/... (10 regions)",
+        "externalImportsOfSourceMapJs": 0
+      },
+      "registry": {
+        "publisher": "GitHub Actions",
+        "published": "2026-09-11T03:31:09.196Z",
+        "inlinedDependencies": {
+          "recast": "0.24.0",
+          "source-map-js": "1.2.1"
+        },
+        "latest": "0.5.5"
+      },
+      "provenanceStatement": {
+        "verifiedCryptographically": false,
+        "reason": "Sigstore TUF trusted-root refresh HTTP 403 (see sigstore-attempt.txt)",
+        "subjectDigestMatchesTarball": true,
+        "workflow": {
+          "ref": "refs/tags/v0.5.5",
+          "repository": "https://github.com/unjs/magicast",
+          "path": ".github/workflows/release.yml"
+        },
+        "sourceCommit": "1804bf72b3e9cf6224a9e81ddd9771b074c41fdd",
+        "invocation": "https://github.com/unjs/magicast/actions/runs/34558631258/attempts/1"
+      }
+    },
+    "@electron/get@3.1.0": {
+      "tarballSha512SRI": "sha512-F+nKc0xW+kVbBRhFzaMgPy3KwmuNTYX1fx6+FxxoSnNgwYX6LD7AKBTWkU0MQ6IBoe7dz069CNkR673sPAgkCQ==",
+      "tarballSha256": "cc60cc0d830923b652f1c8510f26779ddeaab7c7a4941362798920ff970dfb38",
+      "lockIntegrity": "sha512-F+nKc0xW+kVbBRhFzaMgPy3KwmuNTYX1fx6+FxxoSnNgwYX6LD7AKBTWkU0MQ6IBoe7dz069CNkR673sPAgkCQ==",
+      "lockMatches": true,
+      "installedTreeEqualsTarball": true,
+      "registry": {
+        "publisher": "electron-cfa",
+        "published": "2024-07-15T21:40:57.058Z",
+        "gitHead": "0adc5b9425aaf92a3039297b767bf6b40443a986",
+        "attestations": null,
+        "latest": "5.1.0",
+        "latest3x": "3.1.0"
+      }
+    }
+  },
+  "upstreamReleaseState": {
+    "magicastVersions": {
+      "0.5.2": {
+        "published": "2026-02-05T01:35:51.582Z",
+        "inlined": null
+      },
+      "0.5.3": {
+        "published": "2026-05-14T01:58:09.039Z",
+        "inlined": {
+          "recast": "0.23.11",
+          "source-map-js": "1.2.1"
+        }
+      },
+      "0.5.4": {
+        "published": "2026-07-31T05:14:44.994Z",
+        "inlined": {
+          "recast": "0.23.18",
+          "source-map-js": "1.2.1"
+        }
+      },
+      "0.5.5": {
+        "published": "2026-09-11T03:31:09.196Z",
+        "inlined": {
+          "recast": "0.24.0",
+          "source-map-js": "1.2.1"
+        }
+      }
+    },
+    "appBuilderLibDistTags": {
+      "latest": {
+        "version": "26.18.0",
+        "published": "2026-10-20T21:24:37.290Z",
+        "electronGet": "^3.0.0",
+        "engines": {
+          "node": ">=14.0.0"
+        }
+      },
+      "next": {
+        "version": "27.0.0-alpha.13",
+        "published": "2026-10-26T12:41:12.101Z",
+        "electronGet": "^5.1.0",
+        "engines": {
+          "node": ">=22.12.0"
+        }
+      },
+      "v26": {
+        "version": "26.18.1",
+        "published": "2026-10-26T12:34:27.048Z",
+        "electronGet": "^3.0.0",
+        "engines": {
+          "node": ">=14.0.0"
+        }
+      }
+    },
+    "coverageV8Latest": {
+      "version": "5.0.5",
+      "magicast": "^0.5.5"
+    }
+  }
+}

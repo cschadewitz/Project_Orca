@@ -1,0 +1,6 @@
+  private isAlwaysAllowRule(rule: PolicyRule): boolean {
+    return (
+      rule.priority !== undefined &&
+      Math.round((rule.priority % 1) * 1000) === ALWAYS_ALLOW_PRIORITY_FRACTION
+    );
+  }

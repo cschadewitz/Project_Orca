@@ -4,7 +4,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ title bar   ORCA   ◆ 2 waiting        ● connected            ⌘K              │
+│ title bar   ORCA   ◆ 2 waiting           Check for updates    Commands ⌘K    │
 ├────────────┬───────────────────────────────────────────┬─────────────────────┤
 │            │ object header                             │                     │
 │  sidebar   │   Request ▸ Work item ▸ Run ▸ Step         │   docked panel      │
@@ -18,7 +18,7 @@
 │  Config    │                                           │                     │
 │            │                                           │                     │
 ├────────────┴───────────────────────────────────────────┴─────────────────────┤
-│ status bar   orca-daemon 0.9.4 · 3 runs active                               │
+│ status bar   ● connected · Connect to a daemon…            orca-daemon 0.9.4 │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -28,6 +28,15 @@ nothing else about the layout changes per platform. The window is frameless so t
 the only title bar: the OS title bar is hidden, macOS's traffic lights sit centred in their
 inset, and Windows draws its caption buttons as a Window Controls Overlay themed from the
 tokens. Linux keeps its window manager's frame (`src/main/window-chrome.ts`).
+
+The title bar holds the brand, the waiting count, the update control and **Commands** with its
+`⌘K` key cap, in that order (`chrome/title-bar.tsx`). The connection indicator is the status
+bar's, with **Connect to a daemon…** beside it when the app owns its connection, a read-only
+reason when writes are refused, and the daemon's version at the end (`chrome/status-bar.tsx`).
+The update control is one button whose label is the updater's state ("Check for updates",
+"Download 0.7.1", "Downloading 40%", "Restart to update to 0.7.1"). It is also registered as a
+global command, so the palette lists it. While a restart is being prepared the window is
+`inert`, and the restart refuses to go ahead while any draft is unsaved (`update-drafts.ts`).
 
 Nothing sits between the title bar and the sidebar. The connection bars
 (`40-connection-states.md`) and a link's landing notice are the primary pane's: under the
@@ -58,7 +67,7 @@ boundary and none of them has to draw its own.
 | **Plan** | ⬡ | What is coming, why it is not moving, what it depends on | 2 — shipped in v0.5.0 (#170); the graph, risk and decision modes shipped in v0.6.0 (#171–#173) |
 | **Workflows** | ⑂ | What the workflows are, and changing them | Added with the editor (#181): the list, the viewer (#177) and the editor (#180–#182) |
 | **Agents** | ◉ | Who is doing the work and are they healthy | 1 read, 2 write — both shipped |
-| **Config** | ❋ | How the system is wired | 2 — shipped in v0.5.0 (#175, #266) |
+| **Config** | ❋ | How the system is wired | 2 — shipped in v0.5.0 (#175, #266); the configuration studio, guided launch, templates and first-run setup in 0.7.0 |
 
 **Workflows is the sixth surface, added with the editor.** The design had five, with the
 workflow viewer living under Config, reached only by link, from the palette, or from a run's
@@ -74,8 +83,11 @@ Risks, Decisions, Dependencies, Journal — with the risk matrix (#172), the dec
 (#173) and the dependency graph (#171) behind them. **The docked panel is a Plan surface as
 well as a Runs surface**: Plan owns what is in it and names it — "Work item" for the schedule
 row's inspector, "Risk" for a selected risk's status, held items and journal entries, and
-"Relationships" for the graph's inspector (blocked by, blocks, waive). Config is `orca.config.yaml` as a form over the schema the daemon describes, beside
-the raw file, with the permission sidecar as its second document. The workflow viewer
+"Relationships" for the graph's inspector (blocked by, blocks, waive). Config is `orca.config.yaml` as a reviewed form over the schema the daemon describes, beside
+the raw file, with the permission sidecar as its second document. As of 0.7.0 it is the
+configuration studio: Save is reviewed and Apply is separate. Its header also opens **Launch
+work** and **Templates**, and the first-run setup and local diagnostics sections sit at its
+top (`60-implementation.md`, `90-setup-launch-and-maintenance.md`). The workflow viewer
 (#177), where `orca://workflow/…` lands, moved to the Workflows surface with the editor.
 
 The glyph column is `semantics.json`'s `surface` map, bundled in the symbol face like every
@@ -157,8 +169,11 @@ orca://item/auth-sso-epic              plan, that work item, explanation panel o
 orca://plan?mode=deps&focus=auth-sso   plan in the dependency graph, that node selected (#171)
 orca://artifact/spec.md@v3?run=7f3a2c  the docked panel, that artifact, version 3
 orca://launch                          guided launch on Config, including setup/recovery
+orca://config                          Config, the configuration document focused
+orca://config/permissions              Config, the permission sidecar focused
 orca://workflow/ai-sdlc                workflow viewer, no run overlaid
 orca://workflow/ai-sdlc?run=7f3a2c     workflow viewer with that run overlaid
+orca://workflow/ai-sdlc?edit           workflow editor on that workflow's draft (#181)
 orca://agent/claude-local              agents, that agent's card
 ```
 
@@ -181,7 +196,8 @@ one is worth keeping in mind before a new form is added:
   **`orca://workflow/…` is built as of #177** and lands on the viewer, now on the Workflows
   surface (#181), with `?run=` overlaying that run's path over the graph and `?edit` opening
   the editor on the workflow's draft. With no workflow named, the surface is the list of
-  workflows; Config (`⌘6`) is the configuration form and the raw file.
+  workflows; Config (`⌘6`) is the configuration form and the raw file, and `orca://config` or
+  `orca://config/permissions` focuses one of its two documents.
 - **`orca://agent/…` was missing.** The Agents surface shipped in v0.4.0 and the palette lists
   agents, and every palette entry has to hand back a canonical URL.
 

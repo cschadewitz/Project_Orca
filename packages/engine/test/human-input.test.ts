@@ -8,7 +8,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-function make(yaml: string[], stores: Stores = memoryStores()) {
+function make(yaml: string[], stores: Stores = memoryStores(), clock = new FakeClock()) {
   const workflows = new WorkflowRegistry();
   for (const y of yaml) workflows.register(parseWorkflow(y));
   const orchestrator = new Orchestrator({
@@ -18,9 +18,9 @@ function make(yaml: string[], stores: Stores = memoryStores()) {
     templates: new TemplateRegistry(),
     workspaceProvider: new LocalWorkspaceProvider("/tmp"),
     humanInput: new PausingHumanInput(),
-    clock: new FakeClock(),
+    clock,
   });
-  return { orchestrator, stores };
+  return { orchestrator, stores, clock };
 }
 
 const GATED = `
@@ -45,6 +45,22 @@ const nodes = (s: {
 
 describe("pause mode", () => {
   for (const storage of ["memory", "file"] as const) {
+    it(`${storage}: a workflow gate survives more than one agent turn deadline and a new interpreter`, async () => {
+      const dir = storage === "file" ? await mkdtemp(join(tmpdir(), "orca-durable-gate-")) : undefined;
+      try {
+        const first = make([GATED], dir ? fileStores(dir) : memoryStores());
+        const parked = await first.orchestrator.startAndRun({ workflowId: "gated" });
+        const [request] = await first.orchestrator.pendingInputs(parked.run.id);
+        first.clock.advance(31 * 60_000);
+        const next = make([GATED], dir ? fileStores(dir) : first.stores, first.clock).orchestrator;
+        expect((await next.pendingInputs(parked.run.id)).map((input) => input.id)).toEqual([request!.id]);
+        await next.answer(request!.id, "ship", parked.run.id);
+        expect((await next.resume(parked.run.id)).run.outcome).toBe("success");
+        // This exercises the durable workflow gate, never a recovered ACP callback.
+      } finally {
+        if (dir) await rm(dir, { recursive: true, force: true });
+      }
+    });
     it(`${storage}: concurrent conflicting answers from separate interpreters accept exactly one`, async () => {
       const dir = storage === "file" ? await mkdtemp(join(tmpdir(), "orca-answer-")) : undefined;
       try {
@@ -243,11 +259,13 @@ edges: [{ from: s, to: child }, { from: child, to: e }]
     ]);
     const parked = await orchestrator.startAndRun({ workflowId: "sub" });
     expect(parked.run.status).toBe("paused");
+    const [pending] = await orchestrator.pendingInputs(parked.run.id);
     await orchestrator.cancel(parked.run.id, "changed my mind");
     expect((await orchestrator.getState(parked.run.id)).run.status).toBe("cancelled");
     const [childId] = parked.steps[parked.stepOrder[1]!]!.childRunIds;
     expect((await orchestrator.getState(childId!)).run.status).toBe("cancelled");
     expect(await orchestrator.pendingInputs()).toEqual([]);
+    await expect(orchestrator.answer(pending!.id, "ship", pending!.runId)).rejects.toMatchObject({ code: "RUN_STATE" });
   });
 
   it("carries a workflow's consequence clauses and destructive flag through to the answer", async () => {

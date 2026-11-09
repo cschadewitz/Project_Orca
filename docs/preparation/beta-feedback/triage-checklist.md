@@ -1,5 +1,14 @@
 # Beta feedback triage
 
+> **Superseded diagnostics wording, 27 October 2026**
+> ([#786](https://github.com/cschadewitz/Project_Orca/issues/786)): mentions of a #416
+> *preview* below predate the owner's 9 October Save/export-only decision. There is no
+> in-app report viewer, and current source keeps production capture disabled
+> (`DIAGNOSTICS_PRODUCTION_ENABLED = false`). Do not ask testers to preview, enable or
+> export diagnostics. For Windows/Linux private candidates use
+> [private-candidate-windows-linux](../private-candidate-windows-linux/README.md).
+> The content below is otherwise unchanged.
+
 For Casey or the agreed coordinator, after a tester voluntarily submits feedback.
 Use [the report template](report-template.md); no report grants permission for
 device access or additional collection. Severity below is a triage decision, not
