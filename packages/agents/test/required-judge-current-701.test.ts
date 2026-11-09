@@ -35,7 +35,7 @@ const delegation = (requirement: "required" | "advisory", allowWhenUnavailable =
 });
 
 /** An older rule that also covers the action's resource, so both it and an exact grant match. */
-const broadRule = (patch: Partial<StrictPermissionRule> = {}): StrictPermissionRule => {
+const broadRule = (patch: Partial<ReturnType<typeof ruleFixture>> = {}): StrictPermissionRule => {
   const base = ruleFixture();
   return {
     ...base,

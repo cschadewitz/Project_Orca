@@ -5,6 +5,41 @@ round is a small, trusted group. **Nothing here has been decided or done by this
 preparation.** Every box starts unchecked, and testers are **not unblocked** until all
 of them are checked for the specific candidate.
 
+## Evidence reconciliation (5 November 2026)
+
+[#790](https://github.com/cschadewitz/Project_Orca/pull/790) merged this preparation;
+[#789](https://github.com/cschadewitz/Project_Orca/pull/789) merged the source/offline/synthetic
+store rehearsal. Neither supplies installed candidate acceptance. The
+[readiness matrix and unbound candidate ledger](../../reviews/2026-10-27-release-readiness.md#candidate-evidence-ledger-unbound-preparation)
+record the verified main reference and the remaining evidence per possible combination.
+The current personal desktop round targets Windows 11; Windows 10 testing is excluded.
+No offered platform set, final candidate identity, support route, retention policy or date
+has been selected. All gates and candidate fill-ins below remain open.
+
+[#814](https://github.com/cschadewitz/Project_Orca/pull/814) and
+[#815](https://github.com/cschadewitz/Project_Orca/pull/815) merged Windows packaging
+preparation. The [#773 exploratory receipt](https://github.com/cschadewitz/Project_Orca/issues/773#issuecomment-6649853644)
+records Casey's personal Windows 11 AMD64 launch, bundled-daemon connection and successful
+agent-free sample on the unsigned `b4361b1` artifact. This is not a selected-candidate,
+clean-install or complete G3/G4 receipt, and does not prove a later build. It changes no
+tester warning/consent rules, enables no guard or real agent, and does not resume #779.
+
+When a combination is offered, link its own immutable manifest and separate static,
+installation, launch, onboarding, update and offline-restore receipts into that ledger.
+A rebuild creates a new identity. Source-built Windows receipts and a green main CI do
+not satisfy G2–G4. The preparation issue may be complete while these gates stay unchecked.
+For existing installs, use the
+[store-rehearsal installed prerequisites](../store-compatibility-rehearsal/README.md#5-installed-windowslinux-rehearsal-prerequisites-and-expected-evidence):
+backup must precede the first candidate open, including read-only opens that can write;
+rollback requires complete matching pre-upgrade state plus binary/toolchain. Installed
+upgrade and restore remain unverified. No manual migration procedure is chosen here.
+
+For Casey's proposed Windows 11 x64 NSIS / Ubuntu 24.04 Desktop x64 tar.gz test setup,
+use the [disposable Proxmox VM runbook](../release-test-vms/README.md). It adds capacity
+preflight, reusable baselines, independent backup/restore and effort estimates without
+changing the candidate decisions or gates below. Its earlier Windows 10 best-effort
+proposal is historical and does not apply to this round: Windows 10 testing is excluded.
+
 ## 1. Fill-in decisions
 
 Each placeholder below appears in the tester pages. Replace each one in the private copies

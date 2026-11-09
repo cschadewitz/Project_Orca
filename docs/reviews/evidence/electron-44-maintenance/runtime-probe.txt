@@ -1,0 +1,2 @@
+{"runtime":"Electron 44.10.0 embedded Node 24.22.1","synthetic":true,"authenticated":true,"unauthenticatedStatus":401,"orcaVersion":"0.6.0","protocol":{"major":2,"minor":0},"childIdentityVerified":true}
+Owned daemon stopped; synthetic workspace removed.

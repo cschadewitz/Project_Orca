@@ -1,0 +1,339 @@
+# Signed Windows packaging spike: Azure Artifact Signing through OIDC, never published.
+#
+# This is "Future step 2/3" of docs/windows-signing-runbook.md, kept apart from
+# `desktop.yml` on purpose. The ordinary Desktop lane and the release path stay unsigned and
+# untouched. There is no client secret anywhere: `azure/login` trades a GitHub OIDC token for
+# an Azure CLI session, and the TrustedSigning PowerShell module that electron-builder drives
+# picks that session up. Federation should accept only this repository's `windows-signing`
+# environment, and the Azure identity's single role is Certificate Profile Signer on one
+# certificate profile.
+#
+# Trust boundary. `id-token: write` is a job-level grant: once a job has it, *every* step in
+# that job (and every process those steps start) can request an OIDC token. So the work is
+# split in two:
+#
+#   prepare  no OIDC, no environment. Installs dependencies with their lifecycle scripts,
+#            builds the workspace, the daemon and the native addons, probes the daemon, and
+#            uploads the build output as one tarball whose SHA-256 is a job output.
+#   sign     OIDC, protected environment. Checks out the same commit, installs dependencies
+#            with `--ignore-scripts` (no dependency lifecycle code runs), refuses the tarball
+#            unless its digest matches what `prepare` reported for this run and commit, then
+#            packages and signs.
+#
+# What still runs inside the token-capable job, and so is the reviewed boundary: pnpm itself,
+# the locked electron-builder and its dependencies (including Electron's download), this
+# repository's builder hooks at the checked-out commit, the TrustedSigning module the builder
+# installs, the Windows SDK signtool and the actions pinned below. The builder integration
+# signs inner executables during packaging, so packaging cannot move out of this job.
+#
+# What the digest does and does not prove. `bundle-sha256` binds the tarball `sign` unpacks
+# to the one `prepare` produced in this run; it is transfer integrity, not provenance. The
+# bundle is trusted because of its inputs: the checked-out commit, the frozen lockfile (pnpm
+# checks every package against its lockfile integrity hash), checksum-verified Node headers,
+# and a GitHub-hosted runner image, with no cache restored in either job. Accepted residual
+# for this spike: locked dependencies' lifecycle scripts and build tools run in `prepare` and
+# can shape the output. Outputs of this workflow are inspection artifacts, not release
+# candidates; a release lane needs its own provenance review (e.g. build attestation).
+#
+# Manual dispatch from `main` only. The output is an artifact for inspection on a clean
+# Windows VM (runbook "Future step 4"); nothing here creates a release, uploads to a feed or
+# feeds `release-publish.yml`. Successful signing here is not release acceptance.
+#
+# Configuration lives in the `windows-signing` environment:
+#   secrets   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   variables WINDOWS_SIGNING_ENDPOINT        e.g. https://eus.codesigning.azure.net/
+#             WINDOWS_SIGNING_ACCOUNT         Artifact Signing account name
+#             WINDOWS_SIGNING_PROFILE         Public Trust certificate profile name
+#             WINDOWS_SIGNING_PUBLISHER_CN    exact CN of the profile's certificate subject
+name: Windows signed (spike)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-signed
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: windows-signed (prepare, no OIDC)
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    outputs:
+      bundle-sha256: ${{ steps.bundle.outputs.sha256 }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      # The exact commit the dispatch resolved, not a moving ref.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      # No dependency cache here either: what gets signed is built from this commit and the
+      # registry's lockfile-pinned packages, not from state another workflow left behind.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: The version to stamp
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p 'require("./package.json").version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "packaging $version"
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Build the bundled daemon
+        run: pnpm --filter @orca/app run build:daemon
+
+      - name: The bundled daemon answers authenticated hello
+        run: node tools/probe-bundled-daemon.js
+
+      # Byte-for-byte the step in desktop.yml (tools/test/windows-signed-workflow.test.js
+      # holds them equal), so signed and unsigned outputs stage the same addons.
+      - name: Stage native addons for all requested Windows architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_version=$(node -p 'process.versions.node')
+          case "$node_version" in *[!0-9.]*|'') exit 1 ;; esac
+          headers_scratch=$(mktemp -d "$RUNNER_TEMP/orca-win-native-headers.XXXXXX")
+          trap 'rm -rf -- "$headers_scratch"' EXIT
+          archive="node-v${node_version}-headers.tar.gz"
+          base="https://nodejs.org/download/release/v${node_version}"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 30 --max-filesize 65536 \
+            "$base/SHASUMS256.txt" --output "$headers_scratch/SHASUMS256.txt"
+          for name in "$archive" win-x64/node.lib win-arm64/node.lib; do
+            mkdir -p "$headers_scratch/$(dirname "$name")"
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 60 --max-filesize 16777216 \
+              "$base/$name" --output "$headers_scratch/$name"
+            CHECKSUM_ROOT="$headers_scratch" CHECKSUM_NAME="$name" python - <<'PY'
+          import hashlib, os, pathlib, re
+          root, name = pathlib.Path(os.environ["CHECKSUM_ROOT"]), os.environ["CHECKSUM_NAME"]
+          entries = [line[:64] for line in (root / "SHASUMS256.txt").read_text().splitlines()
+                     if re.fullmatch(r"[0-9a-f]{64}  " + re.escape(name), line)]
+          if len(entries) != 1 or hashlib.sha256((root / name).read_bytes()).hexdigest() != entries[0]:
+              raise SystemExit("Exact Node input checksum unavailable or mismatched")
+          PY
+          done
+          # GNU tar in Git Bash reads a drive-letter archive path as host:path.
+          # Use the verified archive's basename from its directory instead.
+          (cd "$headers_scratch" && tar -xzf "$archive")
+          for arch in x64 arm64; do
+            mkdir -p "$headers_scratch/node-v${node_version}/$arch"
+            cp "$headers_scratch/win-$arch/node.lib" "$headers_scratch/node-v${node_version}/$arch/node.lib"
+          done
+          node tools/packaged-windows/stage-native-addons.js --headers "$headers_scratch/node-v${node_version}"
+
+      # Every package's build output (which includes the app's dist/, the bundled daemon and
+      # the staged native addons), as one tarball. Relative paths only: GNU tar in Git Bash
+      # reads a drive-letter path as host:path.
+      - name: Bundle the build output
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -cf windows-signed-build.tar --exclude='*.tsbuildinfo' --exclude=packages/app/dist/release packages/*/dist
+          sha=$(sha256sum windows-signed-build.tar | cut -d' ' -f1)
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "build bundle sha256 $sha for ${{ github.sha }}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-signed-build-${{ github.sha }}
+          path: windows-signed-build.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  sign:
+    name: windows-signed (sign)
+    needs: prepare
+    # Refuse anything but main before the environment is even requested, so a dispatch from
+    # a feature branch never reaches the reviewer or the token. The environment's own
+    # deployment-branch rule is the second, independent check.
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    environment: windows-signing
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+      WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+      WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
+      WINDOWS_SIGNING_PUBLISHER_CN: ${{ vars.WINDOWS_SIGNING_PUBLISHER_CN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Signing configuration is present
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in WINDOWS_SIGNING_ENDPOINT WINDOWS_SIGNING_ACCOUNT WINDOWS_SIGNING_PROFILE WINDOWS_SIGNING_PUBLISHER_CN; do
+            if [ -z "${!name}" ]; then echo "::error::environment variable $name is not set on windows-signing"; missing=1; fi
+          done
+          case "$WINDOWS_SIGNING_ENDPOINT" in https://*.codesigning.azure.net/) ;; *)
+            echo "::error::WINDOWS_SIGNING_ENDPOINT must look like https://<region>.codesigning.azure.net/"; missing=1 ;;
+          esac
+          exit "$missing"
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      # No dependency cache: a signing job should not restore state another workflow wrote.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # The lockfile's exact packages, but none of their install/postinstall scripts. The
+      # build output those scripts would matter for comes from `prepare`.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-signed-build-${{ github.sha }}
+
+      # Source-bound: the tarball must be the one `prepare` built from this commit in this
+      # run, by digest. The checked-out verifier then reads every entry (files and
+      # directories only, each under packages/<pkg>/dist, no links, no duplicates, nothing
+      # that already exists) and writes nothing unless the whole archive passes.
+      - name: Verify and unpack the build output
+        shell: bash
+        env:
+          EXPECTED_SHA256: ${{ needs.prepare.outputs.bundle-sha256 }}
+        run: |
+          set -euo pipefail
+          node tools/packaged-windows/build-bundle.js --bundle windows-signed-build.tar --sha256 "$EXPECTED_SHA256" --root .
+          rm windows-signed-build.tar
+
+      # The builder's output must start empty, so everything verified and uploaded below
+      # is what this job's signer produced.
+      - name: The builder output directory is empty
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -e packages/app/dist/release ] || [ -L packages/app/dist/release ]; then echo "::error::packages/app/dist/release exists before packaging"; exit 1; fi
+
+      # Creates the Azure CLI session the signer uses; the action's post step logs it out.
+      # Every step of this job could request an OIDC token (see the header), which is why
+      # the steps above run no dependency lifecycle scripts.
+      - name: Azure login (OIDC, no secret)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Same per-architecture loop as desktop.yml's Package step, plus the signed-lane
+      # overlay from the runbook. forceCodeSigning makes a missing or failed signature a
+      # build failure instead of an unsigned installer.
+      - name: Package and sign
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          channel=latest
+          case "$VERSION" in *-*) channel=prerelease ;; esac
+          for arch in x64 arm64; do
+            pnpm --filter @orca/app exec electron-builder --win nsis zip --"$arch" --publish never \
+              -c.extraMetadata.version="$VERSION" -c.directories.output="dist/release/$arch" \
+              -c.publish.channel="$channel-$arch" \
+              -c.forceCodeSigning=true \
+              -c.win.verifyUpdateCodeSignature=true \
+              -c.win.azureSignOptions.publisherName="$WINDOWS_SIGNING_PUBLISHER_CN" \
+              -c.win.azureSignOptions.endpoint="$WINDOWS_SIGNING_ENDPOINT" \
+              -c.win.azureSignOptions.codeSigningAccountName="$WINDOWS_SIGNING_ACCOUNT" \
+              -c.win.azureSignOptions.certificateProfileName="$WINDOWS_SIGNING_PROFILE" \
+              -c.win.azureSignOptions.fileDigest=SHA256 \
+              -c.win.azureSignOptions.timestampDigest=SHA256 \
+              -c.win.azureSignOptions.timestampRfc3161=http://timestamp.acs.microsoft.com
+          done
+
+      # The builder installs TrustedSigning with only a minimum version, so record what this
+      # run actually used. Runs even when packaging failed, since that is when it matters.
+      - name: Record signing tool versions
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          "pwsh $($PSVersionTable.PSVersion)"
+          Get-InstalledModule -Name TrustedSigning -AllVersions -ErrorAction SilentlyContinue |
+            ForEach-Object { "TrustedSigning module $($_.Version) from $($_.Repository)" }
+          $module = Get-Module -ListAvailable -Name TrustedSigning | Sort-Object Version -Descending | Select-Object -First 1
+          if ($module) {
+            "TrustedSigning loaded from $($module.ModuleBase)"
+            Get-ChildItem -Path $module.ModuleBase -Recurse -File -Include *.dll, *.exe -ErrorAction SilentlyContinue |
+              ForEach-Object { "  $($_.Name) $($_.VersionInfo.FileVersion)" }
+          } else { "::warning::TrustedSigning module not installed" }
+          "az $((az version --output json | ConvertFrom-Json).'azure-cli')"
+          "node $(node --version)"
+
+      # Runner-side evidence only; the runbook's acceptance gate is a clean VM. Every .exe
+      # must carry a valid, timestamped signature from the expected CN, and the packaged
+      # updater config must name that publisher. Other PE files (.dll, .node) are listed
+      # with their status so coverage can be decided in review rather than assumed.
+      - name: Verify signatures and updater publisher
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = $env:WINDOWS_SIGNING_PUBLISHER_CN
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'Windows SDK signtool.exe not found on the runner' }
+          "signtool: $($signtool.FullName)"
+          $failed = $false
+          foreach ($arch in 'x64', 'arm64') {
+            $root = "packages/app/dist/release/$arch"
+            $exes = Get-ChildItem -Path $root -Recurse -File -Include *.exe
+            if (-not $exes) { throw "no executables under $root" }
+            foreach ($file in $exes) {
+              $sig = Get-AuthenticodeSignature -LiteralPath $file.FullName
+              $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+              $stamped = [bool]$sig.TimeStamperCertificate
+              "{0,-8} {1,-6} stamped={2} cn='{3}' {4}" -f $sig.Status, $arch, $stamped, $cn, $file.FullName
+              & $signtool.FullName verify /pa /all /tw /q $file.FullName | Out-Null
+              if ($LASTEXITCODE -ne 0) { "::error::signtool verify exited $LASTEXITCODE for $($file.FullName)"; $failed = $true }
+              if ($sig.Status -ne 'Valid' -or $cn -ne $expected -or -not $stamped) {
+                "::error::$($file.FullName) is not validly signed and timestamped by '$expected'"; $failed = $true
+              }
+            }
+            Get-ChildItem -Path $root -Recurse -File -Include *.dll, *.node | ForEach-Object {
+              "{0,-8} {1,-6} (not gated) {2}" -f (Get-AuthenticodeSignature -LiteralPath $_.FullName).Status, $arch, $_.FullName
+            }
+            # Parsed, not grepped: publisherName must be exactly the approved CN, no extra entries.
+            node tools/packaged-windows/verify-update-publisher.js --root $root --publisher $expected
+            if ($LASTEXITCODE -ne 0) { "::error::packaged updater publisher check failed for $arch"; $failed = $true }
+          }
+          if ($failed) { exit 1 }
+
+      # For inspection on a clean VM only. Short retention, never a release asset.
+      - name: Upload the signed artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-signed-${{ github.sha }}
+          path: |
+            packages/app/dist/release/x64/*.exe
+            packages/app/dist/release/x64/*.zip
+            packages/app/dist/release/x64/*.blockmap
+            packages/app/dist/release/x64/*-x64.yml
+            packages/app/dist/release/arm64/*.exe
+            packages/app/dist/release/arm64/*.zip
+            packages/app/dist/release/arm64/*.blockmap
+            packages/app/dist/release/arm64/*-arm64.yml
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

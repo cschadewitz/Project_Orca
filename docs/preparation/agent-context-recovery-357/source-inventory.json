@@ -1,0 +1,146 @@
+{
+  "format": "orca.context-recovery-investigation/1",
+  "issue": 357,
+  "checkedAt": "2026-10-30",
+  "orcaBaseline": "a4e0fd44e2a112129034e2f4c9b33a7c95c6db99",
+  "status": "source-reviewed-and-provider-free-tests-only",
+  "retrievedVia": "GitHub connected read-only tools; existing research pins reused, not latest-version claims",
+  "installedProviderRecoveryVerified": false,
+  "sources": [
+    {
+      "id": "claude",
+      "url": "https://github.com/agentclientprotocol/claude-agent-acp/blob/ebfbfbdaa9c2a6a8bd9eb0a4965b521009152350/src/acp-agent.ts",
+      "sourceBlobSha": "9ab7092bde5cf0a013634bb0dc5baad3c5af8036"
+    },
+    {
+      "id": "clauderesume",
+      "url": "https://github.com/agentclientprotocol/claude-agent-acp/blob/ebfbfbdaa9c2a6a8bd9eb0a4965b521009152350/src/resumed-session.ts",
+      "sourceBlobSha": "bc50df274a7fdbf35f1d20917ed10023c36b8571"
+    },
+    {
+      "id": "codexclient",
+      "url": "https://github.com/agentclientprotocol/codex-acp/blob/202e66e63343ec4f5a5e35ab590251d813d129ca/src/CodexAcpClient.ts",
+      "sourceBlobSha": "f8fc9380edada0b5c41adad8367e5ebca6cad652"
+    },
+    {
+      "id": "codexserver",
+      "url": "https://github.com/agentclientprotocol/codex-acp/blob/202e66e63343ec4f5a5e35ab590251d813d129ca/src/CodexAcpServer.ts",
+      "sourceBlobSha": "d3f90a8bbf1184aa26f1576553059af842fbd4a1"
+    },
+    {
+      "id": "codexrecovery",
+      "url": "https://github.com/agentclientprotocol/codex-acp/blob/202e66e63343ec4f5a5e35ab590251d813d129ca/src/app-server-recovery/AppServerRecovery.ts",
+      "sourceBlobSha": "d7afa34c1933c0234b605c6aeea0559027b30706"
+    },
+    {
+      "id": "codexold",
+      "url": "https://github.com/agentclientprotocol/codex-acp/blob/68d7d2d5ddfc0ed5746f9f6130892dda685e65dd/src/CodexAcpClient.ts",
+      "sourceBlobSha": "ecdf1b86eecec2ad876f30bf148419f1a8215bd9"
+    },
+    {
+      "id": "codexrollout",
+      "url": "https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/rollout/src/recorder.rs",
+      "sourceBlobSha": "cd05f6149b3d0ff97addf43ec243b7452a9de343"
+    },
+    {
+      "id": "geminidispatch",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/cli/src/acp/acpRpcDispatcher.ts",
+      "sourceBlobSha": "8d30d8f88259830501e25a5769ff850538d6def4"
+    },
+    {
+      "id": "geminimgr",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/cli/src/acp/acpSessionManager.ts",
+      "sourceBlobSha": "55c979380753b45f4a08ba6530edce175cb8fbb2"
+    },
+    {
+      "id": "geminiselector",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/cli/src/utils/sessionUtils.ts",
+      "sourceBlobSha": "0bcd8768d10e8cfd355230db677b361a140bb4b1"
+    },
+    {
+      "id": "geministorage",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/config/storage.ts",
+      "sourceBlobSha": "5d39376fd48e38cfa09d4eee267c035431b373cc"
+    },
+    {
+      "id": "geminirecorder",
+      "url": "https://github.com/google-gemini/gemini-cli/blob/6006c14a4decfe4b891c6263ad6ad5992e404b5b/packages/core/src/services/chatRecordingService.ts",
+      "sourceBlobSha": "fe7a86762fa799599c050ca06ae4f53ccc77b87f"
+    },
+    {
+      "id": "pi",
+      "url": "https://github.com/svkozak/pi-acp/blob/b0581c9c1d675e634234674484247008b03d69b4/src/acp/agent.ts",
+      "sourceBlobSha": "f3ce031afcb3e93ef87767c6253ba4f2d73891ce"
+    },
+    {
+      "id": "pisession",
+      "url": "https://github.com/svkozak/pi-acp/blob/b0581c9c1d675e634234674484247008b03d69b4/src/acp/session.ts",
+      "sourceBlobSha": "1c97b24fdcd2eb6f2ad9b23f96ead9e451b8be96"
+    },
+    {
+      "id": "pistore",
+      "url": "https://github.com/svkozak/pi-acp/blob/b0581c9c1d675e634234674484247008b03d69b4/src/acp/session-store.ts",
+      "sourceBlobSha": "acc80f2ad60a118d5da68afe159c157b9e4e1c6d"
+    },
+    {
+      "id": "pifind",
+      "url": "https://github.com/svkozak/pi-acp/blob/b0581c9c1d675e634234674484247008b03d69b4/src/acp/pi-sessions.ts",
+      "sourceBlobSha": "56ae1088f02655393c9085b3f765c5ffad36f38f"
+    },
+    {
+      "id": "pipaths",
+      "url": "https://github.com/svkozak/pi-acp/blob/b0581c9c1d675e634234674484247008b03d69b4/src/acp/paths.ts",
+      "sourceBlobSha": "4f55af3b91b09b8a1c6d407af202c34115da285b"
+    },
+    {
+      "id": "picommand",
+      "url": "https://github.com/svkozak/pi-acp/blob/b0581c9c1d675e634234674484247008b03d69b4/src/pi-rpc/process.ts",
+      "sourceBlobSha": "160cc90e0db0bedbbfc1843c210200af13be04b8"
+    },
+    {
+      "id": "pinative",
+      "url": "https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/packages/coding-agent/src/core/session-manager.ts",
+      "sourceBlobSha": "df5281a0a4258462b14faa7d055efa09783ea6aa"
+    },
+    {
+      "id": "opencode",
+      "url": "https://github.com/anomalyco/opencode/blob/148842ef7cb1bc34192b3fff57d0f9721ab9c801/packages/opencode/src/acp/agent.ts",
+      "sourceBlobSha": "a7c59a2615519d6ebe5b237181bd5fadd8233b90"
+    },
+    {
+      "id": "opencodesvc",
+      "url": "https://github.com/anomalyco/opencode/blob/148842ef7cb1bc34192b3fff57d0f9721ab9c801/packages/opencode/src/acp/service.ts",
+      "sourceBlobSha": "c542e2b75320b656549740c293794103908bc16f"
+    },
+    {
+      "id": "opencodesession",
+      "url": "https://github.com/anomalyco/opencode/blob/148842ef7cb1bc34192b3fff57d0f9721ab9c801/packages/opencode/src/acp/session.ts",
+      "sourceBlobSha": "f6a7a56bac2f40e4d4cce8246b783608c2b82617"
+    },
+    {
+      "id": "ocsession",
+      "url": "https://github.com/anomalyco/opencode/blob/148842ef7cb1bc34192b3fff57d0f9721ab9c801/packages/opencode/src/session/session.ts",
+      "sourceBlobSha": "a2a91cd47b5e854606444d1fc09fb18515fbe3b7"
+    },
+    {
+      "id": "ocdb",
+      "url": "https://github.com/anomalyco/opencode/blob/148842ef7cb1bc34192b3fff57d0f9721ab9c801/packages/core/src/database/database.ts",
+      "sourceBlobSha": "d61adf047eacf13ab8af01a4726cb187faebaeb0"
+    },
+    {
+      "id": "ocglobal",
+      "url": "https://github.com/anomalyco/opencode/blob/148842ef7cb1bc34192b3fff57d0f9721ab9c801/packages/core/src/global.ts",
+      "sourceBlobSha": "a192a4b4684fe2dc308665f3d3fa64c866bf8ccc"
+    },
+    {
+      "id": "copilotacp",
+      "url": "https://github.com/github/docs/blob/943e6d816a55df71c974921348c177f344377c8d/content/copilot/reference/copilot-cli-reference/acp-server.md",
+      "sourceBlobSha": "08a75d7eae3a13e5039cdd54e673a7a8a35ad193"
+    },
+    {
+      "id": "copilotconfig",
+      "url": "https://github.com/github/docs/blob/943e6d816a55df71c974921348c177f344377c8d/content/copilot/reference/copilot-cli-reference/cli-config-dir-reference.md",
+      "sourceBlobSha": "0796a6d5a073ed0083444e3f325068762f0ab92d"
+    }
+  ]
+}

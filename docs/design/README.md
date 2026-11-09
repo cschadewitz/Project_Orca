@@ -22,8 +22,9 @@ docs/design/                   this folder
   README.md                    this file: layout, how to consume it, the brand book
   RULES.md                     the checklist an agent holds in context on every task
   claude-design-prompt.md      the brief the system was designed from
-  10-…80-*.md                  information architecture, attention, long-running content,
-                               connection states, a11y, implementation, workflow editing, plan graph
+  10-…90-*.md                  information architecture, attention, long-running content,
+                               connection states, a11y, implementation, workflow editing, plan graph,
+                               setup, launch and maintenance
 ```
 
 ## Build and check
@@ -281,10 +282,14 @@ the token; do not inline the number.
 | The workflow editor: structured edits, drafts, validation, run pinning | `70-workflow-editing.md` |
 | The graph canvases: fixed node boxes, zoom, direction, the minimap | `70-workflow-editing.md`, keys in `50-accessibility-and-keyboard.md` |
 | The two dependency-graph options and the recommendation | `80-dependency-graph-options.md` |
+| Guided launch, first-run setup, diagnostics, the template studio, updates | `90-setup-launch-and-maintenance.md` |
 | The brief the system was designed from | `claude-design-prompt.md` |
 | How closely the app matched the Claude Design artifact, and the drift still open | [`../reviews/2026-10-10-design-conformance.md`](../reviews/2026-10-10-design-conformance.md) |
 
 The rendered version of this system — live component previews, both themes side by side, and
-the seven key screens — lives in a Claude artifact. It is the review surface, not the source:
-when these files change and you want the visual review refreshed, republish it from this
-folder.
+the seven key screens — lives in a Claude Design System artifact,
+[ORCA](https://claude.ai/artifact/PCEoFKbHgCbYG7AW1XjhWg). It is the review surface, not the
+source: these files win wherever the two differ. When these files change and you want the
+visual review refreshed, republish it from this folder. Its `project/*.md` sections are these
+files, and its `tokens.json`, `components/bundle.css` and `components/index.d.ts` are
+`packages/design`'s `tokens.json`, `css/components.css` and `src/component-api.d.ts`.

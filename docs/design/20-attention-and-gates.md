@@ -74,6 +74,31 @@ An option is a rejection when it is marked `destructive`, which the engine reads
 selection doesn't, the button is disabled and says why. It never sends an allow with a deny
 rule. The daemon refuses that mismatch from any client too.
 
+## Request changes and recorded corrections
+
+A gate that offers a revision action also carries a **Request changes** form
+(`attention/revision-card.tsx`, docs/revision-input.md). It is the same component on Attention
+and inline in step detail. It is shown only when the gate names its current revision boundary,
+the decision's artifacts have loaded, and the connection supports revisions. Otherwise the card
+says which of those is missing in one `caption` line instead of offering the form. A submitted
+correction stays on the surface as a **Recorded correction** card while it is pending. It can
+be edited only while the daemon says a replacement is still allowed, and **Refresh correction**
+re-reads it. The person's draft is kept while it re-reads.
+
+## Scoped permission choices
+
+A permission card can carry a **scoped permission review** in place of its plain options
+(`attention/scoped-rule-choices.tsx`, #702). It separates three outcomes and says which one
+happened:
+- a one-time answer, which creates no rule
+- a denial, which creates no rule
+- a reviewed rule save, which does not approve or dispatch the call it came from
+
+A stale review is sent nothing and can be reviewed again. A reply lost after dispatch is
+reported as uncertain, not refused, and the card tells the person not to repeat the choice
+until they refresh. As of 0.7.0 this is inactive: it renders only when an owner injects a review
+port, and no production registration or policy default changes.
+
 ## Notifications
 
 OS notifications are opt-in per tier and default to permission asks only. Clicking one focuses
