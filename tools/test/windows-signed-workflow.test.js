@@ -177,3 +177,12 @@ describe("the packaged updater publisher check", () => {
     );
   });
 });
+
+it("pins every action in the signing workflow to a full commit SHA", () => {
+  const uses = Object.values(signed.jobs).flatMap((job) => job.steps.map((s) => s.uses).filter(Boolean));
+  expect(uses.length).toBeGreaterThan(0);
+  for (const ref of uses) expect(ref).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
+  expect(readFileSync(new URL("../../.github/workflows/windows-signed.yml", import.meta.url), "utf8")).toMatch(
+    /uses: azure\/login@[0-9a-f]{40} # v3\.\d+\.\d+/,
+  );
+});
