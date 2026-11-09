@@ -26,6 +26,15 @@
 # installs, the Windows SDK signtool and the actions pinned below. The builder integration
 # signs inner executables during packaging, so packaging cannot move out of this job.
 #
+# What the digest does and does not prove. `bundle-sha256` binds the tarball `sign` unpacks
+# to the one `prepare` produced in this run; it is transfer integrity, not provenance. The
+# bundle is trusted because of its inputs: the checked-out commit, the frozen lockfile (pnpm
+# checks every package against its lockfile integrity hash), checksum-verified Node headers,
+# and a GitHub-hosted runner image, with no cache restored in either job. Accepted residual
+# for this spike: locked dependencies' lifecycle scripts and build tools run in `prepare` and
+# can shape the output. Outputs of this workflow are inspection artifacts, not release
+# candidates; a release lane needs its own provenance review (e.g. build attestation).
+#
 # Manual dispatch from `main` only. The output is an artifact for inspection on a clean
 # Windows VM (runbook "Future step 4"); nothing here creates a release, uploads to a feed or
 # feeds `release-publish.yml`. Successful signing here is not release acceptance.
@@ -67,10 +76,11 @@ jobs:
 
       - uses: pnpm/action-setup@v6
 
+      # No dependency cache here either: what gets signed is built from this commit and the
+      # registry's lockfile-pinned packages, not from state another workflow left behind.
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 

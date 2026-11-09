@@ -89,6 +89,7 @@ it("builds in a job that cannot request an OIDC token", () => {
   for (const name of ["Build", "Build the bundled daemon", "The bundled daemon answers authenticated hello"])
     expect(step(signed, "prepare", name)).toBeDefined();
   expect(prepare.steps.find((s) => s.run === "pnpm install --frozen-lockfile")).toBeDefined();
+  for (const s of prepare.steps) expect(s.with?.cache).toBeUndefined();
 });
 
 it("runs no dependency lifecycle scripts and restores no cache where the token is available", () => {
