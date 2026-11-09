@@ -1,5 +1,5 @@
-Add the inbound MCP operator adapter, authenticated stdio/Streamable HTTP entry points,
-allowlisted bounded read projections, guarded lifecycle tool contracts and reference-client
-coverage. This is a parallel implementation handoff: production read wiring is supplied as
-an integration patch; retry-safe mutation/continuation wiring and actual-Cal deployment
-acceptance remain separate integration gates.
+Add the inbound MCP operator adapter with authenticated stdio/Streamable HTTP entry points,
+allowlisted bounded read projections and guarded lifecycle tools. It is for **single-owner
+use only**: one owner operating their own daemon. Missing- and invalid-credential refusal
+is source-tested only and has not been live-passed (#392). Scoped access for other users or
+agents (#598) has not been passed and is not offered.

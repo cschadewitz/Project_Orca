@@ -145,7 +145,16 @@ jobs:
             echo
             echo "---"
             echo
-            node tools/release.js notes "$VERSION"
+            # GitHub refuses a pull request body over 65,536 characters, and by now the
+            # branch is already pushed, so a long changelog would leave a half-done prepare.
+            # Past a safe margin, point at the notes on the branch instead of inlining them.
+            node tools/release.js notes "$VERSION" > /tmp/release-notes.md
+            if [ "$(wc -m < /tmp/release-notes.md)" -gt 60000 ]; then
+              echo "The notes are too long for a pull request body. Read them in"
+              echo "[\`CHANGELOG.md\` on this branch](https://github.com/$REPO/blob/release/v$VERSION/CHANGELOG.md)."
+            else
+              cat /tmp/release-notes.md
+            fi
           } > /tmp/pr-body.md
 
           gh pr create --base main --head "release/v$VERSION" \

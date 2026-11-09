@@ -4,4 +4,3 @@ encodings; older binaries may refuse affected typed sidecars or scoped-grant
 material after a downgrade. Existing finite grants are neither migrated nor
 extended. Preserve the matching protected approvals and key material; rewriting an
 until-revoked grant as a legacy finite grant is not a compatibility mechanism.
-Store compatibility and rollback require review before activation or release.
