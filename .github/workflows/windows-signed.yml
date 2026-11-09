@@ -69,16 +69,15 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       # The exact commit the dispatch resolved, not a moving ref.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
-
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       # No dependency cache here either: what gets signed is built from this commit and the
       # registry's lockfile-pinned packages, not from state another workflow left behind.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -146,12 +145,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tar -cf windows-signed-build.tar --exclude='*.tsbuildinfo' packages/*/dist
+          tar -cf windows-signed-build.tar --exclude='*.tsbuildinfo' --exclude=packages/app/dist/release packages/*/dist
           sha=$(sha256sum windows-signed-build.tar | cut -d' ' -f1)
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"
           echo "build bundle sha256 $sha for ${{ github.sha }}"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-signed-build-${{ github.sha }}
           path: windows-signed-build.tar
@@ -176,7 +175,7 @@ jobs:
       WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
       WINDOWS_SIGNING_PUBLISHER_CN: ${{ vars.WINDOWS_SIGNING_PUBLISHER_CN }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -194,10 +193,9 @@ jobs:
           esac
           exit "$missing"
 
-      - uses: pnpm/action-setup@v6
-
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       # No dependency cache: a signing job should not restore state another workflow wrote.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -205,7 +203,7 @@ jobs:
       # build output those scripts would matter for comes from `prepare`.
       - run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-signed-build-${{ github.sha }}
 
@@ -222,11 +220,19 @@ jobs:
           node tools/packaged-windows/build-bundle.js --bundle windows-signed-build.tar --sha256 "$EXPECTED_SHA256" --root .
           rm windows-signed-build.tar
 
+      # The builder's output must start empty, so everything verified and uploaded below
+      # is what this job's signer produced.
+      - name: The builder output directory is empty
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -e packages/app/dist/release ] || [ -L packages/app/dist/release ]; then echo "::error::packages/app/dist/release exists before packaging"; exit 1; fi
+
       # Creates the Azure CLI session the signer uses; the action's post step logs it out.
       # Every step of this job could request an OIDC token (see the header), which is why
       # the steps above run no dependency lifecycle scripts.
       - name: Azure login (OIDC, no secret)
-        uses: azure/login@v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -316,7 +322,7 @@ jobs:
 
       # For inspection on a clean VM only. Short retention, never a release asset.
       - name: Upload the signed artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-signed-${{ github.sha }}
           path: |

@@ -119,6 +119,12 @@ it("unpacks only the digest-checked build output of the same run, before Azure l
   expect(unpack.run).not.toMatch(/tar -[tx]|grep/);
   expect(index("Verify and unpack the build output")).toBeLessThan(index("Azure login (OIDC, no secret)"));
   expect(index("Azure login (OIDC, no secret)")).toBeLessThan(index("Package and sign"));
+  expect(index("Verify and unpack the build output")).toBeLessThan(index("The builder output directory is empty"));
+  expect(index("The builder output directory is empty")).toBeLessThan(index("Azure login (OIDC, no secret)"));
+  expect(step(signed, "sign", "The builder output directory is empty").run).toMatch(
+    /\[ -e packages\/app\/dist\/release \] \|\| \[ -L packages\/app\/dist\/release \]/,
+  );
+  expect(step(signed, "prepare", "Bundle the build output").run).toContain("--exclude=packages/app/dist/release");
 });
 
 it("stages native addons exactly as the unsigned Desktop lane does", () => {
@@ -174,4 +180,13 @@ describe("the packaged updater publisher check", () => {
       "node tools/packaged-windows/verify-update-publisher.js --root $root --publisher $expected",
     );
   });
+});
+
+it("pins every action in the signing workflow to a full commit SHA", () => {
+  const uses = Object.values(signed.jobs).flatMap((job) => job.steps.map((s) => s.uses).filter(Boolean));
+  expect(uses.length).toBeGreaterThan(0);
+  for (const ref of uses) expect(ref).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
+  expect(readFileSync(new URL("../../.github/workflows/windows-signed.yml", import.meta.url), "utf8")).toMatch(
+    /uses: azure\/login@[0-9a-f]{40} # v3\.\d+\.\d+/,
+  );
 });
