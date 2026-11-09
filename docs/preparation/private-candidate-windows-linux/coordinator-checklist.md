@@ -103,10 +103,7 @@ declare.
   it avoids the warning, and don't pre-unblock files.
 - [ ] **G7 No unsupported claims.** The guide and notes claim no supported provider,
   ReviewJudge, tool-guard rule or MCP-operator use (readiness C6/C7). Provider profiles
-  and ORCA-owned rules stay "inactive preparation". Observer is the final planned
-  feature, but has not been accepted. Record its acceptance decision separately before
-  freezing a release candidate; this onboarding exercise cannot accept it. See the
-  [release guidance](../private-beta-release-guidance.md).
+  and ORCA-owned rules stay "inactive preparation".
 - [ ] **G8 Diagnostics still off.** At `{{CANDIDATE_COMMIT}}`,
   `packages/app/src/diagnostics-contract.ts` still has
   `DIAGNOSTICS_PRODUCTION_ENABLED = false`. If a candidate ever enables capture, stop.

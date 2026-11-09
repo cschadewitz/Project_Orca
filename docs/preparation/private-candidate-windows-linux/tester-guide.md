@@ -59,8 +59,6 @@ at all.
 - **Earlier installs:** if you have ever installed or run ORCA on this computer under this
   user account, stop and tell your coordinator first. Upgrading an existing install is not
   verified for this round. Do not delete anything to make room.
-- **Observer:** acceptance is still pending. This first-run trial does not test or
-  accept Observer.
 
 ## Steps
 
