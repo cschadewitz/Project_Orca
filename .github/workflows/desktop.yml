@@ -86,6 +86,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
+          # Nothing in this job pushes or fetches, and some of its runners are persistent
+          # self-hosted hosts: leave no token in .git/config for the job's duration.
+          persist-credentials: false
 
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
       # resolve the store path. Version comes from package.json packageManager.
@@ -238,8 +241,10 @@ jobs:
           fi
 
       # The definition of done, as far as a runner can check it: launch the packaged app
-      # with no daemon running and nothing in `ORCA_DAEMON_URL`, and see the bundled daemon
-      # come up under it. The app forwards the daemon's own output (`onLog` in
+      # with no daemon running, nothing in `ORCA_DAEMON_URL` and a disposable `ORCA_WORKSPACE`
+      # as its explicit target, and see the bundled daemon come up under it. (A bare first
+      # launch opens disconnected for setup by design; the first-run selection path is not
+      # covered here.) The app forwards the daemon's own output (`onLog` in
       # src/main/index.ts), so its listening line appearing in the app's log is the
       # bundled daemon having been found, spawned and answered.
       #
@@ -257,16 +262,18 @@ jobs:
             echo "::error::The self-hosted runner must support unprivileged user namespaces for Chromium's sandbox."
             exit 1
           fi
-          profile=$(mktemp -d)
+          # Under RUNNER_TEMP, which the runner empties after each job, so persistent
+          # self-hosted runners keep no profile, store or local-client token from this run.
+          profile=$(mktemp -d "$RUNNER_TEMP/orca-app-profile.XXXXXX")
           # Without an explicit target or a verified first-run selection the app opens
           # disconnected for setup by design (src/main/index.ts), so give it a disposable
           # workspace: that is the explicit target that makes it start its bundled daemon.
-          workspace=$(mktemp -d)
-          ORCA_WORKSPACE="$workspace" setsid xvfb-run -a packages/app/dist/release/linux-unpacked/orca \
+          workspace=$(mktemp -d "$RUNNER_TEMP/orca-app-workspace.XXXXXX")
+          env -u ORCA_DAEMON_URL ORCA_WORKSPACE="$workspace" setsid xvfb-run -a packages/app/dist/release/linux-unpacked/orca \
             --user-data-dir="$profile" > app.log 2>&1 &
           app=$!
           # The display, app and bundled daemon share this job's own process group.
-          trap 'kill -- "-$app" 2>/dev/null || true' EXIT
+          trap 'kill -- "-$app" 2>/dev/null || true; sleep 1; rm -rf "$profile" "$workspace" || true' EXIT
           for _ in $(seq 1 60); do
             if grep -q 'listening on http://127.0.0.1:' app.log; then break; fi
             sleep 1
