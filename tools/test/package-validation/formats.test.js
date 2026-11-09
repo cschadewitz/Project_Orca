@@ -1,4 +1,5 @@
 /** Bounded readers on benign in-memory fixtures (#772). No artifact is extracted or run. */
+import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
@@ -14,6 +15,7 @@ import {
   readZip,
 } from "../../package-validation/formats.js";
 import {
+  asarIntegrity,
   blockmap,
   gnuLongBlock,
   makeAsar,
@@ -315,6 +317,121 @@ describe("tar.gz contract", () => {
       header.write(sum.toString(8).padStart(6, "0") + "\0 ", 148, "ascii");
       refuses([header], /tar_header_invalid/);
     });
+    it.each([
+      [
+        "a traversing ustar name under PAX path",
+        () => [paxBlock([["path", "top/ok"]]), tarBlock("../../../tmp/evil", "x")],
+      ],
+      [
+        "a traversing ustar prefix under PAX path",
+        () => [paxBlock([["path", "top/ok"]]), tarBlock("evil", "x", { prefix: "/tmp" })],
+      ],
+      [
+        "a traversing ustar name under GNU L",
+        () => [gnuLongBlock("L", "top/ok"), tarBlock("../../../tmp/evil", "x", { format: "gnu" })],
+      ],
+      [
+        "an absolute ustar linkname under PAX linkpath",
+        () => [paxBlock([["linkpath", "ok"]]), tarBlock("top/s", "", { type: "2", linkName: "/etc/passwd" })],
+      ],
+      [
+        "a traversing hardlink linkname under PAX linkpath",
+        () => [
+          tarBlock("top/a", "x"),
+          paxBlock([["linkpath", "top/a"]]),
+          tarBlock("top/h", "", { type: "1", linkName: "../../etc/shadow" }),
+        ],
+      ],
+      [
+        "a traversing ustar linkname under GNU K",
+        () => [
+          gnuLongBlock("K", "ok"),
+          tarBlock("top/s", "", { type: "2", linkName: "../../../etc/passwd", format: "gnu" }),
+        ],
+      ],
+    ])("refuses %s (the shadowed field is checked too)", (_, blocks) => {
+      refuses(blocks(), /tar_shadowed_field_unsafe/);
+    });
+    it("accepts a safe truncated copy in the shadowed ustar fields", () => {
+      expect(
+        names([
+          paxBlock([["path", `${longDir}/file`]]),
+          tarBlock(`${longDir}/file`.slice(0, 99), "x"),
+          gnuLongBlock("L", `${longDir}/link`),
+          gnuLongBlock("K", `${"t".repeat(200)}/payload`),
+          tarBlock(`${longDir}/link`.slice(0, 99), "", { type: "2", linkName: "t".repeat(99), format: "gnu" }),
+        ]).map(([name, kind]) => [name, kind]),
+      ).toEqual([
+        [`${longDir}/file`, "file"],
+        [`${longDir}/link`, "symlink"],
+      ]);
+    });
+    it.each([
+      ["file", "0"],
+      ["directory", "5"],
+    ])("refuses a ustar linkname on a %s", (_, type) => {
+      refuses([tarBlock("top/a", "", { type, linkName: "../../etc/passwd" })], /tar_header_invalid: link target on a/);
+    });
+    it.each([
+      [
+        "a missing member",
+        () => [tarBlock("top/a", "x"), tarBlock("top/h", "", { type: "1", linkName: "top/missing" })],
+      ],
+      [
+        "a directory",
+        () => [tarBlock("top/", "", { type: "5" }), tarBlock("top/h", "", { type: "1", linkName: "top" })],
+      ],
+      [
+        "a directory spelled with its slash",
+        () => [tarBlock("top/", "", { type: "5" }), tarBlock("top/h", "", { type: "1", linkName: "top/" })],
+      ],
+      ["itself", () => [tarBlock("top/h", "", { type: "1", linkName: "top/h" })]],
+      ["a later member", () => [tarBlock("top/h", "", { type: "1", linkName: "top/a" }), tarBlock("top/a", "x")]],
+      [
+        "a symlink",
+        () => [
+          tarBlock("top/a", "x"),
+          tarBlock("top/s", "", { type: "2", linkName: "a" }),
+          tarBlock("top/h", "", { type: "1", linkName: "top/s" }),
+        ],
+      ],
+    ])("refuses a hardlink to %s", (_, blocks) => {
+      refuses(blocks(), /tar_hardlink_invalid/);
+    });
+    it.each([
+      ["a regular file", () => tarBlock("top/orca/", "ELFBODY")],
+      ["an old NUL-type file", () => tarHeader("top/orca/", { type: "\0" })],
+      ["a symlink", () => tarBlock("top/s/", "", { type: "2", linkName: "a" })],
+      ["a PAX-named file", () => Buffer.concat([paxBlock([["path", "top/orca/"]]), tarBlock("top/orca", "x")])],
+    ])("refuses %s whose name ends in /", (_, block) => {
+      refuses([block()], /tar_header_invalid: \w+ name ends in \//);
+    });
+    it.each([
+      ["name", 0],
+      ["prefix", 345],
+      ["linkname", 157],
+    ])("refuses invalid UTF-8 in the ustar %s field", (_, at) => {
+      const header = tarHeader("top/a", { type: at === 157 ? "2" : "0", linkName: at === 157 ? "b" : "" });
+      header.fill(0, at, at + 8);
+      header.write("top/", at, "ascii");
+      header.set([0xff, 0xfe], at + 4);
+      let sum = 0;
+      header.fill(0x20, 148, 156);
+      for (const byte of header) sum += byte;
+      header.write(sum.toString(8).padStart(6, "0") + "\0 ", 148, "ascii");
+      refuses([header], /tar_header_invalid: name field is not UTF-8/);
+    });
+  });
+
+  describe("gzip framing", () => {
+    const tar = Buffer.concat([tarBlock("top/a", "x"), tarBlock("top/b", "y"), Buffer.alloc(1024)]);
+    it("reads a tar split over concatenated gzip members, as gzip -d does", () => {
+      const split = Buffer.concat([gzipSync(tar.subarray(0, 1024)), gzipSync(tar.subarray(1024))]);
+      expect(readTarGz(split).map((m) => m.name)).toEqual(["top/a", "top/b"]);
+    });
+    it("refuses non-gzip bytes after the gzip stream", () => {
+      expect(() => readTarGz(Buffer.concat([gzipSync(tar), Buffer.from("trailing junk")]))).toThrow(/tar_gzip_invalid/);
+    });
   });
 });
 
@@ -421,6 +538,66 @@ describe("asar", () => {
     );
     expect(() => readAsar(makeAsar({ "a/link": { link: "../../outside" } }))).toThrow(/asar_link_escapes/);
     expect(() => readAsar(Buffer.alloc(32))).toThrow(/asar_header_invalid/);
+  });
+  it.each([
+    ["true", true],
+    ["false", false],
+    ['the string "no"', "no"],
+    ["the number 1", 1],
+    ["null", null],
+  ])("refuses any unpacked entry (unpacked: %s), keeping offset and integrity or not", (_, value) => {
+    expect(() => readAsar(makeAsar({ "a.js": { unpacked: value, size: 4 } }))).toThrow(
+      /asar_unpacked_unsupported: a.js/,
+    );
+    const packedButFlagged = makeAsar(
+      { "a.js": "body", "b.js": "body" },
+      {
+        edit: (tree) => {
+          tree.files["a.js"].unpacked = value;
+          delete tree.files["b.js"].integrity;
+          tree.files["b.js"].unpacked = value;
+        },
+      },
+    );
+    expect(() => readAsar(packedButFlagged)).toThrow(/asar_unpacked_unsupported: a.js/);
+    const flaggedDirectory = makeAsar({ "dir/a.js": "x" }, { edit: (tree) => (tree.files.dir.unpacked = value) });
+    expect(() => readAsar(flaggedDirectory)).toThrow(/asar_unpacked_unsupported: dir/);
+  });
+  it.each(["0x0", " 0 ", "0e0", "-0", "+0", "00", "0.0", "", 0])("refuses non-decimal offset %j", (offset) => {
+    const asar = makeAsar({ "a.js": "abc" }, { edit: (tree) => (tree.files["a.js"].offset = offset) });
+    expect(() => readAsar(asar)).toThrow(/asar_offset_invalid/);
+  });
+  describe("integrity block layout (@electron/asar 3.4.1 getFileIntegrity)", () => {
+    const MiB4 = 4 * 1024 * 1024;
+    it.each([
+      [0, 1],
+      [1, 1],
+      [MiB4 - 1, 1],
+      [MiB4, 2],
+      [MiB4 + 1, 2],
+      [2 * MiB4, 3],
+    ])("accepts a %i-byte file with %i block hashes, the last empty at exact multiples", (size, count) => {
+      const body = Buffer.alloc(size, 0x61);
+      const asar = readAsar(makeAsar({ "big.bin": body }));
+      expect(asar.files.get("big.bin").integrity.blocks).toHaveLength(count);
+      expect(checkAsarIntegrity(asar)).toBe(1);
+    });
+    it.each([
+      ["ceil(len / blockSize) blocks at an exact multiple", MiB4, 1],
+      ["an extra block after a partial one", MiB4 + 1, 3],
+      ["no blocks for an empty file", 0, 0],
+    ])("refuses %s", (_, size, count) => {
+      const body = Buffer.alloc(size, 0x61);
+      const blocks = Array.from({ length: count }, (_, i) =>
+        createHash("sha256")
+          .update(body.subarray(i * MiB4, (i + 1) * MiB4))
+          .digest("hex"),
+      );
+      const integrity = { "big.bin": { ...asarIntegrity(body), blocks } };
+      expect(() => checkAsarIntegrity(readAsar(makeAsar({ "big.bin": body }, { integrity })))).toThrow(
+        /asar_integrity_mismatch: big.bin/,
+      );
+    });
   });
 });
 

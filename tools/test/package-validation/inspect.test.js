@@ -238,7 +238,11 @@ describe("content refusals", () => {
 
     it.each([
       ["a long PAX path", { name: `${top}/${"x/".repeat(60)}../../../../${"../".repeat(60)}escape`, body: "x" }],
-      ["a long PAX linkpath", { name: `${top}/link`, kind: "symlink", linkName: `${"../".repeat(40)}etc/passwd` }],
+      [
+        "a long PAX linkpath",
+        // A safe shadowed ustar linkname, so the effective target is what gets refused.
+        { name: `${top}/link`, kind: "symlink", linkName: `${"../".repeat(40)}etc/passwd`, rawLinkName: "placeholder" },
+      ],
     ])("refuses %s that escapes the archive root", (_, entry) => {
       expect(refusal(run({ [linux]: linuxArchive(VERSION, "x64", { extra: [entry] }) }), linux)).toMatch(
         /archive_path_escapes|archive_link_escapes/,
@@ -307,16 +311,41 @@ describe("content refusals", () => {
       ["package.json that is not JSON", { "package.json": "{not json" }, /asar_package_invalid/],
       ["package.json that is null", { "package.json": "null" }, /asar_package_invalid/],
       ["package.json that is an array", { "package.json": "[]" }, /asar_package_invalid/],
-      [
-        "an unpacked renderer font",
-        { "dist/renderer/assets/extra-h4sh.woff2": { unpacked: true, size: 4 } },
-        /renderer_font_unreadable/,
-      ],
-      ["an unpacked index.html", { "dist/renderer/index.html": { unpacked: true, size: 4 } }, /asar_entry_missing/],
     ])("refuses %s", (_, overrides, code) => {
       const report = withAsar(appAsar(VERSION, overrides));
       expect(report.status).toBe("refused");
       expect(refusal(report, linux)).toMatch(code);
+    });
+
+    // An `unpacked` flag would take a file out of integrity coverage, and nothing checks
+    // app.asar.unpacked/ against the tree, so any entry carrying one is refused.
+    it.each([
+      ["a renderer font marked unpacked: true", "dist/renderer/assets/extra-h4sh.woff2", true, false],
+      ["index.html marked unpacked: true", "dist/renderer/index.html", true, false],
+      ['a packed file marked unpacked: "no", integrity removed', "node_modules/dep-a/index.js", "no", true],
+      ["a packed file marked unpacked: 1, integrity removed", "node_modules/dep-a/index.js", 1, true],
+      ["a file marked unpacked: true, with no offset, integrity or tree member", "dist/bridge.js", true, true],
+    ])("refuses %s", (_, path, value, packed) => {
+      const asar = packed
+        ? appAsar(
+            VERSION,
+            {},
+            {
+              edit: (tree) => {
+                const parts = path.split("/");
+                let node = tree;
+                for (const part of parts.slice(0, -1)) node = node.files[part];
+                const entry = node.files[parts.at(-1)];
+                delete entry.integrity;
+                if (value === true) delete entry.offset;
+                entry.unpacked = value;
+              },
+            },
+          )
+        : appAsar(VERSION, { [path]: { unpacked: value, size: 4 } });
+      const report = withAsar(asar);
+      expect(report.status).toBe("refused");
+      expect(refusal(report, linux)).toBe(`asar_unpacked_unsupported: ${path}`);
     });
   });
 
@@ -430,7 +459,7 @@ describe("content refusals", () => {
     if (platform === "linux") {
       cases.push(
         [
-          { name: "a", kind: "hardlink", linkName: "resources.pak" },
+          { name: "a", kind: "hardlink", linkName: `ORCA-${VERSION}/resources.pak` },
           { name: "a/payload", body: "x" },
         ],
         [
@@ -443,7 +472,11 @@ describe("content refusals", () => {
       for (const extra of [entries, [...entries].reverse()]) {
         const report = run(archive(platform, extra));
         expect(report.status).toBe("refused");
-        expect(report.artifacts[0].refusal).toMatch(/archive_(?:ancestor_not_directory|link_escapes)/);
+        // A hardlink through a link ancestor names no earlier regular file, so the tar reader
+        // refuses it before the inspector's ancestor check would.
+        expect(report.artifacts[0].refusal).toMatch(
+          /archive_(?:ancestor_not_directory|link_escapes)|tar_hardlink_invalid/,
+        );
       }
     }
   });

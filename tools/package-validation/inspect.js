@@ -192,7 +192,7 @@ export function daemonVersion(bytes) {
   return stamps[0][1];
 }
 
-/** A packed ASAR body, or a refusal: an absent or unpacked entry has no bytes to check. */
+/** A packed ASAR body, or a refusal: an absent entry or a non-file has no bytes to check. */
 function packedBody(asar, path, code = "asar_entry_missing") {
   const body = asar.read(path);
   if (!body) fail(code, path);
@@ -279,7 +279,6 @@ function inspectAsar(bytes, source, expectedVersion) {
       asarSha256: sha256(bytes),
       asarHeaderSha256: asar.headerSha256,
       asarEntries: names.length,
-      unpackedEntries: names.filter((name) => asar.files.get(name).unpacked),
       // `files` excludes `*.d.ts` only; the app's own `.d.cts` and dependencies' typings ship.
       appDeclarationFiles: names.filter((name) => name.startsWith("dist/") && /\.d\.[cm]ts$/.test(name)),
       dependencyDeclarationFiles: names.filter((name) => name.startsWith("node_modules/") && /\.d\.[cm]?ts$/.test(name))

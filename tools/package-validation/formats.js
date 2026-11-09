@@ -62,6 +62,19 @@ function cString(block, start, length) {
   return slice.subarray(0, end === -1 ? slice.length : end).toString("utf8");
 }
 
+// Header name fields must be valid UTF-8, like PAX values and GNU long names: a lossy
+// decode would report a name that is not the one stored, and could make two names equal.
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+function nameField(block, start, length) {
+  const slice = block.subarray(start, start + length);
+  const end = slice.indexOf(0);
+  try {
+    return strictUtf8.decode(slice.subarray(0, end === -1 ? slice.length : end));
+  } catch {
+    return fail("tar_header_invalid", "name field is not UTF-8");
+  }
+}
+
 function octal(block, start, length) {
   const text = cString(block, start, length).trim();
   if (!/^[0-7]*$/.test(text)) fail("tar_header_invalid", "non-octal numeric field");
@@ -144,6 +157,8 @@ export function readTarGz(compressed) {
   // Extended headers waiting for the member they describe; at most one of each.
   let pending = {};
   let ended = false;
+  // Effective member names read so far, to their kinds: the hardlink-target index.
+  const earlier = new Map();
   while (offset + 512 <= tar.length) {
     const header = tar.subarray(offset, offset + 512);
     if (header.every((byte) => byte === 0)) {
@@ -181,16 +196,35 @@ export function readTarGz(compressed) {
       fail("tar_extended_header_mixed", "GNU long name before a POSIX member");
     // The ustar prefix (345-499) exists only in POSIX headers; in GNU headers those bytes
     // are atime/ctime/offset fields and are never part of the name.
-    const prefix = format === "posix" ? cString(header, 345, 155) : "";
-    const stored = cString(header, 0, 100);
-    const name = pending.x?.path ?? pending.L ?? (prefix ? `${prefix}/${stored}` : stored);
+    const prefix = format === "posix" ? nameField(header, 345, 155) : "";
+    const stored = nameField(header, 0, 100);
+    const rawName = prefix ? `${prefix}/${stored}` : stored;
+    const rawLink = nameField(header, 157, 100);
+    const name = pending.x?.path ?? pending.L ?? rawName;
     const isLink = kind === "symlink" || kind === "hardlink";
     if (!isLink && (pending.x?.linkpath !== undefined || pending.K !== undefined))
       fail("tar_extended_header_invalid", `link target on a ${kind}`);
+    if (!isLink && rawLink) fail("tar_header_invalid", `link target on a ${kind}`);
     if (kind !== "file" && size !== 0) fail("tar_header_invalid", `${kind} with a body`);
-    const linkName = pending.x?.linkpath ?? pending.K ?? cString(header, 157, 100);
+    // GNU tar extracts a regular file named `x/` as a directory, Python's tarfile as a file.
+    if (kind !== "directory" && name.endsWith("/")) fail("tar_header_invalid", `${kind} name ends in /`);
+    const linkName = pending.x?.linkpath ?? pending.K ?? rawLink;
+    // A reader that ignores the extended header sees the ustar fields instead, so a shadowed
+    // name or link target must be as safe as the effective one. Writers put a truncated
+    // copy of the long value there, which passes.
+    if ((pending.x?.path !== undefined || pending.L !== undefined) && !containedPath(rawName))
+      fail("tar_shadowed_field_unsafe", `name ${JSON.stringify(rawName)}`);
+    if (
+      (pending.x?.linkpath !== undefined || pending.K !== undefined) &&
+      !(kind === "hardlink" ? containedPath(rawLink) : containedLink(name, rawLink))
+    )
+      fail("tar_shadowed_field_unsafe", `link target ${JSON.stringify(rawLink)}`);
+    // A hardlink must name an earlier regular-file member: never a directory, itself, a
+    // later member or a file outside the archive (which extraction could otherwise link).
+    if (kind === "hardlink" && earlier.get(linkName) !== "file") fail("tar_hardlink_invalid", `${name} -> ${linkName}`);
     pending = {};
     if (members.length >= MAX_ENTRIES) fail("tar_too_many_entries");
+    earlier.set(name, kind);
     members.push({
       name,
       kind,
@@ -302,7 +336,8 @@ export function readZip(bytes) {
 
 /**
  * The header of an Electron ASAR archive and a reader over its packed bodies. Unpacked
- * entries live in `app.asar.unpacked` and are reported, not read.
+ * entries (`app.asar.unpacked`) are refused: the producer emits none, and an `unpacked` flag
+ * would otherwise take a file out of integrity coverage with nothing checking the other side.
  */
 export function readAsar(bytes) {
   if (bytes.length < 16 || bytes.readUInt32LE(0) !== 4) fail("asar_header_invalid");
@@ -326,6 +361,8 @@ export function readAsar(bytes) {
         fail("asar_entry_name_invalid", JSON.stringify(segment));
       const path = prefix ? `${prefix}/${segment}` : segment;
       if (files.size >= MAX_ENTRIES) fail("asar_too_many_entries");
+      if (child && typeof child === "object" && Object.hasOwn(child, "unpacked"))
+        fail("asar_unpacked_unsupported", path);
       if (child && typeof child.files === "object") {
         files.set(path, { kind: "directory" });
         walk(child, path, depth + 1);
@@ -333,13 +370,11 @@ export function readAsar(bytes) {
         if (!containedLink(path, child.link, { rootRelative: true })) fail("asar_link_escapes", path);
         files.set(path, { kind: "symlink", link: child.link });
       } else if (child && Number.isSafeInteger(child.size) && child.size >= 0) {
-        if (child.unpacked) {
-          files.set(path, { kind: "file", unpacked: true, size: child.size });
-          continue;
-        }
-        const offset = Number(child.offset);
-        if (typeof child.offset !== "string" || !Number.isSafeInteger(offset) || offset < 0)
+        // A plain decimal string, as @electron/asar writes it: no hex, sign, exponent or spaces.
+        if (typeof child.offset !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(child.offset))
           fail("asar_offset_invalid", path);
+        const offset = Number(child.offset);
+        if (!Number.isSafeInteger(offset)) fail("asar_offset_invalid", path);
         if (base + offset + child.size > bytes.length) fail("asar_truncated", path);
         files.set(path, {
           kind: "file",
@@ -354,21 +389,21 @@ export function readAsar(bytes) {
   walk(header, "", 0);
   const read = (path) => {
     const entry = files.get(path);
-    if (!entry || entry.kind !== "file" || entry.unpacked) return undefined;
+    if (!entry || entry.kind !== "file") return undefined;
     return bytes.subarray(base + entry.offset, base + entry.offset + entry.size);
   };
   return { files, read, headerSha256: sha256(bytes.subarray(16, 16 + length)) };
 }
 
 /**
- * ASAR per-file integrity: whole-file and per-block SHA-256. Every packed (not unpacked)
- * file must carry a complete record; a missing or partial record is refused, not skipped.
- * Returns the number of files checked, which is then every packed file.
+ * ASAR per-file integrity: whole-file and per-block SHA-256. Every file (all are packed;
+ * see `readAsar`) must carry a complete record; a missing or partial record is refused, not
+ * skipped. Returns the number of files checked, which is then every file.
  */
 export function checkAsarIntegrity(asar) {
   let checked = 0;
   for (const [path, entry] of asar.files) {
-    if (entry.kind !== "file" || entry.unpacked) continue;
+    if (entry.kind !== "file") continue;
     if (!entry.integrity) fail("asar_integrity_missing", path);
     const { algorithm, hash, blockSize, blocks } = entry.integrity;
     if (
@@ -381,7 +416,9 @@ export function checkAsarIntegrity(asar) {
       fail("asar_integrity_invalid", path);
     const body = asar.read(path);
     if (hash !== sha256(body)) fail("asar_integrity_mismatch", path);
-    const expected = Math.max(1, Math.ceil(body.length / blockSize));
+    // @electron/asar 3.4.1 (`getFileIntegrity`) hashes each full block, then always one final
+    // block in `flush`: floor(len / blockSize) + 1 blocks, the last empty at exact multiples.
+    const expected = Math.floor(body.length / blockSize) + 1;
     if (blocks.length !== expected) fail("asar_integrity_mismatch", path);
     for (let i = 0; i < blocks.length; i++)
       if (blocks[i] !== sha256(body.subarray(i * blockSize, (i + 1) * blockSize)))

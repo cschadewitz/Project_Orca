@@ -69,8 +69,26 @@ export function makeSource(version) {
   return { root, commit: git("rev-parse", "HEAD").trim(), write };
 }
 
-/** An ASAR archive with per-file SHA-256 integrity, in electron's header-pickle layout. */
-export function makeAsar(files, { tamper, integrity = {} } = {}) {
+const ASAR_BLOCK = 4 * 1024 * 1024;
+
+/**
+ * Per-file integrity as @electron/asar 3.4.1 `getFileIntegrity` writes it: a hash per full
+ * 4 MiB block, then always one final block, so a file of exactly N blocks records N + 1.
+ */
+export function asarIntegrity(body) {
+  const blocks = [];
+  let start = 0;
+  for (; start + ASAR_BLOCK <= body.length; start += ASAR_BLOCK)
+    blocks.push(sha256(body.subarray(start, start + ASAR_BLOCK)));
+  blocks.push(sha256(body.subarray(start)));
+  return { algorithm: "SHA256", hash: sha256(body), blockSize: ASAR_BLOCK, blocks };
+}
+
+/**
+ * An ASAR archive with per-file SHA-256 integrity, in electron's header-pickle layout.
+ * `edit(tree)` may change the header JSON just before it is written.
+ */
+export function makeAsar(files, { tamper, integrity = {}, edit } = {}) {
   const tree = { files: {} };
   const bodies = [];
   let offset = 0;
@@ -83,15 +101,15 @@ export function makeAsar(files, { tamper, integrity = {} } = {}) {
       node.files[last] = { link: value.link };
       continue;
     }
-    if (value && typeof value === "object" && value.unpacked) {
-      node.files[last] = { size: value.size ?? 0, unpacked: true };
+    if (value && typeof value === "object" && "unpacked" in value) {
+      node.files[last] = { size: value.size ?? 0, unpacked: value.unpacked };
       continue;
     }
     const body = Buffer.from(value);
     node.files[last] = {
       size: body.length,
       offset: String(offset),
-      integrity: { algorithm: "SHA256", hash: sha256(body), blockSize: 4 * 1024 * 1024, blocks: [sha256(body)] },
+      integrity: asarIntegrity(body),
     };
     // Test hook: `integrity: { [path]: null | {...} }` drops or replaces a file's record.
     if (path in integrity) {
@@ -101,6 +119,7 @@ export function makeAsar(files, { tamper, integrity = {} } = {}) {
     bodies.push(body);
     offset += body.length;
   }
+  edit?.(tree);
   const json = Buffer.from(JSON.stringify(tree));
   const padded = Math.ceil(json.length / 4) * 4;
   const header = Buffer.alloc(16 + padded);
@@ -229,7 +248,8 @@ export function makeTarGz(entries, { globalPax } = {}) {
         type,
         size: body.length,
         mode: entry.mode,
-        linkName: (entry.linkName ?? "").slice(0, 99),
+        // Test hook: `rawLinkName` replaces the truncated copy in the ustar linkname field.
+        linkName: entry.rawLinkName ?? (entry.linkName ?? "").slice(0, 99),
       }),
     );
     if (body.length) blocks.push(pad(body));

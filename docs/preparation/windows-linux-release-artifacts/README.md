@@ -113,7 +113,7 @@ It refuses, rather than skips, when:
 | --- | --- |
 | Artifact-to-commit identity | Manifest SHA-256 for every file; source at manifest commit; version agreement across manifest, source, ASAR and daemon |
 | Archive contents | Every tar/zip member and link contained in the archive root; drive-prefixed/UNC link targets and traversal through stored link or file ancestors refused regardless of entry order; one `resources/app.asar`; Linux `orca` ELF / Windows `ORCA.exe` PE for the named architecture |
-| ASAR contents | Per-file SHA-256 integrity (whole file and every block) required on every packed file, a missing or partial record refused; `asar-has:*` entrypoints; `asar-excludes:*` source maps, `.d.ts`, build state, `dist/daemon|release|diagnostics-native`, native addons, development packages; `asar-dependency:*` for each declared production dependency |
+| ASAR contents | Per-file SHA-256 integrity (whole file and every block, in the `floor(size / 4 MiB) + 1` block layout `@electron/asar` 3.4.1 writes) required on every file, a missing or partial record refused; any entry with an `unpacked` field refused (`asar_unpacked_unsupported`); offsets plain decimal strings (`asar_offset_invalid`); `asar-has:*` entrypoints; `asar-excludes:*` source maps, `.d.ts`, build state, `dist/daemon|release|diagnostics-native`, native addons, development packages; `asar-dependency:*` for each declared production dependency |
 | Native dependencies and resources | `electron-runtime:*` presence; Windows `native-diagnostics:*` — exactly three `.node` PE32+ DLLs for the architecture plus a manifest that passes the packaging hook's closed check against the source; Linux has no `resources/native` |
 | Bundled daemon | Exactly one file under `resources/daemon/`, at `orca-daemon.mjs`, with one version stamp equal to the candidate; byte-identical across one runner's outputs (Linux tarballs and the standalone `.mjs`; the two Windows zips) |
 | Fonts | Every `packages/design/fonts/*.woff2` byte-identical in the packaged renderer, and no extra faces |
@@ -146,8 +146,11 @@ refuses uncertain spellings rather than guessing a target filesystem's Unicode o
 configuration. Linux destination indexing remains case-sensitive.
 
 An unexpected malformed packaged file (an ASAR `package.json` that is not a JSON object, an
-unpacked renderer font or entrypoint) is a named refusal in the report, not a crash: the
-report is always written and says why.
+ASAR entry marked `unpacked`) is a named refusal in the report, not a crash: the report is
+always written and says why. Unpacked entries are refused outright, whatever the flag's
+value: the producer emits none, and supporting them would mean checking each
+`resources/app.asar.unpacked/<path>` tree member against the header's size and integrity,
+which the inspector does not do.
 
 Recorded, not judged: entry counts, ASAR and header digests, daemon digests per artifact
 (Linux vs Windows builds come from different runners and may legitimately differ),
@@ -164,12 +167,20 @@ produces, so a long path is checked exactly like a short one.
 
 Accepted forms:
 
-- **Compression:** one gzip stream, decompressed with a 1.5 GiB output cap.
+- **Compression:** gzip, decompressed by Node's `gunzipSync` with a 1.5 GiB output cap.
+  Concatenated gzip members are read as one stream, as `gzip -d` does; non-gzip bytes after
+  the last member are refused (`tar_gzip_invalid`). Both are pinned by tests.
 - **Headers:** POSIX ustar (`ustar\0` + version `00`) or old-GNU (`ustar  \0`). V7 (no
   magic) and any other magic/version are refused (`tar_header_unsupported`). The header
   checksum must match; numeric fields must be octal (GNU base-256 is refused).
+- **Header name fields:** `name`, `prefix` and `linkname` must be valid UTF-8, as PAX
+  values and GNU long names must (`tar_header_invalid`). A non-link member must have an
+  empty `linkname`, and only a directory's effective name may end in `/`
+  (`tar_header_invalid`): GNU tar extracts a regular file named `x/` as a directory.
 - **Member types:** `0` and NUL (regular file), `5` (directory), `2` (symlink), `1`
-  (hardlink). Directories and links must have size 0. Every other type is refused
+  (hardlink). Directories and links must have size 0. A hardlink must name an earlier
+  regular-file member by its exact effective name; a missing, later, non-file or
+  self-referencing target is refused (`tar_hardlink_invalid`). Every other type is refused
   (`tar_member_unsupported`), including `7` (contiguous), `3`/`4`/`6` (devices, FIFO) and
   GNU `S`, `D`, `M`, `N`, `V`.
 - **Extended headers:** per-member PAX `x` only on POSIX archives' members, GNU `L`/`K` only
@@ -182,6 +193,12 @@ Effective names, in order of precedence within one header format:
   `name`. Link target: PAX `linkpath`, else the `linkname` field.
 - **Old-GNU member:** GNU `L`, else `name`. Link target: GNU `K`, else `linkname`. Bytes
   345–499 of an old-GNU header are atime/ctime/offset fields and are **never** a prefix.
+- **Shadowed fields:** when PAX `path` or GNU `L` supplies the name, the ustar
+  `prefix`/`name` must still be a contained path; when PAX `linkpath` or GNU `K` supplies
+  the target, the ustar `linkname` must still be a contained target
+  (`tar_shadowed_field_unsafe`). A reader that ignores the extended header sees those fields
+  instead. Writers put a truncated copy of the long value there, which passes; a truncated
+  copy that splits a multibyte character is invalid UTF-8 and is refused.
 - **GNU long names and PAX together:** there is no precedence rule between them. A PAX
   header before a GNU member, a GNU `L`/`K` before a POSIX member, or either kind carried
   in a header of the other format is refused (`tar_extended_header_mixed`).
@@ -222,13 +239,14 @@ cap above.
 
 #### Support matrix
 
-Tests are in `tools/test/package-validation/formats.test.js` ("tar.gz contract") and
-`inspect.test.js` ("tar/PAX contract in a packaged Linux archive").
+Tests are in `tools/test/package-validation/formats.test.js` ("tar.gz contract", "asar")
+and `inspect.test.js` ("tar/PAX contract in a packaged Linux archive", "ASAR integrity and
+malformed packaged files"). The last rows cover the ASAR inside the tree.
 
 | Form | Status | Evidence |
 | --- | --- | --- |
 | POSIX ustar regular files and directories, short names | **Supported** | Fixtures; real Linux x64 and arm64 `tar.gz` from main `b4f36ca` (the receipt below): all 77 headers are this form |
-| POSIX ustar symlinks and hardlinks | **Supported** | Fixtures only; the real output has none |
+| POSIX ustar symlinks and hardlinks (a hardlink to an earlier regular file) | **Supported** | Fixtures only; the real output has none |
 | ustar `prefix` + `name` (paths to 255 bytes) | **Supported** | Fixtures only |
 | Per-member PAX `path` / `linkpath` (long and multibyte UTF-8 paths) | **Supported** | Fixtures only, including a 300-byte path, a 200-byte link target and inspector-level containment |
 | Old-GNU members with GNU `L` / `K` long names | **Supported** | Fixtures only |
@@ -239,13 +257,20 @@ Tests are in `tools/test/package-validation/formats.test.js` ("tar.gz contract")
 | Malformed PAX framing, duplicate keys, empty values or headers | **Refused** (`tar_pax_invalid`) | Fixtures (15 framing cases) |
 | GNU long names mixed with PAX or POSIX members | **Refused** (`tar_extended_header_mixed`) | Fixtures |
 | Repeated or dangling `x` / `L` / `K` | **Refused** | Fixtures |
-| Link target on a non-link member; body on a directory or link | **Refused** | Fixtures |
+| Link target on a non-link member (PAX, `K` or the ustar `linkname`); body on a directory or link | **Refused** | Fixtures |
+| Unsafe ustar `name`/`prefix`/`linkname` shadowed by PAX `path`/`linkpath` or GNU `L`/`K` | **Refused** (`tar_shadowed_field_unsafe`) | Fixtures; a safe truncated copy is accepted |
+| Hardlink to a missing, later, non-file member or itself | **Refused** (`tar_hardlink_invalid`) | Fixtures |
+| Non-directory whose name ends in `/`; invalid UTF-8 in `name`, `prefix` or `linkname` | **Refused** (`tar_header_invalid`) | Fixtures |
 | V7 or unknown magic; GNU base-256 numbers; types `7`, `3`, `4`, `6`, `S`, `D`, `M`, `V` and anything else | **Refused** | Fixtures |
 | Missing or short end marker; non-zero bytes or a header after it | **Refused** (`tar_end_invalid`) | Fixtures |
 | PAX `mtime`/`atime`/`ctime` alongside `path` (node-tar and GNU `--format=posix` long-path output) | **Not yet validated** | Refused today. If a future producer emits them for long paths, add them to the allowlist as validated inert decimals with tests, not by ignoring them |
-| Multi-member gzip, or bytes after the gzip stream | **Not yet validated** | Behavior is whatever Node's `gunzipSync` does; not covered by a test |
+| Multi-member (concatenated) gzip | **Supported** | Fixtures; read as one stream, as `gzip -d` does. Real output is one member |
+| Non-gzip bytes after the gzip stream | **Refused** (`tar_gzip_invalid`) | Fixtures |
 | Real producer output that uses long names (PAX or GNU) | **Not yet validated** | The current producer emits none (77 short ustar headers) |
 | Windows `.zip` from a real producer | **Not yet validated** | Fixture-only; see "Limits" |
+| ASAR per-file integrity in `@electron/asar` 3.4.1's block layout, including the extra empty block at exact 4 MiB multiples | **Supported** | Fixtures at 0, 1, 4 MiB − 1, 4 MiB, 4 MiB + 1 and 8 MiB; real output (1,475 files) |
+| ASAR entries with an `unpacked` field (any value: `true`, `false`, `"no"`, `1`), on files or directories | **Not yet validated**; refused (`asar_unpacked_unsupported`) | Fixtures, reader and inspector level. Real output has none. Support would need each `app.asar.unpacked/<path>` member checked against the header's size and integrity |
+| ASAR offsets other than a plain decimal string (`"0x0"`, `" 0 "`, `"0e0"`, `"-0"`, `"00"`) | **Refused** (`asar_offset_invalid`) | Fixtures |
 
 ### Real-producer compatibility receipt (9 November 2026, not a candidate)
 
@@ -256,13 +281,16 @@ designates nothing.
 | Item | Value |
 | --- | --- |
 | Producer source | main `b4f36cabbd26465ad4742dd0581976a95f0f073b`, clean checkout (no tracked changes), unmodified `packages/app/electron-builder.yml` |
-| Inspector | branch `claude/fervent-euler-f9zivo` at merge `ae94cfb02daaad90b43814bb08620d96d8ce8ca6` (main `b4f36ca` merged in). `tools/package-validation/` is unchanged by that merge and by every later commit on the branch: `formats.js` SHA-256 `96d900a1645aa2af921a829a86b4578c3ea1eee03df71838f1ad1517e9b345b3`, `inspect.js` `fd1e4f6d641ed84af93f48adedcc5a395c3e0dfcbfb5e984172d2654de3d0217` |
+| Inspector | branch `claude/fervent-euler-f9zivo` at merge `ae94cfb02daaad90b43814bb08620d96d8ce8ca6` (main `b4f36ca` merged in), unchanged by that merge: `formats.js` SHA-256 `96d900a1645aa2af921a829a86b4578c3ea1eee03df71838f1ad1517e9b345b3`, `inspect.js` `fd1e4f6d641ed84af93f48adedcc5a395c3e0dfcbfb5e984172d2654de3d0217`. The later hardening commit (unpacked ASAR entries, shadowed ustar fields, hardlink targets, trailing `/`, block layout, offsets, UTF-8 names) was re-run against the same four files; see the "Re-run after hardening" row |
+| Version stamp | `0.6.0` is the root `package.json` version at `b4f36ca`, passed so that the ASAR and daemon stamps agree with the source. It is a local build's stamp, **not** a release claim: these hashes are not the published v0.6.0 release assets and must not be compared with them |
 | Host and tools | Linux x64; Node 24.21.0; pnpm 12.4.2; electron-builder / app-builder-lib 26.18.0; Electron 44.10.0; `@electron/asar` 3.4.1; node-tar 7.5.22 in the lockfile |
 | Producer commands | As `desktop.yml`'s Linux leg: `pnpm install --frozen-lockfile`, `pnpm run build`, `pnpm --filter @orca/app run build:daemon`, `pnpm --filter @orca/app exec electron-builder --publish never -c.extraMetadata.version=0.6.0`, then `cp packages/app/dist/daemon/orca-daemon.mjs packages/app/dist/release/orca-daemon-0.6.0.mjs`. The first `electron-builder` attempt failed on a `504 Gateway Time-out` from a download through the network proxy; the identical command was run once more and succeeded. No configuration was changed |
 | Artifacts (SHA-256, computed twice: `sha256sum` and `openssl dgst -sha256`, which agreed) | `ORCA-0.6.0-linux-x64.tar.gz` `b97201289cca23faf57e28627b837091dc34c43d3d5cd73ec2e7cf6882e3fd30` (123,542,523 bytes); `ORCA-0.6.0-linux-x86_64.AppImage` `f54844d74583055a07e8759fff0d8e27f3befdc691a4de688758fb90c7e0cdec` (129,970,685); `ORCA-0.6.0-linux-arm64.tar.gz` `755d683cde9f839317f1d5d09349b002cb2f7fa7b1a8db2970b35b83bd6f58d4` (124,430,156); `orca-daemon-0.6.0.mjs` `d6d1ca0d1fc342f855d21e4a20628fd8820c1c92a36cdc1b4af5dcb11cbfc0a4` (3,642,836) |
 | Command | `node tools/package-validation/inspect.js --candidate candidate.json --source <checkout at b4f36ca> --artifact <each of the four files> --out report.json` (no `--allow-partial`) |
 | Result | Exit 0, report `status: consistent`, `complete: true`, no cross-check failures. Every artifact `consistent` |
 | Negative control | The same tarball against a manifest with one changed hex digit: `refused: artifact_hash_mismatch`, exit 1 |
+| Re-run after hardening | Same four files and manifest, inspector `formats.js` SHA-256 `d698cbe5286548a6f472fa68816480a1e0c12fe897951135d7abb41d77f57df5`, `inspect.js` `e42b8a6a0d2765aba63e60032c262d61dbac034977642be53729b2cc25b8792e`: exit 0, `status: consistent`, `complete: true`; both tarballs 77 members, 1,618 ASAR entries, `asar-integrity:1475-files`. The negative control again gives `artifact_hash_mismatch`, exit 1 |
+| Where the report is | `candidate.json` and `report.json` were written to the session's scratch space and **are not retained**. The fields that matter are summarized in this table and the observations below |
 
 Observations from the report and the tar headers:
 
@@ -566,7 +594,8 @@ update tests, a coordinator decision on N, N+1 and the test feed.
 - It does not verify Authenticode, blockmap chunk checksums (BLAKE2b-144, which Node does
   not expose), or the full transitive production closure (#720 did that against an
   installed tree).
-- It does not read AppImage (squashfs) contents, unpacked ASAR entries, or NSIS payloads.
+- It does not read AppImage (squashfs) contents or NSIS payloads, and it refuses rather
+  than reads unpacked ASAR entries.
 - The Electron runtime list is a presence check of a few core files, not a version check.
 - Window hardening is a text check of the packaged main script; L2 observes enforcement.
 - Tar input is limited to the [tar/PAX contract](#tarpax-contract). A refusal there is a
