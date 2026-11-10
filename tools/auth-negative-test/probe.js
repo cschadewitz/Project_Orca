@@ -111,7 +111,14 @@ export function validateRunArgs({ endpoint, confirm, approvalRef, evidenceDir })
   return parsed;
 }
 
-/** Send one request, once. Resolves with what came back or why nothing did; never rejects. */
+/**
+ * Send one request, once. Resolves with what came back or why nothing did; never rejects.
+ *
+ * `timeoutMs` is an absolute wall-clock deadline for the whole exchange, not an inactivity
+ * timeout: a listener that drips bytes cannot keep the probe running past it. A response
+ * body larger than MAX_BODY is not read to the end; the connection is torn down at the first
+ * byte over, and the result says the body was truncated so no digest is claimed for it.
+ */
 export function sendOnce(endpoint, probe, id, timeoutMs = TIMEOUT_MS) {
   const body = JSON.stringify({ kind: "request", id, method: METHOD, params: {} });
   const headers = {
@@ -122,9 +129,15 @@ export function sendOnce(endpoint, probe, id, timeoutMs = TIMEOUT_MS) {
   };
   return new Promise((resolve) => {
     let settled = false;
+    // Armed before the request exists; it can only fire after `req` below is assigned.
+    const deadline = setTimeout(() => {
+      done({ transportError: "ETIMEDOUT" });
+      req.destroy();
+    }, timeoutMs);
     const done = (value) => {
       if (settled) return;
       settled = true;
+      clearTimeout(deadline);
       resolve(value);
     };
     // agent:false - a fresh connection, no keep-alive pool and no proxy.
@@ -133,29 +146,29 @@ export function sendOnce(endpoint, probe, id, timeoutMs = TIMEOUT_MS) {
       (res) => {
         const chunks = [];
         let size = 0;
-        res.on("data", (chunk) => {
-          size += chunk.length;
-          if (size <= MAX_BODY) chunks.push(chunk);
+        const head = () => ({
+          status: res.statusCode,
+          headers: {
+            "www-authenticate": res.headers["www-authenticate"],
+            connection: res.headers.connection,
+            "content-type": res.headers["content-type"],
+          },
         });
-        res.on("end", () =>
-          done({
-            status: res.statusCode,
-            headers: {
-              "www-authenticate": res.headers["www-authenticate"],
-              connection: res.headers.connection,
-              "content-type": res.headers["content-type"],
-            },
-            body: size <= MAX_BODY ? Buffer.concat(chunks) : undefined,
-            size,
-          }),
-        );
+        res.on("data", (chunk) => {
+          if (settled) return;
+          size += chunk.length;
+          if (size <= MAX_BODY) {
+            chunks.push(chunk);
+            return;
+          }
+          // Over the cap: stop reading. `size` is a lower bound, and nothing is hashed.
+          done({ ...head(), body: undefined, size, truncated: true });
+          req.destroy();
+        });
+        res.on("end", () => done({ ...head(), body: Buffer.concat(chunks), size, truncated: false }));
         res.on("error", (e) => done({ transportError: e.code ?? "ERESPONSE" }));
       },
     );
-    req.setTimeout(timeoutMs, () => {
-      req.destroy();
-      done({ transportError: "ETIMEDOUT" });
-    });
     req.on("error", (e) => done({ transportError: e.code ?? "EREQUEST" }));
     req.end(body);
   });
@@ -185,11 +198,11 @@ export function classify(probe, response) {
   } catch {
     parsed = undefined;
   }
-  const record = {
-    status: response.status,
-    bodyBytes: response.size,
-    bodySha256: digest(response.body),
-  };
+  // A truncated body was never read in full: report how much arrived before the cut-off
+  // and no digest, rather than the digest of an empty or partial buffer.
+  const record = response.truncated
+    ? { status: response.status, bodyTruncated: true, bodyBytesAtLeast: response.size, bodySha256: null }
+    : { status: response.status, bodyBytes: response.size, bodySha256: digest(response.body) };
   if ((response.status >= 200 && response.status < 300) || parsed?.ok === true)
     return { verdict: "unexpected-access", stop: true, ...record };
   const expected = {

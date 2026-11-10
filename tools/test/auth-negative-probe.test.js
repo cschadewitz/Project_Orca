@@ -3,6 +3,7 @@
  * ephemeral loopback port with in-memory credentials, and against stub servers for every way
  * a live run has to stop. Nothing here reaches a host other than this process's own loopback.
  */
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -234,6 +235,61 @@ describe("stops", () => {
     expect(silent).toMatchObject({ outcome: "unreachable", requestsSent: 1 });
     expect(silent.requests[0].error).toBe("ETIMEDOUT");
     expect(seen).toHaveLength(1);
+  });
+
+  it("enforces an absolute deadline against a slow-drip listener", async () => {
+    const timers = [];
+    const { endpoint, seen } = await stub((_, res) => {
+      res.writeHead(401, { "content-type": "application/json" });
+      const timer = setInterval(() => res.write(" "), 20);
+      timers.push(timer);
+      res.on("close", () => clearInterval(timer));
+    });
+    closers.push(() => timers.forEach(clearInterval));
+    const started = Date.now();
+    const result = await sendOnce(endpoint, PROBES[0], "x", 100);
+    const elapsed = Date.now() - started;
+    expect(result).toEqual({ transportError: "ETIMEDOUT" });
+    expect(elapsed).toBeLessThan(300);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("stops reading an oversized body and claims no digest for it", async () => {
+    const big = "x".repeat(4097);
+    const { endpoint } = await stub((_, res) => {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(big);
+    });
+    const response = await sendOnce(endpoint, PROBES[0], "x");
+    expect(response).toMatchObject({ status: 401, truncated: true, body: undefined });
+    expect(response.size).toBeGreaterThan(4096);
+    const record = classify(PROBES[0], response);
+    expect(record).toMatchObject({ verdict: "unexpected-response", stop: true, bodyTruncated: true, bodySha256: null });
+    expect(record.bodyBytesAtLeast).toBeGreaterThan(4096);
+    expect(record).not.toHaveProperty("bodyBytes");
+
+    // An endless body is cut off at the cap, well before the deadline.
+    const { endpoint: endless } = await stub((_, res) => {
+      res.writeHead(200);
+      const timer = setInterval(() => res.write("y".repeat(1024)), 5);
+      res.on("close", () => clearInterval(timer));
+    });
+    const cut = await sendOnce(endless, PROBES[0], "x", 2_000);
+    expect(cut).toMatchObject({ status: 200, truncated: true });
+    expect(classify(PROBES[0], cut)).toMatchObject({ verdict: "unexpected-access", bodySha256: null });
+  });
+
+  it("digests a body at exactly the cap", async () => {
+    const exact = "z".repeat(4096);
+    const { endpoint } = await stub((_, res) => {
+      res.writeHead(500);
+      res.end(exact);
+    });
+    const response = await sendOnce(endpoint, PROBES[0], "x");
+    expect(response).toMatchObject({ status: 500, size: 4096, truncated: false });
+    const record = classify(PROBES[0], response);
+    expect(record).toMatchObject({ bodyBytes: 4096 });
+    expect(record.bodySha256).toBe(createHash("sha256").update(exact).digest("hex"));
   });
 
   it("sends nothing that names a proxy, a redirect or a URL credential", async () => {
