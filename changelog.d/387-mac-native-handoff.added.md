@@ -1,1 +1,0 @@
-- Add candidate-bound Mac approval/defer app routing and a gated native ZIP handoff lifecycle; production installation remains unavailable pending complete recovery ownership and signed Mac acceptance.
