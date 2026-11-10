@@ -38,11 +38,14 @@
 #
 # Source commit. By default the run builds the `main` commit it was dispatched from. A
 # `source_sha` input names another commit to build instead (a release candidate on its own
-# branch), and the `resolve` job accepts it only if it is a full SHA that some branch of this
-# repository contains, it descends from the dispatching `main` commit (so it carries every
-# signing safeguard), and it leaves this workflow and the signing verifiers byte-identical to
-# that commit's. The workflow that runs is always `main`'s; the protected environment's
-# reviewer approves the signing job knowing which commit it builds.
+# branch), and the `resolve` job accepts it only if it is a full SHA, some branch of this
+# repository contains it, and everything the signing job reads from that tree besides the
+# verified bundle (install inputs, workspace manifests, builder config, hooks and resources,
+# the signing verifiers) is byte-identical to the dispatching `main` commit; the root
+# package.json may differ only in its version. So a release-prepare commit on its own branch
+# is signed with main's reviewed signing inputs, and the source tree contributes only the
+# application it builds. The workflow that runs is always `main`'s, and the job summary shows
+# the protected environment's reviewer which commit and version they are approving.
 #
 # Manual dispatch from `main` only. The output is an artifact for inspection on a clean
 # Windows VM (runbook "Future step 4"); nothing here creates a release, uploads to a feed or
@@ -108,13 +111,32 @@ jobs:
           if [ -z "$branches" ]; then
             echo "::error::$source is not on any branch of this repository"; exit 1
           fi
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" "$source"; then
-            echo "::error::$source does not descend from the dispatching main commit $GITHUB_SHA"; exit 1
+          # Everything the token-holding sign job reads from the source tree, beyond the
+          # verified build bundle, must be main's reviewed copy: install inputs, workspace
+          # manifests, builder configuration, hooks and resources, and the signing verifiers.
+          pinned=(pnpm-lock.yaml pnpm-workspace.yaml .npmrc .pnpmfile.cjs
+            ':(glob)packages/*/package.json' packages/app/electron-builder.yml
+            packages/app/scripts packages/app/build tools/packaged-windows)
+          if ! git diff --quiet "$GITHUB_SHA" "$source" -- "${pinned[@]}"; then
+            echo "::error::$source changes inputs of the signing job relative to main $GITHUB_SHA:"
+            git diff --name-only "$GITHUB_SHA" "$source" -- "${pinned[@]}"
+            exit 1
           fi
-          if ! git diff --quiet "$GITHUB_SHA" "$source" -- .github/workflows/windows-signed.yml \
-            tools/packaged-windows/build-bundle.js tools/packaged-windows/verify-update-publisher.js; then
-            echo "::error::$source changes the signing workflow or its verifiers relative to $GITHUB_SHA"; exit 1
+          # The root manifest may differ from main only in its version (a release prepare).
+          if ! node -e '
+            const [a, b] = process.argv.slice(1).map((text) => { const j = JSON.parse(text); delete j.version; return JSON.stringify(j); });
+            process.exit(a === b ? 0 : 1);
+          ' "$(git show "$GITHUB_SHA:package.json")" "$(git show "$source:package.json")"; then
+            echo "::error::$source changes the root package.json beyond its version"; exit 1
           fi
+          version=$(git show "$source:package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')
+          {
+            echo "### Signing source"
+            echo "- source commit: \`$source\` (version \`$version\`)"
+            echo "- workflow and signing inputs from main: \`$GITHUB_SHA\`"
+            echo "- on branches: $(echo $branches)"
+            echo "- commits in source not on main: $(git rev-list --count "$GITHUB_SHA..$source"); on main not in source: $(git rev-list --count "$source..$GITHUB_SHA")"
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
           echo "sha=$source" >> "$GITHUB_OUTPUT"
           printf 'source %s (workflow commit %s), on branches:\n%s\n' "$source" "$GITHUB_SHA" "$branches"
 

