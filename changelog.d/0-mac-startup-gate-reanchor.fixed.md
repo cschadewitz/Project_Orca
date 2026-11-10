@@ -6,4 +6,5 @@
   or a crash during first-launch setup or enrollment. An open update window that no
   update attempt holds is re-anchored to its directories' new identities; when its
   records are lost or unreadable, the recovery shell offers a confirmed reset. A recorded
-  update attempt still keeps startup closed.
+  update attempt still keeps startup closed. Source- and offline-tested only; no packaged
+  Mac acceptance is claimed.

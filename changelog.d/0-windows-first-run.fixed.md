@@ -2,3 +2,4 @@
   under a selected safe parent, using verified token SID and native NTFS identities.
   Native lifetime writer fencing preserves duplicate-writer refusal and receipt
   verification across reopen; unsupported ancestry and legacy Windows receipts refuse.
+  Validated on a source-built Windows app, not from a release artifact.

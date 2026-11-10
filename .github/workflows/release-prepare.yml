@@ -122,31 +122,15 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Build the body before anything is pushed, so a failure here leaves no branch behind.
+          # tools/release-pr-body.js keeps it under GitHub's 65,536-character limit by linking
+          # to CHANGELOG.md on the branch when the notes are too long to inline.
+          node tools/release.js notes "$VERSION" > /tmp/release-notes.md
+          node tools/release-pr-body.js /tmp/release-notes.md > /tmp/pr-body.md
+
           git switch -c "release/v$VERSION"
           git commit -am "release: v$VERSION"
           git push --set-upstream origin "release/v$VERSION"
-
-          {
-            echo "Closing milestone [$MILESTONE_TITLE](https://github.com/$REPO/milestone/$NUMBER) proposes **v$VERSION**."
-            if [ -n "$PIN" ]; then
-              echo "Version pinned by the milestone description; the \`release:*\` labels said \`$BUMP\`."
-            else
-              echo "Version derived from the \`release:$BUMP\` label on the milestone's issues."
-            fi
-            echo
-            echo "Merging this tags \`v$VERSION\` and publishes the release. Review the notes below first —"
-            echo "they are the release body verbatim, so edit \`CHANGELOG.md\` on this branch to change them."
-            if [ -n "$UNLABELLED" ]; then
-              echo
-              echo "> [!NOTE]"
-              echo "> These issues carry no \`release:*\` label and were counted as \`release:none\`:"
-              echo "$UNLABELLED" | sed 's/^/> /'
-            fi
-            echo
-            echo "---"
-            echo
-            node tools/release.js notes "$VERSION"
-          } > /tmp/pr-body.md
 
           gh pr create --base main --head "release/v$VERSION" \
             --title "release: v$VERSION" --body-file /tmp/pr-body.md --label release

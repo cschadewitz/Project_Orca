@@ -1,4 +1,4 @@
-The store compatibility epoch advances to `config-generations-v3`. New protected
+The intermediate (never released) epoch `config-generations-v3` introduced this. New protected
 configuration-generation records and generation-bound run/admission metadata require a
 runtime that understands those bindings. Existing protected-execution-v2 encryption,
 keys and records remain intact; this is not a plaintext migration or key rotation.
