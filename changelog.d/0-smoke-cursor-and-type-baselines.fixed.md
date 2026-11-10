@@ -1,0 +1,1 @@
+Avoid durably rewriting an unchanged retry recovery cursor while holding the shared admission catalog lock. Changed pages still publish durably; admission deadlines, authority checks and retry behavior are unchanged. Refresh the reviewed Linux/macOS type-proof fixtures for the existing ObjectId samples and expanded object-kind glyph catalog.
