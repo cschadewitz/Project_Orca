@@ -568,6 +568,7 @@ export function readBlockmap(compressed) {
   }
   if (!map || !Array.isArray(map.files) || map.files.length !== 1) fail("blockmap_invalid");
   const [file] = map.files;
+  if (!file || typeof file !== "object" || Array.isArray(file)) fail("blockmap_invalid");
   if (!Array.isArray(file.sizes) || !Array.isArray(file.checksums) || file.sizes.length !== file.checksums.length)
     fail("blockmap_invalid");
   if (file.offset !== 0 || !file.sizes.every((n) => Number.isSafeInteger(n) && n > 0)) fail("blockmap_invalid");

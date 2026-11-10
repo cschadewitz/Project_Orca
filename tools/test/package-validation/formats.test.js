@@ -673,5 +673,9 @@ describe("update metadata and blockmap", () => {
     expect(readBlockmap(blockmap(200))).toMatchObject({ chunks: 4, coveredBytes: 200 });
     expect(() => readBlockmap(gzipSync("{}"))).toThrow(/blockmap_invalid/);
     expect(() => readBlockmap(Buffer.from("x"))).toThrow(/blockmap_invalid/);
+    for (const entry of [null, 0, "x", true, []])
+      expect(() => readBlockmap(gzipSync(JSON.stringify({ version: "2", files: [entry] })))).toThrow(
+        /blockmap_invalid/,
+      );
   });
 });
