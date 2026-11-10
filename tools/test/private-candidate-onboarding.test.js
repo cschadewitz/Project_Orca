@@ -130,7 +130,7 @@ const QUOTED = [
       "Selected workspace connected. Open Launch work and choose the harmless sample; review permissions before launching.",
       "Create the displayed new private folder and sample files. Existing parent and project permissions stay unchanged.",
       "The last session ended without closing cleanly, before this computer restarted.",
-      "Setup was refused. Check directory ownership, writable access and Git",
+      "Setup was refused",
     ],
   ],
   [
