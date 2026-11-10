@@ -52,6 +52,13 @@ row with the consequence beside it (rule 17). The screen never adopts or stops a
 does not own, and it says when writer ownership is unknown. Every refusal tells the person what
 was preserved ("Existing files were preserved").
 
+The section is laid out in steps, each with its own heading: the selected directories in one
+sunken list (names in sans, paths in mono, never cut), the step's next act as the primary
+button, and **Reopening and recovery** grouped below. A refusal sits in its own block on a
+`status-failed` rail, never the danger tone: "Setup was refused", then the reason main gave,
+then what to do. Main writes those reasons for the screen (`first-run/refusal.ts`); a raw
+operating system or Git failure is named by its code and never shown as text.
+
 ## Local diagnostics
 
 **Where:** `diagnostics/diagnostics-section.tsx`, the second section on Config.
