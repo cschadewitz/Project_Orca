@@ -13,17 +13,7 @@ jobs:
   probe:
     runs-on: windows-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: harness-as-written
-            plain: "0"
-            parent: ""
-          - name: user-like-folders
-            plain: "1"
-            parent: profile
-    name: probe (${{ matrix.name }})
+    name: probe (packaged first-run)
     defaults:
       run:
         shell: bash
@@ -38,25 +28,33 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
       - run: pnpm --filter @orca/app run build:daemon
-      - name: Build the x64 native addons
+      - name: Stage native addons (as the Desktop workflow does)
         run: |
           set -euo pipefail
           node_version=$(node -p 'process.versions.node')
           h=$(mktemp -d "$RUNNER_TEMP/h.XXXXXX")
           base="https://nodejs.org/download/release/v${node_version}"
           curl -fsS "$base/node-v${node_version}-headers.tar.gz" -o "$h/headers.tar.gz"
-          curl -fsS "$base/win-x64/node.lib" -o "$h/node.lib"
           (cd "$h" && tar -xzf headers.tar.gz)
-          mkdir -p "$h/node-v${node_version}/x64"
-          cp "$h/node.lib" "$h/node-v${node_version}/x64/node.lib"
-          node packages/app/scripts/diagnostics-native-package.js --arch x64 --headers "$h/node-v${node_version}"
-          ls packages/app/native/diagnostics/build/Release
-      - name: Run the first-run Electron harness
-        env:
-          ORCA_PROBE_PLAIN_PROJECT: ${{ matrix.plain }}
-          PROBE_PARENT: ${{ matrix.parent }}
+          for arch in x64 arm64; do
+            mkdir -p "$h/node-v${node_version}/$arch"
+            curl -fsS "$base/win-$arch/node.lib" -o "$h/node-v${node_version}/$arch/node.lib"
+          done
+          node tools/packaged-windows/stage-native-addons.js --headers "$h/node-v${node_version}"
+      - name: Package x64 (unpacked dir only)
         run: |
           set -euo pipefail
-          if [ "$PROBE_PARENT" = profile ]; then export ORCA_WINDOWS_TEST_PARENT="$USERPROFILE"; fi
-          echo "parent=${ORCA_WINDOWS_TEST_PARENT:-<temp>} plain=$ORCA_PROBE_PLAIN_PROJECT"
-          node packages/app/test/milestone21/windows-first-run.mjs
+          pnpm --filter @orca/app exec electron-builder --win dir --x64 --publish never \
+            -c.extraMetadata.version=0.7.0-rc.1 -c.directories.output=dist/release/x64
+          ls packages/app/dist/release/x64/win-unpacked/resources/native/diagnostics/win32-x64
+      - name: Probe with folders under the user profile
+        run: node packages/app/test/probe/packaged-first-run.mjs packages/app/dist/release/x64/win-unpacked/ORCA.exe "$USERPROFILE"
+      - name: Probe with folders under RUNNER_TEMP
+        if: always()
+        run: node packages/app/test/probe/packaged-first-run.mjs packages/app/dist/release/x64/win-unpacked/ORCA.exe "$RUNNER_TEMP"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: probe-screenshots
+          path: probe-*.png
+          retention-days: 3

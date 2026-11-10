@@ -64,9 +64,6 @@ async function launch() {
     env: environment(),
     timeout: 20_000,
   });
-  // PROBE: surface main-process and daemon output.
-  application.process().stdout?.on("data", (d) => process.stdout.write(`[app stdout] ${d}`));
-  application.process().stderr?.on("data", (d) => process.stderr.write(`[app stderr] ${d}`));
   const actual = await application.evaluate(({ app }) => ({
     path: app.getPath("userData"),
     getuid: typeof process.getuid,
@@ -99,9 +96,7 @@ async function close() {
 try {
   await mkdir(profile);
   await mkdir(parent);
-  // PROBE: ORCA_PROBE_PLAIN_PROJECT=1 makes an ordinary inherited-ACL folder, like a user's clone.
-  if (process.env.ORCA_PROBE_PLAIN_PROJECT === "1") await mkdir(project);
-  else windowsPrivateChild(project);
+  windowsPrivateChild(project);
   await cp(installed, runtime, { recursive: true });
   const native = join(runtime, "resources", "native", "diagnostics", "win32-x64");
   await mkdir(native, { recursive: true });
@@ -231,22 +226,7 @@ try {
   check("restart-project-unchanged", git("status", "--porcelain") === beforeProject);
   result.receiptSha256 = hash(receipt);
   result.passed = true;
-} catch (error) {
-  console.error(`[probe] failed in phase ${phase}:`, error);
-  try {
-    if (page)
-      console.error(
-        "[probe] first-run status:",
-        JSON.stringify(await page.evaluate(() => window.orca.firstRun.status())),
-      );
-    if (page)
-      console.error(
-        "[probe] section text:",
-        await page.getByRole("region", { name: "First-run project setup" }).innerText(),
-      );
-  } catch (inner) {
-    console.error("[probe] could not read status:", inner);
-  }
+} catch {
   result.passed = false;
   result.failedPhase = phase;
   process.exitCode = 1;
