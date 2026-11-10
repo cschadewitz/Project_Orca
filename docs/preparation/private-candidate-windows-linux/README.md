@@ -38,6 +38,12 @@ It does **not** change, and only coordinates with, the following:
 - the updater, lockfiles and `tools/owned-read-proof`
 - application code
 
+The [private-beta release guidance](../private-beta-release-guidance.md) supplements
+this onboarding with the release checklist and the v0.6.0 upgrade/rollback
+limitations. It also introduces an explicit consent-notice fill-in in the candidate
+card and coordinator checklist. The baseline and validation record below describe the
+original preparation; they do not validate or accept a later candidate.
+
 ## Sources audited
 
 - [Readiness audit](../../reviews/2026-10-27-release-readiness.md) (#775): the evidence

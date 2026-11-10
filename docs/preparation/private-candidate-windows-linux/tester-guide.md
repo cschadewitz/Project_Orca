@@ -19,6 +19,7 @@ Do not download or open them.
 | Operating-system versions the coordinator tested | {{TESTED_OS_VERSIONS}} |
 | Files and their SHA-256 checksums | {{ARTIFACT_TABLE}} |
 | Where to send reports | {{SUPPORT_ROUTE}} |
+| Participation, optional feedback and how to withdraw | {{CONSENT_NOTICE}} |
 | How long reports are kept, and how to ask for deletion | {{RETENTION_POLICY}} |
 | Your coordinator | {{COORDINATOR}} |
 
