@@ -39,13 +39,12 @@
 # Source commit. By default the run builds the `main` commit it was dispatched from. A
 # `source_sha` input names another commit to build instead (a release candidate on its own
 # branch), and the `resolve` job accepts it only if it is a full SHA, some branch of this
-# repository contains it, and everything the signing job reads from that tree besides the
-# verified bundle (install inputs, workspace manifests, builder config, hooks and resources,
-# the signing verifiers) is byte-identical to the dispatching `main` commit; the root
-# package.json may differ only in its version. So a release-prepare commit on its own branch
-# is signed with main's reviewed signing inputs, and the source tree contributes only the
-# application it builds. The workflow that runs is always `main`'s, and the job summary shows
-# the protected environment's reviewer which commit and version they are approving.
+# repository contains it, and its tree matches the dispatching `main` commit everywhere except
+# release notes (CHANGELOG.md, changelog.d), docs, workflow files, tools/test/*.test.js and
+# the root package.json version, which must be plain semver. That is exactly what a
+# release-prepare commit changes, so the candidate is built and signed from main's reviewed
+# code and configuration. The workflow that runs is always `main`'s, and the job summary
+# shows the protected environment's reviewer which commit and version they are approving.
 #
 # Manual dispatch from `main` only. The output is an artifact for inspection on a clean
 # Windows VM (runbook "Future step 4"); nothing here creates a release, uploads to a feed or
@@ -111,15 +110,17 @@ jobs:
           if [ -z "$branches" ]; then
             echo "::error::$source is not on any branch of this repository"; exit 1
           fi
-          # Everything the token-holding sign job reads from the source tree, beyond the
-          # verified build bundle, must be main's reviewed copy: install inputs, workspace
-          # manifests, builder configuration, hooks and resources, and the signing verifiers.
-          pinned=(pnpm-lock.yaml pnpm-workspace.yaml .npmrc .pnpmfile.cjs
-            ':(glob)packages/*/package.json' packages/app/electron-builder.yml
-            packages/app/scripts packages/app/build tools/packaged-windows)
-          if ! git diff --quiet "$GITHUB_SHA" "$source" -- "${pinned[@]}"; then
-            echo "::error::$source changes inputs of the signing job relative to main $GITHUB_SHA:"
-            git diff --name-only "$GITHUB_SHA" "$source" -- "${pinned[@]}"
+          # The source tree may differ from the dispatching main commit only where nothing the
+          # token-holding sign job reads or runs can be affected: release notes, docs, workflow
+          # files (the workflow always runs from main and uses no local actions) and test files.
+          # Everything else, from workspace manifests and their bins to builder config and its
+          # electron-builder.env, must be main's reviewed copy. An allowlist, not a denylist,
+          # so a newly read path is pinned by default.
+          allowed=(':(exclude)CHANGELOG.md' ':(exclude)changelog.d' ':(exclude)docs'
+            ':(exclude).github' ':(exclude,glob)tools/test/*.test.js' ':(exclude)package.json')
+          if ! git diff --quiet "$GITHUB_SHA" "$source" -- . "${allowed[@]}"; then
+            echo "::error::$source differs from main $GITHUB_SHA outside release notes, docs and tests:"
+            git diff --name-only "$GITHUB_SHA" "$source" -- . "${allowed[@]}"
             exit 1
           fi
           # The root manifest may differ from main only in its version (a release prepare).
@@ -130,6 +131,9 @@ jobs:
             echo "::error::$source changes the root package.json beyond its version"; exit 1
           fi
           version=$(git show "$source:package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::$source has version '${version//[^0-9A-Za-z.+-]/?}', which is not a plain semver"; exit 1
+          fi
           {
             echo "### Signing source"
             echo "- source commit: \`$source\` (version \`$version\`)"

