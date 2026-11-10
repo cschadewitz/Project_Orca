@@ -131,14 +131,13 @@ that it has a plain test. On launch the app picks a daemon in this order:
 The daemon is stopped on `will-quit` — `SIGTERM`, then `SIGKILL` if that is ignored — so it
 cannot outlive the window that started it.
 
-**The workspace it serves is `ORCA_WORKSPACE`, or the user's home directory.** That is a
-placeholder with a known shape rather than an answer: `orca serve` reads `<dir>/.orca` and
-answers an empty run list for a directory that has no store, so a packaged app with no
-`ORCA_WORKSPACE` set opens connected to a daemon that has nothing to show. Choosing one from
-inside the app landed with #164 — **File ▸ Open a store…** stops that daemon and starts one
-over the chosen workspace with `--read-only`, which is an argument to the same spawn module
-rather than a second mechanism — so the placeholder is now only the directory the app *starts*
-on.
+**The workspace it serves is `ORCA_WORKSPACE` or a verified first-run selection.** Without
+either (and without `ORCA_DAEMON_URL` or a saved endpoint) a packaged app starts no daemon and
+opens disconnected for setup (`src/main/index.ts`). Choosing a store from inside the app landed
+with #164 — **File ▸ Open a store…** stops that daemon and starts one over the chosen workspace
+with `--read-only`, which is an argument to the same spawn module rather than a second
+mechanism. The Desktop workflow's packaged-app check sets a disposable `ORCA_WORKSPACE` for
+this reason.
 
 ### Approved application identity and existing installations
 
