@@ -1,4 +1,5 @@
 /** Real builder resource copying/hooks with synthetic Mach-O headers; no native Mac claim. */
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -193,3 +194,29 @@ it.each([Buffer.alloc(512), Buffer.from("ELF"), Buffer.from([0xcf, 0xfa, 0xed, 0
     expect(() => checkNativePE(bytes, "x64")).toThrow();
   },
 );
+
+// The manifest's sourceSha256 is over checked-out bytes, and static inspection recomputes it
+// from a checkout on another OS. A CRLF checkout on the Windows runner refused both Windows
+// zips for 0.7.0-rc.1 (b4b013aa), so every digested source must be pinned to LF.
+it("pins every digested native source to LF line endings", () => {
+  const repo = fileURLToPath(new URL("../../", import.meta.url));
+  const sources = [
+    "binding.gyp",
+    "clock-math.h",
+    "clock.c",
+    "storage.c",
+    "storage-windows.c",
+    "storage-windows-common.h",
+    "first-run-windows.c",
+    "keys-windows.c",
+    "windows-delay-load.c",
+  ].map((name) => `packages/app/native/diagnostics/${name}`);
+  const attributes = execFileSync("git", ["check-attr", "text", "eol", "--", ...sources], {
+    cwd: repo,
+    encoding: "utf8",
+  });
+  for (const path of sources) {
+    expect(attributes).toContain(`${path}: text: set`);
+    expect(attributes).toContain(`${path}: eol: lf`);
+  }
+});
