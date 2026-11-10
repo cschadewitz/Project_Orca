@@ -54,7 +54,7 @@ it.each([true, false])(
         code: "AGENT_TRANSPORT",
         message: ownership
           ? expect.stringContaining("Review same-boot recovery")
-          : expect.stringContaining("Project setup was refused"),
+          : expect.stringContaining("Project setup could not verify"),
       },
     });
     expect(JSON.stringify(result)).not.toContain("sensitive raw startup failure");

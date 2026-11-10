@@ -288,7 +288,17 @@ describe.skipIf(typeof process.getuid !== "function")("dedicated first-run proje
         .mockReset()
         .mockResolvedValueOnce(kind === "non-git" ? f.home : f.project)
         .mockResolvedValueOnce(selected);
-      await expect(f.setup.choose(f.assertCurrent)).rejects.toThrow();
+      // Each refusal names its own reason, so the person knows what to change.
+      await expect(f.setup.choose(f.assertCurrent)).rejects.toThrow(
+        {
+          nonempty: "app workspace folder is not empty",
+          symlink: "app workspace folder is a symbolic link",
+          "inside-project": "project and the app workspace overlap",
+          home: "app workspace folder is your home folder",
+          "non-git": "project folder is your home folder",
+          denied: "cannot read and write the app workspace folder",
+        }[kind],
+      );
       expect(await readdir(f.workspace)).toEqual(kind === "nonempty" ? ["personal.txt"] : []);
       expect(f.prepareConnection).not.toHaveBeenCalled();
     },

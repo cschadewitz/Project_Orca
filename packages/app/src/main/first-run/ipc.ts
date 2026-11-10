@@ -5,6 +5,21 @@ import type { BridgeResult } from "../../bridge.js";
 import type { FirstRunStatus } from "../../first-run-contract.js";
 import type { FirstRunSetup } from "./setup.js";
 import { FirstRunOwnershipRefusal } from "./ownership.js";
+import { FirstRunRefusal, PRESERVED } from "./refusal.js";
+
+const UPDATE_HELD = `An app update is being prepared, so setup is paused. Retry once the update finishes or is cancelled. ${PRESERVED}`;
+const CALLER_CHANGED = `This window or its workspace connection changed while setup was working. Read setup again, then retry. ${PRESERVED}`;
+const UNEXPECTED = `Project setup was refused for a reason it could not identify. Read setup again, then retry or choose a fresh empty workspace. ${PRESERVED}`;
+
+/**
+ * What the person sees when a setup route refuses. Setup's own refusals were written for the screen and pass as they
+ * are; so does the ownership refusal. Anything else is a raw failure whose text may hold paths or tool output, and it
+ * is replaced, never shown.
+ */
+export function refusalMessage(error: unknown): string {
+  if (error instanceof FirstRunOwnershipRefusal || error instanceof FirstRunRefusal) return error.message;
+  return UNEXPECTED;
+}
 
 export function installFirstRunIPC(
   setup: FirstRunSetup,
@@ -28,26 +43,34 @@ export function installFirstRunIPC(
       `orca:workspace.firstRun.${method}`,
       async (event, input: unknown, epoch: number): Promise<BridgeResult<FirstRunStatus>> => {
         try {
-          const check = boundary.capture(event, epoch);
+          const captured = boundary.capture(event, epoch);
+          // The caller's window, connection epoch or update reservation moved: a reason the person can act on.
+          const check = () => {
+            try {
+              captured();
+            } catch (error) {
+              if (error instanceof FirstRunOwnershipRefusal || error instanceof FirstRunRefusal) throw error;
+              throw new FirstRunRefusal(CALLER_CHANGED, { cause: error });
+            }
+          };
           check();
-          if (boundary.held()) throw new Error("Update window preparation is in progress");
-          const value = schema.parse(input);
+          if (boundary.held()) throw new FirstRunRefusal(UPDATE_HELD);
+          const parsed = schema.safeParse(input);
+          if (!parsed.success)
+            throw new FirstRunRefusal(
+              `This setup request no longer matches what is on screen. Read setup again. ${PRESERVED}`,
+            );
+          const value: unknown = parsed.data;
           await boundary.ready();
           check();
-          if (boundary.held()) throw new Error("Update window preparation is in progress");
+          if (boundary.held()) throw new FirstRunRefusal(UPDATE_HELD);
           const result = await (boundary.run ? boundary.run(() => run(value, check)) : run(value, check));
           if (method !== "connect") check();
           return { ok: true, result };
         } catch (error) {
           return {
             ok: false,
-            error: {
-              code: "AGENT_TRANSPORT",
-              message:
-                error instanceof FirstRunOwnershipRefusal
-                  ? error.message
-                  : "Project setup was refused. Check the current window, directory ownership, access and Git before retrying. Existing files were preserved.",
-            },
+            error: { code: "AGENT_TRANSPORT", message: refusalMessage(error) },
           };
         }
       },
