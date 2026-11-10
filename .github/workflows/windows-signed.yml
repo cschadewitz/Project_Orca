@@ -32,8 +32,17 @@
 # checks every package against its lockfile integrity hash), checksum-verified Node headers,
 # and a GitHub-hosted runner image, with no cache restored in either job. Accepted residual
 # for this spike: locked dependencies' lifecycle scripts and build tools run in `prepare` and
-# can shape the output. Outputs of this workflow are inspection artifacts, not release
-# candidates; a release lane needs its own provenance review (e.g. build attestation).
+# can shape the output. This workflow publishes nothing: its artifact is handed on only after
+# clean-VM acceptance, and an automated release lane needs its own provenance review (e.g.
+# build attestation).
+#
+# Source commit. By default the run builds the `main` commit it was dispatched from. A
+# `source_sha` input names another commit to build instead (a release candidate on its own
+# branch), and the `resolve` job accepts it only if it is a full SHA that some branch of this
+# repository contains, it descends from the dispatching `main` commit (so it carries every
+# signing safeguard), and it leaves this workflow and the signing verifiers byte-identical to
+# that commit's. The workflow that runs is always `main`'s; the protected environment's
+# reviewer approves the signing job knowing which commit it builds.
 #
 # Manual dispatch from `main` only. The output is an artifact for inspection on a clean
 # Windows VM (runbook "Future step 4"); nothing here creates a release, uploads to a feed or
@@ -49,6 +58,13 @@ name: Windows signed (spike)
 
 on:
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full commit SHA to build and sign (default is the dispatching main commit)
+        type: string
+        required: false
+
+run-name: Windows signed (spike) of ${{ inputs.source_sha || github.sha }}
 
 permissions:
   contents: read
@@ -58,8 +74,53 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve:
+    name: windows-signed (resolve source)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      # Every branch and its history, so the checks below can see where the commit lives.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the source commit
+        id: source
+        shell: bash
+        env:
+          REQUESTED: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          source="${REQUESTED:-$GITHUB_SHA}"
+          if ! [[ "$source" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::source_sha must be a full 40-character lowercase commit SHA"; exit 1
+          fi
+          if ! git cat-file -e "$source^{commit}" 2>/dev/null; then
+            echo "::error::$source is not a commit on any branch of this repository"; exit 1
+          fi
+          branches=$(git branch -r --contains "$source" --format='%(refname:short)')
+          if [ -z "$branches" ]; then
+            echo "::error::$source is not on any branch of this repository"; exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "$source"; then
+            echo "::error::$source does not descend from the dispatching main commit $GITHUB_SHA"; exit 1
+          fi
+          if ! git diff --quiet "$GITHUB_SHA" "$source" -- .github/workflows/windows-signed.yml \
+            tools/packaged-windows/build-bundle.js tools/packaged-windows/verify-update-publisher.js; then
+            echo "::error::$source changes the signing workflow or its verifiers relative to $GITHUB_SHA"; exit 1
+          fi
+          echo "sha=$source" >> "$GITHUB_OUTPUT"
+          printf 'source %s (workflow commit %s), on branches:\n%s\n' "$source" "$GITHUB_SHA" "$branches"
+
   prepare:
     name: windows-signed (prepare, no OIDC)
+    needs: resolve
     if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     permissions:
@@ -68,10 +129,10 @@ jobs:
       bundle-sha256: ${{ steps.bundle.outputs.sha256 }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      # The exact commit the dispatch resolved, not a moving ref.
+      # The exact commit `resolve` accepted, not a moving ref.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -148,18 +209,18 @@ jobs:
           tar -cf windows-signed-build.tar --exclude='*.tsbuildinfo' --exclude=packages/app/dist/release packages/*/dist
           sha=$(sha256sum windows-signed-build.tar | cut -d' ' -f1)
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"
-          echo "build bundle sha256 $sha for ${{ github.sha }}"
+          echo "build bundle sha256 $sha for ${{ needs.resolve.outputs.sha }}"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: windows-signed-build-${{ github.sha }}
+          name: windows-signed-build-${{ github.run_id }}
           path: windows-signed-build.tar
           if-no-files-found: error
           retention-days: 1
 
   sign:
     name: windows-signed (sign)
-    needs: prepare
+    needs: [resolve, prepare]
     # Refuse anything but main before the environment is even requested, so a dispatch from
     # a feature branch never reaches the reviewer or the token. The environment's own
     # deployment-branch rule is the second, independent check.
@@ -177,7 +238,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       - name: Signing configuration is present
@@ -205,7 +266,7 @@ jobs:
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: windows-signed-build-${{ github.sha }}
+          name: windows-signed-build-${{ github.run_id }}
 
       # Source-bound: the tarball must be the one `prepare` built from this commit in this
       # run, by digest. The checked-out verifier then reads every entry (files and
@@ -324,7 +385,7 @@ jobs:
       - name: Upload the signed artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: windows-signed-${{ github.sha }}
+          name: windows-signed-${{ needs.resolve.outputs.sha }}
           path: |
             packages/app/dist/release/x64/*.exe
             packages/app/dist/release/x64/*.zip

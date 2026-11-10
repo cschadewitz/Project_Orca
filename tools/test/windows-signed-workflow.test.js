@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { verifyPackagedUpdatePublishers, verifyUpdatePublisher } from "../packaged-windows/verify-update-publisher.js";
 
 const appRequire = createRequire(new URL("../../packages/app/package.json", import.meta.url));
@@ -66,9 +66,9 @@ it.skipIf(process.platform === "win32")(
 it("keeps signing authority in one protected, main-only, unpublished job", () => {
   expect(Object.keys(signed.on)).toEqual(["workflow_dispatch"]);
   expect(signed.permissions).toEqual({ contents: "read" });
-  expect(Object.keys(signed.jobs)).toEqual(["prepare", "sign"]);
+  expect(Object.keys(signed.jobs)).toEqual(["resolve", "prepare", "sign"]);
   const job = signed.jobs.sign;
-  expect(job.needs).toBe("prepare");
+  expect(job.needs).toEqual(["resolve", "prepare"]);
   expect(job.if).toBe("github.ref == 'refs/heads/main'");
   expect(job.environment).toBe("windows-signing");
   expect(job.permissions).toEqual({ contents: "read", "id-token": "write" });
@@ -109,7 +109,7 @@ it("unpacks only the digest-checked build output of the same run, before Azure l
   expect(unpack.env.EXPECTED_SHA256).toBe("${{ needs.prepare.outputs.bundle-sha256 }}");
   expect(signed.jobs.prepare.outputs["bundle-sha256"]).toBe("${{ steps.bundle.outputs.sha256 }}");
   const download = steps.find((s) => String(s.uses).startsWith("actions/download-artifact@"));
-  expect(download.with.name).toBe("windows-signed-build-${{ github.sha }}");
+  expect(download.with.name).toBe("windows-signed-build-${{ github.run_id }}");
   const upload = signed.jobs.prepare.steps.find((s) => String(s.uses).startsWith("actions/upload-artifact@"));
   expect(upload.with.name).toBe(download.with.name);
   expect(unpack.run).toContain(
@@ -189,4 +189,86 @@ it("pins every action in the signing workflow to a full commit SHA", () => {
   expect(readFileSync(new URL("../../.github/workflows/windows-signed.yml", import.meta.url), "utf8")).toMatch(
     /uses: azure\/login@[0-9a-f]{40} # v3\.\d+\.\d+/,
   );
+});
+
+describe("the source commit the run builds", () => {
+  const script = step(signed, "resolve", "Resolve the source commit").run;
+  let work;
+  let clone;
+  const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  const commit = (cwd, file, content) => {
+    mkdirSync(join(cwd, file, ".."), { recursive: true });
+    writeFileSync(join(cwd, file), content);
+    git(cwd, "add", "-A");
+    git(cwd, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", file);
+    return git(cwd, "rev-parse", "HEAD");
+  };
+  const resolveWith = (requested, githubSha) => {
+    const out = join(work, `out-${Math.random().toString(16).slice(2)}`);
+    writeFileSync(out, "");
+    execFileSync("bash", ["-c", script], {
+      cwd: clone,
+      env: { ...process.env, REQUESTED: requested, GITHUB_SHA: githubSha, GITHUB_OUTPUT: out },
+      stdio: "pipe",
+    });
+    return readFileSync(out, "utf8");
+  };
+  let main;
+  let candidate;
+  let sideways;
+  let toolChange;
+  let unbranched;
+
+  beforeEach(() => {
+    work = mkdtempSync(join(tmpdir(), "orca-resolve-"));
+    const origin = join(work, "origin");
+    mkdirSync(origin);
+    git(origin, "init", "-q", "-b", "main");
+    commit(origin, "tools/packaged-windows/build-bundle.js", "v1\n");
+    main = commit(origin, "README", "main\n");
+    git(origin, "checkout", "-qb", "candidate");
+    candidate = commit(origin, "package.json", '{"version":"0.7.0-rc.1"}\n');
+    git(origin, "checkout", "-qb", "tooling", main);
+    toolChange = commit(origin, "tools/packaged-windows/build-bundle.js", "v2\n");
+    git(origin, "checkout", "-qb", "old", `${main}~1`);
+    sideways = commit(origin, "other", "x\n");
+    git(origin, "checkout", "-q", "--detach", main);
+    unbranched = commit(origin, "dangling", "d\n");
+    git(origin, "checkout", "-q", "main");
+    clone = join(work, "clone");
+    git(work, "clone", "-q", "--no-local", origin, clone);
+  });
+  afterEach(() => rmSync(work, { recursive: true, force: true }));
+
+  it("defaults to the dispatching main commit", () => {
+    expect(resolveWith("", main)).toBe(`sha=${main}\n`);
+  });
+
+  it("accepts a candidate on its own branch that descends from main and keeps the verifiers", () => {
+    expect(resolveWith(candidate, main)).toBe(`sha=${candidate}\n`);
+  });
+
+  it.each([
+    ["an abbreviated SHA", () => candidate.slice(0, 12)],
+    ["an uppercase SHA", () => candidate.toUpperCase()],
+    ["a branch name", () => "candidate"],
+    ["a commit not descended from main", () => sideways],
+    ["a commit that changes a signing verifier", () => toolChange],
+    ["a commit on no branch of the repository", () => unbranched],
+    ["an unknown commit", () => "0".repeat(40)],
+  ])("refuses %s", (_, requested) => {
+    expect(() => resolveWith(requested(), main)).toThrow();
+  });
+
+  it("is what prepare and sign check out, and the artifact name records", () => {
+    for (const job of ["prepare", "sign"]) {
+      expect(signed.jobs[job].needs).toContain("resolve");
+      const checkout = signed.jobs[job].steps.find((s) => String(s.uses).startsWith("actions/checkout@"));
+      expect(checkout.with.ref).toBe("${{ needs.resolve.outputs.sha }}");
+    }
+    expect(signed.jobs.resolve.permissions).toEqual({ contents: "read" });
+    expect(JSON.stringify(signed.jobs.resolve)).not.toMatch(/id-token|secrets\./);
+    const upload = signed.jobs.sign.steps.find((s) => s.name === "Upload the signed artifacts");
+    expect(upload.with.name).toBe("windows-signed-${{ needs.resolve.outputs.sha }}");
+  });
 });
