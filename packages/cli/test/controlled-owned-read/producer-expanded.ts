@@ -21,25 +21,25 @@ import {
   type StandingIntentReviewRequest,
 } from "@orca/agents";
 import { askHumanInput, LiveHumanInput, type HumanInputQuery, type LiveAnswerAuthority } from "@orca/engine";
-import { CredentialStore } from "../../daemon/src/auth/credentials.js";
-import { Authorizer, OwnershipStore, authInvalid, bindPrincipal } from "../../daemon/src/auth/index.js";
-import { scopedPermissionMethods } from "../../daemon/src/scoped-permission-bridge.js";
-import { dispatch } from "../../daemon/src/server.js";
-import { protectedScopedPermissionOwner } from "../../daemon/src/protected-scoped-permission-owner.js";
-import { ownedReadScopedCapture } from "../../daemon/src/owned-read-scoped-capture.js";
+import { CredentialStore } from "../../../daemon/src/auth/credentials.js";
+import { Authorizer, OwnershipStore, authInvalid, bindPrincipal } from "../../../daemon/src/auth/index.js";
+import { scopedPermissionMethods } from "../../../daemon/src/scoped-permission-bridge.js";
+import { dispatch } from "../../../daemon/src/server.js";
+import { protectedScopedPermissionOwner } from "../../../daemon/src/protected-scoped-permission-owner.js";
+import { ownedReadScopedCapture } from "../../../daemon/src/owned-read-scoped-capture.js";
 import {
   createOwnedFileReadServiceForTest,
   type TrustedOwnedReadInvocation,
   type OwnedReadCurrentCapture,
   type OwnedReadReviewPreview,
   type PostApprovalReadAuthority,
-} from "../../engine/src/owned-file-read-service.js";
+} from "../../../engine/src/owned-file-read-service.js";
 import type {
   SyntheticReadOwner,
   SyntheticReadOwnerSnapshot,
   SyntheticFenceEvidence,
-} from "../../engine/src/synthetic-read-fence.js";
-import { createManagedTypedWorkspace, resolveManagedRootBinding } from "../src/typed-workspace-gate.js";
+} from "../../../engine/src/synthetic-read-fence.js";
+import { createManagedTypedWorkspace, resolveManagedRootBinding } from "../../src/typed-workspace-gate.js";
 
 const complete = <T>(value: T) => ({ state: "complete" as const, value });
 const same = (a: unknown, b: unknown) => assert.ok(isDeepStrictEqual(a, b), "controlled original changed");
@@ -199,6 +199,11 @@ export interface ControlledReadTestSupervisor {
   readonly waitBeforeSaveExpiry?: true;
   /** Short-lived real credential fixture for Save expiry/settlement controls. */
   readonly operatorCredentialTtlMs?: 5000 | 20000;
+  /**
+   * Lifetime of the original action the scenario captures, which the real-clock scenarios wait out.
+   * Defaults to 55 s, under the 60 s Save authority bound; shorter values shorten that wait only (5 s floor: setup must finish before the action lapses).
+   */
+  readonly actionTtlMs?: number;
   /** Optional test synchronization: retain final genuine lease ack until released/rejected. */
   settleOriginalDelivery?(): Promise<void>;
 }
@@ -261,6 +266,8 @@ export async function runControlledOwnedReadTest(
   assert.ok(
     operatorCredentialTtlMs === undefined || operatorCredentialTtlMs === 5000 || operatorCredentialTtlMs === 20000,
   );
+  const actionTtlMs = supervisor.actionTtlMs ?? 55000;
+  assert.ok(Number.isInteger(actionTtlMs) && actionTtlMs >= 5000 && actionTtlMs <= 55000);
   const ownerDurationMs = supervisor.ownerDurationMs;
   assert.ok(ownerDurationMs === undefined || ownerDurationMs === 300000);
   const beforeFreshAuthority = supervisor.beforeFreshAuthority?.bind(supervisor);
@@ -1154,7 +1161,7 @@ export async function runControlledOwnedReadTest(
         cwd: config,
         workspaceRef: active.workspaceRef,
         relevantStateRefs: [],
-        expiresAt: new Date(Date.now() + 55000).toISOString(),
+        expiresAt: new Date(Date.now() + actionTtlMs).toISOString(),
       };
       const original = createOriginal(snapshot);
       service = createOwnedFileReadServiceForTest({

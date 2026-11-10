@@ -150,6 +150,18 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-non-null-assertion": "off",
       "@typescript-eslint/require-await": "off",
+      // A spy keeps every call's arguments, buffers included, until it is restored. Code under
+      // test calls readSync in a tight loop, so spying on it held up to 1.8 GiB per test file.
+      // A warning for now; interceptReadSync (packages/cli/test) records nothing.
+      "no-restricted-syntax": [
+        "warn",
+        {
+          selector:
+            "CallExpression[callee.object.name='vi'][callee.property.name='spyOn'][arguments.0.name='fs'][arguments.1.value='readSync']",
+          message:
+            "vi.spyOn(fs, 'readSync') retains every call's buffers until restored. Use interceptReadSync from packages/cli/test/intercept-read-sync.ts, or see 'Test memory' in docs/DEVELOPMENT.md.",
+        },
+      ],
     },
   },
   prettier,

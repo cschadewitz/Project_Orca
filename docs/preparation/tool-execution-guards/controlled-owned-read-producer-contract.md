@@ -8,7 +8,7 @@ can construct the private test supervisor capability.
 
 ## Entrypoint and original supervisor inputs
 
-The TypeScript producer is `packages/cli/test/controlled-owned-read-producer.ts`.
+The TypeScript producer is `packages/cli/test/controlled-owned-read/producer.ts`.
 Build a new private image with `node tools/owned-read-proof/build-controlled.mjs
 /absolute/new/image`. The builder refuses an existing target. The exact emitted
 entrypoint is `controlled-child.mjs`; it imports `./controlled-producer.mjs`.

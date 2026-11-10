@@ -1,69 +1,11 @@
 /** Real journal compaction: settled history folds into a checkpoint that still verifies, and nothing else is folded. */
-import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
-import { enterFirstRunWriter, firstRunAttempts } from "@orca/protocol/first-run-fence";
-import { firstRunRequiresExplicitContinuationRecovery } from "../../cli/src/first-run-recovery-fence.js";
-import type { BundledDaemon } from "../src/main/daemon-process.js";
-import {
-  OWNERSHIP_DIRECTORY,
-  inspectFirstRunOwnership,
-  reserveFirstRunOwnership,
-} from "../src/main/first-run/ownership.js";
-import { FirstRunRecovery } from "../src/main/first-run/recovery.js";
-import { syntheticFirstRunWriter } from "./fixtures/synthetic-first-run-writer.js";
-
-const roots: string[] = [];
-afterEach(async () => {
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
-});
-// Under the checkout, like the recovery tests: the lifetime fence refuses tmpfs volumes.
-async function selected() {
-  const path = await mkdtemp(join(process.cwd(), ".orca-compaction-test-"));
-  roots.push(path);
-  await writeFile(join(path, "orca.config.yaml"), "synthetic config\n");
-  return path;
-}
-/** One whole owned launch: reserve, attest the writer, attach, observe the direct child's exit and settle. */
-function launch(path: string) {
-  const owner = reserveFirstRunOwnership(path);
-  syntheticFirstRunWriter(path, 123);
-  let exited = false;
-  const daemon: BundledDaemon = {
-    url: "http://127.0.0.1:7654",
-    pid: 123,
-    get exited() {
-      return exited;
-    },
-    stop: async () => {},
-  };
-  owner.attach(daemon);
-  exited = true;
-  expect(owner.complete()).toBe(true);
-}
-const journal = (path: string) => join(path, OWNERSHIP_DIRECTORY);
-const listing = async (path: string) => (await readdir(journal(path))).sort();
-const refused = (path: string) => expect(() => inspectFirstRunOwnership(path)).toThrow("reconciliation");
-
-it("keeps working past the former 256-attempt limit, and the folded journal still verifies", async () => {
-  const path = await selected();
-  for (let count = 0; count < 300; count++) launch(path);
-  const names = await listing(path);
-  const { checkpoint, history, next, latest } = inspectFirstRunOwnership(path);
-  expect(next).toBe(301);
-  expect(latest!.settled).toBe(true);
-  // A fold happens once 65 attempts follow the checkpoint, and keeps the 16 newest settled ones plus its own.
-  expect(checkpoint!.through).toBe(240);
-  expect(names.filter((name) => !/^[0-9]{6}$/.test(name))).toEqual(["checkpoint-000240.json"]);
-  expect(names).toHaveLength(61);
-  expect(history[0]!.number).toBe(checkpoint!.through + 1);
-  expect(firstRunAttempts(journal(path))).toEqual(history.map((attempt) => attempt.name));
-  expect(firstRunRequiresExplicitContinuationRecovery(path)).toBe(false);
-  // The bootstrap's own admission finds the newest attempt of a folded journal.
-  const owner = reserveFirstRunOwnership(path);
-  await enterFirstRunWriter(path, join(path, ".orca"), owner.launchToken!());
-  expect(Object.keys(inspectFirstRunOwnership(path, true).latest!.texts).sort()).toEqual(["claim.json", "writer.json"]);
-}, 60000);
+import { expect, it } from "vitest";
+import { firstRunRequiresExplicitContinuationRecovery } from "../../../cli/src/first-run-recovery-fence.js";
+import { inspectFirstRunOwnership, reserveFirstRunOwnership } from "../../src/main/first-run/ownership.js";
+import { FirstRunRecovery } from "../../src/main/first-run/recovery.js";
+import { journal, launch, listing, refused, selected } from "./fixture.js";
 
 it("detects tampering with the checkpoint or the history it binds, and carries reconciliation forward", async () => {
   const path = await selected();

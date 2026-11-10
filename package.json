@@ -24,7 +24,7 @@
     "lint:css": "node tools/eslint-config/bin/check-css-tokens.js packages/app/renderer packages/design/css/components.css",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format:check": "node tools/format-check.js",
     "design:build": "node packages/design/build-tokens.js",
     "design:check": "node packages/design/build-tokens.js --check",
     "design:fonts": "node tools/font-build/build-fonts.js",

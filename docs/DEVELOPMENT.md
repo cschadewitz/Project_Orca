@@ -21,7 +21,7 @@ pnpm run typecheck           # tsc --noEmit over every package + tests, then aga
                               # a plain Node package never needs
 pnpm run lint                # eslint (type-aware) over the same set, then the CSS token
                               # check; --fix as `pnpm run lint:fix` (eslint only)
-pnpm run format              # prettier --write . (`format:check` to only report)
+pnpm run format              # prettier --write . (`format:check` to only report; runs prettier in parallel over tracked files)
 pnpm test                    # vitest: unit tests + e2e against a real ACP subprocess
 pnpm run test:coverage       # the same run, with coverage and its thresholds
 pnpm run build               # tsc -b project references -> packages/*/dist
@@ -809,6 +809,28 @@ the workspace's own `electron`, so `playwright install` is never needed. The reu
 workflow still runs from release publication against the exact merge commit, including
 all three type-proof platforms. A failed proof blocks tagging; baseline review uses the same
 deliberate procedure above.
+
+## Test memory
+
+The suite runs about twenty test files at once on the homelab runners, so one file that
+holds a lot of memory is multiplied. A run of 20 workers peaks at about 7 GiB against the
+12 GiB runner limit (`docs/ci-runners.md` has the measurements).
+
+- **A spy keeps every call.** `vi.spyOn` and `vi.fn` store the arguments and the
+  results of every call in `mock.calls` and `mock.results` until the mock is restored or
+  cleared. If the code under test calls the function in a loop with a fresh buffer each time,
+  the buffers pile up. Spying on `fs.readSync` did this and held up to 1.8 GiB per file.
+  Use `interceptReadSync()` from `packages/cli/test/intercept-read-sync.ts`, which records
+  nothing. If a test needs the spy, restore or clear it as soon as its assertions are done.
+  The lint rule `no-restricted-syntax` warns on `vi.spyOn(fs, "readSync")`.
+- **`--logHeapUsage` does not show buffers.** It reports the live JS heap per file. Buffers
+  and typed arrays live outside the heap, so read `process.memoryUsage().arrayBuffers` in the
+  test process, or the container's cgroup memory in CI.
+- **Heap flags do not help.** `--max-old-space-size`, `--max-semi-space-size` and
+  `MALLOC_ARENA_MAX` changed nothing, and neither did turning coverage off. Look for retained
+  buffers before raising the runner limit or lowering the worker count.
+- **A file you split runs beside its parts.** Splitting a large file moves its memory into
+  several processes that run at the same time. Check the peak after a split.
 
 ## Tests worth reading first
 
