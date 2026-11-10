@@ -87,6 +87,49 @@ class ReasonTests(unittest.TestCase):
             finally:
                 evidence.close()
 
+    def test_cal7_reopen_and_duplicate_writers_cannot_reset_the_budget(self):
+        # Cal (review of af318bc0): reopening the directory, or a second concurrent
+        # instance, started a fresh in-memory budget, so 8 + 8 bytes landed under limit=10.
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chmod(tmp, 0o700)
+            first = PrivateEvidence(tmp, limit=10)
+            try:
+                with self.assertRaises(Refusal) as caught:
+                    PrivateEvidence(tmp, limit=10)  # concurrent, still empty
+                self.assertEqual(caught.exception.code, 'evidence_store_not_exclusive')
+                first.write('a', b'x' * 8)
+                with self.assertRaises(Refusal) as caught:
+                    PrivateEvidence(tmp, limit=10)  # concurrent, populated
+                self.assertEqual(caught.exception.code, 'evidence_store_not_exclusive')
+            finally:
+                first.close()
+            with self.assertRaises(Refusal) as caught:
+                PrivateEvidence(tmp, limit=10)  # reopen after close
+            self.assertEqual(caught.exception.code, 'evidence_store_not_exclusive')
+            on_disk = sum(os.path.getsize(os.path.join(tmp, n)) for n in os.listdir(tmp))
+            self.assertEqual(on_disk, 8)
+
+    def test_cal7_foreign_content_and_lock_are_refused(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chmod(tmp, 0o700)
+            with open(os.path.join(tmp, '.hidden'), 'wb') as handle:
+                handle.write(b'x')
+            with self.assertRaises(Refusal) as caught:
+                PrivateEvidence(tmp, limit=10)
+            self.assertEqual(caught.exception.code, 'evidence_store_not_exclusive')
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chmod(tmp, 0o700)
+            holder = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with self.assertRaises(Refusal) as caught:
+                    PrivateEvidence(tmp, limit=10)
+                self.assertEqual(caught.exception.code, 'evidence_store_not_exclusive')
+            finally:
+                os.close(holder)
+            PrivateEvidence(tmp, limit=10).close()  # empty and unlocked: accepted
+
     def test_l6_evidence_directory_checked_on_the_opened_descriptor(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as good, tempfile.TemporaryDirectory() as loose:

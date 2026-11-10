@@ -128,12 +128,17 @@ reporting success where the gap is not closed.
 | 4. Partial evidence writes (`reasons.py`) | Bytes are charged before writing; a failed write or fsync removes the partial record and refunds only after removal succeeds; if removal fails the store closes. Failures are `evidence_write_failed`. Regression reproduces the 4-byte partial write followed by an error under a 10-byte limit (`test_cal4_partial_writes_are_accounted_and_removed`) |
 | 5. Identity/authorization circularity | Same as M7: pre-authorization identity bound in the signed statement (by digest, re-measured by the verifier), outer run envelope carrying that identity digest with the plan and consumed statement digests. End-to-end test computes every digest from a real git repository, this host, the Python executable, the loader file and a real containment spec (`test_cal5_end_to_end_with_measured_digests`) |
 | 6. procfs environment dependence | The `/proc/.../children` interface is no longer needed anywhere (ledger and containment scan `/proc/<pid>/stat`); a `/proc` that cannot be read refuses with `procfs_unavailable`; never a skip. The host requirement is in the identity tuple (`host.requirements`: `mount-setattr`, `pidfd`, `proc-pid-stat`, `unprivileged-user-namespaces`), probed by `measure_host`, and stated in the gap matrix and plan. `cgroup.procs` tracking was considered and is not implemented; recorded as open. Not re-run on Cal's host |
+| 7. Evidence budget reset on reopen (second review, at `af318bc0`) | `PrivateEvidence` now owns its directory exclusively for its whole life: the directory must be empty when opened and is held under an exclusive non-blocking `flock` until close. A reopened, pre-populated or concurrently opened store refuses with the new code `evidence_store_not_exclusive` instead of starting a fresh in-memory budget. Regressions: `test_cal7_reopen_and_duplicate_writers_cannot_reset_the_budget` (8 bytes, then concurrent open, then reopen after close; 8 bytes on disk at the end) and `test_cal7_foreign_content_and_lock_are_refused`. Both fail on `af318bc0` and pass after the fix. Assumption: `flock` is advisory, so a same-uid writer that bypasses `PrivateEvidence` is out of scope |
 
 Known limitations still open: `public_summary` accepts short lowercase tokens
 for descriptive keys (bounded, not vocabulary-checked); containment has no
 seccomp or cgroup limits; the loader boundary is cooperative inside one V8
 realm; the producer does not emit the journal; the final no-children check runs
 after directory removal; original bootstrap lineage (row 5) is not implemented.
+
+### After the second review (10 November 2026)
+
+Only `reasons.py` and `test_reasons.py` changed. Results: `check_offline.py` 97 tests OK, 0 skipped, normal and `-O`, as root and as uid 65534 (same `setpriv` setup as above); ruff (E,F,W,B) and flake8 clean. `reasons.py` SHA-256 is now `586369357fb216d28636cd917398f741a8957a26282d0060931f4aabb504cdad`; every other hash below is unchanged.
 
 ## Artifact hashes (SHA-256 at the review-fix commit `d8400d24`)
 

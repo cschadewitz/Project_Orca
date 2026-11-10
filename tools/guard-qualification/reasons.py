@@ -5,6 +5,7 @@ strings. A refusal carries only a code from REASONS; anything else becomes
 'unlisted_reason'. Raw material goes to PrivateEvidence, which is bounded,
 owner-only and reported publicly only by size and SHA-256.
 """
+import fcntl
 import hashlib
 import os
 import re
@@ -28,7 +29,7 @@ REASONS = frozenset((
     'supervisor_not_dedicated', 'sigchld_ignored', 'pidfd_unavailable', 'acquisition_failed',
     'resource_budget_exceeded', 'cleanup_failed', 'cleanup_uncertain', 'process_unsettled',
     'descendant_unsettled', 'ledger_closed', 'body_failed', 'preserved_unsettled', 'procfs_unavailable',
-    'evidence_write_failed',
+    'evidence_write_failed', 'evidence_store_not_exclusive',
     # containment
     'containment_unavailable', 'containment_namespace_shared', 'containment_network',
     'containment_fd_inherited', 'containment_env', 'containment_path_visible',
@@ -118,6 +119,12 @@ class PrivateEvidence:
     Bytes are charged against the limit before they are written, so a failed or
     partial write can never let the directory exceed it. A failed record is
     removed; if removal also fails the store becomes unusable.
+
+    The limit is directory-wide because one instance owns the directory for its
+    whole life: it must be empty when opened and is held under an exclusive
+    flock until close. A reopened, pre-populated or concurrently opened store
+    is refused rather than starting a fresh in-memory budget. flock is advisory,
+    so this assumes no other same-uid writer bypasses PrivateEvidence.
     """
 
     def __init__(self, directory, limit=PRIVATE_EVIDENCE_LIMIT):
@@ -131,6 +138,19 @@ class PrivateEvidence:
                 stat.S_IMODE(info.st_mode) == 0o700):
             os.close(fd)
             raise Refusal('acquisition_failed')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            raise Refusal('evidence_store_not_exclusive') from None
+        try:
+            entries = os.listdir(fd)
+        except OSError:
+            os.close(fd)
+            raise Refusal('acquisition_failed') from None
+        if entries:
+            os.close(fd)
+            raise Refusal('evidence_store_not_exclusive')
         self._dir = fd
         self._limit, self._used, self._names = limit, 0, set()
 
