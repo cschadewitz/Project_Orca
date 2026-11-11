@@ -28,28 +28,57 @@ jobs:
       labels: ${{ steps.pick.outputs.labels }}
       workers: ${{ steps.pick.outputs.workers }}
       pnpm_cache: ${{ steps.pick.outputs.pnpm_cache }}
+      matrix: ${{ steps.pick.outputs.matrix }}
+      shards: ${{ steps.pick.outputs.shards }}
     steps:
       - id: pick
         shell: bash
         env:
           FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
         run: |
-          idle=0
+          idle=0 m1=0 m2=0 pinned=false
           # Check curl's own status: a timeout after partial output must not count
           if [[ "$FORCE_HOSTED" != "true" ]] && body=$(curl -fsS --max-time 5 https://runners.theroses.dev/health); then
             idle=$(jq -r '.Project_Orca // 0' <<<"$body" 2>/dev/null) || idle=0
+            # Exact idle runners per host; absent when health does not know the hosts
+            if jq -e '.machines' <<<"$body" >/dev/null 2>&1; then
+              pinned=true
+              m1=$(jq -r '.machines.m1 // 0' <<<"$body") || m1=0
+              m2=$(jq -r '.machines.m2 // 0' <<<"$body") || m2=0
+            fi
           fi
-          [[ "$idle" =~ ^[0-9]+$ ]] || idle=0
-          if (( idle > 0 )); then
-            echo 'labels=["self-hosted","linux","x64","tyler"]' >> "$GITHUB_OUTPUT"
+          for n in idle m1 m2; do [[ "${!n}" =~ ^[0-9]+$ ]] || printf -v "$n" 0; done
+          base='"self-hosted","linux","x64","tyler"'
+          # One shard per host that has an idle runner, each pinned to that host by its
+          # machine label so two shards never share a host. Shard 2 of 2 only exists when
+          # both hosts are up; with one host up the whole suite runs there as shard 1 of 1.
+          up=()
+          if [[ "$pinned" == true ]]; then
+            if (( m1 > 0 )); then up+=(m1); fi
+            if (( m2 > 0 )); then up+=(m2); fi
+          elif (( idle > 0 )); then
+            up+=(any) # health predates machine labels: one unpinned shard
+          fi
+          if (( ${#up[@]} > 0 )); then
+            echo "labels=[${base}]" >> "$GITHUB_OUTPUT"
             # Why 20 workers and no pnpm cache: docs/ci-runners.md
             echo 'workers=20' >> "$GITHUB_OUTPUT"
             echo 'pnpm_cache=' >> "$GITHUB_OUTPUT"
+            shards='[]'
+            for i in "${!up[@]}"; do
+              if [[ "${up[$i]}" == any ]]; then labels="[${base}]"; else labels="[${base},\"${up[$i]}\"]"; fi
+              shards=$(jq -c --argjson shard "$((i + 1))" --argjson total "${#up[@]}" --argjson labels "$labels" \
+                '. + [{shard: $shard, total: $total, labels: $labels}]' <<<"$shards")
+            done
           else
             echo 'labels=["ubuntu-24.04"]' >> "$GITHUB_OUTPUT"
             echo 'workers=2' >> "$GITHUB_OUTPUT"
             echo 'pnpm_cache=pnpm' >> "$GITHUB_OUTPUT"
+            shards='[{"shard":1,"total":1,"labels":["ubuntu-24.04"]}]'
           fi
+          echo "shards=${shards}" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(jq -c '{include: .}' <<<"$shards")" >> "$GITHUB_OUTPUT"
+          echo "shards: ${shards}"
           echo "idle homelab runners: ${idle}"
 
   changes:
@@ -78,16 +107,16 @@ jobs:
   # consumer and the `check (node 24)` name all stay as they were. Targeted PR runs and
   # docs-only changes are not sharded: this job skips its test steps for them.
   test:
-    name: test (shard ${{ matrix.shard }}/2)
+    name: test (shard ${{ matrix.shard }}/${{ matrix.total }})
     needs: [changes, runner]
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ${{ fromJSON(needs.runner.outputs.labels) }}
+    # Each shard is pinned to its own host by the machine label the picker chose.
+    runs-on: ${{ fromJSON(matrix.labels) }}
     env:
       WORKERS_CAP: ${{ needs.runner.outputs.workers }}
     strategy:
       fail-fast: false
-      matrix:
-        shard: [1, 2]
+      matrix: ${{ fromJSON(needs.runner.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -143,11 +172,11 @@ jobs:
 
       # Thresholds are skipped: half the files cannot meet them. `check` enforces them
       # on the merged coverage.
-      - name: Test shard ${{ matrix.shard }}/2
+      - name: Test shard ${{ matrix.shard }}/${{ matrix.total }}
         if: steps.selection.outputs.mode != 'targeted'
         run: |
           pnpm exec vitest run --coverage \
-            --shard="${{ matrix.shard }}/2" \
+            --shard="${{ matrix.shard }}/${{ matrix.total }}" \
             --reporter=default --reporter=blob \
             --outputFile.blob="blob-reports/blob-${{ matrix.shard }}.json"
         env:
@@ -365,10 +394,12 @@ jobs:
         if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
         # Merges the shards' results and coverage; the thresholds apply to the whole suite.
         run: |
-          test "$(ls blob-reports/*.json 2>/dev/null | wc -l)" -eq 2 || { echo "::error::expected 2 shard blobs in blob-reports/"; exit 1; }
+          test "$(ls blob-reports/*.json 2>/dev/null | wc -l)" -eq "$SHARDS" || { echo "::error::expected $SHARDS shard blobs in blob-reports/"; exit 1; }
           pnpm exec vitest run --merge-reports=blob-reports --coverage \
             --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
         env:
+          # One blob per shard; the picker's shard count is the same on every entry
+          SHARDS: ${{ fromJSON(needs.runner.outputs.shards)[0].total }}
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       # Both still run when the thresholds fail: a red build is exactly when the numbers
