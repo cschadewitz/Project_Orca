@@ -98,7 +98,7 @@ export default defineConfig({
       // Shards set VITEST_SKIP_THRESHOLDS and the merge job, which sees the whole suite,
       // enforces them.
       thresholds: process.env.VITEST_SKIP_THRESHOLDS
-        ? undefined
+        ? {}
         : {
             // The whole report: 89.3 / 78.3 / 90.0 / 92.1 today. These sat at 78/65/80/81 until
             // v0.3.0 - written for a suite that covered 79/66/81.5/82 and never raised as it
