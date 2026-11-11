@@ -63,6 +63,23 @@ container peaked at 10.9 GiB with no swap.
 
 Only `check` moves. `changes` and `pick runner` always run on GitHub-hosted runners.
 
+## Sharding
+
+`check` is a two-job matrix (`shard: [1, 2]`), each shard running `vitest --shard=N/2`
+at the worker count above, so a second machine hosting runners splits the suite across
+both. Shard 1 also runs typecheck, lint, format, the retry acceptance and the compiled
+smoke test; both shards build, since the tests need the emitted `dist`.
+
+A shard sees half the files, so it cannot meet the coverage thresholds. Shards set
+`VITEST_SKIP_THRESHOLDS` and upload a Vitest blob; the `coverage` job merges the blobs
+with `vitest --merge-reports` and enforces the thresholds on the whole suite. It runs on
+the same runner labels as `check` because the blobs hold absolute paths. Targeted PR runs
+are not sharded and run on shard 1 only.
+
+The picker counts idle runners once, so with one idle runner the second shard queues
+until it frees up. The advisory full-suite evidence is only recorded from shard 1 and no
+longer includes the suite report.
+
 ## Vitest file-order cache
 
 Vitest starts the longest test files first, from the per-file durations it cached on
