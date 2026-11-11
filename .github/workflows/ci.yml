@@ -72,9 +72,99 @@ jobs:
           SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node tools/ci-shadow/docs.js
 
-  check:
-    name: check (node ${{ matrix.node }}, shard ${{ matrix.shard }}/2)
+  # The full suite, split in two by file (`vitest --shard`) so a second runner host can
+  # share it. Each shard only produces a blob (test results plus raw coverage); `check`
+  # merges them in its `Test with coverage` step, so the thresholds, the evidence
+  # consumer and the `check (node 24)` name all stay as they were. Targeted PR runs and
+  # docs-only changes are not sharded: this job skips its test steps for them.
+  test:
+    name: test (shard ${{ matrix.shard }}/2)
     needs: [changes, runner]
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ${{ fromJSON(needs.runner.outputs.labels) }}
+    env:
+      WORKERS_CAP: ${{ needs.runner.outputs.workers }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: ${{ needs.runner.outputs.pnpm_cache }}
+
+      - name: Bound test workers
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { availableParallelism } from 'node:os';
+
+          const workers = Math.min(Number(process.env.WORKERS_CAP) || 2, Math.max(1, availableParallelism() - 1));
+          appendFileSync(process.env.GITHUB_ENV, `VITEST_MAX_WORKERS=${workers}\n`);
+          console.log(`Vitest worker limit: ${workers} (available parallelism: ${availableParallelism()})`);
+          NODE
+
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      - name: Restore Vitest file-order cache
+        if: contains(fromJSON(needs.runner.outputs.labels), 'tyler')
+        continue-on-error: true
+        run: |
+          src=/var/cache/vitest-order/results.json
+          dir=node_modules/.vite/vitest/da39a3ee5e6b4b0d3255bfef95601890afd80709
+          if [ -f "$src" ]; then
+            mkdir -p "$dir"
+            cp "$src" "$dir/results.json"
+          fi
+
+      # The same plan `check` makes: a targeted PR run is not sharded.
+      - name: Plan test execution
+        id: selection
+        env:
+          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
+          SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          SHADOW_NODE: 24
+        run: node tools/ci-shadow/execute.js plan
+
+      # Production MCP acceptance launches the emitted daemon and MCP entry points.
+      - name: Build
+        if: steps.selection.outputs.mode != 'targeted'
+        run: pnpm run build
+
+      # Thresholds are skipped: half the files cannot meet them. `check` enforces them
+      # on the merged coverage.
+      - name: Test shard ${{ matrix.shard }}/2
+        if: steps.selection.outputs.mode != 'targeted'
+        run: |
+          pnpm exec vitest run --coverage \
+            --shard="${{ matrix.shard }}/2" \
+            --reporter=default --reporter=blob \
+            --outputFile.blob="blob-reports/blob-${{ matrix.shard }}.json"
+        env:
+          ORCA_MCP_REQUIRE_PRODUCTION: "1"
+          VITEST_SKIP_THRESHOLDS: "1"
+
+      - name: Upload test blob
+        if: ${{ !cancelled() && hashFiles('blob-reports/*.json') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: vitest-blob-${{ matrix.shard }}
+          path: blob-reports/
+          retention-days: 1
+
+  check:
+    name: check (node ${{ matrix.node }})
+    needs: [changes, runner, test]
     if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON(needs.runner.outputs.labels) }}
     env:
@@ -82,13 +172,10 @@ jobs:
       WORKERS_CAP: ${{ needs.runner.outputs.workers }}
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         # 24 is the floor declared in package.json engines and selected by mise.toml.
         node: [24]
-        # The suite is split in two by file (`vitest --shard`). Shard 1 also owns every
-        # step that is not a test run; shard 2 only builds and runs its half of the suite.
-        # The `coverage` job below merges both halves and enforces the thresholds.
-        shard: [1, 2]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -183,27 +270,27 @@ jobs:
           node tools/ci-shadow/execute.js plan
 
       - name: Typecheck
-        if: needs.changes.outputs.code != 'false' && matrix.shard == 1
+        if: needs.changes.outputs.code != 'false'
         run: pnpm run typecheck
 
       # tokens.css and tokens.ts are committed so nothing needs a build to read a token;
       # this fails when someone edited tokens.json and forgot to regenerate them.
       - name: Design tokens are current
-        if: needs.changes.outputs.code != 'false' && matrix.shard == 1
+        if: needs.changes.outputs.code != 'false'
         run: pnpm run design:check
 
       - name: Format
-        if: needs.changes.outputs.code != 'false' && matrix.shard == 1
+        if: needs.changes.outputs.code != 'false'
         run: pnpm run format:check
 
       - name: Lint
-        if: needs.changes.outputs.code != 'false' && matrix.shard == 1
+        if: needs.changes.outputs.code != 'false'
         env:
           NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm run lint
 
       - name: Check ordinary documentation
-        if: needs.changes.outputs.code == 'false' && matrix.shard == 1
+        if: needs.changes.outputs.code == 'false'
         env:
           SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
           SHADOW_HEAD: ${{ github.event.pull_request.head.sha }}
@@ -217,7 +304,7 @@ jobs:
       # These two opt-in cases are skipped by the ordinary suite. Run them against the
       # merged runtime on Node 24 and reject a green result with skips.
       - name: Retry admission acceptance (CLI and ACP)
-        if: needs.changes.outputs.code != 'false' && matrix.shard == 1
+        if: needs.changes.outputs.code != 'false'
         timeout-minutes: 3
         env:
           ORCA_RETRY_INTEGRATION: "1"
@@ -255,9 +342,8 @@ jobs:
 
       # Full/fallback PRs and every main push retain global/app coverage ratchets.
       # Selected PRs do not produce or claim global coverage; main catches regressions.
-      # Targeted PR runs are small and not sharded; shard 2 has nothing to do for them.
       - name: Test selected files
-        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode == 'targeted' && matrix.shard == 1
+        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode == 'targeted'
         run: node tools/ci-shadow/execute.js run
         env:
           SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
@@ -265,92 +351,25 @@ jobs:
           SHADOW_NODE: ${{ matrix.node }}
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
-      # This shard's half of the suite. The blob carries its test results and coverage
-      # to the `coverage` job; thresholds are skipped here because half the files cannot
-      # meet them.
-      - name: Test shard ${{ matrix.shard }}/2 with coverage
-        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
-        run: |
-          pnpm exec vitest run --coverage \
-            --shard="${{ matrix.shard }}/2" \
-            --reporter=default --reporter=blob \
-            --outputFile.blob="blob-reports/blob-${{ matrix.shard }}.json"
-        env:
-          ORCA_MCP_REQUIRE_PRODUCTION: "1"
-          VITEST_SKIP_THRESHOLDS: "1"
-
-      - name: Upload test blob
-        if: ${{ !cancelled() && hashFiles('blob-reports/*.json') != '' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: vitest-blob-${{ matrix.shard }}
-          path: blob-reports/
-          retention-days: 1
-
-      # vitest resolves @orca/* to packages/*/src via aliases, so it never exercises the
-      # emitted dist graph. This catches broken exports maps and missing project references.
-      - name: Smoke test the compiled build
-        if: needs.changes.outputs.code != 'false' && matrix.shard == 1
-        run: node packages/cli/dist/main.js demo
-
-      # Retain actual full/selected suite evidence; job steps authenticate execution mode.
-      # Always retain sanitized failure/missing-result evidence. Failure here cannot
-      # mask or override any existing step, job, coverage or required-check outcome.
-      - name: Record advisory full-suite evidence
-        if: always() && matrix.shard == 1
-        continue-on-error: true
-        run: node tools/ci-shadow/record.js
-
-      - name: Upload advisory full-suite evidence
-        if: always() && matrix.shard == 1
-        continue-on-error: true
-        uses: actions/upload-artifact@v7
-        with:
-          name: ci-full-evidence-${{ github.run_id }}-${{ github.run_attempt }}-node-${{ matrix.node }}
-          path: ${{ runner.temp }}/ci-shadow-evidence/evidence.json
-          if-no-files-found: warn
-          retention-days: 7
-
-  # Merges the shards' blobs, so the thresholds in vitest.config.ts see the whole suite.
-  # Runs on the same labels as `check`: the blobs hold absolute paths, which only map
-  # back to source files on a checkout at the same location.
-  coverage:
-    name: coverage (merge shards)
-    needs: [changes, runner, check]
-    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && needs.check.result == 'success' }}
-    runs-on: ${{ fromJSON(needs.runner.outputs.labels) }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: ${{ needs.runner.outputs.pnpm_cache }}
-
-      - run: pnpm install --frozen-lockfile
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
-
-      # Targeted PR runs write no blobs; there is nothing to merge for them.
+      # The shards' blobs hold absolute paths, so the merge needs a checkout at the same
+      # location as theirs: the same runner labels and image give that.
       - name: Download test blobs
-        id: blobs
-        continue-on-error: true
+        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
         uses: actions/download-artifact@v8
         with:
           pattern: vitest-blob-*
           path: blob-reports
           merge-multiple: true
 
-      - name: Merge shards and check thresholds
-        if: steps.blobs.outcome == 'success'
+      - name: Test with coverage
+        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
+        # Merges the shards' results and coverage; the thresholds apply to the whole suite.
         run: |
+          test "$(ls blob-reports/*.json 2>/dev/null | wc -l)" -eq 2 || { echo "::error::expected 2 shard blobs in blob-reports/"; exit 1; }
           pnpm exec vitest run --merge-reports=blob-reports --coverage \
-            --reporter=default --reporter=json \
-            --outputFile.json="$RUNNER_TEMP/full-suite.json"
+            --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
+        env:
+          ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       # Both still run when the thresholds fail: a red build is exactly when the numbers
       # are worth reading. `hashFiles` keeps them quiet when coverage never ran at all.
@@ -373,3 +392,27 @@ jobs:
         if: ${{ !cancelled() && steps.upload-coverage.outcome == 'failure' }}
         run: |
           echo "::warning title=Coverage upload failed::Could not upload the coverage report. See the job summary for coverage results when available."
+
+      # vitest resolves @orca/* to packages/*/src via aliases, so it never exercises the
+      # emitted dist graph. This catches broken exports maps and missing project references.
+      - name: Smoke test the compiled build
+        if: needs.changes.outputs.code != 'false'
+        run: node packages/cli/dist/main.js demo
+
+      # Retain actual full/selected suite evidence; job steps authenticate execution mode.
+      # Always retain sanitized failure/missing-result evidence. Failure here cannot
+      # mask or override any existing step, job, coverage or required-check outcome.
+      - name: Record advisory full-suite evidence
+        if: always()
+        continue-on-error: true
+        run: node tools/ci-shadow/record.js
+
+      - name: Upload advisory full-suite evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-full-evidence-${{ github.run_id }}-${{ github.run_attempt }}-node-${{ matrix.node }}
+          path: ${{ runner.temp }}/ci-shadow-evidence/evidence.json
+          if-no-files-found: warn
+          retention-days: 7

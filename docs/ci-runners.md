@@ -65,20 +65,22 @@ Only `check` moves. `changes` and `pick runner` always run on GitHub-hosted runn
 
 ## Sharding
 
-`check` is a two-job matrix (`shard: [1, 2]`), each shard running `vitest --shard=N/2`
-at the worker count above, so a second machine hosting runners splits the suite across
-both. Shard 1 also runs typecheck, lint, format, the retry acceptance and the compiled
-smoke test; both shards build, since the tests need the emitted `dist`.
+The full suite runs as two shards in the `test` job (`shard: [1, 2]`, `vitest --shard=N/2`
+at the worker count above), so a second machine hosting runners splits it. Each shard
+builds, runs its half with coverage, and uploads a Vitest blob. `check (node 24)` is still
+the one job the evidence consumer and branch protection know: it `needs` both shards, and
+its `Test with coverage` step downloads the blobs and runs `vitest --merge-reports
+--coverage`, so the coverage thresholds and the full-suite report cover every file.
 
-A shard sees half the files, so it cannot meet the coverage thresholds. Shards set
-`VITEST_SKIP_THRESHOLDS` and upload a Vitest blob; the `coverage` job merges the blobs
-with `vitest --merge-reports` and enforces the thresholds on the whole suite. It runs on
-the same runner labels as `check` because the blobs hold absolute paths. Targeted PR runs
-are not sharded and run on shard 1 only.
+A shard sees half the files, so it cannot meet the thresholds; shards set
+`VITEST_SKIP_THRESHOLDS` and only the merge enforces them. The blobs hold absolute paths,
+so `test` and `check` must run on the same runner labels and image, with the workspace at
+the same location. Targeted PR runs and docs-only changes are not sharded: `test` skips
+its test steps for them.
 
-The picker counts idle runners once, so with one idle runner the second shard queues
-until it frees up. The advisory full-suite evidence is only recorded from shard 1 and no
-longer includes the suite report.
+`check` waits for both shards, so typecheck, lint and the build run after them rather
+than beside them. The picker counts idle runners once, so with one idle runner the second
+shard queues until it frees up.
 
 ## Vitest file-order cache
 
