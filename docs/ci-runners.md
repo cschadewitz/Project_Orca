@@ -72,18 +72,29 @@ it `needs` the shards, and its `Test with coverage` step downloads the blobs and
 `vitest --merge-reports --coverage`, so the coverage thresholds and the full-suite report
 cover every file.
 
-Each shard is pinned to one host by a machine label (`m1`, `m2`), set in that host's
-`RUNNER_LABELS` next to `tyler`. GitHub still decides when a runner is ready, but a shard
-can only start on its own host, so two 20-worker shards never share one machine however
-many runners each host has. The picker builds the shard list from `health`'s per-host
-idle counts:
+`check` and the shards start together. `check` runs its typecheck, lint and build beside
+the tests, then its `Wait for test shards` step polls this run's jobs through the API
+until every shard is done (it needs `actions: read`) before it merges the blobs.
 
-| Idle runners | Shards | Labels |
+`check` and each shard are pinned to a host by a machine label (`m1`, `m2`), set in that
+host's `RUNNER_LABELS` next to `tyler`. GitHub still decides when a runner is ready, but a
+job can only start on its own host, so two 20-worker shards never share a machine however
+many runners it has. Because `check` holds a runner while it waits, a host needs an idle
+runner for every job pinned to it, or `check` could take the only one and wait forever for
+a shard queued behind it. The picker therefore subtracts `check`'s runner first: `check`
+goes to `m1` when it has an idle runner (otherwise `m2`), and a shard goes to each host
+that still has one. It reads the per-host idle counts from `health`:
+
+| Idle runners (m1, m2) | `check` | Shards |
 | --- | --- | --- |
-| both hosts | 2 | shard 1 on `m1`, shard 2 on `m2` |
-| one host | 1 | the whole suite, on that host |
-| none, a failed request, or `CI_FORCE_HOSTED` | 1 | `ubuntu-24.04`, 2 workers |
-| `health` without machine counts | 1 | unpinned `tyler` |
+| 2+, 1+ | `m1` | 2: shard 1 on `m1`, shard 2 on `m2` |
+| 1, 1+ | `m1` | 1, on `m2` |
+| 2+, 0 | `m1` | 1, on `m1` |
+| 0, 2+ | `m2` | 1, on `m2` |
+| no host can hold `check` and a shard, a failed request, `CI_FORCE_HOSTED`, or a `health` without machine counts | `ubuntu-24.04`, 2 workers | 1, on `ubuntu-24.04` |
+
+`m1` therefore needs two runners (one for `check`, one for shard 1) for the suite to
+split in two; `m2` needs one.
 
 `health` gets the counts from GitHub's runner list, which spans every host registered to
 the repo, so the hosts do not need to reach each other. See the runner stack's README for
@@ -95,9 +106,9 @@ so `test` and `check` must run on the same image, with the workspace at the same
 location. Targeted PR runs and docs-only changes are not sharded: `test` skips its test
 steps for them.
 
-`check` waits for the shards, so typecheck, lint and the build run after them rather than
-beside them. The picker counts idle runners once, so a host that fills up between the
-pick and the job queues its shard until a runner frees.
+The picker counts idle runners once, so a host that fills up between the pick and the
+job queues its job until a runner frees. `check` and shard 1 both run on `m1`, so its
+typecheck, lint and build compete with shard 1's workers for that host's CPU.
 
 ## Vitest file-order cache
 
