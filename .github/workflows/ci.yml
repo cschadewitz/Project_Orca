@@ -109,7 +109,8 @@ jobs:
     needs: [changes, runner]
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     # Each shard is pinned to its own host by the machine label the picker chose.
-    runs-on: ${{ fromJSON(matrix.labels) }}
+    # matrix.labels is already an array here: fromJSON takes a string and would fail
+    runs-on: ${{ matrix.labels }}
     env:
       WORKERS_CAP: ${{ needs.runner.outputs.workers }}
     strategy:
@@ -400,6 +401,10 @@ jobs:
             done_count=$(jq '[.[] | select(.status == "completed")] | length' <<<"$shards")
             echo "shards finished: ${done_count}/${SHARDS}"
             if (( done_count >= SHARDS )); then break; fi
+            # Shard jobs are created with this one; none after 5 minutes means they never will be
+            if (( SECONDS > 300 )) && (( $(jq length <<<"$shards") < SHARDS )); then
+              echo "::error::expected ${SHARDS} test shard jobs in this run, found $(jq length <<<"$shards")"; exit 1
+            fi
             sleep 10
           done
 
