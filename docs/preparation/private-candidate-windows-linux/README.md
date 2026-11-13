@@ -21,7 +21,7 @@ points Windows/Linux readers here.
 | Page | Reader | Purpose |
 | --- | --- | --- |
 | [tester-guide.md](tester-guide.md) | Tester | Start here: the candidate card (fill-ins), what the tester agrees to, what the candidate is not, and stop rules |
-| [windows.md](windows.md) | Windows tester | Prerequisites, SHA-256 and signature-status check, NSIS install, first launch, and the no-bypass rule for SmartScreen and browser warnings (P1–P9) |
+| [windows.md](windows.md) | Windows tester | Prerequisites, SHA-256 and signature-status check, NSIS install, first launch, the SmartScreen rule (one named-publisher exception) and the browser-warning stop rule (P1–P9) |
 | [linux.md](linux.md) | Linux tester | Prerequisites, SHA-256 check, tar.gz/AppImage extraction, terminal launch, and the sandbox/FUSE stop rules (P1–P6) |
 | [first-success-sample.md](first-success-sample.md) | Tester | The built-in agent-free `orca-beta-local-check` sample over a throwaway Git project, with expected results, resource bounds and how to stop (F1–F10) |
 | [when-something-goes-wrong.md](when-something-goes-wrong.md) | Tester | Stopping ORCA and its bundled daemon, interruptions, failed startup, setup refusals, and collecting details safely |
@@ -164,7 +164,8 @@ belongs to the coordinator (gates G3–G4) before any tester receives the pages:
   and F1–F10 as written, F10 reopen, and shutdown within about 10 seconds with no leftover
   process. Windows **arm64** and Linux **arm64** have never executed.
 - **Windows:**
-  - the actual SmartScreen and browser behaviour for the unsigned installer
+  - the actual SmartScreen and browser behaviour for the signed installer on a fresh
+    machine (SmartScreen reputation and the exact Publisher text)
   - the NSIS pages and default location
   - folder ACL and ownership checks on folders made under `%USERPROFILE%`
   - uninstall leftovers

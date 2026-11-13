@@ -35,8 +35,8 @@ folder could upload test files.
 Use the NSIS installer for your architecture. electron-builder names it
 `ORCA-<version>-win-<arch>.exe`, where `<version>` is `{{CANDIDATE_VERSION}}` and
 `<arch>` is `x64` or `arm64`. The exact name and checksum are in your card's file table.
-The `.zip` builds are archives, not the supported way to install. Don't use one unless
-your card lists it for you.
+Use only the signed `.exe`. The `.zip` builds carry no signature of their own that P3
+can check, so don't use one.
 
 ## P1–P3: download and check that the file is the candidate
 
@@ -61,11 +61,11 @@ your card lists it for you.
    ```
 
    ```powershell
-   (Get-AuthenticodeSignature "$env:USERPROFILE\Downloads\ORCA-<version>-win-<arch>.exe").SignerCertificate.Subject
+   (Get-AuthenticodeSignature "$env:USERPROFILE\Downloads\ORCA-<version>-win-<arch>.exe").SignerCertificate.GetNameInfo('SimpleName', $false)
    ```
 
-   The expected result for this round is `Status : Valid`, and the subject starts with
-   `CN=Casey Schadewitz`. Any other status (such as `NotSigned`, `HashMismatch` or
+   The expected result for this round is `Status : Valid`, and the second command prints
+   exactly `Casey Schadewitz`. Any other status (such as `NotSigned`, `HashMismatch` or
    `UnknownError`) or any other signer is unexpected: **don't open the file**, stop and
    report it.
 
