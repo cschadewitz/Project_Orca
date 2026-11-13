@@ -95,12 +95,15 @@ declare.
       left running.
 - [ ] **G5 Unsigned statement.** The release notes say the desktop builds are unsigned
   (readiness R10, with the D1 wording), and the tester pages' warnings agree with it.
-- [ ] **G6 Windows warning decision.** The unsigned installer is expected to trigger
-  SmartScreen, and browsers may warn on download. These pages tell testers to **stop**
-  there. Decide whether Windows testers join this round anyway, knowing the expected
-  outcome is "stopped at P1/P4", or whether Windows waits for signing. Don't tell testers
-  to choose **Run anyway**, **Keep** or **Unblock**. Don't pick a download route because
-  it avoids the warning, and don't pre-unblock files.
+- [ ] **G6 Windows warning decision.** Decided for 0.7.0-rc.1: Windows testers receive
+  only the **signed** installer, and the unsigned release-page files are never handed
+  out. A new certificate may still trigger SmartScreen. [windows.md](windows.md) P4
+  allows **More info ▸ Run anyway** only when the publisher reads exactly
+  **Casey Schadewitz** and P2's hash and P3's `Valid` signature both matched; every other
+  SmartScreen screen, and every browser or antivirus warning, is still a stop. Don't
+  extend that exception to any other warning, publisher or file. Don't tell testers to
+  choose **Keep** or **Unblock**, don't pick a download route because it avoids a
+  warning, and don't pre-unblock files.
 - [ ] **G7 No unsupported claims.** The guide and notes claim no supported provider,
   ReviewJudge, tool-guard rule or MCP-operator use (readiness C6/C7). Provider profiles
   and ORCA-owned rules stay "inactive preparation".

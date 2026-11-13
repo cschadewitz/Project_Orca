@@ -114,10 +114,10 @@ above, and what these pages do about each:
    warnings.**
    - RELEASING.md records SmartScreen on the unsigned NSIS installer. Opening it would
      mean "Run anyway", and an unsigned `.exe` may also be flagged by browsers.
-   - **Here:** testers stop at P1/P4 and report. Coordinator gate G6 decides whether
-     Windows testers join this round at all.
-   - Recommendation for the #773 R10 notes wording: for this private round, do not tell
-     testers how to get past SmartScreen.
+   - **Resolved for 0.7.0-rc.1 (G6):** Windows testers get only the signed installer.
+     [windows.md](windows.md) P4 allows **Run anyway** solely when SmartScreen names the
+     publisher **Casey Schadewitz** and the hash and signature checks matched; every other
+     warning is still a stop. Unsigned files are never opened past a warning.
 5. **Windows support statements are out of date.**
    - The first-run README (`packages/app/src/main/first-run/README.md`) still says
      "Windows ownership is unavailable here … fails closed".
