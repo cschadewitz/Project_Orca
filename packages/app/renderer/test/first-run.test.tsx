@@ -89,6 +89,25 @@ it("keeps the selected review after a refused write and shows the reason main ga
   expect(f.firstRun.connect).not.toHaveBeenCalled();
 });
 
+it("keeps keyboard focus in the section when choosing directories replaces the Choose button", async () => {
+  const f = setup();
+  await screen.findByText("Explicit owned directories required.");
+  const choose = screen.getByRole("button", { name: "Choose project and empty workspace" });
+  choose.focus();
+  expect(document.activeElement).toBe(choose);
+  await act(async () => fireEvent.click(choose));
+  expect(f.firstRun.choose).toHaveBeenCalledOnce();
+  // The review step renders its own Choose button; the one that held focus is gone.
+  expect(choose.isConnected).toBe(false);
+  expect(document.activeElement).toBe(screen.getByRole("region", { name: "First-run project setup" }));
+  // And from the review step, Create replaces the step again without dropping focus.
+  const create = screen.getByRole("button", { name: "Create reviewed sample files" });
+  create.focus();
+  await act(async () => fireEvent.click(create));
+  expect(create.isConnected).toBe(false);
+  expect(document.activeElement).toBe(screen.getByRole("region", { name: "First-run project setup" }));
+});
+
 it("reviews Windows private child creation before passing the exact review to main", async () => {
   const f = setup();
   f.firstRun.choose.mockResolvedValueOnce({

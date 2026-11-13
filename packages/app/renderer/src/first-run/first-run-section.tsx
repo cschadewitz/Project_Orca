@@ -99,8 +99,10 @@ export function FirstRunSection(): JSX.Element | null {
   const perform = async (action: () => ReturnType<FirstRunBridge["status"]>, success: string, refused?: string) => {
     if (busy) return;
     const token = ++revision.current;
-    if (state?.state === "configuration-review" && section.current?.contains(document.activeElement))
-      leftHoldingFocus.current = true;
+    /* Any step change can unmount the control that holds focus: Choose moves from the selection row into the review
+       step, Create and Connect leave with theirs, and a review's Bind goes with it. Focus then goes to this region,
+       never the page body (rule 10); a control that survives the change keeps it. */
+    if (section.current?.contains(document.activeElement)) leftHoldingFocus.current = true;
     // Retire queued status evidence too: the handler's render may precede the status update's commit.
     // A failed rereview or binding must not leave a stale Bind control on screen.
     setState((previous) => (previous?.state === "configuration-review" ? undefined : previous));
