@@ -19,6 +19,7 @@ import {
   previousBootAttempt,
 } from "./recovery.js";
 import { inspectLocalTool } from "./agent-preflight.js";
+import { FirstRunRefusal, PRESERVED, failureReason } from "./refusal.js";
 import type { DaemonClient } from "../../client/daemon-client.js";
 import { dirname, join, isAbsolute } from "node:path";
 import { z } from "zod";
@@ -44,6 +45,23 @@ import {
   selectionFailure,
   verifyRuntimeDirectories,
 } from "./directories.js";
+
+const changedSetupFiles = () =>
+  selectionFailure("Setup files in the app workspace were changed, moved or removed since setup wrote them.");
+const staleReview = () => selectionFailure("This directory review is out of date. Choose the directories again.");
+const changedSinceReview = () =>
+  selectionFailure(
+    "The project or app workspace changed after you reviewed it: a different folder, branch or commit. Choose the directories again to review what is there now.",
+  );
+const changedConfiguration = () =>
+  selectionFailure("The saved configuration changed during review. Review the saved configuration again.");
+
+const savedRecordFailure = () =>
+  selectionFailure("The saved setup record is not a private file this account owns, or it changed while being read.");
+const unexpectedDaemon = () =>
+  selectionFailure(
+    "The daemon that answered is not the one started for this workspace, or it lacks the run controls setup needs. No alternate daemon was connected.",
+  );
 
 const directory = z.object({ path: z.string(), dev: z.string(), ino: z.string(), uid: z.string() }).strict();
 const receiptSchema = z
@@ -131,6 +149,7 @@ export class FirstRunSetup {
   }
   /** Saved paths do not authorize startup until both physical directories and exact files verify. */
   private async readReceipt(allowChangedConfig = false): Promise<Receipt | undefined> {
+    this.receiptFailure = undefined;
     try {
       if (process.platform === "win32") {
         const receipt = receiptSchema.parse(JSON.parse(windowsRead(this.deps.receiptPath, 64 * 1024)));
@@ -146,13 +165,13 @@ export class FirstRunSetup {
         typeof process.getuid !== "function" ||
         info.uid !== process.getuid()
       )
-        throw selectionFailure();
+        throw savedRecordFailure();
       const file = await open(this.deps.receiptPath, constants.O_RDONLY | constants.O_NOFOLLOW);
       let text: string;
       try {
         const current = await file.stat();
         if (current.ino !== info.ino || current.dev !== info.dev || current.size > 64 * 1024 || current.nlink !== 1)
-          throw selectionFailure();
+          throw savedRecordFailure();
         text = await file.readFile("utf8");
       } finally {
         await file.close();
@@ -160,36 +179,44 @@ export class FirstRunSetup {
       const receipt = receiptSchema.parse(JSON.parse(text));
       await this.verify(receipt, allowChangedConfig);
       return receipt;
-    } catch {
+    } catch (error) {
+      this.receiptFailure = error instanceof FirstRunRefusal ? error.message : failureReason(error);
       return undefined;
     }
+  }
+  /** Why the saved selection did not verify, from the last read of it, for a refusal the person can act on. */
+  private receiptFailure: string | undefined;
+  private unverifiedReceipt(): FirstRunRefusal {
+    return new FirstRunRefusal(
+      `Saved project identity or sample assets could not be verified.${this.receiptFailure ? ` ${this.receiptFailure}` : ""} Choose a fresh empty app workspace; existing files were preserved.`,
+    );
   }
   private async verify(receipt: Receipt, allowChangedConfig = false): Promise<void> {
     // The receipt's branch and base record what was reviewed at selection. Reopening checks the repository, not HEAD.
     const project = await projectRepository(receipt.project.path, this.deps.home);
     const workspace = await ownedDirectory(receipt.workspace.path, this.deps.home);
     if (!sameDirectory(receipt.project, project) || !sameDirectory(receipt.workspace, workspace))
-      throw selectionFailure();
+      throw selectionFailure("The project or app workspace folder was replaced or moved since setup.");
     separateDirectories(project.path, workspace.path);
     await verifyRuntimeDirectories(workspace);
     const expected = this.files(project.path);
     if (JSON.stringify(Object.keys(receipt.files).sort()) !== JSON.stringify(Object.keys(expected).sort()))
-      throw selectionFailure();
+      throw changedSetupFiles();
     // Each parent directory was exclusively created by this slice; symlink redirection is refused.
     const assets = await lstat(join(workspace.path, "first-run"));
-    if (!assets.isDirectory() || assets.isSymbolicLink()) throw selectionFailure();
+    if (!assets.isDirectory() || assets.isSymbolicLink()) throw changedSetupFiles();
     for (const [name, text] of Object.entries(expected)) {
       const path = join(workspace.path, name);
       if (process.platform === "win32") {
         const info = windowsFile(path);
-        if (info.dev !== workspace.dev || info.uid !== workspace.uid) throw selectionFailure();
+        if (info.dev !== workspace.dev || info.uid !== workspace.uid) throw changedSetupFiles();
         const actual = digest(windowsRead(path, 1024 * 1024));
         if (
           name === "orca.config.yaml"
             ? !allowChangedConfig && actual !== receipt.files[name]
             : actual !== digest(text) || receipt.files[name] !== digest(text)
         )
-          throw selectionFailure();
+          throw changedSetupFiles();
         continue;
       }
       const info = await lstat(path);
@@ -201,16 +228,16 @@ export class FirstRunSetup {
         String(info.uid) !== workspace.uid ||
         info.size > 1024 * 1024
       )
-        throw selectionFailure();
+        throw changedSetupFiles();
       const actual = digest(await readFile(path, "utf8"));
       if (name === "orca.config.yaml") {
-        if (!allowChangedConfig && actual !== receipt.files[name]) throw selectionFailure();
+        if (!allowChangedConfig && actual !== receipt.files[name]) throw changedSetupFiles();
       } else if (
         info.size !== Buffer.byteLength(text) ||
         receipt.files[name] !== digest(text) ||
         actual !== digest(text)
       )
-        throw selectionFailure();
+        throw changedSetupFiles();
     }
   }
 
@@ -274,14 +301,14 @@ export class FirstRunSetup {
   async prepare(id: string, assertCurrent: () => void): Promise<FirstRunStatus> {
     return this.exclusive(async () => {
       const selection = this.selection;
-      if (!selection || selection.review.id !== id) throw selectionFailure();
+      if (!selection || selection.review.id !== id) throw staleReview();
       assertCurrent();
       const project = await preparedProject(selection.project.path, this.deps.home);
       const parent = selection.parent ? windowsDirectory(selection.parent.path, "parent") : undefined;
       const workspaceBefore = parent
         ? selection.workspace
         : await ownedDirectory(selection.workspace.path, this.deps.home);
-      if (parent && !sameDirectory(parent, selection.parent!)) throw selectionFailure();
+      if (parent && !sameDirectory(parent, selection.parent!)) throw changedSinceReview();
       let workspace = workspaceBefore;
       if (
         !sameDirectory(selection.project, project) ||
@@ -289,7 +316,7 @@ export class FirstRunSetup {
         project.branch !== selection.project.branch ||
         project.baseCommit !== selection.project.baseCommit
       )
-        throw selectionFailure();
+        throw changedSinceReview();
       separateDirectories(project.path, workspace.path);
       if (!parent) await emptyDirectory(workspace.path);
       assertCurrent();
@@ -306,7 +333,9 @@ export class FirstRunSetup {
         const current = await ownedDirectory(workspace.path, this.deps.home);
         const assetCurrent = await ownedDirectory(join(workspace.path, "first-run"), this.deps.home);
         if (!sameDirectory(workspace, current) || !sameDirectory(assetDirectory, assetCurrent))
-          throw selectionFailure();
+          throw selectionFailure(
+            "The app workspace folder changed while setup was writing to it. Choose a fresh empty app workspace.",
+          );
         assertCurrent();
         await this.writeExclusive(join(workspace.path, name), text);
       }
@@ -337,7 +366,7 @@ export class FirstRunSetup {
   async prepareRecovery(assertCurrent: () => void): Promise<FirstRunStatus> {
     return this.exclusive(async () => {
       const receipt = await this.readReceipt();
-      if (!receipt) throw selectionFailure();
+      if (!receipt) throw this.unverifiedReceipt();
       await this.verify(receipt);
       assertCurrent();
       return {
@@ -349,7 +378,7 @@ export class FirstRunSetup {
   async reconcileRecovery(id: string, assertCurrent: () => void): Promise<FirstRunStatus> {
     return this.exclusive(async () => {
       const receipt = await this.readReceipt();
-      if (!receipt) throw selectionFailure();
+      if (!receipt) throw this.unverifiedReceipt();
       await this.verify(receipt);
       assertCurrent();
       const recovery = await new FirstRunRecovery(receipt.workspace.path).reconcile(id, assertCurrent);
@@ -360,7 +389,7 @@ export class FirstRunSetup {
   async endPreviousSession(id: string, assertCurrent: () => void): Promise<FirstRunStatus> {
     return this.exclusive(async () => {
       const receipt = await this.readReceipt();
-      if (!receipt) throw selectionFailure();
+      if (!receipt) throw this.unverifiedReceipt();
       assertCurrent();
       await endPreviousBootSession(receipt.workspace.path, id, assertCurrent);
       return this.prepared(receipt);
@@ -370,7 +399,7 @@ export class FirstRunSetup {
     return this.exclusive(async () => {
       this.configReview = undefined;
       const receipt = await this.readReceipt(true);
-      if (!receipt) throw selectionFailure();
+      if (!receipt) throw this.unverifiedReceipt();
       assertCurrent();
       let boundary:
         | (Pick<ReturnType<NonNullable<FirstRunDeps["configuration"]>>, "check" | "rebind"> & { client?: DaemonClient })
@@ -429,9 +458,12 @@ export class FirstRunSetup {
         !config.workflows.includes("first-run/workflow.yaml") ||
         config.agents.some((agent) => agent.hostId !== "local")
       )
-        throw selectionFailure();
+        throw selectionFailure(
+          "The saved configuration is not the local first-run shape this review can bind: one local host, no plugins, the project as its workspace root and the first-run workflow. Save it in Config, then review again.",
+        );
       const checks = [];
-      if (config.agents.length > 32) throw selectionFailure();
+      if (config.agents.length > 32)
+        throw selectionFailure("The saved configuration lists more than 32 agents, more than this review can check.");
       for (const agent of config.agents) {
         boundary.check();
         assertCurrent();
@@ -440,7 +472,7 @@ export class FirstRunSetup {
       await this.verify(receipt, true);
       boundary.check();
       assertCurrent();
-      if (digest(await readFile(doc.path, "utf8")) !== doc.revision) throw selectionFailure();
+      if (digest(await readFile(doc.path, "utf8")) !== doc.revision) throw changedConfiguration();
       const id = randomUUID();
       this.configReview = { id, receipt, revision: doc.revision, expires: Date.now() + 5 * 60_000, boundary };
       return {
@@ -468,7 +500,10 @@ export class FirstRunSetup {
   async bindConfiguration(id: string, assertCurrent: () => void): Promise<FirstRunStatus> {
     return this.exclusive(async () => {
       const review = this.configReview;
-      if (!review || review.id !== id || Date.now() > review.expires) throw selectionFailure();
+      if (!review || review.id !== id || Date.now() > review.expires)
+        throw selectionFailure(
+          "This configuration review has expired or was replaced. Review the saved configuration again.",
+        );
       review.boundary.check();
       assertCurrent();
       await this.verify(review.receipt, true);
@@ -478,7 +513,7 @@ export class FirstRunSetup {
         JSON.stringify(current) !== JSON.stringify(review.receipt) ||
         digest(await readFile(join(current.workspace.path, "orca.config.yaml"), "utf8")) !== review.revision
       )
-        throw selectionFailure();
+        throw changedConfiguration();
       review.boundary.check();
       assertCurrent();
       // Consume before the journal append. If receipt publication fails, uncertainty remains visible.
@@ -506,12 +541,10 @@ export class FirstRunSetup {
   ): Promise<FirstRunStatus> {
     return this.exclusive(async () => {
       const receipt = await this.readReceipt();
-      if (!receipt)
-        throw new Error(
-          "Saved project identity or sample assets could not be verified. Choose a fresh empty app workspace; existing files were preserved.",
-        );
+      if (!receipt) throw this.unverifiedReceipt();
       assertCurrent();
-      if (recovery && receipt.workspace.path !== recovery.workspace) throw selectionFailure();
+      if (recovery && receipt.workspace.path !== recovery.workspace)
+        throw selectionFailure("Recovery was prepared for a different app workspace than the saved one.");
       if (this.deps.current(receipt.workspace.path)) return this.prepared(receipt);
       const candidate = await (recovery?.prepareConnection ?? this.deps.prepareConnection)(receipt.workspace.path);
       let activated = false;
@@ -531,7 +564,7 @@ export class FirstRunSetup {
           !hello.capabilities.includes("runs.read") ||
           !hello.capabilities.includes("runs.subscribe")
         )
-          throw selectionFailure();
+          throw unexpectedDaemon();
         const found = await authenticated.call("operator.discover", {}, OperatorDiscoverySchema, false);
         if (
           found.authentication !== "credential" ||
@@ -539,7 +572,7 @@ export class FirstRunSetup {
           found.target.instanceId !== hello.identity.instanceId ||
           !found.operations.includes("operator.admitRun")
         )
-          throw selectionFailure();
+          throw unexpectedDaemon();
         await this.verify(receipt);
         assertCurrent();
         candidate.check?.();
@@ -547,9 +580,9 @@ export class FirstRunSetup {
         activated = true;
         return this.prepared(receipt);
       } catch (error) {
-        if (error instanceof FirstRunOwnershipRefusal) throw error;
-        throw new Error(
-          "The selected local daemon could not verify its writable workspace. Check the bundled runtime and access, then retry. No alternate daemon was connected.",
+        if (error instanceof FirstRunOwnershipRefusal || error instanceof FirstRunRefusal) throw error;
+        throw new FirstRunRefusal(
+          `The selected local daemon could not verify its writable workspace. Check the bundled runtime and access, then retry. No alternate daemon was connected.`,
           { cause: error },
         );
       } finally {
@@ -571,15 +604,18 @@ export class FirstRunSetup {
     }
   }
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.busy) throw new Error("Project setup is already in progress.");
+    if (this.busy)
+      throw new FirstRunRefusal("Project setup is already in progress. Wait for it to finish, then retry.");
     this.busy = true;
     try {
       return await operation();
     } catch (error) {
-      if (error instanceof FirstRunOwnershipRefusal) throw error;
-      if (error instanceof Error && error.message.startsWith("The selected local daemon")) throw error;
-      throw new Error(
-        "Project setup could not verify the selected directories or write its new files. Check ownership, access and Git, then choose a fresh empty workspace. Existing files were preserved.",
+      if (error instanceof FirstRunOwnershipRefusal || error instanceof FirstRunRefusal) throw error;
+      const reason = failureReason(error);
+      throw new FirstRunRefusal(
+        reason
+          ? `${reason} ${PRESERVED}`
+          : `Project setup could not verify the selected directories or write its new files. Check ownership, access and Git, then choose a fresh empty workspace. ${PRESERVED}`,
         { cause: error },
       );
     } finally {

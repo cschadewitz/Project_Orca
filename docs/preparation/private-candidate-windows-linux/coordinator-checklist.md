@@ -76,7 +76,8 @@ declare.
 - [ ] **G4 Walk this guide yourself.** Do every P-step and F1–F10 once per offered
   combination, in a disposable environment, exactly as written. Correct the pages
   wherever the candidate differs.
-  - On Windows, P4 stops at SmartScreen by design. Do P5–P9 and F1–F10 only in the G3 VM,
+  - On Windows, P4 continues past SmartScreen only under windows.md's named-publisher
+    rule; record the exact SmartScreen text a tester would see on a fresh machine. Do P5–P9 and F1–F10 only in the G3 VM,
     under your own recorded W1 trust decision. Still record what a tester would see at
     P1/P4.
   - Known points to confirm:
@@ -93,14 +94,18 @@ declare.
     - **Launch and shutdown.** Connection time, the run result, F10's automatic
       reconnect (source-only so far), and shutdown within about 10 seconds with nothing
       left running.
-- [ ] **G5 Unsigned statement.** The release notes say the desktop builds are unsigned
-  (readiness R10, with the D1 wording), and the tester pages' warnings agree with it.
-- [ ] **G6 Windows warning decision.** The unsigned installer is expected to trigger
-  SmartScreen, and browsers may warn on download. These pages tell testers to **stop**
-  there. Decide whether Windows testers join this round anyway, knowing the expected
-  outcome is "stopped at P1/P4", or whether Windows waits for signing. Don't tell testers
-  to choose **Run anyway**, **Keep** or **Unblock**. Don't pick a download route because
-  it avoids the warning, and don't pre-unblock files.
+- [ ] **G5 Unsigned statement.** The release notes say the attached desktop files are
+  unsigned and that Windows testers get the separate signed installer (readiness R10, with
+  the D1 wording), and the tester pages' warnings agree with it.
+- [ ] **G6 Windows warning decision.** Decided for 0.7.0-rc.1: Windows testers receive
+  only the **signed** installer, and the unsigned release-page files are never handed
+  out. A new certificate may still trigger SmartScreen. [windows.md](windows.md) P4
+  allows **More info ▸ Run anyway** only when the publisher reads exactly
+  **Casey Schadewitz** and P2's hash and P3's `Valid` signature both matched; every other
+  SmartScreen screen, and every browser or antivirus warning, is still a stop. Don't
+  extend that exception to any other warning, publisher or file. Don't tell testers to
+  choose **Keep** or **Unblock**, don't pick a download route because it avoids a
+  warning, and don't pre-unblock files.
 - [ ] **G7 No unsupported claims.** The guide and notes claim no supported provider,
   ReviewJudge, tool-guard rule or MCP-operator use (readiness C6/C7). Provider profiles
   and ORCA-owned rules stay "inactive preparation".
@@ -158,7 +163,7 @@ declare.
 
 - [ ] **Triage** with the existing [triage rubric](../beta-feedback/triage-checklist.md).
   Its diagnostics lines are superseded; see the [README](README.md#reconciled-findings).
-  For an unsigned Windows build, "stopped at a security warning" is an expected launch
+  On Windows, "stopped at a security warning" is an expected launch
   blocker (B0 for the journey), not a tester error.
 - [ ] Report stage-level observations, not success rates. Record offered and actually
   tested combinations separately.
