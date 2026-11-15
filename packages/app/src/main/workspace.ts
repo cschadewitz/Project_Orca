@@ -13,6 +13,7 @@
 import { UpdatePreflightRefusal } from "./updates.js";
 import { daemonEndpoint, type DaemonTargetSnapshot } from "../daemon-connection.js";
 import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
+import { FirstRunRefusal } from "./first-run/refusal.js";
 import {
   MAINTENANCE_RUNTIME_METHOD,
   RuntimeMaintenanceResultSchema,
@@ -607,7 +608,12 @@ export class Workspace {
     };
     checkRecovery();
     if (this.deps.updateBootstrap?.ordinaryAllowed === false) throw new Error("Update replacement bootstrap is closed");
-    if (this.deps.explicitUrl) throw new ConnectionRefusal("ORCA_DAEMON_URL controls this launch.");
+    // Setup shows only FirstRunRefusal text, so this is one: without it the person sees a generic refusal and
+    // no hint that an environment variable, not their folders, is what stopped Connect.
+    if (this.deps.explicitUrl)
+      throw new FirstRunRefusal(
+        "ORCA_DAEMON_URL is set, so this launch uses that daemon and setup cannot start its own. Unset ORCA_DAEMON_URL, restart ORCA, then connect again.",
+      );
     if (
       this.closed ||
       (this.updating && !recovery) ||

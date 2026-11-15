@@ -13,7 +13,7 @@ import type { BundledDaemon } from "../src/main/daemon-process.js";
 import { startBundledDaemon } from "../src/main/daemon-process.js";
 import { Workspace, type WorkspaceDeps } from "../src/main/workspace.js";
 import { FirstRunSetup } from "../src/main/first-run/setup.js";
-import { startFirstRunWorkspace } from "../src/main/first-run/ipc.js";
+import { refusalMessage, startFirstRunWorkspace } from "../src/main/first-run/ipc.js";
 import { Updates, UpdatePreflightRefusal } from "../src/main/updates.js";
 import { compiledSourceFixture } from "./compiled-source-fixture.js";
 
@@ -201,6 +201,14 @@ it("setup activity refuses both updater reservation paths and explicit remote pr
     await f.workspace.captureMacUpdateTarget({ epoch: f.workspace.connectionTarget.epoch, ...identity }),
   ).toBeUndefined();
   await expect(f.workspace.prepareFirstRunConnection(selectedPath)).rejects.toThrow("ORCA_DAEMON_URL");
+  expect(f.start).not.toHaveBeenCalled();
+  await f.workspace.close();
+});
+it("tells setup that ORCA_DAEMON_URL, not the selected folders, stopped Connect", async () => {
+  const f = rig({ explicitUrl: "http://127.0.0.1:6722" });
+  const refusal = await f.workspace.prepareFirstRunConnection(selectedPath).catch((error: unknown) => error);
+  // What the setup card shows: the reason itself, not the generic folder refusal.
+  expect(refusalMessage(refusal)).toMatch(/^ORCA_DAEMON_URL is set\b.*Unset ORCA_DAEMON_URL, restart ORCA/);
   expect(f.start).not.toHaveBeenCalled();
   await f.workspace.close();
 });
