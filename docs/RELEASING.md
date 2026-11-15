@@ -191,8 +191,9 @@ them. This is a follow-up, not an oversight, and it stays written here until it 
   With those present, `mac.identity` and `mac.notarize` in `packages/app/electron-builder.yml`
   come off `null`/`false` and the workflow gains a keychain step.
 
-- **Windows** shows a SmartScreen "unrecognised app" warning on the NSIS installer, and will
-  may still show warnings after signing starts: a valid signature authenticates a publisher
+- **Windows** shows a SmartScreen "unrecognised app" warning on the unsigned NSIS installer
+  that release assets carry (a signed build comes from `windows-signed.yml` and is distributed
+  separately), and may still show warnings after signing starts: a valid signature authenticates a publisher
   but does not guarantee SmartScreen reputation or bypass enterprise policy.
 
   The [Windows signing runbook](windows-signing-runbook.md) covers publisher choice,

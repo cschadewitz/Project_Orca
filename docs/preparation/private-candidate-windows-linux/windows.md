@@ -3,12 +3,14 @@
 Part of the [Windows/Linux candidate guide](tester-guide.md). The steps are numbered
 **P1–P9**, so a report can name the step where you stopped.
 
-**Read this first.** The Windows installer for this candidate is **unsigned**. ORCA's
-release documentation records that Windows shows a SmartScreen "unrecognized app"
-warning on the unsigned installer, and browsers may warn about the download too. This
-guide never asks you to click past either warning. So the expected result for most
-Windows testers is to **stop at P1 or P4 and report what you saw**. That is a valid,
-useful result, not a mistake on your part.
+**Read this first.** Windows testers get a **code-signed** installer, handed out
+separately from the release page (the Windows files attached to the release itself are
+unsigned; don't use those). The publisher is **Casey Schadewitz**. Because the signing
+certificate is new, Windows may still show a SmartScreen "unrecognized app" screen. P4
+says exactly when you may continue past it: only after P2's checksum and P3's signature
+both match, and only if SmartScreen names that publisher. This guide never asks you to
+click past a browser or antivirus warning, or past SmartScreen for any other publisher.
+Stopping and reporting what you saw is always a valid, useful result.
 
 ## Prerequisites
 
@@ -33,8 +35,8 @@ folder could upload test files.
 Use the NSIS installer for your architecture. electron-builder names it
 `ORCA-<version>-win-<arch>.exe`, where `<version>` is `{{CANDIDATE_VERSION}}` and
 `<arch>` is `x64` or `arm64`. The exact name and checksum are in your card's file table.
-The `.zip` builds are archives, not the supported way to install. Don't use one unless
-your card lists it for you.
+Use only the signed `.exe`. The `.zip` builds carry no signature of their own that P3
+can check, so don't use one.
 
 ## P1–P3: download and check that the file is the candidate
 
@@ -58,16 +60,27 @@ your card lists it for you.
    Get-AuthenticodeSignature "$env:USERPROFILE\Downloads\ORCA-<version>-win-<arch>.exe" | Format-List Status
    ```
 
-   The expected result for this round is `Status : NotSigned`. Any other status is
-   unexpected: stop and report it.
+   ```powershell
+   (Get-AuthenticodeSignature "$env:USERPROFILE\Downloads\ORCA-<version>-win-<arch>.exe").SignerCertificate.GetNameInfo('SimpleName', $false)
+   ```
+
+   The expected result for this round is `Status : Valid`, and the second command prints
+   exactly `Casey Schadewitz`. Any other status (such as `NotSigned`, `HashMismatch` or
+   `UnknownError`) or any other signer is unexpected: **don't open the file**, stop and
+   report it.
 
 ## P4–P7: install
 
-4. **P4 Open the installer** by double-clicking it. Expect a **"Windows protected your PC"**
-   SmartScreen screen. **Stop: choose Don't run, or close it.** Don't choose **More info ▸
-   Run anyway**. Report "stopped at P4: SmartScreen" and anything the screen said about
-   the publisher, in your own words (no screenshot).
-   - Continue only if no warning appeared at all and P2 matched.
+4. **P4 Open the installer** by double-clicking it. A **"Windows protected your PC"**
+   SmartScreen screen may appear, because the signing certificate is new.
+   - If it appears, choose **More info** and read the **Publisher** line. Continue with
+     **Run anyway** only if all three hold: the publisher reads exactly
+     **Casey Schadewitz**, P2's SHA-256 matched, and P3 showed `Valid` with that signer.
+     Note "P4: SmartScreen shown, publisher Casey Schadewitz" in your report.
+   - If the publisher is anything else, says **Unknown publisher**, or you are unsure,
+     **stop: choose Don't run, or close it.** Report "stopped at P4: SmartScreen" and what
+     the screen said about the publisher, in your own words (no screenshot).
+   - If no SmartScreen screen appears, continue.
    - Also stop if Microsoft Defender or other antivirus warns about the file or
      quarantines it. Don't restore or allow it.
 5. **P5 Install for you only, with no administrator prompt.** If the installer asks who to
@@ -123,5 +136,5 @@ When your coordinator confirms nothing more is needed:
 | Clean install, launch, logs, shutdown of the **packaged** installer | [#772](https://github.com/cschadewitz/Project_Orca/issues/772) procedures W1–W5 | Not run for any candidate |
 | Preparatory Windows x64/arm64 packaging | [Desktop run 41878358657](https://github.com/cschadewitz/Project_Orca/actions/runs/41878358657), source `b4361b1`; packaging preparation merged in #814/#815 ([readiness audit](../../reviews/2026-10-27-release-readiness.md)) | Packaging passed; unsigned and not a selected candidate. Native arm64 execution is not established |
 | arm64 | — | Never executed |
-| Signing, publisher trust, SmartScreen reputation | [RELEASING.md](../../RELEASING.md#signing-and-notarisation-are-not-done) | Unsigned; not applicable |
+| Signing, publisher trust, SmartScreen reputation | Signed rc.1 x64 build from the `windows-signed.yml` workflow; Authenticode `Valid`, signer `CN=Casey Schadewitz`, installed and opened on a real Windows 11 26H2 x64 machine that had run ORCA before (no SmartScreen shown there) | Signature verified on one machine; SmartScreen reputation on a fresh machine unknown. The release page's own Windows files remain unsigned |
 | In-place upgrade from an earlier ORCA | Readiness audit C3 | Unverified; excluded from this round |

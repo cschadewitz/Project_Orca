@@ -42,9 +42,11 @@ at all.
 
 ## What this candidate is, and what it is not
 
-- The builds are **unsigned**. On Windows, Microsoft SmartScreen and your browser are
-  expected to warn about an unrecognized app. The [Windows page](windows.md) says what to
-  do: **stop and report. Do not click past the warning.**
+- The files on the release page are **unsigned**. Windows testers instead get a
+  separately distributed installer signed by **Casey Schadewitz**. The
+  [Windows page](windows.md) P4 names the single case where you may continue past
+  SmartScreen; every other warning, including any browser warning, means **stop and
+  report**.
 - This round tests installing, launching and a first local run. It does not test AI coding
   agents. The provider integrations in this code (Claude, Codex, Gemini, Pi, GitHub
   Copilot CLI, OpenCode), the review judges and ORCA's own tool-guard rules are
