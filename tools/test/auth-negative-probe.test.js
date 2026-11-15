@@ -45,7 +45,10 @@ async function stub(answer) {
     });
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  closers.push(() => new Promise((r) => server.close(r)));
+  closers.push(() => {
+    server.closeAllConnections();
+    return new Promise((r) => server.close(r));
+  });
   return { endpoint: parseEndpoint(`http://127.0.0.1:${server.address().port}/rpc`), seen };
 }
 
@@ -237,61 +240,6 @@ describe("stops", () => {
     expect(seen).toHaveLength(1);
   });
 
-  it("enforces an absolute deadline against a slow-drip listener", async () => {
-    const timers = [];
-    const { endpoint, seen } = await stub((_, res) => {
-      res.writeHead(401, { "content-type": "application/json" });
-      const timer = setInterval(() => res.write(" "), 20);
-      timers.push(timer);
-      res.on("close", () => clearInterval(timer));
-    });
-    closers.push(() => timers.forEach(clearInterval));
-    const started = Date.now();
-    const result = await sendOnce(endpoint, PROBES[0], "x", 100);
-    const elapsed = Date.now() - started;
-    expect(result).toEqual({ transportError: "ETIMEDOUT" });
-    expect(elapsed).toBeLessThan(300);
-    expect(seen).toHaveLength(1);
-  });
-
-  it("stops reading an oversized body and claims no digest for it", async () => {
-    const big = "x".repeat(4097);
-    const { endpoint } = await stub((_, res) => {
-      res.writeHead(401, { "content-type": "application/json" });
-      res.end(big);
-    });
-    const response = await sendOnce(endpoint, PROBES[0], "x");
-    expect(response).toMatchObject({ status: 401, truncated: true, body: undefined });
-    expect(response.size).toBeGreaterThan(4096);
-    const record = classify(PROBES[0], response);
-    expect(record).toMatchObject({ verdict: "unexpected-response", stop: true, bodyTruncated: true, bodySha256: null });
-    expect(record.bodyBytesAtLeast).toBeGreaterThan(4096);
-    expect(record).not.toHaveProperty("bodyBytes");
-
-    // An endless body is cut off at the cap, well before the deadline.
-    const { endpoint: endless } = await stub((_, res) => {
-      res.writeHead(200);
-      const timer = setInterval(() => res.write("y".repeat(1024)), 5);
-      res.on("close", () => clearInterval(timer));
-    });
-    const cut = await sendOnce(endless, PROBES[0], "x", 2_000);
-    expect(cut).toMatchObject({ status: 200, truncated: true });
-    expect(classify(PROBES[0], cut)).toMatchObject({ verdict: "unexpected-access", bodySha256: null });
-  });
-
-  it("digests a body at exactly the cap", async () => {
-    const exact = "z".repeat(4096);
-    const { endpoint } = await stub((_, res) => {
-      res.writeHead(500);
-      res.end(exact);
-    });
-    const response = await sendOnce(endpoint, PROBES[0], "x");
-    expect(response).toMatchObject({ status: 500, size: 4096, truncated: false });
-    const record = classify(PROBES[0], response);
-    expect(record).toMatchObject({ bodyBytes: 4096 });
-    expect(record.bodySha256).toBe(createHash("sha256").update(exact).digest("hex"));
-  });
-
   it("sends nothing that names a proxy, a redirect or a URL credential", async () => {
     const { endpoint, seen } = await stub((_, res) => res.end());
     await sendOnce(endpoint, PROBES[2], "x");
@@ -299,6 +247,132 @@ describe("stops", () => {
     expect(seen[0].headers.host).toBe(endpoint.host);
     expect(seen[0].headers.origin).toBeUndefined();
     expect(JSON.parse(seen[0].body)).toEqual({ kind: "request", id: "x", method: "hello", params: {} });
+  });
+});
+
+describe("bounded responses (synthetic listeners only)", () => {
+  it.each([200, 401])(
+    "ends a continuous %i slow drip at the absolute deadline and stops without retry",
+    async (status) => {
+      let closed;
+      const disconnected = new Promise((r) => (closed = r));
+      const { endpoint, seen } = await stub((_, res) => {
+        res.writeHead(status);
+        res.write("x");
+        const drip = setInterval(() => res.write("x"), 20);
+        res.on("close", () => {
+          clearInterval(drip);
+          closed();
+        });
+      });
+      const started = performance.now();
+      const evidence = await runProbes(endpoint, {
+        approvalRef: APPROVAL,
+        send: (e, p, id) => sendOnce(e, p, id, 150),
+      });
+      expect(performance.now() - started).toBeLessThan(1_000);
+      expect(evidence).toMatchObject({
+        outcome: status === 200 ? "unexpected-access" : "unreachable",
+        requestsSent: 1,
+      });
+      expect(evidence.requests[0].error).toBe("ETIMEDOUT");
+      if (status === 200)
+        // The observed 200 survives the timeout: access, with no body evidence claimed.
+        expect(evidence.requests[0]).toMatchObject({
+          status: 200,
+          bodyState: "unavailable",
+          bodyBytesExact: false,
+          bodySha256: null,
+        });
+      else expect(evidence.requests[0]).not.toHaveProperty("bodySha256");
+      await disconnected;
+      expect(seen).toHaveLength(1);
+    },
+    2_000,
+  );
+
+  it("keeps a 200 whose headers arrive before a silent body times out", async () => {
+    const { endpoint } = await stub((_, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.flushHeaders();
+      // Deliberately nothing more: the body never arrives.
+    });
+    const response = await sendOnce(endpoint, PROBES[0], "x", 100);
+    expect(response).toMatchObject({ status: 200, bodyState: "unavailable", size: 0, transportError: "ETIMEDOUT" });
+    expect(classify(PROBES[0], response)).toMatchObject({
+      verdict: "unexpected-access",
+      stop: true,
+      bodyBytes: 0,
+      bodyBytesExact: false,
+      bodySha256: null,
+      error: "ETIMEDOUT",
+    });
+  });
+
+  it.each([200, 401])(
+    "terminates an oversized unfinished %i response without claiming a digest",
+    async (status) => {
+      const canary = "private-response-canary";
+      let closed;
+      const disconnected = new Promise((r) => (closed = r));
+      const { endpoint, seen } = await stub((_, res) => {
+        res.writeHead(status);
+        res.write(canary + "x".repeat(4097));
+        res.on("close", closed);
+        // Deliberately no end: the helper must terminate rather than drain this listener.
+      });
+      const evidence = await runProbes(endpoint, { approvalRef: APPROVAL });
+      expect(evidence).toMatchObject({
+        outcome: status === 200 ? "unexpected-access" : "unexpected-response",
+        requestsSent: 1,
+      });
+      expect(evidence.requests[0]).toMatchObject({
+        bodyState: "truncated",
+        bodyBytesExact: false,
+        bodySha256: null,
+      });
+      expect(evidence.requests[0].bodyBytes).toBeGreaterThan(4096);
+      expect(JSON.stringify(evidence)).not.toContain(canary);
+      await disconnected;
+      expect(seen).toHaveLength(1);
+    },
+    2_000,
+  );
+
+  it("cuts an endless body off at the cap, well before the deadline", async () => {
+    const { endpoint } = await stub((_, res) => {
+      res.writeHead(200);
+      const timer = setInterval(() => res.write("y".repeat(1024)), 5);
+      res.on("close", () => clearInterval(timer));
+    });
+    const response = await sendOnce(endpoint, PROBES[0], "x", 2_000);
+    expect(response).toMatchObject({ status: 200, bodyState: "truncated" });
+    expect(response).not.toHaveProperty("transportError");
+    expect(classify(PROBES[0], response)).toMatchObject({ verdict: "unexpected-access", bodySha256: null });
+  });
+
+  it.each(["", "x".repeat(4096)])("hashes only a complete body, including empty and exactly-at-cap", async (text) => {
+    const { endpoint } = await stub((_, res) => {
+      res.writeHead(200);
+      res.end(text);
+    });
+    const response = await sendOnce(endpoint, PROBES[0], "complete");
+    expect(classify(PROBES[0], response)).toMatchObject({
+      verdict: "unexpected-access",
+      bodyState: "complete",
+      bodyBytes: Buffer.byteLength(text),
+      bodyBytesExact: true,
+      bodySha256: createHash("sha256").update(text).digest("hex"),
+    });
+  });
+
+  it("does not invent a digest when body evidence is unavailable", () => {
+    expect(classify(PROBES[0], { status: 401, headers: {}, size: 5000 })).toMatchObject({
+      verdict: "unexpected-response",
+      bodyState: "unavailable",
+      bodyBytesExact: false,
+      bodySha256: null,
+    });
   });
 });
 

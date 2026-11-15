@@ -107,16 +107,24 @@ Why these are not credentials and not a brute-force attempt:
   `http://[::1]:<port>/rpc`: IP literal, explicit port, exact path, no query, fragment or
   userinfo. There is no default. `--confirm` must repeat it: `auth-negative-392@127.0.0.1:<port>`.
 - **Fixed count, no retry.** Three requests at most, sequentially, each on a fresh connection
-  with no keep-alive pool and no proxy, and a 5-second absolute deadline per request (wall
-  clock, not inactivity, so a slow-drip listener cannot extend it). No loop sends anything twice.
+  with no keep-alive pool and no proxy. One absolute 5-second deadline covers connection,
+  headers and body; traffic cannot extend it. Timeout destroys the request and response.
+  No loop sends anything twice.
 - **Stop on the first surprise.** Any 2xx or `ok: true` is `unexpected-access` (exit 3). A
   403 is `rejected-at-transport-gate` (exit 2). Any other non-matching response is
   `unexpected-response` (exit 2). A refused or silent connection is `unreachable` (exit 4).
   After a stop, no further request is sent.
-- **Sanitized evidence.** An unexpected body is kept only as its length and SHA-256. A body
-  over 4,096 bytes is not read to the end: the connection is closed at the cap and the record
-  says `bodyTruncated: true`, `bodyBytesAtLeast`, `bodySha256: null`. The
-  fixture values themselves are not written to the evidence; it records probe names.
+- **Sanitized, bounded evidence.** A complete unexpected body of at most 4096 bytes is
+  reduced to `bodyBytes` and `bodySha256`, with `bodyState: complete` and
+  `bodyBytesExact: true`. On the first chunk exceeding that cap, the connection is destroyed
+  immediately rather than drained. No body is retained; `bodyState: truncated`,
+  `bodyBytesExact: false` and `bodySha256: null` mean the byte count is only an observed lower
+  bound and no full-body digest is available. A body that never finishes (deadline or
+  transport error after the headers) is `bodyState: unavailable`, also with no digest. Only an
+  actually complete empty body gets SHA-256(empty). Truncated bodies cannot count as
+  credential refusals; 2xx still means `unexpected-access`, including when its body later
+  times out or fails. The fixture values themselves are not written to the evidence; it
+  records probe names.
 - **One run, one directory.** `--evidence-dir` must not exist; it is created `0700`, and
   `evidence.json` is written `0600` with the helper's own SHA-256. `--approval-ref` must link
   the GitHub comment recording the permission.

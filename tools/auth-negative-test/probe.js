@@ -13,8 +13,8 @@
  *   explicitly and confirmed with a phrase that repeats the port. No proxy, no redirect.
  * - Retry. Each request is sent once; the first result that is not the expected refusal
  *   stops the run, and an unreachable daemon is a stop, not a reason to try again.
- * - Keep a response body it did not expect. An unexpected body is reduced to its length and
- *   SHA-256, so an accidental success cannot copy run data into the evidence.
+ * - Keep a response body it did not expect. A complete unexpected body is reduced to its
+ *   length and SHA-256; a body over the cap is terminated and marked truncated, with no digest.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync } from "node:fs";
@@ -114,10 +114,17 @@ export function validateRunArgs({ endpoint, confirm, approvalRef, evidenceDir })
 /**
  * Send one request, once. Resolves with what came back or why nothing did; never rejects.
  *
- * `timeoutMs` is an absolute wall-clock deadline for the whole exchange, not an inactivity
- * timeout: a listener that drips bytes cannot keep the probe running past it. A response
- * body larger than MAX_BODY is not read to the end; the connection is torn down at the first
- * byte over, and the result says the body was truncated so no digest is claimed for it.
+ * `timeoutMs` is one absolute wall-clock deadline covering connection, headers and body, not
+ * an inactivity timeout: a listener that drips bytes cannot keep the probe running past it.
+ * Once a status line has arrived it is kept, whatever happens to the body afterwards, so a
+ * 2xx whose body then stalls or breaks is still classified as access, not as unreachable.
+ *
+ * `bodyState` says what is known about the body:
+ * - `complete`: the response ended within MAX_BODY bytes; `body` holds it and `size` is exact.
+ * - `truncated`: the first chunk over MAX_BODY arrived; the connection was torn down instead
+ *   of drained, nothing is kept, and `size` is only the bytes observed (a lower bound).
+ * - `unavailable`: headers arrived but the body did not finish (deadline or transport error);
+ *   `size` is again only what was observed.
  */
 export function sendOnce(endpoint, probe, id, timeoutMs = TIMEOUT_MS) {
   const body = JSON.stringify({ kind: "request", id, method: METHOD, params: {} });
@@ -129,55 +136,56 @@ export function sendOnce(endpoint, probe, id, timeoutMs = TIMEOUT_MS) {
   };
   return new Promise((resolve) => {
     let settled = false;
+    let response;
+    // What has been observed so far; a transport error or the deadline keeps it.
+    let partial = {};
     // Armed before the request exists; it can only fire after `req` below is assigned.
-    const deadline = setTimeout(() => {
-      done({ transportError: "ETIMEDOUT" });
-      req.destroy();
-    }, timeoutMs);
+    const deadline = setTimeout(() => fail("ETIMEDOUT"), timeoutMs);
     const done = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
+      response?.destroy();
+      req.destroy();
       resolve(value);
     };
+    const fail = (code) => done({ ...partial, transportError: code });
     // agent:false - a fresh connection, no keep-alive pool and no proxy.
     const req = request(
       { hostname: endpoint.hostname, port: endpoint.port, path: "/rpc", method: "POST", headers, agent: false },
       (res) => {
+        response = res;
         const chunks = [];
-        let size = 0;
-        const head = () => ({
+        const head = {
           status: res.statusCode,
           headers: {
             "www-authenticate": res.headers["www-authenticate"],
             connection: res.headers.connection,
             "content-type": res.headers["content-type"],
           },
-        });
+        };
+        partial = { ...head, bodyState: "unavailable", size: 0 };
         res.on("data", (chunk) => {
           if (settled) return;
-          size += chunk.length;
-          if (size <= MAX_BODY) {
-            chunks.push(chunk);
+          partial.size += chunk.length;
+          if (partial.size > MAX_BODY) {
+            chunks.length = 0;
+            done({ ...head, bodyState: "truncated", size: partial.size });
             return;
           }
-          // Over the cap: stop reading. `size` is a lower bound, and nothing is hashed.
-          done({ ...head(), body: undefined, size, truncated: true });
-          req.destroy();
+          chunks.push(chunk);
         });
-        res.on("end", () => done({ ...head(), body: Buffer.concat(chunks), size, truncated: false }));
-        res.on("error", (e) => done({ transportError: e.code ?? "ERESPONSE" }));
+        res.on("end", () => done({ ...head, bodyState: "complete", body: Buffer.concat(chunks), size: partial.size }));
+        res.on("error", (e) => fail(e.code ?? "ERESPONSE"));
       },
     );
-    req.on("error", (e) => done({ transportError: e.code ?? "EREQUEST" }));
+    req.on("error", (e) => fail(e.code ?? "EREQUEST"));
     req.end(body);
   });
 }
 
 function digest(bytes) {
-  return createHash("sha256")
-    .update(bytes ?? Buffer.alloc(0))
-    .digest("hex");
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 /**
@@ -191,20 +199,30 @@ function digest(bytes) {
  * - `unexpected-access`: anything 2xx or `ok: true`. A stop, and the most serious one.
  */
 export function classify(probe, response) {
-  if (response.transportError) return { verdict: "unreachable", stop: true, error: response.transportError };
+  const successfulStatus = response.status >= 200 && response.status < 300;
+  // A received 2xx is unexpected access even if its body later stalls or breaks.
+  if (response.transportError && !successfulStatus)
+    return { verdict: "unreachable", stop: true, error: response.transportError };
+  // An injected `send` may omit bodyState; a Buffer body is then taken as complete.
+  const bodyState = response.bodyState ?? (Buffer.isBuffer(response.body) ? "complete" : "unavailable");
+  const complete = bodyState === "complete" && Buffer.isBuffer(response.body);
   let parsed;
   try {
-    parsed = response.body ? JSON.parse(response.body.toString("utf8")) : undefined;
+    parsed = complete ? JSON.parse(response.body.toString("utf8")) : undefined;
   } catch {
     parsed = undefined;
   }
-  // A truncated body was never read in full: report how much arrived before the cut-off
-  // and no digest, rather than the digest of an empty or partial buffer.
-  const record = response.truncated
-    ? { status: response.status, bodyTruncated: true, bodyBytesAtLeast: response.size, bodySha256: null }
-    : { status: response.status, bodyBytes: response.size, bodySha256: digest(response.body) };
-  if ((response.status >= 200 && response.status < 300) || parsed?.ok === true)
-    return { verdict: "unexpected-access", stop: true, ...record };
+  // Only a body read to its end is digested. Otherwise bodyBytes is the observed lower bound
+  // and there is no digest, rather than the digest of an empty or partial buffer.
+  const record = {
+    status: response.status,
+    bodyBytes: response.size ?? 0,
+    bodyState: complete ? "complete" : bodyState === "truncated" ? "truncated" : "unavailable",
+    bodyBytesExact: complete,
+    bodySha256: complete ? digest(response.body) : null,
+    ...(response.transportError ? { error: response.transportError } : {}),
+  };
+  if (successfulStatus || parsed?.ok === true) return { verdict: "unexpected-access", stop: true, ...record };
   const expected = {
     kind: "response",
     id: 0,
