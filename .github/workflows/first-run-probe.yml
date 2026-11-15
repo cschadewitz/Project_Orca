@@ -47,12 +47,9 @@ jobs:
           pnpm --filter @orca/app exec electron-builder --win dir --x64 --publish never \
             -c.extraMetadata.version=0.7.0-rc.1 -c.directories.output=dist/release/x64
           ls packages/app/dist/release/x64/win-unpacked/resources/native/diagnostics/win32-x64
-      - name: Zip the unpacked app for a manual run
-        shell: pwsh
-        run: Compress-Archive -Path packages/app/dist/release/x64/win-unpacked/* -DestinationPath orca-first-run-debug-x64.zip
+      # Uploaded as the unpacked folder itself, so the download is one zip to extract.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: orca-first-run-debug-x64
-          path: orca-first-run-debug-x64.zip
-          compression-level: 0
-          retention-days: 3
+          path: packages/app/dist/release/x64/win-unpacked/
+          retention-days: 14
