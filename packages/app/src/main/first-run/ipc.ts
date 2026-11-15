@@ -68,12 +68,6 @@ export function installFirstRunIPC(
           if (method !== "connect") check();
           return { ok: true, result };
         } catch (error) {
-          // PROBE ONLY (not for merge): the renderer gets a generic refusal, so print the real chain.
-          for (let e: unknown = error, depth = 0; e && depth < 8; e = (e as { cause?: unknown }).cause, depth++)
-            console.error(
-              `[first-run probe] ${method} ${depth ? "cause" : "error"}:`,
-              e instanceof Error ? e.stack : e,
-            );
           return {
             ok: false,
             error: { code: "AGENT_TRANSPORT", message: refusalMessage(error) },
