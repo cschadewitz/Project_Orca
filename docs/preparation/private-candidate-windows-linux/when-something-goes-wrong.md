@@ -70,7 +70,8 @@ While troubleshooting, **don't**:
 ## Setup refused
 
 ORCA refuses folders it can't verify, and leaves existing files as they were. The card
-then shows "Setup was refused. Check directory ownership, writable access and Git…". If
+then shows "Setup was refused" with the reason under it, such as a workspace folder that
+is not empty or a project with no branch checked out. Include that reason in the report. If
 it says "Project setup could not verify its saved selection. Choose directories again.",
 the folders saved from an earlier step no longer verify. Report that too. The source
 checks for:

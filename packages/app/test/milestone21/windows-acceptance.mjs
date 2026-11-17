@@ -267,11 +267,11 @@ async function firstRunRefusal() {
   try {
     await setup.choose(() => {});
   } catch (error) {
+    // A selection refusal reaches the screen as it is, with no generic wrapper around it.
     refused =
       error instanceof Error &&
-      error.message.startsWith("Project setup could not verify the selected directories") &&
-      error.cause instanceof Error &&
-      error.cause.message.startsWith("Choose owned writable directories with verifiable identity:");
+      error.name === "FirstRunRefusal" &&
+      error.message.startsWith("Choose owned writable directories with verifiable identity:");
   }
   check(typeof process.getuid !== "function", "windows-posix-owner-unavailable");
   check(refused && projectPicked && !workspacePicked && !connected, "first-run-unsupported-refusal");

@@ -1,0 +1,104 @@
+/* First-run project setup, the first section on Config (docs/design/90-setup-launch-and-maintenance.md).
+
+   The section reads top to bottom as the setup does: what it is, what was selected, the next
+   act, what the last act came to, then the reopening and recovery acts that are not part of
+   a first run. Each stage is its own `__step` with a heading, so a stage's buttons sit with
+   the facts they act on instead of running on from the prose around them. Values come from
+   tokens only (rule 1); Config owns the only scroller. */
+
+.orca-first-run {
+  min-width: 0;
+  gap: var(--space-4);
+}
+
+.orca-first-run p,
+.orca-first-run h2,
+.orca-first-run h3 {
+  margin: 0;
+}
+
+.orca-first-run__header,
+.orca-first-run__step,
+.orca-first-run__notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.orca-first-run__header p,
+.orca-first-run__step p,
+.orca-first-run__notes p {
+  max-width: var(--measure-prose);
+}
+
+.orca-first-run__header p,
+.orca-first-run__notes p {
+  color: var(--ink-secondary);
+}
+
+.orca-first-run__notes {
+  border-top: var(--stroke-hairline) solid var(--border-hairline);
+  padding-top: var(--space-3);
+}
+
+/* The step's next act first, then the rest, wrapping between whole buttons (rule 15). */
+.orca-first-run__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* A name and the value ORCA holds under it, on the sunken ground that says machine text. */
+.orca-first-run__facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: var(--space-4);
+  row-gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+}
+
+.orca-first-run__fact {
+  display: contents;
+}
+
+/* type: caption */
+.orca-first-run__fact dt {
+  color: var(--ink-secondary);
+}
+
+/* type: mono-id */
+.orca-first-run__fact dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.orca-config[data-config-layout="stacked"] .orca-first-run__facts {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.orca-config[data-config-layout="stacked"] .orca-first-run__fact dd {
+  margin-bottom: var(--space-1);
+}
+
+/* type: caption — success is quiet (rule 6). */
+.orca-first-run__done {
+  color: var(--ink-secondary);
+}
+
+/* A refusal: its words first, the failed colour only on the rail (rule 4). */
+.orca-first-run__refusal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-raised);
+  border: var(--stroke-hairline) solid var(--border-control);
+  border-left: var(--stroke-rail) solid var(--status-failed);
+  border-radius: var(--radius-sm);
+}

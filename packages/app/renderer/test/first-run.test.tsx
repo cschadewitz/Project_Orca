@@ -63,8 +63,9 @@ it("requires explicit directory review, create and connect actions, and labels t
   expect(f.firstRun.prepare).not.toHaveBeenCalled();
   expect(f.firstRun.connect).not.toHaveBeenCalled();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
-  expect(screen.getByText(/Project: \/Sample α/)).toBeTruthy();
-  expect(screen.getByText(/Sample: orca-beta-local-check/)).toBeTruthy();
+  expect(screen.getByLabelText("Selected directories").textContent).toContain("Project/Sample α");
+  expect(screen.getByText(/orca-beta-local-check/)).toBeTruthy();
+
   expect(f.firstRun.prepare).not.toHaveBeenCalled();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Create reviewed sample files" })));
   expect(f.firstRun.prepare).toHaveBeenCalledExactlyOnceWith("main-review");
@@ -73,19 +74,38 @@ it("requires explicit directory review, create and connect actions, and labels t
   expect(f.firstRun.connect).toHaveBeenCalledTimes(1);
   expect(screen.getByText(/The #420 coding task and a real local-agent run require separate/)).toBeTruthy();
 });
-it("keeps the selected review after a refused write and never displays private native error text", async () => {
+it("keeps the selected review after a refused write and shows the reason main gave", async () => {
   const f = setup();
   await screen.findByText("Explicit owned directories required.");
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
   f.firstRun.prepare.mockResolvedValueOnce({
     ok: false,
-    error: { code: "AGENT_TRANSPORT", message: "private path/secret needle" },
+    error: { code: "AGENT_TRANSPORT", message: "Main reason needle." },
   });
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Create reviewed sample files" })));
   expect(screen.getByText(/Setup was refused/)).toBeTruthy();
-  expect(screen.queryByText(/private path\/secret needle/)).toBeNull();
+  expect(screen.getByText("Main reason needle.")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Create reviewed sample files" })).toBeTruthy();
   expect(f.firstRun.connect).not.toHaveBeenCalled();
+});
+
+it("keeps keyboard focus in the section when choosing directories replaces the Choose button", async () => {
+  const f = setup();
+  await screen.findByText("Explicit owned directories required.");
+  const choose = screen.getByRole("button", { name: "Choose project and empty workspace" });
+  choose.focus();
+  expect(document.activeElement).toBe(choose);
+  await act(async () => fireEvent.click(choose));
+  expect(f.firstRun.choose).toHaveBeenCalledOnce();
+  // The review step renders its own Choose button; the one that held focus is gone.
+  expect(choose.isConnected).toBe(false);
+  expect(document.activeElement).toBe(screen.getByRole("region", { name: "First-run project setup" }));
+  // And from the review step, Create replaces the step again without dropping focus.
+  const create = screen.getByRole("button", { name: "Create reviewed sample files" });
+  create.focus();
+  await act(async () => fireEvent.click(create));
+  expect(create.isConnected).toBe(false);
+  expect(document.activeElement).toBe(screen.getByRole("region", { name: "First-run project setup" }));
 });
 
 it("reviews Windows private child creation before passing the exact review to main", async () => {
@@ -107,7 +127,7 @@ it("reviews Windows private child creation before passing the exact review to ma
   });
   await screen.findByText("Explicit owned directories required.");
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
-  expect(screen.getByText("Selected parent: C:\\Parent")).toBeTruthy();
+  expect(screen.getByText("C:\\Parent")).toBeTruthy();
   expect(screen.getByText(/Existing parent and project permissions stay unchanged/)).toBeTruthy();
   expect(f.firstRun.prepare).not.toHaveBeenCalled();
   await act(async () =>
@@ -243,10 +263,10 @@ describe("marking the previous session ended after a restart", () => {
     expect(f.firstRun.connect).not.toHaveBeenCalled();
   });
 
-  it("keeps the question after a refusal and shows fixed text, never the native message", async () => {
+  it("keeps the question after a refusal and shows the reason main gave beside its own guidance", async () => {
     const endPreviousSession = vi.fn(async () => ({
       ok: false as const,
-      error: { code: "AGENT_TRANSPORT" as const, message: "private path/secret needle" },
+      error: { code: "AGENT_TRANSPORT" as const, message: "Main reason needle." },
     }));
     previousBoot(endPreviousSession);
     await screen.findByRole("button", { name: "Mark previous session ended" });
@@ -255,7 +275,7 @@ describe("marking the previous session ended after a restart", () => {
     );
     expect(endPreviousSession).toHaveBeenCalledOnce();
     expect(screen.getByText(/The previous session was not marked ended/)).toBeTruthy();
-    expect(screen.queryByText(/secret needle/)).toBeNull();
+    expect(screen.getByText("Main reason needle.")).toBeTruthy();
     expect(document.activeElement).toBe(trigger());
   });
 });
@@ -331,17 +351,17 @@ it("cancels a configuration review without binding or connecting and restores se
   expect(document.activeElement).toBe(screen.getByRole("region", { name: "First-run project setup" }));
   expect(screen.getByText(/Configuration review cancelled/)).toBeTruthy();
 });
-it("retires stale evidence on failed rereview, hides private errors and permits explicit retry", async () => {
+it("retires stale evidence on failed rereview, shows the reason and permits explicit retry", async () => {
   const reviewConfiguration = vi
     .fn<NonNullable<FirstRunBridge["reviewConfiguration"]>>()
-    .mockResolvedValueOnce({ ok: false, error: { code: "AGENT_TRANSPORT", message: "private secret needle" } })
+    .mockResolvedValueOnce({ ok: false, error: { code: "AGENT_TRANSPORT", message: "Main reason needle." } })
     .mockResolvedValueOnce({ ok: true, result: configReview("missing") });
   const bindConfiguration = vi.fn();
   setup({ status: async () => ({ ok: true, result: configReview() }), reviewConfiguration, bindConfiguration });
   const review = await screen.findByRole("button", { name: "Review saved configuration for reopening" });
   await act(async () => fireEvent.click(review));
   expect(screen.getByText(/Configuration review could not complete/)).toBeTruthy();
-  expect(screen.queryByText(/private secret needle/)).toBeNull();
+  expect(screen.getByText("Main reason needle.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Bind reviewed saved configuration" })).toBeNull();
   await act(async () => fireEvent.click(review));
   expect(screen.getByText(/Executable missing from the app PATH/)).toBeTruthy();
@@ -353,7 +373,7 @@ it.each(["initial", "workspace"])("retires a queued %s status review before its 
   if (read === "workspace") readStatus.mockResolvedValueOnce({ ok: true, result: configReview() });
   const reviewConfiguration = vi.fn<NonNullable<FirstRunBridge["reviewConfiguration"]>>().mockResolvedValue({
     ok: false,
-    error: { code: "AGENT_TRANSPORT", message: "private secret needle" },
+    error: { code: "AGENT_TRANSPORT", message: "Main reason needle." },
   });
   const bindConfiguration = vi.fn();
   const f = setup({ status: readStatus, reviewConfiguration, bindConfiguration });
@@ -373,7 +393,7 @@ it.each(["initial", "workspace"])("retires a queued %s status review before its 
   });
   expect(reviewConfiguration).toHaveBeenCalledOnce();
   expect(screen.getByText(/Configuration review could not complete/)).toBeTruthy();
-  expect(screen.queryByText(/private secret needle/)).toBeNull();
+  expect(screen.getByText("Main reason needle.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Bind reviewed saved configuration" })).toBeNull();
   expect(screen.queryByText(/Executable file observed/)).toBeNull();
   expect(bindConfiguration).not.toHaveBeenCalled();
@@ -382,7 +402,7 @@ it("ignores a pending status review that completes after a failed rereview", asy
   const status = pendingStatus();
   const reviewConfiguration = vi
     .fn<NonNullable<FirstRunBridge["reviewConfiguration"]>>()
-    .mockResolvedValueOnce({ ok: false, error: { code: "AGENT_TRANSPORT", message: "private secret needle" } })
+    .mockResolvedValueOnce({ ok: false, error: { code: "AGENT_TRANSPORT", message: "Main reason needle." } })
     .mockResolvedValueOnce({ ok: true, result: configReview("missing") });
   const bindConfiguration = vi.fn();
   setup({ status: () => status.promise, reviewConfiguration, bindConfiguration });
@@ -390,7 +410,7 @@ it("ignores a pending status review that completes after a failed rereview", asy
   await act(async () => fireEvent.click(review));
   await act(async () => status.resolve({ ok: true, result: configReview() }));
   expect(screen.getByText(/Configuration review could not complete/)).toBeTruthy();
-  expect(screen.queryByText(/private secret needle/)).toBeNull();
+  expect(screen.getByText("Main reason needle.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Bind reviewed saved configuration" })).toBeNull();
   expect(screen.queryByText(/Executable file observed/)).toBeNull();
   await act(async () => fireEvent.click(review));
@@ -436,12 +456,12 @@ it("preserves ownership reconciliation guidance when configuration review is ref
 it("keeps an uncertain binding outcome explicit and requires fresh review before retry", async () => {
   const bindConfiguration = vi.fn<NonNullable<FirstRunBridge["bindConfiguration"]>>().mockResolvedValue({
     ok: false,
-    error: { code: "AGENT_TRANSPORT", message: "private publication error needle" },
+    error: { code: "AGENT_TRANSPORT", message: "Main reason needle." },
   });
   setup({ status: async () => ({ ok: true, result: configReview() }), bindConfiguration });
   const bind = await screen.findByRole("button", { name: "Bind reviewed saved configuration" });
   await act(async () => fireEvent.click(bind));
   expect(screen.getByText(/Configuration binding could not be confirmed/)).toBeTruthy();
-  expect(screen.queryByText(/private publication error needle/)).toBeNull();
+  expect(screen.getByText("Main reason needle.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Bind reviewed saved configuration" })).toBeNull();
 });

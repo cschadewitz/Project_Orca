@@ -28,6 +28,7 @@ import { diagnosticsAddonPath } from "./diagnostics/native-addon.js";
 import type { OwnedDiagnosticObservation } from "./diagnostics/source-producers.js";
 import { FirstRunSetup } from "./first-run/setup.js";
 import { installFirstRunIPC, startFirstRunWorkspace } from "./first-run/ipc.js";
+import { FirstRunRefusal } from "./first-run/refusal.js";
 import type { DiagnosticsResult } from "../diagnostics-contract.js";
 import { AdmissionIntents, AdmissionIntentController } from "./admission-intents.js";
 import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
@@ -782,15 +783,21 @@ const firstRun = new FirstRunSetup({
 let firstRunConnectionAttempt = 0;
 async function connectFirstRun(assertCurrent: () => void) {
   if (firstRun.isBusy || macUpdateWindows.active || workspace.macUpdateReserved)
-    throw new Error("Project setup or update preparation is busy");
+    throw new FirstRunRefusal(
+      "Project setup or an app update is already in progress. Wait for it to finish, then retry.",
+    );
   const attempt = ++firstRunConnectionAttempt;
   const check = () => {
     assertCurrent();
-    if (attempt !== firstRunConnectionAttempt) throw new Error("Connection cancelled");
+    if (attempt !== firstRunConnectionAttempt)
+      throw new FirstRunRefusal("A newer connect request replaced this one. Nothing was connected by this request.");
   };
   check();
   const release = await guardConnectionDrafts();
-  if (!release) throw new Error("Save or discard pending edits before changing daemons");
+  if (!release)
+    throw new FirstRunRefusal(
+      "Save or discard pending edits before connecting a different workspace. Your edits were kept.",
+    );
   try {
     check();
     return await firstRun.connect(check);

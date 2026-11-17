@@ -140,6 +140,17 @@ keeps its choice. Delete the variable or set it to anything else to return to
 automatic selection. Use it when a job is stuck queued on the homelab runners or the
 homelab is down for maintenance.
 
+## Pull requests from forks
+
+The picker always selects `ubuntu-24.04` when the pull request's head repository is
+not this repository, so the stock workflow never sends fork code to the self-hosted
+runners. That check lives in `ci.yml`, and a fork's pull request runs the `ci.yml`
+from its own branch, so a fork can remove it or set `runs-on` to a self-hosted label
+directly. The real gate is the repository setting that requires approval before
+workflows from outside collaborators' forks run (Settings, Actions, General; it
+appears once the repository is public). Before approving a fork's run, check whether
+it changes anything under `.github/`.
+
 ## What the self-hosted runners can reach
 
 The runner stack lives outside this repository; this section records what the
