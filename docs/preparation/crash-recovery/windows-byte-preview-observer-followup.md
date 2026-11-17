@@ -148,7 +148,7 @@ pins compiled/native identities, fixture hashes and
 No keys, report bodies, profile paths or execution stores are published.
 
 Draft #595 remains against the existing integration branch. #591/#593 ancestry,
-author and committer Calcifer Schadewitz `<schadewitzcalcifer@gmail.com>`, production
+author and committer Calcifer Schadewitz `<347762766+calciferschadewitz@users.noreply.github.com>`, production
 capture disabled, no-CI/no-merge/no-main-publication/no-deployment/credentials/
 physical-interruption constraints and the Mac hold are preserved. Full memory,
 viewer feasibility/review, broader tail/paired load and the previous independent,

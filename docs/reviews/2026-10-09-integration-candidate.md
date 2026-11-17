@@ -22,7 +22,7 @@ Read `AGENTS.md`, the toolchain/validation guidance in
 [Development](../DEVELOPMENT.md) and the relevant runtime boundaries in
 [Architecture](../ARCHITECTURE.md). No `.agents/skills` directory exists in this
 checkout or in the tracked main/maximal-tip trees. All candidate-authored commits
-use Calcifer Schadewitz `<schadewitzcalcifer@gmail.com>` as author and committer.
+use Calcifer Schadewitz `<347762766+calciferschadewitz@users.noreply.github.com>` as author and committer.
 Other desktop checkouts, including M21, were not edited.
 
 Read-only GitHub ref checks at the start and before recording this review agreed:

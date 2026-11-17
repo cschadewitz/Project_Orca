@@ -159,7 +159,7 @@ Actual Darwin signed packaging/loading, APFS durability/metadata, native supervi
 Keychain/TCC continuity, physical smoke and accessibility remain Mac-only acceptance.
 See [the pinned updater contract](mac-closed-window-fixed-path.md) for their full limits.
 
-All integration commits use Calcifer Schadewitz `<schadewitzcalcifer@gmail.com>` as both
+All integration commits use Calcifer Schadewitz `<347762766+calciferschadewitz@users.noreply.github.com>` as both
 author and committer. This note accompanies source changes and is not a docs-only push.
 
 ## Windows-integrated source and acceptance handoff

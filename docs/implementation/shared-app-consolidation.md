@@ -20,7 +20,7 @@ Base main is `db579fb7ac9cfce2e4e6901713088a80602311da`. The branch is
 - `809afc2d25f577ab1cd4efb415fd36b5c0f038cd` merges corrected #569 into final #567.
 - `dc0397d19c1452ef103cf17e281a9457e500c8c2` merges reviewed #568 into that result.
 
-Both merges use Calcifer Schadewitz `<schadewitzcalcifer@gmail.com>` as author and
+Both merges use Calcifer Schadewitz `<347762766+calciferschadewitz@users.noreply.github.com>` as author and
 committer. No conflict resolution or synthesized source change was needed. Against #567,
 the source/test/historical-handoff delta is exactly #569's 10 changed paths and #568's 13
 changed paths; every resulting blob matches its pinned constituent. This document is the

@@ -128,7 +128,7 @@ existing diagnostics root.
 Node 24.19.0, installed Vitest 5.0.2 and TypeScript 7.0.2; dependency manifests,
 lockfile, coverage configuration and CI are unchanged by this slice. No applicable
 local `.agents/skills` were present. Author/committer: Calcifer Schadewitz
-`<schadewitzcalcifer@gmail.com>`.
+`<347762766+calciferschadewitz@users.noreply.github.com>`.
 
 Final affected-suite evidence spans 294 passing cases in ten files, at most two
 workers: coordinator, drain, replacement commit/recovery, candidate, guards,

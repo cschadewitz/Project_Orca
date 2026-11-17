@@ -178,7 +178,7 @@ task-2 evidence remains untouched. No keys, plaintext report bodies, private
 profile paths or execution stores are published.
 
 This draft targets only #584's integration branch. Author and committer are
-Calcifer Schadewitz `<schadewitzcalcifer@gmail.com>`. No merge, main publication,
+Calcifer Schadewitz `<347762766+calciferschadewitz@users.noreply.github.com>`. No merge, main publication,
 remote host, access change, installation, destructive/physical test or desktop
 interaction occurred. Existing consent/privacy and 200% reflow evidence is reused
 at its original pins, without a fresh package claim.

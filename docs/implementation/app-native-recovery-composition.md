@@ -26,7 +26,7 @@ Two clean non-squash merges preserve the supplied commits:
 All 13 #574 changed blobs and all 20 #576 implementation-commit changed blobs remain exact.
 The additional integration delta is main/Workspace wiring, three wiring tests, this handoff
 and a changelog fragment. Author and committer are Calcifer Schadewitz
-`<schadewitzcalcifer@gmail.com>`. Preload, bridge, dependency lockfile, CI workflow and
+`<347762766+calciferschadewitz@users.noreply.github.com>`. Preload, bridge, dependency lockfile, CI workflow and
 coverage thresholds are unchanged. #572's owner-authorized 95% app function threshold
 remains resolved; the older #576 handoff's coverage-policy wording does not reopen it.
 

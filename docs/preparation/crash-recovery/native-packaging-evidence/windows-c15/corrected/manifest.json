@@ -6,7 +6,7 @@
   "productionUnchanged": true,
   "productionEnabled": false,
   "macHeld": true,
-  "authorAndCommitter": "Calcifer Schadewitz <schadewitzcalcifer@gmail.com>",
+  "authorAndCommitter": "Calcifer Schadewitz <347762766+calciferschadewitz@users.noreply.github.com>",
   "integrationBase": "calcifer/m10-m21-m22-same-boot-config-integration",
   "branch": "calcifer/windows-diagnostics-c15-paired",
   "runtime": {
