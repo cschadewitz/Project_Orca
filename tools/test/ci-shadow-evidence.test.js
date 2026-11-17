@@ -688,7 +688,10 @@ it("keeps existing full checks and limits while isolating workflow_run from cand
   ])
     expect(ci).toContain(invariant);
   expect(ci.match(/--reporter=default --reporter=json/g)).toHaveLength(2);
-  expect(ci).toContain("run: pnpm run test:coverage --reporter=default --reporter=json");
+  // The full suite runs as two shards in `test`; this step merges their blobs, so the
+  // thresholds and the full-suite report still cover every file.
+  expect(ci).toContain("pnpm exec vitest run --merge-reports=blob-reports --coverage");
+  expect(ci).toContain("matrix: ${{ fromJSON(needs.runner.outputs.matrix) }}");
   const coverageStep = ci.split("- name: Test with coverage\n")[1].split("\n      # Both still run")[0];
   expect(coverageStep).toContain(
     "if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'",

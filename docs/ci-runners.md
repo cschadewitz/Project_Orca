@@ -13,8 +13,8 @@ The `pick runner` job (`runs-on: ubuntu-slim`) fetches
 
 | Picker result | `check` runs on | Vitest workers | pnpm cache |
 | --- | --- | --- | --- |
-| idle count above zero | `[self-hosted, linux, x64, tyler]` | 20 | none (see below) |
-| zero, or any failure | `ubuntu-24.04` | 2 | `setup-node` `cache: pnpm` |
+| a host has an idle runner (see Sharding) | `[self-hosted, linux, x64, tyler]` | 20 | none (see below) |
+| no host does, or any failure | `ubuntu-24.04` | 2 | `setup-node` `cache: pnpm` |
 
 Every failure to ask counts as zero: DNS, a curl timeout, a non-200 response,
 non-JSON, or a non-numeric count. The step runs under `bash` with `pipefail`
@@ -62,6 +62,53 @@ were split, when only one such file ran at a time. The same code in a throwaway
 container peaked at 10.9 GiB with no swap.
 
 Only `check` moves. `changes` and `pick runner` always run on GitHub-hosted runners.
+
+## Sharding
+
+The full suite runs as shards in the `test` job (`vitest --shard=N/M` at the worker count
+above). Each shard builds, runs its part with coverage, and uploads a Vitest blob.
+`check (node 24)` is still the one job the evidence consumer and branch protection know:
+it `needs` the shards, and its `Test with coverage` step downloads the blobs and runs
+`vitest --merge-reports --coverage`, so the coverage thresholds and the full-suite report
+cover every file.
+
+`check` and the shards start together. `check` runs its typecheck, lint and build beside
+the tests, then its `Wait for test shards` step polls this run's jobs through the API
+until every shard is done (it needs `actions: read`) before it merges the blobs.
+
+`check` and each shard are pinned to a host by a machine label (`m1`, `m2`), set in that
+host's `RUNNER_LABELS` next to `tyler`. GitHub still decides when a runner is ready, but a
+job can only start on its own host, so two 20-worker shards never share a machine however
+many runners it has. Because `check` holds a runner while it waits, a host needs an idle
+runner for every job pinned to it, or `check` could take the only one and wait forever for
+a shard queued behind it. The picker therefore subtracts `check`'s runner first: `check`
+goes to `m1` when it has an idle runner (otherwise `m2`), and a shard goes to each host
+that still has one. It reads the per-host idle counts from `health`:
+
+| Idle runners (m1, m2) | `check` | Shards |
+| --- | --- | --- |
+| 2+, 1+ | `m1` | 2: shard 1 on `m1`, shard 2 on `m2` |
+| 1, 1+ | `m1` | 1, on `m2` |
+| 2+, 0 | `m1` | 1, on `m1` |
+| 0, 2+ | `m2` | 1, on `m2` |
+| no host can hold `check` and a shard, a failed request, `CI_FORCE_HOSTED`, or a `health` without machine counts | `ubuntu-24.04`, 2 workers | 1, on `ubuntu-24.04` |
+
+`m1` therefore needs two runners (one for `check`, one for shard 1) for the suite to
+split in two; `m2` needs one.
+
+`health` gets the counts from GitHub's runner list, which spans every host registered to
+the repo, so the hosts do not need to reach each other. See the runner stack's README for
+`HEALTH_LABELS` and `HEALTH_MACHINES`.
+
+A shard sees only part of the files, so it cannot meet the thresholds; shards set
+`VITEST_SKIP_THRESHOLDS` and only the merge enforces them. The blobs hold absolute paths,
+so `test` and `check` must run on the same image, with the workspace at the same
+location. Targeted PR runs and docs-only changes are not sharded: `test` skips its test
+steps for them.
+
+The picker counts idle runners once, so a host that fills up between the pick and the
+job queues its job until a runner frees. `check` and shard 1 both run on `m1`, so its
+typecheck, lint and build compete with shard 1's workers for that host's CPU.
 
 ## Vitest file-order cache
 

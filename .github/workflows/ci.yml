@@ -16,8 +16,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Chooses where `check` runs: the homelab runners when one is idle, GitHub-hosted
-  # otherwise. Any failure to ask (DNS, timeout, non-200, bad JSON) counts as zero.
+  # Chooses where `check` and its test shards run: the homelab hosts (m1, m2) when they
+  # have idle runners, GitHub-hosted otherwise. Any failure to ask (DNS, timeout,
+  # non-200, bad JSON) counts as zero.
   # Set the repository variable CI_FORCE_HOSTED to `true` to skip the homelab runners
   # (e.g. when a job queued on them); re-run the workflow to apply it.
   # Pull requests from forks always get GitHub-hosted runners: their code must not run
@@ -31,6 +32,8 @@ jobs:
       labels: ${{ steps.pick.outputs.labels }}
       workers: ${{ steps.pick.outputs.workers }}
       pnpm_cache: ${{ steps.pick.outputs.pnpm_cache }}
+      matrix: ${{ steps.pick.outputs.matrix }}
+      shards: ${{ steps.pick.outputs.shards }}
     steps:
       - id: pick
         shell: bash
@@ -39,27 +42,51 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           THIS_REPO: ${{ github.repository }}
         run: |
-          idle=0
+          m1=0 m2=0
           if [[ "$HEAD_REPO" != "$THIS_REPO" ]]; then
             echo "pull request from fork ${HEAD_REPO}: using GitHub-hosted runners"
             FORCE_HOSTED=true
           fi
           # Check curl's own status: a timeout after partial output must not count
           if [[ "$FORCE_HOSTED" != "true" ]] && body=$(curl -fsS --max-time 5 https://runners.theroses.dev/health); then
-            idle=$(jq -r '.Project_Orca // 0' <<<"$body" 2>/dev/null) || idle=0
+            # Exact idle runners per host; a health that predates machine labels sends none
+            m1=$(jq -r '.machines.m1 // 0' <<<"$body" 2>/dev/null) || m1=0
+            m2=$(jq -r '.machines.m2 // 0' <<<"$body" 2>/dev/null) || m2=0
           fi
-          [[ "$idle" =~ ^[0-9]+$ ]] || idle=0
-          if (( idle > 0 )); then
-            echo 'labels=["self-hosted","linux","x64","tyler"]' >> "$GITHUB_OUTPUT"
+          for n in m1 m2; do [[ "${!n}" =~ ^[0-9]+$ ]] || printf -v "$n" 0; done
+          base='"self-hosted","linux","x64","tyler"'
+          # `check` and each shard hold a runner at once, and `check` waits for the shards,
+          # so a host must have an idle runner for every job pinned to it or `check` could
+          # take the only one and wait forever for a shard queued behind it. `check` takes
+          # m1 when it can; a shard goes to each host with a runner left, so two shards
+          # never share a host.
+          c1=$m1 c2=$m2 check_host=
+          if (( c1 > 0 )); then check_host=m1; c1=$((c1 - 1))
+          elif (( c2 > 0 )); then check_host=m2; c2=$((c2 - 1)); fi
+          up=()
+          if (( c1 > 0 )); then up+=(m1); fi
+          if (( c2 > 0 )); then up+=(m2); fi
+          if [[ -n "$check_host" ]] && (( ${#up[@]} > 0 )); then
+            echo "labels=[${base},\"${check_host}\"]" >> "$GITHUB_OUTPUT"
             # Why 20 workers and no pnpm cache: docs/ci-runners.md
             echo 'workers=20' >> "$GITHUB_OUTPUT"
             echo 'pnpm_cache=' >> "$GITHUB_OUTPUT"
+            shards='[]'
+            for i in "${!up[@]}"; do
+              shards=$(jq -c --argjson shard "$((i + 1))" --argjson total "${#up[@]}" \
+                --argjson labels "[${base},\"${up[$i]}\"]" \
+                '. + [{shard: $shard, total: $total, labels: $labels}]' <<<"$shards")
+            done
           else
+            # No host can hold `check` and a shard together: everything on hosted runners
             echo 'labels=["ubuntu-24.04"]' >> "$GITHUB_OUTPUT"
             echo 'workers=2' >> "$GITHUB_OUTPUT"
             echo 'pnpm_cache=pnpm' >> "$GITHUB_OUTPUT"
+            shards='[{"shard":1,"total":1,"labels":["ubuntu-24.04"]}]'
           fi
-          echo "idle homelab runners: ${idle}"
+          echo "shards=${shards}" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(jq -c '{include: .}' <<<"$shards")" >> "$GITHUB_OUTPUT"
+          echo "idle per host: m1=${m1} m2=${m2}; shards: ${shards}"
 
   changes:
     name: classify changes
@@ -81,11 +108,106 @@ jobs:
           SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node tools/ci-shadow/docs.js
 
+  # The full suite, split in two by file (`vitest --shard`) so a second runner host can
+  # share it. Each shard only produces a blob (test results plus raw coverage); `check`
+  # merges them in its `Test with coverage` step, so the thresholds, the evidence
+  # consumer and the `check (node 24)` name all stay as they were. Targeted PR runs and
+  # docs-only changes are not sharded: this job skips its test steps for them.
+  test:
+    name: test (shard ${{ matrix.shard }}/${{ matrix.total }})
+    needs: [changes, runner]
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    # Each shard is pinned to its own host by the machine label the picker chose.
+    # matrix.labels is already an array here: fromJSON takes a string and would fail
+    runs-on: ${{ matrix.labels }}
+    env:
+      WORKERS_CAP: ${{ needs.runner.outputs.workers }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.runner.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: ${{ needs.runner.outputs.pnpm_cache }}
+
+      - name: Bound test workers
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { availableParallelism } from 'node:os';
+
+          const workers = Math.min(Number(process.env.WORKERS_CAP) || 2, Math.max(1, availableParallelism() - 1));
+          appendFileSync(process.env.GITHUB_ENV, `VITEST_MAX_WORKERS=${workers}\n`);
+          console.log(`Vitest worker limit: ${workers} (available parallelism: ${availableParallelism()})`);
+          NODE
+
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      - name: Restore Vitest file-order cache
+        if: contains(fromJSON(needs.runner.outputs.labels), 'tyler')
+        continue-on-error: true
+        run: |
+          src=/var/cache/vitest-order/results.json
+          dir=node_modules/.vite/vitest/da39a3ee5e6b4b0d3255bfef95601890afd80709
+          if [ -f "$src" ]; then
+            mkdir -p "$dir"
+            cp "$src" "$dir/results.json"
+          fi
+
+      # The same plan `check` makes: a targeted PR run is not sharded.
+      - name: Plan test execution
+        id: selection
+        env:
+          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
+          SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          SHADOW_NODE: 24
+        run: node tools/ci-shadow/execute.js plan
+
+      # Production MCP acceptance launches the emitted daemon and MCP entry points.
+      - name: Build
+        if: steps.selection.outputs.mode != 'targeted'
+        run: pnpm run build
+
+      # Thresholds are skipped: half the files cannot meet them. `check` enforces them
+      # on the merged coverage.
+      - name: Test shard ${{ matrix.shard }}/${{ matrix.total }}
+        if: steps.selection.outputs.mode != 'targeted'
+        run: |
+          pnpm exec vitest run --coverage \
+            --shard="${{ matrix.shard }}/${{ matrix.total }}" \
+            --reporter=default --reporter=blob \
+            --outputFile.blob="blob-reports/blob-${{ matrix.shard }}.json"
+        env:
+          ORCA_MCP_REQUIRE_PRODUCTION: "1"
+          VITEST_SKIP_THRESHOLDS: "1"
+
+      - name: Upload test blob
+        if: ${{ !cancelled() && hashFiles('blob-reports/*.json') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: vitest-blob-${{ matrix.shard }}
+          path: blob-reports/
+          retention-days: 1
+
   check:
     name: check (node ${{ matrix.node }})
     needs: [changes, runner]
     if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON(needs.runner.outputs.labels) }}
+    # actions: read lets the wait step below list this run's jobs
+    permissions:
+      contents: read
+      actions: read
     env:
       # Worker cap from the picked runner (see the `runner` job); unset elsewhere means 2
       WORKERS_CAP: ${{ needs.runner.outputs.workers }}
@@ -270,11 +392,51 @@ jobs:
           SHADOW_NODE: ${{ matrix.node }}
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
+      # `check` starts beside the shards, so the typecheck, lint and build above overlap
+      # their tests. Only the merge needs them: wait here until every shard job is done.
+      - name: Wait for test shards
+        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
+        timeout-minutes: 30
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHARDS: ${{ fromJSON(needs.runner.outputs.shards)[0].total }}
+        run: |
+          url="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100"
+          while true; do
+            shards=$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$url" \
+              | jq -c '[.jobs[] | select(.name | startswith("test (shard"))]') || shards='[]'
+            failed=$(jq -r '[.[] | select(.status == "completed" and .conclusion != "success") | .name] | join(", ")' <<<"$shards")
+            if [[ -n "$failed" ]]; then echo "::error::test shard did not pass: ${failed}"; exit 1; fi
+            done_count=$(jq '[.[] | select(.status == "completed")] | length' <<<"$shards")
+            echo "shards finished: ${done_count}/${SHARDS}"
+            if (( done_count >= SHARDS )); then break; fi
+            # Shard jobs are created with this one; none after 5 minutes means they never will be
+            if (( SECONDS > 300 )) && (( $(jq length <<<"$shards") < SHARDS )); then
+              echo "::error::expected ${SHARDS} test shard jobs in this run, found $(jq length <<<"$shards")"; exit 1
+            fi
+            sleep 10
+          done
+
+      # The shards' blobs hold absolute paths, so the merge needs a checkout at the same
+      # location as theirs: the same runner labels and image give that.
+      - name: Download test blobs
+        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: vitest-blob-*
+          path: blob-reports
+          merge-multiple: true
+
       - name: Test with coverage
         if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
-        # Explicit `run` forwards reporter flags to Vitest through pnpm.
-        run: pnpm run test:coverage --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
+        # Merges the shards' results and coverage; the thresholds apply to the whole suite.
+        run: |
+          test "$(ls blob-reports/*.json 2>/dev/null | wc -l)" -eq "$SHARDS" || { echo "::error::expected $SHARDS shard blobs in blob-reports/"; exit 1; }
+          pnpm exec vitest run --merge-reports=blob-reports --coverage \
+            --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
         env:
+          # One blob per shard; the picker's shard count is the same on every entry
+          SHARDS: ${{ fromJSON(needs.runner.outputs.shards)[0].total }}
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       # Both still run when the thresholds fail: a red build is exactly when the numbers

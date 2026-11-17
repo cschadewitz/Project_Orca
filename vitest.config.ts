@@ -93,19 +93,25 @@ export default defineConfig({
       // its two halves are separate entries because they are tested in different
       // environments - the renderer in happy-dom, the Node side as plain modules - and
       // regress independently.
-      thresholds: {
-        // The whole report: 89.3 / 78.3 / 90.0 / 92.1 today. These sat at 78/65/80/81 until
-        // v0.3.0 - written for a suite that covered 79/66/81.5/82 and never raised as it
-        // grew, which left roughly ten points of slack a regression could have landed in.
-        statements: 88,
-        branches: 77,
-        functions: 89,
-        lines: 91,
-        // The renderer: 87.2 / 86.0 / 84.5 / 89.5.
-        "**/packages/app/renderer/src/**": { statements: 86, branches: 85, functions: 83, lines: 88 },
-        // The app's Node half - daemon client, preferences, connection: 100 / 92.9 / 100 / 100.
-        "**/packages/app/src/**": { statements: 95, branches: 92, functions: 95, lines: 99 },
-      },
+      //
+      // A CI shard sees only its slice of the files, so it would fail every number below.
+      // Shards set VITEST_SKIP_THRESHOLDS and the merge job, which sees the whole suite,
+      // enforces them.
+      thresholds: process.env.VITEST_SKIP_THRESHOLDS
+        ? {}
+        : {
+            // The whole report: 89.3 / 78.3 / 90.0 / 92.1 today. These sat at 78/65/80/81 until
+            // v0.3.0 - written for a suite that covered 79/66/81.5/82 and never raised as it
+            // grew, which left roughly ten points of slack a regression could have landed in.
+            statements: 88,
+            branches: 77,
+            functions: 89,
+            lines: 91,
+            // The renderer: 87.2 / 86.0 / 84.5 / 89.5.
+            "**/packages/app/renderer/src/**": { statements: 86, branches: 85, functions: 83, lines: 88 },
+            // The app's Node half - daemon client, preferences, connection: 100 / 92.9 / 100 / 100.
+            "**/packages/app/src/**": { statements: 95, branches: 92, functions: 95, lines: 99 },
+          },
     },
   },
 });
