@@ -1,4 +1,4 @@
-# Macie's physical Mac checklist
+# Tester's physical Mac checklist
 
 This is a future checklist for [#390](https://github.com/cschadewitz/Project_Orca/issues/390),
 prepared under #403. **Nothing here has been run on your Mac.** The version, download,
@@ -57,7 +57,7 @@ Keep account names, notifications and other windows out of them.
 | 13 / MAC-16 | Follow #387's exact upgrade and restore checklist using only its paired candidates, disposable data and keys. Link its evidence here. | Configuration/history/pending work survive; unsafe replacement is refused; recovery matches the full backup. Do not invent a binary-only rollback or delete keys. Missing procedure or pair means blocked. |
 | 14 / all | Quit, review the record with the coordinator and perform only the agreed test cleanup. | Keep a sanitized report; preserve any unresolved failure until its safe cleanup is agreed. Record leftovers. Do not uninstall another ORCA installation or remove personal data. |
 
-The coordinator checks signature/notary/architecture/process details; Macie need not run
+The coordinator checks signature/notary/architecture/process details; the tester need not run
 developer commands. Compare DMG and ZIP only in separately reset test accounts/states.
 For usability acceptance, at least one target-like participant follows the published
 guide without hidden coaching: record each hint needed as a guide/usability defect.

@@ -8,15 +8,17 @@ see [CI shadow selection](ci-shadow-selection.md) for that.
 
 ## How the runner is picked
 
-The `pick runner` job (`runs-on: ubuntu-slim`) fetches
-`https://runners.theroses.dev/health`, which returns `{"Project_Orca": <idle runners>}`.
+The `pick runner` job (`runs-on: ubuntu-slim`) fetches the runner host's health
+endpoint, whose URL is the repository variable `CI_RUNNER_HEALTH_URL`, and reads the
+idle runners per host from it (see Sharding). With the variable unset, the picker
+selects GitHub-hosted runners.
 
 | Picker result | `check` runs on | Vitest workers | pnpm cache |
 | --- | --- | --- | --- |
 | a host has an idle runner (see Sharding) | `[self-hosted, linux, x64, tyler]` | 20 | none (see below) |
 | no host does, or any failure | `ubuntu-24.04` | 2 | `setup-node` `cache: pnpm` |
 
-Every failure to ask counts as zero: DNS, a curl timeout, a non-200 response,
+Every failure to ask counts as zero: no `CI_RUNNER_HEALTH_URL`, DNS, a curl timeout, a non-200 response,
 non-JSON, or a non-numeric count. The step runs under `bash` with `pipefail`
 and checks curl's own exit status, so a response that was partly written before
 curl failed is also discarded.
@@ -28,9 +30,8 @@ those tarballs. The worker count is 20, where a sweep of the full suite with cov
 stopped getting faster (8 workers 134 s, 16: 82 s, 20: 75 s, 24: 73 s, 31: 75 s); more
 workers only add CPU contention.
 
-Memory, measured in a throwaway container with the runners' settings (12 GiB RAM plus
-12 GiB swap, 30 CPUs, `/tmp` as tmpfs, the proxy network, the Vitest order cache
-restored), running `pnpm run test:coverage` after install and build, sampled once per
+Memory, measured in a throwaway container with the runners' settings (a 12 GiB memory
+limit, the Vitest order cache restored), running `pnpm run test:coverage` after install and build, sampled once per
 second. Peak working set and swap in use during the test step:
 
 | Workers | RAM limit | Test step | Peak working set | Peak swap |
@@ -38,9 +39,8 @@ second. Peak working set and swap in use during the test step:
 | 16 | 12 GiB | 86 s | 6.6 GiB | none |
 | 20 | 12 GiB | 82 s | 7.4 GiB | none |
 
-Every run passed all tests. The runners keep their 12 GiB limit. It is a ceiling, not an
-allocation, and the peak leaves about 4.6 GiB of room. An 8 GiB limit also held 20 workers
-(7.5 GiB peak, no swap), so the limit has margin. Before the test helper change below, the same runs reached
+Every run passed all tests, and the peak leaves about 4.6 GiB of room under the limit. An
+8 GiB limit also held 20 workers (7.5 GiB peak, no swap). Before the test helper change below, the same runs reached
 the 12 GiB limit and used 1.4 to 5.3 GiB of swap. The cause was the test fixtures. They
 replaced `fs.readSync` with `vi.spyOn`, which keeps the arguments of every call, buffers
 included, until the spy is restored. The code under test calls `readSync` in a tight
@@ -55,11 +55,6 @@ count. Capping Node's heap (`--max-old-space-size`), the young generation
 neither did switching coverage off. Those settings do not reach ArrayBuffer memory.
 `--logHeapUsage` shows live heap per test file, but it does not show ArrayBuffers.
 Sampling `process.memoryUsage().arrayBuffers` in each test process does.
-
-The runners' own history (Prometheus, cAdvisor) shows peaks of 8.3 to 10.9 GiB and at
-most 98 MiB of swap at 16 workers. That history is from before the large scenario files
-were split, when only one such file ran at a time. The same code in a throwaway
-container peaked at 10.9 GiB with no swap.
 
 Only `check` moves. `changes` and `pick runner` always run on GitHub-hosted runners.
 
@@ -97,8 +92,8 @@ that still has one. It reads the per-host idle counts from `health`:
 split in two; `m2` needs one.
 
 `health` gets the counts from GitHub's runner list, which spans every host registered to
-the repo, so the hosts do not need to reach each other. See the runner stack's README for
-`HEALTH_LABELS` and `HEALTH_MACHINES`.
+the repo, so the hosts do not need to reach each other. The runner stack's own
+documentation covers how the counts are configured.
 
 A shard sees only part of the files, so it cannot meet the thresholds; shards set
 `VITEST_SKIP_THRESHOLDS` and only the merge enforces them. The blobs hold absolute paths,
@@ -119,7 +114,7 @@ no earlier run. Without the cache the full suite with coverage at 20 workers too
 
 The runners keep one copy in the `vitest-order` volume, mounted read-only for jobs at
 `/var/cache/vitest-order`; the `check` job copies it into place before the tests run.
-Jobs never write it. `start.sh` (root) updates it after a job exits, only when GitHub
+Jobs never write it. The runner stack updates it after a job exits, only when GitHub
 reports that this runner just completed a successful `push` to `main` and the workspace
 is at that commit, and only from entries it rebuilds itself (passing files, numeric
 durations, at most 5000, none older than 30 days). The file only orders test files: a
@@ -153,32 +148,17 @@ it changes anything under `.github/`.
 
 ## What the self-hosted runners can reach
 
-The runner stack lives outside this repository; this section records what the
-repository's workflows can rely on. The repository is private, but PR code
-(install, build and test steps) executes on these machines, so treat them as
-running untrusted-by-default code.
+The runner stack lives outside this repository, and its isolation details are kept
+with it, not here. What this repository's workflows can rely on: each runner takes
+one job and is reset before the next; jobs run as a non-root user with no host mounts
+and no Docker socket; their only route out is a proxy that refuses private and
+loopback destinations; and the only credential a job holds is its `GITHUB_TOKEN`
+(`ci.yml` keeps `permissions: contents: read` and `persist-credentials: false`). PR code
+(install, build and test steps) runs on these machines, so treat them as running
+untrusted-by-default code.
 
-- **Per-job lifecycle:** each runner is registered `--ephemeral`, so it takes one job
-  and is deregistered by GitHub. Its container then restarts and resets the job
-  user's home directory and scratch directories before registering again. This is a
-  filesystem reset on a reused container, not a fresh container or VM per job.
-- **Host access:** containers are unprivileged, run the job as a non-root user and
-  have no host bind mounts and no Docker socket. CPU and memory are capped.
-- **Network:** runners attach only to an internal container network. Their one route
-  out is a caching proxy that refuses loopback, private, link-local and CGNAT
-  destinations, checked against the resolved address, so jobs cannot reach the home
-  LAN.
-- **Credentials:** the token used to register runners is removed from the job
-  environment before the job starts. The only credential a job holds is the per-job
-  `GITHUB_TOKEN`; this workflow keeps `permissions: contents: read` and
-  `persist-credentials: false`. The health endpoint's own token lives in a
-  separate container that jobs cannot reach.
-- **Not guaranteed:** the container sandbox uses Docker's default seccomp profile
-  plus the user-namespace calls Electron's Chromium sandbox needs. It is a container
-  boundary, not a VM boundary.
-
-In this repository only `check` selects the `tyler` label. Other workflows (for
-example `app-smoke.yml`, `codeql.yml` and the release workflows) target the separate
-`homelab` label; the isolation notes above describe the `tyler` runners and say
-nothing about that pool. A new workflow that targets `tyler` takes on the same
-assumptions.
+In this repository `ci.yml`'s `check` and `test` jobs select the `tyler` label on their
+own, and a manual dispatch of `app-smoke.yml` or `desktop.yml` can choose it with
+`linux_runner: tyler`. Other workflows (for example `codeql.yml` and the release
+workflows) target the separate `homelab` label; the notes above describe the `tyler` runners and say nothing about
+that pool. A new workflow that targets `tyler` takes on the same assumptions.

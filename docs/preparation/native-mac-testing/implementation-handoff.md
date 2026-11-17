@@ -20,7 +20,7 @@ All changes belong only to `docs/preparation/native-mac-testing/`:
 Read `AGENTS.md`, `CONTRIBUTING.md`, `docs/DEVELOPMENT.md` and `docs/ARCHITECTURE.md`
 before implementation. Read `docs/design/RULES.md` before any later UI change.
 No executable test, CI, runtime, manifest, signing, publishing or installation change
-is authorized by this preparation. Do not operate on Macie's Mac without later approval.
+is authorized by this preparation. Do not operate on the tester's Mac without later approval.
 
 ## Inputs and blockers for implementation
 

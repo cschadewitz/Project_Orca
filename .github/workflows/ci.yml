@@ -39,6 +39,7 @@ jobs:
         shell: bash
         env:
           FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
+          HEALTH_URL: ${{ vars.CI_RUNNER_HEALTH_URL }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           THIS_REPO: ${{ github.repository }}
         run: |
@@ -48,7 +49,8 @@ jobs:
             FORCE_HOSTED=true
           fi
           # Check curl's own status: a timeout after partial output must not count
-          if [[ "$FORCE_HOSTED" != "true" ]] && body=$(curl -fsS --max-time 5 https://runners.theroses.dev/health); then
+          # No health URL configured counts as zero idle runners, like any other failure
+          if [[ "$FORCE_HOSTED" != "true" && -n "$HEALTH_URL" ]] && body=$(curl -fsS --max-time 5 "$HEALTH_URL"); then
             # Exact idle runners per host; a health that predates machine labels sends none
             m1=$(jq -r '.machines.m1 // 0' <<<"$body" 2>/dev/null) || m1=0
             m2=$(jq -r '.machines.m2 // 0' <<<"$body" 2>/dev/null) || m2=0
