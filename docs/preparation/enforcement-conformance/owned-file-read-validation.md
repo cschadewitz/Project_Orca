@@ -3,7 +3,7 @@
 Source under test: `dcbac0eb553e88fe2a579feb186bc90159da69e7`, based on main
 `df2e623175f58f2031efb0bb7386d2de1cae8990`. Later evidence-only commits do not
 change executable source. Author and committer: Calcifer Schadewitz
-`<schadewitzcalcifer@gmail.com>`.
+`<347762766+calciferschadewitz@users.noreply.github.com>`.
 
 ## Environment and setup
 

@@ -12,8 +12,14 @@ jobs:
           git --version
           git log -1 --oneline
       - name: LAN must be blocked
+        env:
+          # A LAN host and port jobs must not reach, as host/port (repository variable)
+          PROBE: ${{ vars.LAN_PROBE_TARGET }}
         run: |
-          if timeout 5 bash -c '</dev/tcp/192.168.50.233/8006'; then
-            echo "::error::pve1 reachable from a job - firewall is not applied"; exit 1
+          if [[ -z "$PROBE" ]]; then
+            echo "::error::set the repository variable LAN_PROBE_TARGET (host/port)"; exit 1
+          fi
+          if timeout 5 bash -c "</dev/tcp/${PROBE}" 2>/dev/null; then
+            echo "::error::LAN target reachable from a job - firewall is not applied"; exit 1
           fi
           echo "LAN blocked (expected)"

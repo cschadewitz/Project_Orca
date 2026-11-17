@@ -274,7 +274,7 @@ on `df2e623`; parent main subsequently reached `bc0c57d`. The canonical checkpoi
 branch is `calcifer/702-typed-sidecar`. The earlier contract-only
 `calcifer/702-typed-persistence` branch is superseded; no PR was created for it.
 All new canonical-branch commits use Calcifer Schadewitz
-`<schadewitzcalcifer@gmail.com>` as author and committer. No history was force-pushed.
+`<347762766+calciferschadewitz@users.noreply.github.com>` as author and committer. No history was force-pushed.
 
 
 ### Enrollment initialization phase (final handoff)

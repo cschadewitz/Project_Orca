@@ -25,7 +25,7 @@ Read #605 metadata and fetched its ref, verifying that one implementation commit
 was missing from the candidate. main remained
 `db579fb7ac9cfce2e4e6901713088a80602311da`. The final read-only ref check still
 showed #605 at the incorporated head and its base branch at #584. Author and
-committer remain Calcifer Schadewitz `<schadewitzcalcifer@gmail.com>`.
+committer remain Calcifer Schadewitz `<347762766+calciferschadewitz@users.noreply.github.com>`.
 
 The only textual conflict was the `.orca-window` comment in shared design CSS.
 Both inputs specify the same `grid-template-columns: minmax(0, 1fr)`. Retained

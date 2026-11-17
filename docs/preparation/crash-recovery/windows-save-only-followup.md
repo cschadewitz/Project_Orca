@@ -146,6 +146,6 @@ Mac stays held. Production capture stays disabled.
 
 This is an integration-only draft against
 `calcifer/m10-m21-m22-same-boot-config-integration`. Author and committer remain
-Calcifer Schadewitz `<schadewitzcalcifer@gmail.com>`. No full suite, coverage or
+Calcifer Schadewitz `<347762766+calciferschadewitz@users.noreply.github.com>`. No full suite, coverage or
 Actions dispatch, merge/auto-merge, main publication, deployment, new access or
 physical interruption was performed. No automatic upload or new sharing is added.

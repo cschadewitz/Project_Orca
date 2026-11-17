@@ -18,7 +18,7 @@ Implementation source: `24cf52dc18f97f981cafcdc8e71d640e8672de8c`, tree
 `dccde5ddd8a0539827a194ccdd882c718745c9ce`, which retains composed source
 `88fc825daaa969675d4d6d06931bceb00ebbacec` and Windows #585
 `455ac202f7afa00da17dd91a595988b0250003a9`. Author and committer are Calcifer
-Schadewitz <schadewitzcalcifer@gmail.com>.
+Schadewitz <347762766+calciferschadewitz@users.noreply.github.com>.
 
 Electron 44.4.5 constructs its Windows async DPAPI provider with Local State
 preferences and commits pending preferences during normal shutdown. Its pinned

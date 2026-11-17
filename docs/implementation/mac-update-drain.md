@@ -129,7 +129,7 @@ Portable local Node 24.19.0, existing Vitest 5.0.2 and TypeScript 7.0.2; no depe
 manifest or lockfile changes. Repository AGENTS/development/architecture instructions
 and both required native handoffs were read; local `.agents`/`.codex` locations
 contain no applicable skill. Author: Calcifer Schadewitz
-`<schadewitzcalcifer@gmail.com>`.
+`<347762766+calciferschadewitz@users.noreply.github.com>`.
 
 Focused final validation is recorded in the draft PR: 80 tests in 10 files with at
 most two workers, including 15 new drain/activity cases. Tests use the real

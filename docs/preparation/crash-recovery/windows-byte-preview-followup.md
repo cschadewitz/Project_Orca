@@ -166,7 +166,7 @@ revocation/document authority, stale closes, revision ordering, pending-read/DOM
 disposal ordering, UTF-8/framing and Save independence. Independent review remains
 required. The draft targets only the existing integration branch
 `calcifer/m10-m21-m22-same-boot-config-integration`; author and committer are
-Calcifer Schadewitz `<schadewitzcalcifer@gmail.com>`.
+Calcifer Schadewitz `<347762766+calciferschadewitz@users.noreply.github.com>`.
 
 Remaining: **combined 32 MiB memory**, broader strict tail/current paired-load
 proof, prior failure/stall and untouched-package network evidence, independent

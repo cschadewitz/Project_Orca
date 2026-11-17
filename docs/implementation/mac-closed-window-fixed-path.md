@@ -5,7 +5,7 @@ This non-Mac source slice starts from combined [#584](https://github.com/cschade
 producer [#581](https://github.com/cschadewitz/Project_Orca/pull/581)
 `50c75cf051aadb551b5e365b1acf0110b70853fc`, whose parent is #580
 `b45b2a0d7df15798e6ba985d71f6e9d507d9cee4`. It retains their constituent evidence.
-Author and committer: Calcifer Schadewitz `<schadewitzcalcifer@gmail.com>`.
+Author and committer: Calcifer Schadewitz `<347762766+calciferschadewitz@users.noreply.github.com>`.
 
 ## Invariant and scope
 

@@ -297,7 +297,7 @@ async function makeFixture() {
     "-c",
     "user.name=Calcifer Schadewitz",
     "-c",
-    "user.email=schadewitzcalcifer@gmail.com",
+    "user.email=347762766+calciferschadewitz@users.noreply.github.com",
     "-c",
     "commit.gpgsign=false",
     "commit",

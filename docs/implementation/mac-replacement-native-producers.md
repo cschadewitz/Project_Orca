@@ -10,7 +10,7 @@ because their AAD binds the original path.
 This focused dependent slice starts at exact [#580](https://github.com/cschadewitz/Project_Orca/pull/580)
 `b45b2a0d7df15798e6ba985d71f6e9d507d9cee4`. The branch is
 `calcifer/native-replacement-journal-producer`. Author and committer:
-Calcifer Schadewitz `<schadewitzcalcifer@gmail.com>`.
+Calcifer Schadewitz `<347762766+calciferschadewitz@users.noreply.github.com>`.
 Read this alongside [the composition inventory](app-native-recovery-composition.md).
 
 ## Concrete correction

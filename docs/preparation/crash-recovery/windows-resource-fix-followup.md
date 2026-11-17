@@ -159,7 +159,7 @@ tests. The directly affected diagnostics/legacy Config/Studio Config renderer
 files pass **63/63** (overlap is intentional; these totals are not added).
 Root and app TypeScript, renderer TypeScript, scoped ESLint/Prettier, changed CSS
 token checks and affected renderer/directory package builds pass. No broad suite
-or CI was run. Commits use Calcifer Schadewitz `<schadewitzcalcifer@gmail.com>`;
+or CI was run. Commits use Calcifer Schadewitz `<347762766+calciferschadewitz@users.noreply.github.com>`;
 draft #591 targets only #584's integration branch.
 
 Remaining: strict 4 ms tails and a current paired-load responsiveness proof;
