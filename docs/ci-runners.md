@@ -93,8 +93,14 @@ When `health` sends only the repository's total (`{"Project_Orca": <idle runners
 its current response) there is nothing to pin a host with, so the picker uses the plain
 `tyler` label: with 2 or more idle runners, `check` and one shard run there; with fewer,
 everything runs on `ubuntu-24.04`. Only one shard, so two 20-worker shards never land on
-the same host. The picker logs the health response (runner counts only) to show which
-case applied.
+the same host. The picker logs only the validated counts (never the response body) to
+show which case applied.
+
+The idle counts are a snapshot, not a reservation. Another CI run on a different ref, or
+an `app-smoke` or `desktop` job on the same pool, can take those runners after the picker
+looks. `check` then holds its runner in `Wait for test shards` while the shard queues,
+until the shard starts or the wait step's timeout ends the run. The rules above make that
+less likely; they do not rule it out.
 
 `m1` therefore needs two runners (one for `check`, one for shard 1) for the suite to
 split in two; `m2` needs one.

@@ -53,8 +53,7 @@ jobs:
           # Check curl's own status: a timeout after partial output must not count
           # No health URL configured counts as zero idle runners, like any other failure
           if [[ "$FORCE_HOSTED" != "true" && -n "$HEALTH_URL" ]] && body=$(curl -fsS --max-time 5 "$HEALTH_URL"); then
-            # Record what the health service reported (runner counts only)
-            echo "health response: $(jq -c . <<<"$body" 2>/dev/null | head -c 500)"
+            # Never log the body: only the validated counts below reach the log.
             # Exact idle runners per host, when the health service sends them
             if jq -e '.machines | type == "object"' <<<"$body" >/dev/null 2>&1; then
               per_host=yes
@@ -69,8 +68,10 @@ jobs:
           if [[ -z "$per_host" ]]; then
             # Total only (the health service's current response): no host labels to pin to.
             # `check` and one shard each hold a runner and `check` waits for the shard, so
-            # use the pool only with two idle runners, or `check` could take the last one
-            # and wait forever. One shard, so two 20-worker shards never share a host.
+            # use the pool only with two idle runners, so `check` does not knowingly take
+            # the last one. The count is a snapshot, not a reservation: another run can still
+            # take a runner first (docs/ci-runners.md). One shard, so two 20-worker shards
+            # never share a host.
             if (( total >= 2 )); then
               echo "labels=[${base}]" >> "$GITHUB_OUTPUT"
               echo 'workers=20' >> "$GITHUB_OUTPUT"
