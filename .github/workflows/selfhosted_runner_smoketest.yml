@@ -13,11 +13,12 @@ jobs:
           git log -1 --oneline
       - name: LAN must be blocked
         env:
-          # A LAN host and port jobs must not reach, as host/port (repository variable)
-          PROBE: ${{ vars.LAN_PROBE_TARGET }}
+          # A LAN host and port jobs must not reach, as host/port. A secret, not a
+          # variable: logs print variable values in the step's env, but mask secrets.
+          PROBE: ${{ secrets.LAN_PROBE_TARGET }}
         run: |
           if [[ -z "$PROBE" ]]; then
-            echo "::error::set the repository variable LAN_PROBE_TARGET (host/port)"; exit 1
+            echo "::error::set the repository secret LAN_PROBE_TARGET (host/port)"; exit 1
           fi
           if timeout 5 bash -c "</dev/tcp/${PROBE}" 2>/dev/null; then
             echo "::error::LAN target reachable from a job - firewall is not applied"; exit 1
