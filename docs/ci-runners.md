@@ -9,8 +9,9 @@ see [CI shadow selection](ci-shadow-selection.md) for that.
 ## How the runner is picked
 
 The `pick runner` job (`runs-on: ubuntu-slim`) fetches the runner host's health
-endpoint, whose URL is the repository variable `CI_RUNNER_HEALTH_URL`, and reads the
-idle runners per host from it (see Sharding). With the variable unset, the picker
+endpoint, whose URL is the repository secret `CI_RUNNER_HEALTH_URL` (a secret so that
+logs mask it; fork and Dependabot runs get no secrets and so use hosted runners), and reads the
+idle runners per host from it (see Sharding). With the secret unset, the picker
 selects GitHub-hosted runners.
 
 | Picker result | `check` runs on | Vitest workers | pnpm cache |

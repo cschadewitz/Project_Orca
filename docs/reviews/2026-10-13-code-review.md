@@ -954,7 +954,7 @@ Full write-up: [C8.md](2026-10-13-review-detail/C8.md).
   - *Where:* `.gitignore`
   - *Recommendation:* Add those patterns, and consider a pre-commit or CI secret scan (see C8-21).
 - **C8-20** · **Info** · security — Internal infrastructure details are committed
-  - *Where:* `.github/workflows/selfhosted_runner_smoketest.yml:16` — LAN Proxmox endpoint (since moved to the `LAN_PROBE_TARGET` repository variable)
+  - *Where:* `.github/workflows/selfhosted_runner_smoketest.yml:16` — LAN Proxmox endpoint (since moved to the `LAN_PROBE_TARGET` repository secret)
   - *Recommendation:* Before any visibility change, move host-specific values into private deployment configuration or repository variables, and keep templates generic.
 - **C8-21** · **Info** · supply-chain — No SAST, dependency review, secret scanning, CODEOWNERS or Dependabot cooldown
   - *Where:* `codeql.yml:158-166` (dispatch-only); `.github/` (no CODEOWNERS); `dependabot.yml` (no `cooldown`)
