@@ -139,3 +139,21 @@ it.skipIf(process.platform === "win32")("the actual selection shell emits usable
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+it("on GitHub-hosted Linux, grants user namespaces to the packaged app only", () => {
+  const steps = workflow.jobs.package.steps;
+  const prep = steps.find(({ name }) => name === "Prepare a GitHub-hosted Linux runner");
+  const launch = steps.find(({ name }) => name === "The packaged app starts its own daemon");
+  expect(prep.if).toBe("matrix.name == 'linux' && runner.environment == 'github-hosted'");
+  expect(steps.indexOf(prep)).toBeLessThan(steps.indexOf(launch));
+  expect(prep.env.ELECTRON_EXE).toBe("packages/app/dist/release/linux-unpacked/orca");
+  expect(launch.run).toContain("packages/app/dist/release/linux-unpacked/orca");
+  expect(prep.run).toContain("kernel.apparmor_restrict_unprivileged_userns=1");
+  expect(prep.run).not.toMatch(/apparmor_restrict_unprivileged_userns=0/);
+  expect(prep.run).toContain("apparmor_parser -r");
+  // The self-hosted refusal stays, skipped only where the step above already checked.
+  expect(launch.run).toContain(
+    '[[ "$RUNNER_ENVIRONMENT" != "github-hosted" ]] && ! unshare --user --map-root-user true',
+  );
+  expect(launch.run).not.toMatch(/--no-sandbox|ORCA_SMOKE_NO_SANDBOX/);
+});

@@ -245,6 +245,36 @@ jobs:
             pnpm --filter @orca/app exec electron-builder --publish never -c.extraMetadata.version="$VERSION"
           fi
 
+      # GitHub-hosted fallback only; never runs on a self-hosted runner. Ubuntu 24.04 keeps
+      # unprivileged user namespaces, which Chromium's sandbox needs, behind AppArmor. Rather
+      # than lift that for the whole VM, load a profile that grants `userns` to the one
+      # Electron executable this job launches, resolved through symlinks, and check that
+      # the restriction stays on for everything else. Here that executable is
+      # the packaged app. The profile is otherwise
+      # unconfined: it is a scoped exception, not a sandbox for the app. Its path is in the
+      # runner-writable workspace, and the job user has passwordless sudo on these VMs, so
+      # it is no boundary against job code; it keeps the default for other programs.
+      - name: Prepare a GitHub-hosted Linux runner
+        if: matrix.name == 'linux' && runner.environment == 'github-hosted'
+        env:
+          ELECTRON_EXE: packages/app/dist/release/linux-unpacked/orca
+        run: |
+          set -euo pipefail
+          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
+          exe=$(readlink -f "$ELECTRON_EXE")
+          test -x "$exe"
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=1
+          printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+            "profile orca-electron-userns \"$exe\" flags=(unconfined) {" '  userns,' '}' \
+            | sudo tee /etc/apparmor.d/orca-electron-userns > /dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/orca-electron-userns
+          sudo grep -q '^orca-electron-userns ' /sys/kernel/security/apparmor/profiles
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          if unshare --user --map-root-user true 2> /dev/null; then
+            echo "::error::an unrelated executable can still create user namespaces"; exit 1
+          fi
+          echo "user namespaces: allowed only for $exe (profile orca-electron-userns)"
+
       # The definition of done, as far as a runner can check it: launch the packaged app
       # with no daemon running, nothing in `ORCA_DAEMON_URL` and a disposable `ORCA_WORKSPACE`
       # as its explicit target, and see the bundled daemon come up under it. (A bare first
@@ -256,26 +286,15 @@ jobs:
       # Linux only: it is the one runner with a display server to fake and a process table
       # to read. What the other two prove is that their artifact builds and that the daemon
       # inside it runs, which is the part that differs per platform.
-      # GitHub-hosted fallback only. Each hosted job gets a fresh VM, so changing its
-      # settings here affects no shared host. Ubuntu 24.04 blocks the unprivileged user
-      # namespaces that Chromium's sandbox needs (through AppArmor). Self-hosted runners
-      # must already provide xvfb and user namespaces; this step never runs on them.
-      - name: Prepare a GitHub-hosted Linux runner
-        if: matrix.name == 'linux' && runner.environment == 'github-hosted'
-        run: |
-          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-
       - name: The packaged app starts its own daemon
         if: matrix.name == 'linux'
         run: |
           set -euo pipefail
-          # Check the provisioned runner without changing its host security policy.
+          # Check the provisioned runner without changing its host security policy. A
+          # GitHub-hosted fallback was prepared and checked by the step above instead.
           command -v xvfb-run
           command -v setsid
-          if ! unshare --user --map-root-user true; then
+          if [[ "$RUNNER_ENVIRONMENT" != "github-hosted" ]] && ! unshare --user --map-root-user true; then
             echo "::error::The self-hosted runner must support unprivileged user namespaces for Chromium's sandbox."
             exit 1
           fi
