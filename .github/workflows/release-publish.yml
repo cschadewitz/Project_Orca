@@ -177,6 +177,8 @@ jobs:
     with:
       ref: ${{ needs.check.outputs.sha }}
       version: ${{ needs.check.outputs.version }}
+    secrets:
+      CI_RUNNER_HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
 
   app-verification:
     name: desktop smoke and type proof
@@ -184,6 +186,8 @@ jobs:
     uses: ./.github/workflows/app-smoke.yml
     with:
       ref: ${{ needs.check.outputs.sha }}
+    secrets:
+      CI_RUNNER_HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
 
   publish:
     name: tag and publish

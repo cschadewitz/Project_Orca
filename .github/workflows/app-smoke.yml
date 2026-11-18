@@ -10,7 +10,9 @@
 # only pre-merge workflow. Release calls still run every job against the exact merge commit
 # before publication; a manual run can verify a branch or produce screenshot evidence.
 # The supplied ref makes the existing classifier run the complete type-proof matrix.
-# Every Linux job runs on Tyler's self-hosted runners; macOS and Windows are GitHub-hosted.
+# Linux jobs run on Tyler's self-hosted runners when one is idle and on GitHub-hosted
+# runners otherwise, chosen once per run by the `runner` job. macOS and Windows are
+# always GitHub-hosted.
 name: App smoke
 
 on:
@@ -26,6 +28,10 @@ on:
       ref:
         required: true
         type: string
+    secrets:
+      CI_RUNNER_HEALTH_URL:
+        description: The runner health endpoint; without it, Linux jobs use GitHub-hosted runners.
+        required: false
 
 permissions:
   contents: read
@@ -35,9 +41,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  runner:
+    name: pick Linux runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+    steps:
+      # The workflow's own commit, not inputs.ref: the code that picks a runner is never the
+      # code under test.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: tools
+          persist-credentials: false
+
+      # Tyler's runners when one is idle, GitHub-hosted otherwise (tools/linux-runner.js).
+      # Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners.
+      - id: pick
+        env:
+          FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
+          HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
+        run: node tools/linux-runner.js
+
   changes:
     name: classify app checks
-    runs-on: [self-hosted, linux, x64, tyler]
+    runs-on: ubuntu-24.04
     outputs:
       type_proof: ${{ steps.classify.outputs.type_proof }}
     steps:
@@ -82,7 +110,8 @@ jobs:
 
   smoke:
     name: electron smoke test
-    runs-on: [self-hosted, linux, x64, tyler]
+    needs: runner
+    runs-on: ${{ fromJSON(needs.runner.outputs.runner) }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -102,6 +131,18 @@ jobs:
       # Deliberately without ELECTRON_SKIP_BINARY_DOWNLOAD: the binary is the point.
       # Playwright needs no browser download — the only driver used is Electron's.
       - run: pnpm install --frozen-lockfile
+
+      # GitHub-hosted fallback only. Each hosted job gets a fresh VM, so changing its
+      # settings here affects no shared host. Ubuntu 24.04 blocks the unprivileged user
+      # namespaces that Chromium's sandbox needs (through AppArmor). Self-hosted runners
+      # must already provide xvfb and user namespaces; this step never runs on them.
+      - name: Prepare a GitHub-hosted Linux runner
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        run: |
+          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
 
       # The self-hosted image must provide xvfb and unprivileged user namespaces.
       # Check the prerequisite without changing the host's security policy or bypassing
@@ -172,7 +213,7 @@ jobs:
   # builds the actual production renderer and CLI after preserving the type-proof report.
   type-proof:
     name: type proof (${{ matrix.os }})
-    needs: changes
+    needs: [changes, runner]
     if: needs.changes.outputs.type_proof == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -182,7 +223,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            runner: [self-hosted, linux, x64, tyler]
+            runner: ${{ fromJSON(needs.runner.outputs.runner) }}
           - os: macos-latest
             runner: macos-latest
           - os: windows-latest
@@ -212,6 +253,18 @@ jobs:
 
       # Without ELECTRON_SKIP_BINARY_DOWNLOAD, as above: the binary is the point.
       - run: pnpm install --frozen-lockfile
+
+      # GitHub-hosted fallback only. Each hosted job gets a fresh VM, so changing its
+      # settings here affects no shared host. Ubuntu 24.04 blocks the unprivileged user
+      # namespaces that Chromium's sandbox needs (through AppArmor). Self-hosted runners
+      # must already provide xvfb and user namespaces; this step never runs on them.
+      - name: Prepare a GitHub-hosted Linux runner
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        run: |
+          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
 
       # As in the smoke job: provision the self-hosted image, never relax its security
       # policy from a job. Native macOS and Windows do not use these Linux prerequisites.

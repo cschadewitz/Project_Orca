@@ -27,6 +27,10 @@ on:
         description: The version to stamp into the artifacts. Defaults to the root package.json's.
         type: string
         required: false
+    secrets:
+      CI_RUNNER_HEALTH_URL:
+        description: The runner health endpoint; without it, Linux jobs use GitHub-hosted runners.
+        required: false
   workflow_dispatch:
     inputs:
       platform:
@@ -57,10 +61,18 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      # Tyler's runners when one is idle, GitHub-hosted otherwise (tools/linux-runner.js).
+      # Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners.
+      - id: pick
+        env:
+          FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
+          HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
+        run: node tools/linux-runner.js
       - id: select
         env:
           DESKTOP_EVENT_NAME: ${{ github.event_name }}
           DESKTOP_PLATFORM: ${{ inputs.platform || 'all' }}
+          DESKTOP_LINUX_RUNNER: ${{ steps.pick.outputs.runner }}
         run: |
           set -euo pipefail
           matrix=$(node tools/desktop-matrix.js)
@@ -244,6 +256,18 @@ jobs:
       # Linux only: it is the one runner with a display server to fake and a process table
       # to read. What the other two prove is that their artifact builds and that the daemon
       # inside it runs, which is the part that differs per platform.
+      # GitHub-hosted fallback only. Each hosted job gets a fresh VM, so changing its
+      # settings here affects no shared host. Ubuntu 24.04 blocks the unprivileged user
+      # namespaces that Chromium's sandbox needs (through AppArmor). Self-hosted runners
+      # must already provide xvfb and user namespaces; this step never runs on them.
+      - name: Prepare a GitHub-hosted Linux runner
+        if: matrix.name == 'linux' && runner.environment == 'github-hosted'
+        run: |
+          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - name: The packaged app starts its own daemon
         if: matrix.name == 'linux'
         run: |

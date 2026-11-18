@@ -78,8 +78,9 @@ unchanged global/app coverage thresholds. Partial selection is not full-suite/co
 proof. See [selection policy and reporting](ci-shadow-selection.md#current-pr-execution).
 Desktop packaging, App smoke/type proof
 and native UI projects are manual/reusable workflows, not automatic PR proof. Their
-Linux jobs run on Tyler's self-hosted runners (`tyler` label); inspect the actual
-workflow before dispatch. This documentation audit dispatches none. [Releasing](RELEASING.md) and
+Linux jobs run on Tyler's self-hosted runners (`tyler` label) when one is idle and on
+GitHub-hosted runners otherwise ([CI runner selection](ci-runners.md)); inspect the
+actual workflow before dispatch. This documentation audit dispatches none. [Releasing](RELEASING.md) and
 [shadow selection](ci-shadow-selection.md) record release/parity/activation limits.
 
 ## Documentation-only review
@@ -117,8 +118,8 @@ platforms.
 For Windows/Linux preparation, select **platform: windows-linux**. This packages both Windows architectures and the existing
 Linux targets, without a Mac packaging job. The Linux leg retains its display and
 Chromium sandbox prerequisites and packaged-app daemon-start check; provision the
-runner rather than bypassing those checks. The Linux leg always runs on Tyler's
-runners. Defaults and release calls retain the full matrix; reusable calls reject
+runner rather than bypassing those checks. The Linux leg runs on Tyler's runners
+when one is idle and on a GitHub-hosted runner otherwise. Defaults and release calls retain the full matrix; reusable calls reject
 reduced matrices. These packaging
 checks do not establish fresh-install acceptance on Windows 11 or Ubuntu 24.04.
 

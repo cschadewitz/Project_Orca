@@ -166,8 +166,14 @@ loopback destinations; and the only credential a job holds is its `GITHUB_TOKEN`
 untrusted-by-default code.
 
 In this repository `ci.yml`'s `check` and `test` jobs select the `tyler` label on their
-own, and the Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and release
-calls) always run on it. Every other job runs on GitHub-hosted runners, including
+own. The Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and release calls)
+use it too when the health endpoint reports at least one idle runner, and GitHub-hosted
+`ubuntu-24.04` otherwise; [`tools/linux-runner.js`](../tools/linux-runner.js) makes that
+choice once per run, and `CI_FORCE_HOSTED` applies to it as well. Those jobs need no
+second idle runner, because none of them waits on another the way `check` waits on its
+shards. On the hosted fallback a step installs xvfb if it is missing and lifts Ubuntu
+24.04's AppArmor block on unprivileged user namespaces, which Chromium's sandbox needs;
+that step runs only on GitHub-hosted runners, never on a self-hosted one. Every other job runs on GitHub-hosted runners, including
 `release-prepare.yml`, `release-publish.yml`'s own jobs, `changelog.yml` and
 `codeql.yml`, which hold write tokens or deploy keys. `tyler` is the only self-hosted
 label; a new workflow that targets it takes on the same assumptions.
