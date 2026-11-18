@@ -48,7 +48,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged && contains(github.event.pull_request.labels.*.name, 'release'))
-    runs-on: [self-hosted, linux, x64, homelab]
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
       sha: ${{ steps.sha.outputs.sha }}
@@ -177,6 +177,8 @@ jobs:
     with:
       ref: ${{ needs.check.outputs.sha }}
       version: ${{ needs.check.outputs.version }}
+    secrets:
+      CI_RUNNER_HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
 
   app-verification:
     name: desktop smoke and type proof
@@ -184,11 +186,13 @@ jobs:
     uses: ./.github/workflows/app-smoke.yml
     with:
       ref: ${{ needs.check.outputs.sha }}
+    secrets:
+      CI_RUNNER_HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
 
   publish:
     name: tag and publish
     needs: [check, desktop, app-verification]
-    runs-on: [self-hosted, linux, x64, homelab]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:

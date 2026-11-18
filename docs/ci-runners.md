@@ -1,7 +1,7 @@
 # CI runner selection
 
-The `check` job in [`ci.yml`](../.github/workflows/ci.yml) runs on a homelab
-self-hosted runner when one is idle and on a GitHub-hosted `ubuntu-24.04` runner
+The `check` job in [`ci.yml`](../.github/workflows/ci.yml) runs on one of Tyler's
+self-hosted runners (label `tyler`) when enough are idle and on a GitHub-hosted `ubuntu-24.04` runner
 otherwise. This page covers how that choice is made, how to override it, and what
 the self-hosted runners can and cannot reach. It does not change what CI verifies;
 see [CI shadow selection](ci-shadow-selection.md) for that.
@@ -93,8 +93,14 @@ When `health` sends only the repository's total (`{"Project_Orca": <idle runners
 its current response) there is nothing to pin a host with, so the picker uses the plain
 `tyler` label: with 2 or more idle runners, `check` and one shard run there; with fewer,
 everything runs on `ubuntu-24.04`. Only one shard, so two 20-worker shards never land on
-the same host. The picker logs the health response (runner counts only) to show which
-case applied.
+the same host. The picker logs only the validated counts (never the response body) to
+show which case applied.
+
+The idle counts are a snapshot, not a reservation. Another CI run on a different ref, or
+an `app-smoke` or `desktop` job on the same pool, can take those runners after the picker
+looks. `check` then holds its runner in `Wait for test shards` while the shard queues,
+until the shard starts or the wait step's timeout ends the run. The rules above make that
+less likely; they do not rule it out.
 
 `m1` therefore needs two runners (one for `check`, one for shard 1) for the suite to
 split in two; `m2` needs one.
@@ -140,8 +146,8 @@ Set the repository variable `CI_FORCE_HOSTED` to `true` (Settings, Secrets and
 variables, Actions, Variables). The picker then skips the health request and selects
 `ubuntu-24.04`. Re-run the workflow for it to apply: a run that already picked a runner
 keeps its choice. Delete the variable or set it to anything else to return to
-automatic selection. Use it when a job is stuck queued on the homelab runners or the
-homelab is down for maintenance.
+automatic selection. Use it when a job is stuck queued on the self-hosted runners or they are down for
+maintenance.
 
 ## Pull requests from forks
 
@@ -166,7 +172,20 @@ loopback destinations; and the only credential a job holds is its `GITHUB_TOKEN`
 untrusted-by-default code.
 
 In this repository `ci.yml`'s `check` and `test` jobs select the `tyler` label on their
-own, and a manual dispatch of `app-smoke.yml` or `desktop.yml` can choose it with
-`linux_runner: tyler`. Other workflows (for example `codeql.yml` and the release
-workflows) target the separate `homelab` label; the notes above describe the `tyler` runners and say nothing about
-that pool. A new workflow that targets `tyler` takes on the same assumptions.
+own. The Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and release calls)
+use it too when the health endpoint reports at least one idle runner, and GitHub-hosted
+`ubuntu-24.04` otherwise; [`tools/linux-runner.js`](../tools/linux-runner.js) makes that
+choice once per run, and `CI_FORCE_HOSTED` applies to it as well. Those jobs need no
+second idle runner, because none of them waits on another the way `check` waits on its
+shards. On the hosted fallback a step installs xvfb if it is missing and loads an
+AppArmor profile that lets the one Electron executable the job launches (the development
+Electron, or the packaged `linux-unpacked/orca`, resolved through symlinks) create the
+user namespaces Chromium's sandbox needs. Ubuntu 24.04's restriction stays on for
+everything else, and the step checks that an unrelated program is still refused. The
+profile is otherwise unconfined, so it is a scoped exception, not a sandbox for the app.
+It is also no boundary against the job's own code: the executable sits in the
+runner-writable workspace and the job user has passwordless sudo on these VMs. The step
+runs only on GitHub-hosted runners, never on a self-hosted one. Every other job runs on GitHub-hosted runners, including
+`release-prepare.yml`, `release-publish.yml`'s own jobs, `changelog.yml` and
+`codeql.yml`, which hold write tokens or deploy keys. `tyler` is the only self-hosted
+label; a new workflow that targets it takes on the same assumptions.

@@ -27,6 +27,10 @@ on:
         description: The version to stamp into the artifacts. Defaults to the root package.json's.
         type: string
         required: false
+    secrets:
+      CI_RUNNER_HEALTH_URL:
+        description: The runner health endpoint; without it, Linux jobs use GitHub-hosted runners.
+        required: false
   workflow_dispatch:
     inputs:
       platform:
@@ -34,12 +38,6 @@ on:
         type: choice
         options: [all, windows, windows-linux]
         default: all
-        required: true
-      linux_runner:
-        description: Linux runner pool; Tyler still requires the existing display and sandbox prerequisites.
-        type: choice
-        options: [homelab, tyler]
-        default: homelab
         required: true
 
 permissions:
@@ -63,11 +61,18 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      # Tyler's runners when one is idle, GitHub-hosted otherwise (tools/linux-runner.js).
+      # Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners.
+      - id: pick
+        env:
+          FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
+          HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
+        run: node tools/linux-runner.js
       - id: select
         env:
           DESKTOP_EVENT_NAME: ${{ github.event_name }}
           DESKTOP_PLATFORM: ${{ inputs.platform || 'all' }}
-          DESKTOP_LINUX_RUNNER: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_runner || 'homelab' }}
+          DESKTOP_LINUX_RUNNER: ${{ steps.pick.outputs.runner }}
         run: |
           set -euo pipefail
           matrix=$(node tools/desktop-matrix.js)
@@ -240,6 +245,36 @@ jobs:
             pnpm --filter @orca/app exec electron-builder --publish never -c.extraMetadata.version="$VERSION"
           fi
 
+      # GitHub-hosted fallback only; never runs on a self-hosted runner. Ubuntu 24.04 keeps
+      # unprivileged user namespaces, which Chromium's sandbox needs, behind AppArmor. Rather
+      # than lift that for the whole VM, load a profile that grants `userns` to the one
+      # Electron executable this job launches, resolved through symlinks, and check that
+      # the restriction stays on for everything else. Here that executable is
+      # the packaged app. The profile is otherwise
+      # unconfined: it is a scoped exception, not a sandbox for the app. Its path is in the
+      # runner-writable workspace, and the job user has passwordless sudo on these VMs, so
+      # it is no boundary against job code; it keeps the default for other programs.
+      - name: Prepare a GitHub-hosted Linux runner
+        if: matrix.name == 'linux' && runner.environment == 'github-hosted'
+        env:
+          ELECTRON_EXE: packages/app/dist/release/linux-unpacked/orca
+        run: |
+          set -euo pipefail
+          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
+          exe=$(readlink -f "$ELECTRON_EXE")
+          test -x "$exe"
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=1
+          printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+            "profile orca-electron-userns \"$exe\" flags=(unconfined) {" '  userns,' '}' \
+            | sudo tee /etc/apparmor.d/orca-electron-userns > /dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/orca-electron-userns
+          sudo grep -q '^orca-electron-userns ' /sys/kernel/security/apparmor/profiles
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          if unshare --user --map-root-user true 2> /dev/null; then
+            echo "::error::an unrelated executable can still create user namespaces"; exit 1
+          fi
+          echo "user namespaces: allowed only for $exe (profile orca-electron-userns)"
+
       # The definition of done, as far as a runner can check it: launch the packaged app
       # with no daemon running, nothing in `ORCA_DAEMON_URL` and a disposable `ORCA_WORKSPACE`
       # as its explicit target, and see the bundled daemon come up under it. (A bare first
@@ -255,10 +290,11 @@ jobs:
         if: matrix.name == 'linux'
         run: |
           set -euo pipefail
-          # Check the provisioned runner without changing its host security policy.
+          # Check the provisioned runner without changing its host security policy. A
+          # GitHub-hosted fallback was prepared and checked by the step above instead.
           command -v xvfb-run
           command -v setsid
-          if ! unshare --user --map-root-user true; then
+          if [[ "$RUNNER_ENVIRONMENT" != "github-hosted" ]] && ! unshare --user --map-root-user true; then
             echo "::error::The self-hosted runner must support unprivileged user namespaces for Chromium's sandbox."
             exit 1
           fi

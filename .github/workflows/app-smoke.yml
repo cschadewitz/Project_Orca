@@ -10,7 +10,9 @@
 # only pre-merge workflow. Release calls still run every job against the exact merge commit
 # before publication; a manual run can verify a branch or produce screenshot evidence.
 # The supplied ref makes the existing classifier run the complete type-proof matrix.
-# Manual runs may opt into Tyler for every Linux job. Release calls retain homelab.
+# Linux jobs run on Tyler's self-hosted runners when one is idle and on GitHub-hosted
+# runners otherwise, chosen once per run by the `runner` job. macOS and Windows are
+# always GitHub-hosted.
 name: App smoke
 
 on:
@@ -21,17 +23,15 @@ on:
         required: true
         type: string
         default: main
-      linux_runner:
-        description: Linux runner pool; Tyler still requires the existing display and sandbox prerequisites.
-        type: choice
-        options: [homelab, tyler]
-        default: homelab
-        required: true
   workflow_call:
     inputs:
       ref:
         required: true
         type: string
+    secrets:
+      CI_RUNNER_HEALTH_URL:
+        description: The runner health endpoint; without it, Linux jobs use GitHub-hosted runners.
+        required: false
 
 permissions:
   contents: read
@@ -41,9 +41,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  runner:
+    name: pick Linux runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+    steps:
+      # The workflow's own commit, not inputs.ref: the code that picks a runner is never the
+      # code under test.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: tools
+          persist-credentials: false
+
+      # Tyler's runners when one is idle, GitHub-hosted otherwise (tools/linux-runner.js).
+      # Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners.
+      - id: pick
+        env:
+          FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
+          HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
+        run: node tools/linux-runner.js
+
   changes:
     name: classify app checks
-    runs-on: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.linux_runner == 'tyler' && '["self-hosted","linux","x64","tyler"]' || '["self-hosted","linux","x64","homelab"]') }}
+    runs-on: ubuntu-24.04
     outputs:
       type_proof: ${{ steps.classify.outputs.type_proof }}
     steps:
@@ -88,7 +110,8 @@ jobs:
 
   smoke:
     name: electron smoke test
-    runs-on: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.linux_runner == 'tyler' && '["self-hosted","linux","x64","tyler"]' || '["self-hosted","linux","x64","homelab"]') }}
+    needs: runner
+    runs-on: ${{ fromJSON(needs.runner.outputs.runner) }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -111,8 +134,10 @@ jobs:
 
       # The self-hosted image must provide xvfb and unprivileged user namespaces.
       # Check the prerequisite without changing the host's security policy or bypassing
-      # Chromium's sandbox with `--no-sandbox` / ORCA_SMOKE_NO_SANDBOX.
+      # Chromium's sandbox with `--no-sandbox` / ORCA_SMOKE_NO_SANDBOX. A GitHub-hosted
+      # fallback is prepared and checked after the Electron binary is on disk, below.
       - name: Check the Linux display and sandbox prerequisites
+        if: runner.environment != 'github-hosted'
         run: |
           command -v xvfb-run
           if ! unshare --user --map-root-user true; then
@@ -141,7 +166,38 @@ jobs:
       - name: Put the Electron binary on disk, rather than inside a test's timeout
         shell: bash
         working-directory: packages/app
-        run: node -e "console.log(require('electron'))"
+        id: electron
+        run: node -e "console.log(require('electron'))" | tee /dev/stderr | sed 's/^/path=/' >> "$GITHUB_OUTPUT"
+
+      # GitHub-hosted fallback only; never runs on a self-hosted runner. Ubuntu 24.04 keeps
+      # unprivileged user namespaces, which Chromium's sandbox needs, behind AppArmor. Rather
+      # than lift that for the whole VM, load a profile that grants `userns` to the one
+      # Electron executable this job launches, resolved through symlinks, and check that
+      # the restriction stays on for everything else. Here that executable is
+      # the development Electron that Playwright starts. The profile is otherwise
+      # unconfined: it is a scoped exception, not a sandbox for the app. Its path is in the
+      # runner-writable workspace, and the job user has passwordless sudo on these VMs, so
+      # it is no boundary against job code; it keeps the default for other programs.
+      - name: Prepare a GitHub-hosted Linux runner
+        if: runner.environment == 'github-hosted'
+        env:
+          ELECTRON_EXE: ${{ steps.electron.outputs.path }}
+        run: |
+          set -euo pipefail
+          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
+          exe=$(readlink -f "$ELECTRON_EXE")
+          test -x "$exe"
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=1
+          printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+            "profile orca-electron-userns \"$exe\" flags=(unconfined) {" '  userns,' '}' \
+            | sudo tee /etc/apparmor.d/orca-electron-userns > /dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/orca-electron-userns
+          sudo grep -q '^orca-electron-userns ' /sys/kernel/security/apparmor/profiles
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          if unshare --user --map-root-user true 2> /dev/null; then
+            echo "::error::an unrelated executable can still create user namespaces"; exit 1
+          fi
+          echo "user namespaces: allowed only for $exe (profile orca-electron-userns)"
 
       # The smoke test runs the built app and the built CLI, not the sources.
       - name: Build
@@ -178,7 +234,7 @@ jobs:
   # builds the actual production renderer and CLI after preserving the type-proof report.
   type-proof:
     name: type proof (${{ matrix.os }})
-    needs: changes
+    needs: [changes, runner]
     if: needs.changes.outputs.type_proof == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -188,7 +244,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            runner: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.linux_runner == 'tyler' && '["self-hosted","linux","x64","tyler"]' || '["self-hosted","linux","x64","homelab"]') }}
+            runner: ${{ fromJSON(needs.runner.outputs.runner) }}
           - os: macos-latest
             runner: macos-latest
           - os: windows-latest
@@ -222,7 +278,7 @@ jobs:
       # As in the smoke job: provision the self-hosted image, never relax its security
       # policy from a job. Native macOS and Windows do not use these Linux prerequisites.
       - name: Check the Linux display and sandbox prerequisites
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.environment != 'github-hosted'
         run: |
           command -v xvfb-run
           if ! unshare --user --map-root-user true; then
@@ -238,7 +294,37 @@ jobs:
         id: native-electron
         shell: bash
         working-directory: packages/app
-        run: node -e "console.log(require('electron'))"
+        run: node -e "console.log(require('electron'))" | tee /dev/stderr | sed 's/^/path=/' >> "$GITHUB_OUTPUT"
+
+      # GitHub-hosted fallback only; never runs on a self-hosted runner. Ubuntu 24.04 keeps
+      # unprivileged user namespaces, which Chromium's sandbox needs, behind AppArmor. Rather
+      # than lift that for the whole VM, load a profile that grants `userns` to the one
+      # Electron executable this job launches, resolved through symlinks, and check that
+      # the restriction stays on for everything else. Here that executable is
+      # the development Electron that Playwright starts. The profile is otherwise
+      # unconfined: it is a scoped exception, not a sandbox for the app. Its path is in the
+      # runner-writable workspace, and the job user has passwordless sudo on these VMs, so
+      # it is no boundary against job code; it keeps the default for other programs.
+      - name: Prepare a GitHub-hosted Linux runner
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        env:
+          ELECTRON_EXE: ${{ steps.native-electron.outputs.path }}
+        run: |
+          set -euo pipefail
+          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
+          exe=$(readlink -f "$ELECTRON_EXE")
+          test -x "$exe"
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=1
+          printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+            "profile orca-electron-userns \"$exe\" flags=(unconfined) {" '  userns,' '}' \
+            | sudo tee /etc/apparmor.d/orca-electron-userns > /dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/orca-electron-userns
+          sudo grep -q '^orca-electron-userns ' /sys/kernel/security/apparmor/profiles
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          if unshare --user --map-root-user true 2> /dev/null; then
+            echo "::error::an unrelated executable can still create user namespaces"; exit 1
+          fi
+          echo "user namespaces: allowed only for $exe (profile orca-electron-userns)"
 
       # Two steps for one command, for the same reason: there is no display server on a
       # Linux runner and no xvfb on the other two.

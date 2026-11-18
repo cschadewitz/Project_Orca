@@ -1,7 +1,6 @@
-/** Exercise the workflow's JSON/boolean routing subset; native prerequisites still require runner proof. */
+/** Hold app-smoke's runner routing and checks; native prerequisites still require runner proof. */
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
 
 const { parse } = createRequire(new URL("../../packages/cli/package.json", import.meta.url))("yaml");
@@ -9,51 +8,65 @@ const workflow = parse(readFileSync(new URL("../../.github/workflows/app-smoke.y
 const proof = workflow.jobs["type-proof"];
 const matrix = proof.strategy.matrix.include;
 const linux = matrix.find((entry) => entry.os === "ubuntu-latest");
-const routes = [workflow.jobs.changes["runs-on"], workflow.jobs.smoke["runs-on"], linux.runner];
+const picked = "${{ fromJSON(needs.runner.outputs.runner) }}";
 
-// These expressions use the shared JSON/string/boolean subset of GitHub and JavaScript.
-// Evaluate the actual YAML expressions with canonical choice values, not a copied selector.
-const route = (expression, event, pool) => {
-  expect(expression.startsWith("${{")).toBe(true);
-  expect(expression.endsWith("}}")).toBe(true);
-  return runInNewContext(
-    expression.slice(3, -2),
-    { github: { event_name: event }, inputs: { linux_runner: pool }, fromJSON: JSON.parse },
-    { timeout: 1000 },
-  );
-};
-
-it.each(["homelab", "tyler"])("manual %s selection routes every Linux job to that pool", (pool) => {
-  expect(routes.map((expression) => route(expression, "workflow_dispatch", pool))).toEqual(
-    Array.from({ length: 3 }, () => ["self-hosted", "linux", "x64", pool]),
-  );
+it("routes the heavy Linux jobs to the runner the picker chose, from the workflow's own commit", () => {
+  expect(workflow.jobs.smoke["runs-on"]).toBe(picked);
+  expect(workflow.jobs.smoke.needs).toBe("runner");
+  expect(linux.runner).toBe(picked);
+  expect(workflow.jobs.changes["runs-on"]).toBe("ubuntu-24.04");
+  const runner = workflow.jobs.runner;
+  expect(runner["runs-on"]).toBe("ubuntu-24.04");
+  expect(runner.outputs.runner).toBe("${{ steps.pick.outputs.runner }}");
+  const checkout = runner.steps.find(({ uses }) => uses?.startsWith("actions/checkout@"));
+  expect(checkout.with.ref).toBeUndefined();
+  const pick = runner.steps.find(({ id }) => id === "pick");
+  expect(pick.run).toBe("node tools/linux-runner.js");
+  expect(pick.env).toEqual({
+    FORCE_HOSTED: "${{ vars.CI_FORCE_HOSTED }}",
+    HEALTH_URL: "${{ secrets.CI_RUNNER_HEALTH_URL }}",
+  });
+  expect(Object.keys(workflow.on.workflow_call.secrets)).toEqual(["CI_RUNNER_HEALTH_URL"]);
 });
 
-it.each([
-  ["workflow_dispatch", undefined],
-  ["workflow_call", undefined],
-  ["workflow_call", "tyler"],
-  ["pull_request", "tyler"],
-])("retains homelab for %s without an explicit manual Tyler choice", (event, pool) => {
-  for (const expression of routes)
-    expect(route(expression, event, pool)).toEqual(["self-hosted", "linux", "x64", "homelab"]);
+it("on GitHub-hosted Linux, grants user namespaces to the launched Electron only", () => {
+  for (const [job, electronStep] of [
+    [workflow.jobs.smoke, "electron"],
+    [proof, "native-electron"],
+  ]) {
+    const names = job.steps.map(({ name }) => name);
+    const prep = job.steps.find(({ name }) => name === "Prepare a GitHub-hosted Linux runner");
+    const check = job.steps.find(({ name }) => name === "Check the Linux display and sandbox prerequisites");
+    // The generic self-hosted check never runs on a hosted VM; the scoped one never runs elsewhere.
+    expect(check.if).toContain("runner.environment != 'github-hosted'");
+    expect(prep.if).toContain("runner.environment == 'github-hosted'");
+    // After the Electron binary is on disk, and for the path that step resolved.
+    const put = job.steps.findIndex(({ id }) => id === electronStep);
+    expect(put).toBeGreaterThan(-1);
+    expect(names.indexOf("Prepare a GitHub-hosted Linux runner")).toBeGreaterThan(put);
+    expect(prep.env.ELECTRON_EXE).toBe(`\${{ steps.${electronStep}.outputs.path }}`);
+    expect(job.steps[put].run).toContain(`>> "$GITHUB_OUTPUT"`);
+    // A profile for that one executable; the VM-wide restriction stays on and is checked.
+    expect(prep.run).toContain('readlink -f "$ELECTRON_EXE"');
+    expect(prep.run).toContain("flags=(unconfined)");
+    expect(prep.run).toContain("userns,");
+    expect(prep.run).toContain("apparmor_parser -r");
+    expect(prep.run).toContain("kernel.apparmor_restrict_unprivileged_userns=1");
+    expect(prep.run).not.toMatch(/apparmor_restrict_unprivileged_userns=0/);
+    expect(prep.run).toMatch(/if unshare --user --map-root-user true[^\n]*; then\s*\n\s*echo "::error::/);
+  }
 });
 
 it("keeps release-call inputs, exact test checkouts and both native hosted legs", () => {
-  expect(workflow.on.workflow_dispatch.inputs.linux_runner).toMatchObject({
-    type: "choice",
-    options: ["homelab", "tyler"],
-    default: "homelab",
-    required: true,
-  });
+  expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual(["ref"]);
   expect(Object.keys(workflow.on.workflow_call.inputs)).toEqual(["ref"]);
   expect(matrix.map(({ os }) => os)).toEqual(["ubuntu-latest", "macos-latest", "windows-latest"]);
   for (const entry of matrix.filter(({ os }) => os !== "ubuntu-latest")) expect(entry.runner).toBe(entry.os);
   expect(proof["runs-on"]).toBe("${{ matrix.runner }}");
-  expect(proof.needs).toBe("changes");
+  expect(proof.needs).toEqual(["changes", "runner"]);
   expect(proof.strategy["fail-fast"]).toBe(false);
   expect(workflow.permissions).toEqual({ contents: "read" });
-  for (const job of Object.values(workflow.jobs))
+  for (const job of Object.values(workflow.jobs).filter((job) => job !== workflow.jobs.runner))
     for (const step of job.steps.filter(({ uses }) => uses?.startsWith("actions/checkout@")))
       expect(step.with.ref).toBe("${{ inputs.ref || github.sha }}");
 });

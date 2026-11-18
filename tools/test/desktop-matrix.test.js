@@ -14,42 +14,43 @@ const selection = workflow.jobs.targets.steps.find((step) => step.id === "select
 it.each(["workflow_dispatch", "workflow_call", "push"])("defaults %s to the complete existing matrix", (event) => {
   const { include } = desktopMatrix(event);
   expect(include.map(({ name, os }) => ({ name, os }))).toEqual([
-    { name: "linux", os: ["self-hosted", "linux", "x64", "homelab"] },
+    { name: "linux", os: ["self-hosted", "linux", "x64", "tyler"] },
     { name: "macos", os: "macos-latest" },
     { name: "windows", os: "windows-latest" },
   ]);
   expect(include.every((target) => target.cache_path.trim().split("\n").length === 2)).toBe(true);
 });
 
-it.each(["homelab", "tyler"])(
-  "manual Windows selection with %s leaves its runner and caches unchanged",
-  (linuxRunner) => {
-    const selected = desktopMatrix("workflow_dispatch", "windows", linuxRunner).include;
-    expect(selected).toEqual(desktopMatrix("workflow_call").include.filter((target) => target.name === "windows"));
-    expect(selected).toHaveLength(1);
-    expect(selected[0].cache_path).toBe(
-      "~\\AppData\\Local\\electron\\Cache\n~\\AppData\\Local\\electron-builder\\Cache\n",
-    );
-  },
-);
+it("manual Windows selection leaves its runner and caches unchanged", () => {
+  const selected = desktopMatrix("workflow_dispatch", "windows").include;
+  expect(selected).toEqual(desktopMatrix("workflow_call").include.filter((target) => target.name === "windows"));
+  expect(selected).toHaveLength(1);
+  expect(selected[0].cache_path).toBe(
+    "~\\AppData\\Local\\electron\\Cache\n~\\AppData\\Local\\electron-builder\\Cache\n",
+  );
+});
 
-it.each(["homelab", "tyler"])(
-  "manual Windows/Linux selection uses only the two requested platforms on %s",
-  (linuxRunner) => {
-    const selected = desktopMatrix("workflow_dispatch", "windows-linux", linuxRunner).include;
-    const full = desktopMatrix("workflow_call").include;
-    expect(selected).toEqual([{ ...full[0], os: ["self-hosted", "linux", "x64", linuxRunner] }, full[2]]);
-    expect(selected.map((target) => target.name)).toEqual(["linux", "windows"]);
-  },
-);
-
-it("manual Tyler routing changes only the Linux pool in the full matrix", () => {
-  const full = desktopMatrix("workflow_call").include;
-  expect(desktopMatrix("workflow_dispatch", "all", "tyler").include).toEqual([
-    { ...full[0], os: ["self-hosted", "linux", "x64", "tyler"] },
-    full[1],
-    full[2],
+it.each(["workflow_dispatch", "workflow_call"])("%s moves only the Linux leg to a hosted fallback", (event) => {
+  const tyler = desktopMatrix(event).include;
+  expect(desktopMatrix(event, "all", "ubuntu-24.04").include).toEqual([
+    { ...tyler[0], os: "ubuntu-24.04" },
+    tyler[1],
+    tyler[2],
   ]);
+});
+
+it.each([["self-hosted", "linux", "x64", "homelab"], "ubuntu-latest", "", ["self-hosted"]])(
+  "refuses Linux runner %j",
+  (linuxRunner) => {
+    expect(() => desktopMatrix("workflow_dispatch", "all", linuxRunner)).toThrow();
+  },
+);
+
+it("manual Windows/Linux selection uses only the two requested platforms", () => {
+  const selected = desktopMatrix("workflow_dispatch", "windows-linux").include;
+  const full = desktopMatrix("workflow_call").include;
+  expect(selected).toEqual([full[0], full[2]]);
+  expect(selected.map((target) => target.name)).toEqual(["linux", "windows"]);
 });
 
 it.each([
@@ -64,29 +65,12 @@ it.each([
   expect(() => desktopMatrix(event, platform)).toThrow();
 });
 
-it.each(["workflow_call", "push", undefined])("refuses a Tyler override outside manual dispatch: %s", (event) => {
-  expect(() => desktopMatrix(event, "all", "tyler")).toThrow();
-});
-
-it.each([
-  { linuxRunner: "TYLER" },
-  { linuxRunner: "ubuntu-24.04" },
-  { linuxRunner: "" },
-  { linuxRunner: ["self-hosted", "tyler"] },
-])("refuses unsupported runner $linuxRunner", ({ linuxRunner }) => {
-  expect(() => desktopMatrix("workflow_dispatch", "windows-linux", linuxRunner)).toThrow();
-});
-
 it("only manual dispatch offers reduction; packaging depends on selection at the same source", () => {
   expect(workflow.on.workflow_dispatch.inputs.platform).toMatchObject({
     options: ["all", "windows", "windows-linux"],
     default: "all",
   });
-  expect(workflow.on.workflow_dispatch.inputs.linux_runner).toMatchObject({
-    options: ["homelab", "tyler"],
-    default: "homelab",
-    required: true,
-  });
+  expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual(["platform"]);
   expect(Object.keys(workflow.on.workflow_call.inputs)).toEqual(["ref", "version"]);
   expect(workflow.jobs.package.needs).toBe("targets");
   expect(workflow.jobs.package.strategy.matrix).toBe("${{ fromJSON(needs.targets.outputs.matrix) }}");
@@ -95,34 +79,43 @@ it("only manual dispatch offers reduction; packaging depends on selection at the
   expect(selection.env).toEqual({
     DESKTOP_EVENT_NAME: "${{ github.event_name }}",
     DESKTOP_PLATFORM: "${{ inputs.platform || 'all' }}",
-    DESKTOP_LINUX_RUNNER: "${{ github.event_name == 'workflow_dispatch' && inputs.linux_runner || 'homelab' }}",
+    DESKTOP_LINUX_RUNNER: "${{ steps.pick.outputs.runner }}",
   });
+  const pick = workflow.jobs.targets.steps.find(({ id }) => id === "pick");
+  expect(pick.run).toBe("node tools/linux-runner.js");
+  expect(workflow.jobs.targets.steps.indexOf(pick)).toBeLessThan(workflow.jobs.targets.steps.indexOf(selection));
+  expect(Object.keys(workflow.on.workflow_call.secrets)).toEqual(["CI_RUNNER_HEALTH_URL"]);
 });
 
 it.skipIf(process.platform === "win32")("the actual selection shell emits usable JSON and no output on refusal", () => {
   const scratch = mkdtempSync(join(tmpdir(), "orca-desktop-matrix-"));
   const output = join(scratch, "output");
-  const run = (event, platform, linuxRunner = "homelab") =>
+  const run = (event, platform, linuxRunner) =>
     execFileSync("bash", ["-c", selection.run], {
       cwd: new URL("../../", import.meta.url),
       env: {
         ...process.env,
         DESKTOP_EVENT_NAME: event,
         DESKTOP_PLATFORM: platform,
-        DESKTOP_LINUX_RUNNER: linuxRunner,
+        DESKTOP_LINUX_RUNNER: linuxRunner === undefined ? "" : JSON.stringify(linuxRunner),
         GITHUB_OUTPUT: output,
       },
       stdio: "pipe",
     });
   try {
     for (const platform of ["all", "windows", "windows-linux"]) {
-      for (const linuxRunner of ["homelab", "tyler"]) {
-        writeFileSync(output, "");
-        run("workflow_dispatch", platform, linuxRunner);
-        const line = readFileSync(output, "utf8");
-        expect(line.startsWith("matrix=")).toBe(true);
-        expect(JSON.parse(line.slice(7))).toEqual(desktopMatrix("workflow_dispatch", platform, linuxRunner));
-      }
+      writeFileSync(output, "");
+      run("workflow_dispatch", platform);
+      const line = readFileSync(output, "utf8");
+      expect(line.startsWith("matrix=")).toBe(true);
+      expect(JSON.parse(line.slice(7))).toEqual(desktopMatrix("workflow_dispatch", platform));
+    }
+    for (const linuxRunner of ["ubuntu-24.04", ["self-hosted", "linux", "x64", "tyler"]]) {
+      writeFileSync(output, "");
+      run("workflow_call", "all", linuxRunner);
+      expect(JSON.parse(readFileSync(output, "utf8").slice(7))).toEqual(
+        desktopMatrix("workflow_call", "all", linuxRunner),
+      );
     }
     for (const event of ["workflow_call", "push"]) {
       writeFileSync(output, "");
@@ -132,12 +125,11 @@ it.skipIf(process.platform === "win32")("the actual selection shell emits usable
       expect(JSON.parse(line.slice(7))).toEqual(desktopMatrix(event));
     }
     for (const [event, platform, linuxRunner] of [
-      ["workflow_dispatch", "invalid", "homelab"],
-      ["workflow_dispatch", "windows-linux", "invalid"],
-      ["workflow_call", "windows", "homelab"],
-      ["workflow_call", "windows-linux", "homelab"],
-      ["workflow_call", "all", "tyler"],
-      ["push", "all", "tyler"],
+      ["workflow_dispatch", "invalid"],
+      ["workflow_call", "windows"],
+      ["workflow_call", "windows-linux"],
+      ["push", "windows"],
+      ["workflow_call", "all", ["self-hosted", "linux", "x64", "homelab"]],
     ]) {
       writeFileSync(output, "");
       expect(() => run(event, platform, linuxRunner)).toThrow();
@@ -146,4 +138,22 @@ it.skipIf(process.platform === "win32")("the actual selection shell emits usable
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+it("on GitHub-hosted Linux, grants user namespaces to the packaged app only", () => {
+  const steps = workflow.jobs.package.steps;
+  const prep = steps.find(({ name }) => name === "Prepare a GitHub-hosted Linux runner");
+  const launch = steps.find(({ name }) => name === "The packaged app starts its own daemon");
+  expect(prep.if).toBe("matrix.name == 'linux' && runner.environment == 'github-hosted'");
+  expect(steps.indexOf(prep)).toBeLessThan(steps.indexOf(launch));
+  expect(prep.env.ELECTRON_EXE).toBe("packages/app/dist/release/linux-unpacked/orca");
+  expect(launch.run).toContain("packages/app/dist/release/linux-unpacked/orca");
+  expect(prep.run).toContain("kernel.apparmor_restrict_unprivileged_userns=1");
+  expect(prep.run).not.toMatch(/apparmor_restrict_unprivileged_userns=0/);
+  expect(prep.run).toContain("apparmor_parser -r");
+  // The self-hosted refusal stays, skipped only where the step above already checked.
+  expect(launch.run).toContain(
+    '[[ "$RUNNER_ENVIRONMENT" != "github-hosted" ]] && ! unshare --user --map-root-user true',
+  );
+  expect(launch.run).not.toMatch(/--no-sandbox|ORCA_SMOKE_NO_SANDBOX/);
 });

@@ -78,9 +78,9 @@ unchanged global/app coverage thresholds. Partial selection is not full-suite/co
 proof. See [selection policy and reporting](ci-shadow-selection.md#current-pr-execution).
 Desktop packaging, App smoke/type proof
 and native UI projects are manual/reusable workflows, not automatic PR proof. Their
-Linux jobs still include homelab routing; inspect the actual workflow before dispatch.
-The owner requires a fresh CPU/RAM/load check before any new homelab job. This
-documentation audit dispatches none. [Releasing](RELEASING.md) and
+Linux jobs run on Tyler's self-hosted runners (`tyler` label) when one is idle and on
+GitHub-hosted runners otherwise ([CI runner selection](ci-runners.md)); inspect the
+actual workflow before dispatch. This documentation audit dispatches none. [Releasing](RELEASING.md) and
 [shadow selection](ci-shadow-selection.md) record release/parity/activation limits.
 
 ## Documentation-only review
@@ -115,13 +115,12 @@ packaging leg (both x64 and arm64); it does not install or launch either artifac
 on Windows 11. The default `all` and release workflow calls retain all three
 platforms.
 
-For Windows/Linux preparation, select **platform: windows-linux** and
-**linux_runner: tyler**. This packages both Windows architectures and the existing
+For Windows/Linux preparation, select **platform: windows-linux**. This packages both Windows architectures and the existing
 Linux targets, without a Mac packaging job. The Linux leg retains its display and
 Chromium sandbox prerequisites and packaged-app daemon-start check; provision the
-runner rather than bypassing those checks. The runner option applies only to manual
-dispatches. Defaults and release calls retain the full matrix and homelab routing;
-reusable calls reject reduced matrices or a different Linux pool. These packaging
+runner rather than bypassing those checks. The Linux leg runs on Tyler's runners
+when one is idle and on a GitHub-hosted runner otherwise. Defaults and release calls retain the full matrix; reusable calls reject
+reduced matrices. These packaging
 checks do not establish fresh-install acceptance on Windows 11 or Ubuntu 24.04.
 
 Record the resolved source SHA, version, run/attempt, artifact file sizes
@@ -812,7 +811,7 @@ deliberate procedure above.
 
 ## Test memory
 
-The suite runs about twenty test files at once on the homelab runners, so one file that
+The suite runs about twenty test files at once on the self-hosted runners, so one file that
 holds a lot of memory is multiplied. A run of 20 workers peaks at about 7 GiB against the
 12 GiB runner limit (`docs/ci-runners.md` has the measurements).
 
