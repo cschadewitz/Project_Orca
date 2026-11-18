@@ -68,16 +68,19 @@ it `needs` the shards, and its `Test with coverage` step downloads the blobs and
 `vitest --merge-reports --coverage`, so the coverage thresholds and the full-suite report
 cover every file.
 
-`check` and the shards start together. `check` runs its typecheck, lint and build beside
-the tests, then its `Wait for test shards` step polls this run's jobs through the API
-until every shard is done (it needs `actions: read`) before it merges the blobs.
+`check` starts only after every shard job has finished (`needs: test`), then runs its
+typecheck, lint and build and merges the blobs. A shard that did not pass fails `check`
+at its `Test shards passed` step. No job holds a runner while it waits for another job
+to get one, so CI runs that compete for the self-hosted pool can queue behind each other
+but cannot stall each other (`tools/test/ci-runner-contention.test.js` simulates that).
+The price is that `check`'s typecheck, lint and build no longer overlap the tests.
 
 `check` and each shard are pinned to a host by a machine label (`m1`, `m2`), set in that
 host's `RUNNER_LABELS` next to `tyler`. GitHub still decides when a runner is ready, but a
 job can only start on its own host, so two 20-worker shards never share a machine however
-many runners it has. Because `check` holds a runner while it waits, a host needs an idle
-runner for every job pinned to it, or `check` could take the only one and wait forever for
-a shard queued behind it. The picker therefore subtracts `check`'s runner first: `check`
+many runners it has. The picker uses a host only when it has an idle runner for every job
+pinned to it, so a run does not queue behind other work. It subtracts `check`'s runner
+first: `check`
 goes to `m1` when it has an idle runner (otherwise `m2`), and a shard goes to each host
 that still has one. It reads the per-host idle counts from `health`:
 
@@ -91,19 +94,21 @@ that still has one. It reads the per-host idle counts from `health`:
 
 When `health` sends only the repository's total (`{"Project_Orca": <idle runners>}`,
 its current response) there is nothing to pin a host with, so the picker uses the plain
-`tyler` label: with 2 or more idle runners, `check` and one shard run there; with fewer,
+`tyler` label: with at least one idle runner, one shard and then `check` run there (one
+runner can take both in turn, since `check` starts after the shard); with none,
 everything runs on `ubuntu-24.04`. Only one shard, so two 20-worker shards never land on
 the same host. The picker logs only the validated counts (never the response body) to
 show which case applied.
 
 The idle counts are a snapshot, not a reservation. Another CI run on a different ref, or
 an `app-smoke` or `desktop` job on the same pool, can take those runners after the picker
-looks. `check` then holds its runner in `Wait for test shards` while the shard queues,
-until the shard starts or the wait step's timeout ends the run. The rules above make that
-less likely; they do not rule it out.
+looks. The run's jobs then queue until runners free up. Because `check` waits for the
+shards through `needs` rather than on a runner, no CI run's jobs can block another's; the
+queue drains as long as runners stay up and jobs finish (an outage or a hung job still
+holds it up).
 
-`m1` therefore needs two runners (one for `check`, one for shard 1) for the suite to
-split in two; `m2` needs one.
+The picker therefore wants two idle runners on `m1` (one for `check`, one for shard 1)
+before it splits the suite in two; `m2` needs one.
 
 `health` gets the counts from GitHub's runner list, which spans every host registered to
 the repo, so the hosts do not need to reach each other. The runner stack's own
@@ -116,8 +121,8 @@ location. Targeted PR runs and docs-only changes are not sharded: `test` skips i
 steps for them.
 
 The picker counts idle runners once, so a host that fills up between the pick and the
-job queues its job until a runner frees. `check` and shard 1 both run on `m1`, so its
-typecheck, lint and build compete with shard 1's workers for that host's CPU.
+job queues its job until a runner frees. `check` and shard 1 both run on `m1`, one after
+the other, so `check`'s typecheck, lint and build no longer compete with shard 1's workers.
 
 ## Vitest file-order cache
 
@@ -137,8 +142,8 @@ missing, stale or wrong one costs speed, never correctness.
 ## Known limit: the idle count is a snapshot
 
 The choice is made once, when `pick runner` runs. If another job takes the last idle
-runner after that, `check` queues on the self-hosted label and waits. It does not fall
-back to hosted by itself.
+runner after that, the run's jobs queue on the self-hosted label until a runner frees.
+They do not fall back to hosted by themselves.
 
 ## Forcing GitHub-hosted runners
 
@@ -176,8 +181,7 @@ own. The Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and releas
 use it too when the health endpoint reports at least one idle runner, and GitHub-hosted
 `ubuntu-24.04` otherwise; [`tools/linux-runner.js`](../tools/linux-runner.js) makes that
 choice once per run, and `CI_FORCE_HOSTED` applies to it as well. Those jobs need no
-second idle runner, because none of them waits on another the way `check` waits on its
-shards. On the hosted fallback a step installs xvfb if it is missing and loads an
+second idle runner, because none of them waits on another. On the hosted fallback a step installs xvfb if it is missing and loads an
 AppArmor profile that lets the one Electron executable the job launches (the development
 Electron, or the packaged `linux-unpacked/orca`, resolved through symlinks) create the
 user namespaces Chromium's sandbox needs. Ubuntu 24.04's restriction stays on for
