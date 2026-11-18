@@ -101,8 +101,10 @@ show which case applied.
 
 The idle counts are a snapshot, not a reservation. Another CI run on a different ref, or
 an `app-smoke` or `desktop` job on the same pool, can take those runners after the picker
-looks. The run's jobs then queue until runners free up; because `check` waits for the
-shards through `needs` rather than on a runner, that queue always drains.
+looks. The run's jobs then queue until runners free up. Because `check` waits for the
+shards through `needs` rather than on a runner, no CI run's jobs can block another's; the
+queue drains as long as runners stay up and jobs finish (an outage or a hung job still
+holds it up).
 
 The picker therefore wants two idle runners on `m1` (one for `check`, one for shard 1)
 before it splits the suite in two; `m2` needs one.
