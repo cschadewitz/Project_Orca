@@ -45,7 +45,7 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           THIS_REPO: ${{ github.repository }}
         run: |
-          m1=0 m2=0
+          m1=0 m2=0 total=0 per_host=
           if [[ "$HEAD_REPO" != "$THIS_REPO" ]]; then
             echo "pull request from fork ${HEAD_REPO}: using GitHub-hosted runners"
             FORCE_HOSTED=true
@@ -55,12 +55,38 @@ jobs:
           if [[ "$FORCE_HOSTED" != "true" && -n "$HEALTH_URL" ]] && body=$(curl -fsS --max-time 5 "$HEALTH_URL"); then
             # Record what the health service reported (runner counts only)
             echo "health response: $(jq -c . <<<"$body" 2>/dev/null | head -c 500)"
-            # Exact idle runners per host; a health that predates machine labels sends none
-            m1=$(jq -r '.machines.m1 // 0' <<<"$body" 2>/dev/null) || m1=0
-            m2=$(jq -r '.machines.m2 // 0' <<<"$body" 2>/dev/null) || m2=0
+            # Exact idle runners per host, when the health service sends them
+            if jq -e '.machines | type == "object"' <<<"$body" >/dev/null 2>&1; then
+              per_host=yes
+              m1=$(jq -r '.machines.m1 // 0' <<<"$body" 2>/dev/null) || m1=0
+              m2=$(jq -r '.machines.m2 // 0' <<<"$body" 2>/dev/null) || m2=0
+            fi
+            # The repository's total idle runners across all hosts
+            total=$(jq -r '.Project_Orca // 0' <<<"$body" 2>/dev/null) || total=0
           fi
-          for n in m1 m2; do [[ "${!n}" =~ ^[0-9]+$ ]] || printf -v "$n" 0; done
+          for n in m1 m2 total; do [[ "${!n}" =~ ^[0-9]+$ ]] || printf -v "$n" 0; done
           base='"self-hosted","linux","x64","tyler"'
+          if [[ -z "$per_host" ]]; then
+            # Total only (the health service's current response): no host labels to pin to.
+            # `check` and one shard each hold a runner and `check` waits for the shard, so
+            # use the pool only with two idle runners, or `check` could take the last one
+            # and wait forever. One shard, so two 20-worker shards never share a host.
+            if (( total >= 2 )); then
+              echo "labels=[${base}]" >> "$GITHUB_OUTPUT"
+              echo 'workers=20' >> "$GITHUB_OUTPUT"
+              echo 'pnpm_cache=' >> "$GITHUB_OUTPUT"
+              shards="[{\"shard\":1,\"total\":1,\"labels\":[${base}]}]"
+            else
+              echo 'labels=["ubuntu-24.04"]' >> "$GITHUB_OUTPUT"
+              echo 'workers=2' >> "$GITHUB_OUTPUT"
+              echo 'pnpm_cache=pnpm' >> "$GITHUB_OUTPUT"
+              shards='[{"shard":1,"total":1,"labels":["ubuntu-24.04"]}]'
+            fi
+            echo "shards=${shards}" >> "$GITHUB_OUTPUT"
+            echo "matrix=$(jq -c '{include: .}' <<<"$shards")" >> "$GITHUB_OUTPUT"
+            echo "idle in total: ${total} (no per-host counts); shards: ${shards}"
+            exit 0
+          fi
           # `check` and each shard hold a runner at once, and `check` waits for the shards,
           # so a host must have an idle runner for every job pinned to it or `check` could
           # take the only one and wait forever for a shard queued behind it. `check` takes

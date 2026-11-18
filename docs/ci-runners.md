@@ -87,7 +87,14 @@ that still has one. It reads the per-host idle counts from `health`:
 | 1, 1+ | `m1` | 1, on `m2` |
 | 2+, 0 | `m1` | 1, on `m1` |
 | 0, 2+ | `m2` | 1, on `m2` |
-| no host can hold `check` and a shard, a failed request, `CI_FORCE_HOSTED`, or a `health` without machine counts | `ubuntu-24.04`, 2 workers | 1, on `ubuntu-24.04` |
+| no host can hold `check` and a shard, a failed request, or `CI_FORCE_HOSTED` | `ubuntu-24.04`, 2 workers | 1, on `ubuntu-24.04` |
+
+When `health` sends only the repository's total (`{"Project_Orca": <idle runners>}`,
+its current response) there is nothing to pin a host with, so the picker uses the plain
+`tyler` label: with 2 or more idle runners, `check` and one shard run there; with fewer,
+everything runs on `ubuntu-24.04`. Only one shard, so two 20-worker shards never land on
+the same host. The picker logs the health response (runner counts only) to show which
+case applied.
 
 `m1` therefore needs two runners (one for `check`, one for shard 1) for the suite to
 split in two; `m2` needs one.
