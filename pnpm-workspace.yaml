@@ -27,7 +27,9 @@ patchedDependencies:
 # patched version on its own.
 # - minimatch < 11.0.1 (GHSA-g3hv-75wg-m249, ReDoS via globparts amplification): eslint and
 #   typescript-eslint moved to 11 themselves, but app-builder-lib (^10.2.5) and
-#   @electron/universal (^9) have not. 11 only drops old Node from engines; the API they call
-#   (named `minimatch` export) is unchanged since 9.
+#   @electron/universal (^9) have not. 11 only drops old Node from engines. app-builder-lib uses
+#   the named `minimatch()` export and `Minimatch` objects (`.set`, `.negate`,
+#   `.match(path, partial)`); @electron/universal uses `minimatch()` with `matchBase`, and only
+#   when merging a mac `universal` arch, which electron-builder.yml does not build (x64/arm64).
 overrides:
   "minimatch@>=7.0.0 <11.0.1": "^11.0.9"
