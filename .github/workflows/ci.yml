@@ -39,7 +39,9 @@ jobs:
         shell: bash
         env:
           FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
-          HEALTH_URL: ${{ vars.CI_RUNNER_HEALTH_URL }}
+          # A secret, not a variable: logs print env values unless they are secrets. Fork and
+          # Dependabot runs get no secrets, so they fall back to hosted runners.
+          HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           THIS_REPO: ${{ github.repository }}
         run: |
