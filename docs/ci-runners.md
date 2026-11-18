@@ -177,9 +177,15 @@ use it too when the health endpoint reports at least one idle runner, and GitHub
 `ubuntu-24.04` otherwise; [`tools/linux-runner.js`](../tools/linux-runner.js) makes that
 choice once per run, and `CI_FORCE_HOSTED` applies to it as well. Those jobs need no
 second idle runner, because none of them waits on another the way `check` waits on its
-shards. On the hosted fallback a step installs xvfb if it is missing and lifts Ubuntu
-24.04's AppArmor block on unprivileged user namespaces, which Chromium's sandbox needs;
-that step runs only on GitHub-hosted runners, never on a self-hosted one. Every other job runs on GitHub-hosted runners, including
+shards. On the hosted fallback a step installs xvfb if it is missing and loads an
+AppArmor profile that lets the one Electron executable the job launches (the development
+Electron, or the packaged `linux-unpacked/orca`, resolved through symlinks) create the
+user namespaces Chromium's sandbox needs. Ubuntu 24.04's restriction stays on for
+everything else, and the step checks that an unrelated program is still refused. The
+profile is otherwise unconfined, so it is a scoped exception, not a sandbox for the app.
+It is also no boundary against the job's own code: the executable sits in the
+runner-writable workspace and the job user has passwordless sudo on these VMs. The step
+runs only on GitHub-hosted runners, never on a self-hosted one. Every other job runs on GitHub-hosted runners, including
 `release-prepare.yml`, `release-publish.yml`'s own jobs, `changelog.yml` and
 `codeql.yml`, which hold write tokens or deploy keys. `tyler` is the only self-hosted
 label; a new workflow that targets it takes on the same assumptions.

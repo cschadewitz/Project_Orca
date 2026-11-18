@@ -29,14 +29,31 @@ it("routes the heavy Linux jobs to the runner the picker chose, from the workflo
   expect(Object.keys(workflow.on.workflow_call.secrets)).toEqual(["CI_RUNNER_HEALTH_URL"]);
 });
 
-it("prepares only GitHub-hosted Linux runners, never a self-hosted one", () => {
-  for (const job of [workflow.jobs.smoke, proof]) {
-    const prep = job.steps.find(({ name }) => name === "Prepare a GitHub-hosted Linux runner");
-    expect(prep.if).toBe("runner.os == 'Linux' && runner.environment == 'github-hosted'");
+it("on GitHub-hosted Linux, grants user namespaces to the launched Electron only", () => {
+  for (const [job, electronStep] of [
+    [workflow.jobs.smoke, "electron"],
+    [proof, "native-electron"],
+  ]) {
     const names = job.steps.map(({ name }) => name);
-    expect(names.indexOf("Prepare a GitHub-hosted Linux runner")).toBeLessThan(
-      names.indexOf("Check the Linux display and sandbox prerequisites"),
-    );
+    const prep = job.steps.find(({ name }) => name === "Prepare a GitHub-hosted Linux runner");
+    const check = job.steps.find(({ name }) => name === "Check the Linux display and sandbox prerequisites");
+    // The generic self-hosted check never runs on a hosted VM; the scoped one never runs elsewhere.
+    expect(check.if).toContain("runner.environment != 'github-hosted'");
+    expect(prep.if).toContain("runner.environment == 'github-hosted'");
+    // After the Electron binary is on disk, and for the path that step resolved.
+    const put = job.steps.findIndex(({ id }) => id === electronStep);
+    expect(put).toBeGreaterThan(-1);
+    expect(names.indexOf("Prepare a GitHub-hosted Linux runner")).toBeGreaterThan(put);
+    expect(prep.env.ELECTRON_EXE).toBe(`\${{ steps.${electronStep}.outputs.path }}`);
+    expect(job.steps[put].run).toContain(`>> "$GITHUB_OUTPUT"`);
+    // A profile for that one executable; the VM-wide restriction stays on and is checked.
+    expect(prep.run).toContain('readlink -f "$ELECTRON_EXE"');
+    expect(prep.run).toContain("flags=(unconfined)");
+    expect(prep.run).toContain("userns,");
+    expect(prep.run).toContain("apparmor_parser -r");
+    expect(prep.run).toContain("kernel.apparmor_restrict_unprivileged_userns=1");
+    expect(prep.run).not.toMatch(/apparmor_restrict_unprivileged_userns=0/);
+    expect(prep.run).toMatch(/if unshare --user --map-root-user true[^\n]*; then\s*\n\s*echo "::error::/);
   }
 });
 
