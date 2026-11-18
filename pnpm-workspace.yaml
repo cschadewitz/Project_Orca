@@ -22,3 +22,14 @@ allowBuilds:
 
 patchedDependencies:
   "@agentclientprotocol/sdk@1.8.0": patches/@agentclientprotocol__sdk@1.8.0.patch
+
+# Security overrides. Remove each one once every parent in the lockfile already resolves a
+# patched version on its own.
+# - minimatch < 11.0.1 (GHSA-g3hv-75wg-m249, ReDoS via globparts amplification): eslint and
+#   typescript-eslint moved to 11 themselves, but app-builder-lib (^10.2.5) and
+#   @electron/universal (^9) have not. 11 only drops old Node from engines. app-builder-lib uses
+#   the named `minimatch()` export and `Minimatch` objects (`.set`, `.negate`,
+#   `.match(path, partial)`); @electron/universal uses `minimatch()` with `matchBase`, and only
+#   when merging a mac `universal` arch, which electron-builder.yml does not build (x64/arm64).
+overrides:
+  "minimatch@>=7.0.0 <11.0.1": "^11.0.9"
