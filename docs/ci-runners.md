@@ -94,7 +94,8 @@ that still has one. It reads the per-host idle counts from `health`:
 
 When `health` sends only the repository's total (`{"Project_Orca": <idle runners>}`,
 its current response) there is nothing to pin a host with, so the picker uses the plain
-`tyler` label: with 2 or more idle runners, `check` and one shard run there; with fewer,
+`tyler` label: with at least one idle runner, one shard and then `check` run there (one
+runner can take both in turn, since `check` starts after the shard); with none,
 everything runs on `ubuntu-24.04`. Only one shard, so two 20-worker shards never land on
 the same host. The picker logs only the validated counts (never the response body) to
 show which case applied.

@@ -51,3 +51,14 @@ it.skipIf(process.platform === "win32").each([
   expect(log).toMatch(/idle (in total: \d+|per host: m1=\d+ m2=\d+)/);
   expect(output).toContain("labels=");
 });
+
+it.skipIf(process.platform === "win32").each([
+  [0, "ubuntu-24.04"],
+  [1, "tyler"],
+  [3, "tyler"],
+])("with %i idle runners in total, picks %s", (idle, expected) => {
+  const { output } = run({ Project_Orca: idle });
+  const labels = output.match(/^labels=(.*)$/m)[1];
+  expect(labels).toContain(expected);
+  expect(output).toMatch(new RegExp(`^shards=\\[\\{"shard":1,"total":1,"labels":\\[[^\\]]*"${expected}"`, "m"));
+});

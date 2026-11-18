@@ -67,12 +67,11 @@ jobs:
           base='"self-hosted","linux","x64","tyler"'
           if [[ -z "$per_host" ]]; then
             # Total only (the health service's current response): no host labels to pin to.
-            # Use the pool only with two idle runners, room for the shard and then `check`,
-            # so a run goes there only when the pool is not already busy. The count is a
-            # snapshot, not a reservation; a run that loses the race queues, it cannot stall
-            # (`check` starts after the shards). One shard, so two 20-worker shards never
-            # share a host.
-            if (( total >= 2 )); then
+            # Use the pool when it has an idle runner: the shard runs first and `check`
+            # after it (`needs: test`), so one runner can serve the whole run in turn. The
+            # count is a snapshot, not a reservation; a run that loses the race queues, it
+            # cannot stall. One shard, so two 20-worker shards never share a host.
+            if (( total >= 1 )); then
               echo "labels=[${base}]" >> "$GITHUB_OUTPUT"
               echo 'workers=20' >> "$GITHUB_OUTPUT"
               echo 'pnpm_cache=' >> "$GITHUB_OUTPUT"
