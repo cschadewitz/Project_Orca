@@ -29,7 +29,7 @@ concurrency:
 jobs:
   fragment:
     name: a fragment, or a reason not to
-    runs-on: [self-hosted, linux, x64, homelab]
+    runs-on: ubuntu-24.04
     steps:
       - name: Resolve the pull request
         id: pr
