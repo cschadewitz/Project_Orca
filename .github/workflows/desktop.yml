@@ -65,7 +65,7 @@ jobs:
       # Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners.
       - id: pick
         env:
-          FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
+          FORCE_HOSTED: "true" # TEMPORARY proof run; reverted next commit
           HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
         run: node tools/linux-runner.js
       - id: select
