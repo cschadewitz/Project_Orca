@@ -67,11 +67,11 @@ jobs:
           base='"self-hosted","linux","x64","tyler"'
           if [[ -z "$per_host" ]]; then
             # Total only (the health service's current response): no host labels to pin to.
-            # `check` and one shard each hold a runner and `check` waits for the shard, so
-            # use the pool only with two idle runners, so `check` does not knowingly take
-            # the last one. The count is a snapshot, not a reservation: another run can still
-            # take a runner first (docs/ci-runners.md). One shard, so two 20-worker shards
-            # never share a host.
+            # Use the pool only with two idle runners, room for the shard and then `check`,
+            # so a run goes there only when the pool is not already busy. The count is a
+            # snapshot, not a reservation; a run that loses the race queues, it cannot stall
+            # (`check` starts after the shards). One shard, so two 20-worker shards never
+            # share a host.
             if (( total >= 2 )); then
               echo "labels=[${base}]" >> "$GITHUB_OUTPUT"
               echo 'workers=20' >> "$GITHUB_OUTPUT"
@@ -88,11 +88,11 @@ jobs:
             echo "idle in total: ${total} (no per-host counts); shards: ${shards}"
             exit 0
           fi
-          # `check` and each shard hold a runner at once, and `check` waits for the shards,
-          # so a host must have an idle runner for every job pinned to it or `check` could
-          # take the only one and wait forever for a shard queued behind it. `check` takes
-          # m1 when it can; a shard goes to each host with a runner left, so two shards
-          # never share a host.
+          # Count a runner for `check` and one for each shard pinned to a host, so the run
+          # uses a host only when it has room for all of them and does not queue behind
+          # other work. `check` starts after the shards, so losing that race queues the run
+          # but cannot stall it. `check` takes m1 when it can; a shard goes to each host
+          # with a runner left, so two shards never share a host.
           c1=$m1 c2=$m2 check_host=
           if (( c1 > 0 )); then check_host=m1; c1=$((c1 - 1))
           elif (( c2 > 0 )); then check_host=m2; c2=$((c2 - 1)); fi
@@ -232,15 +232,15 @@ jobs:
           path: blob-reports/
           retention-days: 1
 
+  # `check` starts only after every shard job has finished (`needs: test`). No job here
+  # holds a runner while it waits for another job to get one, so runs that compete for the
+  # same self-hosted pool can queue but never stall each other
+  # (tools/test/ci-runner-contention.test.js).
   check:
     name: check (node ${{ matrix.node }})
-    needs: [changes, runner]
+    needs: [changes, runner, test]
     if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON(needs.runner.outputs.labels) }}
-    # actions: read lets the wait step below list this run's jobs
-    permissions:
-      contents: read
-      actions: read
     env:
       # Worker cap from the picked runner (see the `runner` job); unset elsewhere means 2
       WORKERS_CAP: ${{ needs.runner.outputs.workers }}
@@ -425,30 +425,16 @@ jobs:
           SHADOW_NODE: ${{ matrix.node }}
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
-      # `check` starts beside the shards, so the typecheck, lint and build above overlap
-      # their tests. Only the merge needs them: wait here until every shard job is done.
-      - name: Wait for test shards
+      # Every shard job has finished before `check` starts; a shard that failed, was
+      # cancelled or never ran fails the merge here rather than leaving it to a missing blob.
+      - name: Test shards passed
         if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
-        timeout-minutes: 30
         env:
-          GH_TOKEN: ${{ github.token }}
-          SHARDS: ${{ fromJSON(needs.runner.outputs.shards)[0].total }}
+          SHARDS_RESULT: ${{ needs.test.result }}
         run: |
-          url="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100"
-          while true; do
-            shards=$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$url" \
-              | jq -c '[.jobs[] | select(.name | startswith("test (shard"))]') || shards='[]'
-            failed=$(jq -r '[.[] | select(.status == "completed" and .conclusion != "success") | .name] | join(", ")' <<<"$shards")
-            if [[ -n "$failed" ]]; then echo "::error::test shard did not pass: ${failed}"; exit 1; fi
-            done_count=$(jq '[.[] | select(.status == "completed")] | length' <<<"$shards")
-            echo "shards finished: ${done_count}/${SHARDS}"
-            if (( done_count >= SHARDS )); then break; fi
-            # Shard jobs are created with this one; none after 5 minutes means they never will be
-            if (( SECONDS > 300 )) && (( $(jq length <<<"$shards") < SHARDS )); then
-              echo "::error::expected ${SHARDS} test shard jobs in this run, found $(jq length <<<"$shards")"; exit 1
-            fi
-            sleep 10
-          done
+          if [[ "$SHARDS_RESULT" != "success" ]]; then
+            echo "::error::test shards did not pass (result: ${SHARDS_RESULT})"; exit 1
+          fi
 
       # The shards' blobs hold absolute paths, so the merge needs a checkout at the same
       # location as theirs: the same runner labels and image give that.
