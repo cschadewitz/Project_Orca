@@ -35,12 +35,6 @@ on:
         options: [all, windows, windows-linux]
         default: all
         required: true
-      linux_runner:
-        description: Linux runner pool; Tyler still requires the existing display and sandbox prerequisites.
-        type: choice
-        options: [homelab, tyler]
-        default: homelab
-        required: true
 
 permissions:
   contents: read
@@ -67,7 +61,6 @@ jobs:
         env:
           DESKTOP_EVENT_NAME: ${{ github.event_name }}
           DESKTOP_PLATFORM: ${{ inputs.platform || 'all' }}
-          DESKTOP_LINUX_RUNNER: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_runner || 'homelab' }}
         run: |
           set -euo pipefail
           matrix=$(node tools/desktop-matrix.js)

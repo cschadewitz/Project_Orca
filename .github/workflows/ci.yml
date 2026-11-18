@@ -16,10 +16,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Chooses where `check` and its test shards run: the homelab hosts (m1, m2) when they
+  # Chooses where `check` and its test shards run: Tyler's self-hosted runners when they
   # have idle runners, GitHub-hosted otherwise. Any failure to ask (DNS, timeout,
   # non-200, bad JSON) counts as zero.
-  # Set the repository variable CI_FORCE_HOSTED to `true` to skip the homelab runners
+  # Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners
   # (e.g. when a job queued on them); re-run the workflow to apply it.
   # Pull requests from forks always get GitHub-hosted runners: their code must not run
   # on self-hosted machines. This is defense in depth only, because a fork can edit this

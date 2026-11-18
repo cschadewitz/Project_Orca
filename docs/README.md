@@ -41,7 +41,7 @@ access invite developer insight; they do not require code changes or host access
 | [Independent maintenance MCP](maintenance-mcp.md) | inspect the read-only refusal-only preparation; it does not activate host controls |
 | [Updating](UPDATING.md) / [releasing](RELEASING.md) / [held Mac composition](implementation/mac-native-provider-composition.md) | inspect Windows/Debian mechanisms, implemented but inactive Mac update/recovery and remaining signed/installed acceptance; operator recipes need their own scope |
 | [CI shadow selection](ci-shadow-selection.md) | understand advisory selection, full-check authority and uncompleted rollout/release parity |
-| [CI runner selection](ci-runners.md) | understand how `check` picks homelab or GitHub-hosted runners, how to force hosted, and what the self-hosted runners can reach |
+| [CI runner selection](ci-runners.md) | understand how `check` picks self-hosted (Tyler) or GitHub-hosted runners, how to force hosted, and what the self-hosted runners can reach |
 | [Performance evidence](performance/persistence-baseline/README.md), [credential admin](performance/mcp-credential-admin/README.md), [retry worker](performance/admission-retry-worker/README.md) | inspect exact synthetic workload pins and measurement limits |
 
 ## Preparation and research

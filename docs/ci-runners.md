@@ -1,7 +1,7 @@
 # CI runner selection
 
-The `check` job in [`ci.yml`](../.github/workflows/ci.yml) runs on a homelab
-self-hosted runner when one is idle and on a GitHub-hosted `ubuntu-24.04` runner
+The `check` job in [`ci.yml`](../.github/workflows/ci.yml) runs on one of Tyler's
+self-hosted runners (label `tyler`) when enough are idle and on a GitHub-hosted `ubuntu-24.04` runner
 otherwise. This page covers how that choice is made, how to override it, and what
 the self-hosted runners can and cannot reach. It does not change what CI verifies;
 see [CI shadow selection](ci-shadow-selection.md) for that.
@@ -140,8 +140,8 @@ Set the repository variable `CI_FORCE_HOSTED` to `true` (Settings, Secrets and
 variables, Actions, Variables). The picker then skips the health request and selects
 `ubuntu-24.04`. Re-run the workflow for it to apply: a run that already picked a runner
 keeps its choice. Delete the variable or set it to anything else to return to
-automatic selection. Use it when a job is stuck queued on the homelab runners or the
-homelab is down for maintenance.
+automatic selection. Use it when a job is stuck queued on the self-hosted runners or they are down for
+maintenance.
 
 ## Pull requests from forks
 
@@ -166,7 +166,8 @@ loopback destinations; and the only credential a job holds is its `GITHUB_TOKEN`
 untrusted-by-default code.
 
 In this repository `ci.yml`'s `check` and `test` jobs select the `tyler` label on their
-own, and a manual dispatch of `app-smoke.yml` or `desktop.yml` can choose it with
-`linux_runner: tyler`. Other workflows (for example `codeql.yml` and the release
-workflows) target the separate `homelab` label; the notes above describe the `tyler` runners and say nothing about
-that pool. A new workflow that targets `tyler` takes on the same assumptions.
+own, and the Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and release
+calls) always run on it. Every other job runs on GitHub-hosted runners, including
+`release-prepare.yml`, `release-publish.yml`'s own jobs, `changelog.yml` and
+`codeql.yml`, which hold write tokens or deploy keys. `tyler` is the only self-hosted
+label; a new workflow that targets it takes on the same assumptions.

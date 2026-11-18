@@ -2,17 +2,14 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export function desktopMatrix(eventName, platform = "all", linuxRunner = "homelab") {
+export function desktopMatrix(eventName, platform = "all") {
   if (!["all", "windows", "windows-linux"].includes(platform))
     throw new Error("Unsupported desktop platform selection");
-  if (!["homelab", "tyler"].includes(linuxRunner)) throw new Error("Unsupported desktop Linux runner selection");
   if (platform !== "all" && eventName !== "workflow_dispatch")
     throw new Error("Reduced desktop matrix requires a manual dispatch");
-  if (linuxRunner !== "homelab" && eventName !== "workflow_dispatch")
-    throw new Error("Desktop Linux runner selection requires a manual dispatch");
   const include = [
     {
-      os: ["self-hosted", "linux", "x64", linuxRunner],
+      os: ["self-hosted", "linux", "x64", "tyler"],
       name: "linux",
       cache_path: "~/.cache/electron\n~/.cache/electron-builder\n",
     },
@@ -33,13 +30,5 @@ export function desktopMatrix(eventName, platform = "all", linuxRunner = "homela
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  console.log(
-    JSON.stringify(
-      desktopMatrix(
-        process.env.DESKTOP_EVENT_NAME,
-        process.env.DESKTOP_PLATFORM || "all",
-        process.env.DESKTOP_LINUX_RUNNER || "homelab",
-      ),
-    ),
-  );
+  console.log(JSON.stringify(desktopMatrix(process.env.DESKTOP_EVENT_NAME, process.env.DESKTOP_PLATFORM || "all")));
 }
