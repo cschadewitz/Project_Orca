@@ -168,8 +168,9 @@ jobs:
         working-directory: packages/app
         id: electron
         # No `tee /dev/stderr`: Git Bash on windows-latest (Git 2.56, Nov 2026) has no /dev/stderr.
+        # The require can print "Downloading Electron binary..." first, so keep the last line.
         run: |
-          electron_path=$(node -e "console.log(require('electron'))")
+          electron_path=$(node -e "console.log(require('electron'))" | tail -n 1)
           echo "$electron_path" >&2
           printf 'path=%s\n' "$electron_path" >> "$GITHUB_OUTPUT"
 
@@ -299,8 +300,9 @@ jobs:
         shell: bash
         working-directory: packages/app
         # No `tee /dev/stderr`: Git Bash on windows-latest (Git 2.56, Nov 2026) has no /dev/stderr.
+        # The require can print "Downloading Electron binary..." first, so keep the last line.
         run: |
-          electron_path=$(node -e "console.log(require('electron'))")
+          electron_path=$(node -e "console.log(require('electron'))" | tail -n 1)
           echo "$electron_path" >&2
           printf 'path=%s\n' "$electron_path" >> "$GITHUB_OUTPUT"
 
