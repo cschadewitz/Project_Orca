@@ -68,6 +68,12 @@ extraResources:
 # the architecture the runner happened to have is the bug this spells out to avoid: GitHub's
 # macOS runners are arm64 and its Windows and Linux runners are x64.
 linux:
+  # The window icon, beside app.asar where the window manager can read it. The tar.gz is the
+  # bare unpacked app with no launcher metadata, so this is the only icon its window has
+  # (src/main/window-icon.ts). AppImage also carries it in its desktop entry.
+  extraResources:
+    - from: build/icon.png
+      to: icon.png
   category: Development
   synopsis: Orchestration Runtime for Coding Agents
   # Named rather than derived: the package is `@orca/app`, and a scoped name is not a

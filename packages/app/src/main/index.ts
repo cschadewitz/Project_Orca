@@ -44,6 +44,7 @@ import { createManagedMacUpdateApplication } from "./mac-managed-update-applicat
 import { createManagedMacNativeProviders } from "./mac-native-providers.js";
 import { updateDriver } from "./update-driver.js";
 import { basename, dirname, join } from "node:path";
+import { windowIcon } from "./window-icon.js";
 import { fileURLToPath } from "node:url";
 import {
   app,
@@ -1235,6 +1236,11 @@ function createWindow(): void {
     backgroundColor: canvasColor(theme),
     // The renderer draws the title bar; the OS keeps only its buttons (window-chrome.ts).
     ...windowChrome(process.platform, theme),
+    ...windowIcon(process.platform, {
+      packaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appRoot: fileURLToPath(new URL("../..", import.meta.url)),
+    }),
     show: false,
     webPreferences: {
       // `.cjs`, because a sandboxed preload is evaluated as a plain script and this package
