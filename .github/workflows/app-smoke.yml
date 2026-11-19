@@ -167,7 +167,11 @@ jobs:
         shell: bash
         working-directory: packages/app
         id: electron
-        run: node -e "console.log(require('electron'))" | tee /dev/stderr | sed 's/^/path=/' >> "$GITHUB_OUTPUT"
+        # No `tee /dev/stderr`: Git Bash on windows-latest (Git 2.56, Nov 2026) has no /dev/stderr.
+        run: |
+          electron_path=$(node -e "console.log(require('electron'))")
+          echo "$electron_path" >&2
+          printf 'path=%s\n' "$electron_path" >> "$GITHUB_OUTPUT"
 
       # GitHub-hosted fallback only; never runs on a self-hosted runner. Ubuntu 24.04 keeps
       # unprivileged user namespaces, which Chromium's sandbox needs, behind AppArmor. Rather
@@ -294,7 +298,11 @@ jobs:
         id: native-electron
         shell: bash
         working-directory: packages/app
-        run: node -e "console.log(require('electron'))" | tee /dev/stderr | sed 's/^/path=/' >> "$GITHUB_OUTPUT"
+        # No `tee /dev/stderr`: Git Bash on windows-latest (Git 2.56, Nov 2026) has no /dev/stderr.
+        run: |
+          electron_path=$(node -e "console.log(require('electron'))")
+          echo "$electron_path" >&2
+          printf 'path=%s\n' "$electron_path" >> "$GITHUB_OUTPUT"
 
       # GitHub-hosted fallback only; never runs on a self-hosted runner. Ubuntu 24.04 keeps
       # unprivileged user namespaces, which Chromium's sandbox needs, behind AppArmor. Rather
