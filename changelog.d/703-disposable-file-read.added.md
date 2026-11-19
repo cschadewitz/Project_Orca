@@ -1,1 +1,0 @@
-Add an inactive Linux disposable-file read acceptance capability with retained descriptor ownership, strict policy/judge/fence composition, and adversarial source tests. No production tool registration or installed-provider coverage is enabled.

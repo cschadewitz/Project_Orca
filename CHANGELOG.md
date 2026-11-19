@@ -29,6 +29,961 @@ Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; prep
 release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
 to read them as they stand.
 
+## 0.7.0-rc.2 - 2026-11-19
+
+### Store format
+
+**Desktop builds are unvalidated, and the files attached to this prerelease are
+unsigned.** No Windows, Linux or macOS file attached here is code-signed or notarised, and
+none has installed-artifact acceptance. Windows testers receive a separately distributed
+installer signed by **Casey Schadewitz** instead; don't use the attached Windows files. If
+SmartScreen warns about that signed installer, choose **More info**, and choose **Run
+anyway** only when the publisher reads exactly Casey Schadewitz, its SHA-256 matches the
+one you were given, and its signature check showed `Valid` for that signer. Stop at any other SmartScreen screen, at any browser, antivirus or macOS Gatekeeper
+warning, and at any unsigned file's warning, and report what it said. The macOS `.dmg` and
+`.zip` use the new bundle ID `com.schadewitz.orca` (was `dev.orca.desktop`), so OS
+permissions, notifications and Keychain access do not carry over; upgrading an existing
+Mac install is not a validated path, and no Mac acceptance is claimed.
+
+**Upgrading from 0.6.0.** 0.6.0 shipped store epoch `ownership-fences-v1`, protocol 1.8
+and capabilities `runs.read`, `runs.control`, `runs.subscribe`, `plan.read` and
+`plan.write`. This release carries store epoch `operator-journals-v4` and protocol 2.0, and
+adds the release capabilities `workflows.validateInputs` and `inputs.live`. The epochs and
+protocol versions the notes below name on the way (`protected-execution-v2`,
+`config-generations-v3`, protocol 1.9 and 1.10) were never released. They are steps
+inside this one upgrade, not versions any release shipped. A 0.6.0 desktop app or
+daemon cannot talk to a 2.0 daemon or app, so upgrade both together. This release's managed
+updater refuses activation and recovery across the epoch change; direct CLI or daemon
+startup does not enforce it. Upgrading an installed 0.6.0 across this epoch, by the 0.6.0
+updater or manually, has not been verified on installed builds. Opening an existing store
+with this release writes to it, even for read-only commands. Before the upgrade, keep a complete, consistent backup of the store,
+protected material and keys with the 0.6.0 binary. Rolling back means restoring that
+backup; reinstalling 0.6.0 over an upgraded store is not supported.
+
+The intermediate (never released) epoch `config-generations-v3` introduced this. New protected
+configuration-generation records and generation-bound run/admission metadata require a
+runtime that understands those bindings. Existing protected-execution-v2 encryption,
+keys and records remain intact; this is not a plaintext migration or key rotation.
+
+The managed Debian updater refuses automatic activation/rollback when release metadata
+has different store epochs. Direct daemon/CLI startup does not enforce that epoch;
+manual rollback to an older binary is not guaranteed to refuse the store and is not a
+supported migration. Retain a complete pre-upgrade store backup, including protected
+material and keys, with its matching binary. Custom executable plugin registrations
+can prevent generation restoration after an engine-process restart; see #394–396.
+
+Generation snapshots now embed their workflow definitions without pinning unlaunched
+workflows. Older binaries that ignore those definitions cannot restore a generation when
+any catalog workflow lacks a pin, even if both builds report `config-generations-v3`.
+Snapshot compatibility is one-way; an equal epoch does not make binary-only rollback safe.
+
+`run.created.provenance` may now include an optional `itemWorkflow` choice with its effective
+dispatch default and source. Individual workflow nodes may pin a different child workflow.
+The field is additive: existing run records need no migration and simply lack this detail.
+
+Opted-in plugin generations add private versioned restoration descriptors to the
+existing protected execution records. Public events and provenance do not expose
+the descriptor data. Existing behavior-bearing records are not automatically
+migrated; older installations do not gain plugin restoration merely by reading
+the same store epoch. Keep a compatible installation and valid protected records
+for recovery, or finish unsupported work in its original engine process.
+
+New inactive standing-grant writes use rule version 2 with `expiresAt: null`,
+and protected standing approvals use versions 2 or 3. Readers must support these
+encodings; older binaries may refuse affected typed sidecars or scoped-grant
+material after a downgrade. Existing finite grants are neither migrated nor
+extended. Preserve the matching protected approvals and key material; rewriting an
+until-revoked grant as a legacy finite grant is not a compatibility mechanism.
+
+An inactive, explicitly versioned permission-sidecar v2 schema retains the legacy
+agent map and adds reviewed typed rule records at the existing sidecar path. Normal
+operation remains on v1: typed persistence has no production registration, and no
+existing sidecar is migrated, repaired or converted by this feature.
+
+Future explicit opt-in requires durable managed enrollment and an accepted compatible
+writer/runtime floor. Enrolled workspaces must refuse incompatible binaries and
+managed update, rollback, root restoration, retarget and enrollment reset until those
+paths have separate reviewed support. Unknown or damaged typed state stays closed;
+legacy fallback cannot restore standing authority. Refs #702/#699.
+
+Establish `operator-journals-v4` and protocol 2.0 for operator, admission, continuation and
+revision integration. Closed protocol 1.10 capability/event schemas cannot consume the new
+wire contract, including `revision.recorded`; upgrade clients and daemons together.
+Optional feature methods remain provider- and authority-gated, not globally required.
+
+The managed updater refuses activation/recovery across store epochs. Direct CLI/daemon
+startup does not enforce the release marker, and direct in-place downgrade is unsupported.
+Before upgrade, stop all writers and retain a complete, consistent backup of both stores,
+protected payloads, all journals and associated state with its matching old binary and
+toolchain. Rollback requires restoring that complete pre-upgrade backup; switching binaries
+cannot undo new writes. Old full-schema readers reject valid unknown events, while filtered
+reads may bypass them, so a successful read does not prove downgrade safety. See
+`docs/UPDATING.md` for the migration and recovery boundary.
+
+### Added
+
+Add the inbound MCP operator adapter with authenticated stdio/Streamable HTTP entry points,
+allowlisted bounded read projections and guarded lifecycle tools. It is for **single-owner
+use only**: one owner operating their own daemon. Missing- and invalid-credential refusal
+is source-tested only and has not been live-passed (#392). Scoped access for other users or
+agents (#598) has not been passed and is not offered.
+
+Add durable continuation admission for supported sealed root decision boundaries,
+with authenticated HTTP/WebSocket receipts, current-authority leased attachment,
+bounded restart discovery, conservative ambiguous-execution refusal and read-only
+durability verification. Child/live/agent-boundary and MCP mutation composition
+remain unsupported in this first slice; protocol 2.0 and operator-journals-v4
+require coordinated upgrades and complete matching-store rollback.
+
+Add the shared protected retry journal and Request/direct admission services for
+client idempotency keys, including durable reservation, bounded contention,
+quota refusal and original-work reconciliation. Writable, token-authenticated
+daemons with admission retry configured expose `runs.admit`, `admissions.get`
+and `admissions.reconcile` to authorized callers with `runs.start` authority;
+`runs.start` uses the same durable admission path when configured.
+
+Palette admission intents now persist encrypted before dispatch, recover after app restart, and require explicit confirmation before abandoning an intent for separate work. Authenticated principal/workspace guards prevent retries crossing scopes; unavailable secure storage fails closed.
+
+- Prepare explicit human revision contracts, fenced service and delivery accounting,
+  authenticated adapter helpers and a correction card for the coordinated runtime
+  integration. Production capability remains gated on the shared retry and ownership
+  wiring; ordinary answer notes remain rationale only.
+
+ACP session callers can require context loading with `requireContextRecovery: true` and a nonempty `resumeSessionId`. Unsupported, failed or timed-out loads stop and clean up the owned connection instead of opening a fresh session. This opt-in checks protocol load success; native context verification and durable approval continuation remain separate work under #357.
+
+- Add candidate-bound Mac approval/defer app routing and a gated native ZIP handoff lifecycle; production installation remains unavailable pending complete recovery ownership and signed Mac acceptance.
+
+Add an authenticated runtime idle fence and concrete managed-target Mac admission leases. Active execution, callbacks, renewal and queued admission/recovery work defer acquisition; uncertain results retain ownership. Mac installation and recovery activation remain disabled.
+
+Add internal Mac update guard foundations: nonce-scoped document leases and authenticated
+owned-daemon capture. Mac update installation remains disabled, and missing authoritative
+attached-execution/callback idle proof blocks admission readiness.
+
+Bind internal Mac update draft leases to Electron window/document lifecycle and the
+sandboxed preload. Native interaction and new-window creation remain guarded until
+scoped release; Mac installation and daemon admission readiness remain disabled.
+
+Added an internal, disabled recovery inventory and manifest validator for explicitly supplied owned roots, with bounded read-only observations and synthetic protected-state round-trip checks. This does not enable production backup, restore or execution recovery.
+
+Mounted the disabled native diagnostics initializer and enum-only startup observer, and exposed an exact owned-child updater stop receipt with a sealed local restart-admission fence. Production updating/capture and complete-state restore remain gated.
+
+Add local deterministic ESM plugin release candidate production with dependency graph checks and installed verifier/bootstrap coverage. Candidate digests remain unapproved; independent release approval and startup pin delivery are still required for supported custom-plugin recovery.
+
+Added opt-in production bootstrap verification and frozen per-plugin identity mounting for independently pinned closed-bundle release evidence, with exact composition, runtime, identity and byte checks. Trusted attestation production/pin delivery remains a deployment requirement; unsupported plugins continue to refuse restoration.
+
+- Add an authenticated trusted-only installed-plugin serve adapter and an unapproved provider-free M10 candidate/independent launcher preparation for parent-owned restart acceptance.
+
+Opt-in `git-worktree` root isolation on built-in local Linux hosts, with frozen base commits, retained ownership receipts and fail-closed provisioning recovery. Defaults, WorkItem workspaces and child inheritance remain unchanged.
+
+Add disabled, explicitly opted-in diagnostic recovery storage and exact-content preview/local-save controls, with bounded encrypted checkpoints, honest cleanup/unknown outcomes and separately authorized Save again. Production capture and native acceptance remain gated.
+
+- Prepare an independent read-only maintenance MCP package with four closed tools,
+  bounded typed health/log projections and synthetic source tests. Production sources
+  explicitly remain unavailable; service supervision, credentials, tunnel activation
+  and platform access acceptance remain future work (#483).
+
+Prepare opt-in fixed Linux maintenance health and same-user structured observation readers,
+bounded source acquisition, and inactive independent launcher/tunnel templates. Unresolved
+service identities still fail closed; activation and actual-client acceptance remain pending.
+
+Add a versioned advisory daemon-machine resource contract, deterministic shared
+fixtures, bounded on-demand Linux collector and caller-authorized workstream
+summary seam. Authenticated API/MCP and UI consumers remain separate work.
+
+Add an opt-in, fixture-tested authenticated daemon/MCP resource-read contract using the shared host snapshot. The proposed host telemetry grant is separate from caller-visible workstream authority and excluded from every preset; production collectors and grants remain unmounted pending policy review and integration.
+
+Added disabled Mac update drain coordination and durable closed replacement recovery
+policy, retaining exact approval/target/token and preserving protected-state plus
+matching-binary generations when newer writes prevent automatic rollback. Production
+activation still requires native writer, recovery and signed lifecycle acceptance.
+
+Added inactive typed policy evaluation and review-registration seams for scoped tool decisions. Existing ACP permission behavior and production defaults are unchanged.
+
+Prepare a default-off Linux typed-workspace owner with durable enrollment intent,
+canonical persistence handoff and managed launch/recovery refusals. Add a separate
+daemon/CLI/ACP lifetime exclusion mechanism; production activation remains unavailable
+pending the stable trusted bridge, complete launch ownership proof and accepted builds.
+The exclusion is already enforced: CLI configuration loading and update bootstrap refuse
+a workspace beneath a `.orca-typed-workspace` marker. No shipped command creates one.
+
+Prepare shared owner-bound typed store identity and protected scoped approval records,
+with current credential/lease checks and safe stored-rule projections. Runtime
+composition remains unavailable pending actual qualified captures and integration gates.
+Approval events from that inactive path redact their metadata in public events and
+notifications while retaining the original encrypted payloads.
+
+Added inactive, owner-injected scoped permission choices in the existing approval card,
+with separate one-time answers and reviewed rule saves, safe decision projections,
+and conservative stale/uncertain recovery. No production registration or policy defaults change.
+
+Add an inactive Linux disposable-file read acceptance capability with retained descriptor ownership, strict policy/judge/fence composition, and adversarial source tests. No production tool registration or installed-provider coverage is enabled.
+
+- Prepare a default-off Linux owner-local capture bridge over the bounded owned-read
+  service, protected facts and original live callback. Unqualified Save/human execution
+  remain refused; disposable tests cover delivery, lost acknowledgement and revocation.
+- Within that default-off bridge, bind human verdict/permit completion to the actual
+  original callback's ephemeral delivery capability, retaining separate Save/answer
+  actions and fail-closed installed gates.
+- Await settled original delivery before refreshed policy evaluation, preserving
+  terminal refusal when the final lease acknowledgement is lost.
+- Retain original human eligibility when bound required-review completion requests
+  a person, while keeping rule-allow completions ineligible for human attribution.
+
+Add an inactive, bounded Linux owned-file read service with stable resource identity,
+private trusted capture/dispatch facade, per-invocation replay protection and actual
+read conformance tests. Local emitted-build evidence stays explicitly unqualified;
+production activation and stored-rule Save remain gated.
+
+#### agents
+
+- Bound ACP permission callbacks to their original turn and invocation;
+  cancellation, timeout and transport loss expire late answers. Explicit session loading
+  checks agent capability and reports fresh-session fallbacks.
+
+#### agents/daemon
+
+- Added inactive typed permission sidecar v2 persistence and exact
+  read/receipt contracts, with original-principal grant rechecks and disposable-store
+  failure/restart tests. Trusted owner injection is required; managed compatibility
+  enforcement and production activation remain incomplete. Refs #702/#699.
+
+#### app
+
+- Add an app icon, the ORCA mark (a bracketed hexagon around a fin on a teal
+  waterline), to the macOS, Windows and Linux builds. The mark and icon SVGs ship in
+  `@orca/design` under `brand/`.
+- Structured configuration forms are now available in Config, with review
+  before saving and a separate, guarded Apply action. Drafts survive navigation;
+  stale or unacknowledged writes retain edits, and restart requirements remain
+  explicit.
+- The object header shortens a trail that does not fit. Its middle folds into a
+  `…` control, nearest the root first, down to `request ▸ … ▸ run ▸ step`; then the run
+  folds too, `request ▸ … ▸ step`; only then is the current crumb's name cut at its end. The
+  first crumb and the current one never fold, and type labels, id tokens and versions are
+  never cut. Fit is measured, so a wide window still shows the whole chain, and the Plan mode
+  control and the Workflows header actions keep their width. `…` opens a menu of the hidden
+  crumbs, each with its type, name and token, and choosing one goes where that crumb would
+  have. It is a button in the tab order, and its accessible name lists the levels it holds
+  in order, so a screen reader still hears the whole chain.
+- Native first-run project review and separate empty-workspace preparation,
+  authenticated owned-daemon connection, and a fixed agent-free launch smoke check.
+  Startup without an explicit target or verified selection opens disconnected for setup.
+  Unknown Windows ownership remains blocked; native acceptance is still required.
+- Open guided launch from Config or the palette, review a configured prepared
+  checkout and typed inputs, confirm permission policy, and restore or recover exact
+  protected launch intents. New work requires explicit abandonment; beta provisioning
+  and native acceptance remain separate.
+- Add explicit native pre-signing build identity and trusted signed Mac
+  candidate validation with bounded DMG/ZIP containment. Desktop packaging stages
+  native addons for every configured Mac architecture; ordinary Mac packaging stays unsigned.
+- The workflow viewer, the workflow editor and the plan's dependency graph have
+  view controls in the canvas's corner: zoom out and in, the zoom level (press it for
+  100%), zoom to fit, a top-to-bottom / left-to-right layout toggle and a minimap of the
+  whole graph you can click or drag to move the view. ⌘/Ctrl with the wheel, or a
+  trackpad pinch, zooms about the pointer. The direction and the minimap are remembered
+  per person and per canvas; they never change the workflow file or its saved layout.
+- A visual workflow editor. Edit opens a draft of the workflow on a canvas, with a
+  node palette, an outline, an inspector and a validation panel that is always present. Drag
+  nodes from the palette onto the canvas or an edge, drag nodes to arrange them, drag from a
+  port to connect, undo and redo, then review the YAML diff and publish a new version. Every
+  gesture has a keyboard path in the new `workflow-edit` scope.
+- A Workflows surface in the sidebar (⌘4): every registered workflow with its version,
+  size and draft state, opening into the viewer or straight into the editor
+  (`orca://workflow/<id>?edit`). Agents and Config move to ⌘5 and ⌘6.
+- Integrate authenticated daemon switching, persistent workspace/boot identity
+  and connection epochs, plus connected live-permission invalidation. Correct connection
+  error reporting, epoch synchronization and bundled endpoint handling.
+- Compose candidate-specific Mac approval/download sessions with reviewed window
+  and runtime guards; wait for preparation settlement before candidate cleanup and
+  retain evidence on unknown release. Native installation and full recovery remain gated.
+- Add disabled main-only Mac candidate binding, process-local approval plumbing
+  and bounded owned-download verification against the existing delivery-v1 manifest.
+  Production offers, approval IPC, installation and recovery remain disabled pending
+  trust/delivery policy, native verification and signed Mac acceptance (#387).
+- Add disabled Mac owned-stop and coherent replacement-startup verification,
+  backed by fresh disposable daemon fixtures. Verification leaves admission closed;
+  production activation, native acceptance and full protected-state recovery remain
+  separate gates (#387).
+- Add an internal Mac update approval coordinator with candidate-bound consent,
+  defer and owned guard handling, and fail-closed unknown outcomes. Production Mac updating
+  remains unavailable pending native, trust, identity and complete-state recovery adapters.
+- Isolated Mac updater rehearsal combines candidate approval/download,
+  window/preload ownership and authenticated runtime admission with reviewed owned-stop
+  and fresh replacement verification. The terminal startup result stays verified-closed;
+  production updates, signed native installation and complete-state recovery remain disabled.
+- Prepare architecture-specific native diagnostics resources and reject missing
+  or stale Mac packaging inputs. Capture remains disabled pending native acceptance.
+- Add explicit same-boot orphan reconciliation for new, kernel-fenced
+  first-run generations, distinguish surviving owned and unknown writers, and
+  recover interrupted saved-configuration binding after verified quiescence.
+  Preserve retained evidence/work and require explicit continuation after recovery;
+  legacy unfenced attempts and native acceptance remain separate gates.
+- Add a durable closed update window, verified fixed-path state/binary backups,
+  and resumable same-boot restoration. Preserve failed-candidate evidence and refuse
+  reopening until validation or full restoration succeeds. Native installation remains
+  disabled pending complete owner wiring and real-Mac verification (#387, #571).
+
+#### app/daemon
+
+- Author configured prompt templates through an authorized catalog,
+  exact-source review and Save, fixture-only previews, strict-pack variants and reviewed
+  workflow instruction assignments. Apply saved assets separately; admitted runs retain
+  captured instruction digests. Configuration reference selectors and explicit source
+  reconciliation preserve comments, unrelated fields and retained drafts. Desktop IPC
+  registration remains in the pinned integration-owner handoff.
+
+#### build
+
+- Manual Desktop packaging can select Windows/Linux together and route Linux
+  jobs to a selected self-hosted runner, while release calls retain the full existing platform matrix.
+
+#### cli
+
+- Fence participating writers before initialization and support authenticated,
+  read-only replacement inspection without permission resets, credential rotation,
+  first-run claim adoption or automatic continuation recovery.
+
+#### daemon
+
+- Workflow drafts: `workflowDrafts.get`, `open`, `apply`, `undo`, `redo`, `review`,
+  `publish` and `discard`. A draft is kept beside the workflow in `.drafts/`, edited through
+  revision-checked semantic operations on the comment-preserving YAML, validated against the
+  active generation, and published by reviewed bytes, a version bump and a generation Apply.
+  Dragged positions are layout metadata in `.layout/`, never in the workflow file.
+- Authentication and authorization on `/rpc` and `/socket`. Bearer credentials
+  (`orca1.<id>.<secret>`, hash-only on disk) with expiry, rotation and revocation; a local
+  bootstrap token file for same-user clients; a deny-by-default permission matrix over every
+  method; per-principal resource scopes that filter lists, hide other principals' runs,
+  artifacts, gates and notifications behind the same not-found a missing id gets; a separate
+  grant for standing permission rules; socket credentials re-checked per message,
+  notification and interval, closing with `4401` on revocation or expiry; and a JSON-lines
+  security audit log. Scope isolation between principals is offline-tested; scoped access for
+other users or agents is not offered (#598). `docs/daemon-security.md` has the matrix, deployment and migration.
+
+- Extend authenticated runtime maintenance with owner-bound drain and
+  defer actions. Close new workflow/run/request admissions while allowing existing
+  work and answers to finish, and require empty activity plus a complete unfinished
+  run inventory before sealing the idle fence. Native installation remains disabled.
+
+#### engine
+
+- Added owner-local live permission decision primitives with exact identities,
+  actor attribution and ordered standing-rule writes, integrated with daemon authority
+  checks and connected app permission-card invalidation.
+
+#### engine/cli
+
+- Plugins can opt in to versioned restoration of custom executors
+  from bounded, validated non-secret inputs in a recorded generation. Recovery
+  constructs an isolated registry after trusted installed-code/dependency identity
+  verification, and refuses unverified, unavailable or incompatible plugins.
+  Host/workspace/plan/input callbacks and mixed legacy compositions
+  remain unsupported across engine-process restarts.
+
+#### engine/daemon
+
+- Integrate Request admission, configuration generations and live
+  permission callbacks under protocol 1.10. CLI/ACP submissions use explicit current
+  authority. Explicit same-principal resume can renew revoked execution attachment without
+  reviving old tool decisions.
+- Add durable Request admission with protected inputs, stable recovery
+  IDs and ownership before execution. Daemon and configured CLI/ACP submissions use the
+  integrated generation provider. Admission list/inspect/reconcile are available through
+  token-mode daemon RPC and local CLI/ACP commands; local reconciliation returns a receipt
+  without implicitly starting execution. No app recovery form is supplied.
+- Add integrated configuration generations, launch provenance and
+  explicit apply. Saved revisions remain distinct from active generations and pinned
+  workflow bodies remain immutable. Custom executable plugin registrations bind the
+  entire generation to its original engine bootstrap, including workflows that never
+  use them; restarting that engine process can prevent restoration. No-op/declarative
+  plugins retain conditional restart compatibility. Cross-process custom-plugin
+  restoration is tracked in #394–396. Boot preserves unrelated recovery after unused workflow
+  edits, configured literal redaction distinguishes ordinary arguments from credentials,
+  and restoration checks reject incompatible executable plugins in both directions.
+
+#### integrations
+
+- Add a bounded JEV restoration adapter with pinned defaults,
+  compatibility refusals and current credential binding checks behind an explicitly
+  provisional injected interface. The shipped plugin remains non-restorable across
+  process restarts until the shared restoration substrate is integrated (#394).
+
+#### protocol
+
+- Add inactive coverage and decision projection helpers with approved opaque
+  references, explicit lifecycle uncertainty and separate recording, delivery, dispatch
+  and effect observations. Production surface wiring and privacy acceptance remain separate.
+
+#### runtime
+
+- Integrate builtin validation, typed launch preflight and revision guards,
+  token-authenticated CLI/app/updater clients, exact pre-execution run ownership and
+  lease-validated standing permissions. Keep sensitive execution inputs and replay payloads
+  in owner-only storage with sanitized public event/read/log projections.
+
+#### tests
+
+- Add a separate candidate-only Linux owned-read trace verifier with
+  retained physical bindings, descriptor/inode reconstruction, valid-action
+  refusal observations and controlled negative executions. No accepting
+  qualification, coverage upgrade or production registration is introduced.
+
+### Changed
+
+The inactive owned-read composition can reserve its initial approval intent before
+the human wait, then obtain a fresh bounded action only after the final original
+acknowledgement. Historical previews remain non-executable; Save and denial do not
+read the resource. Cancellation, current authority checks and owned cleanup remain
+mandatory. This does not enable a production guard or provider callback recovery.
+
+#### agents/engine/integrations
+
+- The Agent Client Protocol SDK is updated from 1.4.0 to
+  1.8.0.
+
+#### app
+
+- Adopt the approved macOS bundle ID `com.schadewitz.orca`, retaining the
+  Windows packaging identity for existing NSIS upgrades. App names and data paths
+  stay unchanged; signing remains disabled. Existing Mac permission and Keychain
+  continuity requires native validation before distribution; no data migration is included.
+- Upgrade electron-builder to 26.18.0 and Vite to 8.3.5. The upgrade was
+  reviewed against production dependency, archive/blockmap and renderer compatibility
+  checks; application runtime source is unchanged.
+- The disabled crash-diagnostics flow prepares current or recovered reports
+  for explicit local export, with a separate destination picker and Save. Report
+  contents stay in main until saved; the in-app viewer is removed. Production
+  capture remains disabled pending independent review and native acceptance.
+- The Dedicated project setup section on Config is laid out in steps: the
+  selected directories in one sunken list, the next action as the primary button, a
+  refusal in its own block, and reopening and recovery actions grouped below.
+- A run's variables, a workflow node's configuration in the Workflows inspector and
+  the variables in the guided launch's review card are now one display: each name in mono,
+  because it is an identifier ORCA produced, a short value on the line beside it, and an
+  object or array as indented JSON in a sunken well, clamped to eight lines with a
+  "Show all" button. A node's `options` or a launch's object input no longer reads as one
+  compact line of JSON, and a withheld launch input is listed by name as "Withheld". A
+  correction's values on an Attention card are set in the same sunken well.
+- Ids are shown by name and tail. Wherever a row or a header printed a raw id —
+  `wi_01M4M899VKJZRZSBHNDY5M579G`, whose first ten characters are a timestamp every id minted
+  with it shares — it now leads with the object's name and follows it with a faint token: the
+  kind's glyph and the id's last six characters, `Database schema ⬡ 5M579G`. An object with
+  no name on any read model (a request) is its token alone. If two ids in one list share six
+  characters, just those two grow. The whole id is on hover, in a new **Copy id** in the
+  object header's crumb menu, in the detail pane, and in the command palette, which matches
+  any part of it. This covers the Agents claimed-work list, the Plan table, rail and
+  inspector, the Runs header, palette labels and danger confirmations, the permission card,
+  the artifact panel and the workflow viewer's run picker. Event timeline rows name an event
+  by its sequence number (`#148`); the row's menu copies its id. Link notices, correction
+  summaries and launch receipts keep ids whole, with the tail picked out. Six object-kind
+  glyphs are bundled: `☰` run and `⬡` work item (the Runs and Plan rail glyphs), `❝`
+  request, `◫` step, `⊓` gate and `✦` event. The step's is a split square because at id size
+  a plain rectangle reads as a dash.
+- The desktop app runs on Electron 44.9.1 (from 44.4.3), a patch update within
+  the existing 44 line.
+
+#### daemon
+
+- `startDaemon` refuses to start without an explicit `auth` policy, and the
+  unauthenticated `loopback-unauthenticated` compatibility mode is refused off loopback. A
+  non-loopback bind needs a TLS-terminating proxy named in `trustedProxies`; requests that
+  bypass it, arrive over plain http through it, carry a disallowed `Origin` or a non-loopback
+  `Host`, or put a credential in the URL are refused. A method missing from the operation
+  inventory is `AUTH_FORBIDDEN` even when a method table answers it.
+
+#### permissions
+
+- Prepare until-revoked owned-read rules without extending existing
+  grants. Separate pending human review from fresh bounded Save and read authority,
+  preserving cancellation, current credentials, workspace scope and one-use checks.
+  Production activation and disconnected-provider continuation remain separate.
+
+#### protocol
+
+- The protocol reference now documents the whole 2.0 surface: an inventory of
+  all 83 daemon methods with the grant each needs and what installs it, the 32 capabilities,
+  `maintenance.runtime` with drain and defer, `ORCA_MAINTENANCE_TOKEN` and
+  `ORCA_ADMISSION_FILE`, `runs.admit` and `admissions.*`, continuation, revision, the six
+  operator reads (a stale cursor is a `restartRequired` page) and ten operator mutations, and
+  the eight `templates.*` and eight `workflowDrafts.*` methods, which arrived within 2.0
+  without a minor bump. It corrects what it said about `PROTOCOL_VERSION` (a client-side
+  code; a version mismatch answers `NOT_SUPPORTED`), `config.set`'s grants (`config.write`
+  and `config.read`), `runs.start` under default `orca serve` (a durable admission that
+  refuses with `RUN_STATE` when it needs reconciliation), and the 1 MB `/rpc` body limit.
+
+#### runtime
+
+- Node.js 24 is now the minimum supported version for development and the
+  standalone daemon. CI retains Node 24 checks and retires the Node 22 lane.
+
+### Fixed
+
+First-run startup reservations now survive app restart. Unconfirmed ownership or
+missing/altered evidence blocks competing local startup and preserves the selected
+store; orphan ownership requires a separately reviewed reconciliation authority.
+
+Retain desktop app writer ownership through first-run, connection and shutdown work.
+During a reserved Mac update drain, allow existing run completion and observation while
+durable admission remains closed; keep new work and final-stop dispatch blocked.
+Enroll selected managed configuration roots before their producers and enforce durable
+admission closure on the running daemon. Compose candidate, commit and full-pair recovery
+under the independent activation hold.
+Native replacement activation and diagnostics remain disabled pending their bindings
+and acceptance.
+
+Bind held Mac update composition to the existing native image verifier, secure-storage
+and intent readers, read-only OS permission observations and one-use owned daemon startup.
+Cancelled native inspection waits for cleanup. Closed validation keeps uncertain children
+owned and observes retained work without reconciliation. Activation remains disabled.
+
+Omit free-form agent text from operator event rows so embedded workspace paths cannot
+cross a projection that promises path omission. Retain event identity and sequence
+metadata and explicitly report the agent-text omission.
+
+Avoid durably rewriting an unchanged retry recovery cursor while holding the shared admission catalog lock. Changed pages still publish durably; admission deadlines, authority checks and retry behavior are unchanged. Refresh the reviewed Linux/macOS type-proof fixtures for the existing ObjectId samples and expanded object-kind glyph catalog.
+
+Honor the existing bounded diagnostic key-envelope contract in Windows DPAPI wrappers.
+Preserve complete control/session metadata and legacy Electron envelopes without rewrapping.
+
+Windows diagnostic key wrappers now use asynchronous current-user DPAPI protection without depending on Electron's delayed first-profile Local State write. Preserved Electron wrappers retain their existing read authority. Diagnostics capture remains disabled.
+
+Keep ACP SDK notification-failure payloads and unknown response IDs out of daemon stderr diagnostics.
+
+First-run configuration review now separates local executable observations from unknown provider/version/sign-in evidence, explains ACP and recovery handoff, preserves the #594 exact-command hold, and supports cancelling an unbound review. Truncated Mach-O headers no longer imply an architecture mismatch.
+
+Use bounded UTF-8 blocks for diagnostics previews, with explicit main/preload/renderer disposal and complete exact selectable text. Keep Save authority tied to the frozen main bytes and preserve disabled production capture and all acceptance gates.
+
+Reduce diagnostic metadata and report allocation churn by growing reusable payload storage to demand within the existing memory ceilings. Production capture remains disabled pending native/resource acceptance.
+
+Reduce diagnostics heap churn by reusing report scheduling callbacks and a compact
+event cursor, scanning the exact canonical event grammar, and reusing validated
+preview text. Keep checkpoint bytes in their owned arena lease through disk
+settlement. Preserve report/event limits, exact Save content, erasure and consent;
+production capture remains disabled pending the separate acceptance gates.
+
+Build Windows diagnostics clock, storage and key-protection addons with MSVC C11
+and the selected architecture's verified Node import library. Keep native staging
+bound to the exact source and PE architecture; production capture remains disabled.
+
+Prevent competing continuation replays from marking completed runs blocked during
+receipt settlement. Preserve recoverable receipts when settlement publication fails
+after execution finishes, without repeating the decision or execution.
+
+Coalesce repeated local diagnostics opt-out clicks while revocation is pending, preserving failure feedback and deliberate retry without delaying opt-out during Save.
+
+Compose same-boot first-run recovery and explicit saved-configuration binding with template
+authoring. Block setup transitions during an updater drain reservation and keep the app's
+YAML dependency consistent with its existing locked resolution.
+
+Compose captured authenticated drain ownership with the final Workspace freeze and updater
+guards. Closed replacement bootstrap gates also refuse staged connections before child startup;
+ordinary quit does not force-stop an updater-reserved daemon. Native activation remains disabled.
+
+Bound legacy standing-rule Save review and verification by cancellation and the
+original action, review, lease and credential deadlines. Legacy Save now requires
+an explicit owned-work reviewer contract; unscoped ports remain unavailable for
+Save while existing grants and ordinary answers retain their semantics.
+
+Scoped permission choices now report a reply lost after dispatch as uncertain rather than refused,
+release a review handle that arrives after a reconnect, let a stale (unsent) choice be reviewed again,
+and point a refusal at refreshing authoritative state. Inactive UI only; no policy semantics change.
+
+Create typed-policy temporary files privately regardless of ambient umask, and
+refuse existing temporary evidence without overwriting or deleting it. Managed
+ownership/privacy checks and default-off activation remain unchanged.
+
+Fix Linux fixed-path recovery validation when timestamp conversion rounds below a millisecond boundary.
+
+Use non-creating Windows synchronization handles for durable run ownership and existing journal verification while retaining integrity checks and missing-record refusal.
+
+#### agents
+
+- An agent can no longer grant itself permissions. ORCA's own files — the config,
+  `orca.permissions.json`, the store (but for the `work/` and `program/` deliverable areas) and
+  `auth/` — are refused to every agent ahead of any permission rule, `default: allow`
+  included, and by the `fs/read_text_file` and `fs/write_text_file` handlers; `auth/` and the
+  store's key directories cannot be read either. Paths are resolved through symlinks and `..`.
+  A wildcard `allow` in the sidecar is ignored with a warning (write one in `orca.config.yaml`
+  instead), and an unreadable sidecar turns every `allow` decided after it into `ask` rather
+  than letting a default allow through.
+- Explicit config and permission-sidecar guards stay protected even when the
+  configured store places them inside a workflow's writable area.
+- Refuse replacing an existing permission sidecar with an unsupported
+  explicit version, even when a legacy replacement document is valid. Typed rule
+  persistence remains disabled pending writer compatibility and recovery acceptance.
+
+#### agents/engine
+
+- Close owned agent sessions when handshake or startup event
+  bookkeeping fails. Direct-child cleanup now waits for exit with bounded SIGTERM
+  and SIGKILL grace periods, reports incomplete cleanup separately, and preserves
+  the original startup failure.
+
+#### app
+
+- Starting runs from the palette or guided launch no longer stops working after
+  about 1,000 runs. The encrypted run-intent journal now drops abandoned intents when it
+  next writes, including ones an earlier version left behind, and its 1,000 limit counts
+  only retained intents, which are never pruned. At that limit the refusal says too many
+  intents are retained instead of pointing at the OS keychain.
+- **Always deny** on a permission card no longer lets the call through. It sent the
+  selected option, usually **Allow once**, with a deny rule; it now answers with the deny
+  option, and **Always allow** with an allow option. When the ask names no single option that
+  goes that way, the button is disabled and says why.
+- On an Attention card, `Enter` on a focused button presses that button. It used to
+  answer with the card's selected option instead, so tabbing to **Deny** or **Always deny** on a
+  permission ask and pressing `Enter` sent **Allow once**. The same holds in every list and
+  canvas: `Enter` on a focused button or link is the control's, while a list's or a tree's own
+  `Enter` on its selected row is unchanged.
+- A push no longer moves focus while a person is working in an Attention card. A new
+  permission ask, or a gate answered from somewhere else, used to move focus to another card or
+  out of a half-typed note, so the next letters became card shortcuts and `Enter` could answer
+  the wrong card. Focus now stays put, and moves to the next card only when the focused card
+  itself goes.
+- A palette row for an Attention card acts on the card it names, or on nothing. It
+  used to act on whichever card was current when it ran, so a card answered elsewhere while the
+  palette was open could turn "Answer" or "Cancel the run" into an answer or a cancel for a
+  different run. When the named card has gone or changed, nothing is sent and the surface says
+  so.
+- Holding `Enter` in the command palette no longer confirms a destructive row. The
+  key's auto-repeat counted as the second press, so a cancel could run without its confirmation
+  being read.
+- Keep keyboard focus in Attention when its final focused gate or permission
+  card is removed, while preserving focus the user moved elsewhere (PR #646).
+- Buttons, menu items, the sidebar's surfaces, segmented controls and the Plan's
+  filters are set in the 13px label style the design gives them, rather than the 14px body
+  text a font reset gave them by accident, and the schedule's **why** in its caption size.
+  Plain buttons set as machine text — validation findings, the editor's graph trail and edge
+  links — are in mono again, as everything ORCA produced is.
+- Counts agree with their nouns and stay on one line with them. The workflow editor's
+  inspector said "1 edges" and "1 nodes", the Plan's decision list "0 of 1 decisions", the
+  template editor "1 changed sources", and the workflow inspector "up to 1 attempts"; a count
+  such as "4 changes" or "16 nodes" could also break between the number and its word. Every
+  count is now written through one helper that picks the noun and joins the two with a no-break
+  space, so a line can wrap between counts but never inside one.
+- The object header's crumbs and its `…` are set in the 13px label style the design
+  gives them, rather than the 14px body text they inherited by accident.
+- Run tree rows for a step that never ran line up with the status column again,
+  the run summary no longer says its status twice, and a permission rule cut short in a
+  narrow panel shows its whole text on hover.
+- Deleting from the workflow editor's inspector no longer drops keyboard focus on the
+  page. After **Delete** or **Delete with its connections** the selection moves to the next node
+  in file order (the previous one if it was the last), after **Delete edge** to the node the
+  edge left from, and focus goes to the canvas, where `⌘Z` takes the delete back. The canvas's
+  own Delete key moves the selection the same way. Focus moved elsewhere while the delete was
+  out stays where it was put.
+- **Delete** and **Delete edge** in the workflow editor's inspector are quiet buttons
+  instead of red ones on every selection. They still do not ask first, on purpose: each takes
+  something out of the unsaved draft, **Undo** (`⌘Z`) brings it back, and nothing reaches the
+  workflow file until **Review and publish**.
+- First-run setup's **Connect selected local workspace** now says when `ORCA_DAEMON_URL`
+  is what stopped it. With that variable set, the launch is pinned to that daemon and setup
+  cannot start its own, but the card showed the generic "could not verify the selected
+  directories" refusal, which pointed at the folders instead.
+- The first-run ownership journal no longer stops the workspace after about 255
+  launches. A reservation folds settled history into a verified checkpoint that keeps the
+  claim chain head and effective configuration, and a journal that already reached the old
+  limit is folded on its next start.
+- A commit, pull or branch switch in the selected project no longer invalidates
+  the saved first-run selection and strands its store. Reopening checks the repository's
+  directory identity; the reviewed branch and base stay in the receipt as provenance.
+- A first-run workspace whose last session ended uncleanly before a restart is no
+  longer blocked for good. Config offers **Mark previous session ended**, which asks on
+  its own row. On confirmation it checks that nothing holds the workspace's startup fence,
+  then records a person-confirmed settlement. Startup continues, and retained runs wait
+  for explicit inspection. It never happens automatically.
+- First-run project setup now says why it refused (for example a non-empty app
+  workspace, a project with no branch checked out, Git missing, or an app update in
+  progress) instead of one generic "Setup was refused" message. Raw operating system and
+  Git text still never reaches the screen.
+- The window no longer draws an OS title bar above its own on macOS and Windows.
+  The traffic lights and the Windows caption buttons now sit inside the title bar's
+  platform insets, follow the theme, and Linux keeps its window manager's frame.
+- Graph nodes on the workflow viewer, the workflow editor and the Plan dependency
+  graph keep a fixed height, so edges meet them where the layout drew them. A long name used
+  to wrap onto as many lines as it took, and a running node's meta line ("running · attempt
+  2 · 3 nested graphs") onto several more, growing the box past its slot. Now a node's name
+  is at most two lines and its kind and meta line one each, all cut at their end with the
+  full text in a tooltip. The full name is still in the node's accessible name, after its
+  status, and in the inspector. The node height token, `node-h`, goes from 64px to 96px, and
+  a node's padding from 8px to 6px above and below, so the kind, a two-line name and a meta
+  line with a status chip fit whole; start and end pills stay as tall as their text and are
+  centred in their slot.
+- Typing or pasting a run id into the command palette now jumps to runs admitted
+  through a request or a direct launch, whose ids are `run_` and a UUID. Only the 26-character
+  form was recognised, so the runs started from the app were the ones that could not be
+  found by id. A bare UUID without `run_` is still not taken for a run.
+- On macOS, only a packaged app mounts the update-recovery startup gate, so
+  development runs and the app smoke tests start normally instead of opening only the
+  recovery shell.
+- A packaged Mac app no longer opens only the recovery shell after Migration
+  Assistant, a Time Machine restore, a renamed home folder, a moved or deleted workspace,
+  or a crash during first-launch setup or enrollment. An open update window that no
+  update attempt holds is re-anchored to its directories' new identities; when its
+  records are lost or unreadable, the recovery shell offers a confirmed reset. A recorded
+  update attempt still keeps startup closed. Source- and offline-tested only; no packaged
+  Mac acceptance is claimed.
+- Menus are no longer see-through. Every popover stood on the dialog scrim's
+  translucent grey; menus now stand on the raised surface with the popover shadow. A
+  destructive menu item is drawn with a `✕` in the danger tone and is never the item focus
+  lands on when the menu opens. The guided launch's workspace-root menu says why a root is
+  unavailable in a note that wraps, instead of an uppercase line past the menu's edge.
+- Menu hints that are machine text are no longer uppercased. A workflow's
+  `ai-sdlc · v3 · 7 nodes` in the palette's picker, a run's `status · vN` in the workflow
+  viewer, a retained launch's intent id and the crumb menu's `orca://` were set in the
+  eyebrow style, which re-cased them; they are now mono and verbatim. Runs in the workflow
+  viewer's picker also carry their id token, since runs of one workflow share a name.
+- Fix the native updater journal's storage namespace and envelope limit;
+  retain interrupted recovery evidence and seal ordinary bootstrap before journal
+  commits or handle closure. Native installation and protected-state restore remain
+  disabled pending complete writer ownership and recovery contracts.
+- The type icons on workflow and dependency graph nodes, and in the editor's palette,
+  are drawn with the 1.5px stroke the design gives inline icons, as the canvas controls are,
+  rather than a 1px hairline.
+- Hovering a command palette row no longer moves the selection, so a stray mouse
+  cannot change what `Enter` runs. Clicking a row selects it, so a destructive row armed
+  by a click is the one the next `Enter` confirms.
+- Saving the Agents policy panel no longer erases a grant written while the draft was
+  open, or puts back one somebody revoked. The draft holds the rules of the agents a person
+  edited rather than a copy of `orca.permissions.json`, and Save writes them onto the file as
+  it is now, so an "allow always" answered meanwhile for another agent is kept; one that
+  changed the same agent's rules stops the save with a conflict and **Reload**. What is typed
+  while a save is out stays in the draft, and **Discard** waits for the write instead of
+  hiding a save that still lands.
+- The permission editor now labels wildcard sidecar allows as ignored and explains
+  why they do not grant permission, including while editing a draft. Existing saved rules
+  remain intact, and permission evaluation is unchanged. Title patterns do not establish
+  exact-command approval evidence; that support remains unavailable under #594.
+- **Remove** on a written grant in the permission policy panel is a quiet button
+  instead of a red one on every grant. It still does not ask first, on purpose: it takes the
+  grant out of the unsaved draft, nothing is written until **Save**, and **Discard** brings
+  it back.
+- Removing a grant in the permission policy panel no longer drops keyboard focus on
+  the page. Focus moves to the next grant's **Remove**, to the previous one's if it was the
+  last grant, or to **Add a grant** if the list is now empty, and the same happens when a
+  re-read takes away the grant focus was in. Focus moved elsewhere stays where it was put.
+- Releasing a claim on the Agents surface no longer drops keyboard focus on the page.
+  When the release goes through and the claim leaves the list, focus moves to the next row's
+  **Release**, to the previous row's if it was the last row, or to the "Claimed work" section
+  if the list is now empty. Focus moved elsewhere while the release was in flight stays where
+  it was put, and a refused release keeps its row and its focus. The result, which used to
+  vanish with the row, is shown under the section's heading.
+- Releasing a claim on the Agents surface asks on the row instead of in a menu.
+  **Release** is a quiet button at rest; pressing it arms the row in the danger tone, with
+  **Keep** (focused, so a second `Enter` keeps the claim) and **✕ Confirm release**, and a
+  second line saying what releasing does: the work item goes back to the scheduler, its run
+  loses the claim, and another run may claim it. Keep, `Esc`, moving focus away or arming
+  another row disarms it, and nothing is sent until Confirm. The controls are named by the
+  work item's title. The command palette's release row on the Agents surface now arms on the
+  first `Enter` and sinks below the safe commands, as the Plan surface's already did.
+- Keep the reader's run and step selection after following a link, while still
+  honoring the same link opened again. Hold live lists when keyboard, minimap or output
+  search navigation moves to earlier content, so new output does not pull the view away.
+- A copied Mac update namespace with missing or torn enrollment cannot take over
+  roots whose original namespace still exists. A confirmed reset removes enrollment before
+  removing the last startup guard, so an interrupted reset can be retried or provisioned again.
+- Run tree rows indent by their depth again. `.orca-tree-row` pads by `--level`,
+  which nothing set, so every row sat at level 0 and only the hairline guides moved.
+- **Save** and **Discard** on the Config surface and in the permission policy panel no
+  longer drop keyboard focus on the page when they empty the draft and the save bar goes away.
+  Focus moves back to what the draft was editing: the form's first section or the YAML text on
+  the Config surface, the written grants in the policy panel. Focus moved elsewhere while a
+  save was out stays where it was put.
+- The Plan schedule's **why** links line up. A classified item drew its why inside the
+  tinted schedule badge and a settled item drew it after its outcome chip, so the tint ended
+  after "why" on some rows and before it on others. Every row is now the mark, then the why —
+  a control is never drawn on a state's tint — and the badge and the settled item's chip take
+  one width in that column (the longest schedule word, "waiting on deps"), so every why starts
+  at one edge. A schedule badge is also never narrower than its word.
+- Status chips no longer clip their word, on any surface. The run tree and the Agents
+  claims list each held the chip to a 12ch column, narrower than "✓ succeeded"; the run tree
+  was fixed on its own and the claims list kept the bug. The chip now sizes itself and is never
+  narrower than its glyph and word, and a list whose statuses form one column asks the chip for
+  it (`StatusChip`'s `aligned`) rather than setting a width.
+- The run summary in step detail no longer scrolls sideways. An object or array
+  variable is set as indented JSON in a sunken well under its name, clamped to eight lines
+  with a "Show all" button, instead of one compact line that held the pane open; a long
+  artifact name truncates inside its chip, whole in its title; and long ids, paths, error
+  messages and tool-call bodies break inside the pane rather than running past it.
+- An agent card with many roles wraps them inside the card instead of running them
+  past its edge and under the card beside it. The card's name no longer breaks at a hyphen
+  ("scripted-" over "slow"): it keeps one line and the host label gives way, truncating at
+  its end with the whole value in its title. The same fix covers the other places a row of
+  labels could outgrow its box: the workflow inspector's kind and attempt chips wrap, a
+  request id filter on the Plan rail truncates at its end instead of running past the rail,
+  and the titles of the step, run and workflow-editor inspectors, the editor's node list and
+  the permission panel's agent id stay on one line, cut at the end with the full text in
+  their titles. A run of chips is one class in the component layer, `.orca-chips`, rather
+  than a copy per surface.
+- Text that does not fit is handled one way everywhere. A label in an outline (a
+  chip, a badge, the "pinned" pill, the waiting count in the title bar, a key, a button) stays
+  on one line and inside its outline. The save bars and the status bar stay one line: when a
+  narrow window runs out of room, their explanatory sentences are cut at the end, with the
+  whole sentence on hover, and the change count and the buttons keep their place.
+- Upgrade electron-updater to 6.8.11, picking up its upstream fixes for cached
+  filename validation, multipart differential downloads and consistent installer/blockmap
+  caches. ORCA's update behaviour and Windows recovery contract are unchanged.
+- The connection bars and a link's landing notice sit in the primary pane under the
+  object header, as `docs/design/40-connection-states.md` places them, instead of stretching
+  across the window above the sidebar and squeezing the app into the status bar's row. The
+  landing notice appears only when a link could not be honoured (an unknown URL, no daemon
+  answering, a work item the plan does not hold, a counterpart the app cannot follow yet);
+  a link that worked no longer says "Opened …". Dismissing the notice no longer closes the
+  workflow it was about. The Runs left column also no longer spills under the step detail
+  when the detail is dragged wide.
+- Support reviewed first-run creation of a new private Windows workspace
+  under a selected safe parent, using verified token SID and native NTFS identities.
+  Native lifetime writer fencing preserves duplicate-writer refusal and receipt
+  verification across reopen; unsupported ancestry and legacy Windows receipts refuse.
+  Validated on a source-built Windows app, not from a release artifact.
+- Keep malformed structured-form scalar values blank instead of coercing objects or
+  arrays, and display launch Request identifiers only when they are strings.
+- Keep reference selectors focused after structured array and record edits, and
+  fit Config fields and review actions within narrow windows and 200% zoom.
+- Resolve authorized Request override choices in the mounted launch route, retain
+  typed drafts across navigation, verify the reviewed selection provenance before protected
+  admission, and recover pending intents under their independent inspection grants.
+  Consume confirmed intent abandonment across same-target authority refresh so the next
+  explicit launch can be edited while preserving target and permission checks.
+- Show authoritative template diagnostics and permit authorized fixture previews
+  when source writes are unavailable.
+- Yield bounded diagnostics report serialization and exact validation between
+  batches, preserving all retained events and exact local export bytes. Capture remains
+  disabled pending packaged native performance, memory and privacy acceptance.
+- The artifact panel's `[` and `]` keys step through the versions on screen as
+  soon as a new version is committed, instead of a stale list.
+- Keep the latest adjacent edit to the same configuration field so extended
+  typing does not exhaust the structured operation limit. Preserve typed paths,
+  structural operation order and review invalidation.
+- Windows update timeout and ambiguous installer errors keep admission closed
+  instead of silently reconnecting. A proven non-launch abort recovers a first-run
+  workspace only after exact-child termination and ownership settlement, through its
+  verified saved selection. Uncertain recovery retains evidence and reports failure.
+- Keep the selected option and rationale when a plan decision is refused, and
+  disable submission while the daemon cannot accept writes. Late responses leave newer
+  drafts intact.
+- Update a selected step's tool-call rows live as calls start, run, finish or
+  fail, while preserving buffered output and permission transitions.
+- Committing a matching buffered-output search with Enter focuses the output
+  lines, so `n` and `Shift+N` navigate matches without editing the query.
+- Plan's Waive and Reopen confirmations focus Keep on opening, return to
+  their trigger after cancellation or refusal, and preserve focus in the inspector
+  when a dependency or decision changes. Late results leave newer questions and
+  focus moved elsewhere alone.
+- Keep configuration variant reviews available through unchanged rerenders while
+  invalidating reviews when the union value, path or schema changes.
+- Refresh mounted Produced artifact chips and panel version lists when matching
+  artifacts are recorded, preserving the selected version, comparison and immutable bodies.
+  Show metadata failures beside the version choices while keeping loaded bodies and diffs visible.
+- Keep uncommitted workflow inspector text and selection while the definition
+  refreshes, with visible refresh errors and changed-definition status.
+- Connect a workflow pointer wire once under StrictMode. Cancelled or
+  unrelated pointers cannot complete the wire or move its node (PR #686).
+- Keep workflow inspector text and validation errors with their selected node or edge,
+  so leaving an equal-valued field cannot write another selection's text. Preserve focused Id
+  input during renaming and unsent text while the current selection refreshes.
+- Retire workflow publish reviews when the draft changes or write access is lost,
+  and ignore late review responses after editing resumes.
+- Retire configuration review evidence queued during setup reads before a new
+  action, so a failed rereview cannot leave a stale saved-configuration Bind control.
+
+#### cli
+
+- Safely render malformed event and plan journal display fields without object
+  stringification. Legacy gate labels, structured journal JSON and stored events are preserved.
+- With `humanInput: { mode: cli }`, the terminal prompt shows the published question
+  and options, with sensitive values withheld as `orca status` shows them. Answers are
+  unchanged.
+- `orca validate` preserves absolute workflow filenames and globs instead
+  of prefixing the working directory. Relative arguments still resolve from the
+  working directory, and configured defaults from the config directory.
+
+#### daemon
+
+- `config.get` leaves a sidecar wildcard `allow` out of the effective policy, as
+  evaluation does.
+- `inputs.answer` refuses an `always` whose one-time answer goes the other way
+  (`NOT_SUPPORTED`), before anything is answered or written.
+- Reject fresh stale continuation intent before reserving a retry operation
+  or continuation ID, while retaining successful replay and lost-ack recovery.
+- Closing a daemon now waits for dispatched RPC method handlers after
+  closing HTTP and WebSocket transports. A caller disconnect still does not cancel
+  an admitted operation; shutdown no longer reports settlement while its handler
+  can still write.
+- Require raw configuration read authority for every Save/validation receipt.
+  Recheck credentials and grants after reads and before configuration or permission-sidecar
+  replacement and generation activation; remove staged files on refusal. Apply continues
+  to require configuration write authority alone and returns no raw editor bytes.
+- Validate Request descriptors and selections against the exact captured
+  configuration and workflow before admission. Suppress sensitive schema defaults and refuse
+  overrides for direct workflows that cannot carry them.
+- Track exact partial consumers, reject blank template IDs, and record Apply
+  history from the reviewed source revisions.
+- A competing continuation reconciliation refused with `RUN_LEASED`
+  preserves the winning receipt, including before execution lease acquisition.
+  Retained-key replay no longer publishes a transient blocked state; the winning
+  continuation still records one decision, attachment, execution and settlement.
+- Graceful shutdown now settles background direct-admission receipt
+  verification before exiting, so its event-lock owner publication cannot be
+  interrupted by a normal restart. Workflow execution keeps its existing lifecycle.
+- A socket closed or revoked while subscription authorization is pending
+  no longer attaches a source listener or starts replay when authorization finishes.
+
+#### engine
+
+- Permission-ask options from an ACP `reject_once` / `reject_always` kind are marked
+  `destructive`.
+- A `parallel` branch or `custom:plan-dispatch` item that starts after another
+  has finished no longer sees that sibling's artifacts, and neither do sequential siblings
+  bound to different work items. A program dispatching two items at a time no longer hands
+  the third item an earlier item's `testReport` and `review` as feedback for its first build.
+- Skip dependency reconciliation for unchanged artifact signals while
+  retaining replay recovery after a saved decision encounters a journal or reconciliation failure.
+- Validate all builtin plan and program custom-node fields at workflow
+  load time and before execution, preserving omitted defaults, templates and
+  sparse scheduling policy overrides.
+- Refuse unregistered Request item-workflow defaults and caller selections
+  before admission, using the captured configuration's workflow registry.
+- Reject malformed artifact YAML through the existing bounded repair prompt;
+  skip malformed optional deliverables and preserve operational error propagation.
+
+#### examples
+
+- The beta first-job fixture (`examples/beta-first-job/fixture.js`) runs on Windows.
+  It pointed Git's global configuration at `NUL` there, which Git for Windows refuses as a
+  config path; it now uses `/dev/null`, which Git for Windows also reads as the null device.
+
+#### integrations
+
+- Preserve original ACP permission option IDs, kinds, labels and
+  order in non-live forwarding; refuse invalid metadata and unknown answers rather
+  than fabricating allow/reject choices. Exact-command live approval remains
+  unsupported (PR #674).
+
+#### store
+
+- Discard failed document mutation batches when directory setup or lock
+  acquisition fails, so reads and later writes do not revive rejected changes.
+  Preserve mutations queued for subsequent writes.
+- Publish content-addressed artifact blobs without overwriting shared bytes,
+  synchronize them before indexing, and reject corrupted bodies on read or reuse.
+  Existing blob paths and index records remain compatible; no migration is required.
+- For a run with sensitive launch inputs, `agent.turn.started` publishes
+  `promptPreview` as `[REDACTED]`. A rendered prompt can hold a sensitive value formatted as
+  YAML, transformed by a template function or cut at the 400-character preview bound, which
+  literal scrubbing cannot recognize. `promptHash` and the encrypted original are unchanged,
+  and event logs written earlier are not rewritten.
+- A sensitive `itemWorkflow` input is withheld from public launch provenance. Its
+  source, and an explicit `itemWorkflow` override, stay visible.
+- Replay validated accepted retry receipts during catalog acquisition
+  contention, retaining authorization, intent comparison, operation locking and
+  durable receipt checks without allocating or repairing retry state.
+
+#### testing
+
+- Serialize shared scripted-agent counter transactions across processes,
+  preserving failure and cancellation consumption behavior in concurrent demos.
+
 ## 0.6.0 - 2026-09-29
 
 ### Store format
