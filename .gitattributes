@@ -25,3 +25,6 @@ docs/preparation/beta-first-job/reference.patch text eol=lf
 # (diagnostics-native-package.js sourceDigest), and static inspection (#779) recomputes it
 # from a checkout on another OS. Keep the bytes identical on Windows checkouts.
 packages/app/native/diagnostics/** text eol=lf
+
+# The app icon, rendered from packages/design/brand/orca-icon-light*.svg (docs/design/README.md).
+packages/app/build/icon.* binary
