@@ -1,0 +1,142 @@
+{
+  "record": "guard-proof-exact-identity-matrix",
+  "status": "incomplete-not-qualified",
+  "note": "Reviewed tuple for the one supported lane. Null means not yet fixed or not yet measured; identity.validate() refuses it with identity_incomplete. The tuple has no session or authorization field: it is measured first, the frozen plan names its digest, and the signed authorization names the plan, identity and ledger digests. Values are pathname snapshots and builder outputs, not loaded identity, and grant nothing. host.requirements names the kernel interfaces the boundary needs (Linux 5.12+ mount_setattr, pidfd_open, a readable /proc/<pid>/stat, unprivileged user namespaces). The /proc/<pid>/task/<tid>/children interface (CONFIG_PROC_CHILDREN) is not required; a host without a readable /proc refuses with procfs_unavailable.",
+  "baseMain": {
+    "commit": "c41c878170767f122107558d2d719e428661eb73",
+    "tree": "a1c46ed56074ddd7cfdcb16e97d500e9f072ed35"
+  },
+  "reviewedTuple": {
+    "version": 1,
+    "lane": "controlled-owned-read-connected",
+    "source": {
+      "commit": null,
+      "tree": null,
+      "clean": true
+    },
+    "build": {
+      "inputsSha256": "9514e53b48cf390510220ed028533af74b2f1f5f12882a32f5367ed60956d946",
+      "inputCount": 387,
+      "lockfileSha256": "cd493916b9d8cb3ae64db94fad3f923be7a2f661e375ce892c1e728db11dbaf2",
+      "builderSha256": "aea8057186bb9b437bad915f45ebd2437054197202a6d9d4adca03de20ea774b",
+      "outputs": {
+        "controlled-build.json": {
+          "bytes": 48711,
+          "sha256": "9fd5294d059ded8cec9a36c0727163f95c8fbb6c0279a43fba3b5b2d1bf96ee8"
+        },
+        "controlled-child.mjs": {
+          "bytes": 5254,
+          "sha256": "a58036e5343fe07dac8625f7d5dfc2a7e0c6bfe660ddb1e96711b5b8d002e35c"
+        },
+        "controlled-producer.mjs": {
+          "bytes": 2248585,
+          "sha256": "b145543ef28899ba2e4a076e2fed6f3193260b3d2987103821cc23bef956bb31"
+        }
+      }
+    },
+    "provider": {
+      "name": "orca-owned-io",
+      "version": null
+    },
+    "bridge": {
+      "name": "scoped-permission-bridge",
+      "version": null
+    },
+    "tool": {
+      "name": "owned-file-read",
+      "schemaSha256": null,
+      "codec": "orca-owned-read-v1",
+      "codecVersion": 1
+    },
+    "executionPath": "orca-owned-file-read-service",
+    "host": {
+      "os": "linux",
+      "arch": null,
+      "kernelRelease": null,
+      "hostIdSha256": null,
+      "requirements": ["mount-setattr", "pidfd", "proc-pid-stat", "unprivileged-user-namespaces"]
+    },
+    "runtime": {
+      "node": {
+        "version": null,
+        "exeSha256": null
+      },
+      "python": {
+        "version": null,
+        "exeSha256": null
+      }
+    },
+    "loader": {
+      "manifestSha256": null,
+      "moduleCount": null,
+      "loaderSha256": "aee90854e3ecfb9d229ca648dd98c45a52b8d3c392d3d95cad817ea6df1864b5"
+    },
+    "profile": {
+      "id": "orca-owned-file-read-v1",
+      "sha256": null
+    },
+    "containment": {
+      "mechanism": "unshare-pivot-root-v1",
+      "specSha256": null,
+      "namespaces": ["cgroup", "ipc", "mnt", "net", "pid", "user", "uts"]
+    }
+  },
+  "buildMeasurement": {
+    "command": "node tools/owned-read-proof/build-controlled.mjs <new empty directory>",
+    "sourceCommit": "c41c878170767f122107558d2d719e428661eb73",
+    "repositoryInputs": 195,
+    "dependencyInputs": 192,
+    "inputsSha256Definition": "sha256 of canonical JSON (sorted keys, no spaces) of controlled-build.json 'sources'",
+    "launched": false,
+    "comparedWithPr809ReviewedImage": "different: #809 reviewed producer 2248652 bytes 1c0bffce..., child 5713 bytes 17fdd509..., manifest 48027 bytes 889bd46e...",
+    "builderTarget": "node24; the build host ran Node v22.23.4, so a qualification runtime must be fixed separately"
+  },
+  "thisHostSnapshot": {
+    "purpose": "Where the offline tests ran. Not the qualification host.",
+    "kernelRelease": "6.18.44-fc-v310",
+    "arch": "x86_64",
+    "hostIdSha256": "464048bad91408fdbd7b03183ddb99ee57598da639ae80916c487b3fc6f2994b",
+    "node": {
+      "version": "v22.23.4",
+      "path": "/opt/node22/bin/node",
+      "bytes": 124902584,
+      "sha256": "2286ce921a47349726b0e8b037ccbb6627043d24d1fc3c8f22c2dc53c4a1f7ff"
+    },
+    "python": {
+      "version": "3.13.18",
+      "bytes": 31150928,
+      "sha256": "3fff8e682225671f0ab9659e9a0f540f7c81491352004fc1397b16f57bed56ca"
+    },
+    "unshare": {
+      "version": "util-linux 2.39.3",
+      "bytes": 43624,
+      "sha256": "a23c8863860669003dc4660039fe642f5795c8c2195898ebc5d01afa1ac3d11c"
+    }
+  },
+  "unsupportedRoutes": [
+    "acp-native-shell",
+    "acp-terminal",
+    "provider-built-in-tools",
+    "provider-cached-native-approval",
+    "native-allow-always",
+    "remembered-native-denial",
+    "shell-descendants",
+    "subagents",
+    "independent-mcp-servers",
+    "custom-sessions",
+    "remote-ssh-execution",
+    "acp-fs-write-text-file",
+    "acp-fs-read-text-file-unowned",
+    "claude-provider",
+    "codex-provider",
+    "gemini-provider",
+    "pi-provider",
+    "windows-host",
+    "macos-host",
+    "pending-intent-replay",
+    "judge-delegated-review",
+    "product-ui-permission-flows",
+    "other-tools-schemas-or-codecs",
+    "other-profiles"
+  ]
+}
