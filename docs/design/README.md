@@ -17,6 +17,7 @@ packages/design/               the @orca/design workspace package
   css/components.css           the component layer: token-bound classes, no hardcoded values
   src/component-api.d.ts       the props each React primitive should expose over those classes
   test/contrast.test.ts        WCAG AA for every documented pairing, in both themes
+  brand/                       the mark and the app icon as SVG, light and dark
 
 docs/design/                   this folder
   README.md                    this file: layout, how to consume it, the brand book
@@ -256,6 +257,35 @@ what the Runs surface lists and a work item token at a node of the graph Plan dr
 to read as a shape at `mono-id` size, which is why the step's is a split square and not the
 plain rectangle `▭`: at 12px that is a dash. The glyph is decoration; the kind's word is the
 token's accessible name ("run 7X8PXX").
+
+## Logo and app icon
+
+The mark is a hollow hexagon cut at the middle of each edge into six corner brackets, with a
+dorsal fin standing on a teal waterline inside it. The hexagon is the work item's `⬡`; the six
+pieces are the six stages an item passes through; the fin is the name. It is drawn on a 64-unit
+grid in four token colours and nothing else: `ink-primary` for the brackets and the fin,
+`accent` for the waterline, `surface-base` for the tile and `border-hairline` for its edge,
+each from the theme the icon is for (`test/brand.test.ts` holds that).
+
+```
+packages/design/brand/
+  orca-mark-light.svg          the mark alone, transparent ground, for a light surface
+  orca-mark-dark.svg           the same for a dark surface
+  orca-icon-light.svg          the app icon: the mark at 96% on a rounded surface-base tile
+  orca-icon-dark.svg           the same tile in the dark theme
+  orca-icon-*-macos.svg        the tile on the macOS icon grid (824 of 1024, transparent margin)
+packages/app/build/
+  icon.png, icon.ico, icon.icns   what electron-builder packages, rendered from the light SVGs
+```
+
+- The waterline passes *behind* the brackets: a mask cuts it where a bracket crosses, so the
+  hexagon reads whole and the mark works on any ground without a halo colour.
+- The installers ship the light tile on every platform. The dark files are for documentation,
+  the README and anywhere the ground is known to be dark.
+- Do not redraw the mark at small sizes by scaling a screenshot. Re-render the PNG, `.ico`
+  (16–256) and `.icns` (16–1024) from the SVG when the SVG changes, and commit both together.
+- No wordmark is drawn: where the name sits beside the mark it is set in IBM Plex Sans
+  SemiBold, lowercase or as `ORCA`, at the mark's optical height.
 
 ## Building on this
 
