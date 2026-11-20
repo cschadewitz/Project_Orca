@@ -22,7 +22,7 @@ points Windows/Linux readers here.
 | --- | --- | --- |
 | [tester-guide.md](tester-guide.md) | Tester | Start here: the candidate card (fill-ins), what the tester agrees to, what the candidate is not, and stop rules |
 | [windows.md](windows.md) | Windows tester | Prerequisites, SHA-256 and signature-status check, NSIS install, first launch, the SmartScreen rule (one named-publisher exception) and the browser-warning stop rule (P1–P9) |
-| [linux.md](linux.md) | Linux tester | Prerequisites, SHA-256 check, tar.gz/AppImage extraction, terminal launch, and the sandbox/FUSE stop rules (P1–P6) |
+| [linux.md](linux.md) | Linux tester | Prerequisites, SHA-256 check, APT plan review, Ubuntu 24.04 `.deb` install, terminal launch as the normal user, the sandbox/AppArmor stop rules (P1–P6) and `orca-desktop`-only cleanup |
 | [first-success-sample.md](first-success-sample.md) | Tester | The built-in agent-free `orca-beta-local-check` sample over a throwaway Git project, with expected results, resource bounds and how to stop (F1–F10) |
 | [when-something-goes-wrong.md](when-something-goes-wrong.md) | Tester | Stopping ORCA and its bundled daemon, interruptions, failed startup, setup refusals, and collecting details safely |
 | [feedback-template.md](feedback-template.md) | Tester | Copyable text report: candidate, platform, runtime, steps, expected vs. actual, minimal sanitized evidence |
