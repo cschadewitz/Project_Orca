@@ -33,7 +33,8 @@ AppImage or arm64 file on the download page.
 ## What you are agreeing to
 
 - Install the candidate on your own computer, under your own user account. On Linux
-  that is one `sudo apt install` of the checked `.deb`; ORCA itself always runs as you.
+  that is a reviewed `sudo apt-get install` of the checked `.deb`; ORCA itself always
+  runs as you.
 - Make a new throwaway folder, `orca-trial`, with a tiny throwaway Git project in it.
   Use only that folder with ORCA.
 - Run one built-in sample. It starts no AI agent, needs no account and no internet, and
@@ -81,8 +82,9 @@ at all.
 
 - any value on your card is unfilled, or the file you downloaded doesn't match its SHA-256
 - your operating system, browser or antivirus shows a security warning, or blocks the file
-- an installer asks for administrator rights. The one exception is the Linux page's P4
-  `sudo apt install` of the `.deb` whose hash matched
+- an installer asks for administrator rights. The only exceptions are the Linux page's
+  `sudo apt-get` commands: P3's dry run, P4's install of the `.deb` whose hash matched,
+  and the reviewed removal of `orca-desktop` after the round
 - APT's plan removes, upgrades or downgrades a package, or installs anything other than
   `orca-desktop`
 - anything asks you to run ORCA with `sudo` or as root

@@ -8,12 +8,11 @@ Part of the [Windows/Linux candidate guide](tester-guide.md). The steps are numb
 the command it installs are both called **`orca-desktop`**. Don't confuse it with
 **Orca**, the screen reader that Ubuntu installs by default as the package `orca`: these
 steps never run, change or remove `orca`. Don't use a tar.gz, an AppImage or an arm64
-file, even if the download page lists one. On stock Ubuntu 24.04 they cannot start with
-the sandbox on.
+file, even if the download page lists one: they are not part of this round.
 
-Installing the package is the one step in this round that uses `sudo`, and only for the
-single `apt install` command in P4, after you have checked the file. Never run ORCA itself
-with `sudo`, and never change a system setting to make it start.
+This round uses `sudo` only for APT: P3's dry run and P4's install of the checked `.deb`,
+and, after the round, the reviewed removal of `orca-desktop`. Never run ORCA itself with
+`sudo`, and never change a system setting to make it start.
 
 ## Prerequisites
 
@@ -53,38 +52,45 @@ Keep the throwaway folders for this test in your home directory. Don't use a syn
 
 ## P3–P4: review APT's plan, then install
 
-3. **P3 Review APT's plan.** This only shows what APT would do. It changes nothing and
-   needs no `sudo`:
+3. **P3 Review APT's plan.** This dry run only shows what APT would do and changes
+   nothing. It uses `sudo` so that APT reads the same system configuration as the real
+   install, and the same options as P4:
 
    ```sh
-   apt install --simulate ./ORCA-<version>-linux-amd64.deb
-   ```
-
-   The `./` matters: it makes APT read the file you checked, not a package from the
-   internet. Expect:
-
-   - under "The following NEW packages will be installed:", only `orca-desktop`
-   - the summary line `0 upgraded, 1 newly installed, 0 to remove and …`
-
-   **Stop** if the plan removes any package, upgrades or downgrades any package, installs
-   any package other than `orca-desktop`, or names `orca`. Report "stopped at P3:
-   unexpected APT plan" and copy only the package names. Don't change your system's
-   package sources or settings to get a different plan.
-
-4. **P4 Install** the same file, once:
-
-   ```sh
-   sudo apt install ./ORCA-<version>-linux-amd64.deb
+   sudo apt-get install --simulate --no-install-recommends --no-remove ./ORCA-<version>-linux-amd64.deb
    ```
 
    `sudo` asks for **your own** computer password in this terminal. That is not an ORCA
-   or provider prompt; never type it anywhere else or share it. If APT shows a package
-   list and asks "Do you want to continue?", compare it with P3. If anything differs,
-   answer `n` and stop.
+   or provider prompt; never type it anywhere else or share it. The `./` makes APT read
+   the file you checked, not a package from the internet. The approved plan is exactly:
 
-   APT may print a note that the download "is performed unsandboxed as root" because
-   the file is in your home folder. That note is about APT reading the file and is
-   expected. Expect the output to end with lines such as "Setting up orca-desktop".
+   - under "The following NEW packages will be installed:", only `orca-desktop`
+   - the summary line `0 upgraded, 1 newly installed, 0 to remove and …` (the number of
+     "not upgraded" packages doesn't matter)
+
+   **Stop** if the plan removes any package, upgrades or downgrades any package, installs
+   or downloads any package other than `orca-desktop`, or names `orca`. Report "stopped
+   at P3: unexpected APT plan" and copy only the package names. Don't change your
+   system's package sources or settings to get a different plan.
+
+4. **P4 Install** the same file, once, with the same options plus `--assume-no`:
+
+   ```sh
+   sudo apt-get install --assume-no --no-install-recommends --no-remove ./ORCA-<version>-linux-amd64.deb
+   ```
+
+   These options hold APT to P3's approved plan. APT installs without asking only when
+   the plan is exactly `orca-desktop` and nothing else. If its fresh plan would add,
+   upgrade or download any other package, it asks "Do you want to continue?",
+   `--assume-no` answers no for you, and it prints "Abort." without changing anything.
+   `--no-remove` makes it abort on any removal. Either abort is a stop: report "stopped
+   at P4: APT plan differed from P3". Don't run it again.
+
+   Before the install lines, APT prints its plan again. Check it matches P3, and that
+   the line "Need to get 0 B/…" starts with `0 B`: nothing is downloaded. APT may also
+   print a note that the download "is performed unsandboxed as root" because the file is
+   in your home folder. That note is about APT reading the file and is expected. Expect
+   the output to end with lines such as "Setting up orca-desktop".
 
    **Stop, and don't try again, if:**
    - APT prints an error, or the install fails. The package refuses to install when it
@@ -94,8 +100,8 @@ Keep the throwaway folders for this test in your home directory. Don't use a syn
      finish
    - anything asks you to disable a protection, edit `/etc`, or change `sysctl`
 
-   Don't retry with `dpkg -i`, `--force` options, a different file or a different
-   package manager.
+   Don't retry with `dpkg -i`, `apt install`, `--yes`, `--force` options, a different
+   file or a different package manager. Don't bypass any warning.
 
    Check the result:
 
@@ -152,16 +158,18 @@ When your coordinator confirms nothing more is needed:
    nothing:
 
    ```sh
-   apt remove --simulate orca-desktop
+   sudo apt-get remove --simulate orca-desktop
    ```
 
    Under "The following packages will be REMOVED:" expect only `orca-desktop`. If the
    plan lists `orca` or any other package, stop and tell your coordinator. Otherwise:
 
    ```sh
-   sudo apt remove orca-desktop
+   sudo apt-get remove orca-desktop
    ```
 
+   APT shows the plan again and asks "Do you want to continue?". Answer `y` only if it
+   still lists only `orca-desktop`; otherwise answer `n` and tell your coordinator.
    Never `apt remove orca`, `apt purge` or `apt autoremove` for this round: `orca` is the
    screen reader, and the other two can remove packages this round didn't install.
 3. In your file manager, review each folder and its contents with your coordinator before
@@ -181,6 +189,6 @@ When your coordinator confirms nothing more is needed:
 | First-run directory, Git and setup checks, and the agent-free sample interpreter | Portable source tests on Linux x64 (`packages/app/test/first-run*.test.ts`, `packages/cli/test/first-run-sample.test.ts`) and this preparation's [offline validation](README.md#validation-record) | Offline only |
 | `.deb` packaging, install script, sandboxed launch and removal | [#854](https://github.com/cschadewitz/Project_Orca/pull/854) and the hosted Ubuntu 24.04 check in `desktop.yml` ([INSTALL-LINUX.md](../../INSTALL-LINUX.md#what-is-checked-and-what-is-not)). A hosted runner is not a desktop install and runs no sample | Per build, hosted only |
 | Install, launch, sample and F10 reopen on a fresh Ubuntu 24.04 Desktop | Coordinator gates G3–G4 for this candidate | Not recorded for a versioned candidate |
-| tar.gz and AppImage | They don't start on stock Ubuntu 24.04 or later with the sandbox on ([#853](https://github.com/cschadewitz/Project_Orca/issues/853)) | Not offered |
-| arm64 | The arm64 `.deb` is built but no check installs it | Not offered |
+| x64 tar.gz | On a stock Ubuntu 24.04 setup it aborted before its first window with the SUID sandbox helper error ([#853](https://github.com/cschadewitz/Project_Orca/issues/853)). The AppImage was not launched there | Not offered |
+| arm64 | The arm64 `.deb` is built but no check installs or launches it | Untested; not offered |
 | Updates | Linux has no desktop updater | Not applicable |

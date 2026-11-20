@@ -46,9 +46,10 @@ This is preparation, not a decision that any combination passed. The proposed Li
 is **Ubuntu 24.04 Desktop x64 (`amd64`) `.deb`**, package and command `orca-desktop`
 ([#853](https://github.com/cschadewitz/Project_Orca/issues/853),
 [#854](https://github.com/cschadewitz/Project_Orca/pull/854),
-[INSTALL-LINUX.md](../../INSTALL-LINUX.md)). The tar.gz and AppImage don't start on stock
-Ubuntu 24.04 or later with the sandbox on, and the arm64 `.deb` has never been installed
-by any check, so none of them is offered. A rehearsal or pull-request build (for example a
+[INSTALL-LINUX.md](../../INSTALL-LINUX.md)). None of the other Linux files is offered: the
+x64 tar.gz aborted with the sandbox helper error on the stock Ubuntu 24.04 setup in #853
+(the AppImage was not launched there), and the arm64 `.deb` is untested because no check
+installs or launches it. A rehearsal or pull-request build (for example a
 recut posted on #854 or #859) is not the candidate, even from the same commit: fill
 `{{ARTIFACT_TABLE}}` only from the versioned candidate's own manifest, and leave
 `{{SUPPORTED_PLATFORMS}}` and `{{TESTED_OS_VERSIONS}}` unfilled until that candidate clears
@@ -87,8 +88,12 @@ declare.
   `{{CANDIDATE_COMMIT}}`.
   - **Linux `.deb`: G2 is not enough on its own.** Also record, for the exact file in
     `{{ARTIFACT_TABLE}}`:
-    - **Identity.** The file name, its SHA-256 computed twice independently and equal to
-      the producing run's artifact digest and the manifest, and the control fields from
+    - **Identity.** The `.deb`'s file name and SHA-256, recomputed independently from
+      the exact bytes testers will download and equal to the producing job's checksum for
+      that file and to the candidate manifest. If the Actions artifact (the
+      `desktop-linux` ZIP) is the delivery container, record and verify the ZIP's digest
+      separately: it is a hash of the outer ZIP, not of the `.deb`, so the two never
+      match. Also record the control fields from
       `dpkg-deb -f`: `Package: orca-desktop`, `Architecture: amd64`, the candidate's
       version, and no `Conflicts`, `Breaks`, `Replaces` or `Provides`.
     - **Payload.** `dpkg-deb -c`: every member owned by root, no setuid, setgid or sticky
@@ -130,8 +135,12 @@ declare.
     - **First launch.** Does it open **disconnected** for setup
       (`packages/app/src/main/index.ts`) or start a daemon (`desktop.yml`'s launch
       expectation, noted in #779)?
-    - **Linux APT plan.** The exact plan P3 shows on the offered OS, and whether APT's
-      "unsandboxed as root" download note appears as linux.md P4 describes.
+    - **Linux APT transaction.** On the offered OS, P3's dry run shows exactly the
+      approved plan (only `orca-desktop` new, nothing upgraded, removed or downloaded),
+      and P4 with the same options installs that same plan without a prompt. Also show
+      that P4 aborts with no change when the plan would differ (for example a package
+      that pulls in a missing dependency), and whether APT's "unsandboxed as root" note
+      appears. Until this is recorded, linux.md P3–P4 are provisional.
     - **Linux sandbox.** That the sandbox starts on the offered OS without changing
       settings, and what a refused install looks like.
     - **Linux keyring.** What the desktop's keyring prompt looks like at F7, and that F7's
