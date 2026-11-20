@@ -320,6 +320,100 @@ jobs:
           grep -q 'listening on http://127.0.0.1:' app.log
           pgrep -af -g "$app" orca-daemon.mjs
 
+      # The supported Ubuntu 24.04 install (#853), as a tester gets it: the x64 .deb through
+      # apt, on a host whose `kernel.apparmor_restrict_unprivileged_userns` is on, launched
+      # from its installed path with the sandbox on and no profile of this job's own. The
+      # prepare step above only covers linux-unpacked/orca; /opt/ORCA/orca resolves to a
+      # different file, so the package's own install script has to provide the exception or
+      # Chromium aborts before the first window, as the rc.2 tarball did. Then: the bundled
+      # daemon answers, renderers run in their own user namespace (the sandbox is really on),
+      # SIGTERM shuts the app and its daemon down, and removing the package removes the
+      # profile. GitHub-hosted only: it installs into /opt and /etc with sudo, which a
+      # persistent self-hosted runner must not be asked to do.
+      - name: The .deb installs and launches sandboxed on stock Ubuntu
+        if: matrix.name == 'linux' && runner.environment == 'github-hosted'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=(packages/app/dist/release/ORCA-*-linux-amd64.deb)
+          test "${#debs[@]}" = 1
+          deb=$(readlink -f "${debs[0]}")
+          # Nothing in the package is group- or world-writable, and nothing is setuid: the
+          # install script decides the helper's mode, not the archive.
+          if dpkg-deb -c "$deb" | awk '$1 !~ /^l/ && $1 ~ /^.....w|^........w|s/ { print; bad = 1 } END { exit !bad }'; then
+            echo "::error::the .deb carries writable or setuid entries"; exit 1
+          fi
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          sudo apt-get update -q
+          sudo apt-get install -y -q "$deb"
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          sudo grep -q '^orca ' /sys/kernel/security/apparmor/profiles
+          test "$(stat -c %a /opt/ORCA/chrome-sandbox)" = 755
+          test "$(readlink -f "$(command -v orca)")" = /opt/ORCA/orca
+          if unshare --user --map-root-user true 2> /dev/null; then
+            echo "::error::an unrelated executable can still create user namespaces"; exit 1
+          fi
+
+          # The previous step's app and daemon are gone, so every match below is this one's.
+          for _ in $(seq 1 10); do pgrep -f orca-daemon.mjs > /dev/null || break; sleep 1; done
+          if pgrep -af orca-daemon.mjs; then echo "::error::a daemon from an earlier step is still running"; exit 1; fi
+          profile=$(mktemp -d "$RUNNER_TEMP/orca-deb-profile.XXXXXX")
+          workspace=$(mktemp -d "$RUNNER_TEMP/orca-deb-workspace.XXXXXX")
+          env -u ORCA_DAEMON_URL ORCA_WORKSPACE="$workspace" setsid xvfb-run -a orca \
+            --user-data-dir="$profile" > deb-app.log 2>&1 &
+          group=$!
+          trap 'kill -- "-$group" 2>/dev/null || true; sleep 1; rm -rf "$profile" "$workspace" || true' EXIT
+          for _ in $(seq 1 60); do
+            if grep -q 'listening on http://127.0.0.1:' deb-app.log; then break; fi
+            sleep 1
+          done
+          echo '--- the installed app said ---'
+          cat deb-app.log
+          grep -q 'listening on http://127.0.0.1:' deb-app.log
+          pgrep -af -g "$group" orca-daemon.mjs
+          if grep -q 'SUID sandbox helper' deb-app.log; then
+            echo "::error::Chromium fell back to the SUID sandbox"; exit 1
+          fi
+
+          # The browser process is the installed binary with no --type; a sandboxed renderer
+          # lives in a user namespace of its own. Found by executable, not by argv[0], which
+          # is whatever the launcher typed (here `orca`, through /usr/bin).
+          installed() {
+            for pid in $(pgrep -f 'orca' || true); do
+              [ "$(readlink "/proc/$pid/exe" 2> /dev/null)" = /opt/ORCA/orca ] && echo "$pid"
+            done
+            return 0
+          }
+          main=; renderer=
+          for pid in $(installed); do
+            args=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+            case "$args" in
+              *--type=renderer*) renderer=${renderer:-$pid} ;;
+              *--type=*) ;;
+              *) main=${main:-$pid} ;;
+            esac
+          done
+          test -n "$main" && test -n "$renderer"
+          if [ "$(readlink "/proc/$main/ns/user")" = "$(readlink "/proc/$renderer/ns/user")" ]; then
+            echo "::error::the renderer shares the browser's user namespace: no namespace sandbox"; exit 1
+          fi
+          echo "browser $main, renderer $renderer in $(readlink "/proc/$renderer/ns/user")"
+
+          kill -TERM "$main"
+          for _ in $(seq 1 30); do
+            if [ -z "$(installed)" ] && ! pgrep -f orca-daemon.mjs > /dev/null; then break; fi
+            sleep 1
+          done
+          if [ -n "$(installed)" ] || pgrep -af orca-daemon.mjs; then
+            echo "::error::the app or its daemon outlived SIGTERM"; exit 1
+          fi
+
+          sudo apt-get remove -y -q orca
+          test ! -e /etc/apparmor.d/orca
+          if sudo grep -q '^orca ' /sys/kernel/security/apparmor/profiles; then
+            echo "::error::removing the package left its AppArmor profile loaded"; exit 1
+          fi
+
       # The standalone daemon artifact, named for the release. Built once and taken from the
       # Linux leg: it is one ESM file with no platform in it, and three identical copies on
       # a release page would only raise the question of which one to take.
@@ -337,6 +431,7 @@ jobs:
           path: |
             packages/app/dist/release/*.AppImage
             packages/app/dist/release/*.tar.gz
+            packages/app/dist/release/*.deb
             packages/app/dist/release/*.dmg
             packages/app/dist/release/*.zip
             packages/app/dist/release/*.exe

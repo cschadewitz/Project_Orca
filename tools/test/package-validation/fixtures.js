@@ -426,6 +426,24 @@ export function updateMetadata(version, arch, installer, { sha512 } = {}) {
 
 export const appImage = () => Buffer.concat([makeElf("x64"), Buffer.alloc(64), Buffer.from("hsqs"), Buffer.alloc(32)]);
 
+/** A Debian package's outer `ar` archive with placeholder control and data members. */
+export function debPackage(
+  members = [
+    ["debian-binary", "2.0\n"],
+    ["control.tar.xz", "c"],
+    ["data.tar.xz", "data"],
+  ],
+) {
+  const parts = [Buffer.from("!<arch>\n", "latin1")];
+  for (const [name, text] of members) {
+    const body = Buffer.from(text, "latin1");
+    const header = `${`${name}/`.padEnd(16)}${"0".padEnd(12)}${"0".padEnd(6)}${"0".padEnd(6)}${"100644".padEnd(8)}${String(body.length).padEnd(10)}\x60\n`;
+    parts.push(Buffer.from(header, "latin1"), body);
+    if (body.length % 2) parts.push(Buffer.from("\n"));
+  }
+  return Buffer.concat(parts);
+}
+
 /** Write artifacts and a candidate manifest naming exactly their SHA-256 values. */
 export function writeCandidate(dir, commit, version, artifacts, { manifestOverride } = {}) {
   const paths = [];

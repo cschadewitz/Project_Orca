@@ -88,6 +88,22 @@ linux:
       arch: [x64]
     - target: tar.gz
       arch: [x64, arm64]
+    # The supported install on Ubuntu 24.04 and later (#853). Those releases restrict
+    # unprivileged user namespaces through AppArmor, so Chromium's namespace sandbox cannot
+    # start from an unpacked tree, and its SUID fallback needs `chrome-sandbox` owned by root
+    # with mode 4755, which no download can carry. The package's install script, which runs
+    # as root, loads an AppArmor profile that grants `userns` to /opt/ORCA/orca alone and
+    # leaves the system-wide restriction on; on a system without that restriction it keeps
+    # the helper at 0755 and the namespace sandbox works as it does from the archive.
+    - target: deb
+      arch: [x64, arm64]
+
+# Debian control fields. fpm will not build without a maintainer and a homepage; the name is
+# lowercase because Debian package names must be, whatever productName says.
+deb:
+  packageName: orca
+  maintainer: ORCA contributors
+  priority: optional
 
 mac:
   extraResources:
