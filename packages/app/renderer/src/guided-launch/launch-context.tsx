@@ -101,7 +101,9 @@ export function GuidedLaunchProvider({
       // Reading retained launches is often what first asks the Linux keyring (#857).
       if (error instanceof LaunchPortFailure && error.storage !== undefined)
         setMessage(
-          `${error.storage.message} Then choose Read current launch context. Your original draft is retained.`,
+          error.storage.reason === "unavailable"
+            ? `${error.storage.message} Then choose Read current launch context. Your original draft is retained.`
+            : error.storage.message,
         );
       else
         setMessage(

@@ -100,16 +100,16 @@ describe("protected-storage refusal (#857)", () => {
     ["gnome_libsecret", "cancelled or locked GNOME keyring"],
     ["kwallet5", "locked KWallet"],
     ["kwallet6", "locked KWallet 6"],
-  ])("names a %s refusal (%s) and says to unlock, retry, then reopen", async (backend) => {
+  ])("names a %s refusal (%s) and says to reopen, unlock, then launch again", async (backend) => {
     const f = fixture({ available: false, backend });
     const error = await refusal(f.controller.submit(f.review));
     expect(error.reason).toBe("keyring-locked");
     expect(error.stage).toBe("before-send");
     expect(error.message).toMatch(/^Secure run-intent storage is unavailable\. No run was submitted\./);
     expect(error.message).toContain("unlock prompt was cancelled");
-    expect(error.message).toContain("Unlock your login keyring");
-    expect(error.message).toContain("then retry");
-    expect(error.message).toContain("quit and reopen ORCA");
+    expect(error.message).toContain("only once each time it starts");
+    expect(error.message).toContain("quit and reopen ORCA, accept the unlock prompt");
+    expect(error.message).toContain("then launch again");
     expect(f.send).not.toHaveBeenCalled();
     expect(f.encryptString).not.toHaveBeenCalled();
     expect(existsSync(f.path)).toBe(false);
@@ -210,5 +210,12 @@ describe("protected-storage refusal (#857)", () => {
     expect(error.stage).toBe("before-send");
     expect(error.message).toContain("No run was submitted");
     expect(f.send).not.toHaveBeenCalled();
+  });
+  it("reads retained launches with no journal as before-send: nothing can have been sent", async () => {
+    const f = fixture({ available: false, backend: "gnome_libsecret" });
+    const error = await refusal(f.controller.retained());
+    expect(error.stage).toBe("before-send");
+    expect(error.message).toContain("No run was submitted");
+    expect(error.message).not.toContain("An earlier launch may still exist");
   });
 });

@@ -41,8 +41,11 @@ function sameScope(a: IntentScope, b: IntentScope): boolean {
  */
 function storageFix(reason: ProtectedStorageReason, then: string): string {
   switch (reason) {
+    // Chromium asks the Linux keyring for ORCA's key once per process and keeps a refusal
+    // until the app exits (seen natively on the #857 recut: unlocking the keyring afterwards
+    // does not help). So the way on is a restart, not an in-app retry.
     case "keyring-locked":
-      return `The system keyring did not give ORCA its encryption key: the keyring is locked, or its unlock prompt was cancelled. Unlock your login keyring (accept the prompt when it appears), then ${then}. If that is refused again, quit and reopen ORCA so it can ask the keyring again.`;
+      return `The system keyring did not give ORCA its encryption key: the keyring is locked, or its unlock prompt was cancelled. ORCA can ask the keyring only once each time it starts, so quit and reopen ORCA, accept the unlock prompt with your login password, then ${then}.`;
     case "no-keyring":
       return `No supported system keyring (GNOME Keyring or KWallet) is available in this session, and ORCA does not store run intents in plain text. Start or unlock your desktop keyring, then quit and reopen ORCA and ${then}.`;
     case "unavailable":
@@ -63,10 +66,10 @@ function storageMessage(reason: ProtectedStorageReason, stage: ProtectedStorageS
   if (stage === "before-send")
     return reason === "unavailable"
       ? "Secure run-intent storage is unavailable. No run was submitted; restore the OS keychain before retrying."
-      : `Secure run-intent storage is unavailable. No run was submitted. ${storageFix(reason, "retry")}`;
+      : `Secure run-intent storage is unavailable. No run was submitted. ${storageFix(reason, "launch again")}`;
   if (stage === "after-send")
     return `The launch was sent, but secure run-intent storage refused its receipt. Do not start new work. ${storageFix(reason, "recover the original launch")}`;
-  return `Secure run-intent storage is unavailable, so ORCA cannot read its retained launches. An earlier launch may still exist; do not start it again. ${storageFix(reason, "recover or try again")}`;
+  return `Secure run-intent storage is unavailable, so ORCA cannot read its retained launches. An earlier launch may still exist; do not start it again. ${storageFix(reason, "recover the original launch or launch again")}`;
 }
 /**
  * A fail-closed refusal of protected storage. The main process maps it to the `PROTECTED_STORAGE`
@@ -129,17 +132,14 @@ export class AdmissionIntents {
     if (!this.encryption.isEncryptionAvailable() || this.encryption.getSelectedStorageBackend?.() === "basic_text")
       throw this.refusal();
   }
-  private read(): IntentRecord[] {
-    this.check();
-    return this.readChecked();
-  }
   /**
-   * The journal for new work. `before-send` only when no retained intent can exist: the check
-   * refused but there is no journal file at all (nothing was ever retained), so this launch
-   * was certainly not sent. A refused read of an existing journal stays `unconfirmed` (#857
-   * review): an earlier retained launch may exist and must not be offered again as new.
+   * `before-send` only when no retained intent can exist: the check refused and there is no
+   * journal file at all (nothing was ever retained, so nothing was sent). That is also what a
+   * fresh install sees when Launch work first reads retained launches. A refused read of an
+   * existing journal stays `unconfirmed` (#857 review): an earlier retained launch may exist
+   * and must not be offered again as new.
    */
-  private readForNewWork(): IntentRecord[] {
+  private read(): IntentRecord[] {
     try {
       this.check();
     } catch (error) {
@@ -259,7 +259,7 @@ export class AdmissionIntents {
       )
     )
       throw new Error("Verified run-intent scope is unavailable. No run was submitted.");
-    const records = this.readForNewWork();
+    const records = this.read();
     const existing = records.find((r) => sameScope(r, scope) && r.workflowId === workflowId && r.state === "retained");
     if (existing?.guided)
       throw new Error("This workflow has a retained guided intent. Recover or explicitly abandon that command first.");
@@ -294,7 +294,7 @@ export class AdmissionIntents {
     const review = parseGuidedReview(raw);
     if (scope.workspaceId !== review.target.workspaceId || !scope.target || !scope.principalId)
       throw new Error("Verified run-intent scope is unavailable. No run was submitted.");
-    const records = this.readForNewWork();
+    const records = this.read();
     const held = records.find((r) => r.workflowId === review.workflowId && r.state === "retained");
     if (held) {
       if (!sameScope(held, scope))

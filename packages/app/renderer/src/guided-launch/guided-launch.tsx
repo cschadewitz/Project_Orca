@@ -384,12 +384,17 @@ export function GuidedLaunch({
           kind="error"
           title={STORAGE_TITLES[state.storageRefusal.reason]}
           body={state.storageRefusal.message}
-          action={{
-            label: "Retry launch",
-            onClick: () => {
-              void controller.retryProtectedStorage();
-            },
-          }}
+          // A Linux keyring refusal holds until ORCA restarts, so only the OS keychain case retries here.
+          {...(state.storageRefusal.reason === "unavailable"
+            ? {
+                action: {
+                  label: "Retry launch",
+                  onClick: () => {
+                    void controller.retryProtectedStorage();
+                  },
+                },
+              }
+            : {})}
         />
       ) : (
         <Text style="body">{state.message}</Text>

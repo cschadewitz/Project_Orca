@@ -14,7 +14,7 @@ import { harness } from "./harness.js";
 import { launchContext, launchDraft, launchPorts } from "./guided-launch-fixtures.js";
 
 const KEYRING =
-  "Secure run-intent storage is unavailable. No run was submitted. The system keyring did not give ORCA its encryption key: the keyring is locked, or its unlock prompt was cancelled. Unlock your login keyring (accept the prompt when it appears), then retry. If that is refused again, quit and reopen ORCA so it can ask the keyring again.";
+  "Secure run-intent storage is unavailable. No run was submitted. The system keyring did not give ORCA its encryption key: the keyring is locked, or its unlock prompt was cancelled. ORCA can ask the keyring only once each time it starts, so quit and reopen ORCA, accept the unlock prompt with your login password, then launch again.";
 const accepted = {
   intent: { id: "protected-intent-1" },
   response: { state: "accepted", operationId: "op", admissionId: "admission", runId: "run-original" },
@@ -125,33 +125,42 @@ describe("guided launch protected-storage refusal (#857)", () => {
     expect(f.launch).toHaveBeenCalledTimes(1);
   });
   it.each([
-    ["keyring-locked", "Keyring locked or unlock cancelled"],
-    ["no-keyring", "No system keyring available"],
-    ["unavailable", "Secure storage unavailable"],
-  ] as const)("renders a %s refusal as an error state with a working Retry", async (reason, title) => {
-    const h = harness();
-    teardown.push(h.dispose);
-    const f = setup();
-    f.launch.mockRejectedValueOnce(refused(reason, `Guidance for ${reason}.`)).mockResolvedValueOnce(accepted);
-    render(
-      <h.Providers>
-        <GuidedLaunch
-          controller={f.controller}
-          onClose={() => {}}
-          onConfiguration={() => {}}
-          onConnections={() => {}}
-        />
-      </h.Providers>,
-    );
-    await act(() => f.controller.preview());
-    await act(() => f.controller.submit());
-    expect(screen.getByText(title)).toBeTruthy();
-    expect(screen.getByText(`Guidance for ${reason}. Your draft is retained.`)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Recover original launch" })).toBeNull();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Retry launch" }));
-    });
-    expect(f.launch).toHaveBeenCalledTimes(2);
-    expect(screen.queryByRole("button", { name: "Retry launch" })).toBeNull();
-  });
+    ["keyring-locked", "Keyring locked or unlock cancelled", false],
+    ["no-keyring", "No system keyring available", false],
+    ["unavailable", "Secure storage unavailable", true],
+  ] as const)(
+    "renders a %s refusal as an error state; Retry only where a retry can work",
+    async (reason, title, retry) => {
+      const h = harness();
+      teardown.push(h.dispose);
+      const f = setup();
+      f.launch.mockRejectedValueOnce(refused(reason, `Guidance for ${reason}.`)).mockResolvedValueOnce(accepted);
+      render(
+        <h.Providers>
+          <GuidedLaunch
+            controller={f.controller}
+            onClose={() => {}}
+            onConfiguration={() => {}}
+            onConnections={() => {}}
+          />
+        </h.Providers>,
+      );
+      await act(() => f.controller.preview());
+      await act(() => f.controller.submit());
+      expect(screen.getByText(title)).toBeTruthy();
+      expect(screen.getByText(`Guidance for ${reason}. Your draft is retained.`)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Recover original launch" })).toBeNull();
+      const button = screen.queryByRole("button", { name: "Retry launch" });
+      if (!retry) {
+        // A Linux keyring refusal holds until ORCA restarts: no in-app Retry is offered.
+        expect(button).toBeNull();
+        return;
+      }
+      await act(async () => {
+        fireEvent.click(button!);
+      });
+      expect(f.launch).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("button", { name: "Retry launch" })).toBeNull();
+    },
+  );
 });
