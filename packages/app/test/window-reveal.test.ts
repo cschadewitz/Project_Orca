@@ -17,9 +17,9 @@ class FakeContents extends EventEmitter {
   constructor(private readonly owner: { destroyed: boolean }) {
     super();
   }
-  override off(event: string | symbol, listener: (...args: unknown[]) => void) {
+  override off(event: string | symbol, listener: (...args: never[]) => void) {
     if (this.owner.destroyed) throw new TypeError("Object has been destroyed");
-    return super.off(event, listener);
+    return super.off(event, listener as Parameters<EventEmitter["off"]>[1]);
   }
 }
 
