@@ -57,7 +57,7 @@ Keep the throwaway folders for this test in your home directory. Don't use a syn
    install, and the same options as P4:
 
    ```sh
-   sudo apt-get install --simulate --no-install-recommends --no-remove ./ORCA-<version>-linux-amd64.deb
+   sudo apt-get install --simulate --trivial-only --no-install-recommends --no-remove ./ORCA-<version>-linux-amd64.deb
    ```
 
    `sudo` asks for **your own** computer password in this terminal. That is not an ORCA
@@ -73,21 +73,23 @@ Keep the throwaway folders for this test in your home directory. Don't use a syn
    at P3: unexpected APT plan" and copy only the package names. Don't change your
    system's package sources or settings to get a different plan.
 
-4. **P4 Install** the same file, once, with the same options plus `--assume-no`:
+4. **P4 Install** the same file, once, with the same options as P3 but without
+   `--simulate`:
 
    ```sh
-   sudo apt-get install --assume-no --no-install-recommends --no-remove ./ORCA-<version>-linux-amd64.deb
+   sudo apt-get install --trivial-only --no-install-recommends --no-remove ./ORCA-<version>-linux-amd64.deb
    ```
 
-   These options hold APT to P3's approved plan. APT installs without asking only when
-   the plan is exactly `orca-desktop` and nothing else. If its fresh plan would add,
-   upgrade or download any other package, it asks "Do you want to continue?",
-   `--assume-no` answers no for you, and it prints "Abort." without changing anything.
-   `--no-remove` makes it abort on any removal. Either abort is a stop: report "stopped
-   at P4: APT plan differed from P3". Don't run it again.
+   APT works out its plan again here. The two options are there to refuse a plan that
+   differs from P3's before anything changes: `--trivial-only` refuses a plan that
+   installs or upgrades anything besides the file you name, and `--no-remove` refuses
+   any removal. If APT prints "Trivial Only specified but this is not a trivial
+   operation" or "Packages need to be removed but remove is disabled", nothing was
+   installed. Stop and report "stopped at P4: APT plan differed from P3". Don't run it
+   again, and don't remove either option.
 
-   Before the install lines, APT prints its plan again. Check it matches P3, and that
-   the line "Need to get 0 B/…" starts with `0 B`: nothing is downloaded. APT may also
+   Before the install lines, APT prints its plan again. If it differs from P3 and APT
+   carries on anyway, stop as soon as it finishes and report it. APT may also
    print a note that the download "is performed unsandboxed as root" because the file is
    in your home folder. That note is about APT reading the file and is expected. Expect
    the output to end with lines such as "Setting up orca-desktop".

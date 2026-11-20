@@ -135,12 +135,18 @@ declare.
     - **First launch.** Does it open **disconnected** for setup
       (`packages/app/src/main/index.ts`) or start a daemon (`desktop.yml`'s launch
       expectation, noted in #779)?
-    - **Linux APT transaction.** On the offered OS, P3's dry run shows exactly the
-      approved plan (only `orca-desktop` new, nothing upgraded, removed or downloaded),
-      and P4 with the same options installs that same plan without a prompt. Also show
-      that P4 aborts with no change when the plan would differ (for example a package
-      that pulls in a missing dependency), and whether APT's "unsandboxed as root" note
-      appears. Until this is recorded, linux.md P3–P4 are provisional.
+    - **Linux APT transaction.** linux.md P3–P4 are **provisional** until this is
+      recorded. In one test on the offered OS, with the exact file and the exact P3/P4
+      commands:
+      - the clean case: P3 shows only `orca-desktop` new, nothing upgraded or removed,
+        and P4 installs that same plan
+      - the changed-plan case: a test package that needs a dependency or an upgrade, or
+        conflicts with an installed package, makes P4 refuse before any change. Run it
+        with those dependencies already in APT's cache, and again with a local
+        `APT::Get::Assume-Yes` default and quiet mode (`-qq`), since APT then installs
+        without any prompt. `--assume-no` is not enough for this: it only answers
+        prompts that those settings suppress
+      - whether APT's "unsandboxed as root" note appears
     - **Linux sandbox.** That the sandbox starts on the offered OS without changing
       settings, and what a refused install looks like.
     - **Linux keyring.** What the desktop's keyring prompt looks like at F7, and that F7's
