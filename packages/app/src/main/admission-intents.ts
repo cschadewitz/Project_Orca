@@ -5,7 +5,7 @@
  * records are dropped on write, so the journal holds only retained (unresolved) intents.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { PROTECTED_STORAGE_CODE, type ProtectedStorageReason, type ProtectedStorageStage } from "../bridge.js";
 import type { LaunchReview, RetainedLaunch } from "../configuration-launch-contract.js";
@@ -51,11 +51,13 @@ function storageFix(reason: ProtectedStorageReason, then: string): string {
 }
 /**
  * Where the refusal happened, which decides what the screen may claim:
- * - `before-send`: this launch's own intent could not be retained, so it was not sent. The
- *   only stage that may say "No run was submitted" and offer a fresh Retry launch.
+ * - `before-send`: this launch was certainly not sent and no earlier retained intent can be
+ *   in the way: the journal was read with none for this work and the new one's write was
+ *   refused, or there is no journal at all. The only stage that may say "No run was
+ *   submitted" and offer a fresh Retry launch.
  * - `after-send`: the daemon may already hold the launch; its receipt could not be saved.
- * - `unconfirmed`: reading retained intents failed (recover, resolve, list). An earlier
- *   launch may exist, so nothing is claimed about it and new work is not offered.
+ * - `unconfirmed`: reading an existing journal failed (submit, recover, resolve, list). An
+ *   earlier launch may exist, so nothing is claimed about it and new work is not offered.
  */
 function storageMessage(reason: ProtectedStorageReason, stage: ProtectedStorageStage): string {
   if (stage === "before-send")
@@ -98,15 +100,6 @@ export function protectedStorageBridgeError(
     details: { reason: error.reason, stage: error.stage },
   };
 }
-/** Run `retain` for a launch that has not been sent: a refusal there is a confirmed before-send. */
-export function beforeSend<T>(retain: () => T): T {
-  try {
-    return retain();
-  } catch (error) {
-    if (isProtectedStorageRefusal(error)) throw error.at("before-send");
-    throw error;
-  }
-}
 const KEYRING_BACKENDS = new Set(["gnome_libsecret", "kwallet", "kwallet5", "kwallet6"]);
 /** Thrown inside validation, where the catch replaces it with the "could not be verified" message. */
 const invalid = () => new Error("Saved run intents are invalid.");
@@ -138,6 +131,42 @@ export class AdmissionIntents {
   }
   private read(): IntentRecord[] {
     this.check();
+    return this.readChecked();
+  }
+  /**
+   * The journal for new work. `before-send` only when no retained intent can exist: the check
+   * refused but there is no journal file at all (nothing was ever retained), so this launch
+   * was certainly not sent. A refused read of an existing journal stays `unconfirmed` (#857
+   * review): an earlier retained launch may exist and must not be offered again as new.
+   */
+  private readForNewWork(): IntentRecord[] {
+    try {
+      this.check();
+    } catch (error) {
+      if (isProtectedStorageRefusal(error) && !this.journalExists()) throw error.at("before-send");
+      throw error;
+    }
+    return this.readChecked();
+  }
+  /** Read and verified with no existing intent for this work: a refused write was not sent. */
+  private writeNewWork(records: IntentRecord[]): void {
+    try {
+      this.write(records);
+    } catch (error) {
+      if (isProtectedStorageRefusal(error)) throw error.at("before-send");
+      throw error;
+    }
+  }
+  private journalExists(): boolean {
+    try {
+      statSync(this.path);
+      return true;
+    } catch (error) {
+      // Anything but a confirmed absence (a permission error, say) is treated as "may exist".
+      return (error as NodeJS.ErrnoException).code !== "ENOENT";
+    }
+  }
+  private readChecked(): IntentRecord[] {
     let bytes: Buffer;
     try {
       bytes = readFileSync(this.path);
@@ -230,7 +259,7 @@ export class AdmissionIntents {
       )
     )
       throw new Error("Verified run-intent scope is unavailable. No run was submitted.");
-    const records = this.read();
+    const records = this.readForNewWork();
     const existing = records.find((r) => sameScope(r, scope) && r.workflowId === workflowId && r.state === "retained");
     if (existing?.guided)
       throw new Error("This workflow has a retained guided intent. Recover or explicitly abandon that command first.");
@@ -248,7 +277,7 @@ export class AdmissionIntents {
       idempotencyKey: randomUUID(),
       state: "retained",
     };
-    this.write([...records, record]);
+    this.writeNewWork([...records, record]);
     return { ...record };
   }
   list(scope: IntentScope): Pick<IntentRecord, "id" | "workflowId">[] {
@@ -265,7 +294,7 @@ export class AdmissionIntents {
     const review = parseGuidedReview(raw);
     if (scope.workspaceId !== review.target.workspaceId || !scope.target || !scope.principalId)
       throw new Error("Verified run-intent scope is unavailable. No run was submitted.");
-    const records = this.read();
+    const records = this.readForNewWork();
     const held = records.find((r) => r.workflowId === review.workflowId && r.state === "retained");
     if (held) {
       if (!sameScope(held, scope))
@@ -283,7 +312,7 @@ export class AdmissionIntents {
       state: "retained",
       guided: { version: 1, review },
     };
-    this.write([...records, record]);
+    this.writeNewWork([...records, record]);
     return structuredClone(record);
   }
   guided(scope: IntentScope, id: string): IntentRecord {
@@ -353,7 +382,7 @@ export class AdmissionIntentController {
     connection.assertCurrent();
     if (generation !== this.generation)
       throw new Error("Run intent changed while connecting. Choose Start again for new work.");
-    const intent = beforeSend(() => this.journal.retain(connection.scope, workflowId));
+    const intent = this.journal.retain(connection.scope, workflowId);
     connection.assertCurrent();
     const result = await connection.admit({
       workflowId: intent.workflowId,

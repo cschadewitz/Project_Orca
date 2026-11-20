@@ -191,4 +191,24 @@ describe("protected-storage refusal (#857)", () => {
     expect(error.message).not.toContain("No run was submitted");
     expect(protectedStorageBridgeError(new Error("other"))).toBeUndefined();
   });
+  it("keeps a refused read of an existing journal unconfirmed at submit", async () => {
+    const f = fixture({ available: true, backend: "gnome_libsecret" });
+    f.journal.retain(f.scope, "other-workflow");
+    f.state.available = false;
+    const error = await refusal(f.controller.submit(f.review));
+    expect(error.stage).toBe("unconfirmed");
+    expect(error.message).not.toContain("No run was submitted");
+    expect(f.send).not.toHaveBeenCalled();
+  });
+  it("is before-send once the existing journal was read and holds nothing for this work", async () => {
+    const f = fixture({ available: true, backend: "gnome_libsecret" });
+    f.journal.retain(f.scope, "other-workflow");
+    f.encryptString.mockImplementationOnce(() => {
+      throw new Error("Error while encrypting the text provided to safeStorage.encryptString.");
+    });
+    const error = await refusal(f.controller.submit(f.review));
+    expect(error.stage).toBe("before-send");
+    expect(error.message).toContain("No run was submitted");
+    expect(f.send).not.toHaveBeenCalled();
+  });
 });

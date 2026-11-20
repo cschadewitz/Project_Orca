@@ -40,7 +40,7 @@ async function bridged<T>(work: () => Promise<T>): Promise<BridgeResult<T>> {
 }
 const decode = (raw: unknown): LaunchReceipt => raw as LaunchReceipt;
 
-it("accepted send, refused receipt, Recover while locked, unlock, Recover: one admission", async () => {
+function wire(lockOnSend: boolean) {
   const dir = mkdtempSync(join(tmpdir(), "orca-recovery-"));
   dirs.push(dir);
   const key = randomBytes(32);
@@ -88,7 +88,7 @@ it("accepted send, refused receipt, Recover while locked, unlock, Recover: one a
   const admissions = new Map<string, string>();
   const send = vi.fn<GuidedIntentConnection["send"]>(async (record) => {
     if (!admissions.has(record.idempotencyKey)) admissions.set(record.idempotencyKey, `run-${admissions.size + 1}`);
-    keyring.unlocked = false; // the keyring locks before the receipt is written
+    if (lockOnSend) keyring.unlocked = false; // the keyring locks before the receipt is written
     return {
       kind: "direct",
       receipt: {
@@ -128,7 +128,8 @@ it("accepted send, refused receipt, Recover while locked, unlock, Recover: one a
     },
     resolveIntent: async () => {
       const handles = unwrap(await bridged(() => main.retained()));
-      return handles[0] ? { id: handles[0].intentId } : undefined;
+      const handle = handles.find((h) => h.workflowId === review.workflowId);
+      return handle ? { id: handle.intentId } : undefined;
     },
     recover: async (intent) => {
       const response: LaunchResponse = unwrap(await bridged(() => main.recover(intent.id, "reconcile")));
@@ -136,6 +137,10 @@ it("accepted send, refused receipt, Recover while locked, unlock, Recover: one a
     },
   };
   const ui = new GuidedLaunchController(launchContext(), launchDraft(), ports);
+  return { ui, main, journal, keyring, send, recover, admissions, review, target };
+}
+it("accepted send, refused receipt, Recover while locked, unlock, Recover: one admission", async () => {
+  const { ui, keyring, send, recover, admissions } = wire(true);
   await ui.preview();
   await ui.submit();
 
@@ -163,6 +168,62 @@ it("accepted send, refused receipt, Recover while locked, unlock, Recover: one a
   state = ui.read();
   expect(state.phase).toBe("admitted");
   expect(state.result).toMatchObject({ state: "resolved", result: { state: "accepted", runId: "run-1" } });
+  expect(recover).toHaveBeenCalledTimes(1);
+  expect(recover.mock.calls[0]![0].idempotencyKey).toBe(send.mock.calls[0]![0].idempotencyKey);
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(admissions.size).toBe(1);
+});
+
+it("a refused read of an existing journal at submit stays unconfirmed; verified absence makes it launchable", async () => {
+  const { ui, journal, keyring, send, recover, admissions, target } = wire(false);
+  // An earlier palette intent for another workflow: the journal exists, nothing retained for this review.
+  journal.retain({ target: "bundled:/workspace", workspaceId: target.workspaceId, principalId: "local" }, "other");
+  keyring.unlocked = false;
+  await ui.preview();
+  await ui.submit();
+  let state = ui.read();
+  expect(send).not.toHaveBeenCalled();
+  expect(state.phase).toBe("blocked");
+  expect(state.storageRefusal).toBeUndefined();
+  expect(state.unresolvedReview).toBeDefined();
+  expect(state.message).toContain("An earlier launch may still exist");
+  expect(state.message).not.toContain("No run was submitted");
+  await ui.retryProtectedStorage();
+  expect(send).not.toHaveBeenCalled();
+
+  await ui.recover(); // still locked: refused again, nothing sent
+  expect(ui.read().phase).toBe("blocked");
+  expect(ui.read().unresolvedReview).toBeDefined();
+  expect(send).not.toHaveBeenCalled();
+
+  keyring.unlocked = true;
+  await ui.recover(); // readable, and no retained launch for this review: verified new
+  state = ui.read();
+  expect(state.phase).toBe("review");
+  expect(state.unresolvedReview).toBeUndefined();
+  expect(state.message).toContain("no retained launch exists for this review");
+  expect(recover).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+
+  await ui.submit();
+  expect(ui.read().phase).toBe("admitted");
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(admissions.size).toBe(1);
+});
+it("a refused read at submit with this review already retained recovers it, never sends it again", async () => {
+  const { ui, main, keyring, send, recover, admissions, review } = wire(false);
+  send.mockImplementationOnce(async () => {
+    throw new Error("acknowledgement lost"); // retained, admission unknown to the UI
+  });
+  await expect(main.submit(review)).rejects.toThrow("acknowledgement lost");
+  admissions.set(send.mock.calls[0]![0].idempotencyKey, "run-earlier");
+  keyring.unlocked = false;
+  await ui.preview();
+  await ui.submit();
+  expect(ui.read().message).not.toContain("No run was submitted");
+  keyring.unlocked = true;
+  await ui.recover();
+  expect(ui.read().phase).toBe("admitted");
   expect(recover).toHaveBeenCalledTimes(1);
   expect(recover.mock.calls[0]![0].idempotencyKey).toBe(send.mock.calls[0]![0].idempotencyKey);
   expect(send).toHaveBeenCalledTimes(1);

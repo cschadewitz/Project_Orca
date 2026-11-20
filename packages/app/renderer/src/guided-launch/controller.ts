@@ -60,6 +60,8 @@ function protectedInputs(context: LaunchContext, draft: LaunchDraft, previous: r
     ]),
   ];
 }
+/** Recovery found the journal readable and no retained launch for the refused review. */
+class VerifiedNewLaunch extends Error {}
 /** No connection, persistence or retry implementation: all effects go through the shared owner. */
 export class GuidedLaunchController {
   private state: LaunchState;
@@ -71,6 +73,13 @@ export class GuidedLaunchController {
     this.update({ busy: value });
   }
   private fence = 0;
+  /**
+   * Set when this submit was refused because an existing protected journal could not be read
+   * (`unconfirmed`): nothing was sent by it, but an earlier retained launch may exist. Recover
+   * then reads the journal; if it finds no retained launch for this review, the review is
+   * verified as new and becomes launchable again (#857 review).
+   */
+  private storageUnconfirmedSubmit = false;
   constructor(
     context: LaunchContext,
     draft: LaunchDraft,
@@ -313,6 +322,7 @@ export class GuidedLaunchController {
     const fence = this.fence;
     this.update({ phase: "submitting", message: "Retaining the protected launch intent." });
     if (launch !== undefined) {
+      this.storageUnconfirmedSubmit = false;
       this.update({ unresolvedReview: review });
       try {
         await this.receive(
@@ -376,7 +386,9 @@ export class GuidedLaunchController {
           await this.receive(async () => {
             const intent = await this.ports.resolveIntent!(review);
             if (fence !== this.fence) throw new LaunchPortFailure("stale");
+            if (!intent && this.storageUnconfirmedSubmit) throw new VerifiedNewLaunch();
             if (!intent) throw new LaunchPortFailure("unavailable");
+            this.storageUnconfirmedSubmit = false;
             this.update({ intent, unresolvedReview: undefined });
             return this.ports.recover(intent);
           }, fence);
@@ -476,13 +488,27 @@ export class GuidedLaunchController {
         this.state.intent === undefined
       )
         this.refuseStorage(review, error.storage);
-      else if (fence === this.fence && error instanceof LaunchPortFailure) this.block(this.failureMessage(error));
-      else if (fence === this.fence)
+      else if (fence === this.fence && error instanceof VerifiedNewLaunch) this.verifiedNew();
+      else if (fence === this.fence && error instanceof LaunchPortFailure) {
+        if (error.storage?.stage === "unconfirmed" && review && this.state.intent === undefined)
+          this.storageUnconfirmedSubmit = true;
+        this.block(this.failureMessage(error));
+      } else if (fence === this.fence)
         this.update({
           phase: "recovering",
           message: "The launch acknowledgement is unavailable. Recover the original intent; do not submit new work.",
         });
     }
+  }
+  /** The journal is readable again and holds no retained launch for the refused review. */
+  private verifiedNew(): void {
+    const review = this.state.unresolvedReview;
+    this.storageUnconfirmedSubmit = false;
+    if (review === undefined) return;
+    const message =
+      "Secure storage is available and no retained launch exists for this review, so nothing was submitted. Choose Launch to send it.";
+    this.update({ phase: "review", review, unresolvedReview: undefined, message });
+    this.ports.announce(message);
   }
   private refuseStorage(review: LaunchReview, storage: ProtectedStorageRefusalView): void {
     const message = `${storage.message} Your draft is retained.`;

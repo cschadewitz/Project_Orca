@@ -3,7 +3,6 @@ import { AdmissionRetryResultSchema, RequestsSubmitResultSchema, RunsAdmitResult
 import type { EditorTarget, LaunchResponse, LaunchReview, RetainedLaunch } from "../configuration-launch-contract.js";
 import {
   AdmissionIntents,
-  beforeSend,
   isProtectedStorageRefusal,
   type IntentRecord,
   type IntentScope,
@@ -68,7 +67,7 @@ export class GuidedLaunchController {
     await connection.verifyReview(review);
     connection.assertCurrent();
     if (generation !== this.generation) throw new Error("The retained intent changed while review was pending.");
-    const record = beforeSend(() => this.journal.retainGuided(connection.scope, review));
+    const record = this.journal.retainGuided(connection.scope, review);
     const existing = this.pending.get(record.id);
     if (existing) return existing;
     const work = this.send(connection, record);
