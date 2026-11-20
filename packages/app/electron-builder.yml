@@ -96,8 +96,8 @@ linux:
     # start from an unpacked tree, and its SUID fallback needs `chrome-sandbox` owned by root
     # with mode 4755, which no download can carry. The package's install script, which runs
     # as root, loads an AppArmor profile that grants `userns` to /opt/ORCA/orca-desktop alone and
-    # leaves the system-wide restriction on; on a system without that restriction it keeps
-    # the helper at 0755 and the namespace sandbox works as it does from the archive.
+    # leaves the system-wide restriction on. The helper stays 0755 everywhere: the package
+    # supports the namespace sandbox only, never the setuid one.
     - target: deb
       arch: [x64, arm64]
 
@@ -109,6 +109,10 @@ deb:
   packageName: orca-desktop
   maintainer: ORCA contributors
   priority: optional
+  # The repository's postinst, not electron-builder's: no setuid fallback for chrome-sandbox,
+  # no redundant cache refreshes, and a clear refusal when the AppArmor exception cannot load
+  # (the file says why). The postrm and the profile itself remain electron-builder's.
+  afterInstall: build/linux/after-install.tpl
 
 mac:
   extraResources:
