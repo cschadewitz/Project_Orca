@@ -45,6 +45,7 @@ import { createManagedMacNativeProviders } from "./mac-native-providers.js";
 import { updateDriver } from "./update-driver.js";
 import { basename, dirname, join } from "node:path";
 import { windowIcon } from "./window-icon.js";
+import { revealWhenReady } from "./window-reveal.js";
 import { fileURLToPath } from "node:url";
 import {
   app,
@@ -1275,7 +1276,13 @@ function createWindow(): void {
     diagnostics.rendererDisposed();
   });
   macUpdateWindows.track(win);
-  win.once("ready-to-show", () => win.show());
+  // `ready-to-show` alone can leave the window hidden for good under Wayland (#858).
+  revealWhenReady(win, {
+    onReveal: (reason) => {
+      if (reason !== "ready-to-show")
+        console.warn(`[orca] window shown by the ${reason} fallback; no first paint was reported`);
+    },
+  });
   if (rendererUrl) {
     void win.loadURL(rendererUrl);
     win.webContents.openDevTools({ mode: "detach" });
