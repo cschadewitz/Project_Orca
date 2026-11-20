@@ -14,13 +14,17 @@ import { harness } from "./harness.js";
 import { launchContext, launchDraft, launchPorts } from "./guided-launch-fixtures.js";
 
 const KEYRING =
-  "Secure run-intent storage is unavailable. No run was submitted. The system keyring did not give ORCA its encryption key: the keyring is locked, or its unlock prompt was cancelled. Unlock your login keyring (accept the prompt when it appears), then retry. If the retry is refused again, quit and reopen ORCA so it can ask the keyring again.";
+  "Secure run-intent storage is unavailable. No run was submitted. The system keyring did not give ORCA its encryption key: the keyring is locked, or its unlock prompt was cancelled. Unlock your login keyring (accept the prompt when it appears), then retry. If that is refused again, quit and reopen ORCA so it can ask the keyring again.";
 const accepted = {
   intent: { id: "protected-intent-1" },
   response: { state: "accepted", operationId: "op", admissionId: "admission", runId: "run-original" },
 } as const;
-function refused(reason: "keyring-locked" | "no-keyring" | "unavailable" = "keyring-locked", message = KEYRING) {
-  return new LaunchPortFailure("protected-storage", { reason, message });
+function refused(
+  reason: "keyring-locked" | "no-keyring" | "unavailable" = "keyring-locked",
+  message = KEYRING,
+  stage: "before-send" | "after-send" | "unconfirmed" = "before-send",
+) {
+  return new LaunchPortFailure("protected-storage", { reason, stage, message });
 }
 function setup() {
   const launch = vi.fn<NonNullable<LaunchPorts["launch"]>>();
@@ -39,14 +43,24 @@ describe("guided launch protected-storage refusal (#857)", () => {
     expect(() =>
       unwrap({
         ok: false,
-        error: { code: "PROTECTED_STORAGE", message: KEYRING, details: { reason: "keyring-locked" } },
+        error: {
+          code: "PROTECTED_STORAGE",
+          message: KEYRING,
+          details: { reason: "keyring-locked", stage: "before-send" },
+        },
       }),
     ).toThrow(
-      expect.objectContaining({ reason: "protected-storage", storage: { reason: "keyring-locked", message: KEYRING } }),
+      expect.objectContaining({
+        reason: "protected-storage",
+        storage: { reason: "keyring-locked", stage: "before-send", message: KEYRING },
+      }),
     );
     expect(() =>
+      unwrap({ ok: false, error: { code: "PROTECTED_STORAGE", message: "m", details: { reason: "keyring-locked" } } }),
+    ).toThrow(expect.objectContaining({ storage: { reason: "keyring-locked", stage: "unconfirmed", message: "m" } }));
+    expect(() =>
       unwrap({ ok: false, error: { code: "PROTECTED_STORAGE", message: "m", details: { reason: "bogus" } } }),
-    ).toThrow(expect.objectContaining({ storage: { reason: "unavailable", message: "m" } }));
+    ).toThrow(expect.objectContaining({ storage: { reason: "unavailable", stage: "unconfirmed", message: "m" } }));
     expect(() => unwrap({ ok: false, error: { code: "AGENT_TRANSPORT", message: KEYRING } })).toThrow(
       expect.objectContaining({ reason: "unavailable", storage: undefined }),
     );
@@ -62,12 +76,33 @@ describe("guided launch protected-storage refusal (#857)", () => {
     expect(state.review).toBe(review);
     expect(state.unresolvedReview).toBeUndefined();
     expect(state.intent).toBeUndefined();
-    expect(state.storageRefusal).toEqual({ reason: "keyring-locked", message: `${KEYRING} Your draft is retained.` });
+    expect(state.storageRefusal).toEqual({
+      reason: "keyring-locked",
+      stage: "before-send",
+      message: `${KEYRING} Your draft is retained.`,
+    });
     expect(state.message).toContain("unlock prompt was cancelled");
     expect(state.message).not.toContain("launch operation is unavailable");
     expect(f.ports.announce).toHaveBeenCalledWith(`${KEYRING} Your draft is retained.`);
     expect(f.ports.navigate).not.toHaveBeenCalled();
   });
+  it.each(["after-send", "unconfirmed"] as const)(
+    "keeps the original launch to recover, with no Retry, on a %s refusal",
+    async (stage) => {
+      const f = setup();
+      f.launch.mockRejectedValueOnce(refused("keyring-locked", "Sent; unlock and recover.", stage));
+      await f.controller.preview();
+      await f.controller.submit();
+      const state = f.controller.read();
+      expect(state.phase).toBe("blocked");
+      expect(state.storageRefusal).toBeUndefined();
+      expect(state.unresolvedReview).toBeDefined();
+      expect(state.message).toContain("Sent; unlock and recover.");
+      expect(state.message).toContain("Recover original launch");
+      await f.controller.retryProtectedStorage();
+      expect(f.launch).toHaveBeenCalledTimes(1);
+    },
+  );
   it("retries the same reviewed command once storage is available", async () => {
     const f = setup();
     f.launch.mockRejectedValueOnce(refused()).mockResolvedValueOnce(accepted);

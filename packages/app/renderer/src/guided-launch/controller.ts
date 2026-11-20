@@ -337,8 +337,14 @@ export class GuidedLaunchController {
       await this.receive(() => this.ports.submit!(intent), fence, review);
     } catch (error) {
       if (fence !== this.fence) return;
-      if (error instanceof LaunchPortFailure && error.storage !== undefined && this.state.intent === undefined)
+      if (
+        error instanceof LaunchPortFailure &&
+        error.storage?.stage === "before-send" &&
+        this.state.intent === undefined
+      )
         this.refuseStorage(review, error.storage);
+      else if (error instanceof LaunchPortFailure && error.storage !== undefined)
+        this.block(this.failureMessage(error));
       else
         this.block(
           "Protected intent storage is unavailable. No launch was sent by this controller; your draft is retained.",
@@ -459,9 +465,16 @@ export class GuidedLaunchController {
           message: "Admission is unresolved. Recover the retained intent to inspect or reconcile it.",
         });
     } catch (error) {
-      // Main raises a storage refusal only before anything is retained or sent, so the exact
-      // review stays ready: unlocking the keyring and choosing Retry submits it unchanged.
-      if (fence === this.fence && error instanceof LaunchPortFailure && error.storage !== undefined && review)
+      // Only a confirmed before-send refusal means nothing was sent, so only then does the exact
+      // review stay ready for a fresh Retry. After a send, or when retained intents could not be
+      // read, block instead: the intent and unresolved review stay, and Recover is the way on.
+      if (
+        fence === this.fence &&
+        error instanceof LaunchPortFailure &&
+        error.storage?.stage === "before-send" &&
+        review &&
+        this.state.intent === undefined
+      )
         this.refuseStorage(review, error.storage);
       else if (fence === this.fence && error instanceof LaunchPortFailure) this.block(this.failureMessage(error));
       else if (fence === this.fence)
@@ -477,7 +490,7 @@ export class GuidedLaunchController {
       phase: "review",
       review,
       unresolvedReview: undefined,
-      storageRefusal: { reason: storage.reason, message },
+      storageRefusal: { reason: storage.reason, stage: storage.stage, message },
       message,
     });
     this.ports.announce(message);
@@ -489,7 +502,7 @@ export class GuidedLaunchController {
   }
   private failureMessage(error: LaunchPortFailure): string {
     if (error.storage !== undefined)
-      return `${error.storage.message} Your draft and any retained intent are preserved.`;
+      return `${error.storage.message} Your draft and any retained intent are preserved; choose Recover original launch once storage is available.`;
     const messages = {
       unauthorized:
         "Current authorization refused the launch operation. Your draft and any retained intent are preserved.",

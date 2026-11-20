@@ -108,12 +108,15 @@ export type BridgeResult<T> = { ok: true; result: T } | { ok: false; error: Prot
 
 /**
  * The app-local code for a fail-closed protected-storage refusal (#857): the OS keychain or
- * Linux keyring did not provide ORCA's key, or only `basic_text` is available. Nothing was
- * submitted. `details.reason` is `keyring-locked`, `no-keyring` or `unavailable`, and the
- * message already names the cause and what to do, so a screen shows it with a retry.
+ * Linux keyring did not provide ORCA's key, or only `basic_text` is available.
+ * `details.reason` is `keyring-locked`, `no-keyring` or `unavailable`, and the
+ * message already names the cause and what to do. `details.stage` says what may be claimed:
+ * only `before-send` means this launch was not sent and may be retried as new; `after-send`
+ * and `unconfirmed` mean a launch may exist, so the screen keeps it and offers recovery.
  */
 export const PROTECTED_STORAGE_CODE = "PROTECTED_STORAGE";
 export type ProtectedStorageReason = "keyring-locked" | "no-keyring" | "unavailable";
+export type ProtectedStorageStage = "before-send" | "after-send" | "unconfirmed";
 
 /**
  * Params as a caller passes them: the schema defaults (`limit`, `offset`) are the daemon's

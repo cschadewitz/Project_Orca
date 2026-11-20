@@ -14,6 +14,7 @@ import {
   AdmissionIntents,
   ProtectedStorageRefusal,
   isProtectedStorageRefusal,
+  protectedStorageBridgeError,
   type IntentEncryption,
 } from "../src/main/admission-intents.js";
 import { GuidedLaunchController, type GuidedIntentConnection } from "../src/main/guided-launch.js";
@@ -103,6 +104,7 @@ describe("protected-storage refusal (#857)", () => {
     const f = fixture({ available: false, backend });
     const error = await refusal(f.controller.submit(f.review));
     expect(error.reason).toBe("keyring-locked");
+    expect(error.stage).toBe("before-send");
     expect(error.message).toMatch(/^Secure run-intent storage is unavailable\. No run was submitted\./);
     expect(error.message).toContain("unlock prompt was cancelled");
     expect(error.message).toContain("Unlock your login keyring");
@@ -155,7 +157,7 @@ describe("protected-storage refusal (#857)", () => {
     expect(f.send.mock.calls[0]![0].guided!.review.command).toEqual(f.review.command);
     expect(readFileSync(f.path).toString("utf8")).not.toContain("private sample task needle");
   });
-  it("does not claim nothing was submitted when storage refuses the receipt after a send", async () => {
+  it("marks a receipt refusal after a send as after-send, never as nothing submitted", async () => {
     const f = fixture({ available: true, backend: "gnome_libsecret" });
     f.send.mockImplementationOnce(async () => {
       f.state.available = false;
@@ -164,15 +166,29 @@ describe("protected-storage refusal (#857)", () => {
         receipt: { state: "accepted", operationId: "operation", admissionId: "admission", runId: "run" },
       };
     });
-    const error = await f.controller.submit(f.review).then(
-      () => undefined,
-      (e: unknown) => e as Error,
-    );
-    expect(isProtectedStorageRefusal(error)).toBe(false);
-    expect(error?.message).toContain("The launch was sent");
-    expect(error?.message).not.toContain("No run was submitted");
+    const error = await refusal(f.controller.submit(f.review));
+    expect(error.stage).toBe("after-send");
+    expect(error.reason).toBe("keyring-locked");
+    expect(error.message).toContain("The launch was sent");
+    expect(error.message).toContain("recover the original launch");
+    expect(error.message).not.toContain("No run was submitted");
+    expect(protectedStorageBridgeError(error)).toEqual({
+      code: "PROTECTED_STORAGE",
+      message: error.message,
+      details: { reason: "keyring-locked", stage: "after-send" },
+    });
     expect(f.send).toHaveBeenCalledTimes(1);
     f.state.available = true;
     expect(f.journal.guidedList(f.scope)).toHaveLength(1);
+  });
+  it("marks a refused read of retained intents as unconfirmed, without a no-run claim", async () => {
+    const f = fixture({ available: true, backend: "gnome_libsecret" });
+    await f.controller.submit(f.review);
+    f.state.available = false;
+    const error = await refusal(f.controller.retained());
+    expect(error.stage).toBe("unconfirmed");
+    expect(error.message).toContain("An earlier launch may still exist");
+    expect(error.message).not.toContain("No run was submitted");
+    expect(protectedStorageBridgeError(new Error("other"))).toBeUndefined();
   });
 });

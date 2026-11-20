@@ -3,6 +3,7 @@ import { AdmissionRetryResultSchema, RequestsSubmitResultSchema, RunsAdmitResult
 import type { EditorTarget, LaunchResponse, LaunchReview, RetainedLaunch } from "../configuration-launch-contract.js";
 import {
   AdmissionIntents,
+  beforeSend,
   isProtectedStorageRefusal,
   type IntentRecord,
   type IntentScope,
@@ -45,11 +46,8 @@ function afterSend<T>(work: () => T): T {
   try {
     return work();
   } catch (error) {
-    if (!isProtectedStorageRefusal(error)) throw error;
-    throw new Error(
-      "The launch was sent, but secure run-intent storage refused its receipt. Restore the OS keychain, then recover the original intent; do not submit new work.",
-      { cause: error },
-    );
+    if (isProtectedStorageRefusal(error)) throw error.at("after-send");
+    throw error;
   }
 }
 export class GuidedLaunchController {
@@ -70,7 +68,7 @@ export class GuidedLaunchController {
     await connection.verifyReview(review);
     connection.assertCurrent();
     if (generation !== this.generation) throw new Error("The retained intent changed while review was pending.");
-    const record = this.journal.retainGuided(connection.scope, review);
+    const record = beforeSend(() => this.journal.retainGuided(connection.scope, review));
     const existing = this.pending.get(record.id);
     if (existing) return existing;
     const work = this.send(connection, record);

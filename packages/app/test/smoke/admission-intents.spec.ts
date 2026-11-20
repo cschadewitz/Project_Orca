@@ -404,7 +404,7 @@ test("actual app refuses admission when the availability check is false", async 
       error: {
         code: "PROTECTED_STORAGE",
         message: expect.stringMatching(/^Secure run-intent storage is unavailable\. No run was submitted[.;] /),
-        details: { reason: expect.stringMatching(/^(keyring-locked|no-keyring|unavailable)$/) },
+        details: { reason: expect.stringMatching(/^(keyring-locked|no-keyring|unavailable)$/), stage: "before-send" },
       },
     });
     const observed = await observation(app);

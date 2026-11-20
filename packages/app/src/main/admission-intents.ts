@@ -7,7 +7,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ProtectedStorageReason } from "../bridge.js";
+import { PROTECTED_STORAGE_CODE, type ProtectedStorageReason, type ProtectedStorageStage } from "../bridge.js";
 import type { LaunchReview, RetainedLaunch } from "../configuration-launch-contract.js";
 import { canonicalGuidedValue, parseGuidedReview } from "./guided-intent-contract.js";
 
@@ -39,26 +39,73 @@ function sameScope(a: IntentScope, b: IntentScope): boolean {
  * locked keyring, so both are `keyring-locked`: the Linux backend is a real keyring that did
  * not hand over ORCA's key. `no-keyring` is Linux's `basic_text`, which ORCA never uses.
  */
-const STORAGE_REFUSED = "Secure run-intent storage is unavailable. No run was submitted";
-const STORAGE_GUIDANCE: Record<ProtectedStorageReason, string> = {
-  "keyring-locked": `${STORAGE_REFUSED}. The system keyring did not give ORCA its encryption key: the keyring is locked, or its unlock prompt was cancelled. Unlock your login keyring (accept the prompt when it appears), then retry. If the retry is refused again, quit and reopen ORCA so it can ask the keyring again.`,
-  "no-keyring": `${STORAGE_REFUSED}. No supported system keyring (GNOME Keyring or KWallet) is available in this session, and ORCA does not store run intents in plain text. Start or unlock your desktop keyring, then quit and reopen ORCA and retry.`,
-  unavailable: `${STORAGE_REFUSED}; restore the OS keychain before retrying.`,
-};
+function storageFix(reason: ProtectedStorageReason, then: string): string {
+  switch (reason) {
+    case "keyring-locked":
+      return `The system keyring did not give ORCA its encryption key: the keyring is locked, or its unlock prompt was cancelled. Unlock your login keyring (accept the prompt when it appears), then ${then}. If that is refused again, quit and reopen ORCA so it can ask the keyring again.`;
+    case "no-keyring":
+      return `No supported system keyring (GNOME Keyring or KWallet) is available in this session, and ORCA does not store run intents in plain text. Start or unlock your desktop keyring, then quit and reopen ORCA and ${then}.`;
+    case "unavailable":
+      return `Restore the OS keychain, then ${then}.`;
+  }
+}
+/**
+ * Where the refusal happened, which decides what the screen may claim:
+ * - `before-send`: this launch's own intent could not be retained, so it was not sent. The
+ *   only stage that may say "No run was submitted" and offer a fresh Retry launch.
+ * - `after-send`: the daemon may already hold the launch; its receipt could not be saved.
+ * - `unconfirmed`: reading retained intents failed (recover, resolve, list). An earlier
+ *   launch may exist, so nothing is claimed about it and new work is not offered.
+ */
+function storageMessage(reason: ProtectedStorageReason, stage: ProtectedStorageStage): string {
+  if (stage === "before-send")
+    return reason === "unavailable"
+      ? "Secure run-intent storage is unavailable. No run was submitted; restore the OS keychain before retrying."
+      : `Secure run-intent storage is unavailable. No run was submitted. ${storageFix(reason, "retry")}`;
+  if (stage === "after-send")
+    return `The launch was sent, but secure run-intent storage refused its receipt. Do not start new work. ${storageFix(reason, "recover the original launch")}`;
+  return `Secure run-intent storage is unavailable, so ORCA cannot read its retained launches. An earlier launch may still exist; do not start it again. ${storageFix(reason, "recover or try again")}`;
+}
 /**
  * A fail-closed refusal of protected storage. The main process maps it to the `PROTECTED_STORAGE`
- * bridge code so the renderer can show the cause and a retry rather than a generic failure.
- * It is only ever raised before anything is sent; a refusal after a send is rethrown as a
- * plain error by the caller, because "no run was submitted" would then be untrue.
+ * bridge code with `details.reason` and `details.stage`, so the renderer can tell a refused new
+ * launch (retry it) from a launch that may already exist (recover it).
  */
 export class ProtectedStorageRefusal extends Error {
   override readonly name = "ProtectedStorageRefusal";
-  constructor(readonly reason: ProtectedStorageReason) {
-    super(STORAGE_GUIDANCE[reason]);
+  constructor(
+    readonly reason: ProtectedStorageReason,
+    readonly stage: ProtectedStorageStage = "unconfirmed",
+  ) {
+    super(storageMessage(reason, stage));
+  }
+  /** The same cause, restated for the caller that knows where in the launch it happened. */
+  at(stage: ProtectedStorageStage): ProtectedStorageRefusal {
+    return new ProtectedStorageRefusal(this.reason, stage);
   }
 }
 export function isProtectedStorageRefusal(error: unknown): error is ProtectedStorageRefusal {
   return error instanceof ProtectedStorageRefusal;
+}
+/** The bridge shape of a refusal; anything else is left to the generic mapping. */
+export function protectedStorageBridgeError(
+  error: unknown,
+): { code: typeof PROTECTED_STORAGE_CODE; message: string; details: { reason: string; stage: string } } | undefined {
+  if (!isProtectedStorageRefusal(error)) return undefined;
+  return {
+    code: PROTECTED_STORAGE_CODE,
+    message: error.message,
+    details: { reason: error.reason, stage: error.stage },
+  };
+}
+/** Run `retain` for a launch that has not been sent: a refusal there is a confirmed before-send. */
+export function beforeSend<T>(retain: () => T): T {
+  try {
+    return retain();
+  } catch (error) {
+    if (isProtectedStorageRefusal(error)) throw error.at("before-send");
+    throw error;
+  }
 }
 const KEYRING_BACKENDS = new Set(["gnome_libsecret", "kwallet", "kwallet5", "kwallet6"]);
 /** Thrown inside validation, where the catch replaces it with the "could not be verified" message. */
@@ -306,7 +353,7 @@ export class AdmissionIntentController {
     connection.assertCurrent();
     if (generation !== this.generation)
       throw new Error("Run intent changed while connecting. Choose Start again for new work.");
-    const intent = this.journal.retain(connection.scope, workflowId);
+    const intent = beforeSend(() => this.journal.retain(connection.scope, workflowId));
     connection.assertCurrent();
     const result = await connection.admit({
       workflowId: intent.workflowId,

@@ -14,7 +14,7 @@ import type {
   PreflightParams,
   PreflightResult,
 } from "../../../src/configuration-launch-contract.js";
-import type { ProtectedStorageReason } from "../../../src/bridge.js";
+import type { ProtectedStorageReason, ProtectedStorageStage } from "../../../src/bridge.js";
 import type { RequestOverrideChoices } from "./request-overrides.js";
 
 /** App-local injection contracts. These do not register an RPC or a storage format. */
@@ -95,9 +95,13 @@ export class LaunchPortFailure extends Error {
     super("Guided launch adapter refused the operation.");
   }
 }
-/** A fail-closed protected-storage refusal (#857). Nothing was retained or sent. */
+/**
+ * A fail-closed protected-storage refusal (#857). Only `before-send` says this launch was not
+ * sent; any other stage means a launch may exist and must be recovered, never sent again.
+ */
 export interface ProtectedStorageRefusalView {
   reason: ProtectedStorageReason;
+  stage: ProtectedStorageStage;
   message: string;
 }
 type WithoutOperation<T> = T extends unknown ? Omit<T, "operationId"> : never;

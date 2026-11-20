@@ -28,7 +28,14 @@ export function unwrap<T>(value: BridgeResult<T>): T {
   if (value.ok) return value.result;
   if (value.error.code === PROTECTED_STORAGE_CODE) {
     const reason = STORAGE_REASONS.find((r) => r === value.error.details?.["reason"]) ?? "unavailable";
-    throw new LaunchPortFailure("protected-storage", { reason, message: value.error.message });
+    // Anything but an explicit before-send is treated as "a launch may exist".
+    const stage =
+      value.error.details?.["stage"] === "before-send"
+        ? "before-send"
+        : value.error.details?.["stage"] === "after-send"
+          ? "after-send"
+          : "unconfirmed";
+    throw new LaunchPortFailure("protected-storage", { reason, stage, message: value.error.message });
   }
   throw new LaunchPortFailure(value.error.code === "AUTH_FORBIDDEN" ? "unauthorized" : "unavailable");
 }
