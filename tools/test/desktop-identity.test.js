@@ -36,7 +36,7 @@ it("preserves Windows NSIS identity, installation name and updater cache", () =>
   );
 });
 
-it("keeps Linux desktop entries and package names stable across the ID change", () => {
+it("keeps Linux desktop entries stable across the ID change, named apart from the screen reader", () => {
   const oldConfig = { ...config, appId: "dev.orca.desktop" };
   const desktop = (buildConfig) => {
     const helper = new LinuxTargetHelper({
@@ -54,7 +54,8 @@ it("keeps Linux desktop entries and package names stable across the ID change", 
   };
   expect(appInfo("linux").id).toBe("com.schadewitz.orca");
   expect(appInfo("linux").linuxPackageName).toBe("ORCA");
-  expect(appInfo("linux").productFilename).toBe("orca");
+  expect(appInfo("linux").productFilename).toBe("orca-desktop");
   expect(desktop(config)).toEqual(desktop(oldConfig));
-  expect(desktop(config).name).toBe("orca");
+  // Not `orca`: Ubuntu Desktop's screen reader owns /usr/bin/orca and orca.desktop (#853).
+  expect(desktop(config).name).toBe("orca-desktop");
 });

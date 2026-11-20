@@ -116,7 +116,7 @@ use it too when the health endpoint reports at least one idle runner, and GitHub
 `ubuntu-24.04` otherwise; [`tools/linux-runner.js`](../tools/linux-runner.js) makes that
 choice once per run, and `CI_FORCE_HOSTED` applies to it as well. On the hosted fallback a step installs xvfb if it is missing and loads an
 AppArmor profile that lets the one Electron executable the job launches (the development
-Electron, or the packaged `linux-unpacked/orca`, resolved through symlinks) create the
+Electron, or the packaged `linux-unpacked/orca-desktop`, resolved through symlinks) create the
 user namespaces Chromium's sandbox needs. Ubuntu 24.04's restriction stays on for
 everything else, and the step checks that an unrelated program is still refused. The
 profile is otherwise unconfined, so it is a scoped exception, not a sandbox for the app.

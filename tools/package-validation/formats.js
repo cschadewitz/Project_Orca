@@ -574,3 +574,32 @@ export function readBlockmap(compressed) {
   if (file.offset !== 0 || !file.sizes.every((n) => Number.isSafeInteger(n) && n > 0)) fail("blockmap_invalid");
   return { version: map.version, chunks: file.sizes.length, coveredBytes: file.sizes.reduce((a, b) => a + b, 0) };
 }
+
+const AR_MAGIC = Buffer.from("!<arch>\n", "latin1");
+
+/**
+ * The members of a Debian package's outer `ar` archive: names and sizes only. The control
+ * and data archives inside are xz-compressed by fpm, which Node cannot read, so their
+ * contents stay unread here (`NOT_ESTABLISHED` in inspect.js).
+ */
+export function readAr(bytes) {
+  if (bytes.length < AR_MAGIC.length || !bytes.subarray(0, AR_MAGIC.length).equals(AR_MAGIC)) fail("ar_magic_missing");
+  const members = [];
+  let offset = AR_MAGIC.length;
+  while (offset < bytes.length) {
+    if (offset + 60 > bytes.length) fail("ar_truncated");
+    const header = bytes.subarray(offset, offset + 60);
+    if (header[58] !== 0x60 || header[59] !== 0x0a) fail("ar_header_invalid", "terminator");
+    const name = header.subarray(0, 16).toString("latin1").trimEnd().replace(/\/$/, "");
+    const sizeText = header.subarray(48, 58).toString("latin1").trim();
+    if (!/^[0-9]+$/.test(sizeText)) fail("ar_header_invalid", "size");
+    const size = Number(sizeText);
+    const start = offset + 60;
+    if (start + size > bytes.length) fail("ar_truncated");
+    members.push({ name, size, body: bytes.subarray(start, start + size) });
+    if (members.length > 16) fail("ar_header_invalid", "too many members");
+    // Members are aligned to an even offset.
+    offset = start + size + (size % 2);
+  }
+  return members;
+}
