@@ -259,26 +259,16 @@ jobs:
           echo "Published [v$version](https://github.com/${{ github.repository }}/releases/tag/v$version)" \
             "with ${#assets[@]} artifacts." >> "$GITHUB_STEP_SUMMARY"
 
-      # Optional private HTTPS distribution host. A deployment key only writes feed files;
-      # clients receive a separate read-only feed credential, never this key or GH_TOKEN.
-      - name: Activate the private desktop feed
-        if: vars.ORCA_FEED_HOST != ''
+      # Optional private desktop feed: Cloudflare R2 behind tools/deploy/feed-worker. The R2
+      # token only writes the feed bucket; testers hold separate read tokens, never this key or
+      # GH_TOKEN. A new version is offered to the internal ring only; feed-promote.yml moves it
+      # to preview or stable, in full or as a percentage rollout.
+      - name: Publish to the desktop feed
+        if: vars.ORCA_FEED_BUCKET != ''
         env:
-          FEED_HOST: ${{ vars.ORCA_FEED_HOST }}
-          FEED_ROOT: ${{ vars.ORCA_FEED_ROOT }}
-          FEED_KEY: ${{ secrets.ORCA_FEED_SSH_KEY }}
-          FEED_KNOWN_HOSTS: ${{ secrets.ORCA_FEED_KNOWN_HOSTS }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
+          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
           VERSION: ${{ needs.check.outputs.version }}
-        run: |
-          set -euo pipefail
-          [[ "$FEED_HOST" =~ ^[a-zA-Z0-9_@.-]+$ ]]
-          [[ "$FEED_ROOT" =~ ^/[a-zA-Z0-9_./-]+$ ]]
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$FEED_KEY" > ~/.ssh/orca-feed
-          chmod 600 ~/.ssh/orca-feed
-          printf '%s\n' "$FEED_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          trap 'rm -f ~/.ssh/orca-feed' EXIT
-          tar -C artifacts -czf /tmp/orca-feed.tgz .
-          scp -i ~/.ssh/orca-feed /tmp/orca-feed.tgz "$FEED_HOST:/tmp/orca-feed-$VERSION.tgz"
-          ssh -i ~/.ssh/orca-feed "$FEED_HOST" python3 - "$FEED_ROOT" "$VERSION" "/tmp/orca-feed-$VERSION.tgz" < tools/deploy/publish-feed.py
+        run: bash tools/deploy/feed-r2.sh snapshot artifacts "$VERSION"
