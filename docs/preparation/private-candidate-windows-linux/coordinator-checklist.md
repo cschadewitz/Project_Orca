@@ -34,11 +34,29 @@ backup must precede the first candidate open, including read-only opens that can
 rollback requires complete matching pre-upgrade state plus binary/toolchain. Installed
 upgrade and restore remain unverified. No manual migration procedure is chosen here.
 
-For Casey's proposed Windows 11 x64 NSIS / Ubuntu 24.04 Desktop x64 tar.gz test setup,
+For Casey's proposed Windows 11 x64 NSIS / Ubuntu 24.04 Desktop x64 `.deb` test setup,
 use the [disposable Proxmox VM runbook](../release-test-vms/README.md). It adds capacity
 preflight, reusable baselines, independent backup/restore and effort estimates without
 changing the candidate decisions or gates below. Its earlier Windows 10 best-effort
 proposal is historical and does not apply to this round: Windows 10 testing is excluded.
+
+## Proposed Linux offer for 0.7.0-rc.2 (draft, 20 November 2026)
+
+This is preparation, not a decision that any combination passed. The proposed Linux offer
+is **Ubuntu 24.04 Desktop x64 (`amd64`) `.deb`**, package and command `orca-desktop`
+([#853](https://github.com/cschadewitz/Project_Orca/issues/853),
+[#854](https://github.com/cschadewitz/Project_Orca/pull/854),
+[INSTALL-LINUX.md](../../INSTALL-LINUX.md)). The tar.gz and AppImage don't start on stock
+Ubuntu 24.04 or later with the sandbox on, and the arm64 `.deb` has never been installed
+by any check, so none of them is offered. A rehearsal or pull-request build (for example a
+recut posted on #854 or #859) is not the candidate, even from the same commit: fill
+`{{ARTIFACT_TABLE}}` only from the versioned candidate's own manifest, and leave
+`{{SUPPORTED_PLATFORMS}}` and `{{TESTED_OS_VERSIONS}}` unfilled until that candidate clears
+G2–G4 below. Keep the update feed off.
+
+Deliberate keyring cancellation and exact run counting
+([#857](https://github.com/cschadewitz/Project_Orca/issues/857)) belong to internal testing,
+not to the tester path. Testers only get F7's Linux keyring note.
 
 ## 1. Fill-in decisions
 
@@ -52,7 +70,7 @@ declare.
 | `{{CANDIDATE_VERSION}}` | The version stamped into the artifacts. Testers compare it with the status bar's `orca-daemon …` | Release owner; the release or Desktop run's version step ([readiness audit](../../reviews/2026-10-27-release-readiness.md) R7) |
 | `{{CANDIDATE_COMMIT}}` | The full 40-character source commit | The producing workflow run's record. No commit is embedded in the artifacts ([#772 plan](https://github.com/cschadewitz/Project_Orca/issues/772), "Inputs") |
 | `{{DOWNLOAD_LOCATION}}` | Where approved testers download the files. It must be reachable with the private GitHub access they **already** have | Repository owner. Don't change visibility or collaborators, or send invitations, to make it reachable |
-| `{{SUPPORTED_PLATFORMS}}` | Exactly which platform, architecture and file type combinations this round offers. Examples: Windows x64 NSIS; Linux x64 tar.gz | Repository owner, as readiness decision D1. List only combinations that pass gates G2–G4 |
+| `{{SUPPORTED_PLATFORMS}}` | Exactly which platform, architecture and file type combinations this round offers. Examples: Windows x64 NSIS; Ubuntu 24.04 Desktop x64 (`amd64`) `.deb` | Repository owner, as readiness decision D1. List only combinations that pass gates G2–G4 |
 | `{{TESTED_OS_VERSIONS}}` | The OS versions on which **you** ran gates G3–G4 for this candidate. Anything else is "untested" | Coordinator's own runs |
 | `{{ARTIFACT_TABLE}}` | Each file name and its SHA-256, from the candidate manifest (computed twice, independently) | Candidate manifest and the #772 static report |
 | `{{SUPPORT_ROUTE}}` | The private place testers send reports, and who can read it. Not public GitHub | Coordinator / repository owner |
@@ -67,9 +85,37 @@ declare.
 - [ ] **G2 Static inspection.** The #772/#779 inspector reports `consistent` for every
   file in `{{ARTIFACT_TABLE}}` against the manifest and a clean checkout at
   `{{CANDIDATE_COMMIT}}`.
+  - **Linux `.deb`: G2 is not enough on its own.** Also record, for the exact file in
+    `{{ARTIFACT_TABLE}}`:
+    - **Identity.** The file name, its SHA-256 computed twice independently and equal to
+      the producing run's artifact digest and the manifest, and the control fields from
+      `dpkg-deb -f`: `Package: orca-desktop`, `Architecture: amd64`, the candidate's
+      version, and no `Conflicts`, `Breaks`, `Replaces` or `Provides`.
+    - **Payload.** `dpkg-deb -c`: every member owned by root, no setuid, setgid or sticky
+      bit, nothing group- or other-writable, the app only under `/opt/ORCA`, and nothing
+      named plain `orca`.
+    - **Scripts.** `dpkg-deb -e`: postinst is the repository's
+      `packages/app/build/linux/after-install.tpl` as built. It sets `chrome-sandbox` to
+      `0755` and never setuid, loads only the `orca-desktop` AppArmor profile (granting
+      `userns` to `/opt/ORCA/orca-desktop` alone), refuses rather than falling back where
+      the restriction is on and the profile can't load, and refreshes no shared caches.
+      postrm unloads and deletes that profile. No script touches the screen reader package
+      `orca`.
+    - That the Desktop run's hosted `.deb` install check passed for this build. It is not a
+      substitute for G3–G4: a hosted runner is not a desktop session.
 - [ ] **G3 Coordinator's own runtime checks**, in a disposable VM or container, for each
   offered combination:
-  - Linux: #772 L1, plus L3 for an AppImage
+  - Linux: #772 L1, applied to the installed `.deb` on a fresh Ubuntu 24.04 Desktop
+    amd64 with a standard account, the default
+    `kernel.apparmor_restrict_unprivileged_userns=1`, and the screen reader `orca`
+    installed. Record:
+    - APT's plan for P3 and the install, and that it matched
+    - a **normal sandboxed launch** as the normal user, with no `sudo`, no `--no-sandbox`
+      and no setting changed: the `orca-desktop` profile is loaded, `chrome-sandbox` is
+      not setuid, and a renderer runs in its own user namespace
+    - the bundled daemon connects, and closing stops the app and its daemon
+    - `apt remove orca-desktop` removes the profile, and the screen reader's package,
+      `/usr/bin/orca` and version are unchanged
   - Windows: #772 W1–W3 and W5. W1's trust prompt is **your own** recorded bootstrap
     decision inside that disposable VM. It is never passed on to testers.
   - keep their evidence
@@ -84,9 +130,12 @@ declare.
     - **First launch.** Does it open **disconnected** for setup
       (`packages/app/src/main/index.ts`) or start a daemon (`desktop.yml`'s launch
       expectation, noted in #779)?
-    - **Linux tar.gz.** The top-level folder layout.
-    - **Linux sandbox.** Whether the Chromium sandbox starts on each tested distribution
-      without changing settings.
+    - **Linux APT plan.** The exact plan P3 shows on the offered OS, and whether APT's
+      "unsandboxed as root" download note appears as linux.md P4 describes.
+    - **Linux sandbox.** That the sandbox starts on the offered OS without changing
+      settings, and what a refused install looks like.
+    - **Linux keyring.** What the desktop's keyring prompt looks like at F7, and that F7's
+      Linux keyring note matches the candidate's messages.
     - **Windows installer.** The NSIS install-mode page and the default location.
     - **Windows folders.** Whether folders made in a normal PowerShell window under
       `%USERPROFILE%` pass first-run's ACL and ownership checks. The source-built
@@ -94,6 +143,9 @@ declare.
     - **Launch and shutdown.** Connection time, the run result, F10's automatic
       reconnect (source-only so far), and shutdown within about 10 seconds with nothing
       left running.
+  - On Linux, **F10 must succeed on the offered OS**, not only be observed: after F9 the
+    reopened window appears and is usable, it reconnects to the same workspace, and
+    **Runs** shows the same single run with no new one. A failure here blocks the offer.
 - [ ] **G5 Unsigned statement.** The release notes say the attached desktop files are
   unsigned and that Windows testers get the separate signed installer (readiness R10, with
   the D1 wording), and the tester pages' warnings agree with it.
