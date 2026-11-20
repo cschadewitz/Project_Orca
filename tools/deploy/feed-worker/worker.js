@@ -4,7 +4,8 @@
  * Every request needs `Authorization: Bearer <token>`. The Worker never sees plain tokens at
  * rest: the `FEED_TOKENS` secret maps each token's SHA-256 (hex) to the ring it belongs to,
  * `{"<sha256>": {"ring": "preview"}}`. The bucket holds immutable `<version>/` snapshots and
- * `rings.json` (see rings.js), so the channel file a client asks for (`latest-x64.yml`)
+ * `rings.json` (see rings.js). Nothing of a snapshot is served until its `complete.json`
+ * exists, which feed-r2.sh writes last. The channel file a client asks for (`latest-x64.yml`)
  * resolves per token: the ring's version, or its partial rollout when the token's stable
  * bucket falls under the percentage. Installers and blockmaps are addressed by the version
  * in their file name, which is how electron-updater finds the old blockmap for a
@@ -59,6 +60,11 @@ export function parseRange(header) {
 function contentType(name) {
   if (name.endsWith(".yml")) return "text/yaml; charset=utf-8";
   return "application/octet-stream";
+}
+
+/** feed-r2.sh writes VERSION/complete.json last; until then nothing of VERSION is served. */
+async function complete(bucket, version) {
+  return Boolean(await bucket.head(`${version}/complete.json`));
 }
 
 async function readRings(bucket) {
@@ -127,7 +133,7 @@ export async function handle(request, env) {
       return respond(503);
     }
     const version = rings && (await versionFor(rings, caller.ring, caller.hash));
-    if (!version) return respond(404);
+    if (!version || !(await complete(env.FEED, version))) return respond(404);
     // An rc snapshot carries prerelease-ARCH.yml; the client always asks for latest-ARCH.yml.
     for (const file of [`latest-${channel[1]}.yml`, `prerelease-${channel[1]}.yml`]) {
       if (await env.FEED.head(`${version}/${file}`)) return serve(env.FEED, `${version}/${file}`, name, request);
@@ -135,8 +141,13 @@ export async function handle(request, env) {
     return respond(404);
   }
 
+  // Any completed snapshot, not only the ring's current one: a differential download needs
+  // the blockmap of the version the client is upgrading from.
   const payload = PAYLOAD.exec(name);
-  if (payload) return serve(env.FEED, `${payload[1]}/${name}`, name, request);
+  if (payload) {
+    if (!(await complete(env.FEED, payload[1]))) return respond(404);
+    return serve(env.FEED, `${payload[1]}/${name}`, name, request);
+  }
   return respond(404);
 }
 

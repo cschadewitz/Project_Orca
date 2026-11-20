@@ -1,13 +1,17 @@
 # Put a released version's *signed* Windows build into the private desktop feed, offered to
 # the internal ring only. release-publish.yml never feeds it: its Desktop output is unsigned.
 #
-# Inputs are a published version (its `vX.Y.Z` tag must exist) and the id of a successful
+# Inputs are a version with a published (non-draft) GitHub release and the id of a successful
 # `Windows signed (spike)` run, dispatched from main with `source_sha` set to that tag's
-# commit. This job accepts the run only if it is that workflow on main and it succeeded, takes
+# commit. tools/deploy/feed-source.js accepts the run only if it is that workflow on main and
+# it succeeded, and the release only if it is published for that tag. The job then takes
 # only the artifact named for the tagged commit, re-checks every installer's Authenticode
 # signature, timestamp and publisher on this Windows runner, re-checks the update metadata
 # against the installers (release-assets.py), and then uploads with tools/deploy/feed-r2.sh.
 # Signed artifacts are kept for 7 days, so run this within a week of signing.
+#
+# Dispatch from main only, and keep the R2 write credential in the protected `desktop-feed`
+# environment (required reviewers, deployments from main only); see docs/UPDATING.md.
 #
 # Rerunning after an interruption resumes: identical objects are skipped and different ones
 # refused. feed-promote.yml moves the version on from internal.
@@ -36,7 +40,7 @@ permissions:
 jobs:
   publish:
     name: publish ${{ inputs.version }} to the internal ring
-    if: vars.ORCA_FEED_BUCKET != ''
+    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
     runs-on: windows-latest
     environment: desktop-feed
     defaults:
@@ -53,7 +57,7 @@ jobs:
         with:
           node-version: 24
 
-      - name: Resolve the tagged commit and check the signed run
+      - name: Check the release and the signed run
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
@@ -62,23 +66,21 @@ jobs:
           RUN_ID: ${{ inputs.signed_run_id }}
         run: |
           set -euo pipefail
-          fail() { echo "::error::$*"; exit 1; }
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || fail "invalid version"
-          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || fail "invalid run id"
-          sha=$(git rev-parse --verify -q "refs/tags/v$VERSION^{commit}") || fail "tag v$VERSION does not exist"
-          gh api "repos/$REPO/actions/runs/$RUN_ID" > run.json
-          [[ "$(jq -r .path run.json)" == ".github/workflows/windows-signed.yml" ]] || fail "run $RUN_ID is not Windows signed"
-          [[ "$(jq -r .head_branch run.json)" == "main" ]] || fail "run $RUN_ID was not dispatched from main"
-          [[ "$(jq -r .conclusion run.json)" == "success" ]] || fail "run $RUN_ID did not succeed"
-          rm run.json
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "Feeding v$VERSION ($sha) from signed run $RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::invalid version"; exit 1; }
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::invalid run id"; exit 1; }
+          sha=$(git rev-parse --verify -q "refs/tags/v$VERSION^{commit}" || true)
+          gh api "repos/$REPO/actions/runs/$RUN_ID" > run.json || rm -f run.json
+          gh api "repos/$REPO/releases/tags/v$VERSION" > release.json || rm -f release.json
+          artifact=$(node tools/deploy/feed-source.js "$VERSION" "$sha" run.json release.json)
+          rm -f run.json release.json
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "Feeding published v$VERSION ($sha) from signed run $RUN_ID" >> "$GITHUB_STEP_SUMMARY"
 
       # Only the artifact named for the tagged commit: a run that signed anything else has none.
       - name: Download the signed build of the tagged commit
         uses: actions/download-artifact@v8
         with:
-          name: windows-signed-${{ steps.source.outputs.sha }}
+          name: ${{ steps.source.outputs.artifact }}
           run-id: ${{ inputs.signed_run_id }}
           github-token: ${{ github.token }}
           path: signed

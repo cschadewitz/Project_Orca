@@ -72,9 +72,9 @@ case "${1:-}" in
     dir=$2 version=$3
     check_version "$version"
     channel=$(channel_of "$version")
-    # Payload first, metadata last, each written once. The Worker only offers a version
-    # through rings.json, so a partial snapshot is never visible, and rerunning after an
-    # interruption at any point resumes: identical objects are skipped, different ones refused.
+    # Payload first, then metadata, then the completion record, each written once. Rerunning
+    # after an interruption at any point resumes: identical objects are skipped, different
+    # ones refused.
     for arch in x64 arm64; do
       for name in "ORCA-$version-win-$arch.exe" "ORCA-$version-win-$arch.exe.blockmap"; do
         [[ -f "$dir/$name" ]] || fail "missing $name"
@@ -89,15 +89,16 @@ case "${1:-}" in
     for arch in x64 arm64; do
       put_once "$version/$channel-$arch.yml" "$dir/$channel-$arch.yml" "text/yaml; charset=utf-8"
     done
+    # The completion record, written only once every object above is in place. The Worker
+    # serves nothing from a snapshot without it, payload included.
+    printf '{"format":1,"version":"%s"}\n' "$version" >"$work/complete.json"
+    put_once "$version/complete.json" "$work/complete.json" application/json
     update_rings publish "$version"
     ;;
   promote)
     [[ $# -eq 4 ]] || fail "usage: feed-r2.sh promote RING VERSION PERCENT"
     check_version "$3"
-    channel=$(channel_of "$3")
-    for arch in x64 arm64; do
-      exists "$3/$channel-$arch.yml" || fail "no complete feed snapshot for $3"
-    done
+    exists "$3/complete.json" || fail "no complete feed snapshot for $3"
     update_rings promote "$2" "$3" "$4"
     ;;
   *)

@@ -10,14 +10,13 @@ describe("desktop feed workflows", () => {
     expect(publish).not.toMatch(/feed-r2\.sh|ORCA_FEED_|publish-feed/);
   });
 
-  it("feeds only a successful signed run's artifact for the tagged commit, after re-verifying it", () => {
+  it("feeds only a published release's signed artifact, after re-verifying it", () => {
     const feed = read("feed-publish.yml");
     expect(feed).toContain("refs/tags/v$VERSION^{commit}");
-    expect(feed).toContain('".github/workflows/windows-signed.yml"');
-    expect(feed).toContain('"$(jq -r .head_branch run.json)" == "main"');
-    expect(feed).toContain('"$(jq -r .conclusion run.json)" == "success"');
-    expect(feed).toContain("name: windows-signed-${{ steps.source.outputs.sha }}");
+    expect(feed).toContain('releases/tags/v$VERSION" > release.json');
+    expect(feed).toContain("name: ${{ steps.source.outputs.artifact }}");
     const order = [
+      "tools/deploy/feed-source.js",
       "Get-AuthenticodeSignature",
       "tools/deploy/release-assets.py signed",
       "tools/deploy/feed-r2.sh snapshot signed",
@@ -29,7 +28,7 @@ describe("desktop feed workflows", () => {
   it("gates both feed workflows on the bucket variable and one concurrency group", () => {
     for (const name of ["feed-publish.yml", "feed-promote.yml"]) {
       const text = read(name);
-      expect(text).toContain("if: vars.ORCA_FEED_BUCKET != ''");
+      expect(text).toContain("if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''");
       expect(text).toContain("group: release-publication");
       expect(text).toContain("environment: desktop-feed");
     }

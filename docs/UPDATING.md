@@ -134,8 +134,9 @@ it in the feed; separate buckets and Workers per audience would be the way to en
 Promote with the **Desktop feed (promote)** workflow (`feed-promote.yml`): pick a ring, a
 version the feed holds and a percentage. 100 offers it to the whole ring, 1–99 starts or changes
 a rollout, and 0 halts the rollout of that version. A ring cannot be given a version older than
-its full version or its active rollout; the same rollout version can be widened or completed. It runs in the `desktop-feed` environment;
-add required reviewers there to gate promotions.
+its full version or its active rollout; the same rollout version can be widened or completed.
+Like publication, it only runs when dispatched from main, in the protected `desktop-feed`
+environment (see the setup below).
 
 Rings never move backwards, and halting is not a rollback. The client disallows downgrades,
 so anyone who already took a bad build keeps it until a newer fixed version ships; halting
@@ -158,8 +159,10 @@ confirming it was never published, before retrying the existing release process.
 
 The feed never takes these release assets: they are the unsigned Desktop builds. After a
 release is published, dispatch **Windows signed (spike)** from main with `source_sha` set to the
-tag's commit, then **Desktop feed (publish signed)** (`feed-publish.yml`) with the version and
-that run's id. It accepts only a successful `windows-signed.yml` run from main, downloads only
+tag's commit, then **Desktop feed (publish signed)** (`feed-publish.yml`) from main with the
+version and that run's id. `tools/deploy/feed-source.js` refuses a version without a
+published, non-draft GitHub release for its tag (a tag alone is not enough) and accepts only
+a successful `windows-signed.yml` run from main. The job then downloads only
 the artifact named for the tagged commit, re-checks each installer's Authenticode signature,
 timestamp and publisher (`ORCA_FEED_PUBLISHER_CN`) and the metadata's SHA-512 and blockmaps,
 and runs `tools/deploy/feed-r2.sh snapshot`. Signed artifacts are kept 7 days, so feed within
@@ -167,12 +170,13 @@ a week of signing. The feed therefore carries signed installers even where the G
 assets are unsigned.
 
 `feed-r2.sh snapshot` uploads installers and blockmaps to `VERSION/`, then the two metadata
-files, each written only if absent. An object that already exists must hold identical bytes,
+files, then `VERSION/complete.json`, each written only if absent. An object that already exists must hold identical bytes,
 so a rerun after an interruption at any stage resumes and nothing published is ever replaced.
 A lookup or write error other than "absent" stops the run. It then offers the version to
 `internal`. A version older than anything `internal` already offers, its rollout included (a
-hotfix behind an rc), is stored but not offered; promote it explicitly. Nothing is offered
-until `rings.json` names a version, so a partial snapshot is never visible.
+hotfix behind an rc), is stored but not offered; promote it explicitly. The Worker serves
+nothing of a version, metadata or payload, until its `complete.json` exists, so a partial
+snapshot is never visible; completed older snapshots stay readable for differential downloads.
 
 One-time setup (Casey):
 
@@ -183,12 +187,16 @@ One-time setup (Casey):
 3. Mint a token per person with `node tools/deploy/feed-token.js RING`. Give each person their
    token; merge the printed entries into one JSON object and store it with
    `npx wrangler secret put FEED_TOKENS`. Revoke a person by removing their entry.
-4. In the repository, set variables `ORCA_FEED_ACCOUNT_ID` (the Cloudflare account id),
+4. Create the `desktop-feed` environment (Settings → Environments) and protect it: add
+   yourself (and Cal) as required reviewers, and under deployment branches allow only `main`.
+   Store `ORCA_FEED_ACCESS_KEY_ID` and `ORCA_FEED_SECRET_ACCESS_KEY` from the R2 token as
+   **environment** secrets there, not repository secrets, so only a reviewed run from main can
+   write the bucket. Both feed workflows also refuse to run from any other ref.
+5. Set repository variables `ORCA_FEED_ACCOUNT_ID` (the Cloudflare account id),
    `ORCA_FEED_BUCKET` and `ORCA_FEED_PUBLISHER_CN` (the exact signing certificate CN, as in
-   `WINDOWS_SIGNING_PUBLISHER_CN`), and secrets `ORCA_FEED_ACCESS_KEY_ID` and
-   `ORCA_FEED_SECRET_ACCESS_KEY` from the R2 token. Until `ORCA_FEED_BUCKET` is set, neither
-   feed workflow does anything.
-5. Before the first real version, exercise `feed-r2.sh` against a throwaway bucket: R2's
+   `WINDOWS_SIGNING_PUBLISHER_CN`). Until `ORCA_FEED_BUCKET` is set, neither feed workflow
+   does anything.
+6. Before the first real version, exercise `feed-r2.sh` against a throwaway bucket: R2's
    handling of conditional writes (`If-None-Match`, `If-Match`) has not been verified from CI.
 
 A feed failure leaves the GitHub release in place and the rings unchanged. Rerun **Desktop

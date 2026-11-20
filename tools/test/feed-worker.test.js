@@ -34,6 +34,8 @@ class FakeBucket {
 function env(rings, extra = {}) {
   const objects = {
     "0.7.0/latest-x64.yml": "version: 0.7.0\n",
+    "0.7.0/complete.json": '{"format":1,"version":"0.7.0"}',
+    "0.7.1-rc.1/complete.json": '{"format":1,"version":"0.7.1-rc.1"}',
     "0.7.0/ORCA-0.7.0-win-x64.exe": "0123456789",
     "0.7.0/ORCA-0.7.0-win-x64.exe.blockmap": "old-map",
     "0.7.1-rc.1/prerelease-x64.yml": "version: 0.7.1-rc.1\n",
@@ -207,6 +209,25 @@ describe("payload files", () => {
       expect(response.headers.get("Content-Range")).toBe("bytes */10");
     },
   );
+});
+
+describe("snapshot completion", () => {
+  it("serves nothing of a snapshot until its completion record exists", async () => {
+    const partial = {
+      "0.8.0/latest-x64.yml": "version: 0.8.0\n",
+      "0.8.0/ORCA-0.8.0-win-x64.exe": "partial",
+      "0.8.0/ORCA-0.8.0-win-x64.exe.blockmap": "partial-map",
+    };
+    const rings = { format: 1, rings: { internal: { version: "0.8.0" } } };
+    const e = env(rings, partial);
+    for (const path of ["/latest-x64.yml", "/ORCA-0.8.0-win-x64.exe", "/ORCA-0.8.0-win-x64.exe.blockmap"]) {
+      expect((await handle(get(path, { token: TOKENS.internal }), e)).status).toBe(404);
+    }
+    const done = env(rings, { ...partial, "0.8.0/complete.json": "{}" });
+    expect((await handle(get("/ORCA-0.8.0-win-x64.exe", { token: TOKENS.internal }), done)).status).toBe(200);
+    // Completed historical snapshots stay reachable for differential downloads.
+    expect((await handle(get("/ORCA-0.7.0-win-x64.exe.blockmap", { token: TOKENS.internal }), done)).status).toBe(200);
+  });
 });
 
 describe("parseRange", () => {

@@ -91,9 +91,10 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
     const keys = puts.map((a) => a[a.indexOf("--key") + 1]);
     expect(keys.slice(0, 4).every((k) => /\.exe(\.blockmap)?$/.test(k))).toBe(true);
     expect(keys.slice(4, 6)).toEqual(["0.7.1-rc.1/prerelease-x64.yml", "0.7.1-rc.1/prerelease-arm64.yml"]);
-    expect(keys[6]).toBe("rings.json");
+    expect(keys[6]).toBe("0.7.1-rc.1/complete.json");
+    expect(keys[7]).toBe("rings.json");
     expect(puts[4]).toContain("--if-none-match");
-    expect(puts[6]).toContain("--if-none-match");
+    expect(puts[7]).toContain("--if-none-match");
     expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8"))).toEqual({
       format: 1,
       rings: { internal: { version: "0.7.1-rc.1" } },
@@ -106,7 +107,7 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
     f.release("0.7.0", "latest");
     expect(f.run("snapshot", f.artifacts, "0.7.0").status).toBe(0);
     const puts = f.log().filter((a) => a[3] === "put-object");
-    expect(puts).toHaveLength(7);
+    expect(puts).toHaveLength(8);
     expect(puts.every((a) => a.includes("--if-none-match") || a.includes("--if-match"))).toBe(true);
   });
 
@@ -126,8 +127,8 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
     expect(readFileSync(f.object("0.7.0/ORCA-0.7.0-win-x64.exe"), "utf8")).toBe("exe 0.7.0 x64");
   });
 
-  // 7 writes: 4 payload, 2 metadata, rings.json. Interrupt before each, then resume.
-  it.each([0, 1, 4, 5, 6])("resumes after an interruption once %i objects were written", (written) => {
+  // 8 writes: 4 payload, 2 metadata, the completion record, rings.json. Interrupt before each.
+  it.each([0, 1, 2, 3, 4, 5, 6, 7])("resumes after an interruption once %i objects were written", (written) => {
     const f = setup();
     f.release("0.7.1-rc.1", "prerelease");
     const cut = f.runWith({ FAKE_PUT_LIMIT: String(written) }, "snapshot", f.artifacts, "0.7.1-rc.1");
@@ -141,6 +142,10 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
       );
       expect(existsSync(f.object(`0.7.1-rc.1/prerelease-${arch}.yml`))).toBe(true);
     }
+    expect(JSON.parse(readFileSync(f.object("0.7.1-rc.1/complete.json"), "utf8"))).toEqual({
+      format: 1,
+      version: "0.7.1-rc.1",
+    });
     expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8")).rings.internal).toEqual({
       version: "0.7.1-rc.1",
     });
