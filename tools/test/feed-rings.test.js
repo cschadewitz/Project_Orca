@@ -105,6 +105,28 @@ describe("promote", () => {
     expect(() => promote(base, "stable", "0.7.1", 101)).toThrow(/percent/);
   });
 
+  it("never replaces a newer active rollout with an older version", () => {
+    const rolling = promote(base, "stable", "0.7.2", 10).rings;
+    expect(() => promote(rolling, "stable", "0.7.1", 50)).toThrow(/rolling out 0.7.2/);
+    expect(() => promote(rolling, "stable", "0.7.1", 100)).toThrow(/rolling out 0.7.2/);
+    expect(promote(rolling, "stable", "0.7.2", 30).rings.rings.stable.rollout.percent).toBe(30);
+    expect(promote(rolling, "stable", "0.7.3", 5).rings.rings.stable.rollout).toEqual({ version: "0.7.3", percent: 5 });
+    expect(promote(rolling, "stable", "0.7.2", 0).rings.rings.stable).toEqual({ version: "0.7.0" });
+  });
+
+  it("does not let publication clear a newer internal rollout", () => {
+    const rolling = promote(
+      { format: 1, rings: { internal: { version: "0.7.0" } } },
+      "internal",
+      "0.8.0-rc.1",
+      50,
+    ).rings;
+    const result = publish(rolling, "0.7.1");
+    expect(result.changed).toBe(false);
+    expect(result.rings).toEqual(rolling);
+    expect(publish(rolling, "0.8.0-rc.2").rings.rings.internal).toEqual({ version: "0.8.0-rc.2" });
+  });
+
   it("starts a ring that has never offered anything", () => {
     expect(promote(emptyRings(), "stable", "0.7.0", 100).rings.rings).toEqual({ stable: { version: "0.7.0" } });
   });

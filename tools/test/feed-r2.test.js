@@ -15,6 +15,13 @@ const store = process.env.FAKE_S3;
 fs.appendFileSync(path.join(store, "..", "log"), JSON.stringify(args) + "\n");
 const opt = (name) => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
 const op = args[3];
+if (process.env.FAKE_FAIL_OP === op) { process.stderr.write("An error occurred (InternalError) (500)\n"); process.exit(254); }
+if (op === "put-object" && process.env.FAKE_PUT_LIMIT) {
+  const counter = path.join(store, "..", "puts");
+  const done = fs.existsSync(counter) ? Number(fs.readFileSync(counter, "utf8")) : 0;
+  if (done >= Number(process.env.FAKE_PUT_LIMIT)) { process.stderr.write("Connection was closed\n"); process.exit(255); }
+  fs.writeFileSync(counter, String(done + 1));
+}
 const file = path.join(store, encodeURIComponent(opt("--key")));
 const etag = () => '"' + crypto.createHash("md5").update(fs.readFileSync(file)).digest("hex") + '"';
 const fail = (code) => { process.stderr.write("An error occurred (" + code + ")\n"); process.exit(254); };
@@ -56,6 +63,8 @@ function setup() {
     GITHUB_STEP_SUMMARY: join(root, "summary"),
   };
   const run = (...args) => spawnSync("bash", ["tools/deploy/feed-r2.sh", ...args], { env, encoding: "utf8" });
+  const runWith = (extra, ...args) =>
+    spawnSync("bash", ["tools/deploy/feed-r2.sh", ...args], { env: { ...env, ...extra }, encoding: "utf8" });
   const object = (key) => join(store, encodeURIComponent(key));
   const log = () =>
     readFileSync(join(root, "log"), "utf8")
@@ -69,7 +78,7 @@ function setup() {
       writeFileSync(join(artifacts, `${channel}-${arch}.yml`), `version: ${version}\n`);
     }
   };
-  return { run, object, log, release, artifacts, root };
+  return { run, runWith, object, log, release, artifacts, root };
 }
 
 describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
@@ -92,15 +101,62 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
     expect(readFileSync(join(f.root, "summary"), "utf8")).toContain("internal now offers 0.7.1-rc.1");
   });
 
-  it("refuses to republish a complete snapshot and leaves the rings alone", () => {
+  it("writes every object conditionally", () => {
+    const f = setup();
+    f.release("0.7.0", "latest");
+    expect(f.run("snapshot", f.artifacts, "0.7.0").status).toBe(0);
+    const puts = f.log().filter((a) => a[3] === "put-object");
+    expect(puts).toHaveLength(7);
+    expect(puts.every((a) => a.includes("--if-none-match") || a.includes("--if-match"))).toBe(true);
+  });
+
+  it("treats a rerun of identical bytes as a no-op and refuses different bytes", () => {
     const f = setup();
     f.release("0.7.0", "latest");
     expect(f.run("snapshot", f.artifacts, "0.7.0").status).toBe(0);
     const rings = readFileSync(f.object("rings.json"), "utf8");
     const again = f.run("snapshot", f.artifacts, "0.7.0");
-    expect(again.status).not.toBe(0);
-    expect(again.stderr).toContain("already exists");
+    expect(again.status, again.stderr).toBe(0);
+    expect(again.stdout).toContain("identical bytes");
     expect(readFileSync(f.object("rings.json"), "utf8")).toBe(rings);
+    writeFileSync(join(f.artifacts, "ORCA-0.7.0-win-x64.exe"), "tampered");
+    const changed = f.run("snapshot", f.artifacts, "0.7.0");
+    expect(changed.status).not.toBe(0);
+    expect(changed.stderr).toContain("already exists with different bytes");
+    expect(readFileSync(f.object("0.7.0/ORCA-0.7.0-win-x64.exe"), "utf8")).toBe("exe 0.7.0 x64");
+  });
+
+  // 7 writes: 4 payload, 2 metadata, rings.json. Interrupt before each, then resume.
+  it.each([0, 1, 4, 5, 6])("resumes after an interruption once %i objects were written", (written) => {
+    const f = setup();
+    f.release("0.7.1-rc.1", "prerelease");
+    const cut = f.runWith({ FAKE_PUT_LIMIT: String(written) }, "snapshot", f.artifacts, "0.7.1-rc.1");
+    expect(cut.status).not.toBe(0);
+    expect(existsSync(f.object("rings.json"))).toBe(false);
+    const resumed = f.run("snapshot", f.artifacts, "0.7.1-rc.1");
+    expect(resumed.status, resumed.stderr).toBe(0);
+    for (const arch of ["x64", "arm64"]) {
+      expect(readFileSync(f.object(`0.7.1-rc.1/ORCA-0.7.1-rc.1-win-${arch}.exe`), "utf8")).toBe(
+        `exe 0.7.1-rc.1 ${arch}`,
+      );
+      expect(existsSync(f.object(`0.7.1-rc.1/prerelease-${arch}.yml`))).toBe(true);
+    }
+    expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8")).rings.internal).toEqual({
+      version: "0.7.1-rc.1",
+    });
+  });
+
+  it("stops on a lookup or write error instead of reading it as absence", () => {
+    const f = setup();
+    f.release("0.7.0", "latest");
+    const head = f.runWith({ FAKE_FAIL_OP: "head-object" }, "promote", "stable", "0.7.0", "100");
+    expect(head.status).not.toBe(0);
+    expect(head.stderr).toContain("could not look up");
+    const put = f.runWith({ FAKE_FAIL_OP: "put-object" }, "snapshot", f.artifacts, "0.7.0");
+    expect(put.status).not.toBe(0);
+    expect(put.stderr).toContain("could not write");
+    const get = f.runWith({ FAKE_FAIL_OP: "get-object" }, "promote", "stable", "0.7.0", "100");
+    expect(get.status).not.toBe(0);
   });
 
   it("promotes only complete snapshots and writes rings.json conditionally", () => {

@@ -115,7 +115,7 @@ The client always asks for `latest-ARCH.yml`; which version that resolves to dep
 
 | Ring | Meant for | Offered |
 | --- | --- | --- |
-| `internal` | Maintainers | Every published version, automatically on publication |
+| `internal` | Maintainers | Each version `feed-publish.yml` uploads |
 | `preview` | Testers | What `Desktop feed (promote)` moves there, prereleases included |
 | `stable` | Everyone else | What `Desktop feed (promote)` moves there, never a prerelease |
 
@@ -125,9 +125,16 @@ from a hash of the token and the rollout version, so it is stable between checks
 the percentage only adds people. Named subsets are rings: mint the people you want first with
 an `internal` or `preview` token.
 
+Rings are **targeting, not access control.** They decide which version a token is offered.
+Any valid token can still download any installer or blockmap the bucket holds by its file name;
+that keeps old blockmaps reachable for differential downloads, and the same versions are
+already public on GitHub releases. If a build must not reach some testers at all, do not put
+it in the feed; separate buckets and Workers per audience would be the way to enforce that.
+
 Promote with the **Desktop feed (promote)** workflow (`feed-promote.yml`): pick a ring, a
-published version and a percentage. 100 offers it to the whole ring, 1–99 starts or changes a
-rollout, and 0 halts the rollout of that version. It runs in the `desktop-feed` environment;
+version the feed holds and a percentage. 100 offers it to the whole ring, 1–99 starts or changes
+a rollout, and 0 halts the rollout of that version. A ring cannot be given a version older than
+its full version or its active rollout; the same rollout version can be widened or completed. It runs in the `desktop-feed` environment;
 add required reviewers there to gate promotions.
 
 Rings never move backwards, and halting is not a rollback. The client disallows downgrades,
@@ -149,12 +156,23 @@ release, then makes the complete release visible. A failed upload leaves a draft
 inspection rather than a partial discoverable feed. Delete that failed draft/tag only after
 confirming it was never published, before retrying the existing release process.
 
-Then, if the feed is configured, `tools/deploy/feed-r2.sh snapshot` uploads the version's
-installers and blockmaps to `VERSION/` in the bucket, writes the two metadata files last
-(refusing if they already exist, so a complete snapshot is immutable), and offers the version
-to `internal`. A version older than what `internal` already offers (a hotfix behind an rc) is
-stored but not offered; promote it explicitly. Without the variables below, GitHub release
-publication works as before and the feed is untouched.
+The feed never takes these release assets: they are the unsigned Desktop builds. After a
+release is published, dispatch **Windows signed (spike)** from main with `source_sha` set to the
+tag's commit, then **Desktop feed (publish signed)** (`feed-publish.yml`) with the version and
+that run's id. It accepts only a successful `windows-signed.yml` run from main, downloads only
+the artifact named for the tagged commit, re-checks each installer's Authenticode signature,
+timestamp and publisher (`ORCA_FEED_PUBLISHER_CN`) and the metadata's SHA-512 and blockmaps,
+and runs `tools/deploy/feed-r2.sh snapshot`. Signed artifacts are kept 7 days, so feed within
+a week of signing. The feed therefore carries signed installers even where the GitHub release
+assets are unsigned.
+
+`feed-r2.sh snapshot` uploads installers and blockmaps to `VERSION/`, then the two metadata
+files, each written only if absent. An object that already exists must hold identical bytes,
+so a rerun after an interruption at any stage resumes and nothing published is ever replaced.
+A lookup or write error other than "absent" stops the run. It then offers the version to
+`internal`. A version older than anything `internal` already offers, its rollout included (a
+hotfix behind an rc), is stored but not offered; promote it explicitly. Nothing is offered
+until `rings.json` names a version, so a partial snapshot is never visible.
 
 One-time setup (Casey):
 
@@ -165,15 +183,19 @@ One-time setup (Casey):
 3. Mint a token per person with `node tools/deploy/feed-token.js RING`. Give each person their
    token; merge the printed entries into one JSON object and store it with
    `npx wrangler secret put FEED_TOKENS`. Revoke a person by removing their entry.
-4. In the repository, set variables `ORCA_FEED_ACCOUNT_ID` (the Cloudflare account id) and
-   `ORCA_FEED_BUCKET`, and secrets `ORCA_FEED_ACCESS_KEY_ID` and
-   `ORCA_FEED_SECRET_ACCESS_KEY` from the R2 token. Setting `ORCA_FEED_BUCKET` is what turns
-   publication to the feed on.
+4. In the repository, set variables `ORCA_FEED_ACCOUNT_ID` (the Cloudflare account id),
+   `ORCA_FEED_BUCKET` and `ORCA_FEED_PUBLISHER_CN` (the exact signing certificate CN, as in
+   `WINDOWS_SIGNING_PUBLISHER_CN`), and secrets `ORCA_FEED_ACCESS_KEY_ID` and
+   `ORCA_FEED_SECRET_ACCESS_KEY` from the R2 token. Until `ORCA_FEED_BUCKET` is set, neither
+   feed workflow does anything.
+5. Before the first real version, exercise `feed-r2.sh` against a throwaway bucket: R2's
+   handling of conditional writes (`If-None-Match`, `If-Match`) has not been verified from CI.
 
-A feed failure after the GitHub release is published leaves the release in place and the
-rings unchanged. Repair it by downloading the **already verified published release assets**
-into a directory and running `tools/deploy/feed-r2.sh snapshot DIR VERSION` with the same
-environment. Do not rerun release creation for an already published tag.
+A feed failure leaves the GitHub release in place and the rings unchanged. Rerun **Desktop
+feed (publish signed)** with the same inputs (or a fresh signed run of the same commit if the
+artifact expired; its bytes differ, so it is refused if any object of the first attempt was
+already written, and those objects must be removed from the bucket first). Do not rerun release
+creation for an already published tag.
 
 Windows signing is **not proven or provisioned by this change**. Current builds remain
 unsigned. Bootstrap requires trusting the installer through Windows' unsigned-app warning;

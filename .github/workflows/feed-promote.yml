@@ -1,5 +1,5 @@
-# Move a published version between the desktop feed's rings (internal, preview, stable), in
-# full or as a percentage rollout, or halt a rollout. release-publish.yml only ever offers a
+# Move a version the feed already holds between its rings (internal, preview, stable), in
+# full or as a percentage rollout, or halt a rollout. feed-publish.yml only ever offers a
 # new version to `internal`; everything past that is a deliberate dispatch of this workflow.
 #
 # The rules are in tools/deploy/feed-worker/rings.js: rings never move backwards (the client
@@ -28,7 +28,7 @@ on:
         type: number
         default: 100
 
-# Shares release-publish.yml's group, so a promotion never races a publication's ring update.
+# Shares the release and feed-publish group, so a promotion never races a ring update.
 concurrency:
   group: release-publication
   cancel-in-progress: false

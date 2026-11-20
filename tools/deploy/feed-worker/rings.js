@@ -68,6 +68,12 @@ export function validateRings(value) {
   return value;
 }
 
+/** The newest version any token in the ring may already have been offered. */
+function newest(entry) {
+  if (!entry) return undefined;
+  return entry.rollout?.version ?? entry.version;
+}
+
 function clone(rings) {
   return validateRings(JSON.parse(JSON.stringify(rings)));
 }
@@ -79,7 +85,7 @@ function clone(rings) {
 export function publish(rings, version) {
   if (!isVersion(version)) throw new Error(`Invalid version: ${version}`);
   const next = clone(rings);
-  const current = next.rings.internal?.version;
+  const current = newest(next.rings.internal);
   if (current && compareVersions(version, current) <= 0)
     return { rings: next, changed: false, message: `internal stays on ${current}; ${version} stored only` };
   next.rings.internal = { version };
@@ -106,6 +112,10 @@ export function promote(rings, ring, version, percent) {
   if (ring === "stable" && isPrerelease(version)) throw new Error("stable cannot take a prerelease");
   if (entry.version && compareVersions(version, entry.version) <= 0)
     throw new Error(`${ring} already offers ${entry.version}; rings never move backwards`);
+  // Some of the ring may already run the active rollout's version; an older one would strand
+  // them. Widening or completing the same version is fine, and halting is handled above.
+  if (entry.rollout && compareVersions(version, entry.rollout.version) < 0)
+    throw new Error(`${ring} is rolling out ${entry.rollout.version}; rings never move backwards`);
   if (percent === 100) {
     next.rings[ring] = { version };
     return { rings: validateRings(next), message: `${ring} now offers ${version} to everyone` };

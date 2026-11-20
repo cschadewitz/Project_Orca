@@ -259,16 +259,5 @@ jobs:
           echo "Published [v$version](https://github.com/${{ github.repository }}/releases/tag/v$version)" \
             "with ${#assets[@]} artifacts." >> "$GITHUB_STEP_SUMMARY"
 
-      # Optional private desktop feed: Cloudflare R2 behind tools/deploy/feed-worker. The R2
-      # token only writes the feed bucket; testers hold separate read tokens, never this key or
-      # GH_TOKEN. A new version is offered to the internal ring only; feed-promote.yml moves it
-      # to preview or stable, in full or as a percentage rollout.
-      - name: Publish to the desktop feed
-        if: vars.ORCA_FEED_BUCKET != ''
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
-          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
-          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
-          VERSION: ${{ needs.check.outputs.version }}
-        run: bash tools/deploy/feed-r2.sh snapshot artifacts "$VERSION"
+      # The private desktop feed is deliberately not fed from here: these are the ordinary,
+      # unsigned Desktop builds. feed-publish.yml takes signed bytes for the tagged commit.
