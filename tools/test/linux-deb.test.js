@@ -5,9 +5,22 @@
  * install script loads an AppArmor profile for /opt/ORCA/orca alone. These checks hold the
  * packaging and the workflow's install-and-launch proof to that, with the locked builder.
  */
-import { readFileSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, it } from "vitest";
+import afterPack from "../../packages/app/scripts/after-pack.js";
+import { stripSharedWrite } from "../../packages/app/scripts/linux-file-modes.js";
 
 const appRequire = createRequire(new URL("../../packages/app/package.json", import.meta.url));
 const builderRequire = createRequire(appRequire.resolve("electron-builder"));
@@ -62,6 +75,33 @@ it("relies on a builder whose scripts install a scoped userns profile and keep t
   expect(install).toContain("chmod 0755 '/opt/${sanitizedProductName}/chrome-sandbox'");
   expect(install).not.toMatch(/apparmor_restrict_unprivileged_userns/);
   expect(template("after-remove.tpl")).toContain("apparmor_parser --remove");
+});
+
+// The Electron zip unpacks 0666/0777 on the build hosts, and fpm copies modes verbatim: the
+// first hosted run of the install step refused a .deb whose /opt/ORCA/orca was world-writable.
+it("removes group and other write from the unpacked Linux tree before targets are built", () => {
+  expect(config.afterPack).toBe("./scripts/after-pack.js");
+  const root = mkdtempSync(join(tmpdir(), "orca-linux-modes-"));
+  try {
+    mkdirSync(join(root, "locales"));
+    writeFileSync(join(root, "orca"), "");
+    writeFileSync(join(root, "chrome-sandbox"), "");
+    writeFileSync(join(root, "locales/en-US.pak"), "");
+    symlinkSync("orca", join(root, "link"));
+    chmodSync(join(root, "orca"), 0o777);
+    chmodSync(join(root, "chrome-sandbox"), 0o755);
+    chmodSync(join(root, "locales/en-US.pak"), 0o666);
+    chmodSync(join(root, "locales"), 0o777);
+    afterPack({ electronPlatformName: "linux", appOutDir: root });
+    const mode = (path) => lstatSync(join(root, path)).mode & 0o7777;
+    expect(mode("orca")).toBe(0o755);
+    expect(mode("chrome-sandbox")).toBe(0o755);
+    expect(mode("locales/en-US.pak")).toBe(0o644);
+    expect(mode("locales")).toBe(0o755);
+    expect(stripSharedWrite(root)).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 it("installs the .deb and launches it sandboxed on a restricted GitHub-hosted runner", () => {

@@ -160,4 +160,4 @@ publish:
 
 # Explicit local addon build is required for Mac/Windows packaging. No network/build at hook time.
 beforePack: ./scripts/diagnostics-native-package.js
-afterPack: ./scripts/verify-diagnostics-native.js
+afterPack: ./scripts/after-pack.js

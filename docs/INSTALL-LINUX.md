@@ -31,6 +31,12 @@ namespaces work, which with the profile loaded includes Ubuntu 24.04. Removing t
 unloads and deletes the profile. These are electron-builder's standard Debian scripts; the
 repository adds none of its own.
 
+Because that profile trusts whatever binary sits at `/opt/ORCA/orca`, nothing under
+`/opt/ORCA` may be writable by anyone but root. electron-builder unpacks Electron without
+applying a umask and fpm copies modes as they are, so the build's `afterPack` hook
+(`packages/app/scripts/linux-file-modes.js`) strips group and other write from the unpacked
+tree first, and the workflow refuses a package that still carries any.
+
 **Do not** work around the archive with `--no-sandbox`, by setting
 `kernel.apparmor_restrict_unprivileged_userns=0`, or by `chown root` / `chmod 4755` on the
 downloaded helper. Each of those turns off or weakens a protection, either for ORCA's
