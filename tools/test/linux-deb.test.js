@@ -115,6 +115,8 @@ it("installs the .deb and launches it sandboxed on a restricted GitHub-hosted ru
   expect(run).toContain("grep -q '^orca ' /sys/kernel/security/apparmor/profiles");
   expect(run).toContain('test "$(stat -c %a /opt/ORCA/chrome-sandbox)" = 755');
   expect(run).toContain("/ns/user");
+  // The daemon is /opt/ORCA/orca too (run as Node), so it must not be taken for the browser.
+  expect(run).toContain("*orca-daemon.mjs*) ;;");
   expect(run).toContain('kill -TERM "$main"');
   expect(run).toContain("apt-get remove -y -q orca");
   // The proof is that the package alone is enough: no sandbox bypass, no profile of the

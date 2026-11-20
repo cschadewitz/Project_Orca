@@ -388,6 +388,8 @@ jobs:
           for pid in $(installed); do
             args=$(tr '\0' ' ' < "/proc/$pid/cmdline")
             case "$args" in
+              # The bundled daemon is the same executable run as Node, with no --type either.
+              *orca-daemon.mjs*) ;;
               *--type=renderer*) renderer=${renderer:-$pid} ;;
               *--type=*) ;;
               *) main=${main:-$pid} ;;
