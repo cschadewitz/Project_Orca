@@ -146,8 +146,8 @@ it("on GitHub-hosted Linux, grants user namespaces to the packaged app only", ()
   const launch = steps.find(({ name }) => name === "The packaged app starts its own daemon");
   expect(prep.if).toBe("matrix.name == 'linux' && runner.environment == 'github-hosted'");
   expect(steps.indexOf(prep)).toBeLessThan(steps.indexOf(launch));
-  expect(prep.env.ELECTRON_EXE).toBe("packages/app/dist/release/linux-unpacked/orca");
-  expect(launch.run).toContain("packages/app/dist/release/linux-unpacked/orca");
+  expect(prep.env.ELECTRON_EXE).toBe("packages/app/dist/release/linux-unpacked/orca-desktop");
+  expect(launch.run).toContain("packages/app/dist/release/linux-unpacked/orca-desktop");
   expect(prep.run).toContain("kernel.apparmor_restrict_unprivileged_userns=1");
   expect(prep.run).not.toMatch(/apparmor_restrict_unprivileged_userns=0/);
   expect(prep.run).toContain("apparmor_parser -r");

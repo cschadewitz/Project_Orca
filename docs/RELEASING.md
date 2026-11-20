@@ -88,8 +88,9 @@ Linux gets the `tar.gz`, which is the same tree without the single-file wrapper.
 
 On Linux the `.deb` (x64 and arm64) is the supported install, and the one to point testers
 at: Ubuntu 24.04 and later restrict the user namespaces Chromium's sandbox needs, and only
-the package's root install script can load the AppArmor profile that lets `/opt/ORCA/orca`
-make them. The archive and the AppImage abort before their first window there (#853).
+the package's root install script can load the AppArmor profile that lets
+`/opt/ORCA/orca-desktop` make them. The Linux executable, package, command and desktop entry
+are all `orca-desktop`, because `orca` is Ubuntu Desktop's screen reader. The archive and the AppImage abort before their first window there (#853).
 [INSTALL-LINUX.md](INSTALL-LINUX.md) has the install, the reason and what CI checks.
 
 ### The daemon inside the desktop artifact
@@ -158,7 +159,7 @@ and `mac.notarize: false` remain in effect.
 | --- | --- |
 | macOS | `CFBundleIdentifier` becomes `com.schadewitz.orca`; builder-derived helper bundle IDs follow it. `ORCA.app`, product name, DMG/ZIP targets and artifact filenames are unchanged. OS permissions, notification identity and Keychain access must be checked as a new identity, not assumed to transfer from `dev.orca.desktop`. |
 | Windows | Explicit `win.appId: dev.orca.desktop` preserves existing NSIS identity. The locked builder derives the installer GUID from that ID and uses the ID for shortcut AppUserModelID. Install/uninstall registration, installation name and updater cache naming remain stable. A Windows ID migration is deferred to a separate product decision; do not remove this override as cleanup. |
-| Linux | The default ID changes, but the current AppImage/tar.gz targets retain executable `orca`, package/product names, desktop entry and artifact filenames. The `.deb` added for #853 installs to `/opt/ORCA` as package `orca` with the same desktop entry. This is not a Debian service/store migration. |
+| Linux | The default ID changes; product name and artifact filenames are unchanged. For #853 the executable and desktop entry became `orca-desktop` (was `orca`, which is the GNOME screen reader's package and command on Ubuntu Desktop), and the `.deb` installs to `/opt/ORCA` as package `orca-desktop`. This is not a Debian service/store migration. |
 | Application data | Package name `@orca/app` and product name `ORCA` are unchanged. Electron's default `userData` is name-based, not bundle-ID-based; preferences and encrypted run intents stay at the same paths. Workspace selection and `<workspace>/.orca` are unchanged. No files are moved, reset or deleted. |
 | Updates | Windows remains on its existing NSIS identity and `latest-ARCH` feed channels. This change does not enable macOS/Linux automatic updates, change feeds or publish artifacts. |
 

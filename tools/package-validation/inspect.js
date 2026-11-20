@@ -363,7 +363,7 @@ function inspectTree(entries, { platform, arch }, source, version, scratch) {
     return entry?.kind === "file" ? entry : undefined;
   };
   const checks = [];
-  const executable = file(platform === "linux" ? "orca" : "ORCA.exe");
+  const executable = file(platform === "linux" ? "orca-desktop" : "ORCA.exe");
   if (!executable) fail("executable_missing");
   if (platform === "linux") {
     if (readElf(executable.body).machine !== arch) fail("executable_arch_mismatch");

@@ -258,7 +258,7 @@ jobs:
       - name: Prepare a GitHub-hosted Linux runner
         if: matrix.name == 'linux' && runner.environment == 'github-hosted'
         env:
-          ELECTRON_EXE: packages/app/dist/release/linux-unpacked/orca
+          ELECTRON_EXE: packages/app/dist/release/linux-unpacked/orca-desktop
         run: |
           set -euo pipefail
           command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
@@ -306,7 +306,7 @@ jobs:
           # disconnected for setup by design (src/main/index.ts), so give it a disposable
           # workspace: that is the explicit target that makes it start its bundled daemon.
           workspace=$(mktemp -d "$RUNNER_TEMP/orca-app-workspace.XXXXXX")
-          env -u ORCA_DAEMON_URL ORCA_WORKSPACE="$workspace" setsid xvfb-run -a packages/app/dist/release/linux-unpacked/orca \
+          env -u ORCA_DAEMON_URL ORCA_WORKSPACE="$workspace" setsid xvfb-run -a packages/app/dist/release/linux-unpacked/orca-desktop \
             --user-data-dir="$profile" > app.log 2>&1 &
           app=$!
           # The display, app and bundled daemon share this job's own process group.
@@ -323,13 +323,17 @@ jobs:
       # The supported Ubuntu 24.04 install (#853), as a tester gets it: the x64 .deb through
       # apt, on a host whose `kernel.apparmor_restrict_unprivileged_userns` is on, launched
       # from its installed path with the sandbox on and no profile of this job's own. The
-      # prepare step above only covers linux-unpacked/orca; /opt/ORCA/orca resolves to a
+      # prepare step above only covers linux-unpacked/orca-desktop; the installed copy is a
       # different file, so the package's own install script has to provide the exception or
       # Chromium aborts before the first window, as the rc.2 tarball did. Then: the bundled
       # daemon answers, renderers run in their own user namespace (the sandbox is really on),
       # SIGTERM shuts the app and its daemon down, and removing the package removes the
       # profile. GitHub-hosted only: it installs into /opt and /etc with sudo, which a
       # persistent self-hosted runner must not be asked to do.
+      #
+      # Ubuntu Desktop ships the GNOME screen reader as package `orca` (/usr/bin/orca,
+      # orca.desktop). It is installed first, and must come through the install and the
+      # removal of ORCA's package untouched: same version, same owner of its files.
       - name: The .deb installs and launches sandboxed on stock Ubuntu
         if: matrix.name == 'linux' && runner.environment == 'github-hosted'
         run: |
@@ -343,23 +347,48 @@ jobs:
           if dpkg-deb -c "$deb" | awk '$1 !~ /^l/ && $1 ~ /^.....w|^........w|s/ { print; bad = 1 } END { exit !bad }'; then
             echo "::error::the .deb carries writable or setuid entries"; exit 1
           fi
+          # The package's own identity, and no claim on the screen reader's.
+          test "$(dpkg-deb -f "$deb" Package)" = orca-desktop
+          for field in Conflicts Breaks Replaces Provides; do
+            test -z "$(dpkg-deb -f "$deb" "$field")"
+          done
+          if dpkg-deb -c "$deb" | awk '{ print $NF }' | grep -E '^\./usr/bin/orca$|/orca\.desktop$|apparmor\.d/orca$'; then
+            echo "::error::the .deb ships a path the screen reader owns"; exit 1
+          fi
+          scripts=$(mktemp -d "$RUNNER_TEMP/orca-deb-control.XXXXXX")
+          dpkg-deb -e "$deb" "$scripts"
+          # electron-builder's maintainer scripts, as generated: every link, alternative and
+          # profile they touch is orca-desktop's, none the screen reader's.
+          grep -q "'/usr/bin/orca-desktop' 'orca-desktop' '/opt/ORCA/orca-desktop'" "$scripts/postinst"
+          grep -q "APPARMOR_PROFILE_TARGET='/etc/apparmor.d/orca-desktop'" "$scripts/postinst"
+          grep -q "update-alternatives --remove 'orca-desktop' '/opt/ORCA/orca-desktop'" "$scripts/postrm"
+          grep -q "APPARMOR_PROFILE_DEST='/etc/apparmor.d/orca-desktop'" "$scripts/postrm"
+          if grep -nE "/usr/bin/orca'|alternatives/orca'|apparmor\.d/orca'|'orca'" "$scripts/postinst" "$scripts/postrm"; then
+            echo "::error::a maintainer script touches the screen reader's names"; exit 1
+          fi
+          rm -rf "$scripts"
+
           test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
           sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends orca
+          reader() { dpkg-query -W -f '${Status} ${Version}\n' orca; dpkg -S /usr/bin/orca; readlink -f /usr/bin/orca; }
+          before=$(reader)
+          echo "screen reader: $before"
           sudo apt-get install -y -q "$deb"
+          test "$(reader)" = "$before"
+          dpkg-query -W -f '${Status}\n' orca-desktop | grep -q 'install ok installed'
           test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
-          sudo grep -q '^orca ' /sys/kernel/security/apparmor/profiles
+          sudo grep -q '^orca-desktop ' /sys/kernel/security/apparmor/profiles
           test "$(stat -c %a /opt/ORCA/chrome-sandbox)" = 755
-          test "$(readlink -f "$(command -v orca)")" = /opt/ORCA/orca
+          test "$(readlink -f "$(command -v orca-desktop)")" = /opt/ORCA/orca-desktop
+          test -f /usr/share/applications/orca-desktop.desktop
           if unshare --user --map-root-user true 2> /dev/null; then
             echo "::error::an unrelated executable can still create user namespaces"; exit 1
           fi
 
-          # The previous step's app and daemon are gone, so every match below is this one's.
-          for _ in $(seq 1 10); do pgrep -f orca-daemon.mjs > /dev/null || break; sleep 1; done
-          if pgrep -af orca-daemon.mjs; then echo "::error::a daemon from an earlier step is still running"; exit 1; fi
           profile=$(mktemp -d "$RUNNER_TEMP/orca-deb-profile.XXXXXX")
           workspace=$(mktemp -d "$RUNNER_TEMP/orca-deb-workspace.XXXXXX")
-          env -u ORCA_DAEMON_URL ORCA_WORKSPACE="$workspace" setsid xvfb-run -a orca \
+          env -u ORCA_DAEMON_URL ORCA_WORKSPACE="$workspace" setsid xvfb-run -a orca-desktop \
             --user-data-dir="$profile" > deb-app.log 2>&1 &
           group=$!
           trap 'kill -- "-$group" 2>/dev/null || true; sleep 1; rm -rf "$profile" "$workspace" || true' EXIT
@@ -377,10 +406,10 @@ jobs:
 
           # The browser process is the installed binary with no --type; a sandboxed renderer
           # lives in a user namespace of its own. Found by executable, not by argv[0], which
-          # is whatever the launcher typed (here `orca`, through /usr/bin).
+          # is whatever the launcher typed (here `orca-desktop`, through /usr/bin).
           installed() {
             for pid in $(pgrep -f 'orca' || true); do
-              [ "$(readlink "/proc/$pid/exe" 2> /dev/null)" = /opt/ORCA/orca ] && echo "$pid"
+              [ "$(readlink "/proc/$pid/exe" 2> /dev/null)" = /opt/ORCA/orca-desktop ] && echo "$pid"
             done
             return 0
           }
@@ -410,11 +439,13 @@ jobs:
             echo "::error::the app or its daemon outlived SIGTERM"; exit 1
           fi
 
-          sudo apt-get remove -y -q orca
-          test ! -e /etc/apparmor.d/orca
-          if sudo grep -q '^orca ' /sys/kernel/security/apparmor/profiles; then
+          sudo apt-get remove -y -q orca-desktop
+          test ! -e /etc/apparmor.d/orca-desktop
+          if sudo grep -q '^orca-desktop ' /sys/kernel/security/apparmor/profiles; then
             echo "::error::removing the package left its AppArmor profile loaded"; exit 1
           fi
+          test "$(reader)" = "$before"
+          echo "screen reader unchanged: $(reader)"
 
       # The standalone daemon artifact, named for the release. Built once and taken from the
       # Linux leg: it is one ESM file with no platform in it, and three identical copies on

@@ -362,7 +362,7 @@ export function windowsNative(source, arch, { addonArch = arch } = {}) {
   return files;
 }
 
-/** A Linux tar.gz tree: `<top>/orca`, Electron runtime placeholders, resources. */
+/** A Linux tar.gz tree: `<top>/orca-desktop`, Electron runtime placeholders, resources. */
 export function linuxArchive(
   version,
   arch,
@@ -373,7 +373,7 @@ export function linuxArchive(
   return makeTarGz(
     [
       { name: `${top}/`, kind: "directory", mode: 0o755 },
-      { name: `${top}/orca`, body: makeElf(arch), mode: 0o755 },
+      { name: `${top}/orca-desktop`, body: makeElf(arch), mode: 0o755 },
       { name: `${top}/chrome-sandbox`, body: makeElf(arch), mode: 0o755 },
       ...runtime.map((name) => ({ name: `${top}/${name}`, body: `placeholder ${name}` })),
       { name: `${top}/resources/app.asar`, body: asar },
