@@ -123,8 +123,9 @@ it("has a postinst that never makes the helper setuid and leaves cache refreshes
 describe("the postinst, run against a fake root", () => {
   // The rendered script with every absolute path it touches moved under a scratch root, on a
   // PATH holding only core utilities: no update-alternatives or ischroot, and AppArmor tools
-  // only as the stubs a case asks for (`apparmor` "absent", "loads" or "fails to load").
-  const run = ({ restricted, profileLoaded = false, helperMode = 0o4755, apparmor = "absent" }) => {
+  // only as the stubs a case asks for: `apparmor` is "absent", "disabled", "unparsable"
+  // (preflight fails), "fails" (live load fails) or "loads"; `chroot` stubs ischroot true.
+  const run = ({ restricted, profileLoaded = false, helperMode = 0o4755, apparmor = "absent", chroot = false }) => {
     const root = mkdtempSync(join(tmpdir(), "orca-postinst-"));
     try {
       const bin = join(root, "bin");
@@ -145,15 +146,22 @@ describe("the postinst, run against a fake root", () => {
           writeFileSync(join(bin, name), `#!${join(bin, "bash")}\n${body}\n`);
           chmodSync(join(bin, name), 0o755);
         };
-        stub("apparmor_status", "exit 0");
-        // Parsing always succeeds; a live --replace either loads the profile or fails.
+        stub("apparmor_status", apparmor === "disabled" ? "exit 1" : "exit 0");
+        // --skip-kernel-load is the preflight parse; --replace the live load.
+        const preflight = apparmor === "unparsable" ? "exit 1" : "exit 0";
+        const replace =
+          apparmor === "loads"
+            ? `echo 'orca-desktop (unconfined)' >> '${profiles}'; exit 0`
+            : "echo 'apparmor_parser: load failed' >&2; exit 1";
         stub(
           "apparmor_parser",
-          apparmor === "loads"
-            ? `case "$1" in --replace) echo 'orca-desktop (unconfined)' >> '${profiles}' ;; esac; exit 0`
-            : `case "$1" in --replace) echo 'apparmor_parser: load failed' >&2; exit 1 ;; esac; exit 0`,
+          `case "$1" in --skip-kernel-load) ${preflight} ;; --replace) ${replace} ;; esac; exit 0`,
         );
         writeFileSync(join(root, "opt/ORCA/resources/apparmor-profile"), "profile orca-desktop {}\n");
+      }
+      if (chroot) {
+        writeFileSync(join(bin, "ischroot"), `#!${join(bin, "bash")}\nexit 0\n`);
+        chmodSync(join(bin, "ischroot"), 0o755);
       }
       writeFileSync(join(root, "opt/ORCA/orca-desktop"), "");
       writeFileSync(join(root, "opt/ORCA/chrome-sandbox"), "");
@@ -166,7 +174,7 @@ describe("the postinst, run against a fake root", () => {
       const script = postinstTemplate
         .replaceAll("${executable}", "orca-desktop")
         .replaceAll("${sanitizedProductName}", "ORCA")
-        .replaceAll("/usr/bin/ischroot", `${root}/absent/ischroot`)
+        .replaceAll("/usr/bin/ischroot", `${bin}/ischroot`)
         .replaceAll(/(['"( ])\/(opt|usr\/bin|etc\/apparmor\.d|proc\/sys|sys\/kernel)\//g, `$1${root}/$2/`);
       writeFileSync(join(root, "postinst"), script);
       const result = spawnSync(join(bin, "bash"), [join(root, "postinst"), "configure"], {
@@ -192,8 +200,26 @@ describe("the postinst, run against a fake root", () => {
     expect(result.link).toBe(`${result.root}/opt/ORCA/orca-desktop`);
   });
 
-  it("succeeds where the restriction is on and the profile is loaded", () => {
-    expect(run({ restricted: true, profileLoaded: true }).status).toBe(0);
+  it("succeeds without loading anything inside a chroot, even with the restriction on", () => {
+    expect(run({ restricted: true, chroot: true }).status).toBe(0);
+  });
+
+  it("succeeds with AppArmor absent where the restriction is off", () => {
+    expect(run({ restricted: false, apparmor: "absent" }).status).toBe(0);
+  });
+
+  // Cal's fourth review: with the restriction on, a profile already loaded by an earlier
+  // version must never pass for this install's own. Every way of not loading it refuses.
+  it.each([
+    ["AppArmor tools are absent", "absent", "AppArmor is not enabled"],
+    ["AppArmor is not enabled", "disabled", "AppArmor is not enabled"],
+    ["the preflight parse fails", "unparsable", "cannot parse"],
+  ])("refuses where the restriction is on, %s, and a stale profile is loaded", (_, apparmor, message) => {
+    const result = run({ restricted: true, profileLoaded: true, apparmor });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(message);
+    expect(result.stderr).toContain("The sandbox is not disabled and the helper is not made setuid.");
+    expect(result.helper).toBe(0o755);
   });
 
   it("loads the profile and succeeds where AppArmor is present and the restriction is on", () => {

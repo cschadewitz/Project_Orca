@@ -9,10 +9,10 @@
 #     and its desktop entry declares none, and dpkg's triggers in shared-mime-info
 #     (/usr/share/mime/packages) and desktop-file-utils (/usr/share/applications) already
 #     refresh both caches for the paths this package installs.
-#   - Where loading the profile fails, or the restriction is on and the profile is not
-#     loaded, it fails the install with a message rather than leaving an app that aborts at
-#     launch. A failed load refuses at once, so a stale profile from an earlier version can
-#     never stand in for it.
+#   - Where the restriction is on (outside a chroot), it must load its own packaged profile
+#     and see it active; any failure refuses the install with a message rather than leaving
+#     an app that aborts at launch, and a stale profile from an earlier version can never
+#     stand in for it.
 # ${executable} and ${sanitizedProductName} are filled in by electron-builder, single-quote
 # escaped.
 set -e
@@ -45,24 +45,33 @@ refuse() {
 
 restricted() { [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; }
 
-# The AppArmor exception, for systems that restrict unprivileged user namespaces (Ubuntu
-# 24.04+). A profile the running AppArmor cannot parse (abi/4.0 on Ubuntu 22.04) is skipped:
-# those releases do not restrict user namespaces and need none.
+# The AppArmor exception. Where the system restricts unprivileged user namespaces (Ubuntu
+# 24.04+) outside a chroot, this install must load its own packaged profile and see it
+# loaded: every step that fails refuses, so a profile an earlier version left loaded can
+# never stand in for this one. Elsewhere it is best effort: a chroot cannot load profiles
+# live, and a system without the restriction (or whose AppArmor cannot parse abi/4.0, as on
+# Ubuntu 22.04) needs none.
 PROFILE_SOURCE='/opt/${sanitizedProductName}/resources/apparmor-profile'
 PROFILE_TARGET='/etc/apparmor.d/${executable}'
-if apparmor_status --enabled > /dev/null 2>&1 && apparmor_parser --skip-kernel-load --debug "$PROFILE_SOURCE" > /dev/null 2>&1; then
-    cp -f "$PROFILE_SOURCE" "$PROFILE_TARGET"
-    if ! in_chroot && hash apparmor_parser 2>/dev/null; then
-        # -W -T as dh_apparmor, so abstraction updates are pulled in. A failed load refuses
-        # here, before the check below could pass on a profile an earlier version loaded.
-        if ! apparmor_parser --replace --write-cache --skip-read-cache "$PROFILE_TARGET"; then
-            refuse "apparmor_parser could not load the AppArmor profile $PROFILE_TARGET."
-        fi
-    fi
-fi
+# -W -T as dh_apparmor, so abstraction updates are pulled in.
+load_profile() { apparmor_parser --replace --write-cache --skip-read-cache "$PROFILE_TARGET"; }
 
-if ! in_chroot && restricted && ! grep -q '^${executable} ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
-    refuse "this system restricts unprivileged user namespaces, and the AppArmor profile that lets ${executable} use them is not loaded."
+if ! in_chroot && restricted; then
+    apparmor_status --enabled > /dev/null 2>&1 \
+        || refuse "this system restricts unprivileged user namespaces, but AppArmor is not enabled to grant ${executable} its exception."
+    hash apparmor_parser 2>/dev/null \
+        || refuse "this system restricts unprivileged user namespaces, but apparmor_parser is not installed to load ${executable}'s AppArmor profile."
+    apparmor_parser --skip-kernel-load --debug "$PROFILE_SOURCE" > /dev/null 2>&1 \
+        || refuse "this system's AppArmor cannot parse ${executable}'s packaged profile $PROFILE_SOURCE."
+    cp -f "$PROFILE_SOURCE" "$PROFILE_TARGET"
+    load_profile || refuse "apparmor_parser could not load the AppArmor profile $PROFILE_TARGET."
+    grep -q '^${executable} ' /sys/kernel/security/apparmor/profiles 2>/dev/null \
+        || refuse "the AppArmor profile $PROFILE_TARGET was loaded but is not listed as active."
+elif apparmor_status --enabled > /dev/null 2>&1 && apparmor_parser --skip-kernel-load --debug "$PROFILE_SOURCE" > /dev/null 2>&1; then
+    cp -f "$PROFILE_SOURCE" "$PROFILE_TARGET"
+    if ! in_chroot; then
+        load_profile || refuse "apparmor_parser could not load the AppArmor profile $PROFILE_TARGET."
+    fi
 fi
 
 exit 0

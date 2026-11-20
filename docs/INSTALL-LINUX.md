@@ -45,8 +45,12 @@ in place of electron-builder's. Three things set it apart:
   `chmod 4755` when its install-time probe could not create a user namespace. This package
   supports Chromium's namespace sandbox only, with the profile above where it is needed.
 - **It refuses rather than installing an app that cannot start.** If the system restricts
-  unprivileged user namespaces and the profile did not load, the install fails with a
-  message saying so. It does not disable the sandbox or fall back to the setuid helper.
+  unprivileged user namespaces (outside a chroot), the install must load its own packaged
+  profile and then see it active. If AppArmor is not enabled, `apparmor_parser` is missing,
+  the profile does not parse, the load fails or the profile is not listed afterwards, the
+  install fails with a message saying so. A profile an earlier version left loaded never
+  counts. It does not disable the sandbox or fall back to the setuid helper. In a chroot,
+  or where the restriction is off, loading the profile is best effort.
 - **It refreshes no shared caches itself.** The package ships no MIME types and its desktop
   entry declares none. dpkg's own triggers already rebuild the desktop database when
   `/usr/share/applications` changes (desktop-file-utils) and the MIME database when
