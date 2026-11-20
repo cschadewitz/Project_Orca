@@ -1,7 +1,12 @@
 /** Main-owned guided submission/recovery over the existing encrypted intent journal. */
 import { AdmissionRetryResultSchema, RequestsSubmitResultSchema, RunsAdmitResultSchema } from "@orca/protocol";
 import type { EditorTarget, LaunchResponse, LaunchReview, RetainedLaunch } from "../configuration-launch-contract.js";
-import { AdmissionIntents, type IntentRecord, type IntentScope } from "./admission-intents.js";
+import {
+  AdmissionIntents,
+  isProtectedStorageRefusal,
+  type IntentRecord,
+  type IntentScope,
+} from "./admission-intents.js";
 import { parseGuidedReview } from "./guided-intent-contract.js";
 
 export interface GuidedIntentConnection {
@@ -34,6 +39,18 @@ function response(raw: LaunchResponse, mode: "direct" | "request"): LaunchRespon
     } else RequestsSubmitResultSchema.parse(receipt.result);
   }
   return { kind: "retry", receipt };
+}
+/** After a send, a storage refusal must not say "no run was submitted": recovery is the next step. */
+function afterSend<T>(work: () => T): T {
+  try {
+    return work();
+  } catch (error) {
+    if (!isProtectedStorageRefusal(error)) throw error;
+    throw new Error(
+      "The launch was sent, but secure run-intent storage refused its receipt. Restore the OS keychain, then recover the original intent; do not submit new work.",
+      { cause: error },
+    );
+  }
 }
 export class GuidedLaunchController {
   private generation = 0;
@@ -71,11 +88,13 @@ export class GuidedLaunchController {
     connection.assertCurrent();
     const result = response(await connection.send(record), record.guided!.review.command.mode);
     connection.assertCurrent();
-    this.retainReceipt(connection, record, result);
-    return {
-      intent: this.journal.guidedList(connection.scope).find((r) => r.intentId === record.id)!,
-      response: result,
-    };
+    return afterSend(() => {
+      this.retainReceipt(connection, record, result);
+      return {
+        intent: this.journal.guidedList(connection.scope).find((r) => r.intentId === record.id)!,
+        response: result,
+      };
+    });
   }
   async retained(): Promise<readonly RetainedLaunch[]> {
     const connection = await this.connect();
@@ -93,7 +112,7 @@ export class GuidedLaunchController {
       this.journal.guided(connection.scope, id);
       const result = response(await connection.recover(record, action), record.guided!.review.command.mode);
       connection.assertCurrent();
-      this.retainReceipt(connection, record, result);
+      afterSend(() => this.retainReceipt(connection, record, result));
       return result;
     } finally {
       this.recovering.delete(id);

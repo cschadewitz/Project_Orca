@@ -12,6 +12,7 @@ import type {
   LaunchReview,
   LaunchState,
   LaunchTarget,
+  ProtectedStorageRefusalView,
 } from "./contracts.js";
 
 export function sameLaunchTarget(a: LaunchTarget, b: LaunchTarget): boolean {
@@ -97,6 +98,9 @@ export class GuidedLaunchController {
     };
   };
   private update(patch: Partial<LaunchState>): void {
+    // A storage refusal describes one refused submit; any other phase change retires it.
+    if (patch.phase !== undefined && !Object.hasOwn(patch, "storageRefusal"))
+      patch = { ...patch, storageRefusal: undefined };
     this.state = freeze({ ...this.state, ...patch });
     this.listeners.forEach((listener) => listener());
   }
@@ -331,8 +335,11 @@ export class GuidedLaunchController {
       if (fence !== this.fence) return;
       this.update({ message: "Submitting the retained launch intent." });
       await this.receive(() => this.ports.submit!(intent), fence, review);
-    } catch {
-      if (fence === this.fence)
+    } catch (error) {
+      if (fence !== this.fence) return;
+      if (error instanceof LaunchPortFailure && error.storage !== undefined && this.state.intent === undefined)
+        this.refuseStorage(review, error.storage);
+      else
         this.block(
           "Protected intent storage is unavailable. No launch was sent by this controller; your draft is retained.",
         );
@@ -452,7 +459,11 @@ export class GuidedLaunchController {
           message: "Admission is unresolved. Recover the retained intent to inspect or reconcile it.",
         });
     } catch (error) {
-      if (fence === this.fence && error instanceof LaunchPortFailure) this.block(this.failureMessage(error));
+      // Main raises a storage refusal only before anything is retained or sent, so the exact
+      // review stays ready: unlocking the keyring and choosing Retry submits it unchanged.
+      if (fence === this.fence && error instanceof LaunchPortFailure && error.storage !== undefined && review)
+        this.refuseStorage(review, error.storage);
+      else if (fence === this.fence && error instanceof LaunchPortFailure) this.block(this.failureMessage(error));
       else if (fence === this.fence)
         this.update({
           phase: "recovering",
@@ -460,13 +471,33 @@ export class GuidedLaunchController {
         });
     }
   }
+  private refuseStorage(review: LaunchReview, storage: ProtectedStorageRefusalView): void {
+    const message = `${storage.message} Your draft is retained.`;
+    this.update({
+      phase: "review",
+      review,
+      unresolvedReview: undefined,
+      storageRefusal: { reason: storage.reason, message },
+      message,
+    });
+    this.ports.announce(message);
+  }
+  /** Retry after a protected-storage refusal: the same reviewed command, checked again by main. */
+  async retryProtectedStorage(): Promise<void> {
+    if (this.state.storageRefusal === undefined) return;
+    await this.submit();
+  }
   private failureMessage(error: LaunchPortFailure): string {
+    if (error.storage !== undefined)
+      return `${error.storage.message} Your draft and any retained intent are preserved.`;
     const messages = {
       unauthorized:
         "Current authorization refused the launch operation. Your draft and any retained intent are preserved.",
       stale: "The target, workflow or active configuration is stale. Your draft and any retained intent are preserved.",
       validation: "The runtime refused input validation. Your draft and any retained intent are preserved.",
       unavailable: "The launch operation is unavailable. Your draft and any retained intent are preserved.",
+      "protected-storage":
+        "Secure run-intent storage is unavailable. Restore the OS keychain, then retry. Your draft and any retained intent are preserved.",
     };
     return messages[error.reason];
   }

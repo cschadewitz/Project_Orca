@@ -30,7 +30,7 @@ import { FirstRunSetup } from "./first-run/setup.js";
 import { installFirstRunIPC, startFirstRunWorkspace } from "./first-run/ipc.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
 import type { DiagnosticsResult } from "../diagnostics-contract.js";
-import { AdmissionIntents, AdmissionIntentController } from "./admission-intents.js";
+import { AdmissionIntents, AdmissionIntentController, isProtectedStorageRefusal } from "./admission-intents.js";
 import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
 import type { LaunchReview, PreflightParams } from "../configuration-launch-contract.js";
 import { RunsAdmitResultSchema } from "@orca/protocol";
@@ -61,7 +61,14 @@ import {
 } from "electron";
 import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
-import type { AlertItem, AlertsUpdate, BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
+import {
+  PROTECTED_STORAGE_CODE,
+  type AlertItem,
+  type AlertsUpdate,
+  type BridgeResult,
+  type ConnectionSnapshot,
+  type WorkspaceSnapshot,
+} from "../bridge.js";
 import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/daemon-client.js";
 import { callTemplate } from "../client/template-client.js";
 import type { TemplateMethod } from "../template-bridge.js";
@@ -369,6 +376,11 @@ function handle<P, R>(channel: string, run: (params: P) => Promise<R>): void {
       return { ok: true, result: await appWriters.run(() => run(params)) };
     } catch (e) {
       if (e instanceof DaemonClientError) return { ok: false, error: e.error };
+      if (isProtectedStorageRefusal(e))
+        return {
+          ok: false,
+          error: { code: PROTECTED_STORAGE_CODE, message: e.message, details: { reason: e.reason } },
+        };
       return { ok: false, error: { code: "AGENT_TRANSPORT", message: e instanceof Error ? e.message : String(e) } };
     }
   });
