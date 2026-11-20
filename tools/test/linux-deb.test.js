@@ -122,8 +122,9 @@ it("has a postinst that never makes the helper setuid and leaves cache refreshes
 
 describe("the postinst, run against a fake root", () => {
   // The rendered script with every absolute path it touches moved under a scratch root, on a
-  // PATH holding only core utilities: no update-alternatives, AppArmor tools or ischroot.
-  const run = ({ restricted, profileLoaded = false, helperMode = 0o4755 }) => {
+  // PATH holding only core utilities: no update-alternatives or ischroot, and AppArmor tools
+  // only as the stubs a case asks for (`apparmor` "absent", "loads" or "fails to load").
+  const run = ({ restricted, profileLoaded = false, helperMode = 0o4755, apparmor = "absent" }) => {
     const root = mkdtempSync(join(tmpdir(), "orca-postinst-"));
     try {
       const bin = join(root, "bin");
@@ -138,6 +139,22 @@ describe("the postinst, run against a fake root", () => {
         mkdirSync(join(root, dir), { recursive: true });
       for (const tool of ["bash", "cat", "chmod", "cp", "grep", "ln", "readlink", "rm"])
         symlinkSync(execFileSync("bash", ["-c", `command -v ${tool}`], { encoding: "utf8" }).trim(), join(bin, tool));
+      const profiles = join(root, "sys/kernel/security/apparmor/profiles");
+      if (apparmor !== "absent") {
+        const stub = (name, body) => {
+          writeFileSync(join(bin, name), `#!${join(bin, "bash")}\n${body}\n`);
+          chmodSync(join(bin, name), 0o755);
+        };
+        stub("apparmor_status", "exit 0");
+        // Parsing always succeeds; a live --replace either loads the profile or fails.
+        stub(
+          "apparmor_parser",
+          apparmor === "loads"
+            ? `case "$1" in --replace) echo 'orca-desktop (unconfined)' >> '${profiles}' ;; esac; exit 0`
+            : `case "$1" in --replace) echo 'apparmor_parser: load failed' >&2; exit 1 ;; esac; exit 0`,
+        );
+        writeFileSync(join(root, "opt/ORCA/resources/apparmor-profile"), "profile orca-desktop {}\n");
+      }
       writeFileSync(join(root, "opt/ORCA/orca-desktop"), "");
       writeFileSync(join(root, "opt/ORCA/chrome-sandbox"), "");
       chmodSync(join(root, "opt/ORCA/chrome-sandbox"), helperMode);
@@ -179,12 +196,73 @@ describe("the postinst, run against a fake root", () => {
     expect(run({ restricted: true, profileLoaded: true }).status).toBe(0);
   });
 
+  it("loads the profile and succeeds where AppArmor is present and the restriction is on", () => {
+    expect(run({ restricted: true, apparmor: "loads" }).status).toBe(0);
+  });
+
+  // Cal's third review: under `set -e` a failed load used to exit before any explanation, and
+  // a profile an earlier version left loaded must not pass for this one.
+  it("refuses with an explanation when loading the profile fails, even with a stale one loaded", () => {
+    const result = run({ restricted: true, profileLoaded: true, apparmor: "fails" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("apparmor_parser could not load the AppArmor profile");
+    expect(result.stderr).toContain("The sandbox is not disabled and the helper is not made setuid.");
+    expect(result.helper).toBe(0o755);
+  });
+
   it("refuses clearly, without weakening anything, where the restriction is on and no profile loaded", () => {
     const result = run({ restricted: true });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("restricts unprivileged user namespaces");
     expect(result.stderr).toContain("The sandbox is not disabled and the helper is not made setuid.");
     expect(result.helper).toBe(0o755);
+  });
+});
+
+// Cal's third review: `a && b` under `set -e` does not stop on a failing `a`. Run the step's
+// own guards against an extracted-control directory and require each to stop the gate.
+describe("the .deb step's maintainer-script guards", () => {
+  const step = () =>
+    workflow.jobs.package.steps.find((s) => s.name === "The .deb installs and launches sandboxed on stock Ubuntu").run;
+  const guards = () => {
+    const run = step();
+    const start = run.indexOf("          for unexpected in ".trimStart());
+    const end = run.indexOf('grep -qx "EXECUTABLE=');
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    return run.slice(start, end);
+  };
+  const gate = (files) => {
+    const dir = mkdtempSync(join(tmpdir(), "orca-deb-control-"));
+    try {
+      for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
+      return spawnSync("bash", ["-c", `set -euo pipefail\nscripts=${dir}\n${guards()}\necho GATE-PASSED`], {
+        encoding: "utf8",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const valid = { postinst: "#!/bin/bash\nexit 0\n", postrm: "#!/bin/bash\nexit 0\n" };
+
+  it("passes a control directory with only valid postinst and postrm", () => {
+    expect(gate(valid).stdout).toContain("GATE-PASSED");
+  });
+
+  it.each(["preinst", "prerm", "triggers"])("stops on an unexpected %s", (name) => {
+    const result = gate({ ...valid, [name]: "#!/bin/bash\n" });
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain("GATE-PASSED");
+  });
+
+  it.each(["postinst", "postrm"])("stops when %s is not valid bash", (name) => {
+    const result = gate({ ...valid, [name]: "if then fi (\n" });
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain("GATE-PASSED");
+  });
+
+  it("states every check as its own command, never mid-way through an && list", () => {
+    expect(step()).not.toMatch(/^\s*(?:test|bash -n|grep -q)[^\n]*&&/m);
   });
 });
 

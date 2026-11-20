@@ -381,8 +381,14 @@ jobs:
           ls -ln "$scripts"
           test "$(stat -c %a "$scripts/postinst")" = 755
           test "$(stat -c %a "$scripts/postrm")" = 755
-          test ! -e "$scripts/preinst" && test ! -e "$scripts/prerm" && test ! -e "$scripts/triggers"
-          bash -n "$scripts/postinst" && bash -n "$scripts/postrm"
+          # One command per check: under `set -e` a failure before the last command of an
+          # && list does not stop the step.
+          for unexpected in preinst prerm triggers config templates; do
+            if [ -e "$scripts/$unexpected" ]; then echo "::error::the .deb carries an unexpected $unexpected"; exit 1; fi
+          done
+          for script in postinst postrm; do
+            if ! bash -n "$scripts/$script"; then echo "::error::$script is not valid bash"; exit 1; fi
+          done
           grep -qx "EXECUTABLE='/opt/ORCA/orca-desktop'" "$scripts/postinst"
           grep -qx "HELPER='/opt/ORCA/chrome-sandbox'" "$scripts/postinst"
           grep -qx 'chmod 0755 "$HELPER"' "$scripts/postinst"
@@ -469,7 +475,7 @@ jobs:
               *) main=${main:-$pid} ;;
             esac
           done
-          test -n "$main" && test -n "$renderer"
+          if [ -z "$main" ] || [ -z "$renderer" ]; then echo "::error::no browser ($main) or renderer ($renderer) process found"; exit 1; fi
           if [ "$(readlink "/proc/$main/ns/user")" = "$(readlink "/proc/$renderer/ns/user")" ]; then
             echo "::error::the renderer shares the browser's user namespace: no namespace sandbox"; exit 1
           fi
