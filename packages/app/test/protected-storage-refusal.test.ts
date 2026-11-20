@@ -28,7 +28,7 @@ function fixture(storage: { available: boolean; backend?: string }) {
   dirs.push(dir);
   const path = join(dir, "intent.enc"),
     key = randomBytes(32);
-  const state = { ...storage };
+  const state: { available: boolean; backend?: string | undefined } = { ...storage };
   const encryptString = vi.fn((value: string) => {
     if (!state.available) throw new Error("Encryption is not available.");
     const nonce = randomBytes(12),
@@ -200,6 +200,31 @@ describe("protected-storage refusal (#857)", () => {
     expect(error.message).not.toContain("No run was submitted");
     expect(f.send).not.toHaveBeenCalled();
   });
+  it.each([
+    ["gnome_libsecret", false, "keyring-locked"],
+    ["kwallet6", false, "keyring-locked"],
+    ["basic_text", true, "no-keyring"],
+    [undefined, false, "unavailable"],
+  ] as const)(
+    "never directs a %s existing-journal refusal to launch again before the journal is verified",
+    async (backend, available, reason) => {
+      const f = fixture({ available: true, backend: "gnome_libsecret" });
+      await f.controller.submit(f.review);
+      f.state.available = available;
+      f.state.backend = backend;
+      for (const attempt of [f.controller.submit(f.review), f.controller.retained()]) {
+        const error = await refusal(attempt);
+        expect(error.stage).toBe("unconfirmed");
+        expect(error.reason).toBe(reason);
+        expect(error.message).toContain("An earlier launch may still exist; do not start new work.");
+        expect(error.message).toContain("recover the original launch");
+        expect(error.message).toContain("tells you if a new launch is safe");
+        expect(error.message).not.toMatch(/launch again|start it again|try again|retry/i);
+        expect(error.message).not.toContain("No run was submitted");
+      }
+      expect(f.send).toHaveBeenCalledTimes(1);
+    },
+  );
   it("is before-send once the existing journal was read and holds nothing for this work", async () => {
     const f = fixture({ available: true, backend: "gnome_libsecret" });
     f.journal.retain(f.scope, "other-workflow");

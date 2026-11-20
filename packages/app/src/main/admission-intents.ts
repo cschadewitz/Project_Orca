@@ -60,7 +60,8 @@ function storageFix(reason: ProtectedStorageReason, then: string): string {
  *   submitted" and offer a fresh Retry launch.
  * - `after-send`: the daemon may already hold the launch; its receipt could not be saved.
  * - `unconfirmed`: reading an existing journal failed (submit, recover, resolve, list). An
- *   earlier launch may exist, so nothing is claimed about it and new work is not offered.
+ *   earlier launch may exist, so nothing is claimed about it and the guidance is recovery-only
+ *   until a successful read verifies that no retained launch matches.
  */
 function storageMessage(reason: ProtectedStorageReason, stage: ProtectedStorageStage): string {
   if (stage === "before-send")
@@ -69,7 +70,10 @@ function storageMessage(reason: ProtectedStorageReason, stage: ProtectedStorageS
       : `Secure run-intent storage is unavailable. No run was submitted. ${storageFix(reason, "launch again")}`;
   if (stage === "after-send")
     return `The launch was sent, but secure run-intent storage refused its receipt. Do not start new work. ${storageFix(reason, "recover the original launch")}`;
-  return `Secure run-intent storage is unavailable, so ORCA cannot read its retained launches. An earlier launch may still exist; do not start it again. ${storageFix(reason, "recover the original launch or launch again")}`;
+  // Reopening or unlocking does not prove the earlier launch is absent, so this stage never
+  // points at a new launch. Recovery reads the journal first; only a verified absence (the
+  // renderer's verified-new state) says that a new launch is safe.
+  return `Secure run-intent storage is unavailable, so ORCA cannot read its retained launches. An earlier launch may still exist; do not start new work. ${storageFix(reason, "recover the original launch. ORCA reads its retained launches first and tells you if a new launch is safe")}`;
 }
 /**
  * A fail-closed refusal of protected storage. The main process maps it to the `PROTECTED_STORAGE`
