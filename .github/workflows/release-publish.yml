@@ -325,54 +325,72 @@ jobs:
           final=true
           case "$version" in *-*) final=false ;; esac
           if [ "$final" = true ]; then
-            assets=(artifacts/*-"$version"-linux-amd64.deb)
-            if [ ${#assets[@]} -ne 1 ]; then
-              echo "::error::expected exactly one Ubuntu amd64 .deb for $version, found ${#assets[@]}; nothing published"
+            debs=(artifacts/*-"$version"-linux-amd64.deb)
+            if [ ${#debs[@]} -ne 1 ]; then
+              echo "::error::expected exactly one Ubuntu amd64 .deb for $version, found ${#debs[@]}; nothing published"
               exit 1
             fi
-            # GitHub allows several drafts with one tag name. An earlier run's draft is
-            # reused or deleted by a maintainer after checking it, never duplicated here.
+            # GitHub allows several drafts for one version, and a draft's tag_name can read
+            # back as a temporary `untagged-…` value, so drafts are found by title as well.
+            # An earlier run's draft is reused or deleted by a maintainer after checking it,
+            # never duplicated here.
             existing=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
-              --jq ".[] | select(.draft and .tag_name == \"v$version\") | .id")
+              --jq ".[] | select(.draft and (.name == \"v$version\" or .tag_name == \"v$version\")) | .id")
             if [ -n "$existing" ]; then
               echo "::error::a draft for v$version already exists (release id(s) $(echo $existing)); check and reuse it (docs/RELEASING.md, \"Publishing a final\")"
               exit 1
             fi
-          else
-            # The installers, the archives and the standalone daemon. Refusing to publish an
-            # empty set is the point: a release page with no artifacts looks like a release
-            # with nothing to download rather than like a workflow that lost them.
-            assets=(artifacts/*)
-            if [ ${#assets[@]} -eq 0 ]; then
-              echo "::error::the desktop workflow produced no artifacts; nothing published"
+            # Created through the API so the exact release id comes back from creation;
+            # everything after works by that id, never by tag name. GitHub prepends the body
+            # to its generated list of merged pull requests, as the prerelease path below does.
+            id=$(jq -n --rawfile body /tmp/notes.md --arg tag "v$version" --arg sha "$SHA" \
+              '{tag_name: $tag, target_commitish: $sha, name: $tag, body: $body, draft: true,
+                prerelease: false, make_latest: "false", generate_release_notes: true}' \
+              | gh api -X POST "repos/$GITHUB_REPOSITORY/releases" --input - --jq .id)
+            if ! [[ "$id" =~ ^[0-9]+$ ]]; then
+              echo "::error::creating the v$version draft returned no release id; check the releases list for a partial draft"
               exit 1
             fi
+            deb="${debs[0]}"
+            gh api -X POST -H "Content-Type: application/octet-stream" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$id/assets?name=$(basename "$deb")" \
+              --input "$deb" >/dev/null
+            # Read the draft back by id: still a draft, the intended commit, exactly the .deb
+            # with the digest of the file this run built.
+            want="sha256:$(sha256sum "$deb" | cut -d' ' -f1)"
+            check=$(gh api "repos/$GITHUB_REPOSITORY/releases/$id" --jq \
+              "[.draft, .target_commitish == \"$SHA\", ([.assets[] | [.name, .digest]] == [[\"$(basename "$deb")\", \"$want\"]])] | map(tostring) | join(\" \")")
+            if [ "$check" != "true true true" ]; then
+              echo "::error::draft $id does not read back as a draft at $SHA with exactly the .deb ($check); not published"
+              exit 1
+            fi
+            {
+              echo "Drafted v$version as release id \`$id\` at \`$SHA\` with $(basename "$deb") (\`$want\`) only. Not tagged or published."
+              echo "Next: dispatch Windows signed (spike) from main with source_sha \`$SHA\`, verify and"
+              echo "attach the signed installer to release $id, then publish it (docs/RELEASING.md, \"Publishing a final\")."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # The installers, the archives and the standalone daemon. Refusing to publish an
+          # empty set is the point: a release page with no artifacts looks like a release
+          # with nothing to download rather than like a workflow that lost them.
+          assets=(artifacts/*)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "::error::the desktop workflow produced no artifacts; nothing published"
+            exit 1
           fi
           printf 'attaching %s\n' "${assets[@]}"
 
           # A version with a prerelease suffix (0.2.0-rc.1) is published as a prerelease,
           # so it never becomes the repository's "latest".
-          prerelease=()
-          [ "$final" = true ] || prerelease=(--prerelease)
-
           gh release create "v$version" --draft \
             --target "$SHA" \
             --title "v$version" \
             --notes-file /tmp/notes.md \
             --generate-notes \
-            "${prerelease[@]}" \
+            --prerelease \
             "${assets[@]}"
-
-          if [ "$final" = true ]; then
-            id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
-              --jq ".[] | select(.draft and .tag_name == \"v$version\" and .target_commitish == \"$SHA\") | .id")
-            {
-              echo "Drafted v$version (release id \`$id\`) at \`$SHA\` with the Ubuntu amd64 .deb only. Not tagged or published."
-              echo "Next: dispatch Windows signed (spike) from main with source_sha \`$SHA\`, verify and"
-              echo "attach the signed installer, then publish the draft (docs/RELEASING.md, \"Publishing a final\")."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
 
           gh release edit "v$version" --draft=false
 

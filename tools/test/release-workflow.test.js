@@ -77,23 +77,34 @@ it("drafts a final with the Ubuntu .deb only, leaving tag and publication to a m
   const publish = named(workflow("release-publish.yml").jobs.publish.steps, "Tag and release").run;
   // Only a version without a prerelease suffix is a final.
   expect(publish).toContain('case "$version" in *-*) final=false ;; esac');
-  // A final attaches exactly one asset: the Ubuntu amd64 .deb.
-  expect(publish).toContain('assets=(artifacts/*-"$version"-linux-amd64.deb)');
-  expect(publish).toContain("if [ ${#assets[@]} -ne 1 ]; then");
-  // It is created as a draft, and stops before the step that publishes (and so tags) it.
-  const create = publish.indexOf('gh release create "v$version" --draft');
-  const stop = publish.indexOf("exit 0", create);
-  const publishNow = publish.indexOf('gh release edit "v$version" --draft=false');
-  expect(create).toBeGreaterThan(-1);
-  expect(stop).toBeGreaterThan(create);
-  expect(publishNow).toBeGreaterThan(stop);
-  expect(publish.slice(create, stop)).toContain('if [ "$final" = true ]; then');
-  // A prerelease still attaches everything and is never latest.
-  expect(publish).toContain('[ "$final" = true ] || prerelease=(--prerelease)');
-  // A rerun never adds a second draft beside an earlier one.
-  const duplicate = publish.indexOf('select(.draft and .tag_name == \\"v$version\\")');
+  const start = publish.indexOf('if [ "$final" = true ]; then');
+  const stop = publish.indexOf("exit 0", start);
+  expect(start).toBeGreaterThan(-1);
+  expect(stop).toBeGreaterThan(start);
+  const final = publish.slice(start, stop);
+  // Exactly one asset: the Ubuntu amd64 .deb.
+  expect(final).toContain('debs=(artifacts/*-"$version"-linux-amd64.deb)');
+  expect(final).toContain("if [ ${#debs[@]} -ne 1 ]; then");
+  // No second draft: earlier drafts are found by title too, since a draft's tag can read
+  // back as `untagged-…`.
+  const duplicate = final.indexOf('select(.draft and (.name == \\"v$version\\" or .tag_name == \\"v$version\\"))');
+  const create = final.indexOf('gh api -X POST "repos/$GITHUB_REPOSITORY/releases" --input - --jq .id');
   expect(duplicate).toBeGreaterThan(-1);
-  expect(duplicate).toBeLessThan(create);
+  expect(create).toBeGreaterThan(duplicate);
+  // A draft, never latest, and the id from creation is required and used from then on.
+  expect(final).toContain("draft: true");
+  expect(final).toContain('make_latest: "false"');
+  expect(final).toContain('if ! [[ "$id" =~ ^[0-9]+$ ]]; then');
+  expect(final).toContain("releases/$id/assets?name=");
+  // Read back by id before reporting success: draft, target and the .deb digest.
+  expect(final).toContain('gh api "repos/$GITHUB_REPOSITORY/releases/$id"');
+  expect(final).toContain('if [ "$check" != "true true true" ]; then');
+  expect(final).not.toContain("--draft=false");
+  expect(final).not.toContain("gh release create");
+  // The publishing edit comes after the final has stopped; a prerelease still attaches
+  // everything and is never latest.
+  expect(publish.indexOf('gh release edit "v$version" --draft=false')).toBeGreaterThan(stop);
+  expect(publish.slice(stop)).toContain("--prerelease");
 });
 
 it("runs nothing after a final's draft that could ship its unsigned build output", () => {

@@ -69,37 +69,49 @@ required status checks.
 A final becomes the repository's "latest", so its page must offer only signed or validated
 downloads. The Windows installers `release-publish.yml` builds are unsigned, and only the
 Ubuntu 24.04 amd64 `.deb` has native install acceptance. So for a final, `publish` creates
-a **draft** targeting the merge commit with the Ubuntu amd64 `.deb` attached and nothing
-else: no tag exists yet, nothing is latest, and no feed step runs. The run's other builds
-stay in its workflow artifacts. The job summary names the commit and the draft's release
-id. Then, with `R=cschadewitz/Project_Orca`, `ID` that release id, `SHA` that commit and
-`V` the version:
+a **draft** through the API, targeting the merge commit, with the Ubuntu amd64 `.deb`
+attached and nothing else: no tag exists yet, nothing is latest, and no feed step runs. It
+takes the release id from the creation response, uploads by that id, and reads the draft
+back (still a draft, the intended commit, exactly the `.deb` with this run's digest) before
+the job summary reports the id. The run's other builds stay in its workflow artifacts.
+
+Work on the draft **by id, never by tag**: a draft has no tag yet, and the API can report
+its `tag_name` as a temporary `untagged-…` value. With `R=cschadewitz/Project_Orca`, `ID`
+the release id from the job summary, `SHA` the commit and `V` the version:
 
 1. Dispatch **Windows signed (spike)** from `main` with `source_sha` set to `SHA`, while
    `main` still matches it outside notes, docs and workflows (later product drift on `main`
    makes the source check refuse it). Its environment reviewer approves the run.
-2. Verify the signed installer from that run: Authenticode status `Valid`, a timestamp,
-   the expected publisher, and that its SHA-256 and `latest.yml` agree.
-3. Work on the draft by id, not by tag: a draft has no tag yet and its page can show a
-   temporary `untagged-…` name. Check it first:
-   `gh api repos/$R/releases/$ID --jq '{draft, tag_name, target_commitish, assets: [.assets[] | {name, digest}]}'`
-   must show `draft: true`, `tag_name: "v$V"`, `target_commitish` equal to `SHA`, and the
-   `.deb` whose `digest` matches the run's artifact.
-4. Attach the signed x64 installer by id:
+2. Verify the signing run's output: Authenticode status `Valid`, a timestamp, the expected
+   publisher, and the run's `latest-x64.yml` `files[0]` (`url`, `size`, base64 **SHA-512**)
+   describing exactly `ORCA-$V-win-x64.exe` (`release-assets.py` checks this). Record the
+   installer's **SHA-256** separately: that is what the release page and the notes'
+   verification step show.
+3. Check the draft:
+   `gh api repos/$R/releases/$ID --jq '{draft, name, tag_name, target_commitish, assets: [.assets[] | {name, digest}]}'`
+   must show `draft: true`, `name: "v$V"`, `target_commitish` equal to `SHA`, and only the
+   `.deb`, whose `digest` matches the run's artifact. `tag_name` may read `v$V` or
+   `untagged-…`; step 5 sets it.
+4. Attach the signed installer by id:
    `gh api -X POST -H 'Content-Type: application/octet-stream' "https://uploads.github.com/repos/$R/releases/$ID/assets?name=ORCA-$V-win-x64.exe" --input <file>`,
-   then repeat step 3's check: exactly the `.exe` and the `.deb`, each `digest` equal to
-   the SHA-256 you verified.
-5. Publish it with the tag and target stated explicitly:
-   `gh api -X PATCH repos/$R/releases/$ID -f tag_name=v$V -f target_commitish=$SHA -F draft=false`.
-   Then `git ls-remote origin refs/tags/v$V` must print `SHA`, and the release must be the
-   one marked latest.
-6. Where the desktop feed is enabled, feed that signing run to **Desktop feed (publish
+   then repeat step 3: exactly the `.exe` and the `.deb`, the `.exe`'s `digest` equal to
+   `sha256:` and the SHA-256 recorded in step 2.
+5. Publish with the tag and target stated explicitly:
+   `gh api -X PATCH repos/$R/releases/$ID -f tag_name=v$V -f target_commitish=$SHA -F draft=false -f make_latest=true`.
+   Then `git ls-remote origin refs/tags/v$V` must print `SHA`, and
+   `gh api repos/$R/releases/latest --jq .id` must print `ID`.
+6. Download both assets from the published page and repeat the native acceptance on the
+   exact published files (signature, digests, install, first launch). The signing run's
+   checks in step 2 are not that acceptance.
+7. Where the desktop feed is enabled, feed that signing run to **Desktop feed (publish
    signed)** ([UPDATING.md](UPDATING.md)).
 
-If `publish` fails or is re-run for a final, it refuses to make a second draft while one
-for the version exists. Reuse that draft when step 3's checks pass for the commit you mean
-to release; delete it only when its target or assets are wrong, then dispatch **Release
-(publish)** again.
+If `publish` fails or is re-run for a final, it refuses to make a second draft while any
+draft named or tagged `v$V` exists, and prints their ids. Reuse such a draft when step 3's
+checks pass for the commit you mean to release (upload the `.deb` by id if it is missing).
+Delete a draft only when its target or assets are wrong, then dispatch **Release
+(publish)** again. More than one draft for the version is always a stop: delete the extras
+after checking which one, if any, is valid.
 
 ## The artifacts
 
