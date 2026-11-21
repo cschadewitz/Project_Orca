@@ -50,7 +50,7 @@ jobs:
     steps:
       # The workflow's own commit, not inputs.ref: the code that picks a runner is never the
       # code under test.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: tools
           persist-credentials: false
@@ -69,7 +69,7 @@ jobs:
     outputs:
       type_proof: ${{ steps.classify.outputs.type_proof }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Pull requests need the merge base for BASE...HEAD.
           # Release verification checks out the exact merge commit.
@@ -113,15 +113,15 @@ jobs:
     needs: runner
     runs-on: ${{ fromJSON(needs.runner.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
 
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
       # resolve the store path. Version comes from package.json packageManager.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # One version: this is about the app running at all, not about Node support.
           # `mise.toml` pins 24, so that is what a developer reproduces locally.
@@ -222,7 +222,7 @@ jobs:
       # a trace for anything that failed. None of these is a baseline — see the spec header.
       - name: Upload the smoke test's output
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: app-smoke
           path: |
@@ -260,7 +260,7 @@ jobs:
           - os: windows-latest
             runner: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
 
@@ -275,9 +275,9 @@ jobs:
           echo "requested test ref: $TEST_REF"
           echo "checked-out test SHA: $(git rev-parse HEAD)"
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -358,7 +358,7 @@ jobs:
       # `docs/DEVELOPMENT.md`, "Screenshot baselines", is the procedure.
       - name: Upload the type proof's screenshots
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: type-proof-${{ matrix.os }}
           path: |
@@ -386,7 +386,7 @@ jobs:
 
       - name: Upload native admission-intent acceptance evidence
         if: ${{ !cancelled() && runner.os != 'Linux' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: admission-intents-${{ matrix.os }}
           path: |
@@ -406,7 +406,7 @@ jobs:
 
       - name: Upload native revision workflow acceptance evidence
         if: ${{ !cancelled() && runner.os != 'Linux' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: revision-workflow-${{ matrix.os }}
           path: |
@@ -430,14 +430,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -559,7 +559,7 @@ jobs:
       # profile and workspace live in a temp dir the specs delete.
       - name: Upload native Linux acceptance evidence
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-native
           path: |

@@ -21,20 +21,20 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: harness
           persist-credentials: false
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: 14666a315b43bc859ad0b73dda92ddf280b0de10
           path: source
           persist-credentials: false
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 12.4.2
           run_install: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
       - name: Install locked source dependencies without lifecycle scripts
@@ -99,7 +99,7 @@ jobs:
         run: node harness/packages/app/test/recovery-preparation/windows-c15-candidate.mjs "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/c15-runtime" "$GITHUB_WORKSPACE/evidence" stall "$C15_PARENT" "$GITHUB_WORKSPACE/evidence/build.json" "$C15_SEAL_SHA256"
       - name: Retain sanitized receipts on success or refusal
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-c15-candidate-${{ github.sha }}
           path: evidence/
