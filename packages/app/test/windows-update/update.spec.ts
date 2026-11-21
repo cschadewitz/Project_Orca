@@ -70,6 +70,9 @@ async function launch(ring: keyof typeof TOKEN_FILES): Promise<{ app: ElectronAp
     env,
     timeout: 60_000,
   });
+  // The main process's own output, in the workflow log beside the feed's request log.
+  app.process().stdout?.on("data", (chunk: Buffer) => process.stdout.write(`[${ring}] ${chunk.toString()}`));
+  app.process().stderr?.on("data", (chunk: Buffer) => process.stdout.write(`[${ring}] ${chunk.toString()}`));
   const page = await app.firstWindow({ timeout: 60_000 });
   await page.waitForFunction(
     () => (window as unknown as UpdatesWindow).orca?.connection.read().state === "live",
@@ -138,9 +141,15 @@ test("an internal token is offered the next version, downloads it and installs i
       { timeout: 360_000 },
     );
     await test.step("restart into the installer", async () => {
-      // Restart hands over to the installer and quits; the bridge call may not return.
-      void page.evaluate(() => (window as unknown as UpdatesWindow).orca.updates.act("restart")).catch(() => undefined);
-      await expect.poll(() => closed, { timeout: 120_000, message: "the app quits into the installer" }).toBe(true);
+      // Restart hands over to the installer and quits, so a successful call never answers. An
+      // answer is a refusal or an unknown installer outcome: fail with it rather than wait.
+      let answer: unknown;
+      void page
+        .evaluate(() => (window as unknown as UpdatesWindow).orca.updates.act("restart"))
+        .then((reply) => (answer = reply))
+        .catch(() => undefined);
+      await expect.poll(() => closed || answer !== undefined, { timeout: 120_000 }).toBe(true);
+      expect(closed, `the app quits into the installer; restart answered ${JSON.stringify(answer)}`).toBe(true);
     });
   } finally {
     if (!closed) await Promise.race([app.close().catch(() => undefined), new Promise((r) => setTimeout(r, 15_000))]);
