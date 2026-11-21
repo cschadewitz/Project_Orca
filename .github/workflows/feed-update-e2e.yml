@@ -193,6 +193,18 @@ jobs:
           [ "$code" = 401 ] || { echo "::error::the local feed did not come up (last answer: $code)"; exit 1; }
           pnpm run app:windows-update
 
+      # What was left waiting: an installer window, the app, or the updater's cached installer.
+      - name: Show what the update left behind
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-Process | Where-Object { $_.MainWindowTitle -or $_.ProcessName -like 'ORCA*' } |
+            Format-Table Id, ProcessName, MainWindowTitle, Path -AutoSize -Wrap
+          Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'ORCA' } |
+            Format-Table ProcessId, Name, CommandLine -AutoSize -Wrap
+          Get-ChildItem "$env:LOCALAPPDATA" -Directory -Filter '*updater*' -ErrorAction SilentlyContinue |
+            Get-ChildItem -Recurse -ErrorAction SilentlyContinue | Format-Table FullName, Length -AutoSize
+
       - name: Stop anything the update left running
         if: always()
         shell: pwsh

@@ -134,7 +134,9 @@ it.each(["timeout", "error", "throw"] as const)(
       if (kind === "error") failed();
       await assertion;
       failed(); // Duplicate/late callbacks cannot change the already classified outcome.
-      expect(fake.instance.quitAndInstall).toHaveBeenCalledExactlyOnceWith(false, true);
+      // Silent, then relaunch: an interactive per-user installer would stop on "who should
+      // this be installed for", where "all users" elevates into a second, per-machine install.
+      expect(fake.instance.quitAndInstall).toHaveBeenCalledExactlyOnceWith(true, true);
       expect(fake.instance.off).toHaveBeenCalledExactlyOnceWith("error", failed);
       expect(vi.getTimerCount()).toBe(0);
     } finally {

@@ -31,8 +31,9 @@ missing/unresponsive window blocks restart. Next the main process asks its **own
 to close admission atomically. Any in-flight request (including a running agent operation)
 blocks the attempt; no work is killed. Durable parked gates have returned their leases and
 survive restart. Once admission is closed, new calls cannot race with shutdown. The owned
-daemon is stopped before the installer launches. An external daemon is neither stopped nor
-installed by this path.
+daemon is stopped before the installer launches. The installer runs silently, keeps the
+per-user install where it is and starts the updated app; it asks nothing. An external daemon
+is neither stopped nor installed by this path.
 
 ### Windows failed-update recovery contract (#660, C5a-02)
 
