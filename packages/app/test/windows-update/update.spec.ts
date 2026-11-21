@@ -14,8 +14,8 @@
  * (`feed-update-e2e.yml`) packages N and N+1, installs N, trusts a throwaway certificate for
  * `localhost` and starts the feed before this runs; the environment below says where.
  */
-import { test, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
-import { execFile } from "node:child_process";
+import { test, expect, chromium, type Browser, type Page } from "@playwright/test";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,7 +50,21 @@ interface UpdatesWindow {
   };
 }
 
-async function launch(ring: keyof typeof TOKEN_FILES): Promise<{ app: ElectronApplication; page: Page }> {
+/**
+ * The installed app, started as a person would and driven over the renderer's DevTools
+ * protocol. Not Playwright's Electron launcher: its Node inspector session holds the main
+ * process open after the app quits, and the installer waits for that process to exit.
+ */
+interface Launched {
+  child: ChildProcess;
+  browser: Browser;
+  page: Page;
+  exited: Promise<void>;
+}
+
+const PORTS = { internal: 9341, preview: 9342 };
+
+async function launch(ring: keyof typeof TOKEN_FILES): Promise<Launched> {
   const root = await mkdtemp(join(tmpdir(), `orca-update-${ring}-`));
   const workspace = join(root, "workspace");
   await mkdir(workspace, { recursive: true });
@@ -64,24 +78,48 @@ async function launch(ring: keyof typeof TOKEN_FILES): Promise<{ app: ElectronAp
   });
   delete env.ORCA_UPDATE_PRERELEASE;
   delete env.ELECTRON_RUN_AS_NODE;
-  const app = await electron.launch({
-    executablePath: EXECUTABLE,
-    args: [`--user-data-dir=${join(root, "profile")}`],
+  const port = PORTS[ring];
+  const child = spawn(EXECUTABLE, [`--user-data-dir=${join(root, "profile")}`, `--remote-debugging-port=${port}`], {
     env,
-    timeout: 60_000,
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
   // The main process's own output, in the workflow log beside the feed's request log.
-  app.process().stdout?.on("data", (chunk: Buffer) => process.stdout.write(`[${ring}] ${chunk.toString()}`));
-  app.process().stderr?.on("data", (chunk: Buffer) => process.stdout.write(`[${ring}] ${chunk.toString()}`));
-  const page = await app.firstWindow({ timeout: 60_000 });
+  child.stdout?.on("data", (chunk: Buffer) => process.stdout.write(`[${ring}] ${chunk.toString()}`));
+  child.stderr?.on("data", (chunk: Buffer) => process.stdout.write(`[${ring}] ${chunk.toString()}`));
+  let browser: Browser | undefined;
+  await expect
+    .poll(
+      async () => {
+        expect(child.exitCode, "the app exited during startup").toBeNull();
+        browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`).catch(() => undefined);
+        return browser !== undefined;
+      },
+      { timeout: 60_000, message: "the app's DevTools endpoint answers" },
+    )
+    .toBe(true);
+  const context = browser!.contexts()[0]!;
+  const page = context.pages()[0] ?? (await context.waitForEvent("page", { timeout: 60_000 }));
   await page.waitForFunction(
     () => (window as unknown as UpdatesWindow).orca?.connection.read().state === "live",
     undefined,
-    {
-      timeout: 60_000,
-    },
+    { timeout: 60_000 },
   );
-  return { app, page };
+  return { child, browser: browser!, page, exited };
+}
+
+/** Close the window (the app quits with its last window), or end the process if it will not. */
+async function stop({ child, browser, page, exited }: Launched): Promise<void> {
+  if (child.exitCode === null) await page.close().catch(() => undefined);
+  await browser.close().catch(() => undefined);
+  const settled = await Promise.race([
+    exited.then(() => true),
+    new Promise<false>((r) => setTimeout(r, 20_000, false)),
+  ]);
+  if (!settled) {
+    child.kill();
+    await exited;
+  }
 }
 
 async function act(page: Page, action: string): Promise<Snapshot> {
@@ -108,13 +146,13 @@ test("the installed version is the one being updated from", async () => {
 });
 
 test("a preview token, whose ring holds the installed version, is not offered the update", async () => {
-  const { app, page } = await launch("preview");
+  const launched = await launch("preview");
   try {
-    const state = await act(page, "check");
+    const state = await act(launched.page, "check");
     expect(state).toMatchObject({ phase: "current", current: FROM });
     expect(state.version).toBeUndefined();
   } finally {
-    await app.close();
+    await stop(launched);
   }
 });
 
@@ -122,15 +160,10 @@ test("an internal token is offered the next version, downloads it and installs i
   // Each step has its own bound, so a hang names the step; the feed's request log is in the
   // workflow output.
   test.setTimeout(900_000);
-  const { app, page } = await launch("internal");
-  let closed = false;
-  app.on("close", () => (closed = true));
-  // Node prints this once the main process has run out of work, which is how an app that has
-  // quit looks while Playwright's inspector session still holds the process open.
+  const launched = await launch("internal");
+  const { child, page } = launched;
   let quit = false;
-  app.process().stderr?.on("data", (chunk: Buffer) => {
-    if (chunk.toString().includes("Waiting for the debugger to disconnect")) quit = true;
-  });
+  void launched.exited.then(() => (quit = true));
   try {
     await test.step(
       "check",
@@ -154,14 +187,12 @@ test("an internal token is offered the next version, downloads it and installs i
         .evaluate(() => (window as unknown as UpdatesWindow).orca.updates.act("restart"))
         .then((reply) => (answer = reply))
         .catch(() => undefined);
-      await expect.poll(() => closed || quit || answer !== undefined, { timeout: 120_000 }).toBe(true);
-      expect(closed || quit, `the app quits into the installer; restart answered ${JSON.stringify(answer)}`).toBe(true);
-      // Only the inspector keeps it alive now, and the installer waits for it to exit: let it.
-      if (!closed) app.process().kill();
-      await expect.poll(() => closed, { timeout: 30_000, message: "the quit app exits" }).toBe(true);
+      await expect.poll(() => quit || answer !== undefined, { timeout: 120_000 }).toBe(true);
+      expect(quit, `the app quits into the installer; restart answered ${JSON.stringify(answer)}`).toBe(true);
+      expect(child.exitCode, "the app's exit code").toBe(0);
     });
   } finally {
-    if (!closed) await Promise.race([app.close().catch(() => undefined), new Promise((r) => setTimeout(r, 15_000))]);
+    await stop(launched);
   }
   await test.step("installed version", async () => {
     await expect
