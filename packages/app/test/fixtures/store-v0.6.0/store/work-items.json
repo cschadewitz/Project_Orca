@@ -1,0 +1,91 @@
+[
+  {
+    "id": "wi_01M7Y4N2FEP02284GR1X5MZ93Y",
+    "requestId": "req_01M7Y4N25J0PVEY5G2710H23DS",
+    "slug": "schema",
+    "title": "Database schema",
+    "description": "Add users table",
+    "kind": "task",
+    "acceptanceCriteria": [],
+    "dependsOn": [],
+    "status": "done",
+    "runId": "run_01M7Y4N32Q3PRX2KNSA630DJZH",
+    "estimate": "S",
+    "planId": "plan_01M7Y4N2F8SXV6CPP5X7GXWN58",
+    "priority": "normal",
+    "produced": {
+      "intent": "art_01M7Y4N3ASVN7D3Q7VQ9JZ8WKM",
+      "spec": "art_01M7Y4N3JMAPH2SQGD7XWXP8TE",
+      "plan": "art_01M7Y4N3V5XAAX2K81M1ZGSXY9",
+      "implementation": "art_01M7Y4N3VF4MTJ1QKQ0GXVMZ95",
+      "test-report": "art_01M7Y4N43TX2AP9V4N3QN547FG",
+      "testReport": "art_01M7Y4N43TX2AP9V4N3QN547FG",
+      "review": "art_01M7Y4N4BMGBFZDYS9KDTFA0PQ",
+      "deploy-report": "art_01M7Y4N4K6DBHQY2EGASM1FZJF",
+      "deployReport": "art_01M7Y4N4K6DBHQY2EGASM1FZJF"
+    },
+    "createdAt": "2026-11-21T04:08:25.837Z",
+    "updatedAt": "2026-11-21T04:08:28.038Z"
+  },
+  {
+    "id": "wi_01M7Y4N2FEB9B6JRDH72BKHGMZ",
+    "requestId": "req_01M7Y4N25J0PVEY5G2710H23DS",
+    "slug": "login-api",
+    "title": "Login API",
+    "description": "POST /login",
+    "kind": "feature",
+    "acceptanceCriteria": [],
+    "dependsOn": [
+      "schema",
+      "decision:session-store"
+    ],
+    "status": "done",
+    "estimate": "M",
+    "planId": "plan_01M7Y4N2F8SXV6CPP5X7GXWN58",
+    "priority": "high",
+    "produced": {
+      "intent": "art_01M7Y4N4XVM90KSKDX1QECZKVY",
+      "spec": "art_01M7Y4N57JJTXEEMJ74Q17Z01X",
+      "plan": "art_01M7Y4N5G21N7R0XRBXM69WKRG",
+      "implementation": "art_01M7Y4N5G80J2VEXXQEDD3918K",
+      "test-report": "art_01M7Y4N5QERE9K9R61WR5CZHVT",
+      "testReport": "art_01M7Y4N5QERE9K9R61WR5CZHVT",
+      "review": "art_01M7Y4N5YWAB8QGQ0N6JEDVFFR",
+      "deploy-report": "art_01M7Y4N65RKZP303XAJ0T58GEV",
+      "deployReport": "art_01M7Y4N65RKZP303XAJ0T58GEV"
+    },
+    "createdAt": "2026-11-21T04:08:25.837Z",
+    "updatedAt": "2026-11-21T04:08:29.662Z",
+    "runId": "run_01M7Y4N4MRGM7GV5WJGJ61QX84"
+  },
+  {
+    "id": "wi_01M7Y4N2FEW0KDSP52EJ2M09VW",
+    "requestId": "req_01M7Y4N25J0PVEY5G2710H23DS",
+    "slug": "docs",
+    "title": "Docs",
+    "description": "Document auth",
+    "kind": "task",
+    "acceptanceCriteria": [],
+    "dependsOn": [
+      "informs:login-api@spec"
+    ],
+    "status": "done",
+    "runId": "run_01M7Y4N336C1FQ2QWTB2PN2TTK",
+    "estimate": "XS",
+    "planId": "plan_01M7Y4N2F8SXV6CPP5X7GXWN58",
+    "priority": "normal",
+    "produced": {
+      "intent": "art_01M7Y4N3B7XG9SCEKH5V39ATB4",
+      "spec": "art_01M7Y4N3KHYHME86ME84324KJ2",
+      "plan": "art_01M7Y4N4CM57RWMMC564Z5SSD9",
+      "implementation": "art_01M7Y4N4CVCFZF0GR7E7948K3G",
+      "test-report": "art_01M7Y4N4M3MXZKX3S61Z0SJ09G",
+      "testReport": "art_01M7Y4N4M3MXZKX3S61Z0SJ09G",
+      "review": "art_01M7Y4N4XAQ8BF29W3YB9377AN",
+      "deploy-report": "art_01M7Y4N56XNQMBA8P9V4YF1P6G",
+      "deployReport": "art_01M7Y4N56XNQMBA8P9V4YF1P6G"
+    },
+    "createdAt": "2026-11-21T04:08:25.837Z",
+    "updatedAt": "2026-11-21T04:08:28.675Z"
+  }
+]

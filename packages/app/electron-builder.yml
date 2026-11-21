@@ -77,8 +77,11 @@ linux:
   category: Development
   synopsis: Orchestration Runtime for Coding Agents
   # Named rather than derived: the package is `@orca/app`, and a scoped name is not a
-  # thing a binary on `$PATH` can be called.
-  executableName: orca
+  # thing a binary on `$PATH` can be called. Not plain `orca`: that is the GNOME screen
+  # reader, which Ubuntu Desktop installs by default as package `orca` owning /usr/bin/orca
+  # and orca.desktop (#853 review). Every Linux identity derived from this (the .deb's
+  # /usr/bin link, AppArmor profile and desktop entry) is therefore `orca-desktop` too.
+  executableName: orca-desktop
   target:
     # AppImage for x64 only. Building an arm64 AppImage on an x64 runner needs an arm64
     # appimagetool to run there, which is the one cross-build in this file that does not
@@ -88,6 +91,28 @@ linux:
       arch: [x64]
     - target: tar.gz
       arch: [x64, arm64]
+    # The supported install on Ubuntu 24.04 and later (#853). Those releases restrict
+    # unprivileged user namespaces through AppArmor, so Chromium's namespace sandbox cannot
+    # start from an unpacked tree, and its SUID fallback needs `chrome-sandbox` owned by root
+    # with mode 4755, which no download can carry. The package's install script, which runs
+    # as root, loads an AppArmor profile that grants `userns` to /opt/ORCA/orca-desktop alone and
+    # leaves the system-wide restriction on. The helper stays 0755 everywhere: the package
+    # supports the namespace sandbox only, never the setuid one.
+    - target: deb
+      arch: [x64, arm64]
+
+# Debian control fields. fpm will not build without a maintainer and a homepage; the name is
+# lowercase because Debian package names must be, whatever productName says. Never `orca`:
+# apt would take this package for a version of the screen reader and replace it. No
+# Conflicts/Replaces/Provides either: the two install side by side.
+deb:
+  packageName: orca-desktop
+  maintainer: ORCA contributors
+  priority: optional
+  # The repository's postinst, not electron-builder's: no setuid fallback for chrome-sandbox,
+  # no redundant cache refreshes, and a clear refusal when the AppArmor exception cannot load
+  # (the file says why). The postrm and the profile itself remain electron-builder's.
+  afterInstall: build/linux/after-install.tpl
 
 mac:
   extraResources:
@@ -144,4 +169,4 @@ publish:
 
 # Explicit local addon build is required for Mac/Windows packaging. No network/build at hook time.
 beforePack: ./scripts/diagnostics-native-package.js
-afterPack: ./scripts/verify-diagnostics-native.js
+afterPack: ./scripts/after-pack.js

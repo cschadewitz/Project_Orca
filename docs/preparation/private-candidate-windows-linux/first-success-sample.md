@@ -174,8 +174,16 @@ seconds, see [failed startup](when-something-goes-wrong.md#failed-startup).
 5. Choose **Launch** once. Don't choose it again, even if nothing seems to happen. Wait 30
    seconds, then see [interruptions](when-something-goes-wrong.md#interruptions).
 
-No permission question or other prompt should appear. If one does, don't answer it. Stop
-and report it.
+No permission question or other prompt from ORCA should appear. If one does, don't answer
+it. Stop and report it.
+
+**Linux keyring.** On Linux, your desktop may ask you to unlock its system keyring. That is
+not an ORCA/provider credential prompt. If you recognize the OS dialog, unlock it locally;
+never share the password. Stop for any provider key, token, sign-in or unexpected
+authorization prompt. If you cancel and ORCA confirms nothing was submitted, verify there
+is no new run, then quit and reopen ORCA, unlock the keyring and launch once. If ORCA says
+an earlier launch may exist, use **Recover original launch** first; don't start another
+until recovery confirms it is safe.
 
 ## F8: check the result
 

@@ -71,7 +71,7 @@ construction rather than by anyone checking:
 | Artifact | What it is | Files on the release |
 | --- | --- | --- |
 | **daemon** | The CLI, bundled to one ESM file. No Electron. | `orca-daemon-X.Y.Z.mjs` |
-| **desktop** | The Electron app, with that same daemon build inside it. | `.AppImage`, `.tar.gz`, `.dmg`, `.zip`, `.exe` |
+| **desktop** | The Electron app, with that same daemon build inside it. | `.deb`, `.AppImage`, `.tar.gz`, `.dmg`, `.zip`, `.exe` |
 
 `.github/workflows/desktop.yml` builds both, on `ubuntu-latest`, `macos-latest` and
 `windows-latest`. `release-publish.yml` calls it as a reusable workflow against the merge
@@ -85,6 +85,13 @@ It is deliberately not part of `ci.yml`, which sets
 Architectures: x64 and arm64 everywhere, except the Linux `AppImage`, which is x64 only —
 building an arm64 one on an x64 runner needs an arm64 `appimagetool` to run there. arm64
 Linux gets the `tar.gz`, which is the same tree without the single-file wrapper.
+
+On Linux the `.deb` (x64 and arm64) is the supported install, and the one to point testers
+at: Ubuntu 24.04 and later restrict the user namespaces Chromium's sandbox needs, and only
+the package's root install script can load the AppArmor profile that lets
+`/opt/ORCA/orca-desktop` make them. The Linux executable, package, command and desktop entry
+are all `orca-desktop`, because `orca` is Ubuntu Desktop's screen reader. The archive and the AppImage abort before their first window there (#853).
+[INSTALL-LINUX.md](INSTALL-LINUX.md) has the install, the reason and what CI checks.
 
 ### The daemon inside the desktop artifact
 
@@ -152,7 +159,7 @@ and `mac.notarize: false` remain in effect.
 | --- | --- |
 | macOS | `CFBundleIdentifier` becomes `com.schadewitz.orca`; builder-derived helper bundle IDs follow it. `ORCA.app`, product name, DMG/ZIP targets and artifact filenames are unchanged. OS permissions, notification identity and Keychain access must be checked as a new identity, not assumed to transfer from `dev.orca.desktop`. |
 | Windows | Explicit `win.appId: dev.orca.desktop` preserves existing NSIS identity. The locked builder derives the installer GUID from that ID and uses the ID for shortcut AppUserModelID. Install/uninstall registration, installation name and updater cache naming remain stable. A Windows ID migration is deferred to a separate product decision; do not remove this override as cleanup. |
-| Linux | The default ID changes, but the current AppImage/tar.gz targets retain executable `orca`, package/product names, desktop entry and artifact filenames. This is not a Debian service/store migration. |
+| Linux | The default ID changes; product name and artifact filenames are unchanged. For #853 the executable and desktop entry became `orca-desktop` (was `orca`, which is the GNOME screen reader's package and command on Ubuntu Desktop), and the `.deb` installs to `/opt/ORCA` as package `orca-desktop`. This is not a Debian service/store migration. |
 | Application data | Package name `@orca/app` and product name `ORCA` are unchanged. Electron's default `userData` is name-based, not bundle-ID-based; preferences and encrypted run intents stay at the same paths. Workspace selection and `<workspace>/.orca` are unchanged. No files are moved, reset or deleted. |
 | Updates | Windows remains on its existing NSIS identity and `latest-ARCH` feed channels. This change does not enable macOS/Linux automatic updates, change feeds or publish artifacts. |
 
@@ -260,6 +267,21 @@ Release: v0.3.0-rc.1
 That overrides the labels. A version with a prerelease suffix is published with
 `--prerelease`, so it never becomes the repository's "latest".
 
+### A final is its last candidate
+
+A final release (`0.7.0`) should ship the code of its newest release candidate
+(`v0.7.0-rc.N`) plus fixes someone chose on purpose, not whatever merged to `main` after the
+candidate was tested. Land those fixes as cherry-picks or say why each one belongs. To make
+drift visible, the release pull request for a final compares what the release is built
+from (`packages/` with its manifests, `workflows/`, `templates/`, the lockfile and the root
+build config and `.github/workflows/desktop.yml`, listed as `DRIFT_PATHS` in
+`tools/release-pr-body.js`) with the newest
+`v<version>-rc.*` tag and either says nothing changed or shows a warning with the
+`git diff --stat` and a comparison link. If the comparison output is missing, the
+workflow stops before pushing anything rather than reporting that nothing changed. This only works when candidates are released
+through this workflow, so they carry tags. Learned from T3 Code, whose stable release
+builds the exact commit its last nightly shipped (#863).
+
 ### What counts as breaking
 
 Not the TypeScript API — nothing outside this repository imports it. ORCA's compatibility
@@ -283,6 +305,38 @@ claim the release makes on your behalf: write the fragment when it would be fals
 
 Documentation under `docs/` describes `main`, not the last release. Link docs at the tag
 (`/blob/vX.Y.Z/docs/...`) when a release note needs to point at them.
+
+## Rehearsing a release (dry run)
+
+Run **Release (publish)** from the Actions tab with **dry_run** ticked and a branch or
+commit as **ref**. The ref must contain `efdaf863` (#862) or be newer: the App smoke
+workflow's `linux-native` job is required for a rehearsal as for a release, and it installs
+the ref's `.deb` and runs `pnpm run app:linux-native`, which older refs (including rc.2,
+`c2e617af`) do not have, so a rehearsal of one fails there. The upgrade launch check is the
+one step an older ref may lack; it reports not applicable. It runs every job a real release runs (the full check path, the desktop
+artifacts, the smoke and type proof) and then uploads the artifacts to a **draft
+prerelease** called `vX.Y.Z-dryrun.<run number>`, where `X.Y.Z` is the ref's
+`package.json` version without its prerelease suffix. Nothing is tagged, nothing is
+published or marked latest, and no feed step runs. The draft's notes start with a
+dry-run warning.
+
+Dispatch it with the workflow from `main` (the "Use workflow from" box); the run refuses
+any other. The rehearsed ref is untrusted: its code only ever runs in jobs with a read-only
+token and no saved git credentials, and the smoke runs on GitHub-hosted runners, never the
+self-hosted ones, without the runner health endpoint; the desktop and smoke jobs pick their
+runners with `main`'s tooling, not the ref's. The draft is uploaded by a separate job that
+checks out `main`'s workflow revision, validates the version and commit, and treats the
+artifacts as data. A ref from before the upgrade launch check reports it as not applicable.
+
+A real (non-dry-run) release refuses any commit that is not on `main`, and a manual one must
+also be dispatched with `main`'s workflow: its publish job runs the released commit's own
+tooling with a write token, so that commit has to be reviewed. Any commit on `main`
+qualifies, so fixing forward after a failed publish still works.
+
+Use it before merging a release pull request, or to try a risky change through the
+release graph before it lands. A failure costs nothing, unlike a failed `release-publish`
+after merge, which leaves a bump on `main` with no tag. Delete the draft when you are done
+(`gh release delete vX.Y.Z-dryrun.N`). Learned from T3 Code's preview release train (#863).
 
 ## Doing it by hand
 

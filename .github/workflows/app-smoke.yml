@@ -28,6 +28,17 @@ on:
       ref:
         required: true
         type: string
+      # Release dry runs rehearse an arbitrary ref, so they never route it to self-hosted runners.
+      hosted_only:
+        required: false
+        type: boolean
+        default: false
+      # Release verification always runs the upgrade launch check. A manual run on a ref from
+      # before the check existed reports it as not applicable instead of failing.
+      upgrade_launch_required:
+        required: false
+        type: boolean
+        default: true
     secrets:
       CI_RUNNER_HEALTH_URL:
         description: The runner health endpoint; without it, Linux jobs use GitHub-hosted runners.
@@ -50,7 +61,7 @@ jobs:
     steps:
       # The workflow's own commit, not inputs.ref: the code that picks a runner is never the
       # code under test.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: tools
           persist-credentials: false
@@ -59,7 +70,7 @@ jobs:
       # Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners.
       - id: pick
         env:
-          FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
+          FORCE_HOSTED: ${{ inputs.hosted_only && 'true' || vars.CI_FORCE_HOSTED }}
           HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
         run: node tools/linux-runner.js
 
@@ -69,12 +80,13 @@ jobs:
     outputs:
       type_proof: ${{ steps.classify.outputs.type_proof }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Pull requests need the merge base for BASE...HEAD.
           # Release verification checks out the exact merge commit.
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Classify
         id: classify
@@ -113,15 +125,16 @@ jobs:
     needs: runner
     runs-on: ${{ fromJSON(needs.runner.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
       # resolve the store path. Version comes from package.json packageManager.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # One version: this is about the app running at all, not about Node support.
           # `mise.toml` pins 24, so that is what a developer reproduces locally.
@@ -213,11 +226,28 @@ jobs:
       - name: Smoke test
         run: xvfb-run -a pnpm run app:smoke
 
+      # The same old-store upgrade check ci.yml runs on pull requests (#863), so a release
+      # proves it against the exact merge commit too.
+      - name: Upgrade launch check
+        env:
+          REQUIRED: ${{ inputs.upgrade_launch_required && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          if ! node -e 'process.exit(require("./package.json").scripts?.["app:upgrade-launch"] ? 0 : 1)'; then
+            if [ "$REQUIRED" = "true" ]; then
+              echo "::error::this ref has no app:upgrade-launch script, and release verification requires it"
+              exit 1
+            fi
+            echo "::notice title=Upgrade launch check::not applicable: this ref predates the check (#863)"
+            exit 0
+          fi
+          xvfb-run -a pnpm run app:upgrade-launch
+
       # Screenshots of both themes, the greyscale pictures, the axe results per surface and
       # a trace for anything that failed. None of these is a baseline — see the spec header.
       - name: Upload the smoke test's output
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: app-smoke
           path: |
@@ -255,9 +285,10 @@ jobs:
           - os: windows-latest
             runner: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
       - name: Record workflow and checked-out revision
         shell: bash
@@ -270,9 +301,9 @@ jobs:
           echo "requested test ref: $TEST_REF"
           echo "checked-out test SHA: $(git rev-parse HEAD)"
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -353,7 +384,7 @@ jobs:
       # `docs/DEVELOPMENT.md`, "Screenshot baselines", is the procedure.
       - name: Upload the type proof's screenshots
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: type-proof-${{ matrix.os }}
           path: |
@@ -381,7 +412,7 @@ jobs:
 
       - name: Upload native admission-intent acceptance evidence
         if: ${{ !cancelled() && runner.os != 'Linux' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: admission-intents-${{ matrix.os }}
           path: |
@@ -401,11 +432,164 @@ jobs:
 
       - name: Upload native revision workflow acceptance evidence
         if: ${{ !cancelled() && runner.os != 'Linux' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: revision-workflow-${{ matrix.os }}
           path: |
             test-results/revision-workflow/
             playwright-report-revision-workflow/
+          retention-days: ${{ inputs.ref && 14 || 7 }}
+          if-no-files-found: ignore
+
+  # The installed Linux package in a real desktop session's moving parts (#857, #858): the
+  # x64 .deb this ref builds, installed through apt and launched from /opt/ORCA, under Xvfb
+  # and under a headless Weston, with a session bus, a locked GNOME login keyring and the real
+  # gcr unlock prompt. `packages/app/test/native-linux/README.md` says what each spec proves
+  # and what it cannot (a physical GNOME Shell session, the GTK folder chooser).
+  #
+  # GitHub-hosted only, like the .deb step in desktop.yml: it apt-installs the session's tools
+  # and the package into /opt and /etc with sudo, which a persistent self-hosted runner must
+  # not be asked to do. The hosted image restricts unprivileged user namespaces as stock
+  # Ubuntu 24.04 does, so the package's own AppArmor profile is what lets the sandbox start.
+  linux-native:
+    name: native Linux acceptance (installed .deb)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # With the Electron binary: electron-builder packages it.
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install the desktop session's tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            xvfb dbus dbus-bin gnome-keyring gcr libsecret-tools xdotool weston git
+
+      # A regression package built from this ref, stamped like Desktop's (the root
+      # package.json version, docs/RELEASING.md) so the app reports the version under test.
+      # It is not the published artifact: exact-package acceptance stays with desktop.yml's
+      # .deb step and the tester pass on the release candidate's own package.
+      - name: Build a ref-built regression .deb (x64)
+        env:
+          REF: ${{ inputs.ref || github.sha }}
+        run: |
+          set -euo pipefail
+          version=$(node -p 'require("./package.json").version')
+          printf 'packaging %s from %s (regression build, not the release artifact)\n' "$version" "$REF"
+          pnpm run build
+          pnpm --filter @orca/app run build:daemon
+          pnpm --filter @orca/app exec electron-builder --linux deb --x64 --publish never \
+            -c.extraMetadata.version="$version"
+
+      # The same refusals as desktop.yml's .deb step, before anything runs with sudo: one
+      # package, named orca-desktop, claiming nothing of the screen reader's, a payload that
+      # is root-owned with no setuid/setgid/sticky bit and nothing group- or other-writable
+      # but symlinks, and the maintainer scripts APT will execute. Then the privileged install, with the userns
+      # restriction on, and the package's own AppArmor profile loaded.
+      - name: Check and install the regression .deb
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=(packages/app/dist/release/ORCA-*-linux-amd64.deb)
+          test "${#debs[@]}" = 1
+          deb=$(readlink -f "${debs[0]}")
+          echo "regression package (ref-built): $(sha256sum "$deb")" | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$(dpkg-deb -f "$deb" Package)" = orca-desktop
+          # electron-builder writes a prerelease 0.7.0-rc.2 as Debian's 0.7.0~rc.2.
+          version=$(node -p 'require("./package.json").version')
+          test "$(dpkg-deb -f "$deb" Version)" = "${version/-/\~}"
+          for field in Conflicts Breaks Replaces Provides Pre-Depends; do
+            test -z "$(dpkg-deb -f "$deb" "$field")"
+          done
+          if dpkg-deb -c "$deb" | awk '{ print $NF }' | grep -E '^\./usr/bin/orca$|/orca\.desktop$|apparmor\.d/orca$|^\./usr/share/mime/'; then
+            echo "::error::the .deb ships a path the screen reader or the MIME database owns"; exit 1
+          fi
+          dpkg-deb --fsys-tarfile "$deb" | python3 -c '
+          import sys, tarfile
+          bad = []
+          with tarfile.open(fileobj=sys.stdin.buffer, mode="r|") as tar:
+              for m in tar:
+                  if m.uid or m.gid or m.mode & 0o7000 or (not m.issym() and m.mode & 0o022):
+                      bad.append(f"{m.mode:04o} {m.uid}:{m.gid} {m.name}")
+          if bad:
+              print("\n".join(bad)); sys.exit("::error::the .deb carries owned, special-bit or writable entries")
+          '
+          # Desktop's own checks of the generated maintainer scripts, which APT runs as root.
+          # The maintainer scripts as generated. postinst is the repository's
+          # (build/linux/after-install.tpl): helper always 0755, never setuid; no cache
+          # refreshes (dpkg triggers do that); the scoped profile, and a refusal if the
+          # restriction is on and the profile could not load. postrm is electron-builder's.
+          scripts=$(mktemp -d "$RUNNER_TEMP/orca-deb-control.XXXXXX")
+          dpkg-deb -e "$deb" "$scripts"
+          ls -ln "$scripts"
+          test "$(stat -c %a "$scripts/postinst")" = 755
+          test "$(stat -c %a "$scripts/postrm")" = 755
+          # One command per check: under `set -e` a failure before the last command of an
+          # && list does not stop the step.
+          for unexpected in preinst prerm triggers config templates; do
+            if [ -e "$scripts/$unexpected" ]; then echo "::error::the .deb carries an unexpected $unexpected"; exit 1; fi
+          done
+          for script in postinst postrm; do
+            if ! bash -n "$scripts/$script"; then echo "::error::$script is not valid bash"; exit 1; fi
+          done
+          grep -qx "EXECUTABLE='/opt/ORCA/orca-desktop'" "$scripts/postinst"
+          grep -qx "HELPER='/opt/ORCA/chrome-sandbox'" "$scripts/postinst"
+          grep -qx 'chmod 0755 "$HELPER"' "$scripts/postinst"
+          grep -q "update-alternatives --install '/usr/bin/orca-desktop' 'orca-desktop' \"\$EXECUTABLE\" 100" "$scripts/postinst"
+          grep -qx "PROFILE_TARGET='/etc/apparmor.d/orca-desktop'" "$scripts/postinst"
+          grep -q "update-alternatives --remove 'orca-desktop' '/opt/ORCA/orca-desktop'" "$scripts/postrm"
+          grep -q "APPARMOR_PROFILE_DEST='/etc/apparmor.d/orca-desktop'" "$scripts/postrm"
+          # Code only: the template's comments name what it deliberately does not do.
+          if grep -hvE '^[[:space:]]*#' "$scripts/postinst" "$scripts/postrm" \
+            | grep -nE '4755|[0-7]?[4-7][0-7]{3}[^0-9]|chmod [ug]?\+s|u\+s|update-mime-database|update-desktop-database|no-sandbox|apparmor_restrict_unprivileged_userns=0'; then
+            echo "::error::a maintainer script can make the helper setuid, weaken the sandbox or refresh caches"; exit 1
+          fi
+          if grep -nE "/usr/bin/orca'|alternatives/orca'|apparmor\.d/orca'|'orca'" "$scripts/postinst" "$scripts/postrm"; then
+            echo "::error::a maintainer script touches the screen reader's names"; exit 1
+          fi
+          rm -rf "$scripts"
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=1
+          sudo apt-get install -y -q "$deb"
+          test "$(stat -c '%a %u:%g' /opt/ORCA/chrome-sandbox)" = '755 0:0'
+          test "$(stat -c '%a %u:%g' /opt/ORCA/orca-desktop)" = '755 0:0'
+          sudo grep -q '^orca-desktop ' /sys/kernel/security/apparmor/profiles
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          if unshare --user --map-root-user true 2> /dev/null; then
+            echo "::error::an unrelated executable can still create user namespaces"; exit 1
+          fi
+          # The specs launch as this job's own unprivileged account, never root, with
+          # Chromium's sandbox on; each launch fails unless every renderer is in its own
+          # user namespace (packages/app/test/native-linux/app.ts, requireSandbox).
+          test "$(id -u)" != 0
+
+      - name: Native Linux acceptance
+        timeout-minutes: 15
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-linux-native
+        run: pnpm run app:linux-native
+
+      # Screenshots of ORCA's own window and per-cycle timings only. The session's keyring,
+      # profile and workspace live in a temp dir the specs delete.
+      - name: Upload native Linux acceptance evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-native
+          path: |
+            test-results/linux-native/
+            playwright-report-linux-native/
           retention-days: ${{ inputs.ref && 14 || 7 }}
           if-no-files-found: ignore

@@ -47,7 +47,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -439,5 +439,101 @@ export async function startDemoDaemon(): Promise<Daemon> {
       await exited;
       await rm(dir, { recursive: true, force: true });
     },
+  };
+}
+
+/**
+ * The absolute directory `orca demo` ran in when a store fixture was made. Every path the
+ * demo recorded starts with it; see `packages/app/test/fixtures/store-v0.6.0/README.md`.
+ */
+export const STORE_FIXTURE_ROOT = "/tmp/ORCA_FIXTURE_ROOT";
+
+/** What a store fixture daemon adds to the usual handle: the runs the old release wrote. */
+export interface StoreFixtureDaemon extends Omit<Daemon, "startLivePermission"> {
+  /** The daemon's own console output so far, for a failure message. */
+  log: () => string;
+}
+
+/**
+ * Copy `fixture` (an old release's `.orca`) into a fresh workspace, rewriting the demo's
+ * recorded root to that workspace, and serve it with the CLI built from this checkout.
+ *
+ * Nothing is migrated or seeded here: whatever the current daemon does with an old store on
+ * startup is what is being tested (#863). The config is written fresh because the old
+ * release's config named its own checkout's scripted agent and workflows.
+ */
+export async function startStoreFixtureDaemon(fixture: string): Promise<StoreFixtureDaemon> {
+  const dir = await mkdtemp(join(tmpdir(), "orca-upgrade-"));
+  const storeDir = join(dir, ".orca");
+  await cp(fixture, storeDir, { recursive: true });
+
+  const escaped = JSON.stringify(dir).slice(1, -1);
+  for (const entry of await readdir(storeDir, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const path = join(entry.parentPath, entry.name);
+    const text = await readFile(path, "utf8");
+    if (!text.includes(STORE_FIXTURE_ROOT)) continue;
+    const root = /\.jsonl?$/.test(entry.name) ? escaped : dir;
+    await writeFile(path, text.replaceAll(STORE_FIXTURE_ROOT, root), "utf8");
+  }
+
+  const forward = (path: string) => path.replaceAll("\\", "/");
+  const config = {
+    version: 1,
+    storeDir,
+    hosts: [{ id: "local", type: "local" }],
+    agents: [
+      {
+        id: "scripted",
+        name: "Scripted test agent",
+        command: process.execPath,
+        args: [join(repoRoot, "packages/testing/dist/scripted-agent/main.js")],
+        hostId: "local",
+        roles: ["planner", "designer", "builder", "tester", "reviewer", "deployer", "decomposer"],
+      },
+    ],
+    workflows: [forward(join(repoRoot, "workflows", "*.yaml"))],
+    templates: [forward(join(repoRoot, "templates", "**", "*.md"))],
+    program: { workflow: "program", itemWorkflow: "ai-sdlc" },
+    planning: { plan: "demo", planName: "Demo plan" },
+    workspace: { provider: "local", root: dir, hostId: "local" },
+  };
+  const configPath = join(dir, "orca.upgrade.config.json");
+  await writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
+  const tokenFile = join(dir, "auth", "local-client.token");
+
+  const port = await freePort();
+  const url = `http://127.0.0.1:${port}`;
+  const serve: ChildProcess = spawn(process.execPath, [cli, "--config", configPath, "serve", "--port", String(port)], {
+    cwd: dir,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const output: string[] = [];
+  serve.stdout?.on("data", (d: Buffer) => output.push(d.toString()));
+  serve.stderr?.on("data", (d: Buffer) => output.push(d.toString()));
+
+  const stop = async () => {
+    const exited = serve.exitCode === null && serve.signalCode === null ? once(serve, "exit") : undefined;
+    serve.kill("SIGTERM");
+    await exited;
+    await rm(dir, { recursive: true, force: true });
+  };
+
+  try {
+    await waitForHello(url, tokenFile);
+  } catch (e) {
+    await stop();
+    throw new Error(`the current daemon did not come up on the old store\ndaemon output:\n${output.join("")}`, {
+      cause: e,
+    });
+  }
+
+  return {
+    url,
+    dir,
+    tokenFile,
+    rpc: (method, params) => rpc(url, tokenFile, method, params),
+    log: () => output.join(""),
+    stop,
   };
 }

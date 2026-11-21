@@ -14,6 +14,10 @@
  * - **`smoke`** (`pnpm run app:smoke`) launches the *built* app against a real daemon and
  *   audits every surface. It runs on Linux only: what it is about is the app coming up at
  *   all, and three runners would be paying three times for one answer.
+ * - **`upgrade-launch`** (`pnpm run app:upgrade-launch`) opens the built app on a store that
+ *   ORCA 0.6.0 wrote, served by this commit's daemon (#863). Unlike the projects here it
+ *   runs in `ci.yml` on pull requests, because it is small and an upgrade break is the kind
+ *   nothing else catches before a release.
  * - **`type-proof`** (`pnpm run app:type-proof`) launches the renderer's dev server at
  *   `#type` and diffs committed per-platform screenshots. It runs on all three runners,
  *   because "do the bundled faces render the same on Linux, macOS and Windows" is a
@@ -24,6 +28,11 @@
  *
  * - **`revision-workflow`** uses real UI controls and a protected daemon for revision
  *   save/restart/CAS/review/delivery acceptance, on those same macOS/Windows runners.
+ *
+ * - **`linux-native`** (`pnpm run app:linux-native`) drives the *installed* `.deb` from
+ *   `/opt/ORCA` in a disposable desktop session: Xvfb and headless Weston, a session bus, a
+ *   locked GNOME keyring and its real unlock prompt (#857, #858). Linux only, on a
+ *   GitHub-hosted runner; `packages/app/test/native-linux/README.md` has the details.
  *
  * Separate projects in one config let the workflow say `--project=<name>`
  * and lets `toHaveScreenshot` put the project's name in a baseline's filename, beside the
@@ -93,6 +102,7 @@ export default defineConfig({
   use: { trace: "retain-on-failure" },
   projects: [
     { name: "smoke", testMatch: "app-shell.spec.ts" },
+    { name: "upgrade-launch", testMatch: "upgrade-launch.spec.ts" },
     {
       name: "type-proof",
       testMatch: "type-proof.spec.ts",
@@ -111,6 +121,14 @@ export default defineConfig({
       outputDir: here("../../../../test-results/revision-workflow"),
       // Synthetic public IDs, hashes, booleans and counts only; no protected content.
       use: { trace: "off", screenshot: "off", video: "off" },
+    },
+    {
+      name: "linux-native",
+      testDir: here("../native-linux"),
+      testMatch: "*.spec.ts",
+      outputDir: here("../../../../test-results/linux-native"),
+      // Screenshots of ORCA's own window only; never a profile, keyring or daemon store.
+      use: { trace: "off", video: "off" },
     },
   ],
 });

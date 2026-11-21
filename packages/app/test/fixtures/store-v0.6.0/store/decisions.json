@@ -1,0 +1,90 @@
+[
+  {
+    "id": "dec_6N0D4VZ3831E5E1CES5NCHHPQZ",
+    "planId": "plan_01M7Y4N2F8SXV6CPP5X7GXWN58",
+    "key": "session-store",
+    "title": "Where do sessions live?",
+    "question": "Signed cookies or a server-side store?",
+    "status": "decided",
+    "criteria": [
+      {
+        "key": "simplicity",
+        "name": "Simplicity",
+        "weight": 3,
+        "direction": "maximize"
+      },
+      {
+        "key": "revocation",
+        "name": "Revocation support",
+        "weight": 1,
+        "direction": "maximize"
+      }
+    ],
+    "options": [
+      {
+        "key": "cookie",
+        "name": "Signed cookie",
+        "scores": {
+          "simplicity": 9,
+          "revocation": 3
+        },
+        "pros": [],
+        "cons": [],
+        "risks": []
+      },
+      {
+        "key": "redis",
+        "name": "Redis",
+        "scores": {
+          "simplicity": 5,
+          "revocation": 9
+        },
+        "pros": [],
+        "cons": [],
+        "risks": []
+      }
+    ],
+    "scale": 10,
+    "consequences": [],
+    "origin": {
+      "kind": "decomposition",
+      "runId": "run_01M7Y4N25RKWC5S4YPWMJX1R3M",
+      "artifactId": "art_01M7Y4N2EC8Z1T9JE45YV9392Q"
+    },
+    "createdAt": "2026-11-21T04:08:25.846Z",
+    "updatedAt": "2026-11-21T04:08:26.399Z",
+    "chosen": "cookie",
+    "decidedBy": "matrix",
+    "decidedAt": "2026-11-21T04:08:26.399Z",
+    "result": {
+      "ranking": [
+        {
+          "option": "cookie",
+          "score": 7.5,
+          "normalized": 0.75,
+          "byCriterion": {
+            "simplicity": 6.75,
+            "revocation": 0.75
+          }
+        },
+        {
+          "option": "redis",
+          "score": 6,
+          "normalized": 0.6,
+          "byCriterion": {
+            "simplicity": 3.75,
+            "revocation": 2.25
+          }
+        }
+      ],
+      "recommended": "cookie",
+      "margin": 0.15,
+      "confidence": "clear",
+      "pivotalCriteria": [
+        "simplicity"
+      ],
+      "evaluatedAt": "2026-11-21T04:08:26.399Z"
+    },
+    "rationale": "Simplicity wins for v1."
+  }
+]

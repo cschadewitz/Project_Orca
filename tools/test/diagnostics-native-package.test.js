@@ -86,7 +86,7 @@ it("the actual builder validates the hooks/config and keeps native output out of
   await validateConfiguration(config, new DebugLogger(false));
   expect(config.files).toContain("!dist/diagnostics-native");
   expect(config.beforePack).toBe("./scripts/diagnostics-native-package.js");
-  expect(config.afterPack).toBe("./scripts/verify-diagnostics-native.js");
+  expect(config.afterPack).toBe("./scripts/after-pack.js");
 });
 
 it("the actual Mac builder copies the existing native validator with its relative imports intact", async () => {

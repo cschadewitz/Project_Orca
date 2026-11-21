@@ -6,14 +6,39 @@
 // Usage (the workflow passes the rest through the environment):
 //   node tools/release-pr-body.js <notes-file>
 //
-// Environment: REPO, NUMBER, VERSION, BUMP, PIN, MILESTONE_TITLE, UNLABELLED.
-import { readFileSync } from "node:fs";
+// Environment: REPO, NUMBER, VERSION, BUMP, PIN, MILESTONE_TITLE, UNLABELLED, and for a
+// final release after a candidate, DRIFT_SINCE (the newest rc tag) and DRIFT_FILE (the
+// `git diff --stat` of DRIFT_PATHS since it).
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 /** GitHub's limit is 65,536 characters; keep a margin for anything it adds. */
 export const BODY_LIMIT = 65_000;
 /** How many unlabelled issues are listed before the rest is summarised as a count. */
 export const UNLABELLED_LIMIT = 50;
+
+/** How many `git diff --stat` lines are shown before the rest is summarised as a count. */
+export const DRIFT_LIMIT = 40;
+
+/**
+ * Everything a release is built from, as git pathspecs: the packages and their manifests,
+ * what the CLI ships beside them, the root build inputs and the workflow that packages the
+ * desktop artifacts. A dependency bump in a
+ * manifest or the lockfile changes the shipped app as surely as a source edit does.
+ * release-prepare.yml passes exactly these to `git diff` (tools/test holds it to that).
+ */
+export const DRIFT_PATHS = [
+  "packages/",
+  "workflows/",
+  "templates/",
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "patches/",
+  "tsconfig*.json",
+  "release-compatibility.json",
+  ".github/workflows/desktop.yml",
+];
 
 /** Characters as GitHub counts them (code points), not UTF-16 units. */
 const length = (text) => [...text].length;
@@ -23,7 +48,7 @@ const length = (text) => [...text].length;
  * CHANGELOG.md on the release branch instead of inlining them; the release body itself
  * (a separate, larger limit) still carries the notes verbatim.
  */
-export function prBody({ repo, number, version, bump, pin, title, unlabelled, notes }) {
+export function prBody({ repo, number, version, bump, pin, title, unlabelled, notes, drift }) {
   const lines = [
     `Closing milestone [${title}](https://github.com/${repo}/milestone/${number}) proposes **v${version}**.`,
   ];
@@ -52,9 +77,62 @@ export function prBody({ repo, number, version, bump, pin, title, unlabelled, no
     for (const issue of issues.slice(0, UNLABELLED_LIMIT)) note.push(`> ${issue}`);
     if (issues.length > UNLABELLED_LIMIT) note.push(`> …and ${issues.length - UNLABELLED_LIMIT} more.`);
   }
+  note.push(...driftSection(repo, version, drift));
   const inline = [...lines, ...intro(true), ...note, "", "---", "", notes.replace(/\n+$/, "")].join("\n") + "\n";
   if (length(inline) <= BODY_LIMIT) return inline;
   return [...lines, ...intro(false), ...note].join("\n") + "\n";
+}
+
+/**
+ * A final release should be its last candidate's code plus fixes someone chose (#863,
+ * docs/RELEASING.md). This says what changed in DRIFT_PATHS since that candidate, so
+ * anything that merged to main after it is visible before the merge, not after the tag.
+ */
+function driftSection(repo, version, drift) {
+  if (!drift?.since) return [];
+  const compareLink = `https://github.com/${repo}/compare/${drift.since}...release/v${version}`;
+  // No comparison output is not the same as an empty comparison: never report "nothing
+  // changed" for a diff that did not run.
+  if (typeof drift.stat !== "string")
+    return [
+      "",
+      "> [!WARNING]",
+      `> The comparison with the last candidate, \`${drift.since}\`, did not run, so drift is unknown.`,
+      `> Check it by hand before merging ([full comparison](${compareLink})).`,
+    ];
+  const stat = drift.stat.split("\n").filter((line) => line.trim() !== "");
+  if (stat.length === 0)
+    return [
+      "",
+      `Nothing the release is built from (packages, their manifests, the lockfile, root build config or desktop packaging) changed since \`${drift.since}\`: this is that candidate's code.`,
+    ];
+  const shown = stat.length > DRIFT_LIMIT ? [...stat.slice(0, DRIFT_LIMIT - 1), stat.at(-1)] : stat;
+  return [
+    "",
+    "> [!WARNING]",
+    `> What the release is built from changed since the last candidate, \`${drift.since}\`. A final should be`,
+    "> that candidate plus fixes chosen on purpose; check each file below is one of them",
+    `> ([full comparison](${compareLink})).`,
+    "",
+    "```",
+    ...shown.slice(0, -1),
+    ...(stat.length > DRIFT_LIMIT ? [`…and ${stat.length - DRIFT_LIMIT} more files`] : []),
+    shown.at(-1),
+    "```",
+  ];
+}
+
+/**
+ * The `git diff --stat` the workflow wrote. A missing file means the comparison did not run,
+ * which the workflow treats as a failure: the body is built before anything is pushed, so
+ * refusing here leaves no half-made release branch.
+ */
+function driftStat(file) {
+  if (!file || !existsSync(file)) {
+    console.error(`DRIFT_SINCE is set but the comparison output ${file || "(DRIFT_FILE unset)"} is missing`);
+    process.exit(1);
+  }
+  return readFileSync(file, "utf8");
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -74,6 +152,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       title: env.MILESTONE_TITLE,
       unlabelled: env.UNLABELLED,
       notes: readFileSync(file, "utf8"),
+      drift: env.DRIFT_SINCE ? { since: env.DRIFT_SINCE, stat: driftStat(env.DRIFT_FILE) } : undefined,
     }),
   );
 }
