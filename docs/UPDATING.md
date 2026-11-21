@@ -174,10 +174,12 @@ containing it can do depends on how far it got, so find out first.
    the rest queue). Cancel any you did not mean to happen, and let a running one finish or
    cancel it before you read the ring state: a promotion that completes after you looked
    changes the answer.
-3. **Read the current ring state.** Check what each ring now offers: run **Desktop feed
-   (watchdog)** by hand if it is configured, which reports each ring's offered version, or
-   read `rings.json` in the bucket. Note for each ring whether the bad version is its
-   **full** version or only an active **rollout**.
+3. **Read the authoritative ring state.** Open `rings.json` in the bucket (Cloudflare
+   dashboard → R2 → the feed bucket → `rings.json`). It is the only record of each ring's
+   **full** version and any active **rollout** with its percentage; decide on a halt from
+   it alone. The watchdog can corroborate what a client is offered, but each canary token
+   sits in one rollout bucket, so it can miss an active rollout and cannot tell a fully
+   promoted version from a partial offer.
 4. **Halt what is still a rollout.** For each ring where the bad version is an active
    partial rollout, dispatch **Desktop feed (promote)** with that ring, the bad version and
    percent `0`. That stops offering it to the rest of the ring. A halt does nothing for a
@@ -190,11 +192,14 @@ containing it can do depends on how far it got, so find out first.
    that ring's testers not to update.
 6. **Say what affected people see.** An install that already updated, or already
    downloaded the bad version and is waiting to restart into it, keeps it: the client
-   refuses downgrades and the feed cannot take a download back. An install that has not
-   updated is safe only if its ring no longer offers the bad version (its rollout was
-   halted and it was outside it); while a ring's full version is the bad one, its next
-   check offers it. If the bad version cannot start, those people need the Windows
-   failed-update recovery above, or a reinstall of the last good release from GitHub.
+   refuses downgrades and the feed cannot take a download back. An install that was offered
+   the bad version before the halt can still hold that offer and download it, because the
+   versioned installer stays in the bucket for differential downloads; a halt only changes
+   what the next check returns. An install that never saw the offer is safe only while its
+   ring no longer offers the bad version (its rollout was halted and it was outside it);
+   while a ring's full version is the bad one, its next check offers it. If the bad version
+   cannot start, those people need the Windows failed-update recovery above, or a reinstall
+   of the last good release from GitHub.
 
 Leave the bad version's snapshot in the bucket: deleting it would break differential
 downloads for anyone upgrading from it.

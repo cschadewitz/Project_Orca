@@ -5,11 +5,12 @@
  *
  * - with a `preview` token, whose ring still holds N, it is told it is current;
  * - with an `internal` token, whose ring holds N+1, it is offered N+1, downloads it through
- *   the Worker (Range requests included), and restarts into the installer, after which
- *   Windows reports N+1 installed.
+ *   the Worker and restarts into the installer, after which Windows reports N+1 installed.
  *
- * So the Worker's ring logic, its authorization and range handling, the app's update driver
- * and electron-updater are proven together, with nothing published. The feed workflow
+ * That covers the Worker's ring choice and authorization, the app's update driver and
+ * electron-updater on an unsigned per-user install, with nothing published. It does not
+ * prove the updated app relaunches, that Range requests were used (a full download passes
+ * too), signed-feed acceptance or the prerelease opt-in. The feed workflow
  * (`feed-update-e2e.yml`) packages N and N+1, installs N, trusts a throwaway certificate for
  * `localhost` and starts the feed before this runs; the environment below says where.
  */

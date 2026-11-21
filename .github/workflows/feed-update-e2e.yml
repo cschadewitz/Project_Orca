@@ -5,11 +5,13 @@
 # install N+1 with an `internal` token, and check and stay current with a `preview` token
 # (packages/app/test/windows-update/update.spec.ts).
 #
-# It proves the Worker's ring choice, authorization and Range answers, the app's update
-# driver and electron-updater together, which no unit test can. Runs on pull requests that
-# touch any of them, and by hand. GitHub-hosted only; no secret, no bucket, no signing (the
-# packaging is unsigned, so electron-updater has no publisher to verify; the signed path is
-# covered by feed-publish.yml's own checks).
+# What it shows: an unsigned build, installed per-user, takes N+1 from the feed Worker's own
+# handler when its token's ring offers N+1 and stays put when its ring offers N, and after
+# the restart Windows reports N+1 installed. What it does not show: that the updated app
+# relaunches, that the Worker's Range answers were used (electron-updater may fall back to a
+# full download and still pass), signed-feed acceptance (feed-publish.yml checks that), or
+# the prerelease opt-in. Runs on pull requests that touch any of these parts, and by hand.
+# GitHub-hosted only; no secret, no bucket, no signing.
 name: Desktop feed (update test)
 
 on:
