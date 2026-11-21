@@ -60,14 +60,19 @@ export function prBody({ repo, number, version, bump, pin, title, unlabelled, no
   lines.push("");
   const issues = (unlabelled ?? "").split("\n").filter((line) => line.trim() !== "");
   const notesLink = `[\`CHANGELOG.md\` on this branch](https://github.com/${repo}/blob/release/v${version}/CHANGELOG.md)`;
+  // A final only stages a draft (docs/RELEASING.md, "Publishing a final"); a prerelease is
+  // tagged and published by the merge.
+  const merging = version.includes("-")
+    ? `Merging this tags \`v${version}\` and publishes the release.`
+    : `Merging this runs the release checks and stages a **draft** \`v${version}\` with only the Ubuntu amd64 \`.deb\`. It does not tag, publish or write the feed; see "Publishing a final" in docs/RELEASING.md.`;
   const intro = (inline) =>
     inline
       ? [
-          `Merging this tags \`v${version}\` and publishes the release. Review the notes below first —`,
+          `${merging} Review the notes below first —`,
           "they are the release body verbatim, so edit `CHANGELOG.md` on this branch to change them.",
         ]
       : [
-          `Merging this tags \`v${version}\` and publishes the release. Review the notes first: they are`,
+          `${merging} Review the notes first: they are`,
           `too long for this description, so read them in ${notesLink}. They are the release body`,
           "verbatim; edit `CHANGELOG.md` on this branch to change them.",
         ];

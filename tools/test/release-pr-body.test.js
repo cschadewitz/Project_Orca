@@ -73,6 +73,20 @@ describe("release pull request body", () => {
   });
 });
 
+describe("what merging does", () => {
+  it("says a prerelease merge tags and publishes", () => {
+    const body = prBody({ ...base, unlabelled: "", notes: "- x\n" });
+    expect(body).toContain("Merging this tags `v0.7.0-rc.1` and publishes the release.");
+  });
+
+  it("says a final merge only stages a .deb-only draft (#865)", () => {
+    const body = prBody({ ...base, version: "0.7.0", pin: "v0.7.0", title: "0.7.0", unlabelled: "", notes: "- x\n" });
+    expect(body).toContain("stages a **draft** `v0.7.0` with only the Ubuntu amd64 `.deb`");
+    expect(body).toContain("It does not tag, publish or write the feed");
+    expect(body).not.toContain("publishes the release.");
+  });
+});
+
 describe("drift since the last candidate (#863)", () => {
   const final = { ...base, version: "0.7.0", pin: "v0.7.0", unlabelled: "", notes: "n\n" };
 

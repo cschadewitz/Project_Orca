@@ -231,10 +231,12 @@ The compatibility exception follows the builder's [NSIS identity contract](https
 Focused tests resolve IDs and names with the locked builder and compare Linux desktop
 entries; they do not substitute for running old and new installers on native systems.
 
-### Signing and notarisation are not done
+### Signing and notarisation
 
-Both artifacts are **unsigned**, and both platforms say so to the person who downloads
-them. This is a follow-up, not an oversight, and it stays written here until it is closed.
+The ordinary builds from `desktop.yml` and the release job are **unsigned** on every
+platform. Windows finals are signed in a separate lane (`windows-signed.yml`) and only that
+signed installer is released; macOS signing and notarisation are not done yet, and stay
+written here until they are.
 
 - **macOS** shows "ORCA is damaged and can't be opened" or a Gatekeeper refusal, because an
   unsigned app that arrived with a quarantine attribute cannot be opened by double-clicking
@@ -251,24 +253,23 @@ them. This is a follow-up, not an oversight, and it stays written here until it 
   With those present, `mac.identity` and `mac.notarize` in `packages/app/electron-builder.yml`
   come off `null`/`false` and the workflow gains a keychain step.
 
-- **Windows** shows a SmartScreen "unrecognised app" warning on the unsigned NSIS installer
-  that release assets carry (a signed build comes from `windows-signed.yml` and is distributed
-  separately), and may still show warnings after signing starts: a valid signature authenticates a publisher
-  but does not guarantee SmartScreen reputation or bypass enterprise policy.
+- **Windows**: the NSIS installers the ordinary release job and `desktop.yml` build are
+  unsigned CI output and are never a final's download. The supported installer for a final
+  is the one `windows-signed.yml` signs for the release commit, attached to the draft before
+  publication ([Publishing a final](#publishing-a-final)). A valid signature authenticates
+  the publisher but does not guarantee SmartScreen reputation or bypass enterprise policy.
 
   The [Windows signing runbook](windows-signing-runbook.md) covers publisher choice,
   Azure Artifact Signing eligibility/cost, owner-led enrollment, least-privilege OIDC CI,
   builder 26 compatibility, timestamps, updater publisher matching and native acceptance.
-  The proposed cloud route keeps keys service-managed and needs no client secret. A
-  publicly trusted CA's cloud/HSM offering is an alternative if Azure is unsuitable;
-  self-signed/internal certificates do not establish public publisher trust. No route is
-  provisioned or enabled by the runbook.
+  A publicly trusted CA's cloud/HSM offering is an alternative if Azure is unsuitable;
+  self-signed/internal certificates do not establish public publisher trust.
 
 - **Linux** has nothing to sign against. An AppImage can carry a detached GPG signature, and
   almost nothing verifies one; it is not on the list.
 
-Until that lands, the release notes for a version carrying desktop artifacts should say the
-builds are unsigned and how to open them.
+Release notes say which downloads are signed and supported; a prerelease's page carries
+unsigned CI output and its notes must say not to install that output.
 
 ## Changelog fragments
 
@@ -445,8 +446,9 @@ The final job validates both feeds and uploads assets to a draft before publishi
 optionally activates the private HTTPS feed through a separately provisioned SSH account.
 This replaces the older statement that distribution requires making the repository public.
 Repository credentials stay with GitHub Actions/`gh`; clients use read-only feed credentials.
-The signing setup above remains unproven and unsigned Windows installs require an explicit
-bootstrap trust decision. Do not describe unit tests as packaged-update or signing evidence.
+(Since #856 the feed is the R2 Worker fed only from signed runs; since #865 a final's
+Windows download is the signed installer, so no unsigned bootstrap is part of a final.) Do
+not describe unit tests as packaged-update or signing evidence.
 
 Review `release-compatibility.json` with every store-format change. A changed epoch blocks
 automatic Debian activation and recovery across that boundary; a binary-only rollback is

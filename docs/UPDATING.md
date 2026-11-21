@@ -14,7 +14,8 @@ Signing and macOS automatic updates are not activated by this identity change.
 
 ## Windows bootstrap and daily use
 
-Install the matching x64 or arm64 NSIS `.exe` from a published release. ZIP builds are
+Install the signed x64 NSIS `.exe` from a published final release (Windows arm64 is not a
+supported install yet; a release candidate's unsigned installers are never the install). ZIP builds are
 archives, not the supported installation/update path. A pre-v0.6.0 desktop has no update
 control; install v0.6.0 manually once. Retain a known-good installer for recovery.
 
@@ -165,27 +166,40 @@ Worker serves either under the `latest-ARCH.yml` name the client requests. Clien
 downgrades. Linux and macOS build targets are preserved; their automatic updating is outside
 this iteration.
 
-All packaging uses `--publish never`. The final publication job waits for the existing
-checks, smoke/type proof and platform builds. It flattens assets with collision checks,
-checks both metadata versions, SHA-512 checksums and blockmap presence, uploads to a draft
-release, then makes the complete release visible. A failed upload leaves a draft for
-inspection rather than a partial discoverable feed. Delete that failed draft/tag only after
-confirming it was never published, before retrying the existing release process.
+All packaging uses `--publish never`. The publication job waits for the existing checks,
+smoke/type proof and platform builds, flattens assets with collision checks, and checks both
+metadata versions, SHA-512 checksums and blockmap presence. A prerelease is uploaded to a
+draft and then made visible with every build attached. A final (`X.Y.Z`) stops at a draft
+with only the Ubuntu amd64 `.deb`: no tag, nothing latest, no feed write
+([RELEASING.md, "Publishing a final"](RELEASING.md#publishing-a-final)).
 
-The feed never takes these release assets: they are the unsigned Desktop builds. After a
-release is published, dispatch **Windows signed (spike)** from main with `source_sha` set to the
-tag's commit, then **Desktop feed (publish signed)** (`feed-publish.yml`) from main with the
-version and that run's id. `tools/deploy/feed-source.js` refuses a version without a
-published, non-draft GitHub release for its tag (a tag alone is not enough) and accepts only
-a successful `windows-signed.yml` run from main. The job then downloads only
-the artifact named for the tagged commit, re-checks each installer's Authenticode signature,
-timestamp and publisher (`ORCA_FEED_PUBLISHER_CN`), checks that each channel file names
-exactly one installer whose `files[]` entry (what the updater reads) and legacy `path` /
-`sha512` both match that installer's name, size and SHA-512, with its blockmap present
-(`release-assets.py`, which parses the builder's metadata strictly and refuses anything
-else), and runs `tools/deploy/feed-r2.sh snapshot`. Signed artifacts are kept 7 days, so feed within
-a week of signing. The feed therefore carries signed installers even where the GitHub release
-assets are unsigned.
+The feed never takes the ordinary release-job builds: their Windows installers are unsigned.
+For a final the order is:
+
+1. Dispatch **Windows signed (spike)** from main with `source_sha` set to the draft's pinned
+   merge commit, **before** publication.
+2. Attach that run's signed x64 installer to the draft, run native acceptance on the exact
+   draft assets, and only then publish the draft (which creates the tag). RELEASING.md has
+   the steps and checks.
+3. **Architecture gate.** `feed-publish.yml` publishes x64 and arm64 together and offers
+   both to `internal` at once; rings select versions, not architectures. Windows arm64 has
+   no native acceptance yet. Until it does, or serving is explicitly constrained to x64,
+   leave the production feed off (do not set `ORCA_FEED_BUCKET`, do not dispatch the next
+   step for a production bucket) and do not rely on ring assignment to scope architecture.
+4. Dispatch **Desktop feed (publish signed)** (`feed-publish.yml`) from main with the version
+   and the id of **that same** signing run. Before dispatching, confirm the run's x64
+   installer SHA-256 equals the accepted installer's and the one on the published release.
+
+`tools/deploy/feed-source.js` refuses a version without a published, non-draft GitHub
+release for its tag (a tag alone is not enough) and accepts only a successful
+`windows-signed.yml` run from main. The job then downloads only the artifact named for the
+tagged commit, re-checks each installer's Authenticode signature, timestamp and publisher
+(`ORCA_FEED_PUBLISHER_CN`), checks that each channel file names exactly one installer whose
+`files[]` entry (what the updater reads) and legacy `path` / `sha512` both match that
+installer's name, size and SHA-512, with its blockmap present (`release-assets.py`, which
+parses the builder's metadata strictly and refuses anything else), and runs
+`tools/deploy/feed-r2.sh snapshot`. Signed artifacts are kept 7 days, so publish and feed
+within a week of signing.
 
 `feed-r2.sh snapshot` uploads installers and blockmaps to `VERSION/`, then the two metadata
 files, then `VERSION/complete.json`, each written only if absent. An object that already exists must hold identical bytes,
@@ -224,20 +238,20 @@ One-time setup (Casey):
    installation, so it is not that acceptance.
 
 A feed failure leaves the GitHub release in place and the rings unchanged. Rerun **Desktop
-feed (publish signed)** with the same inputs (or a fresh signed run of the same commit if the
-artifact expired; its bytes differ, so it is refused if any object of the first attempt was
-already written, and those objects must be removed from the bucket first). Do not rerun release
-creation for an already published tag.
+feed (publish signed)** with the same inputs. A fresh signing run of the same commit is
+**not** a drop-in retry for an accepted final: its bytes differ from the installer that was
+accepted and published, so it must not be fed for that version (and `feed-r2.sh` refuses it
+once any object of the first attempt exists). If the accepted run's artifact has expired,
+stop and decide deliberately; do not substitute new bytes. Do not rerun release creation for
+an already published tag.
 
-Windows signing is **not proven or provisioned by this change**. Current builds remain
-unsigned. Bootstrap requires trusting the installer through Windows' unsigned-app warning;
-that is not production signing evidence. Before wider rollout configure electron-builder
-Windows signing, timestamping and a stable publisher identity, then verify signature
-checking with both valid and wrong-publisher installers. Follow the
-[Windows signing runbook](windows-signing-runbook.md) for the proposed Azure Artifact Signing
-OIDC setup or a reviewed certificate/HSM alternative. Do not
-weaken signature validation to get a test green. HTTPS/checksums protect distribution but
-do not substitute for publisher identity.
+Windows signing is provisioned through `windows-signed.yml` (Azure Artifact Signing over
+OIDC; see the [Windows signing runbook](windows-signing-runbook.md)). The supported Windows
+installer for a final is the signed one; the unsigned installers are ordinary CI build
+output only and are never the release download or a feed payload. A valid signature
+authenticates the publisher but does not guarantee SmartScreen reputation or bypass
+enterprise policy. Do not weaken signature validation to get a test green. HTTPS/checksums
+protect distribution but do not substitute for publisher identity.
 
 ## Debian: inventory before migration
 
