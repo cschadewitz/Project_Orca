@@ -20,6 +20,13 @@ describe("checkSource", () => {
     expect(checkSource(ok())).toBe(`windows-signed-${SHA}`);
   });
 
+  it("accepts a release candidate", () => {
+    const rc = ok();
+    Object.assign(rc, { version: "0.8.0-rc.2" });
+    rc.release.tag_name = "v0.8.0-rc.2";
+    expect(checkSource(rc)).toBe(`windows-signed-${SHA}`);
+  });
+
   it.each([
     ["a tag without a release", (s) => (s.release = undefined), /has no GitHub release/],
     ["a draft release", (s) => Object.assign(s.release, { draft: true, published_at: null }), /not published/],
@@ -31,6 +38,10 @@ describe("checkSource", () => {
     ["a running run", (s) => Object.assign(s.run, { status: "in_progress", conclusion: null }), /did not succeed/],
     ["no run record", (s) => (s.run = undefined), /not Windows signed/],
     ["a bad version", (s) => (s.version = "v0.7.1"), /invalid version/],
+    // Only finals and candidates are meant for a ring (#863, item 7).
+    ["a dry run", (s) => (s.version = "0.7.1-dryrun.12"), /not a final or an -rc\.N candidate/],
+    ["a beta", (s) => (s.version = "0.7.1-beta.1"), /not a final or an -rc\.N candidate/],
+    ["an rc without a number", (s) => (s.version = "0.7.1-rc"), /not a final or an -rc\.N candidate/],
   ])("refuses %s", (_label, change, message) => {
     const source = ok();
     change(source);

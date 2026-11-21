@@ -44,6 +44,19 @@ jobs:
     runs-on: ubuntu-24.04
     environment: desktop-feed
     steps:
+      # The pause switch (#863, item 8): set the repository variable ORCA_FEED_PAUSE to `true`
+      # while a bad build is being dealt with. Only halting (percent 0) still runs, because
+      # halting is how a bad rollout is stopped; nothing can be offered to anyone.
+      - name: Refuse while the feed is paused
+        env:
+          PAUSE: ${{ vars.ORCA_FEED_PAUSE }}
+          PERCENT: ${{ inputs.percent }}
+        run: |
+          if [ "$PAUSE" = "true" ] && [ "$PERCENT" != "0" ]; then
+            echo "::error::the feed is paused (ORCA_FEED_PAUSE); only a halt (percent 0) may run. See docs/UPDATING.md, \"Pulling a bad build\"."
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main

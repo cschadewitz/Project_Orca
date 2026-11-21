@@ -158,7 +158,50 @@ Rings never move backwards, and halting is not a rollback. The client disallows 
 so anyone who already took a bad build keeps it until a newer fixed version ships; halting
 only stops more people from getting it. Keep early rollouts small for that reason.
 
-### Release/feed provisioning
+### Pulling a bad build
+
+Rings never move backwards, so a bad build is never "rolled back": it is halted, then
+replaced by a newer fixed version (adopted from T3 Code's bad-nightly runbook, #863).
+
+1. **Pause the feed.** Set the repository variable `ORCA_FEED_PAUSE` to `true` (Settings →
+   Secrets and variables → Actions → Variables). While it is set, **Desktop feed (publish
+   signed)** refuses to run and **Desktop feed (promote)** refuses everything except a halt,
+   so nobody can offer the bad version, or anything else, to more people by mistake.
+2. **Halt the rollout.** Dispatch **Desktop feed (promote)** with the ring, the bad version
+   and percent `0`, for each ring where it is a rollout. If it is already a ring's full
+   version, there is nothing to halt: everyone in that ring has been offered it.
+3. **Say what affected people see.** An install that already updated keeps the bad version;
+   the client refuses downgrades, and the feed cannot offer an older one. Installs that had
+   not updated stay on the version they run. If the bad version cannot start, those people
+   need the Windows failed-update recovery above, or a reinstall of the last good release
+   from GitHub.
+4. **Ship the fix as a newer version.** Release it normally (a patch, or the next rc), sign
+   it, then unpause (`ORCA_FEED_PAUSE` to anything but `true`, or delete it) and publish it
+   to `internal`. Check it there before promoting.
+5. **Promote the fix** past the bad version in every ring that had it, starting with a small
+   rollout. A ring can always move forward to a newer version, rollout or not.
+
+Leave the bad version's snapshot in the bucket: deleting it would break differential
+downloads for anyone upgrading from it.
+
+### Feed watchdog
+
+**Desktop feed (watchdog)** (`feed-watchdog.yml`) checks the live feed once a day as a client
+sees it. For each ring with a canary token it fetches every channel file and fails when:
+a request without a token is not refused; an architecture the Worker does not serve answers;
+a ring is offered a version with no published GitHub release, `stable` a prerelease, or any
+ring a prerelease other than `-rc.N`; or the installer the feed serves does not hash to its
+channel file's sha512 or differs from the published release asset. It holds no bucket
+credential and cannot read `rings.json`, so it checks what each ring is offered, not what it
+should be offered; compare its summary with the last promotion.
+
+To turn it on, mint one canary token per ring you want checked with
+`node tools/deploy/feed-token.js RING`, add their `FEED_TOKENS` entries to the Worker secret
+like any tester's, and store the tokens as the repository secret `ORCA_FEED_CANARY_TOKENS`,
+a JSON object such as `{"internal": "…", "preview": "…", "stable": "…"}`. Then set the
+repository variable `ORCA_FEED_URL` to the feed's https origin. Until `ORCA_FEED_URL` is set
+the workflow is skipped. A canary token is an ordinary read token: revoke it the same way.
+
 
 `desktop.yml` builds Windows architectures separately, with distinct installer names and
 `latest-x64.yml` / `latest-arm64.yml`. Prereleases instead carry `prerelease-*.yml`; the

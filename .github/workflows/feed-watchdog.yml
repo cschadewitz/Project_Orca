@@ -1,0 +1,50 @@
+# Check the live desktop feed once a day, the way a client sees it (#863, item 6; adopted from
+# T3 Code's scheduled feed check). tools/deploy/feed-watchdog.js asks the feed for each ring's
+# channel files with that ring's canary token and fails when:
+#
+# - a request without a token is not refused (401), or an unserved architecture is served;
+# - a ring is offered something that is not a published GitHub release, `stable` a prerelease,
+#   or any ring a prerelease other than `-rc.N`;
+# - the installer the feed serves does not hash to its channel file's sha512, or differs from
+#   the published release asset.
+#
+# Read-only: it holds no bucket credential and writes nothing. It runs only once the feed is
+# configured: the repository variable ORCA_FEED_URL (the feed's https origin) and the secret
+# ORCA_FEED_CANARY_TOKENS, a JSON object of ring to a canary token minted with
+# tools/deploy/feed-token.js (docs/UPDATING.md, "Feed watchdog"). Until then it is skipped.
+name: Desktop feed (watchdog)
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: feed-watchdog
+  cancel-in-progress: true
+
+jobs:
+  watch:
+    name: check the live feed
+    if: vars.ORCA_FEED_URL != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools/deploy
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Check every ring and architecture
+        env:
+          FEED_URL: ${{ vars.ORCA_FEED_URL }}
+          FEED_CANARY_TOKENS: ${{ secrets.ORCA_FEED_CANARY_TOKENS }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/deploy/feed-watchdog.js
