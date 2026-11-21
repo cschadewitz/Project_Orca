@@ -50,6 +50,28 @@ signed_artifact() {
   echo "$names"
 }
 
+# lookup PATH JQ: print the value (status 0), status 1 only for an explicit Not Found, and
+# status 2 for any other failure (rate limit, outage, access). It runs in a command
+# substitution, so callers must stop on 2 themselves (see `found`).
+lookup() {
+  local out
+  if out=$(gh api "$1" --jq "$2" 2>"${TMPDIR:-/tmp}/lookup-error.$$"); then
+    rm -f "${TMPDIR:-/tmp}/lookup-error.$$"
+    echo "$out"
+    return 0
+  fi
+  if grep -q 'HTTP 404' "${TMPDIR:-/tmp}/lookup-error.$$"; then
+    rm -f "${TMPDIR:-/tmp}/lookup-error.$$"
+    return 1
+  fi
+  cat "${TMPDIR:-/tmp}/lookup-error.$$" >&2
+  rm -f "${TMPDIR:-/tmp}/lookup-error.$$"
+  echo "::error::could not read $1; nothing written" >&2
+  return 2
+}
+# found STATUS: true for 0, false for 1, and stops the run for anything else.
+found() { case "$1" in 0) return 0 ;; 1) return 1 ;; *) exit 1 ;; esac; }
+
 # Refuse unless draft ID is still exactly what we selected. Prints its body.
 validate() {
   local id=$1 sha=$2 version=$3 marker=$4 json names recorded
@@ -159,12 +181,15 @@ case "${1:-}" in
     [[ "$deb" =~ ^sha256:[0-9a-f]{64}$ && "$exe" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "digests must be SHA-256 hex"
     deb_name="ORCA-$version-linux-amd64.deb" exe_name="ORCA-$version-win-x64.exe"
     # Never move Latest backwards or sideways.
-    latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name 2>/dev/null || true)
-    if [[ -n "$latest" ]]; then
+    rc=0
+    latest=$(lookup "repos/$REPO/releases/latest" .tag_name) || rc=$?
+    if found "$rc"; then
       [[ "$latest" != "v$version" && "$(printf '%s\n%s\n' "${latest#v}" "$version" | sort -V | tail -n1)" == "$version" ]] ||
         fail "v$version is not newer than the current latest $latest"
     fi
-    if tagged=$(gh api "repos/$REPO/git/ref/tags/v$version" --jq .object.sha 2>/dev/null); then
+    rc=0
+    tagged=$(lookup "repos/$REPO/git/ref/tags/v$version" .object.sha) || rc=$?
+    if found "$rc"; then
       [[ "$tagged" == "$sha" ]] || fail "tag v$version already exists at $tagged, not $sha"
     fi
     json=$(gh api "repos/$REPO/releases/$id") || fail "release $id not found"

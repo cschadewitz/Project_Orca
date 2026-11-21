@@ -27,6 +27,10 @@ const method = x < 0 ? "GET" : args[x + 1];
 const url = args.find((a) => a.startsWith("repos/") || a.startsWith("https://"));
 const path = url.replace(/^https:\/\/uploads\.github\.com\//, "").replace(/^repos\/o\/r\//, "");
 const input = () => { const i = args.indexOf("--input"); return args[i + 1] === "-" ? fs.readFileSync(0) : fs.readFileSync(args[i + 1]); };
+if (process.env.FAKE_ERROR_PATH && new RegExp(process.env.FAKE_ERROR_PATH).test(path)) {
+  process.stderr.write("gh: Service Unavailable (HTTP 503)\n");
+  process.exit(1);
+}
 const byId = (id) => state.releases.find((r) => String(r.id) === id);
 let out;
 let m;
@@ -394,6 +398,24 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(result.stderr).toContain(message);
     expect(f.writes()).toHaveLength(2);
     expect(f.state().releases.find((r) => r.id === 7).draft).toBe(true);
+  });
+
+  it.each([["releases/latest"], ["git/ref/tags/"]])("stops before writing when %s cannot be read", (path) => {
+    const f = setup();
+    expect(f.attach().status).toBe(0);
+    const result = f.run(ATTACH, accepted(f), { FAKE_ERROR_PATH: `^${path}` });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("nothing written");
+    expect(f.writes()).toHaveLength(2);
+    expect(f.state().releases[0].draft).toBe(true);
+  });
+
+  it("publishes the first release when there is no Latest and no tag yet", () => {
+    const f = setup();
+    expect(f.attach().status).toBe(0);
+    const result = f.run(ATTACH, accepted(f));
+    expect(result.status, result.stderr).toBe(0);
+    expect(f.state().latest).toBe(7);
   });
 
   it("refuses digests other than the accepted ones", () => {
