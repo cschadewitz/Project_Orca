@@ -1,1 +1,0 @@
-Mounted the disabled native diagnostics initializer and enum-only startup observer, and exposed an exact owned-child updater stop receipt with a sealed local restart-admission fence. Production updating/capture and complete-state restore remain gated.
