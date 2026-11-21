@@ -833,6 +833,21 @@ another process's window. It runs as the `linux-native` job of the App smoke wor
 GitHub-hosted `ubuntu-24.04` runner. How to run it locally, what each spec asserts and what it
 does not cover are in [packages/app/test/native-linux/README.md](../packages/app/test/native-linux/README.md).
 
+## Flaky tests are fixed, not waited out
+
+A test that needs a fixed sleep or a retry to pass is wrong, and a skipped test without an
+issue is a test nobody will turn back on. `pnpm run lint` enforces three rules in test files
+(`orca/no-flaky-test-waits`, adopted from T3 Code's testing rules, #863):
+
+- **No `waitForTimeout`.** Wait for the condition itself: a locator assertion,
+  `expect.poll`, an event or a `Deferred`. A sampling interval inside a bounded stability
+  check is the one exception, and says so in an `eslint-disable-next-line` with its reason.
+- **No `retries` or `retry` above 0.** Playwright's config keeps `retries: 0`; Vitest's has
+  no `retry`.
+- **A skip names its issue.** `it.skip`, `test.skip`, `describe.skip` and `.fixme` need
+  `// quarantine: #<issue> <why>` on the line directly above. `skipIf`/`runIf` for a
+  platform and `it.todo` are not quarantines. `.only` is refused.
+
 ## Test memory
 
 The suite runs about twenty test files at once on the self-hosted runners, so one file that
