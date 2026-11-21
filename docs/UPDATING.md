@@ -179,8 +179,11 @@ version and that run's id. `tools/deploy/feed-source.js` refuses a version witho
 published, non-draft GitHub release for its tag (a tag alone is not enough) and accepts only
 a successful `windows-signed.yml` run from main. The job then downloads only
 the artifact named for the tagged commit, re-checks each installer's Authenticode signature,
-timestamp and publisher (`ORCA_FEED_PUBLISHER_CN`) and the metadata's SHA-512 and blockmaps,
-and runs `tools/deploy/feed-r2.sh snapshot`. Signed artifacts are kept 7 days, so feed within
+timestamp and publisher (`ORCA_FEED_PUBLISHER_CN`), checks that each channel file names
+exactly one installer whose `files[]` entry (what the updater reads) and legacy `path` /
+`sha512` both match that installer's name, size and SHA-512, with its blockmap present
+(`release-assets.py`, which parses the builder's metadata strictly and refuses anything
+else), and runs `tools/deploy/feed-r2.sh snapshot`. Signed artifacts are kept 7 days, so feed within
 a week of signing. The feed therefore carries signed installers even where the GitHub release
 assets are unsigned.
 

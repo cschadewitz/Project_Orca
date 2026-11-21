@@ -31,7 +31,7 @@ class LoopbackExecutor extends ElectronHttpExecutor {
 }
 
 const hex = (text) => createHash("sha256").update(text).digest("hex");
-const TOKENS = { preview: "p".repeat(43), stable: "s".repeat(43) };
+const TOKENS = { internal: "i".repeat(43), preview: "p".repeat(43), stable: "s".repeat(43) };
 const installer = (version) => Buffer.from(`synthetic installer ${version}, never executed`);
 
 function snapshot(version, channel) {
@@ -52,11 +52,12 @@ const objects = new Map(
   Object.entries({
     ...snapshot("0.7.0", "latest"),
     ...snapshot("0.7.1-rc.1", "prerelease"),
+    ...snapshot("0.7.1-rc.2", "prerelease"),
     "rings.json": Buffer.from(
       JSON.stringify({
         format: 1,
         rings: {
-          internal: { version: "0.7.1-rc.1" },
+          internal: { version: "0.7.1-rc.2" },
           preview: { version: "0.7.1-rc.1" },
           stable: { version: "0.7.0" },
         },
@@ -79,7 +80,9 @@ const bucket = {
 };
 const env = {
   FEED: bucket,
-  FEED_TOKENS: JSON.stringify({ [hex(TOKENS.preview)]: { ring: "preview" }, [hex(TOKENS.stable)]: { ring: "stable" } }),
+  FEED_TOKENS: JSON.stringify(
+    Object.fromEntries(Object.entries(TOKENS).map(([ring, token]) => [hex(token), { ring }])),
+  ),
 };
 
 // electron-updater names the channel file after the platform; this is the Windows client.
@@ -172,6 +175,17 @@ describe("installed client against the ringed feed", () => {
     expect(await offered(await client("0.7.1", TOKENS.preview), true)).toBeUndefined();
     expect(await offered(await client("0.7.1-rc.1", TOKENS.stable), true)).toBeUndefined();
     expect(await offered(await client("0.7.1-rc.1", TOKENS.stable), false)).toBeUndefined();
+  });
+
+  it("moves an installed rc to a newer rc only with the opt-in, and downloads it", async () => {
+    const updater = await client("0.7.1-rc.1", TOKENS.internal);
+    expect(await offered(updater, true)).toBe("0.7.1-rc.2");
+    const [path] = await updater.downloadUpdate();
+    expect(await readFile(path)).toEqual(installer("0.7.1-rc.2"));
+    expect(await offered(await client("0.7.1-rc.1", TOKENS.internal), false)).toBeUndefined();
+    // The same rc is not an update, and a newer rc install ignores the ring's older one.
+    expect(await offered(await client("0.7.1-rc.1", TOKENS.preview), true)).toBeUndefined();
+    expect(await offered(await client("0.7.1-rc.2", TOKENS.preview), true)).toBeUndefined();
   });
 
   it("refuses the feed without a valid token", async () => {
