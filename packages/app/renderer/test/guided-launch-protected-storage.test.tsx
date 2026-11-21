@@ -14,7 +14,7 @@ import { harness } from "./harness.js";
 import { launchContext, launchDraft, launchPorts } from "./guided-launch-fixtures.js";
 
 const KEYRING =
-  "Secure run-intent storage is unavailable. No run was submitted. The system keyring did not give ORCA its encryption key: the keyring is locked, or its unlock prompt was cancelled. ORCA can ask the keyring only once each time it starts, so quit and reopen ORCA, accept the unlock prompt with your login password, then launch again.";
+  "Secure run-intent storage is unavailable. No run was submitted. The system keyring did not give ORCA its encryption key: the keyring is locked or not set up yet, or its prompt was cancelled. ORCA can ask the keyring only once each time it starts, so quit and reopen ORCA, follow the system prompt to create or unlock your keyring, then launch again.";
 const accepted = {
   intent: { id: "protected-intent-1" },
   response: { state: "accepted", operationId: "op", admissionId: "admission", runId: "run-original" },
@@ -81,7 +81,7 @@ describe("guided launch protected-storage refusal (#857)", () => {
       stage: "before-send",
       message: `${KEYRING} Your draft is retained.`,
     });
-    expect(state.message).toContain("unlock prompt was cancelled");
+    expect(state.message).toContain("its prompt was cancelled");
     expect(state.message).not.toContain("launch operation is unavailable");
     expect(f.ports.announce).toHaveBeenCalledWith(`${KEYRING} Your draft is retained.`);
     expect(f.ports.navigate).not.toHaveBeenCalled();
@@ -125,7 +125,7 @@ describe("guided launch protected-storage refusal (#857)", () => {
     expect(f.launch).toHaveBeenCalledTimes(1);
   });
   it.each([
-    ["keyring-locked", "Keyring locked or unlock cancelled", false],
+    ["keyring-locked", "Keyring locked, not set up, or prompt cancelled", false],
     ["no-keyring", "No system keyring available", false],
     ["unavailable", "Secure storage unavailable", true],
   ] as const)(

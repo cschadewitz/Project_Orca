@@ -43,9 +43,10 @@ function storageFix(reason: ProtectedStorageReason, then: string): string {
   switch (reason) {
     // Chromium asks the Linux keyring for ORCA's key once per process and keeps a refusal
     // until the app exits (seen natively on the #857 recut: unlocking the keyring afterwards
-    // does not help). So the way on is a restart, not an in-app retry.
+    // does not help). So the way on is a restart, not an in-app retry. A fresh Ubuntu session
+    // may have no login keyring yet; its prompt then asks to create one instead of unlocking.
     case "keyring-locked":
-      return `The system keyring did not give ORCA its encryption key: the keyring is locked, or its unlock prompt was cancelled. ORCA can ask the keyring only once each time it starts, so quit and reopen ORCA, accept the unlock prompt with your login password, then ${then}.`;
+      return `The system keyring did not give ORCA its encryption key: the keyring is locked or not set up yet, or its prompt was cancelled. ORCA can ask the keyring only once each time it starts, so quit and reopen ORCA, follow the system prompt to create or unlock your keyring, then ${then}.`;
     case "no-keyring":
       return `No supported system keyring (GNOME Keyring or KWallet) is available in this session, and ORCA does not store run intents in plain text. Start or unlock your desktop keyring, then quit and reopen ORCA and ${then}.`;
     case "unavailable":

@@ -11,7 +11,7 @@ import { launchSelectionLines } from "../../../src/launch-provenance.js";
 import "./guided-launch.css";
 
 const STORAGE_TITLES: Record<ProtectedStorageRefusalView["reason"], string> = {
-  "keyring-locked": "Keyring locked or unlock cancelled",
+  "keyring-locked": "Keyring locked, not set up, or prompt cancelled",
   "no-keyring": "No system keyring available",
   unavailable: "Secure storage unavailable",
 };

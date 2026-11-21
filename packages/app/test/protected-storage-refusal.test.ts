@@ -106,9 +106,9 @@ describe("protected-storage refusal (#857)", () => {
     expect(error.reason).toBe("keyring-locked");
     expect(error.stage).toBe("before-send");
     expect(error.message).toMatch(/^Secure run-intent storage is unavailable\. No run was submitted\./);
-    expect(error.message).toContain("unlock prompt was cancelled");
+    expect(error.message).toContain("not set up yet, or its prompt was cancelled");
     expect(error.message).toContain("only once each time it starts");
-    expect(error.message).toContain("quit and reopen ORCA, accept the unlock prompt");
+    expect(error.message).toContain("quit and reopen ORCA, follow the system prompt to create or unlock your keyring");
     expect(error.message).toContain("then launch again");
     expect(f.send).not.toHaveBeenCalled();
     expect(f.encryptString).not.toHaveBeenCalled();
