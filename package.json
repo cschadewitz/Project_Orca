@@ -21,6 +21,7 @@
     "app:admission-intents": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=admission-intents",
     "app:revision-workflow": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=revision-workflow",
     "app:linux-native": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=linux-native",
+    "app:windows-update": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=windows-update",
     "app:type-proof:update": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=type-proof --update-snapshots",
     "lint": "eslint . && pnpm run lint:css",
     "lint:css": "node tools/eslint-config/bin/check-css-tokens.js packages/app/renderer packages/design/css/components.css",

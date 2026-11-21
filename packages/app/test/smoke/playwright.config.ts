@@ -34,6 +34,10 @@
  *   locked GNOME keyring and its real unlock prompt (#857, #858). Linux only, on a
  *   GitHub-hosted runner; `packages/app/test/native-linux/README.md` has the details.
  *
+ * - **`windows-update`** (`pnpm run app:windows-update`) updates an *installed* Windows
+ *   build from N to N+1 through a local copy of the feed Worker (#863), in
+ *   `feed-update-e2e.yml` on a GitHub-hosted Windows runner.
+ *
  * Separate projects in one config let the workflow say `--project=<name>`
  * and lets `toHaveScreenshot` put the project's name in a baseline's filename, beside the
  * platform it already puts there.
@@ -121,6 +125,14 @@ export default defineConfig({
       outputDir: here("../../../../test-results/revision-workflow"),
       // Synthetic public IDs, hashes, booleans and counts only; no protected content.
       use: { trace: "off", screenshot: "off", video: "off" },
+    },
+    {
+      name: "windows-update",
+      testDir: here("../windows-update"),
+      testMatch: "*.spec.ts",
+      outputDir: here("../../../../test-results/windows-update"),
+      // The feed tokens are files the spec only names; never record requests or a profile.
+      use: { trace: "off", video: "off", screenshot: "off" },
     },
     {
       name: "linux-native",
