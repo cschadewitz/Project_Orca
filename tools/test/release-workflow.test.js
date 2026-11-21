@@ -73,6 +73,25 @@ it("rehearses a release on dry_run without tagging, publishing or feeding anythi
   expect(upload.run).not.toContain("${{");
 });
 
+it("drafts a final with the Ubuntu .deb only, leaving tag and publication to a maintainer", () => {
+  const publish = named(workflow("release-publish.yml").jobs.publish.steps, "Tag and release").run;
+  // Only a version without a prerelease suffix is a final.
+  expect(publish).toContain('case "$version" in *-*) final=false ;; esac');
+  // A final attaches exactly one asset: the Ubuntu amd64 .deb.
+  expect(publish).toContain('assets=(artifacts/*-"$version"-linux-amd64.deb)');
+  expect(publish).toContain("if [ ${#assets[@]} -ne 1 ]; then");
+  // It is created as a draft, and stops before the step that publishes (and so tags) it.
+  const create = publish.indexOf('gh release create "v$version" --draft');
+  const stop = publish.indexOf("exit 0", create);
+  const publishNow = publish.indexOf('gh release edit "v$version" --draft=false');
+  expect(create).toBeGreaterThan(-1);
+  expect(stop).toBeGreaterThan(create);
+  expect(publishNow).toBeGreaterThan(stop);
+  expect(publish.slice(create, stop)).toContain('if [ "$final" = true ]; then');
+  // A prerelease still attaches everything and is never latest.
+  expect(publish).toContain('[ "$final" = true ] || prerelease=(--prerelease)');
+});
+
 it("never hands a write token to the ref under test (#863)", () => {
   const file = workflow("release-publish.yml");
   expect(file.permissions).toEqual({ contents: "read" });

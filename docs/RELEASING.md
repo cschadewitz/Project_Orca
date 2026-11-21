@@ -38,7 +38,8 @@ Closing it proposes the release.
    builds the desktop and daemon artifacts from that same commit (`desktop.yml`, below),
    then tags `vX.Y.Z` and publishes the release with the changelog section as its body,
    the artifacts attached, and GitHub's generated list of merged pull requests appended
-   underneath.
+   underneath. A **final** (`0.7.0`, no prerelease suffix) stops short of that: see
+   [Publishing a final](#publishing-a-final).
 
 Closing a milestone stops at a pull request on purpose. A milestone can be closed by
 accident and reopened; a published tag cannot be unpublished cleanly. One merge click is
@@ -62,6 +63,29 @@ carries. Giving `release-prepare.yml` a personal
 access token instead of `GITHUB_TOKEN` would move the checks back onto the PR, at the cost
 of a token to store and rotate; that trade is only worth making if `main` ever gains
 required status checks.
+
+### Publishing a final
+
+A final becomes the repository's "latest", so its page must offer only signed or validated
+downloads. The Windows installers `release-publish.yml` builds are unsigned, and only the
+Ubuntu 24.04 amd64 `.deb` has native install acceptance. So for a final, `publish` creates
+a **draft** targeting the merge commit with the Ubuntu amd64 `.deb` attached and nothing
+else: no tag exists yet and nothing is latest. The run's other builds stay in its workflow
+artifacts. The job summary names the commit. Then:
+
+1. Dispatch **Windows signed (spike)** from `main` with `source_sha` set to that commit,
+   while `main` still matches it outside notes, docs and workflows (later product drift on
+   `main` makes the source check refuse it). Its environment reviewer approves the run.
+2. Verify the signed installer from that run: Authenticode status `Valid`, a timestamp,
+   the expected publisher, and its SHA-256 and `latest.yml` agree.
+3. Attach the signed x64 installer to the draft (`gh release upload vX.Y.Z <file>`), check
+   the draft lists exactly the signed `.exe` and the `.deb`, and publish it
+   (`gh release edit vX.Y.Z --draft=false`). Publishing creates the tag at the merge commit.
+4. Where the desktop feed is enabled, feed that signing run to **Desktop feed (publish
+   signed)** ([UPDATING.md](UPDATING.md)).
+
+A failed `publish` for a final leaves at most a draft. Delete the draft before
+dispatching **Release (publish)** again for the same version.
 
 ## The artifacts
 

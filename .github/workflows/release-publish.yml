@@ -10,7 +10,8 @@
 # is the verification that used to be the whole workflow; `desktop` builds the app for the
 # three platforms and the daemon beside it, from the same merge commit, so the daemon inside
 # the desktop artifact and the daemon on the release page are one build; `publish` tags and
-# attaches. A platform runner failing therefore means no tag, which is the right way round —
+# attaches (a final only drafts, with the Ubuntu .deb, until a maintainer attaches the signed
+# Windows installer and publishes it: docs/RELEASING.md "Publishing a final"). A platform runner failing therefore means no tag, which is the right way round —
 # a published release with two of three artifacts is not a thing that can be fixed forward.
 #
 # `workflow_dispatch` is the fix-forward path. When this workflow fails after the release
@@ -313,21 +314,38 @@ jobs:
           python3 tools/deploy/release-assets.py artifacts "$version"
           node tools/release.js notes "$version" > /tmp/notes.md
 
-          # The installers, the archives and the standalone daemon. Refusing to publish an
-          # empty set is the point: a release page with no artifacts looks like a release
-          # with nothing to download rather than like a workflow that lost them.
+          # A final (no prerelease suffix) becomes "latest", so it must not offer anything
+          # unsigned or unvalidated as the download. This build's Windows installers are
+          # unsigned (the signed ones come from windows-signed.yml for this exact commit) and
+          # only the Ubuntu amd64 .deb has native acceptance. So a final attaches the .deb
+          # alone and stays a draft: no tag and nothing latest until a maintainer attaches the
+          # verified signed installer and publishes it (docs/RELEASING.md, "Publishing a final").
+          # Everything else this run built stays in its workflow artifacts.
           shopt -s nullglob
-          assets=(artifacts/*)
-          if [ ${#assets[@]} -eq 0 ]; then
-            echo "::error::the desktop workflow produced no artifacts; nothing published"
-            exit 1
+          final=true
+          case "$version" in *-*) final=false ;; esac
+          if [ "$final" = true ]; then
+            assets=(artifacts/*-"$version"-linux-amd64.deb)
+            if [ ${#assets[@]} -ne 1 ]; then
+              echo "::error::expected exactly one Ubuntu amd64 .deb for $version, found ${#assets[@]}; nothing published"
+              exit 1
+            fi
+          else
+            # The installers, the archives and the standalone daemon. Refusing to publish an
+            # empty set is the point: a release page with no artifacts looks like a release
+            # with nothing to download rather than like a workflow that lost them.
+            assets=(artifacts/*)
+            if [ ${#assets[@]} -eq 0 ]; then
+              echo "::error::the desktop workflow produced no artifacts; nothing published"
+              exit 1
+            fi
           fi
           printf 'attaching %s\n' "${assets[@]}"
 
           # A version with a prerelease suffix (0.2.0-rc.1) is published as a prerelease,
           # so it never becomes the repository's "latest".
           prerelease=()
-          case "$version" in *-*) prerelease=(--prerelease) ;; esac
+          [ "$final" = true ] || prerelease=(--prerelease)
 
           gh release create "v$version" --draft \
             --target "$SHA" \
@@ -336,6 +354,15 @@ jobs:
             --generate-notes \
             "${prerelease[@]}" \
             "${assets[@]}"
+
+          if [ "$final" = true ]; then
+            {
+              echo "Drafted v$version at \`$SHA\` with the Ubuntu amd64 .deb only. Not tagged or published."
+              echo "Next: dispatch Windows signed (spike) from main with source_sha \`$SHA\`, verify and"
+              echo "attach the signed installer, then publish the draft (docs/RELEASING.md, \"Publishing a final\")."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
           gh release edit "v$version" --draft=false
 
