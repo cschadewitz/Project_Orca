@@ -291,6 +291,21 @@ claim the release makes on your behalf: write the fragment when it would be fals
 Documentation under `docs/` describes `main`, not the last release. Link docs at the tag
 (`/blob/vX.Y.Z/docs/...`) when a release note needs to point at them.
 
+## Rehearsing a release (dry run)
+
+Run **Release (publish)** from the Actions tab with **dry_run** ticked and any branch or
+commit as **ref**. It runs every job a real release runs (the full check path, the desktop
+artifacts, the smoke and type proof) and then uploads the artifacts to a **draft
+prerelease** called `vX.Y.Z-dryrun.<run number>`, where `X.Y.Z` is the ref's
+`package.json` version without its prerelease suffix. Nothing is tagged, nothing is
+published or marked latest, and no feed step runs. The draft's notes start with a
+dry-run warning.
+
+Use it before merging a release pull request, or to try a risky change through the
+release graph before it lands. A failure costs nothing, unlike a failed `release-publish`
+after merge, which leaves a bump on `main` with no tag. Delete the draft when you are done
+(`gh release delete vX.Y.Z-dryrun.N`). Learned from T3 Code's preview release train (#863).
+
 ## Doing it by hand
 
 The workflow is a wrapper around `tools/release.js`, which is offline and has no

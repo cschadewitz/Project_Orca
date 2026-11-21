@@ -45,3 +45,27 @@ it("bounds workers and runs the no-skip retry acceptance exactly as ci.yml does"
   }
   expect(release.indexOf(named(release, "Bound test workers"))).toBeLessThan(position(release, "pnpm test"));
 });
+
+it("rehearses a release on dry_run without tagging, publishing or feeding anything (#863)", () => {
+  const file = workflow("release-publish.yml");
+  const input = file.on.workflow_dispatch.inputs.dry_run;
+  expect(input).toMatchObject({ type: "boolean", default: false, required: false });
+
+  const version = named(release, "The version being released");
+  expect(version.env).toEqual({ DRY_RUN: "${{ inputs.dry_run }}" });
+  // The rehearsal gets its own version, decided before the tag refusal could apply.
+  expect(version.run).toMatch(
+    /if \[ "\$DRY_RUN" = "true" \]; then\s+# [^\n]*\n\s+version="\$\{version%%-\*\}-dryrun\.\$GITHUB_RUN_NUMBER"/,
+  );
+
+  const publish = file.jobs.publish.steps;
+  expect(named(publish, "Tag and release").if).toBe("${{ !inputs.dry_run }}");
+  for (const step of publish.filter((s) => /feed/i.test(s.name ?? ""))) expect(step.if).toContain("!inputs.dry_run");
+
+  const rehearsal = named(publish, "Upload the rehearsal to a draft prerelease");
+  expect(rehearsal.if).toBe("${{ inputs.dry_run }}");
+  expect(rehearsal.run).toContain("--draft --prerelease --latest=false");
+  expect(rehearsal.run).toContain('*-dryrun.*) ;; *) echo "::error::');
+  expect(rehearsal.run).not.toContain("--draft=false");
+  expect(rehearsal.run).not.toMatch(/git (tag|push)/);
+});

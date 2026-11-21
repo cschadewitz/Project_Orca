@@ -22,6 +22,13 @@
 # that ref, through the same three jobs — the only thing that changes is which commit is
 # tagged. The "tag already exists" checks below are what keep a stray dispatch from
 # publishing anything twice.
+#
+# `dry_run` rehearses all of it without releasing anything (#863, after T3 Code's preview
+# train). The same checks, builds, smoke and type proof run against any ref, and the
+# artifacts go to a **draft** prerelease named `vX.Y.Z-dryrun.<run number>`. Nothing is
+# tagged (a draft has no tag until it is published), nothing is marked latest, no feed is
+# touched, and the "tag already exists" refusal does not apply, so it can rehearse a
+# version that is already released. Delete the draft when you are done with it.
 name: Release (publish)
 
 on:
@@ -34,6 +41,11 @@ on:
         required: true
         type: string
         default: main
+      dry_run:
+        description: "Rehearse only: build everything and upload a draft prerelease; never tag, publish or feed."
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: release-publication
@@ -161,10 +173,16 @@ jobs:
       # artifacts are stamped with and the version that gets tagged cannot disagree.
       - name: The version being released
         id: version
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           version=$(node -p 'require("./package.json").version')
-          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+          if [ "$DRY_RUN" = "true" ]; then
+            # A distinct version, so nothing built here can be mistaken for the real one.
+            version="${version%%-*}-dryrun.$GITHUB_RUN_NUMBER"
+            echo "dry run: rehearsing as v$version; nothing will be tagged or published"
+          elif git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
             echo "::error::tag v$version already exists; nothing published"
             exit 1
           fi
@@ -213,6 +231,7 @@ jobs:
           merge-multiple: true
 
       - name: Tag and release
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ needs.check.outputs.sha }}
@@ -259,10 +278,43 @@ jobs:
           echo "Published [v$version](https://github.com/${{ github.repository }}/releases/tag/v$version)" \
             "with ${#assets[@]} artifacts." >> "$GITHUB_STEP_SUMMARY"
 
+      # The rehearsal's end: the same asset checks and notes as a release, uploaded to a
+      # draft prerelease. `gh release create --draft` creates no tag, and the draft is never
+      # edited to published, so nothing here is visible to updaters or marked latest.
+      - name: Upload the rehearsal to a draft prerelease
+        if: ${{ inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.check.outputs.sha }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          version="$VERSION"
+          case "$version" in *-dryrun.*) ;; *) echo "::error::$version is not a dry-run version"; exit 1 ;; esac
+          python3 tools/deploy/release-assets.py artifacts "$version"
+          {
+            echo "> **Dry run, not a release.** Built from \`$SHA\` by run $GITHUB_RUN_ID. Delete this draft when done."
+            echo
+            node tools/release.js notes "${version%%-*}" 2>/dev/null || echo "(no CHANGELOG section for ${version%%-*} yet)"
+          } > /tmp/notes.md
+          shopt -s nullglob
+          assets=(artifacts/*)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "::error::the desktop workflow produced no artifacts"
+            exit 1
+          fi
+          gh release create "v$version" --draft --prerelease --latest=false \
+            --target "$SHA" \
+            --title "v$version (dry run)" \
+            --notes-file /tmp/notes.md \
+            "${assets[@]}"
+          echo "Dry run uploaded to draft v$version with ${#assets[@]} artifacts. Nothing was tagged or published." \
+            >> "$GITHUB_STEP_SUMMARY"
+
       # Optional private HTTPS distribution host. A deployment key only writes feed files;
       # clients receive a separate read-only feed credential, never this key or GH_TOKEN.
       - name: Activate the private desktop feed
-        if: vars.ORCA_FEED_HOST != ''
+        if: ${{ vars.ORCA_FEED_HOST != '' && !inputs.dry_run }}
         env:
           FEED_HOST: ${{ vars.ORCA_FEED_HOST }}
           FEED_ROOT: ${{ vars.ORCA_FEED_ROOT }}
