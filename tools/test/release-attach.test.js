@@ -288,7 +288,7 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(f.writes()).toHaveLength(2);
 
     // Publication through the workflow's script, then the feed takes exactly run 100.
-    const published = f.run(ATTACH, ["publish", "7", "0.8.0"]);
+    const published = f.run(ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest]);
     expect(published.status, published.stderr).toBe(0);
     expect(f.writes().slice(2)).toEqual([["patch", "7", "tag_name", "target_commitish", "draft", "make_latest"]]);
     const fed = f.run(FEED_AUTO, [], { EVENT: "release", RELEASE_TAG: "v0.8.0" });
@@ -339,26 +339,82 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(f.writes()).toEqual([]);
   });
 
+  const accepted = (f) => ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest];
+
   it.each([
-    ["no installer", {}, "not the recorded one"],
-    ["no record", { body: "Notes." }, "no single signing record"],
-  ])("refuses to publish a draft with %s", (_label, over, message) => {
-    const f = setup({
-      releases: [draft({ body: "Notes.\n\n<!-- orca-signed-run: 100 sha256:" + "a".repeat(64) + " -->", ...over })],
+    ["no installer", () => {}, "is not the accepted installer"],
+    ["no record", (st) => (st.releases[0].body = "Notes."), "no single signing record"],
+  ])("refuses to publish a draft with %s", (_label, change, message) => {
+    const f = setup();
+    f.edit((st) => {
+      st.releases[0].body = `Notes.\n\n<!-- orca-signed-run: 100 sha256:${"a".repeat(64)} -->`;
+      change(st);
     });
-    const result = f.run(ATTACH, ["publish", "7", "0.8.0"]);
+    const result = f.run(ATTACH, accepted(f));
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(message);
     expect(f.writes()).toEqual([]);
   });
 
-  it("refuses to publish when the tag already exists at another commit", () => {
+  it.each([
+    [
+      "changed Ubuntu bytes",
+      (st) => (st.releases[0].assets[0].digest = "sha256:" + "9".repeat(64)),
+      "not exactly the accepted",
+    ],
+    ["another source commit", (st) => (st.releases[0].target_commitish = OTHER), "no longer targets"],
+    [
+      "an extra asset",
+      (st) => st.releases[0].assets.push({ name: "notes.txt", digest: "sha256:0" }),
+      "unexpected assets",
+    ],
+    [
+      "an older version than Latest",
+      (st) => {
+        st.releases.push({ ...draft({ id: 5, tag_name: "v0.9.0", name: "v0.9.0", draft: false }) });
+        st.latest = 5;
+      },
+      "not newer than the current latest v0.9.0",
+    ],
+    [
+      "the same version as Latest",
+      (st) => {
+        st.releases.push({ ...draft({ id: 5, tag_name: "v0.8.0", name: "v0.8.0", draft: false }) });
+        st.latest = 5;
+      },
+      "not newer than the current latest v0.8.0",
+    ],
+    ["the tag at another commit", (st) => (st.tags["v0.8.0"] = OTHER), "already exists at"],
+  ])("refuses to publish with %s", (_label, change, message) => {
     const f = setup();
     expect(f.attach().status).toBe(0);
-    f.edit((st) => (st.tags["v0.8.0"] = OTHER));
-    const result = f.run(ATTACH, ["publish", "7", "0.8.0"]);
+    f.edit(change);
+    const result = f.run(ATTACH, accepted(f));
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("already exists at");
+    expect(result.stderr).toContain(message);
     expect(f.writes()).toHaveLength(2);
+    expect(f.state().releases.find((r) => r.id === 7).draft).toBe(true);
+  });
+
+  it("refuses digests other than the accepted ones", () => {
+    const f = setup();
+    expect(f.attach().status).toBe(0);
+    const result = f.run(ATTACH, ["publish", "7", "0.8.0", SHA, "sha256:" + "9".repeat(64), f.digest]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("not exactly the accepted");
+    expect(f.writes()).toHaveLength(2);
+  });
+
+  it("publishes over an older Latest and reads the accepted digests back", () => {
+    const f = setup();
+    expect(f.attach().status).toBe(0);
+    f.edit((st) => {
+      st.releases.push({ ...draft({ id: 5, tag_name: "v0.7.9", name: "v0.7.9", draft: false }) });
+      st.latest = 5;
+    });
+    const result = f.run(ATTACH, accepted(f));
+    expect(result.status, result.stderr).toBe(0);
+    expect(f.state().latest).toBe(7);
+    expect(f.state().tags["v0.8.0"]).toBe(SHA);
   });
 });

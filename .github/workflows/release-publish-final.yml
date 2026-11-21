@@ -1,10 +1,13 @@
 # Publish a staged final after its native acceptance, without anyone running API calls by hand.
 #
-# Dispatch from main with the draft's release id and version. tools/deploy/release-attach.sh
-# publish re-reads the draft: still a draft, named vVERSION, exactly the Ubuntu .deb and the x64
-# installer, one signing record, and the installer's digest equal to the recorded one. It
-# refuses an existing tag at another commit, publishes with the tag and target stated
-# explicitly, and checks the tag and `latest` afterwards. It shares its concurrency group with
+# Dispatch from main with the draft's release id, the version, and what native acceptance
+# passed on: the source commit and the SHA-256 of both the Ubuntu .deb and the x64 installer.
+# tools/deploy/release-attach.sh publish compares all of them with the draft immediately
+# before publishing (still a draft, named vVERSION, targeting that commit, exactly those two
+# assets with those digests, the installer's digest equal to the signing record). It refuses
+# a version not newer than the current Latest and an existing tag at another commit,
+# publishes with the tag and target stated explicitly, and reads back the published assets'
+# digests, the tag and Latest. Native acceptance itself stays a required step before this. It shares its concurrency group with
 # Release (attach signed installer), so publication through this workflow never interleaves
 # with an attachment. A release published with the workflow token does not raise the `release`
 # event for other workflows, so this dispatches Desktop feed (automatic) itself.
@@ -18,6 +21,15 @@ on:
         required: true
       version:
         description: Version (X.Y.Z)
+        required: true
+      source_sha:
+        description: The commit native acceptance was run for (40 hex)
+        required: true
+      deb_sha256:
+        description: SHA-256 of the Ubuntu .deb that passed native acceptance
+        required: true
+      exe_sha256:
+        description: SHA-256 of the Windows x64 installer that passed native acceptance
         required: true
 
 concurrency:
@@ -47,7 +59,10 @@ jobs:
           REPO: ${{ github.repository }}
           ID: ${{ inputs.release_id }}
           VERSION: ${{ inputs.version }}
-        run: bash tools/deploy/release-attach.sh publish "$ID" "$VERSION"
+          SHA: ${{ inputs.source_sha }}
+          DEB: ${{ inputs.deb_sha256 }}
+          EXE: ${{ inputs.exe_sha256 }}
+        run: bash tools/deploy/release-attach.sh publish "$ID" "$VERSION" "$SHA" "$DEB" "$EXE"
 
       - name: Hand over to the desktop feed
         if: vars.ORCA_FEED_AUTO == 'true' && vars.ORCA_FEED_BUCKET != ''

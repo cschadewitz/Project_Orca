@@ -12,9 +12,10 @@
 #   release-attach.sh reconcile         dispatch the attach for every final draft still missing
 #                                       its installer or record: the recorded run if there is
 #                                       one, else the newest qualifying run for its commit
-#   release-attach.sh publish ID VERSION
-#                                       publish draft ID as vVERSION once it holds exactly the
-#                                       .deb and the recorded installer
+#   release-attach.sh publish ID VERSION SHA DEB_SHA256 EXE_SHA256
+#                                       publish draft ID as vVERSION only if it targets SHA and
+#                                       holds exactly the accepted .deb and installer (the
+#                                       recorded one), and VERSION is newer than Latest
 #
 # Every write is preceded by a fresh read of the exact draft: still a draft, the same target
 # and name, only the expected assets, and no other record. The record is written before the
@@ -150,27 +151,38 @@ case "${1:-}" in
     done <<<"$drafts"
     ;;
   publish)
-    [[ $# -eq 3 && "$2" =~ ^[0-9]+$ && "$3" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "usage: release-attach.sh publish ID VERSION"
-    id=$2 version=$3
-    json=$(gh api "repos/$REPO/releases/$id") || fail "release $id not found"
-    sha=$(jq -r .target_commitish <<<"$json")
-    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "release $id does not target a commit"
-    records=$(jq -r '.body // ""' <<<"$json" | grep -oE "$MARK_RE" || true)
-    [[ $(grep -c . <<<"$records") -eq 1 ]] || fail "release $id has no single signing record"
-    digest=$(awk '{print $4}' <<<"$records")
-    marker=$records
-    validate "$id" "$sha" "$version" "$marker" >/dev/null
-    have=$(jq -r --arg n "ORCA-$version-win-x64.exe" '[.assets[] | select(.name == $n) | .digest] | .[0] // ""' <<<"$json")
-    [[ "$have" == "$digest" ]] || fail "release $id's installer ($have) is not the recorded one ($digest)"
-    [[ $(jq '.assets | length' <<<"$json") -eq 2 ]] || fail "release $id does not hold exactly the .deb and the installer"
+    # The operator states what native acceptance passed on: the source commit and both
+    # installers' digests. Everything is compared against the draft right before publishing.
+    [[ $# -eq 6 && "$2" =~ ^[0-9]+$ && "$3" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$4" =~ ^[0-9a-f]{40}$ ]] ||
+      fail "usage: release-attach.sh publish ID VERSION SHA DEB_SHA256 EXE_SHA256"
+    id=$2 version=$3 sha=$4 deb="sha256:${5#sha256:}" exe="sha256:${6#sha256:}"
+    [[ "$deb" =~ ^sha256:[0-9a-f]{64}$ && "$exe" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "digests must be SHA-256 hex"
+    deb_name="ORCA-$version-linux-amd64.deb" exe_name="ORCA-$version-win-x64.exe"
+    # Never move Latest backwards or sideways.
+    latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name 2>/dev/null || true)
+    if [[ -n "$latest" ]]; then
+      [[ "$latest" != "v$version" && "$(printf '%s\n%s\n' "${latest#v}" "$version" | sort -V | tail -n1)" == "$version" ]] ||
+        fail "v$version is not newer than the current latest $latest"
+    fi
     if tagged=$(gh api "repos/$REPO/git/ref/tags/v$version" --jq .object.sha 2>/dev/null); then
       [[ "$tagged" == "$sha" ]] || fail "tag v$version already exists at $tagged, not $sha"
     fi
+    json=$(gh api "repos/$REPO/releases/$id") || fail "release $id not found"
+    records=$(jq -r '.body // ""' <<<"$json" | grep -oE "$MARK_RE" || true)
+    [[ $(grep -c . <<<"$records") -eq 1 ]] || fail "release $id has no single signing record"
+    [[ "$(awk '{print $4}' <<<"$records")" == "$exe" ]] || fail "release $id's signing record is not the accepted installer $exe"
+    json=$(validate "$id" "$sha" "$version" "$records" >/dev/null && gh api "repos/$REPO/releases/$id") || exit 1
+    digests() { jq -r --arg d "$deb_name" --arg e "$exe_name" '[(.assets | length), ([.assets[] | select(.name == $d) | .digest] | .[0] // ""), ([.assets[] | select(.name == $e) | .digest] | .[0] // "")] | map(tostring) | join(" ")'; }
+    [[ "$(digests <<<"$json")" == "2 $deb $exe" ]] ||
+      fail "release $id's assets ($(digests <<<"$json")) are not exactly the accepted $deb_name $deb and $exe_name $exe"
     gh api -X PATCH "repos/$REPO/releases/$id" -f tag_name="v$version" -f target_commitish="$sha" \
       -F draft=false -f make_latest=true >/dev/null
+    after=$(gh api "repos/$REPO/releases/$id")
+    [[ "$(jq -r '.draft' <<<"$after")" == false && "$(digests <<<"$after")" == "2 $deb $exe" ]] ||
+      fail "release $id does not read back published with the accepted assets"
     [[ "$(gh api "repos/$REPO/git/ref/tags/v$version" --jq .object.sha)" == "$sha" ]] || fail "tag v$version does not point at $sha"
     [[ "$(gh api "repos/$REPO/releases/latest" --jq .id)" == "$id" ]] || fail "release $id is not latest"
-    note "Published v$version (release \`$id\`, \`$sha\`) with the recorded installer \`$digest\`."
+    note "Published v$version (release \`$id\`, \`$sha\`): $deb_name \`$deb\`, $exe_name \`$exe\`."
     ;;
-  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE | reconcile | publish ID VERSION" ;;
+  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE | reconcile | publish ID VERSION SHA DEB_SHA256 EXE_SHA256" ;;
 esac

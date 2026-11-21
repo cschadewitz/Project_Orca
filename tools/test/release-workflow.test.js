@@ -227,6 +227,12 @@ it("publishes a final only from main, through the checking script, and hands ove
       inputs: {
         release_id: { description: "The accepted draft's release id", required: true },
         version: { description: "Version (X.Y.Z)", required: true },
+        source_sha: { description: "The commit native acceptance was run for (40 hex)", required: true },
+        deb_sha256: { description: "SHA-256 of the Ubuntu .deb that passed native acceptance", required: true },
+        exe_sha256: {
+          description: "SHA-256 of the Windows x64 installer that passed native acceptance",
+          required: true,
+        },
       },
     },
   });
@@ -234,7 +240,7 @@ it("publishes a final only from main, through the checking script, and hands ove
   const job = wf.jobs.publish;
   expect(job.if).toBe("github.ref == 'refs/heads/main'");
   expect(job.permissions).toEqual({ contents: "write", actions: "write" });
-  expect(job.steps[1].run).toBe('bash tools/deploy/release-attach.sh publish "$ID" "$VERSION"');
+  expect(job.steps[1].run).toBe('bash tools/deploy/release-attach.sh publish "$ID" "$VERSION" "$SHA" "$DEB" "$EXE"');
   expect(job.steps[1].run).not.toContain("${{");
   expect(job.steps[2].run).toBe('gh workflow run feed-auto.yml --repo "$GITHUB_REPOSITORY" --ref main');
 });

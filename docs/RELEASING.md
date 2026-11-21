@@ -117,13 +117,15 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    signing run's checks in step 2 are not that acceptance. If either fails, stop: the draft
    stays a draft and nothing is public.
 6. Publish by dispatching **Release (publish final)** (`release-publish-final.yml`) from
-   `main` with `release_id=$ID` and `version=$V`. It re-reads the draft (exactly the `.deb`
-   and the recorded installer, one record, the installer's digest equal to the recorded one),
-   refuses an existing tag at another commit, publishes with the tag and target stated
-   explicitly, and checks that `v$V` points at `SHA` and that `ID` is latest. It shares one
-   queue with the attach, so the two never interleave; publish only through it, not by
-   editing the draft by hand. Then both public downloads (from the published page's URLs)
-   must hash to the digests accepted in step 5.
+   `main` with `release_id=$ID`, `version=$V`, and what step 5 accepted: `source_sha=$SHA`,
+   `deb_sha256` and `exe_sha256` (the digests of the exact files that passed). Immediately
+   before publishing it compares all of them with the draft: still a draft, named `v$V`,
+   targeting `SHA`, exactly those two assets with those digests, and the installer's digest
+   equal to the signing record. It refuses a version that is not newer than the current
+   Latest and an existing tag at another commit, publishes with the tag and target stated
+   explicitly, and reads back the published digests, the tag and Latest. It shares one queue
+   with the attach, so the two never interleave; publish only through it, not by editing the
+   draft by hand.
 7. Where the desktop feed is enabled, publishing feeds that signing run automatically
    (step 6 dispatches **Desktop feed (automatic)**, which dispatches **Desktop feed (publish signed)**; see
    [UPDATING.md](UPDATING.md)). Check that run went green.
