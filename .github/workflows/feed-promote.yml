@@ -1,0 +1,64 @@
+# Move a version the feed already holds between its rings (internal, preview, stable), in
+# full or as a percentage rollout, or halt a rollout. feed-publish.yml only ever offers a
+# new version to `internal`; everything past that is a deliberate dispatch of this workflow.
+#
+# The rules are in tools/deploy/feed-worker/rings.js: rings never move backwards (the client
+# refuses downgrades, so moving a pointer back would only strand people already updated),
+# `stable` never takes a prerelease, and percent 0 halts a rollout without touching the
+# ring's full version. A halted rollout is not a rollback: ship a newer fixed version.
+#
+# Dispatch from main only. The job runs in the protected `desktop-feed` environment, which
+# holds the R2 write credential, requires a reviewer and only deploys from main.
+name: Desktop feed (promote)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ring:
+        description: "Ring to change"
+        required: true
+        type: choice
+        options: [internal, preview, stable]
+      version:
+        description: "Published version, e.g. 0.7.1 or 0.8.0-rc.1"
+        required: true
+        type: string
+      percent:
+        description: "100 = whole ring, 1-99 = rollout, 0 = halt the rollout of this version"
+        required: true
+        type: number
+        default: 100
+
+# Shares the release and feed-publish group, so a promotion never races a ring update.
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: promote ${{ inputs.version }} in ${{ inputs.ring }}
+    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
+    runs-on: ubuntu-24.04
+    environment: desktop-feed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Update the rings
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
+          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+          RING: ${{ inputs.ring }}
+          VERSION: ${{ inputs.version }}
+          PERCENT: ${{ inputs.percent }}
+        run: bash tools/deploy/feed-r2.sh promote "$RING" "$VERSION" "$PERCENT"

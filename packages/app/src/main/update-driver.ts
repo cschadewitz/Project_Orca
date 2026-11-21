@@ -2,6 +2,15 @@
 import { readFileSync } from "node:fs";
 import electronUpdater from "electron-updater";
 import type { UpdateDriver } from "./updates.js";
+/**
+ * Release candidates are offered only to installs that opt in with ORCA_UPDATE_PRERELEASE=1
+ * (internal and preview testers). Everyone else ignores a prerelease even if a feed offers
+ * one; the feed's stable ring never does. Downgrades stay refused either way.
+ */
+export function acceptsVersion(version: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return !version.includes("-") || env.ORCA_UPDATE_PRERELEASE === "1";
+}
+
 export function updateDriver(packaged: boolean, platform: string, arch: string): UpdateDriver | undefined {
   if (!packaged || platform !== "win32" || !["x64", "arm64"].includes(arch)) return undefined;
   let updater: InstanceType<typeof electronUpdater.NsisUpdater> | undefined;
@@ -32,7 +41,7 @@ export function updateDriver(packaged: boolean, platform: string, arch: string):
       // Re-read rotated credentials on each retry/check.
       updater = undefined;
       const result = await get().checkForUpdates();
-      if (!result || result.updateInfo.version.includes("-")) return undefined;
+      if (!result || !acceptsVersion(result.updateInfo.version)) return undefined;
       return result.isUpdateAvailable ? result.updateInfo.version : undefined;
     },
     async download(progress) {
