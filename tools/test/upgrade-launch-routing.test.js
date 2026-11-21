@@ -22,7 +22,14 @@ it("runs the upgrade launch check after the build, only when it was decided to",
   expect(decide.if).toBe("needs.changes.outputs.code != 'false'");
   // Main pushes always run it; pull requests run it for what ships and for the fixture.
   expect(decide.run).toContain('if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then');
-  for (const path of ["/^packages\\//", "/^pnpm-lock\\.yaml$/", "/^release-compatibility\\.json$/"])
+  for (const path of [
+    "/^packages\\//",
+    "/^pnpm-lock\\.yaml$/",
+    "/^pnpm-workspace\\.yaml$/",
+    "/^patches\\//",
+    "/^tsconfig[^\\/]*\\.json$/",
+    "/^release-compatibility\\.json$/",
+  ])
     expect(decide.run).toContain(path);
 });
 
@@ -44,7 +51,12 @@ it("never lets ci.yml's install fetch the binary for every other step", () => {
   expect(install.env).toEqual({ ELECTRON_SKIP_BINARY_DOWNLOAD: 1 });
 });
 
-it("runs the same check in release verification", () => {
-  expect(named(smoke, "Upgrade launch check").run).toBe(RUN);
+it("runs the same check in release verification, and says when an older ref predates it", () => {
+  const step = named(smoke, "Upgrade launch check");
+  expect(step.run.trimEnd().split("\n").at(-1)).toBe(RUN);
+  // Required unless a caller says otherwise; a manual run has no such input and is not required.
+  expect(step.env).toEqual({ REQUIRED: "${{ inputs.upgrade_launch_required && 'true' || 'false' }}" });
+  expect(step.run).toMatch(/if \[ "\$REQUIRED" = "true" \]; then\s+echo "::error::[^\n]*\n\s+exit 1/);
+  expect(step.run).toContain("::notice title=Upgrade launch check::not applicable");
   expect(index(smoke, "Upgrade launch check")).toBeGreaterThan(index(smoke, "Build"));
 });

@@ -58,6 +58,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -127,10 +128,17 @@ jobs:
       - name: The version to stamp
         id: version
         shell: bash
+        env:
+          # Data, never spliced into the script: the caller's version arrives as a variable.
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          version="${{ inputs.version }}"
+          version="$VERSION"
           if [ -z "$version" ]; then version=$(node -p 'require("./package.json").version'); fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::not a semver version; nothing packaged"
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "packaging $version"
 

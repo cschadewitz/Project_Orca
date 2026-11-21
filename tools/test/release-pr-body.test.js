@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-import { BODY_LIMIT, DRIFT_LIMIT, UNLABELLED_LIMIT, prBody } from "../release-pr-body.js";
+import { BODY_LIMIT, DRIFT_LIMIT, DRIFT_PATHS, UNLABELLED_LIMIT, prBody } from "../release-pr-body.js";
 
 // Borrowed from the CLI, which already installs it, as release-workflow.test.js does.
 const { parse } = createRequire(new URL("../../packages/cli/package.json", import.meta.url))("yaml");
@@ -77,9 +77,9 @@ describe("drift since the last candidate (#863)", () => {
     expect(prBody({ ...final, drift: { since: "", stat: "" } })).not.toContain("candidate");
   });
 
-  it("says the final is the candidate's code when nothing under packages/ changed", () => {
+  it("says the final is the candidate's code when nothing it is built from changed", () => {
     const body = prBody({ ...final, drift: { since: "v0.7.0-rc.2", stat: "" } });
-    expect(body).toContain("No code under `packages/` changed since `v0.7.0-rc.2`");
+    expect(body).toContain("changed since `v0.7.0-rc.2`: this is that candidate's code");
     expect(body).not.toContain("[!WARNING]");
   });
 
@@ -109,5 +109,21 @@ describe("drift since the last candidate (#863)", () => {
     expect(step.run).toContain('if [ "$VERSION" = "$base" ]; then');
     expect(step.run).toContain('git tag -l "v$base-rc.*" --sort=-v:refname | head -n 1');
     expect(step.run.indexOf("DRIFT_SINCE=")).toBeLessThan(step.run.lastIndexOf("node tools/release-pr-body.js"));
+  });
+
+  it("compares manifests, the lockfile and root build config, not only sources", () => {
+    const wf = parse(readFileSync(new URL("../../.github/workflows/release-prepare.yml", import.meta.url), "utf8"));
+    const run = Object.values(wf.jobs)
+      .flatMap((job) => job.steps)
+      .find((s) => s.name === "Open the release pull request").run;
+    const diff = run.match(/git diff --stat=\S+ "\$DRIFT_SINCE" HEAD -- ([^>]+)>/)[1];
+    const paths = diff
+      .replace(/\\\n/g, " ")
+      .trim()
+      .split(/\s+/)
+      .map((p) => p.replace(/^'(.*)'$/, "$1"));
+    expect(paths).toEqual(DRIFT_PATHS);
+    expect(diff).not.toContain("exclude");
+    for (const path of ["package.json", "pnpm-lock.yaml", "tsconfig*.json"]) expect(DRIFT_PATHS).toContain(path);
   });
 });

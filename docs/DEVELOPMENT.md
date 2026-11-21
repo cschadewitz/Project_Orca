@@ -818,7 +818,9 @@ checkout's built daemon and opens the built app on it. It asserts that every run
 release recorded is still served, that the app handshakes, and that Runs and Plan render the
 old data. It takes a few seconds, so unlike the other projects here `ci.yml` runs it on pull
 requests that touch what ships (and always on `main`), fetching the Electron binary for that
-step alone; release verification runs it too, in the App smoke workflow's `smoke` job. The
+step alone; release verification runs it too, in the App smoke workflow's `smoke` job, where
+it is required. A manual App smoke run on a ref from before the check existed reports it as
+not applicable instead of failing. The
 fixture is old on purpose: never regenerate it with current code. Its README says how it
 was made and when to add a newer one beside it (#863).
 

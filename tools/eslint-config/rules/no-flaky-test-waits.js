@@ -5,7 +5,8 @@
 //   wait for the thing itself (`expect.poll`, a locator, an event);
 // - no automatic retries: a `retries` or `retry` option above 0 hides a flaky test instead
 //   of failing it;
-// - no silent skips: `it.skip`, `test.skip`, `describe.skip` and `.fixme` need a
+// - no silent skips: `it.skip`, `test.skip`, `describe.skip` and `.fixme` (also chained,
+//   as in `it.skip.each`) need a
 //   `// quarantine: #<issue> <why>` comment on the line above, so every skipped test has an
 //   issue that tracks bringing it back. Conditional skips (`skipIf`, `runIf`) and `todo`
 //   are not quarantines and are left alone; `.only` is refused outright.
@@ -14,12 +15,21 @@ const TEST_OBJECTS = new Set(["it", "test", "describe", "suite"]);
 const SKIPS = new Set(["skip", "fixme"]);
 const QUARANTINE = /^\s*quarantine:\s*#\d+\s+\S/;
 
-/** `it.skip`, `test.describe.skip`, `describe.only` … as the property name, or null. */
-function testModifier(callee) {
-  if (callee.type !== "MemberExpression" || callee.computed || callee.property.type !== "Identifier") return null;
-  let object = callee.object;
-  while (object.type === "MemberExpression" && !object.computed) object = object.object;
-  return object.type === "Identifier" && TEST_OBJECTS.has(object.name) ? callee.property.name : null;
+/**
+ * Every property in a test call's member chain (`it.skip.each` gives `skip` and `each`,
+ * `test.describe.only` gives `describe` and `only`), or an empty set when the chain does not
+ * start at a test object. All of them, not the last: a parameterized `.only.each` or
+ * `.skip.each` ends in `each`.
+ */
+function testModifiers(callee) {
+  const names = new Set();
+  let object = callee;
+  while (object.type === "MemberExpression") {
+    if (object.computed || object.property.type !== "Identifier") return new Set();
+    names.add(object.property.name);
+    object = object.object;
+  }
+  return object.type === "Identifier" && TEST_OBJECTS.has(object.name) && names.size > 0 ? names : new Set();
 }
 
 /** @type {import("eslint").Rule.RuleModule} */
@@ -38,6 +48,16 @@ export default {
   },
   create(context) {
     const source = context.sourceCode;
+    function checkModifiers(node, chain) {
+      const modifiers = testModifiers(chain);
+      if (modifiers.has("only")) context.report({ node, messageId: "only" });
+      if ([...modifiers].some((name) => SKIPS.has(name))) {
+        const above = source
+          .getCommentsBefore(node)
+          .filter((comment) => comment.loc.end.line === node.loc.start.line - 1);
+        if (!above.some((comment) => QUARANTINE.test(comment.value))) context.report({ node, messageId: "skip" });
+      }
+    }
     return {
       CallExpression(node) {
         const callee = node.callee;
@@ -50,14 +70,11 @@ export default {
           context.report({ node, messageId: "sleep" });
           return;
         }
-        const modifier = testModifier(callee);
-        if (modifier === "only") context.report({ node, messageId: "only" });
-        if (modifier && SKIPS.has(modifier)) {
-          const above = source
-            .getCommentsBefore(node)
-            .filter((comment) => comment.loc.end.line === node.loc.start.line - 1);
-          if (!above.some((comment) => QUARANTINE.test(comment.value))) context.report({ node, messageId: "skip" });
-        }
+        checkModifiers(node, callee);
+      },
+      // `test.skip.each\`a | b\`(...)`: the table form tags a template instead of calling.
+      TaggedTemplateExpression(node) {
+        checkModifiers(node, node.tag);
       },
       Property(node) {
         const key =

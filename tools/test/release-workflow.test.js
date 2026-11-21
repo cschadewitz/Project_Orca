@@ -53,19 +53,51 @@ it("rehearses a release on dry_run without tagging, publishing or feeding anythi
 
   const version = named(release, "The version being released");
   expect(version.env).toEqual({ DRY_RUN: "${{ inputs.dry_run }}" });
+  // The ref's version is validated as data before it names anything.
+  expect(version.run.indexOf("=~ ^[0-9]+")).toBeLessThan(version.run.indexOf('"$DRY_RUN"'));
   // The rehearsal gets its own version, decided before the tag refusal could apply.
   expect(version.run).toMatch(
     /if \[ "\$DRY_RUN" = "true" \]; then\s+# [^\n]*\n\s+version="\$\{version%%-\*\}-dryrun\.\$GITHUB_RUN_NUMBER"/,
   );
 
-  const publish = file.jobs.publish.steps;
-  expect(named(publish, "Tag and release").if).toBe("${{ !inputs.dry_run }}");
-  for (const step of publish.filter((s) => /feed/i.test(s.name ?? ""))) expect(step.if).toContain("!inputs.dry_run");
-
-  const rehearsal = named(publish, "Upload the rehearsal to a draft prerelease");
+  // A real release and a rehearsal are separate jobs; neither runs on the other's dispatch.
+  expect(file.jobs.publish.if).toBe("${{ !inputs.dry_run }}");
+  const rehearsal = file.jobs.rehearsal;
   expect(rehearsal.if).toBe("${{ inputs.dry_run }}");
-  expect(rehearsal.run).toContain("--draft --prerelease --latest=false");
-  expect(rehearsal.run).toContain('*-dryrun.*) ;; *) echo "::error::');
-  expect(rehearsal.run).not.toContain("--draft=false");
-  expect(rehearsal.run).not.toMatch(/git (tag|push)/);
+  expect(rehearsal.needs).toEqual(["check", "desktop", "app-verification"]);
+  const upload = named(rehearsal.steps, "Upload the rehearsal to a draft prerelease");
+  expect(upload.run).toContain("--draft --prerelease --latest=false");
+  expect(upload.run).toContain("-dryrun\\.[0-9]+$");
+  expect(upload.run).not.toContain("--draft=false");
+  expect(upload.run).not.toMatch(/git (tag|push)/);
+  expect(upload.run).not.toContain("${{");
+});
+
+it("never hands a write token to the ref under test (#863)", () => {
+  const file = workflow("release-publish.yml");
+  expect(file.permissions).toEqual({ contents: "read" });
+
+  // A rehearsal may name any ref, so its writer trusts only a default-branch workflow.
+  const guard = release[0];
+  expect(guard.name).toBe("A dry run is dispatched from the default branch");
+  expect(guard.if).toBe("${{ inputs.dry_run }}");
+  expect(guard.env.DEFAULT).toBe("refs/heads/${{ github.event.repository.default_branch }}");
+
+  // Only the two writers get write, and every checkout drops its credentials.
+  for (const [name, job] of Object.entries(file.jobs)) {
+    if (job.uses) continue;
+    expect(job.permissions ?? null, name).toEqual(
+      ["publish", "rehearsal"].includes(name) ? { contents: "write" } : null,
+    );
+    for (const step of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@")))
+      expect(step.with["persist-credentials"], name).toBe(false);
+  }
+  // The rehearsal writer runs this workflow's revision, not the rehearsed ref.
+  expect(file.jobs.rehearsal.steps[0].with.ref).toBe("${{ github.sha }}");
+
+  // The rehearsed ref is built on hosted runners and its version reaches desktop as data.
+  expect(file.jobs["app-verification"].with.hosted_only).toBe("${{ inputs.dry_run == true }}");
+  const stamp = workflow("desktop.yml").jobs.package.steps.find((s) => s.name === "The version to stamp");
+  expect(stamp.env).toEqual({ VERSION: "${{ inputs.version }}" });
+  expect(stamp.run).not.toContain("${{");
 });

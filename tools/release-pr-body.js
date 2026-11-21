@@ -8,7 +8,7 @@
 //
 // Environment: REPO, NUMBER, VERSION, BUMP, PIN, MILESTONE_TITLE, UNLABELLED, and for a
 // final release after a candidate, DRIFT_SINCE (the newest rc tag) and DRIFT_FILE (the
-// `git diff --stat` of packages/ since it).
+// `git diff --stat` of DRIFT_PATHS since it).
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -19,6 +19,24 @@ export const UNLABELLED_LIMIT = 50;
 
 /** How many `git diff --stat` lines are shown before the rest is summarised as a count. */
 export const DRIFT_LIMIT = 40;
+
+/**
+ * Everything a release is built from, as git pathspecs: the packages and their manifests,
+ * what the CLI ships beside them, and the root build inputs. A dependency bump in a
+ * manifest or the lockfile changes the shipped app as surely as a source edit does.
+ * release-prepare.yml passes exactly these to `git diff` (tools/test holds it to that).
+ */
+export const DRIFT_PATHS = [
+  "packages/",
+  "workflows/",
+  "templates/",
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "patches/",
+  "tsconfig*.json",
+  "release-compatibility.json",
+];
 
 /** Characters as GitHub counts them (code points), not UTF-16 units. */
 const length = (text) => [...text].length;
@@ -65,7 +83,7 @@ export function prBody({ repo, number, version, bump, pin, title, unlabelled, no
 
 /**
  * A final release should be its last candidate's code plus fixes someone chose (#863,
- * docs/RELEASING.md). This says what changed under packages/ since that candidate, so
+ * docs/RELEASING.md). This says what changed in DRIFT_PATHS since that candidate, so
  * anything that merged to main after it is visible before the merge, not after the tag.
  */
 function driftSection(repo, version, drift) {
@@ -73,12 +91,15 @@ function driftSection(repo, version, drift) {
   const stat = (drift.stat ?? "").split("\n").filter((line) => line.trim() !== "");
   const compare = `https://github.com/${repo}/compare/${drift.since}...release/v${version}`;
   if (stat.length === 0)
-    return ["", `No code under \`packages/\` changed since \`${drift.since}\`: this is that candidate's code.`];
+    return [
+      "",
+      `Nothing the release is built from (packages, their manifests, the lockfile or root build config) changed since \`${drift.since}\`: this is that candidate's code.`,
+    ];
   const shown = stat.length > DRIFT_LIMIT ? [...stat.slice(0, DRIFT_LIMIT - 1), stat.at(-1)] : stat;
   return [
     "",
     "> [!WARNING]",
-    `> Code under \`packages/\` changed since the last candidate, \`${drift.since}\`. A final should be`,
+    `> What the release is built from changed since the last candidate, \`${drift.since}\`. A final should be`,
     "> that candidate plus fixes chosen on purpose; check each file below is one of them",
     `> ([full comparison](${compare})).`,
     "",

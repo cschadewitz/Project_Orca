@@ -272,7 +272,9 @@ That overrides the labels. A version with a prerelease suffix is published with
 A final release (`0.7.0`) should ship the code of its newest release candidate
 (`v0.7.0-rc.N`) plus fixes someone chose on purpose, not whatever merged to `main` after the
 candidate was tested. Land those fixes as cherry-picks or say why each one belongs. To make
-drift visible, the release pull request for a final compares `packages/` with the newest
+drift visible, the release pull request for a final compares what the release is built
+from (`packages/` with its manifests, `workflows/`, `templates/`, the lockfile and the root
+build config, listed as `DRIFT_PATHS` in `tools/release-pr-body.js`) with the newest
 `v<version>-rc.*` tag and either says nothing changed or shows a warning with the
 `git diff --stat` and a comparison link. This only works when candidates are released
 through this workflow, so they carry tags. Learned from T3 Code, whose stable release
@@ -311,6 +313,12 @@ prerelease** called `vX.Y.Z-dryrun.<run number>`, where `X.Y.Z` is the ref's
 `package.json` version without its prerelease suffix. Nothing is tagged, nothing is
 published or marked latest, and no feed step runs. The draft's notes start with a
 dry-run warning.
+
+Dispatch it with the workflow from `main` (the "Use workflow from" box); the run refuses
+any other. The rehearsed ref is untrusted: its code only ever runs in jobs with a read-only
+token and no saved git credentials, and the smoke runs on GitHub-hosted runners, never the
+self-hosted ones. The draft is uploaded by a separate job that checks out `main`'s workflow
+revision, validates the version and commit, and treats the artifacts as data.
 
 Use it before merging a release pull request, or to try a risky change through the
 release graph before it lands. A failure costs nothing, unlike a failed `release-publish`

@@ -28,6 +28,17 @@ on:
       ref:
         required: true
         type: string
+      # Release dry runs rehearse an arbitrary ref, so they never route it to self-hosted runners.
+      hosted_only:
+        required: false
+        type: boolean
+        default: false
+      # Release verification always runs the upgrade launch check. A manual run on a ref from
+      # before the check existed reports it as not applicable instead of failing.
+      upgrade_launch_required:
+        required: false
+        type: boolean
+        default: true
     secrets:
       CI_RUNNER_HEALTH_URL:
         description: The runner health endpoint; without it, Linux jobs use GitHub-hosted runners.
@@ -59,7 +70,7 @@ jobs:
       # Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners.
       - id: pick
         env:
-          FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
+          FORCE_HOSTED: ${{ inputs.hosted_only && 'true' || vars.CI_FORCE_HOSTED }}
           HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
         run: node tools/linux-runner.js
 
@@ -75,6 +86,7 @@ jobs:
           # Release verification checks out the exact merge commit.
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Classify
         id: classify
@@ -116,6 +128,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
       # resolve the store path. Version comes from package.json packageManager.
@@ -216,7 +229,19 @@ jobs:
       # The same old-store upgrade check ci.yml runs on pull requests (#863), so a release
       # proves it against the exact merge commit too.
       - name: Upgrade launch check
-        run: xvfb-run -a pnpm run app:upgrade-launch
+        env:
+          REQUIRED: ${{ inputs.upgrade_launch_required && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          if ! node -e 'process.exit(require("./package.json").scripts?.["app:upgrade-launch"] ? 0 : 1)'; then
+            if [ "$REQUIRED" = "true" ]; then
+              echo "::error::this ref has no app:upgrade-launch script, and release verification requires it"
+              exit 1
+            fi
+            echo "::notice title=Upgrade launch check::not applicable: this ref predates the check (#863)"
+            exit 0
+          fi
+          xvfb-run -a pnpm run app:upgrade-launch
 
       # Screenshots of both themes, the greyscale pictures, the axe results per surface and
       # a trace for anything that failed. None of these is a baseline — see the spec header.
@@ -263,6 +288,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
       - name: Record workflow and checked-out revision
         shell: bash

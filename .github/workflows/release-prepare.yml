@@ -129,14 +129,17 @@ jobs:
 
           # A final (no prerelease suffix) is compared with its newest release candidate tag,
           # so code that merged after the candidate shows in the body before anyone merges
-          # (#863). The bump commit above only touches manifests and the changelog.
+          # (#863).
           DRIFT_SINCE=""
           base="${VERSION%%-*}"
           if [ "$VERSION" = "$base" ]; then
             DRIFT_SINCE=$(git tag -l "v$base-rc.*" --sort=-v:refname | head -n 1)
           fi
           if [ -n "$DRIFT_SINCE" ]; then
-            git diff --stat=200,150 "$DRIFT_SINCE" HEAD -- packages/ ':(exclude)packages/*/package.json' > /tmp/drift.txt
+            # The same paths as DRIFT_PATHS in tools/release-pr-body.js: sources, manifests,
+            # the lockfile and root build config. HEAD is main before the bump commit.
+            git diff --stat=200,150 "$DRIFT_SINCE" HEAD -- packages/ workflows/ templates/ package.json \
+              pnpm-lock.yaml pnpm-workspace.yaml patches/ 'tsconfig*.json' release-compatibility.json > /tmp/drift.txt
           fi
           export DRIFT_SINCE DRIFT_FILE=/tmp/drift.txt
           node tools/release-pr-body.js /tmp/release-notes.md > /tmp/pr-body.md
