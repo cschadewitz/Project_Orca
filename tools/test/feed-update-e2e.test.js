@@ -40,3 +40,11 @@ it("runs on pull requests that touch the feed Worker or the update driver", () =
   for (const path of ["tools/deploy/feed-worker/**", "packages/app/src/main/update-driver.ts"])
     expect(e2e.on.pull_request.paths).toContain(path);
 });
+
+it("packages into dist/release, which electron-builder.yml keeps out of the app", () => {
+  // Elsewhere under dist/, N+1 would package N's installer into its own app.asar.
+  expect(readFileSync(new URL("../../packages/app/electron-builder.yml", import.meta.url), "utf8")).toContain(
+    '- "!dist/release"',
+  );
+  expect(named("Package N and N+1").run).toContain('-c.directories.output="dist/release/update-e2e/$version"');
+});

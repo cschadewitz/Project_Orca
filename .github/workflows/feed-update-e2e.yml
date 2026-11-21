@@ -105,28 +105,32 @@ jobs:
           done
           node tools/packaged-windows/stage-native-addons.js --headers "$headers_scratch/node-v${node_version}"
 
-      # x64 only, NSIS only, as the feed serves. The same build, stamped twice.
+      # x64 only, NSIS only, as the feed serves. The same build, stamped twice. The output stays
+      # under dist/release, which electron-builder.yml excludes from `files`, so N+1 cannot
+      # package N's installer.
       - name: Package N and N+1
         run: |
           set -euo pipefail
           for version in "$FROM_VERSION" "$TO_VERSION"; do
             pnpm --filter @orca/app exec electron-builder --win nsis --x64 --publish never \
-              -c.extraMetadata.version="$version" -c.directories.output="dist/update-e2e/$version" \
+              -c.extraMetadata.version="$version" -c.directories.output="dist/release/update-e2e/$version" \
               -c.publish.channel=latest-x64
           done
-          ls -l packages/app/dist/update-e2e/*
+          ls -l packages/app/dist/release/update-e2e/*
 
       - name: Install N
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = "packages/app/dist/update-e2e/$env:FROM_VERSION/ORCA-$env:FROM_VERSION-win-x64.exe"
+          $installer = "packages/app/dist/release/update-e2e/$env:FROM_VERSION/ORCA-$env:FROM_VERSION-win-x64.exe"
           $process = Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "installer exited $($process.ExitCode)" }
           $entry = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
             Where-Object DisplayName -like 'ORCA*' | Select-Object -First 1
           if (-not $entry) { throw 'no ORCA uninstall entry' }
-          $exe = Join-Path $entry.InstallLocation 'ORCA.exe'
+          # electron-builder writes no InstallLocation to the Uninstall key; DisplayIcon is
+          # "<install dir>\ORCA.exe,0".
+          $exe = ($entry.DisplayIcon -replace ',\d+$', '').Trim('"')
           if (-not (Test-Path $exe)) { throw "missing $exe" }
           "ORCA_UPDATE_EXECUTABLE=$exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "installed $($entry.DisplayVersion) at $exe"
@@ -150,7 +154,7 @@ jobs:
           set -euo pipefail
           feed="$RUNNER_TEMP/feed"
           for version in "$FROM_VERSION" "$TO_VERSION"; do
-            dir="packages/app/dist/update-e2e/$version"
+            dir="packages/app/dist/release/update-e2e/$version"
             node tools/deploy/feed-local.js snapshot "$feed/bucket" "$version" \
               "$dir/ORCA-$version-win-x64.exe" "$dir/ORCA-$version-win-x64.exe.blockmap" "$dir/latest-x64.yml"
           done
