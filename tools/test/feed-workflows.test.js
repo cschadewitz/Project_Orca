@@ -61,6 +61,11 @@ describe("automatic feed dispatch", () => {
     expect(auto).toContain("github.event.workflow_run.head_branch == 'main'");
   });
 
+  it("dispatches nothing while the feed is paused", () => {
+    expect(auto).toContain("if: vars.ORCA_FEED_PAUSE == 'true'");
+    expect(auto.match(/if: steps\.pause\.outcome == 'skipped'/g)).toHaveLength(2);
+  });
+
   it("holds no feed credentials and runs main's script", () => {
     expect(auto).not.toMatch(/secrets\.|environment:/);
     expect(auto).toMatch(/ref: main\n/);

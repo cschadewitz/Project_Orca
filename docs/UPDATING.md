@@ -176,11 +176,11 @@ with only the Ubuntu amd64 `.deb`: no tag, nothing latest, no feed write
 The feed never takes the ordinary release-job builds: their Windows installers are unsigned.
 For a final the order is:
 
-1. Dispatch **Windows signed (spike)** from main with `source_sha` set to the draft's pinned
-   merge commit, **before** publication.
-2. Attach that run's signed x64 installer to the draft, run native acceptance on the exact
-   draft assets, and only then publish the draft (which creates the tag). RELEASING.md has
-   the steps and checks.
+1. Staging the draft dispatches **Windows signed (spike)** for the draft's pinned merge
+   commit automatically, **before** publication.
+2. **Release (attach signed installer)** attaches that run's signed x64 installer to the
+   draft automatically. Native acceptance runs on the exact draft assets, and only then is the
+   draft published (which creates the tag). RELEASING.md has the steps and checks.
 3. **Architecture gate.** Rings select versions, not architectures, so the feed itself must
    leave out any architecture without native acceptance. Windows arm64 has none yet, so
    `feed-publish.yml` serves x64 only (`FEED_ARCHES: x64`): the signed run's arm64 installer

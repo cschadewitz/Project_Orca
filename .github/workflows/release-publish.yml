@@ -366,8 +366,8 @@ jobs:
             fi
             {
               echo "Drafted v$version as release id \`$id\` at \`$SHA\` with $(basename "$deb") (\`$want\`) only. Not tagged or published."
-              echo "Next: dispatch Windows signed (spike) from main with source_sha \`$SHA\`, verify and"
-              echo "attach the signed installer to release $id, then publish it (docs/RELEASING.md, \"Publishing a final\")."
+              echo "The sign job dispatches Windows signed (spike) for \`$SHA\`; its x64 installer is attached to release $id"
+              echo "automatically. Then native acceptance and publication (docs/RELEASING.md, \"Publishing a final\")."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -405,6 +405,27 @@ jobs:
   # and the version as data, and runs the same asset checks a release runs before uploading
   # them to a draft prerelease. `gh release create --draft` creates no tag, and nothing here
   # edits the draft to published, so no updater sees it and nothing becomes latest.
+  # A final is staged unsigned; sign the same commit right away. release-attach-signed.yml
+  # attaches the signed x64 installer to the draft when that run succeeds. This job checks
+  # nothing out and can only dispatch.
+  sign:
+    name: dispatch Windows signing for the final
+    needs: [check, publish]
+    if: ${{ !inputs.dry_run && !contains(needs.check.outputs.version, '-') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch Windows signed (spike) for the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.check.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::invalid release commit"; exit 1; }
+          gh workflow run windows-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f source_sha="$SHA"
+          echo "Dispatched Windows signed (spike) for \`$SHA\`." >> "$GITHUB_STEP_SUMMARY"
+
   rehearsal:
     name: upload the rehearsal to a draft
     needs: [check, desktop, app-verification]

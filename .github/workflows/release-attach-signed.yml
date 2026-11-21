@@ -1,0 +1,123 @@
+# Attach a final's signed Windows x64 installer to its staged draft, so nobody downloads and
+# uploads it by hand.
+#
+# release-publish.yml stages a final as a draft with only the Ubuntu .deb and dispatches
+# `Windows signed (spike)` for the same commit. When that signed run succeeds, this finds the
+# single draft (not a prerelease) whose target is the commit it signed, re-checks the x64
+# installer's Authenticode signature, timestamp and publisher (ORCA_FEED_PUBLISHER_CN), and
+# uploads it to the draft by id. An installer of that name already on the draft must have the
+# same SHA-256 (a rerun is a no-op; different bytes stop the run). It never publishes, tags or
+# touches the feed: native acceptance and publication follow (docs/RELEASING.md).
+name: Release (attach signed installer)
+
+on:
+  workflow_run:
+    workflows: ["Windows signed (spike)"]
+    types: [completed]
+
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  attach:
+    name: attach the signed x64 installer to the draft
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'workflow_dispatch'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Find the signed commit and its draft
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          artifact=$(gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            --jq '[.artifacts[].name | select(test("^windows-signed-[0-9a-f]{40}$"))] | .[0] // ""')
+          [[ -n "$artifact" ]] || { echo "Signed run $RUN_ID has no signed artifact." | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
+          sha=${artifact#windows-signed-}
+          ids=$(gh api --paginate "repos/$REPO/releases" \
+            --jq ".[] | select(.draft and (.prerelease | not) and .target_commitish == \"$sha\") | .id")
+          count=$(wc -w <<<"$ids")
+          if [[ "$count" -eq 0 ]]; then
+            echo "No final draft targets $sha; nothing to attach." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [[ "$count" -eq 1 ]] || { echo "::error::$count final drafts target $sha ($(echo $ids)); attach by hand"; exit 1; }
+          id=$(echo $ids)
+          name=$(gh api "repos/$REPO/releases/$id" --jq .name)
+          [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::draft $id is named '$name', not a final"; exit 1; }
+          {
+            echo "artifact=$artifact"
+            echo "sha=$sha"
+            echo "id=$id"
+            echo "version=${name#v}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download the signed build
+        if: steps.find.outputs.id != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ steps.find.outputs.artifact }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: signed
+
+      - name: Verify the x64 installer's signature, timestamp and publisher
+        if: steps.find.outputs.id != ''
+        shell: pwsh
+        env:
+          EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+          VERSION: ${{ steps.find.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:EXPECTED) { throw 'ORCA_FEED_PUBLISHER_CN is not set' }
+          $files = @(Get-ChildItem -Path signed -Recurse -File -Filter "ORCA-$($env:VERSION)-win-x64.exe")
+          if ($files.Count -ne 1) { throw "expected one ORCA-$($env:VERSION)-win-x64.exe, found $($files.Count)" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $files[0].FullName
+          $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+          "{0} stamped={1} cn='{2}'" -f $sig.Status, [bool]$sig.TimeStamperCertificate, $cn
+          if ($sig.Status -ne 'Valid' -or $cn -ne $env:EXPECTED -or -not $sig.TimeStamperCertificate) {
+            throw "the installer is not validly signed and timestamped by '$($env:EXPECTED)'"
+          }
+
+      - name: Attach it to the draft by id
+        if: steps.find.outputs.id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ID: ${{ steps.find.outputs.id }}
+          SHA: ${{ steps.find.outputs.sha }}
+          VERSION: ${{ steps.find.outputs.version }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          name="ORCA-$VERSION-win-x64.exe"
+          file=$(find signed -type f -name "$name")
+          want="sha256:$(sha256sum "$file" | cut -d' ' -f1)"
+          have=$(gh api "repos/$REPO/releases/$ID" --jq ".assets[] | select(.name == \"$name\") | .digest")
+          if [[ -z "$have" ]]; then
+            gh api -X POST -H "Content-Type: application/octet-stream" \
+              "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=$name" --input "$file" >/dev/null
+          elif [[ "$have" != "$want" ]]; then
+            echo "::error::draft $ID already has $name with $have, not this run's $want"
+            exit 1
+          fi
+          check=$(gh api "repos/$REPO/releases/$ID" --jq \
+            "[.draft, .target_commitish == \"$SHA\", ([.assets[] | select(.name == \"$name\") | .digest] == [\"$want\"])] | map(tostring) | join(\" \")")
+          [[ "$check" == "true true true" ]] || { echo "::error::draft $ID does not read back with $name ($check)"; exit 1; }
+          {
+            echo "Attached $name (\`$want\`) from signed run $RUN_ID to draft v$VERSION (release \`$ID\`, \`$SHA\`)."
+            echo "Next: native acceptance on the draft's exact assets, then publish (docs/RELEASING.md)."
+          } >> "$GITHUB_STEP_SUMMARY"

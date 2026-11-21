@@ -134,12 +134,15 @@ it("never hands a write token to the ref under test (#863)", () => {
   expect(reviewed.run).toContain('if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]');
   expect(release.findIndex((s) => s.run === "pnpm install --frozen-lockfile")).toBeGreaterThan(sha + 1);
 
-  // Only the two writers get write, and every checkout drops its credentials.
+  // Only the two writers get contents write (sign may only dispatch), and every checkout drops its credentials.
   for (const [name, job] of Object.entries(file.jobs)) {
     if (job.uses) continue;
-    expect(job.permissions ?? null, name).toEqual(
-      ["publish", "rehearsal"].includes(name) ? { contents: "write" } : null,
-    );
+    const expected = ["publish", "rehearsal"].includes(name)
+      ? { contents: "write" }
+      : name === "sign"
+        ? { actions: "write" }
+        : null;
+    expect(job.permissions ?? null, name).toEqual(expected);
     for (const step of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@")))
       expect(step.with["persist-credentials"], name).toBe(false);
   }
@@ -167,4 +170,27 @@ it("never hands a write token to the ref under test (#863)", () => {
   const stamp = workflow("desktop.yml").jobs.package.steps.find((s) => s.name === "The version to stamp");
   expect(stamp.env).toEqual({ VERSION: "${{ inputs.version }}" });
   expect(stamp.run).not.toContain("${{");
+});
+
+it("signs a final's commit right after staging its draft, and only a final", () => {
+  const sign = workflow("release-publish.yml").jobs.sign;
+  expect(sign.needs).toEqual(["check", "publish"]);
+  expect(sign.if).toBe("${{ !inputs.dry_run && !contains(needs.check.outputs.version, '-') }}");
+  expect(sign.steps.some((s) => s.uses)).toBe(false);
+  expect(sign.steps[0].run).toContain(
+    'gh workflow run windows-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f source_sha="$SHA"',
+  );
+});
+
+it("attaches only a re-verified signed x64 installer to the one final draft at its commit", () => {
+  const attach = readFileSync(".github/workflows/release-attach-signed.yml", "utf8");
+  expect(attach).toContain('workflows: ["Windows signed (spike)"]');
+  expect(attach).toContain("github.event.workflow_run.head_branch == 'main'");
+  expect(attach).toContain('.draft and (.prerelease | not) and .target_commitish == \\"$sha\\"');
+  const order = ["Get-AuthenticodeSignature", "ORCA_FEED_PUBLISHER_CN", "releases/$ID/assets?name=$name"].map((n) =>
+    attach.indexOf(n),
+  );
+  expect(order.every((i) => i > 0)).toBe(true);
+  expect(attach).toContain("already has $name with $have");
+  expect(attach).not.toMatch(/draft=false|make_latest|feed-r2/);
 });

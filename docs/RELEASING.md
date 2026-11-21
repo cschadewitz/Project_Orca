@@ -79,25 +79,27 @@ Work on the draft **by id, never by tag**: a draft has no tag yet, and the API c
 its `tag_name` as a temporary `untagged-…` value. With `R=cschadewitz/Project_Orca`, `ID`
 the release id from the job summary, `SHA` the commit and `V` the version:
 
-1. Dispatch **Windows signed (spike)** from `main` with `source_sha` set to `SHA`, while
-   `main` still matches it outside notes, docs and workflows (later product drift on `main`
-   makes the source check refuse it). Its environment reviewer approves the run.
-2. Verify the signing run's output: Authenticode status `Valid`, a timestamp, the expected
-   publisher, and the run's `latest-x64.yml` `files[0]` (`url`, `size`, base64 **SHA-512**)
-   describing exactly `ORCA-$V-win-x64.exe` (`release-assets.py` checks this). Record the
-   installer's **SHA-256** separately: that is what the release page and the notes'
-   verification step show.
-3. Check the draft:
+1. **Automatic:** the same run's `sign` job dispatches **Windows signed (spike)** from
+   `main` with `source_sha` set to `SHA` (while `main` still matches it outside notes, docs
+   and workflows; later product drift on `main` makes the source check refuse it). The
+   `windows-signing` environment allows `main` only and needs no reviewer.
+2. The signing run itself checks Authenticode status `Valid`, a timestamp, the expected
+   publisher, and that `latest-x64.yml` `files[0]` (`url`, `size`, base64 **SHA-512**)
+   describes exactly `ORCA-$V-win-x64.exe`.
+3. **Automatic:** when it succeeds, **Release (attach signed installer)**
+   (`release-attach-signed.yml`) finds the one final draft targeting `SHA`, re-checks the x64
+   installer's signature, timestamp and publisher, uploads it by id and reads the draft back.
+   A rerun is a no-op; different bytes under the same name stop it. Its summary gives the
+   installer's **SHA-256**. To check by hand:
    `gh api repos/$R/releases/$ID --jq '{draft, name, tag_name, target_commitish, assets: [.assets[] | {name, digest}]}'`
-   must show `draft: true`, `name: "v$V"`, `target_commitish` equal to `SHA`, and only the
-   `.deb`, whose `digest` matches the run's artifact. `tag_name` may read `v$V` or
-   `untagged-…`; step 5 sets it.
-4. Attach the signed installer by id:
-   `gh api -X POST -H 'Content-Type: application/octet-stream' "https://uploads.github.com/repos/$R/releases/$ID/assets?name=ORCA-$V-win-x64.exe" --input <file>`,
-   then repeat step 3: exactly the `.exe` and the `.deb`, the `.exe`'s `digest` equal to
-   `sha256:` and the SHA-256 recorded in step 2.
+   must show `draft: true`, `name: "v$V"`, `target_commitish` equal to `SHA`, and exactly the
+   `.deb` and the `.exe`. `tag_name` may read `v$V` or `untagged-…`; step 6 sets it.
+4. If either automatic step did not run (for example the signing run was refused), dispatch
+   **Windows signed (spike)** for `SHA` by hand; the attach follows on its own. Attaching by
+   hand is
+   `gh api -X POST -H 'Content-Type: application/octet-stream' "https://uploads.github.com/repos/$R/releases/$ID/assets?name=ORCA-$V-win-x64.exe" --input <file>`.
 5. Run native acceptance on the exact staged bytes before anything is public: the signed
-   x64 `.exe` and the Ubuntu amd64 `.deb`, each with a digest equal to what step 4's check
+   x64 `.exe` and the Ubuntu amd64 `.deb`, each with a digest equal to what step 3's check
    shows on the draft (signature, install, first launch, a built-in sample, reopen). The
    signing run's checks in step 2 are not that acceptance. If either fails, stop: the draft
    stays a draft and nothing is public.

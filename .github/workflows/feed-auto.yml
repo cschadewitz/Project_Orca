@@ -40,14 +40,23 @@ jobs:
         github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-24.04
     steps:
+      # ORCA_FEED_PAUSE=true means nothing new is offered (docs/UPDATING.md, "Pulling a bad
+      # build"); this then dispatches nothing, and says so.
+      - name: Skip while the feed is paused
+        id: pause
+        if: vars.ORCA_FEED_PAUSE == 'true'
+        run: echo "The feed is paused (ORCA_FEED_PAUSE=true); nothing dispatched." | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Scripts and tags come from main, whatever commit triggered the event.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.pause.outcome == 'skipped'
         with:
           ref: main
           fetch-depth: 0
           fetch-tags: true
 
       - name: Find the release and its signed run, then dispatch the feed
+        if: steps.pause.outcome == 'skipped'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
