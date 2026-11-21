@@ -26,13 +26,13 @@ describe("desktop feed workflows", () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
-  it("gates both feed workflows on the bucket variable and one concurrency group", () => {
+  it("gates both feed workflows on the bucket variable, main and the feed environment", () => {
     for (const name of ["feed-publish.yml", "feed-promote.yml"]) {
       const text = read(name);
       expect(text).toContain("if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''");
-      expect(text).toContain("group: release-publication");
       expect(text).toContain("environment: desktop-feed");
     }
+    expect(read("feed-promote.yml")).toContain("group: release-publication");
   });
 
   it("serves only the natively accepted x64 installer, matching the published release", () => {
@@ -53,12 +53,12 @@ describe("desktop feed workflows", () => {
 describe("automatic feed dispatch", () => {
   const auto = read("feed-auto.yml");
 
-  it("runs on a published release or a completed signed run, only while the feed is on", () => {
+  it("runs on a published release and a daily reconcile, only when switched on", () => {
     expect(auto).toContain("types: [published]");
-    expect(auto).toContain('workflows: ["Windows signed (spike)"]');
-    expect(auto).toContain("vars.ORCA_FEED_BUCKET != ''");
-    expect(auto).toContain("github.event.workflow_run.conclusion == 'success'");
-    expect(auto).toContain("github.event.workflow_run.head_branch == 'main'");
+    expect(auto).toMatch(/cron: "41 7 \* \* \*"/);
+    expect(auto).not.toContain("workflow_run");
+    expect(auto).toContain("if: vars.ORCA_FEED_AUTO == 'true' && vars.ORCA_FEED_BUCKET != ''");
+    expect(auto).not.toMatch(/^concurrency:/m);
   });
 
   it("dispatches nothing while the feed is paused", () => {
@@ -73,10 +73,7 @@ describe("automatic feed dispatch", () => {
     expect(auto).toMatch(/permissions:\n {2}contents: read\n {2}actions: write\n/);
   });
 
-  it("dispatches feed-publish.yml from main, which re-checks everything", () => {
-    const script = readFileSync("tools/deploy/feed-auto.sh", "utf8");
-    expect(script).toContain('gh workflow run feed-publish.yml --repo "$REPO" --ref main');
-    expect(script).toContain("windows-signed-$sha");
-    expect(script).toContain(".draft == false");
+  it("queues feed-publish per version so no version's dispatch replaces another's", () => {
+    expect(read("feed-publish.yml")).toContain("group: feed-publish-${{ inputs.version }}");
   });
 });

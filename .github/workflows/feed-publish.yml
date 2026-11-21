@@ -35,8 +35,11 @@ on:
         required: true
         type: string
 
+# One queue per version, so a pending feed of one version never replaces another's. Bucket
+# writes stay safe across versions and with promotions: objects are written once, and
+# rings.json only conditionally, re-read and retried on a conflict (feed-r2.sh).
 concurrency:
-  group: release-publication
+  group: feed-publish-${{ inputs.version }}
   cancel-in-progress: false
 
 permissions:

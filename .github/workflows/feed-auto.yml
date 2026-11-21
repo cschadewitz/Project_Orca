@@ -1,43 +1,35 @@
-# Feeds each published version automatically, so nobody has to dispatch feed-publish.yml.
+# Feeds each published final automatically, so nobody has to dispatch feed-publish.yml.
 #
-# A version can be fed once both exist: its published (non-draft) GitHub release and a
-# successful `Windows signed (spike)` run from main for the release's tagged commit. Whichever
-# happens last triggers this workflow:
-#   - release published       -> look for the signed run of the tag's commit
-#   - signed run completed    -> look for a published release tagged at the commit it signed
-# When both are there it dispatches feed-publish.yml from main with the version and run id;
-# feed-publish.yml then does every check (published release, signed run on main, signatures,
-# metadata, installer SHA-256 equal to the release asset) before writing anything, and a
-# repeat of an already fed version is a no-op. When one half is missing it stops with a note.
+# release-attach-signed.yml records, in the draft's notes, the signing run whose x64 installer
+# it attached. When the release is published, this dispatches feed-publish.yml from main with
+# exactly that run, provided the published installer's digest still equals the recorded one
+# (tools/deploy/feed-auto.sh). feed-publish.yml then does every check again before writing,
+# and feeding a version twice is a no-op.
 #
-# This job holds no feed credentials: it only reads and dispatches. Nothing runs while the
-# feed is off (ORCA_FEED_BUCKET unset).
+# A daily run (and a manual dispatch) reconciles every release published in the last 7 days,
+# the signed artifacts' lifetime, so a dispatch that was dropped or failed is retried. A failed
+# feed-publish run shows red in Actions; rerun it, or let the next reconcile dispatch it again.
+#
+# Off unless ORCA_FEED_AUTO is `true` (and the feed itself is on, ORCA_FEED_BUCKET). This job
+# holds no feed credentials: it only reads and dispatches. ORCA_FEED_PAUSE=true skips it.
 name: Desktop feed (automatic)
 
 on:
   release:
     types: [published]
-  workflow_run:
-    workflows: ["Windows signed (spike)"]
-    types: [completed]
+  schedule:
+    - cron: "41 7 * * *"
+  workflow_dispatch:
 
-concurrency:
-  group: feed-auto
-  cancel-in-progress: false
-
+# No concurrency group: each run only dispatches, and feed-publish.yml queues per version.
 permissions:
   contents: read
   actions: write
 
 jobs:
   dispatch:
-    name: feed the published, signed version
-    if: >-
-      vars.ORCA_FEED_BUCKET != '' &&
-      (github.event_name == 'release' ||
-       (github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_branch == 'main' &&
-        github.event.workflow_run.event == 'workflow_dispatch'))
+    name: feed published, signed versions
+    if: vars.ORCA_FEED_AUTO == 'true' && vars.ORCA_FEED_BUCKET != ''
     runs-on: ubuntu-24.04
     steps:
       # ORCA_FEED_PAUSE=true means nothing new is offered (docs/UPDATING.md, "Pulling a bad
@@ -47,20 +39,18 @@ jobs:
         if: vars.ORCA_FEED_PAUSE == 'true'
         run: echo "The feed is paused (ORCA_FEED_PAUSE=true); nothing dispatched." | tee -a "$GITHUB_STEP_SUMMARY"
 
-      # Scripts and tags come from main, whatever commit triggered the event.
+      # The script comes from main, whatever commit triggered the event.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.pause.outcome == 'skipped'
         with:
           ref: main
-          fetch-depth: 0
-          fetch-tags: true
+          persist-credentials: false
 
-      - name: Find the release and its signed run, then dispatch the feed
+      - name: Dispatch the feed for published, signed releases
         if: steps.pause.outcome == 'skipped'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-          SIGNED_RUN_ID: ${{ github.event.workflow_run.id }}
         run: bash tools/deploy/feed-auto.sh

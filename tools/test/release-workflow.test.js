@@ -192,5 +192,8 @@ it("attaches only a re-verified signed x64 installer to the one final draft at i
   );
   expect(order.every((i) => i > 0)).toBe(true);
   expect(attach).toContain("already has $name with $have");
+  // The run that produced the attached bytes is recorded once, for feed-auto.yml.
+  expect(attach).toContain('marker="<!-- orca-signed-run: $RUN_ID $want -->"');
+  expect(attach).toContain("already records another signing run");
   expect(attach).not.toMatch(/draft=false|make_latest|feed-r2/);
 });

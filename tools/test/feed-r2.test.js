@@ -33,6 +33,11 @@ if (op === "get-object") {
   process.exit(0);
 }
 if (op === "put-object") {
+  // FAKE_RACE names a file holding a rings.json another writer stores just before this put.
+  if (opt("--key") === "rings.json" && process.env.FAKE_RACE && fs.existsSync(process.env.FAKE_RACE)) {
+    fs.copyFileSync(process.env.FAKE_RACE, file);
+    fs.rmSync(process.env.FAKE_RACE);
+  }
   if (opt("--if-none-match") === "*" && fs.existsSync(file)) fail("PreconditionFailed");
   const match = opt("--if-match");
   if (match && (!fs.existsSync(file) || etag() !== match)) fail("PreconditionFailed");
@@ -218,6 +223,25 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
       encoding: "utf8",
     });
     expect(bad.stderr).toContain("FEED_ACCOUNT_ID");
+  });
+
+  it("re-reads and reapplies a ring change when another writer got there first", () => {
+    const f = setup();
+    f.release("0.7.0", "latest");
+    expect(f.run("snapshot", f.artifacts, "0.7.0", "x64").status).toBe(0);
+    const race = join(f.root, "race.json");
+    writeFileSync(
+      race,
+      JSON.stringify({ format: 1, rings: { internal: { version: "0.7.0" }, preview: { version: "0.7.0" } } }),
+    );
+    const result = f.runWith({ FAKE_RACE: race }, "promote", "stable", "0.7.0", "100");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("retrying");
+    expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8")).rings).toEqual({
+      internal: { version: "0.7.0" },
+      preview: { version: "0.7.0" },
+      stable: { version: "0.7.0" },
+    });
   });
 
   it("parses as bash", () => {

@@ -1,67 +1,60 @@
 #!/usr/bin/env bash
-# Pair a published release with the signed Windows run of its tagged commit and dispatch
-# feed-publish.yml for them (see .github/workflows/feed-auto.yml). Reads only; writes nothing
-# but the dispatch. Exits 0 with a note when the other half is not there yet.
+# Dispatch feed-publish.yml for published finals whose draft recorded the signing run that
+# produced their published installer (see .github/workflows/feed-auto.yml). Reads only;
+# writes nothing but dispatches. Feeding a version again is a no-op in feed-publish.yml, so a
+# repeated dispatch is safe.
 #
-# Environment: GH_TOKEN, REPO, EVENT (release | workflow_run), and RELEASE_TAG (release) or
-# SIGNED_RUN_ID (workflow_run).
+# release-attach-signed.yml writes `<!-- orca-signed-run: RUN_ID sha256:HEX -->` into the
+# draft's notes when it attaches the signed x64 installer. A release is dispatched only when
+# that marker exists, names one run, and its digest equals the published installer's digest;
+# anything else is left for a manual dispatch, with a note.
+#
+# Environment: GH_TOKEN, REPO, EVENT (release | schedule | workflow_dispatch), RELEASE_TAG
+# (release event only).
 set -euo pipefail
 fail() { echo "::error::$*" >&2; exit 1; }
 note() { echo "$*" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
-signed_workflow=windows-signed.yml
+TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 
-# The newest successful signed run from main that still has the artifact for SHA.
-signed_run_for() {
-  local sha=$1 id
-  for id in $(gh api "repos/$REPO/actions/workflows/$signed_workflow/runs?branch=main&status=success&per_page=50" \
-    --jq '.workflow_runs[].id'); do
-    if gh api "repos/$REPO/actions/runs/$id/artifacts?per_page=100" \
-      --jq ".artifacts[] | select(.name == \"windows-signed-$sha\" and (.expired | not)) | .id" | grep -q .; then
-      echo "$id"
-      return 0
-    fi
-  done
-  return 1
-}
-
-# A published, non-draft vX.Y.Z[-pre] release whose tag is SHA.
-published_version_at() {
-  local sha=$1 tag
-  for tag in $(git tag --points-at "$sha" 'v*'); do
-    [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || continue
-    if gh api "repos/$REPO/releases/tags/$tag" --jq 'select(.draft == false and .published_at != null) | .tag_name' 2>/dev/null |
-      grep -qx "$tag"; then
-      echo "${tag#v}"
-      return 0
-    fi
-  done
-  return 1
+# Dispatch one published release, or explain why not. Never fails the job for one release.
+feed_release() {
+  local tag=$1 json version markers run digest asset
+  [[ "$tag" =~ $TAG_RE ]] || { note "$tag: not a version tag; skipped."; return 0; }
+  version=${tag#v}
+  json=$(gh api "repos/$REPO/releases/tags/$tag") || { note "$tag: no release; skipped."; return 0; }
+  if [[ "$(jq -r '.draft == false and .published_at != null' <<<"$json")" != true ]]; then
+    note "$tag: not published; skipped."
+    return 0
+  fi
+  markers=$(jq -r '.body // ""' <<<"$json" | grep -oE '<!-- orca-signed-run: [0-9]+ sha256:[0-9a-f]{64} -->' || true)
+  if [[ $(grep -c . <<<"$markers") -ne 1 ]]; then
+    note "$tag: no single signed-run record in its notes; dispatch feed-publish.yml by hand."
+    return 0
+  fi
+  run=$(awk '{print $3}' <<<"$markers")
+  digest=$(awk '{print $4}' <<<"$markers")
+  asset=$(jq -r --arg n "ORCA-$version-win-x64.exe" '[.assets[] | select(.name == $n) | .digest] | .[0] // ""' <<<"$json")
+  if [[ "$asset" != "$digest" ]]; then
+    note "$tag: the published installer ($asset) is not the one signed run $run recorded ($digest); not fed."
+    return 0
+  fi
+  gh workflow run feed-publish.yml --repo "$REPO" --ref main -f version="$version" -f signed_run_id="$run"
+  note "$tag: dispatched Desktop feed (publish signed) with signed run $run."
 }
 
 case "${EVENT:-}" in
   release)
-    [[ "${RELEASE_TAG:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || fail "not a version tag: ${RELEASE_TAG:-}"
-    version=${RELEASE_TAG#v}
-    sha=$(git rev-parse --verify -q "refs/tags/$RELEASE_TAG^{commit}") || fail "tag $RELEASE_TAG not found"
-    if ! run=$(signed_run_for "$sha"); then
-      note "No signed Windows run for $RELEASE_TAG ($sha) yet; the feed runs when one completes."
-      exit 0
-    fi
+    [[ "${RELEASE_TAG:-}" =~ $TAG_RE ]] || fail "not a version tag: ${RELEASE_TAG:-}"
+    feed_release "$RELEASE_TAG"
     ;;
-  workflow_run)
-    [[ "${SIGNED_RUN_ID:-}" =~ ^[0-9]+$ ]] || fail "invalid run id"
-    run=$SIGNED_RUN_ID
-    artifact=$(gh api "repos/$REPO/actions/runs/$run/artifacts?per_page=100" \
-      --jq '[.artifacts[].name | select(test("^windows-signed-[0-9a-f]{40}$"))] | .[0] // ""')
-    [[ -n "$artifact" ]] || { note "Signed run $run has no signed artifact; nothing to feed."; exit 0; }
-    sha=${artifact#windows-signed-}
-    if ! version=$(published_version_at "$sha"); then
-      note "Signed run $run ($sha) has no published release yet; the feed runs when it is published."
-      exit 0
-    fi
+  schedule | workflow_dispatch)
+    # Reconcile: every release published in the last 7 days (the signed artifacts' lifetime),
+    # so a dispatch that was dropped or failed is retried.
+    since=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+    tags=$(gh api "repos/$REPO/releases?per_page=30" \
+      --jq ".[] | select(.draft == false and .published_at != null and .published_at >= \"$since\") | .tag_name")
+    [[ -n "$tags" ]] || { note "No release published since $since."; exit 0; }
+    for tag in $tags; do feed_release "$tag"; done
     ;;
   *) fail "unsupported event: ${EVENT:-}" ;;
 esac
-
-gh workflow run feed-publish.yml --repo "$REPO" --ref main -f version="$version" -f signed_run_id="$run"
-note "Dispatched Desktop feed (publish signed) for $version from signed run $run ($sha)."

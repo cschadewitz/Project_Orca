@@ -49,22 +49,32 @@ put_once() {
   echo "$key already present with identical bytes"
 }
 
-# Read-modify-write rings.json, conditional on the copy read, so a concurrent writer fails
-# this step instead of being overwritten. The workflows also share one concurrency group.
+# Read-modify-write rings.json, conditional on the copy read, so a concurrent writer's change
+# is never overwritten: on a precondition failure the change is re-read and reapplied, up to
+# five times. The transition itself is re-validated each time (feed-rings.js).
 update_rings() {
-  local condition
-  if s3 get-object --bucket "$FEED_BUCKET" --key rings.json --query ETag --output text \
-    "$work/rings.json" >"$work/etag" 2>"$work/error"; then
-    condition=(--if-match "$(cat "$work/etag")")
-  elif grep -q NoSuchKey "$work/error"; then
-    condition=(--if-none-match '*')
-  else
-    cat "$work/error" >&2
-    fail "could not read rings.json"
-  fi
-  node "$here/feed-rings.js" "$work/rings.json" "$@" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
-  s3 put-object --bucket "$FEED_BUCKET" --key rings.json --body "$work/rings.json" \
-    --content-type application/json --cache-control no-store "${condition[@]}" >/dev/null
+  local condition attempt
+  for attempt in 1 2 3 4 5; do
+    if s3 get-object --bucket "$FEED_BUCKET" --key rings.json --query ETag --output text \
+      "$work/rings.json" >"$work/etag" 2>"$work/error"; then
+      condition=(--if-match "$(cat "$work/etag")")
+    elif grep -q NoSuchKey "$work/error"; then
+      rm -f "$work/rings.json"
+      condition=(--if-none-match '*')
+    else
+      cat "$work/error" >&2
+      fail "could not read rings.json"
+    fi
+    node "$here/feed-rings.js" "$work/rings.json" "$@" >"$work/rings-message"
+    if s3 put-object --bucket "$FEED_BUCKET" --key rings.json --body "$work/rings.json" \
+      --content-type application/json --cache-control no-store "${condition[@]}" >/dev/null 2>"$work/put-error"; then
+      tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}" <"$work/rings-message"
+      return 0
+    fi
+    grep -Eq 'PreconditionFailed|\(412\)' "$work/put-error" || { cat "$work/put-error" >&2; fail "could not write rings.json"; }
+    echo "rings.json changed while updating it (attempt $attempt); retrying"
+  done
+  fail "rings.json kept changing; gave up after 5 attempts"
 }
 
 case "${1:-}" in

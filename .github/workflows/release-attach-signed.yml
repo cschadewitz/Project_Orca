@@ -6,8 +6,10 @@
 # single draft (not a prerelease) whose target is the commit it signed, re-checks the x64
 # installer's Authenticode signature, timestamp and publisher (ORCA_FEED_PUBLISHER_CN), and
 # uploads it to the draft by id. An installer of that name already on the draft must have the
-# same SHA-256 (a rerun is a no-op; different bytes stop the run). It never publishes, tags or
-# touches the feed: native acceptance and publication follow (docs/RELEASING.md).
+# same SHA-256 (a rerun is a no-op; different bytes stop the run). It records the run id and
+# digest in the draft's notes as an HTML comment, which feed-auto.yml uses to feed exactly
+# these bytes once published. It never publishes, tags or touches the feed: native acceptance
+# and publication follow (docs/RELEASING.md).
 name: Release (attach signed installer)
 
 on:
@@ -112,6 +114,18 @@ jobs:
               "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=$name" --input "$file" >/dev/null
           elif [[ "$have" != "$want" ]]; then
             echo "::error::draft $ID already has $name with $have, not this run's $want"
+            exit 1
+          fi
+          # Record which signing run produced the attached bytes, for feed-auto.yml. Invisible
+          # on the release page; one record per release, never a different one.
+          marker="<!-- orca-signed-run: $RUN_ID $want -->"
+          body=$(gh api "repos/$REPO/releases/$ID" --jq '.body // ""')
+          recorded=$(grep -oE '<!-- orca-signed-run: [0-9]+ sha256:[0-9a-f]{64} -->' <<<"$body" || true)
+          if [[ -z "$recorded" ]]; then
+            jq -n --arg body "$body"$'\n\n'"$marker" '{body: $body}' |
+              gh api -X PATCH "repos/$REPO/releases/$ID" --input - >/dev/null
+          elif [[ "$recorded" != "$marker" ]]; then
+            echo "::error::draft $ID already records another signing run: $recorded"
             exit 1
           fi
           check=$(gh api "repos/$REPO/releases/$ID" --jq \
