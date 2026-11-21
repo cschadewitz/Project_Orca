@@ -153,4 +153,7 @@ jobs:
           FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
           FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
           VERSION: ${{ inputs.version }}
-        run: bash tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$FEED_ARCHES"
+        # Prove R2 still honours conditional writes before relying on them.
+        run: |
+          bash tools/deploy/feed-r2.sh probe
+          bash tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$FEED_ARCHES"

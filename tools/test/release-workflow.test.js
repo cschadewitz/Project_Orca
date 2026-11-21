@@ -175,25 +175,37 @@ it("never hands a write token to the ref under test (#863)", () => {
 it("signs a final's commit right after staging its draft, and only a final", () => {
   const sign = workflow("release-publish.yml").jobs.sign;
   expect(sign.needs).toEqual(["check", "publish"]);
-  expect(sign.if).toBe("${{ !inputs.dry_run && !contains(needs.check.outputs.version, '-') }}");
+  expect(sign.if).toBe(
+    "${{ !inputs.dry_run && !contains(needs.check.outputs.version, '-') && vars.ORCA_RELEASE_AUTO_SIGN == 'true' }}",
+  );
   expect(sign.steps.some((s) => s.uses)).toBe(false);
   expect(sign.steps[0].run).toContain(
     'gh workflow run windows-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f source_sha="$SHA"',
   );
 });
 
-it("attaches only a re-verified signed x64 installer to the one final draft at its commit", () => {
-  const attach = readFileSync(".github/workflows/release-attach-signed.yml", "utf8");
-  expect(attach).toContain('workflows: ["Windows signed (spike)"]');
-  expect(attach).toContain("github.event.workflow_run.head_branch == 'main'");
-  expect(attach).toContain('.draft and (.prerelease | not) and .target_commitish == \\"$sha\\"');
-  const order = ["Get-AuthenticodeSignature", "ORCA_FEED_PUBLISHER_CN", "releases/$ID/assets?name=$name"].map((n) =>
-    attach.indexOf(n),
-  );
-  expect(order.every((i) => i > 0)).toBe(true);
-  expect(attach).toContain("already has $name with $have");
-  // The run that produced the attached bytes is recorded once, for feed-auto.yml.
-  expect(attach).toContain('marker="<!-- orca-signed-run: $RUN_ID $want -->"');
-  expect(attach).toContain("already records another signing run");
-  expect(attach).not.toMatch(/draft=false|make_latest|feed-r2/);
+it("attaches only a re-verified signed x64 installer, through the re-validating script", () => {
+  const text = readFileSync(".github/workflows/release-attach-signed.yml", "utf8");
+  const wf = workflow("release-attach-signed.yml");
+  expect(text).toContain('workflows: ["Windows signed (spike)"]');
+  // Each signed run queues on its own: nothing shares (or can cancel) another's attachment.
+  expect(wf.concurrency).toEqual({
+    group: "release-attach-${{ inputs.signed_run_id || github.event.workflow_run.id || 'reconcile' }}",
+    "cancel-in-progress": false,
+  });
+  // The automatic paths are behind their own default-off switch; a dispatch by run id is not.
+  expect(wf.jobs.attach.if).toContain("github.event_name == 'workflow_run' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
+  expect(wf.jobs.attach.if).toContain("github.event.workflow_run.head_branch == 'main'");
+  expect(wf.jobs.reconcile.if).toContain("github.event_name == 'schedule' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
+  const steps = wf.jobs.attach.steps.map((s) => s.name ?? s.uses);
+  const verify = steps.indexOf("Verify the x64 installer's signature, timestamp and publisher");
+  const attachStep = steps.findIndex((n) => n?.startsWith("Attach it to the draft by id"));
+  expect(verify).toBeGreaterThan(0);
+  expect(attachStep).toBeGreaterThan(verify);
+  expect(wf.jobs.attach.steps[attachStep].run).toContain("bash tools/deploy/release-attach.sh attach");
+  expect(wf.jobs.reconcile.steps.at(-1).run).toBe("bash tools/deploy/release-attach.sh reconcile");
+  expect(text).not.toMatch(/draft=false|make_latest|feed-r2/);
+  const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
+  expect(script).toContain('marker="<!-- orca-signed-run: $run $want -->"');
+  expect(script).not.toMatch(/draft=false|make_latest|"draft": *false/);
 });

@@ -177,9 +177,10 @@ The feed never takes the ordinary release-job builds: their Windows installers a
 For a final the order is:
 
 1. Staging the draft dispatches **Windows signed (spike)** for the draft's pinned merge
-   commit automatically, **before** publication.
+   commit, **before** publication (automatic while `ORCA_RELEASE_AUTO_SIGN` is `true`).
 2. **Release (attach signed installer)** attaches that run's signed x64 installer to the
-   draft automatically. Native acceptance runs on the exact draft assets, and only then is the
+   draft and records the run (automatic under the same switch, otherwise dispatched with
+   the run id). Native acceptance runs on the exact draft assets, and only then is the
    draft published (which creates the tag). RELEASING.md has the steps and checks.
 3. **Architecture gate.** Rings select versions, not architectures, so the feed itself must
    leave out any architecture without native acceptance. Windows arm64 has none yet, so
@@ -237,13 +238,16 @@ One-time setup (Casey):
    writing. Store `ORCA_FEED_ACCESS_KEY_ID` and `ORCA_FEED_SECRET_ACCESS_KEY` from the R2 token
    as **environment** secrets there, not repository secrets, so only a run from main can
    write the bucket. Both feed workflows also refuse to run from any other ref.
-5. Set repository variables `ORCA_FEED_AUTO` (`true` to feed published finals automatically),
+5. Set repository variables `ORCA_RELEASE_AUTO_SIGN` (`true` to sign and attach finals
+   automatically, RELEASING.md), `ORCA_FEED_AUTO` (`true` to feed published finals automatically),
    `ORCA_FEED_ACCOUNT_ID` (the Cloudflare account id),
    `ORCA_FEED_BUCKET` and `ORCA_FEED_PUBLISHER_CN` (the exact signing certificate CN, as in
    `WINDOWS_SIGNING_PUBLISHER_CN`). Until `ORCA_FEED_BUCKET` is set, neither feed workflow
    does anything.
-6. Before the first real version, exercise `feed-r2.sh` against a throwaway bucket: R2's
-   handling of conditional writes (`If-None-Match`, `If-Match`) has not been verified from CI.
+6. Nothing to do by hand for conditional writes: every feed write job first runs
+   `feed-r2.sh probe`, which writes a throwaway `ci-probe/` key (never served) with
+   `If-None-Match` and `If-Match` conditions that must hold or be refused, deletes it, and
+   stops the job before any real write if R2 does not honour them.
 7. Before giving testers tokens, run the packaged acceptance on real Windows with signed
    builds from the feed: an opted-in preview install on stable `N` is offered and installs
    rc `N+1-rc.x`; a stable install on `N` is not offered it; neither is offered an older

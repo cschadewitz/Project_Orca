@@ -1,24 +1,39 @@
 # Attach a final's signed Windows x64 installer to its staged draft, so nobody downloads and
 # uploads it by hand.
 #
-# release-publish.yml stages a final as a draft with only the Ubuntu .deb and dispatches
-# `Windows signed (spike)` for the same commit. When that signed run succeeds, this finds the
-# single draft (not a prerelease) whose target is the commit it signed, re-checks the x64
-# installer's Authenticode signature, timestamp and publisher (ORCA_FEED_PUBLISHER_CN), and
-# uploads it to the draft by id. An installer of that name already on the draft must have the
-# same SHA-256 (a rerun is a no-op; different bytes stop the run). It records the run id and
-# digest in the draft's notes as an HTML comment, which feed-auto.yml uses to feed exactly
-# these bytes once published. It never publishes, tags or touches the feed: native acceptance
-# and publication follow (docs/RELEASING.md).
+# release-publish.yml stages a final as a draft with only the Ubuntu .deb and (with
+# ORCA_RELEASE_AUTO_SIGN on) dispatches `Windows signed (spike)` for the same commit. When that
+# signed run succeeds, this finds the single draft (not a prerelease) whose target is the
+# commit it signed, re-checks the x64 installer's Authenticode signature, timestamp and
+# publisher (ORCA_FEED_PUBLISHER_CN), and uploads it to the draft by id. Before every write
+# tools/deploy/release-attach.sh re-reads that exact draft (still a draft, same target and
+# name, only the expected assets, no other record) and stops if it changed, so a draft
+# published in the meantime is never written to. It records the run id and digest in the
+# draft's notes as an HTML comment, which feed-auto.yml uses to feed exactly these bytes once
+# published. It never publishes, tags or touches the feed.
+#
+# Each signed run queues on its own, so one attachment never displaces another. A daily
+# reconcile (and a manual dispatch without a run id) re-dispatches the attach for any final
+# draft still missing its installer or record, so an interrupted run recovers by itself.
+# The automatic paths are off unless ORCA_RELEASE_AUTO_SIGN is `true`; a dispatch with a run id
+# always works.
 name: Release (attach signed installer)
 
 on:
   workflow_run:
     workflows: ["Windows signed (spike)"]
     types: [completed]
+  schedule:
+    - cron: "29 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      signed_run_id:
+        description: Successful `Windows signed (spike)` run to attach (empty = reconcile all drafts)
+        required: false
+        default: ""
 
 concurrency:
-  group: release-publication
+  group: release-attach-${{ inputs.signed_run_id || github.event.workflow_run.id || 'reconcile' }}
   cancel-in-progress: false
 
 permissions:
@@ -29,50 +44,39 @@ jobs:
   attach:
     name: attach the signed x64 installer to the draft
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.event == 'workflow_dispatch'
+      (github.event_name == 'workflow_dispatch' && inputs.signed_run_id != '' &&
+       github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && vars.ORCA_RELEASE_AUTO_SIGN == 'true' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'workflow_dispatch')
     runs-on: windows-latest
     defaults:
       run:
         shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_ID: ${{ inputs.signed_run_id || github.event.workflow_run.id }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - name: Find the signed commit and its draft
         id: find
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          artifact=$(gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" \
-            --jq '[.artifacts[].name | select(test("^windows-signed-[0-9a-f]{40}$"))] | .[0] // ""')
-          [[ -n "$artifact" ]] || { echo "Signed run $RUN_ID has no signed artifact." | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
-          sha=${artifact#windows-signed-}
-          ids=$(gh api --paginate "repos/$REPO/releases" \
-            --jq ".[] | select(.draft and (.prerelease | not) and .target_commitish == \"$sha\") | .id")
-          count=$(wc -w <<<"$ids")
-          if [[ "$count" -eq 0 ]]; then
-            echo "No final draft targets $sha; nothing to attach." | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          [[ "$count" -eq 1 ]] || { echo "::error::$count final drafts target $sha ($(echo $ids)); attach by hand"; exit 1; }
-          id=$(echo $ids)
-          name=$(gh api "repos/$REPO/releases/$id" --jq .name)
-          [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::draft $id is named '$name', not a final"; exit 1; }
-          {
-            echo "artifact=$artifact"
-            echo "sha=$sha"
-            echo "id=$id"
-            echo "version=${name#v}"
-          } >> "$GITHUB_OUTPUT"
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::invalid signed run id"; exit 1; }
+          bash tools/deploy/release-attach.sh select "$RUN_ID" >> "$GITHUB_OUTPUT"
 
       - name: Download the signed build
         if: steps.find.outputs.id != ''
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ steps.find.outputs.artifact }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ env.RUN_ID }}
           github-token: ${{ github.token }}
           path: signed
 
@@ -94,44 +98,36 @@ jobs:
             throw "the installer is not validly signed and timestamped by '$($env:EXPECTED)'"
           }
 
-      - name: Attach it to the draft by id
+      - name: Attach it to the draft by id, re-validating the draft before each write
         if: steps.find.outputs.id != ''
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
           ID: ${{ steps.find.outputs.id }}
           SHA: ${{ steps.find.outputs.sha }}
           VERSION: ${{ steps.find.outputs.version }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          name="ORCA-$VERSION-win-x64.exe"
-          file=$(find signed -type f -name "$name")
-          want="sha256:$(sha256sum "$file" | cut -d' ' -f1)"
-          have=$(gh api "repos/$REPO/releases/$ID" --jq ".assets[] | select(.name == \"$name\") | .digest")
-          if [[ -z "$have" ]]; then
-            gh api -X POST -H "Content-Type: application/octet-stream" \
-              "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=$name" --input "$file" >/dev/null
-          elif [[ "$have" != "$want" ]]; then
-            echo "::error::draft $ID already has $name with $have, not this run's $want"
-            exit 1
-          fi
-          # Record which signing run produced the attached bytes, for feed-auto.yml. Invisible
-          # on the release page; one record per release, never a different one.
-          marker="<!-- orca-signed-run: $RUN_ID $want -->"
-          body=$(gh api "repos/$REPO/releases/$ID" --jq '.body // ""')
-          recorded=$(grep -oE '<!-- orca-signed-run: [0-9]+ sha256:[0-9a-f]{64} -->' <<<"$body" || true)
-          if [[ -z "$recorded" ]]; then
-            jq -n --arg body "$body"$'\n\n'"$marker" '{body: $body}' |
-              gh api -X PATCH "repos/$REPO/releases/$ID" --input - >/dev/null
-          elif [[ "$recorded" != "$marker" ]]; then
-            echo "::error::draft $ID already records another signing run: $recorded"
-            exit 1
-          fi
-          check=$(gh api "repos/$REPO/releases/$ID" --jq \
-            "[.draft, .target_commitish == \"$SHA\", ([.assets[] | select(.name == \"$name\") | .digest] == [\"$want\"])] | map(tostring) | join(\" \")")
-          [[ "$check" == "true true true" ]] || { echo "::error::draft $ID does not read back with $name ($check)"; exit 1; }
-          {
-            echo "Attached $name (\`$want\`) from signed run $RUN_ID to draft v$VERSION (release \`$ID\`, \`$SHA\`)."
-            echo "Next: native acceptance on the draft's exact assets, then publish (docs/RELEASING.md)."
-          } >> "$GITHUB_STEP_SUMMARY"
+          file=$(find signed -type f -name "ORCA-$VERSION-win-x64.exe")
+          bash tools/deploy/release-attach.sh attach "$ID" "$SHA" "$VERSION" "$RUN_ID" "$file"
+          echo "Next: native acceptance on the draft's exact assets, then publish (docs/RELEASING.md)." >> "$GITHUB_STEP_SUMMARY"
+
+  reconcile:
+    name: re-dispatch attachments still missing
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'schedule' && vars.ORCA_RELEASE_AUTO_SIGN == 'true') ||
+       (github.event_name == 'workflow_dispatch' && inputs.signed_run_id == ''))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Dispatch the attach for drafts missing their installer or record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: bash tools/deploy/release-attach.sh reconcile
