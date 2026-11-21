@@ -1,22 +1,53 @@
 #!/usr/bin/env bash
 # Attach a final's signed x64 installer to its staged draft (release-attach-signed.yml).
 #
-#   release-attach.sh select RUN_ID     print artifact=, sha=, id=, version= for the one final
-#                                       draft at the commit RUN_ID signed (nothing if none)
+#   release-attach.sh select RUN_ID     print artifact=, sha=, id=, version= (stdout holds only
+#                                       these) for the one final draft at the commit RUN_ID
+#                                       signed; nothing if none. RUN_ID must be a successful
+#                                       windows-signed.yml run of this repository, dispatched
+#                                       from main, with exactly one unexpired signed artifact
 #   release-attach.sh attach ID SHA VERSION RUN_ID FILE
-#                                       upload FILE to draft ID and record RUN_ID and its digest
-#                                       in the notes; re-validates the draft before every write
+#                                       record RUN_ID and FILE's digest in draft ID's notes, then
+#                                       upload FILE; re-validates the draft before every write
 #   release-attach.sh reconcile         dispatch the attach for every final draft still missing
-#                                       its installer or record, with the newest successful
-#                                       signed run of its commit that still has the artifact
+#                                       its installer or record: the recorded run if there is
+#                                       one, else the newest qualifying run for its commit
+#   release-attach.sh publish ID VERSION
+#                                       publish draft ID as vVERSION once it holds exactly the
+#                                       .deb and the recorded installer
 #
 # Every write is preceded by a fresh read of the exact draft: still a draft, the same target
-# and name, only the expected assets, and no other record. A draft published (or changed) in
-# the meantime stops the run before it writes. Environment: GH_TOKEN, REPO.
+# and name, only the expected assets, and no other record. The record is written before the
+# upload, so an interrupted attach is resumed with the same run, never a newer one. The attach
+# and publish workflows share one concurrency group, so publication through the workflow
+# never interleaves with an attach. Environment: GH_TOKEN, REPO.
 set -euo pipefail
 fail() { echo "::error::$*" >&2; exit 1; }
-note() { echo "$*" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
+# Notes go to stderr and the summary: `select`'s stdout is the step's GITHUB_OUTPUT.
+note() { echo "$*" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}" >&2; }
 MARK_RE='<!-- orca-signed-run: [0-9]+ sha256:[0-9a-f]{64} -->'
+
+# Print RUN_ID's single unexpired signed artifact name if it is a successful
+# windows-signed.yml run of this repository, dispatched from main; print nothing otherwise
+# (the reason goes to stderr).
+signed_artifact() {
+  local run=$1 facts names count
+  facts=$(gh api "repos/$REPO/actions/runs/$run" --jq \
+    '[.path, .repository.full_name, .head_repository.full_name, .event, .head_branch, .status, .conclusion] | join(" ")') ||
+    { note "Run $run not found."; return 0; }
+  if [[ "$facts" != ".github/workflows/windows-signed.yml $REPO $REPO workflow_dispatch main completed success" ]]; then
+    note "Run $run is not a successful Windows signed (spike) run dispatched from main ($facts)."
+    return 0
+  fi
+  names=$(gh api "repos/$REPO/actions/runs/$run/artifacts?per_page=100" \
+    --jq '.artifacts[] | select(.expired | not) | .name | select(test("^windows-signed-[0-9a-f]{40}$"))')
+  count=$(grep -c . <<<"$names" || true)
+  if [[ "$count" -ne 1 ]]; then
+    note "Run $run has $count unexpired signed artifacts, not one."
+    return 0
+  fi
+  echo "$names"
+}
 
 # Refuse unless draft ID is still exactly what we selected. Prints its body.
 validate() {
@@ -39,9 +70,8 @@ validate() {
 case "${1:-}" in
   select)
     [[ "${2:-}" =~ ^[0-9]+$ ]] || fail "usage: release-attach.sh select RUN_ID"
-    artifact=$(gh api "repos/$REPO/actions/runs/$2/artifacts?per_page=100" \
-      --jq '[.artifacts[] | select(.expired | not) | .name | select(test("^windows-signed-[0-9a-f]{40}$"))] | .[0] // ""')
-    [[ -n "$artifact" ]] || { note "Signed run $2 has no unexpired signed artifact; nothing to attach."; exit 0; }
+    artifact=$(signed_artifact "$2")
+    [[ -n "$artifact" ]] || { note "Nothing to attach from run $2."; exit 0; }
     sha=${artifact#windows-signed-}
     ids=$(gh api --paginate "repos/$REPO/releases" \
       --jq ".[] | select(.draft and (.prerelease | not) and .target_commitish == \"$sha\") | .id")
@@ -59,6 +89,13 @@ case "${1:-}" in
     [[ "$(basename "$file")" == "$name" ]] || fail "$file is not $name"
     want="sha256:$(sha256sum "$file" | cut -d' ' -f1)"
     marker="<!-- orca-signed-run: $run $want -->"
+    # The record first: if anything interrupts the upload, the draft already names this run,
+    # so reconcile resumes with it and no other run's bytes can be attached.
+    body=$(validate "$id" "$sha" "$version" "$marker")
+    if ! grep -qF "$marker" <<<"$body"; then
+      jq -n --arg body "$body"$'\n\n'"$marker" '{body: $body}' |
+        gh api -X PATCH "repos/$REPO/releases/$id" --input - >/dev/null
+    fi
     validate "$id" "$sha" "$version" "$marker" >/dev/null
     have=$(gh api "repos/$REPO/releases/$id" --jq ".assets[] | select(.name == \"$name\") | .digest")
     if [[ -z "$have" ]]; then
@@ -67,11 +104,6 @@ case "${1:-}" in
     elif [[ "$have" != "$want" ]]; then
       fail "draft $id already has $name with $have, not this run's $want"
     fi
-    body=$(validate "$id" "$sha" "$version" "$marker")
-    if ! grep -qF "$marker" <<<"$body"; then
-      jq -n --arg body "$body"$'\n\n'"$marker" '{body: $body}' |
-        gh api -X PATCH "repos/$REPO/releases/$id" --input - >/dev/null
-    fi
     check=$(gh api "repos/$REPO/releases/$id" --jq \
       "[.draft, .target_commitish == \"$sha\", ([.assets[] | select(.name == \"$name\") | .digest] == [\"$want\"]), ((.body // \"\") | contains(\"$marker\"))] | map(tostring) | join(\" \")")
     [[ "$check" == "true true true true" ]] || fail "draft $id does not read back with $name and its record ($check)"
@@ -79,28 +111,66 @@ case "${1:-}" in
     ;;
   reconcile)
     drafts=$(gh api --paginate "repos/$REPO/releases" \
-      --jq '.[] | select(.draft and (.prerelease | not)) | [.id, .target_commitish, .name, ((.body // "") | test("<!-- orca-signed-run: [0-9]+ sha256:[0-9a-f]{64} -->")), ([.assets[].name] | any(endswith("-win-x64.exe")))] | @tsv')
+      --jq '.[] | select(.draft and (.prerelease | not)) | [.id, .target_commitish, .name, ([.assets[].name] | any(endswith("-win-x64.exe")))] | @tsv')
     [[ -n "$drafts" ]] || { note "No final drafts."; exit 0; }
-    runs=$(gh api "repos/$REPO/actions/workflows/windows-signed.yml/runs?branch=main&status=success&per_page=30" \
+    runs=$(gh api "repos/$REPO/actions/workflows/windows-signed.yml/runs?branch=main&event=workflow_dispatch&status=success&per_page=30" \
       --jq '.workflow_runs[].id')
-    while IFS=$'\t' read -r id sha name recorded attached; do
+    while IFS=$'\t' read -r id sha name attached; do
       [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
-      if [[ "$recorded" == true && "$attached" == true ]]; then continue; fi
+      records=$(gh api "repos/$REPO/releases/$id" --jq '.body // ""' | grep -oE "$MARK_RE" || true)
+      count=$(grep -c . <<<"$records" || true)
+      if [[ "$count" -gt 1 ]]; then
+        note "$name (release $id): more than one signing record; fix by hand."
+        continue
+      fi
+      if [[ "$count" -eq 1 && "$attached" == true ]]; then continue; fi
+      if [[ "$count" -eq 0 && "$attached" == true ]]; then
+        note "$name (release $id): an installer without a signing record (attached by hand); not touched."
+        continue
+      fi
+      # Recorded but not uploaded: resume with exactly the recorded run, never another.
+      if [[ "$count" -eq 1 ]]; then
+        candidates=$(awk '{print $3}' <<<"$records")
+      else
+        candidates=$runs
+      fi
       found=""
-      for run in $runs; do
-        if gh api "repos/$REPO/actions/runs/$run/artifacts?per_page=100" \
-          --jq ".artifacts[] | select(.name == \"windows-signed-$sha\" and (.expired | not)) | .id" | grep -q .; then
+      for run in $candidates; do
+        if [[ "$(signed_artifact "$run")" == "windows-signed-$sha" ]]; then
           found=$run
           break
         fi
       done
       if [[ -z "$found" ]]; then
-        note "$name (release $id): no unexpired signed run for $sha yet."
+        note "$name (release $id): no qualifying signed run for $sha (recorded: ${records:-none})."
         continue
       fi
       gh workflow run release-attach-signed.yml --repo "$REPO" --ref main -f signed_run_id="$found"
       note "$name (release $id): dispatched the attach with signed run $found."
     done <<<"$drafts"
     ;;
-  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE | reconcile" ;;
+  publish)
+    [[ $# -eq 3 && "$2" =~ ^[0-9]+$ && "$3" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "usage: release-attach.sh publish ID VERSION"
+    id=$2 version=$3
+    json=$(gh api "repos/$REPO/releases/$id") || fail "release $id not found"
+    sha=$(jq -r .target_commitish <<<"$json")
+    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "release $id does not target a commit"
+    records=$(jq -r '.body // ""' <<<"$json" | grep -oE "$MARK_RE" || true)
+    [[ $(grep -c . <<<"$records") -eq 1 ]] || fail "release $id has no single signing record"
+    digest=$(awk '{print $4}' <<<"$records")
+    marker=$records
+    validate "$id" "$sha" "$version" "$marker" >/dev/null
+    have=$(jq -r --arg n "ORCA-$version-win-x64.exe" '[.assets[] | select(.name == $n) | .digest] | .[0] // ""' <<<"$json")
+    [[ "$have" == "$digest" ]] || fail "release $id's installer ($have) is not the recorded one ($digest)"
+    [[ $(jq '.assets | length' <<<"$json") -eq 2 ]] || fail "release $id does not hold exactly the .deb and the installer"
+    if tagged=$(gh api "repos/$REPO/git/ref/tags/v$version" --jq .object.sha 2>/dev/null); then
+      [[ "$tagged" == "$sha" ]] || fail "tag v$version already exists at $tagged, not $sha"
+    fi
+    gh api -X PATCH "repos/$REPO/releases/$id" -f tag_name="v$version" -f target_commitish="$sha" \
+      -F draft=false -f make_latest=true >/dev/null
+    [[ "$(gh api "repos/$REPO/git/ref/tags/v$version" --jq .object.sha)" == "$sha" ]] || fail "tag v$version does not point at $sha"
+    [[ "$(gh api "repos/$REPO/releases/latest" --jq .id)" == "$id" ]] || fail "release $id is not latest"
+    note "Published v$version (release \`$id\`, \`$sha\`) with the recorded installer \`$digest\`."
+    ;;
+  *) fail "usage: release-attach.sh select RUN_ID | attach ID SHA VERSION RUN_ID FILE | reconcile | publish ID VERSION" ;;
 esac

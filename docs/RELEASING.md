@@ -90,15 +90,18 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    publisher, and that `latest-x64.yml` `files[0]` (`url`, `size`, base64 **SHA-512**)
    describes exactly `ORCA-$V-win-x64.exe`.
 3. **Automatic** (same switch): when it succeeds, **Release (attach signed installer)**
-   (`release-attach-signed.yml`, `tools/deploy/release-attach.sh`) finds the one final draft
-   targeting `SHA`, re-checks the x64 installer's signature, timestamp and publisher, uploads
-   it by id, records the run and digest in the draft's notes and reads both back. Before each
-   write it re-reads that exact draft (still a draft, same target and name, only the `.deb`
-   or `.deb` + `.exe`, no other run's record) and stops if anything changed, so a draft
-   published in the meantime is never written to. A rerun is a no-op; different bytes under
-   the same name stop it. Each signing run queues separately, and a reconcile every 6 hours
-   re-dispatches the attach for any final draft still missing its installer or record, so an
-   interrupted attach recovers on its own. Its summary gives the installer's **SHA-256**. To check by hand:
+   (`release-attach-signed.yml`, `tools/deploy/release-attach.sh`) first checks the signing
+   run itself: a successful `windows-signed.yml` run of this repository, dispatched from
+   `main`, with exactly one unexpired signed artifact. It finds the one final draft targeting
+   `SHA`, re-checks the x64 installer's signature, timestamp and publisher, records the run
+   and the installer's digest in the draft's notes, then uploads it by id and reads both
+   back. Before each write it re-reads that exact draft (still a draft, same target and name,
+   only the `.deb` or `.deb` + `.exe`, no other run's record) and stops if anything changed.
+   Because the record comes first, an interrupted upload is resumed with the same run, and a
+   later signing run of the same commit is refused. A reconcile every 6 hours re-dispatches
+   the attach for any final draft missing its installer or record (the recorded run if there
+   is one); an installer attached by hand without a record is left alone. A rerun is a
+   no-op; different bytes under the same name stop it. Its summary gives the installer's **SHA-256**. To check by hand:
    `gh api repos/$R/releases/$ID --jq '{draft, name, tag_name, target_commitish, assets: [.assets[] | {name, digest}]}'`
    must show `draft: true`, `name: "v$V"`, `target_commitish` equal to `SHA`, and exactly the
    `.deb` and the `.exe`. `tag_name` may read `v$V` or `untagged-…`; step 6 sets it.
@@ -113,13 +116,16 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    shows on the draft (signature, install, first launch, a built-in sample, reopen). The
    signing run's checks in step 2 are not that acceptance. If either fails, stop: the draft
    stays a draft and nothing is public.
-6. Publish with the tag and target stated explicitly:
-   `gh api -X PATCH repos/$R/releases/$ID -f tag_name=v$V -f target_commitish=$SHA -F draft=false -f make_latest=true`.
-   Then `git ls-remote origin refs/tags/v$V` must print `SHA`,
-   `gh api repos/$R/releases/latest --jq .id` must print `ID`, and both public downloads
-   (from the published page's URLs) must hash to the digests accepted in step 5.
+6. Publish by dispatching **Release (publish final)** (`release-publish-final.yml`) from
+   `main` with `release_id=$ID` and `version=$V`. It re-reads the draft (exactly the `.deb`
+   and the recorded installer, one record, the installer's digest equal to the recorded one),
+   refuses an existing tag at another commit, publishes with the tag and target stated
+   explicitly, and checks that `v$V` points at `SHA` and that `ID` is latest. It shares one
+   queue with the attach, so the two never interleave; publish only through it, not by
+   editing the draft by hand. Then both public downloads (from the published page's URLs)
+   must hash to the digests accepted in step 5.
 7. Where the desktop feed is enabled, publishing feeds that signing run automatically
-   (**Desktop feed (automatic)** dispatches **Desktop feed (publish signed)**; see
+   (step 6 dispatches **Desktop feed (automatic)**, which dispatches **Desktop feed (publish signed)**; see
    [UPDATING.md](UPDATING.md)). Check that run went green.
 
 If `publish` fails or is re-run for a final, it refuses to make a second draft while any

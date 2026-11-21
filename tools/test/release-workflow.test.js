@@ -188,11 +188,15 @@ it("attaches only a re-verified signed x64 installer, through the re-validating 
   const text = readFileSync(".github/workflows/release-attach-signed.yml", "utf8");
   const wf = workflow("release-attach-signed.yml");
   expect(text).toContain('workflows: ["Windows signed (spike)"]');
-  // Each signed run queues on its own: nothing shares (or can cancel) another's attachment.
-  expect(wf.concurrency).toEqual({
-    group: "release-attach-${{ inputs.signed_run_id || github.event.workflow_run.id || 'reconcile' }}",
+  // Attachment and publication share one queue, so they never interleave; reconcile, which
+  // only dispatches, queues on its own.
+  expect(wf.jobs.attach.concurrency).toEqual({ group: "release-draft-writes", "cancel-in-progress": false });
+  expect(workflow("release-publish-final.yml").concurrency).toEqual({
+    group: "release-draft-writes",
     "cancel-in-progress": false,
   });
+  expect(wf.jobs.reconcile.concurrency.group).toBe("release-attach-reconcile");
+  expect(wf.permissions).toEqual({ contents: "read" });
   // The automatic paths are behind their own default-off switch; a dispatch by run id is not.
   expect(wf.jobs.attach.if).toContain("github.event_name == 'workflow_run' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
   expect(wf.jobs.attach.if).toContain("github.event.workflow_run.head_branch == 'main'");
@@ -206,6 +210,31 @@ it("attaches only a re-verified signed x64 installer, through the re-validating 
   expect(wf.jobs.reconcile.steps.at(-1).run).toBe("bash tools/deploy/release-attach.sh reconcile");
   expect(text).not.toMatch(/draft=false|make_latest|feed-r2/);
   const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
+  // The signing run itself is checked before any draft is selected, on every path.
+  expect(script).toContain(
+    'if [[ "$facts" != ".github/workflows/windows-signed.yml $REPO $REPO workflow_dispatch main completed success" ]]; then',
+  );
   expect(script).toContain('marker="<!-- orca-signed-run: $run $want -->"');
-  expect(script).not.toMatch(/draft=false|make_latest|"draft": *false/);
+  // Only `publish` (Release (publish final)) publishes; attach and reconcile never do.
+  const attachPart = script.slice(script.indexOf("\n  attach)"), script.indexOf("\n  publish)"));
+  expect(attachPart).not.toMatch(/draft=false|make_latest|"draft": *false/);
+});
+
+it("publishes a final only from main, through the checking script, and hands over to the feed", () => {
+  const wf = workflow("release-publish-final.yml");
+  expect(wf.on).toEqual({
+    workflow_dispatch: {
+      inputs: {
+        release_id: { description: "The accepted draft's release id", required: true },
+        version: { description: "Version (X.Y.Z)", required: true },
+      },
+    },
+  });
+  expect(wf.permissions).toEqual({ contents: "read" });
+  const job = wf.jobs.publish;
+  expect(job.if).toBe("github.ref == 'refs/heads/main'");
+  expect(job.permissions).toEqual({ contents: "write", actions: "write" });
+  expect(job.steps[1].run).toBe('bash tools/deploy/release-attach.sh publish "$ID" "$VERSION"');
+  expect(job.steps[1].run).not.toContain("${{");
+  expect(job.steps[2].run).toBe('gh workflow run feed-auto.yml --repo "$GITHUB_REPOSITORY" --ref main');
 });

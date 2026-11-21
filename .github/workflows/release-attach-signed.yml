@@ -12,9 +12,11 @@
 # draft's notes as an HTML comment, which feed-auto.yml uses to feed exactly these bytes once
 # published. It never publishes, tags or touches the feed.
 #
-# Each signed run queues on its own, so one attachment never displaces another. A daily
-# reconcile (and a manual dispatch without a run id) re-dispatches the attach for any final
-# draft still missing its installer or record, so an interrupted run recovers by itself.
+# The signing run is checked first (a successful windows-signed.yml run of this repository,
+# dispatched from main, with exactly one unexpired signed artifact). The record is written
+# before the upload. A reconcile every 6 hours (and a manual dispatch without a run id)
+# re-dispatches the attach for any final draft still missing its installer or record, with
+# the recorded run when there is one, so an interrupted or displaced run recovers by itself.
 # The automatic paths are off unless ORCA_RELEASE_AUTO_SIGN is `true`; a dispatch with a run id
 # always works.
 name: Release (attach signed installer)
@@ -32,17 +34,21 @@ on:
         required: false
         default: ""
 
-concurrency:
-  group: release-attach-${{ inputs.signed_run_id || github.event.workflow_run.id || 'reconcile' }}
-  cancel-in-progress: false
-
 permissions:
-  contents: write
-  actions: read
+  contents: read
 
 jobs:
   attach:
     name: attach the signed x64 installer to the draft
+    # Shared with Release (publish final): an attachment and a publication never interleave.
+    # A pending run displaced here loses nothing: the draft keeps its record (written before
+    # the upload) and the reconcile below dispatches the attach again.
+    concurrency:
+      group: release-draft-writes
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.signed_run_id != '' &&
        github.ref == 'refs/heads/main') ||
@@ -69,6 +75,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::invalid signed run id"; exit 1; }
+          # stdout carries only the output assignments; notes go to stderr.
           bash tools/deploy/release-attach.sh select "$RUN_ID" >> "$GITHUB_OUTPUT"
 
       - name: Download the signed build
@@ -117,6 +124,9 @@ jobs:
       ((github.event_name == 'schedule' && vars.ORCA_RELEASE_AUTO_SIGN == 'true') ||
        (github.event_name == 'workflow_dispatch' && inputs.signed_run_id == ''))
     runs-on: ubuntu-24.04
+    concurrency:
+      group: release-attach-reconcile
+      cancel-in-progress: false
     permissions:
       contents: read
       actions: write

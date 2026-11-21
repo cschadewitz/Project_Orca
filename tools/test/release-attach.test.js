@@ -40,8 +40,18 @@ if (method === "POST" && (m = path.match(/^releases\/(\d+)\/assets\?name=(.+)$/)
   const r = byId(m[1]);
   if (!r) { process.stderr.write("HTTP 404\n"); process.exit(1); }
   if (method === "PATCH") {
-    Object.assign(r, JSON.parse(input().toString()));
-    log(["patch", m[1]]);
+    const fields = {};
+    args.forEach((a, i) => {
+      if (a === "-f") { const [k, ...v] = args[i + 1].split("="); fields[k] = v.join("="); }
+      if (a === "-F") { const [k, ...v] = args[i + 1].split("="); fields[k] = JSON.parse(v.join("=")); }
+    });
+    Object.assign(r, args.includes("--input") ? JSON.parse(input().toString()) : fields);
+    if (fields.draft === false) {
+      r.published_at = "2026-11-21T22:00:00Z";
+      state.tags[r.tag_name] = r.target_commitish;
+      state.latest = r.id;
+    }
+    log(["patch", m[1], ...Object.keys(fields)]);
   } else {
     state.reads = (state.reads || 0) + 1;
     if (String(state.reads) === process.env.FAKE_PUBLISH_AT_READ) {
@@ -50,6 +60,12 @@ if (method === "POST" && (m = path.match(/^releases\/(\d+)\/assets\?name=(.+)$/)
     }
   }
   out = r;
+} else if (path === "releases/latest") {
+  out = byId(String(state.latest));
+} else if ((m = path.match(/^git\/ref\/tags\/(.+)$/))) {
+  if (state.tags[m[1]]) out = { object: { sha: state.tags[m[1]] } };
+} else if ((m = path.match(/^actions\/runs\/(\d+)$/))) {
+  out = state.runs[m[1]];
 } else if ((m = path.match(/^releases\/tags\/(.+)$/))) {
   out = state.releases.find((r) => r.tag_name === m[1]);
 } else if (/^releases(\?|$)/.test(path)) {
@@ -86,12 +102,27 @@ const draft = (over = {}) => ({
 });
 const artifact = (sha = SHA, expired = false) => ({ name: `windows-signed-${sha}`, expired });
 
-function setup({ releases = [draft()], artifacts = { 100: [artifact()] }, signedRuns = [100] } = {}) {
+const goodRun = {
+  path: ".github/workflows/windows-signed.yml",
+  repository: { full_name: "o/r" },
+  head_repository: { full_name: "o/r" },
+  event: "workflow_dispatch",
+  head_branch: "main",
+  status: "completed",
+  conclusion: "success",
+};
+
+function setup({
+  releases = [draft()],
+  artifacts = { 100: [artifact()] },
+  signedRuns = [100],
+  runs = Object.fromEntries(Object.keys(artifacts).map((id) => [id, goodRun])),
+} = {}) {
   const root = mkdtempSync(join(tmpdir(), "orca-release-attach-"));
   dirs.push(root);
   writeFileSync(join(root, "gh"), FAKE_GH);
   chmodSync(join(root, "gh"), 0o755);
-  writeFileSync(join(root, "state.json"), JSON.stringify({ releases, artifacts, signedRuns }));
+  writeFileSync(join(root, "state.json"), JSON.stringify({ releases, artifacts, signedRuns, runs, tags: {} }));
   writeFileSync(join(root, "log"), "");
   mkdirSync(join(root, "signed"));
   const exe = join(root, "signed", "ORCA-0.8.0-win-x64.exe");
@@ -110,45 +141,83 @@ function setup({ releases = [draft()], artifacts = { 100: [artifact()] }, signed
         ...env,
       },
     });
-  const attach = (env) => run(ATTACH, ["attach", "7", SHA, "0.8.0", "100", exe], env);
+  const attach = (env, runId = "100") => run(ATTACH, ["attach", "7", SHA, "0.8.0", runId, exe], env);
   const state = () => JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
+  const edit = (fn) => {
+    const st = state();
+    fn(st);
+    st.reads = 0;
+    writeFileSync(join(root, "state.json"), JSON.stringify(st));
+  };
   const writes = () =>
     readFileSync(join(root, "log"), "utf8")
       .split("\n")
       .filter(Boolean)
       .map((l) => JSON.parse(l));
-  return { run, attach, state, writes, digest, marker: `<!-- orca-signed-run: 100 ${digest} -->` };
+  const marker = (runId = 100) => `<!-- orca-signed-run: ${runId} ${digest} -->`;
+  return { run, attach, state, edit, writes, digest, marker };
 }
 
+const UPLOAD = ["upload", "7", "ORCA-0.8.0-win-x64.exe"];
+const RECORD = ["patch", "7"];
+const dispatchAttach = (runId) => [
+  "workflow",
+  "run",
+  "release-attach-signed.yml",
+  "--repo",
+  "o/r",
+  "--ref",
+  "main",
+  "-f",
+  `signed_run_id=${runId}`,
+];
+
 describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
-  it("selects the one final draft at the signed commit", () => {
+  it("selects the one final draft at the signed commit, printing only output assignments", () => {
     const f = setup();
     const result = f.run(ATTACH, ["select", "100"]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(`artifact=windows-signed-${SHA}\nsha=${SHA}\nid=7\nversion=0.8.0\n`);
   });
 
-  it("selects nothing without a draft or an unexpired artifact, and refuses two drafts", () => {
-    expect(setup({ releases: [] }).run(ATTACH, ["select", "100"]).stdout).not.toContain("id=");
-    expect(setup({ artifacts: { 100: [artifact(SHA, true)] } }).run(ATTACH, ["select", "100"]).stdout).not.toContain(
-      "id=",
-    );
+  it.each([
+    ["another workflow", { path: ".github/workflows/ci.yml" }],
+    ["another repository", { head_repository: { full_name: "fork/r" } }],
+    ["a push", { event: "push" }],
+    ["another branch", { head_branch: "topic" }],
+    ["a failed run", { conclusion: "failure" }],
+    ["a running run", { status: "in_progress", conclusion: null }],
+  ])("selects nothing from %s, with nothing on stdout", (_label, over) => {
+    const f = setup({ runs: { 100: { ...goodRun, ...over } } });
+    const result = f.run(ATTACH, ["select", "100"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("not a successful Windows signed (spike) run dispatched from main");
+  });
+
+  it("selects nothing without a draft, with an expired or a second artifact, and refuses two drafts", () => {
+    for (const f of [
+      setup({ releases: [] }),
+      setup({ artifacts: { 100: [artifact(SHA, true)] } }),
+      setup({ artifacts: { 100: [artifact(), artifact(OTHER)] } }),
+    ]) {
+      const result = f.run(ATTACH, ["select", "100"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+    }
     const two = setup({ releases: [draft(), draft({ id: 8 })] }).run(ATTACH, ["select", "100"]);
     expect(two.status).not.toBe(0);
     expect(two.stderr).toContain("2 final drafts");
   });
 
-  it("uploads, records the run and reads both back; a rerun writes nothing", () => {
+  it("records the run first, then uploads, and reads both back; a rerun writes nothing", () => {
     const f = setup();
     const first = f.attach();
     expect(first.status, first.stderr).toBe(0);
     const r = f.state().releases[0];
     expect(r.assets.map((a) => a.digest)).toEqual([DEB.digest, f.digest]);
-    expect(r.body).toBe(`Notes.\n\n${f.marker}`);
-    expect(f.writes()).toEqual([
-      ["upload", "7", "ORCA-0.8.0-win-x64.exe"],
-      ["patch", "7"],
-    ]);
+    expect(r.body).toBe(`Notes.\n\n${f.marker()}`);
+    expect(f.writes()).toEqual([RECORD, UPLOAD]);
     expect(f.attach().status).toBe(0);
     expect(f.writes()).toHaveLength(2);
   });
@@ -161,14 +230,14 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(f.writes()).toEqual([]);
   });
 
-  it("does not record a run on a draft published between the upload and the record", () => {
-    // Reads: validate, existing asset, validate (published here), so no PATCH follows.
+  it("does not upload to a draft published between the record and the upload", () => {
+    // Reads: validate, then validate again (published here), so no upload follows.
     const f = setup();
-    const result = f.attach({ FAKE_PUBLISH_AT_READ: "3" });
+    const result = f.attach({ FAKE_PUBLISH_AT_READ: "2" });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("no longer a draft");
-    expect(f.writes()).toEqual([["upload", "7", "ORCA-0.8.0-win-x64.exe"]]);
-    expect(f.state().releases[0].body).toBe("Notes.");
+    expect(f.writes()).toEqual([RECORD]);
+    expect(f.state().releases[0].assets).toEqual([DEB]);
   });
 
   it.each([
@@ -191,62 +260,72 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     const result = f.attach();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("already has ORCA-0.8.0-win-x64.exe");
-    expect(f.writes()).toEqual([]);
   });
 
-  it("recovers an interrupted attachment through reconcile, attach and the feed", () => {
-    // The attach was cancelled after uploading and before recording. Run 300 signed another
-    // commit and run 200's artifact expired; 100 still holds this commit's signed build.
+  it("resumes an interrupted upload with the recorded run, not a newer one, through to the feed", () => {
+    // The attach recorded run 100 and was interrupted before uploading. Run 200 signed the same
+    // commit later (different bytes), and 300 another commit.
+    const f = setup({
+      artifacts: { 300: [artifact(OTHER)], 200: [artifact()], 100: [artifact()] },
+      signedRuns: [300, 200, 100],
+    });
+    f.edit((st) => (st.releases[0].body = `Notes.\n\n${f.marker(100)}`));
+
+    // Run 200's own attach (its workflow_run) is refused: the draft names 100.
+    const newer = f.attach({}, "200");
+    expect(newer.status).not.toBe(0);
+    expect(newer.stderr).toContain("another signing run");
+
+    const reconcile = f.run(ATTACH, ["reconcile"]);
+    expect(reconcile.status, reconcile.stderr).toBe(0);
+    expect(f.writes()).toEqual([dispatchAttach(100)]);
+
+    expect(f.attach().status).toBe(0);
+    expect(f.writes().slice(1)).toEqual([UPLOAD]);
+
+    // Nothing left to reconcile.
+    f.run(ATTACH, ["reconcile"]);
+    expect(f.writes()).toHaveLength(2);
+
+    // Publication through the workflow's script, then the feed takes exactly run 100.
+    const published = f.run(ATTACH, ["publish", "7", "0.8.0"]);
+    expect(published.status, published.stderr).toBe(0);
+    expect(f.writes().slice(2)).toEqual([["patch", "7", "tag_name", "target_commitish", "draft", "make_latest"]]);
+    const fed = f.run(FEED_AUTO, [], { EVENT: "release", RELEASE_TAG: "v0.8.0" });
+    expect(fed.status, fed.stderr).toBe(0);
+    expect(f.writes().at(-1)).toEqual([
+      "workflow",
+      "run",
+      "feed-publish.yml",
+      "--repo",
+      "o/r",
+      "--ref",
+      "main",
+      "-f",
+      "version=0.8.0",
+      "-f",
+      "signed_run_id=100",
+    ]);
+  });
+
+  it("starts a draft with no record from the newest qualifying run", () => {
     const f = setup({
       artifacts: { 300: [artifact(OTHER)], 200: [artifact(SHA, true)], 100: [artifact()] },
       signedRuns: [300, 200, 100],
     });
-    const s = f.state();
-    s.releases[0].assets.push({ name: "ORCA-0.8.0-win-x64.exe", digest: f.digest });
-    const root = dirs[dirs.length - 1];
-    writeFileSync(join(root, "state.json"), JSON.stringify(s));
-
-    const reconcile = f.run(ATTACH, ["reconcile"]);
-    expect(reconcile.status, reconcile.stderr).toBe(0);
-    expect(f.writes()).toEqual([
-      ["workflow", "run", "release-attach-signed.yml", "--repo", "o/r", "--ref", "main", "-f", "signed_run_id=100"],
-    ]);
-
-    const attached = f.attach();
-    expect(attached.status, attached.stderr).toBe(0);
-    expect(f.writes().slice(1)).toEqual([["patch", "7"]]);
-
-    // Published after acceptance: the feed takes exactly run 100.
-    const p = f.state();
-    p.releases[0].draft = false;
-    p.releases[0].published_at = "2026-11-21T22:00:00Z";
-    writeFileSync(join(root, "state.json"), JSON.stringify(p));
-    const fed = f.run(FEED_AUTO, [], { EVENT: "release", RELEASE_TAG: "v0.8.0" });
-    expect(fed.status, fed.stderr).toBe(0);
-    expect(f.writes().slice(2)).toEqual([
-      [
-        "workflow",
-        "run",
-        "feed-publish.yml",
-        "--repo",
-        "o/r",
-        "--ref",
-        "main",
-        "-f",
-        "version=0.8.0",
-        "-f",
-        "signed_run_id=100",
-      ],
-    ]);
-
-    // Nothing left to reconcile.
-    p.releases[0].draft = true;
-    writeFileSync(join(root, "state.json"), JSON.stringify(p));
-    f.run(ATTACH, ["reconcile"]);
-    expect(f.writes()).toHaveLength(3);
+    expect(f.run(ATTACH, ["reconcile"]).status).toBe(0);
+    expect(f.writes()).toEqual([dispatchAttach(100)]);
   });
 
-  it("reconciles only finals, and waits while no signed run has the artifact", () => {
+  it("leaves an installer attached without a record alone", () => {
+    const f = setup({ releases: [draft({ assets: [DEB, { name: "ORCA-0.8.0-win-x64.exe", digest: "sha256:0" }] })] });
+    const result = f.run(ATTACH, ["reconcile"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("without a signing record");
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("reconciles only finals, and waits while no signed run qualifies", () => {
     const f = setup({
       releases: [
         draft({ id: 1, prerelease: true }),
@@ -256,7 +335,30 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     });
     const result = f.run(ATTACH, ["reconcile"]);
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("v0.9.0 (release 3): no unexpired signed run");
+    expect(result.stderr).toContain("v0.9.0 (release 3): no qualifying signed run");
     expect(f.writes()).toEqual([]);
+  });
+
+  it.each([
+    ["no installer", {}, "not the recorded one"],
+    ["no record", { body: "Notes." }, "no single signing record"],
+  ])("refuses to publish a draft with %s", (_label, over, message) => {
+    const f = setup({
+      releases: [draft({ body: "Notes.\n\n<!-- orca-signed-run: 100 sha256:" + "a".repeat(64) + " -->", ...over })],
+    });
+    const result = f.run(ATTACH, ["publish", "7", "0.8.0"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("refuses to publish when the tag already exists at another commit", () => {
+    const f = setup();
+    expect(f.attach().status).toBe(0);
+    f.edit((st) => (st.tags["v0.8.0"] = OTHER));
+    const result = f.run(ATTACH, ["publish", "7", "0.8.0"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("already exists at");
+    expect(f.writes()).toHaveLength(2);
   });
 });
