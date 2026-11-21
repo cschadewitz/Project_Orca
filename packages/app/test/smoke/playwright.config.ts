@@ -25,6 +25,11 @@
  * - **`revision-workflow`** uses real UI controls and a protected daemon for revision
  *   save/restart/CAS/review/delivery acceptance, on those same macOS/Windows runners.
  *
+ * - **`linux-native`** (`pnpm run app:linux-native`) drives the *installed* `.deb` from
+ *   `/opt/ORCA` in a disposable desktop session: Xvfb and headless Weston, a session bus, a
+ *   locked GNOME keyring and its real unlock prompt (#857, #858). Linux only, on a
+ *   GitHub-hosted runner; `packages/app/test/native-linux/README.md` has the details.
+ *
  * Separate projects in one config let the workflow say `--project=<name>`
  * and lets `toHaveScreenshot` put the project's name in a baseline's filename, beside the
  * platform it already puts there.
@@ -111,6 +116,14 @@ export default defineConfig({
       outputDir: here("../../../../test-results/revision-workflow"),
       // Synthetic public IDs, hashes, booleans and counts only; no protected content.
       use: { trace: "off", screenshot: "off", video: "off" },
+    },
+    {
+      name: "linux-native",
+      testDir: here("../native-linux"),
+      testMatch: "*.spec.ts",
+      outputDir: here("../../../../test-results/linux-native"),
+      // Screenshots of ORCA's own window only; never a profile, keyring or daemon store.
+      use: { trace: "off", video: "off" },
     },
   ],
 });

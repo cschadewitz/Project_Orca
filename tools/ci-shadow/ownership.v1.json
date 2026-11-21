@@ -292,6 +292,17 @@
       "project": "revision-workflow",
       "platforms": ["macos", "windows"],
       "runtime": "built Electron + daemon + protected persistence"
+    },
+    {
+      "id": "linux-native",
+      "config": "packages/app/test/smoke/playwright.config.ts",
+      "files": [
+        "packages/app/test/native-linux/keyring-prompt.spec.ts",
+        "packages/app/test/native-linux/reopen-cycles.spec.ts"
+      ],
+      "project": "linux-native",
+      "platforms": ["linux"],
+      "runtime": "installed .deb + Xvfb + Weston + GNOME keyring"
     }
   ],
   "fullChecks": [

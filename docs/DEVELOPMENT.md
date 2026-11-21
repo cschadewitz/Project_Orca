@@ -809,6 +809,17 @@ workflow still runs from release publication against the exact merge commit, inc
 all three type-proof platforms. A failed proof blocks tagging; baseline review uses the same
 deliberate procedure above.
 
+### Native Linux acceptance
+
+`pnpm run app:linux-native` drives the **installed** `.deb` (`/opt/ORCA/orca-desktop`) in a
+disposable desktop session the specs start themselves: Xvfb and a headless Weston, a session
+bus, a locked GNOME login keyring and the real gcr unlock prompt, answered with xdotool. It
+covers the window not appearing after reopen on Wayland (#858) and the keyring prompt flow
+(#857), which the projects above cannot see because they use Xvfb only and the prompt is
+another process's window. It runs as the `linux-native` job of the App smoke workflow on a
+GitHub-hosted `ubuntu-24.04` runner. How to run it locally, what each spec asserts and what it
+does not cover are in [packages/app/test/native-linux/README.md](../packages/app/test/native-linux/README.md).
+
 ## Test memory
 
 The suite runs about twenty test files at once on the self-hosted runners, so one file that

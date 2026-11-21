@@ -409,3 +409,80 @@ jobs:
             playwright-report-revision-workflow/
           retention-days: ${{ inputs.ref && 14 || 7 }}
           if-no-files-found: ignore
+
+  # The installed Linux package in a real desktop session's moving parts (#857, #858): the
+  # x64 .deb this ref builds, installed through apt and launched from /opt/ORCA, under Xvfb
+  # and under a headless Weston, with a session bus, a locked GNOME login keyring and the real
+  # gcr unlock prompt. `packages/app/test/native-linux/README.md` says what each spec proves
+  # and what it cannot (a physical GNOME Shell session, the GTK folder chooser).
+  #
+  # GitHub-hosted only, like the .deb step in desktop.yml: it apt-installs the session's tools
+  # and the package into /opt and /etc with sudo, which a persistent self-hosted runner must
+  # not be asked to do. The hosted image restricts unprivileged user namespaces as stock
+  # Ubuntu 24.04 does, so the package's own AppArmor profile is what lets the sandbox start.
+  linux-native:
+    name: native Linux acceptance (installed .deb)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # With the Electron binary: electron-builder packages it.
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install the desktop session's tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            xvfb dbus dbus-bin gnome-keyring gcr libsecret-tools xdotool weston git
+
+      - name: Build the x64 .deb
+        run: |
+          set -euo pipefail
+          pnpm run build
+          pnpm --filter @orca/app run build:daemon
+          pnpm --filter @orca/app exec electron-builder --linux deb --x64 --publish never
+
+      - name: Install the .deb
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=(packages/app/dist/release/ORCA-*-linux-amd64.deb)
+          test "${#debs[@]}" = 1
+          sha256sum "${debs[0]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=1
+          sudo apt-get install -y -q "$(readlink -f "${debs[0]}")"
+          test -x /opt/ORCA/orca-desktop
+          sudo grep -q '^orca-desktop ' /sys/kernel/security/apparmor/profiles
+          # The specs launch as this job's own unprivileged account, never root.
+          test "$(id -u)" != 0
+
+      - name: Native Linux acceptance
+        timeout-minutes: 15
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-linux-native
+        run: pnpm run app:linux-native
+
+      # Screenshots of ORCA's own window and per-cycle timings only. The session's keyring,
+      # profile and workspace live in a temp dir the specs delete.
+      - name: Upload native Linux acceptance evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-native
+          path: |
+            test-results/linux-native/
+            playwright-report-linux-native/
+          retention-days: ${{ inputs.ref && 14 || 7 }}
+          if-no-files-found: ignore
