@@ -1,6 +1,11 @@
 /** Production UI bindings over the shared guarded bridge; no renderer journal or execution key. */
 import { RequestsSubmitResultSchema, RunsAdmitResultSchema, type RunsAdmitResult } from "@orca/protocol";
-import type { BridgeResult, OrcaBridge } from "../../../src/bridge.js";
+import {
+  PROTECTED_STORAGE_CODE,
+  type BridgeResult,
+  type OrcaBridge,
+  type ProtectedStorageReason,
+} from "../../../src/bridge.js";
 import type { GuidedLaunchSnapshot, ProtectedGuidedLaunch } from "../../../src/guided-launch-bridge.js";
 import type {
   LaunchContext,
@@ -18,8 +23,20 @@ import { launchSelectionLines } from "../../../src/launch-provenance.js";
 import type { RequestOverrideChoices } from "./request-overrides.js";
 
 export const CONFIGURED_ROOT = "configured-project";
+const STORAGE_REASONS: readonly ProtectedStorageReason[] = ["keyring-locked", "no-keyring", "unavailable"];
 export function unwrap<T>(value: BridgeResult<T>): T {
   if (value.ok) return value.result;
+  if (value.error.code === PROTECTED_STORAGE_CODE) {
+    const reason = STORAGE_REASONS.find((r) => r === value.error.details?.["reason"]) ?? "unavailable";
+    // Anything but an explicit before-send is treated as "a launch may exist".
+    const stage =
+      value.error.details?.["stage"] === "before-send"
+        ? "before-send"
+        : value.error.details?.["stage"] === "after-send"
+          ? "after-send"
+          : "unconfirmed";
+    throw new LaunchPortFailure("protected-storage", { reason, stage, message: value.error.message });
+  }
   throw new LaunchPortFailure(value.error.code === "AUTH_FORBIDDEN" ? "unauthorized" : "unavailable");
 }
 export function launchContext(snapshot: GuidedLaunchSnapshot): LaunchContext {

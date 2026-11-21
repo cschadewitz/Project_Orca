@@ -16,7 +16,7 @@ import { useAnnounce } from "../a11y/announce-context.js";
 import { useUpdateDraft } from "../update-drafts.js";
 import { runUrl } from "../route-table.js";
 import { GuidedLaunchController, launchReceipt } from "./controller.js";
-import type { LaunchContext } from "./contracts.js";
+import { LaunchPortFailure, type LaunchContext } from "./contracts.js";
 import { CONFIGURED_ROOT, launchContext, productionPorts, unwrap } from "./production-bindings.js";
 
 interface Session {
@@ -96,8 +96,16 @@ export function GuidedLaunchProvider({
       change();
       const handles = unwrap(await bridge.retained());
       if (token === revision.current) setRetained(handles);
-    } catch {
-      if (token === revision.current)
+    } catch (error) {
+      if (token !== revision.current) return;
+      // Reading retained launches is often what first asks the Linux keyring (#857).
+      if (error instanceof LaunchPortFailure && error.storage !== undefined)
+        setMessage(
+          error.storage.reason === "unavailable"
+            ? `${error.storage.message} Then choose Read current launch context. Your original draft is retained.`
+            : error.storage.message,
+        );
+      else
         setMessage(
           "Guided launch could not verify this target. Check connection, configuration and checkout, then read again. Your original draft is retained.",
         );

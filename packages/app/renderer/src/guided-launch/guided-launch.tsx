@@ -1,14 +1,20 @@
 /** Guided launch workspace composed from shared primitives and injected protected admission ports. */
 import { useEffect, useState, useSyncExternalStore, type JSX, type ReactNode } from "react";
 import type { WorkflowInputDeclarationView } from "@orca/protocol";
-import { Button, Card, ConfigField, KeyValueList, Menu, ObjectId, Text } from "../ui/index.js";
+import { Button, Card, ConfigField, KeyValueList, Menu, ObjectId, StateView, Text } from "../ui/index.js";
 import type { GuidedLaunchController } from "./controller.js";
 import { launchReceipt } from "./controller.js";
-import type { LaunchDraft, LaunchRoot } from "./contracts.js";
+import type { LaunchDraft, LaunchRoot, ProtectedStorageRefusalView } from "./contracts.js";
 import { inputSensitive, parseInput } from "./input-model.js";
 import { RequestOverrides, type RequestOverrideChoices } from "./request-overrides.js";
 import { launchSelectionLines } from "../../../src/launch-provenance.js";
 import "./guided-launch.css";
+
+const STORAGE_TITLES: Record<ProtectedStorageRefusalView["reason"], string> = {
+  "keyring-locked": "Keyring locked, not set up, or prompt cancelled",
+  "no-keyring": "No system keyring available",
+  unavailable: "Secure storage unavailable",
+};
 
 /**
  * The workspace-root menu's note: each root that cannot be chosen, named, with the reason
@@ -373,7 +379,26 @@ export function GuidedLaunch({
           )}
         </ConfigField>
       )}
-      <Text style="body">{state.message}</Text>
+      {state.storageRefusal !== undefined && state.phase === "review" ? (
+        <StateView
+          kind="error"
+          title={STORAGE_TITLES[state.storageRefusal.reason]}
+          body={state.storageRefusal.message}
+          // A Linux keyring refusal holds until ORCA restarts, so only the OS keychain case retries here.
+          {...(state.storageRefusal.reason === "unavailable"
+            ? {
+                action: {
+                  label: "Retry launch",
+                  onClick: () => {
+                    void controller.retryProtectedStorage();
+                  },
+                },
+              }
+            : {})}
+        />
+      ) : (
+        <Text style="body">{state.message}</Text>
+      )}
       {state.errors.map((issue, index) => (
         <Text key={index} style="caption">
           {issue.path}: {issue.message}

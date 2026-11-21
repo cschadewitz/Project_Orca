@@ -30,7 +30,7 @@ import { FirstRunSetup } from "./first-run/setup.js";
 import { installFirstRunIPC, startFirstRunWorkspace } from "./first-run/ipc.js";
 import { FirstRunRefusal } from "./first-run/refusal.js";
 import type { DiagnosticsResult } from "../diagnostics-contract.js";
-import { AdmissionIntents, AdmissionIntentController } from "./admission-intents.js";
+import { AdmissionIntents, AdmissionIntentController, protectedStorageBridgeError } from "./admission-intents.js";
 import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
 import type { LaunchReview, PreflightParams } from "../configuration-launch-contract.js";
 import { RunsAdmitResultSchema } from "@orca/protocol";
@@ -370,6 +370,8 @@ function handle<P, R>(channel: string, run: (params: P) => Promise<R>): void {
       return { ok: true, result: await appWriters.run(() => run(params)) };
     } catch (e) {
       if (e instanceof DaemonClientError) return { ok: false, error: e.error };
+      const storage = protectedStorageBridgeError(e);
+      if (storage) return { ok: false, error: storage };
       return { ok: false, error: { code: "AGENT_TRANSPORT", message: e instanceof Error ? e.message : String(e) } };
     }
   });
