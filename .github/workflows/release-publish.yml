@@ -330,6 +330,14 @@ jobs:
               echo "::error::expected exactly one Ubuntu amd64 .deb for $version, found ${#assets[@]}; nothing published"
               exit 1
             fi
+            # GitHub allows several drafts with one tag name. An earlier run's draft is
+            # reused or deleted by a maintainer after checking it, never duplicated here.
+            existing=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+              --jq ".[] | select(.draft and .tag_name == \"v$version\") | .id")
+            if [ -n "$existing" ]; then
+              echo "::error::a draft for v$version already exists (release id(s) $(echo $existing)); check and reuse it (docs/RELEASING.md, \"Publishing a final\")"
+              exit 1
+            fi
           else
             # The installers, the archives and the standalone daemon. Refusing to publish an
             # empty set is the point: a release page with no artifacts looks like a release
@@ -356,8 +364,10 @@ jobs:
             "${assets[@]}"
 
           if [ "$final" = true ]; then
+            id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+              --jq ".[] | select(.draft and .tag_name == \"v$version\" and .target_commitish == \"$SHA\") | .id")
             {
-              echo "Drafted v$version at \`$SHA\` with the Ubuntu amd64 .deb only. Not tagged or published."
+              echo "Drafted v$version (release id \`$id\`) at \`$SHA\` with the Ubuntu amd64 .deb only. Not tagged or published."
               echo "Next: dispatch Windows signed (spike) from main with source_sha \`$SHA\`, verify and"
               echo "attach the signed installer, then publish the draft (docs/RELEASING.md, \"Publishing a final\")."
             } >> "$GITHUB_STEP_SUMMARY"
@@ -371,8 +381,9 @@ jobs:
 
       # Optional private HTTPS distribution host. A deployment key only writes feed files;
       # clients receive a separate read-only feed credential, never this key or GH_TOKEN.
+      # Never for a final: its build output is unsigned and the release is still a draft.
       - name: Activate the private desktop feed
-        if: vars.ORCA_FEED_HOST != ''
+        if: vars.ORCA_FEED_HOST != '' && contains(needs.check.outputs.version, '-')
         env:
           FEED_HOST: ${{ vars.ORCA_FEED_HOST }}
           FEED_ROOT: ${{ vars.ORCA_FEED_ROOT }}

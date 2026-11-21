@@ -90,6 +90,17 @@ it("drafts a final with the Ubuntu .deb only, leaving tag and publication to a m
   expect(publish.slice(create, stop)).toContain('if [ "$final" = true ]; then');
   // A prerelease still attaches everything and is never latest.
   expect(publish).toContain('[ "$final" = true ] || prerelease=(--prerelease)');
+  // A rerun never adds a second draft beside an earlier one.
+  const duplicate = publish.indexOf('select(.draft and .tag_name == \\"v$version\\")');
+  expect(duplicate).toBeGreaterThan(-1);
+  expect(duplicate).toBeLessThan(create);
+});
+
+it("runs nothing after a final's draft that could ship its unsigned build output", () => {
+  const steps = workflow("release-publish.yml").jobs.publish.steps;
+  const after = steps.slice(steps.findIndex((step) => step.name === "Tag and release") + 1);
+  // Any later step (today the legacy feed) must be gated to prereleases.
+  for (const step of after) expect(step.if ?? "", step.name).toContain("contains(needs.check.outputs.version, '-')");
 });
 
 it("never hands a write token to the ref under test (#863)", () => {
