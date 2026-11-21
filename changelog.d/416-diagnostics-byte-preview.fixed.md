@@ -1,1 +1,0 @@
-Use bounded UTF-8 blocks for diagnostics previews, with explicit main/preload/renderer disposal and complete exact selectable text. Keep Save authority tied to the frozen main bytes and preserve disabled production capture and all acceptance gates.
