@@ -135,11 +135,16 @@ jobs:
           if [ "$VERSION" = "$base" ]; then
             DRIFT_SINCE=$(git tag -l "v$base-rc.*" --sort=-v:refname | head -n 1)
           fi
+          # No stale output: release-pr-body.js refuses a missing file rather than reading it
+          # as "nothing changed", and a failed diff stops this step (set -e).
+          rm -f /tmp/drift.txt
           if [ -n "$DRIFT_SINCE" ]; then
             # The same paths as DRIFT_PATHS in tools/release-pr-body.js: sources, manifests,
-            # the lockfile and root build config. HEAD is main before the bump commit.
+            # the lockfile, root build config and desktop packaging. HEAD is main before the
+            # bump commit.
             git diff --stat=200,150 "$DRIFT_SINCE" HEAD -- packages/ workflows/ templates/ package.json \
-              pnpm-lock.yaml pnpm-workspace.yaml patches/ 'tsconfig*.json' release-compatibility.json > /tmp/drift.txt
+              pnpm-lock.yaml pnpm-workspace.yaml patches/ 'tsconfig*.json' release-compatibility.json \
+              .github/workflows/desktop.yml > /tmp/drift.txt
           fi
           export DRIFT_SINCE DRIFT_FILE=/tmp/drift.txt
           node tools/release-pr-body.js /tmp/release-notes.md > /tmp/pr-body.md

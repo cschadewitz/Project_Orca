@@ -274,9 +274,11 @@ A final release (`0.7.0`) should ship the code of its newest release candidate
 candidate was tested. Land those fixes as cherry-picks or say why each one belongs. To make
 drift visible, the release pull request for a final compares what the release is built
 from (`packages/` with its manifests, `workflows/`, `templates/`, the lockfile and the root
-build config, listed as `DRIFT_PATHS` in `tools/release-pr-body.js`) with the newest
+build config and `.github/workflows/desktop.yml`, listed as `DRIFT_PATHS` in
+`tools/release-pr-body.js`) with the newest
 `v<version>-rc.*` tag and either says nothing changed or shows a warning with the
-`git diff --stat` and a comparison link. This only works when candidates are released
+`git diff --stat` and a comparison link. If the comparison output is missing, the
+workflow stops before pushing anything rather than reporting that nothing changed. This only works when candidates are released
 through this workflow, so they carry tags. Learned from T3 Code, whose stable release
 builds the exact commit its last nightly shipped (#863).
 
@@ -317,8 +319,15 @@ dry-run warning.
 Dispatch it with the workflow from `main` (the "Use workflow from" box); the run refuses
 any other. The rehearsed ref is untrusted: its code only ever runs in jobs with a read-only
 token and no saved git credentials, and the smoke runs on GitHub-hosted runners, never the
-self-hosted ones. The draft is uploaded by a separate job that checks out `main`'s workflow
-revision, validates the version and commit, and treats the artifacts as data.
+self-hosted ones, without the runner health endpoint; the desktop and smoke jobs pick their
+runners with `main`'s tooling, not the ref's. The draft is uploaded by a separate job that
+checks out `main`'s workflow revision, validates the version and commit, and treats the
+artifacts as data. A ref from before the upgrade launch check reports it as not applicable.
+
+A real (non-dry-run) release refuses any commit that is not on `main`, and a manual one must
+also be dispatched with `main`'s workflow: its publish job runs the released commit's own
+tooling with a write token, so that commit has to be reviewed. Any commit on `main`
+qualifies, so fixing forward after a failed publish still works.
 
 Use it before merging a release pull request, or to try a risky change through the
 release graph before it lands. A failure costs nothing, unlike a failed `release-publish`

@@ -22,7 +22,8 @@ export const DRIFT_LIMIT = 40;
 
 /**
  * Everything a release is built from, as git pathspecs: the packages and their manifests,
- * what the CLI ships beside them, and the root build inputs. A dependency bump in a
+ * what the CLI ships beside them, the root build inputs and the workflow that packages the
+ * desktop artifacts. A dependency bump in a
  * manifest or the lockfile changes the shipped app as surely as a source edit does.
  * release-prepare.yml passes exactly these to `git diff` (tools/test holds it to that).
  */
@@ -36,6 +37,7 @@ export const DRIFT_PATHS = [
   "patches/",
   "tsconfig*.json",
   "release-compatibility.json",
+  ".github/workflows/desktop.yml",
 ];
 
 /** Characters as GitHub counts them (code points), not UTF-16 units. */
@@ -88,12 +90,21 @@ export function prBody({ repo, number, version, bump, pin, title, unlabelled, no
  */
 function driftSection(repo, version, drift) {
   if (!drift?.since) return [];
-  const stat = (drift.stat ?? "").split("\n").filter((line) => line.trim() !== "");
-  const compare = `https://github.com/${repo}/compare/${drift.since}...release/v${version}`;
+  const compareLink = `https://github.com/${repo}/compare/${drift.since}...release/v${version}`;
+  // No comparison output is not the same as an empty comparison: never report "nothing
+  // changed" for a diff that did not run.
+  if (typeof drift.stat !== "string")
+    return [
+      "",
+      "> [!WARNING]",
+      `> The comparison with the last candidate, \`${drift.since}\`, did not run, so drift is unknown.`,
+      `> Check it by hand before merging ([full comparison](${compareLink})).`,
+    ];
+  const stat = drift.stat.split("\n").filter((line) => line.trim() !== "");
   if (stat.length === 0)
     return [
       "",
-      `Nothing the release is built from (packages, their manifests, the lockfile or root build config) changed since \`${drift.since}\`: this is that candidate's code.`,
+      `Nothing the release is built from (packages, their manifests, the lockfile, root build config or desktop packaging) changed since \`${drift.since}\`: this is that candidate's code.`,
     ];
   const shown = stat.length > DRIFT_LIMIT ? [...stat.slice(0, DRIFT_LIMIT - 1), stat.at(-1)] : stat;
   return [
@@ -101,7 +112,7 @@ function driftSection(repo, version, drift) {
     "> [!WARNING]",
     `> What the release is built from changed since the last candidate, \`${drift.since}\`. A final should be`,
     "> that candidate plus fixes chosen on purpose; check each file below is one of them",
-    `> ([full comparison](${compare})).`,
+    `> ([full comparison](${compareLink})).`,
     "",
     "```",
     ...shown.slice(0, -1),
@@ -109,6 +120,19 @@ function driftSection(repo, version, drift) {
     shown.at(-1),
     "```",
   ];
+}
+
+/**
+ * The `git diff --stat` the workflow wrote. A missing file means the comparison did not run,
+ * which the workflow treats as a failure: the body is built before anything is pushed, so
+ * refusing here leaves no half-made release branch.
+ */
+function driftStat(file) {
+  if (!file || !existsSync(file)) {
+    console.error(`DRIFT_SINCE is set but the comparison output ${file || "(DRIFT_FILE unset)"} is missing`);
+    process.exit(1);
+  }
+  return readFileSync(file, "utf8");
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -128,12 +152,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       title: env.MILESTONE_TITLE,
       unlabelled: env.UNLABELLED,
       notes: readFileSync(file, "utf8"),
-      drift: env.DRIFT_SINCE
-        ? {
-            since: env.DRIFT_SINCE,
-            stat: env.DRIFT_FILE && existsSync(env.DRIFT_FILE) ? readFileSync(env.DRIFT_FILE, "utf8") : "",
-          }
-        : undefined,
+      drift: env.DRIFT_SINCE ? { since: env.DRIFT_SINCE, stat: driftStat(env.DRIFT_FILE) } : undefined,
     }),
   );
 }

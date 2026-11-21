@@ -1,7 +1,11 @@
 // The release pull request body must stay under GitHub's 65,536-character limit, since
 // release-prepare.yml opens the pull request only after the release branch is pushed.
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { BODY_LIMIT, DRIFT_LIMIT, DRIFT_PATHS, UNLABELLED_LIMIT, prBody } from "../release-pr-body.js";
 
@@ -81,6 +85,31 @@ describe("drift since the last candidate (#863)", () => {
     const body = prBody({ ...final, drift: { since: "v0.7.0-rc.2", stat: "" } });
     expect(body).toContain("changed since `v0.7.0-rc.2`: this is that candidate's code");
     expect(body).not.toContain("[!WARNING]");
+  });
+
+  it("never reads a missing comparison as an empty one", () => {
+    const body = prBody({ ...final, drift: { since: "v0.7.0-rc.2", stat: undefined } });
+    expect(body).toContain("> [!WARNING]");
+    expect(body).toContain("did not run, so drift is unknown");
+    expect(body).not.toContain("this is that candidate's code");
+  });
+
+  it("refuses to build a body when the comparison output is missing", () => {
+    const notes = join(mkdtempSync(join(tmpdir(), "drift-")), "notes.md");
+    writeFileSync(notes, "n\n");
+    const run = spawnSync(process.execPath, [fileURLToPath(new URL("../release-pr-body.js", import.meta.url)), notes], {
+      env: {
+        ...process.env,
+        REPO: "o/r",
+        VERSION: "0.7.0",
+        DRIFT_SINCE: "v0.7.0-rc.2",
+        DRIFT_FILE: `${notes}.missing`,
+      },
+      encoding: "utf8",
+    });
+    expect(run.status).toBe(1);
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toContain("comparison output");
   });
 
   it("warns and lists the files that changed, with a comparison link", () => {

@@ -27,6 +27,11 @@ on:
         description: The version to stamp into the artifacts. Defaults to the root package.json's.
         type: string
         required: false
+      hosted_only:
+        description: Never route to self-hosted runners (release rehearsals of arbitrary refs).
+        type: boolean
+        required: false
+        default: false
     secrets:
       CI_RUNNER_HEALTH_URL:
         description: The runner health endpoint; without it, Linux jobs use GitHub-hosted runners.
@@ -55,16 +60,19 @@ jobs:
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
     steps:
+      # The workflow's own commit, not inputs.ref: the code that picks runners and the
+      # matrix is never the code under test (the same rule as app-smoke.yml's picker).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: tools
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       # Linux packaging runs GitHub-hosted for now: Tyler's hosts run out of disk building the
       # x64 and arm64 archives (ENOSPC on tyler-1/2/3, Nov 2026). To go back to Tyler's runners
-      # when one is idle (tools/linux-runner.js), restore `${{ vars.CI_FORCE_HOSTED }}` here.
+      # when one is idle (tools/linux-runner.js), restore
+      # `${{ inputs.hosted_only && 'true' || vars.CI_FORCE_HOSTED }}` here; keep hosted_only.
       - id: pick
         env:
           FORCE_HOSTED: "true"

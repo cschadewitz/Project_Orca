@@ -83,6 +83,16 @@ it("never hands a write token to the ref under test (#863)", () => {
   expect(guard.if).toBe("${{ inputs.dry_run }}");
   expect(guard.env.DEFAULT).toBe("refs/heads/${{ github.event.repository.default_branch }}");
 
+  // A real release runs the released commit's tooling with write, so that commit must be
+  // on the default branch (any commit on it, so a fix-forward release still works).
+  const sha = release.findIndex((s) => s.id === "sha");
+  const reviewed = release[sha + 1];
+  expect(reviewed.name).toBe("A real release builds a reviewed commit from the default branch");
+  expect(reviewed.if).toBe("${{ !inputs.dry_run }}");
+  expect(reviewed.run).toContain('git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"');
+  expect(reviewed.run).toContain('if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]');
+  expect(release.findIndex((s) => s.run === "pnpm install --frozen-lockfile")).toBeGreaterThan(sha + 1);
+
   // Only the two writers get write, and every checkout drops its credentials.
   for (const [name, job] of Object.entries(file.jobs)) {
     if (job.uses) continue;
@@ -95,8 +105,24 @@ it("never hands a write token to the ref under test (#863)", () => {
   // The rehearsal writer runs this workflow's revision, not the rehearsed ref.
   expect(file.jobs.rehearsal.steps[0].with.ref).toBe("${{ github.sha }}");
 
-  // The rehearsed ref is built on hosted runners and its version reaches desktop as data.
-  expect(file.jobs["app-verification"].with.hosted_only).toBe("${{ inputs.dry_run == true }}");
+  // The rehearsed ref is built on hosted runners, without the runner health endpoint.
+  for (const call of ["desktop", "app-verification"]) {
+    expect(file.jobs[call].with.hosted_only, call).toBe("${{ inputs.dry_run == true }}");
+    expect(file.jobs[call].secrets, call).toEqual({
+      CI_RUNNER_HEALTH_URL: "${{ !inputs.dry_run && secrets.CI_RUNNER_HEALTH_URL || '' }}",
+    });
+  }
+  // Required for a release; a rehearsal of a ref that predates it reports not applicable.
+  expect(file.jobs["app-verification"].with.upgrade_launch_required).toBe("${{ !inputs.dry_run }}");
+
+  // Desktop picks runners and its matrix with the workflow revision's tooling, not the ref's.
+  const desktop = workflow("desktop.yml");
+  expect(desktop.on.workflow_call.inputs.hosted_only).toMatchObject({ type: "boolean", default: false });
+  const targets = desktop.jobs.targets.steps;
+  expect(targets[0].with).toEqual({ "sparse-checkout": "tools", "persist-credentials": false });
+  expect(targets.find((s) => s.id === "pick").env.FORCE_HOSTED).toMatch(/^(true|\$\{\{ inputs\.hosted_only && .+)$/);
+
+  // Its version reaches desktop as data.
   const stamp = workflow("desktop.yml").jobs.package.steps.find((s) => s.name === "The version to stamp");
   expect(stamp.env).toEqual({ VERSION: "${{ inputs.version }}" });
   expect(stamp.run).not.toContain("${{");

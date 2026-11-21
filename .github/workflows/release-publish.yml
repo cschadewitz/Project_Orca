@@ -32,11 +32,13 @@
 #
 # The rehearsed ref is untrusted, so it never meets a write token. The workflow's token is
 # read-only; every job that runs the ref's code (check, and the desktop and app-smoke calls)
-# checks out without persisted credentials, and app-smoke runs it on GitHub-hosted runners
-# only. The one job that writes, `rehearsal`, checks out this workflow's own revision (which
+# checks out without persisted credentials, both calls pick runners with this workflow
+# revision's tooling, and a rehearsal runs GitHub-hosted only, without the runner health
+# endpoint. The one job that writes, `rehearsal`, checks out this workflow's own revision (which
 # must be the default branch), runs only that revision's tooling, and treats the built
 # artifacts and the version as data. `publish`, the real release, keeps its write grant to
-# itself the same way.
+# itself and runs the released commit's tooling only once `check` has proved that commit is
+# on the default branch, i.e. reviewed.
 name: Release (publish)
 
 on:
@@ -98,6 +100,29 @@ jobs:
       - name: The commit being released
         id: sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # A real release runs the released commit's own tooling with a write token (the
+      # `publish` job), so that commit must already be reviewed: on the default branch, and
+      # dispatched with the default branch's workflow. Any commit on it qualifies, which keeps
+      # the fix-forward path (publish again from a later reviewed commit) open. A dry run may
+      # rehearse anything, because its writer runs none of the ref's code.
+      - name: A real release builds a reviewed commit from the default branch
+        if: ${{ !inputs.dry_run }}
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "::error::dispatch a release with the workflow from $DEFAULT_BRANCH (it was $REF)"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"; then
+            echo "::error::$SHA is not on $DEFAULT_BRANCH; release a reviewed commit, or tick dry_run to rehearse this one"
+            exit 1
+          fi
 
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
@@ -223,8 +248,10 @@ jobs:
     with:
       ref: ${{ needs.check.outputs.sha }}
       version: ${{ needs.check.outputs.version }}
+      # A rehearsal's ref may be any branch: hosted runners only, and no health endpoint.
+      hosted_only: ${{ inputs.dry_run == true }}
     secrets:
-      CI_RUNNER_HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
+      CI_RUNNER_HEALTH_URL: ${{ !inputs.dry_run && secrets.CI_RUNNER_HEALTH_URL || '' }}
 
   app-verification:
     name: desktop smoke and type proof
@@ -232,10 +259,14 @@ jobs:
     uses: ./.github/workflows/app-smoke.yml
     with:
       ref: ${{ needs.check.outputs.sha }}
-      # A rehearsal's ref may be any branch: never route it to the self-hosted runners.
+      # A rehearsal's ref may be any branch: never route it to the self-hosted runners, and
+      # do not hand it the health endpoint.
       hosted_only: ${{ inputs.dry_run == true }}
+      # A real release requires the upgrade launch check. A rehearsal of a ref from before
+      # the check existed reports it as not applicable instead.
+      upgrade_launch_required: ${{ !inputs.dry_run }}
     secrets:
-      CI_RUNNER_HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
+      CI_RUNNER_HEALTH_URL: ${{ !inputs.dry_run && secrets.CI_RUNNER_HEALTH_URL || '' }}
 
   publish:
     name: tag and publish
