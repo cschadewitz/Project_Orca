@@ -13,6 +13,11 @@
 # Dispatch from main only, and keep the R2 write credential in the protected `desktop-feed`
 # environment (required reviewers, deployments from main only); see docs/UPDATING.md.
 #
+# Architectures: only Windows x64 has native acceptance, so FEED_ARCHES below serves x64
+# alone; the signed artifact's arm64 installer is never uploaded. An architecture with no
+# channel file in a snapshot is offered nothing new by it. Adding arm64 is a reviewed change
+# to FEED_ARCHES after arm64 passes native acceptance (docs/UPDATING.md, architecture gate).
+#
 # Rerunning after an interruption resumes: identical objects are skipped and different ones
 # refused. feed-promote.yml moves the version on from internal.
 name: Desktop feed (publish signed)
@@ -36,6 +41,9 @@ concurrency:
 permissions:
   contents: read
   actions: read
+
+env:
+  FEED_ARCHES: x64
 
 jobs:
   publish:
@@ -89,11 +97,16 @@ jobs:
         shell: pwsh
         env:
           EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+          VERSION: ${{ inputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:EXPECTED) { throw 'ORCA_FEED_PUBLISHER_CN is not set' }
-          $exes = Get-ChildItem -Path signed -Recurse -File -Filter *.exe
+          $exes = @(Get-ChildItem -Path signed -Recurse -File -Filter *.exe)
           if ($exes.Count -ne 2) { throw "expected 2 installers, found $($exes.Count)" }
+          foreach ($arch in $env:FEED_ARCHES.Split(' ')) {
+            $name = "ORCA-$($env:VERSION)-win-$arch.exe"
+            if (@($exes | Where-Object Name -eq $name).Count -ne 1) { throw "missing $name" }
+          }
           foreach ($file in $exes) {
             $sig = Get-AuthenticodeSignature -LiteralPath $file.FullName
             $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
@@ -108,7 +121,26 @@ jobs:
       - name: Verify the update metadata
         env:
           VERSION: ${{ inputs.version }}
-        run: python tools/deploy/release-assets.py signed "$VERSION"
+        run: python tools/deploy/release-assets.py signed "$VERSION" "$FEED_ARCHES"
+
+      # The feed must serve the bytes that were accepted and published, not just a valid
+      # signature: each served installer must equal the published release's asset.
+      - name: Match the published release's installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          for arch in $FEED_ARCHES; do
+            name="ORCA-$VERSION-win-$arch.exe"
+            published=$(gh api "repos/$REPO/releases/tags/v$VERSION" \
+              --jq ".assets[] | select(.name == \"$name\") | .digest")
+            [[ "$published" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::v$VERSION has no published $name digest"; exit 1; }
+            actual="sha256:$(sha256sum "signed/$name" | cut -d' ' -f1)"
+            [[ "$actual" == "$published" ]] || { echo "::error::$name differs from the published release ($actual != $published)"; exit 1; }
+            echo "$name matches the published release ($actual)" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Upload to the feed and offer to internal
         env:
@@ -117,4 +149,4 @@ jobs:
           FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
           FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
           VERSION: ${{ inputs.version }}
-        run: bash tools/deploy/feed-r2.sh snapshot signed "$VERSION"
+        run: bash tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$FEED_ARCHES"

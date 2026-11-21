@@ -230,6 +230,60 @@ describe("snapshot completion", () => {
   });
 });
 
+describe("served architectures", () => {
+  // A completed snapshot that does hold arm64 objects, e.g. left by an earlier publisher.
+  const ARM = {
+    "0.7.0/latest-arm64.yml": "version: 0.7.0\n",
+    "0.7.0/ORCA-0.7.0-win-arm64.exe": "armarmarm0",
+    "0.7.0/ORCA-0.7.0-win-arm64.exe.blockmap": "arm-map",
+    "0.7.1-rc.1/prerelease-arm64.yml": "version: 0.7.1-rc.1\n",
+    "0.7.1-rc.1/ORCA-0.7.1-rc.1-win-arm64.exe": "armarmarm1",
+  };
+
+  it("serves x64 only", async () => {
+    const { SERVED_ARCHES } = await import("../deploy/feed-worker/worker.js");
+    expect(SERVED_ARCHES).toEqual(["x64"]);
+  });
+
+  it.each([
+    ["GET", {}],
+    ["HEAD", {}],
+    ["GET", { Range: "bytes=0-1" }],
+    ["HEAD", { Range: "bytes=0-1" }],
+  ])("answers 404 for arm64 objects that exist, with %s %j, without reading the bucket", async (method, headers) => {
+    for (const [path, token] of [
+      ["/latest-arm64.yml", TOKENS.stable],
+      ["/latest-arm64.yml", TOKENS.internal],
+      ["/ORCA-0.7.0-win-arm64.exe", TOKENS.stable],
+      ["/ORCA-0.7.0-win-arm64.exe.blockmap", TOKENS.stable],
+      ["/ORCA-0.7.1-rc.1-win-arm64.exe", TOKENS.internal],
+    ]) {
+      const e = env(RINGS, ARM);
+      const response = await handle(get(path, { token, method, headers }), e);
+      expect(response.status, `${method} ${path}`).toBe(404);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(e.FEED.calls).toEqual([]);
+    }
+  });
+
+  it("keeps x64 channel files, installers and historical blockmaps beside arm64 objects", async () => {
+    const e = env(RINGS, ARM);
+    expect(await (await handle(get("/latest-x64.yml", { token: TOKENS.stable }), e)).text()).toBe("version: 0.7.0\n");
+    expect(await (await handle(get("/latest-x64.yml", { token: TOKENS.internal }), e)).text()).toBe(
+      "version: 0.7.1-rc.1\n",
+    );
+    expect(await (await handle(get("/ORCA-0.7.0-win-x64.exe", { token: TOKENS.stable }), e)).text()).toBe("0123456789");
+    const map = await handle(get("/ORCA-0.7.0-win-x64.exe.blockmap", { token: TOKENS.internal }), e);
+    expect(map.status).toBe(200);
+    expect(await map.text()).toBe("old-map");
+    const range = await handle(
+      get("/ORCA-0.7.0-win-x64.exe", { token: TOKENS.stable, method: "HEAD", headers: { Range: "bytes=0-1" } }),
+      e,
+    );
+    expect(range.status).toBe(206);
+  });
+});
+
 describe("parseRange", () => {
   it("reads the forms R2 can answer in one read", () => {
     expect(parseRange(null)).toBeUndefined();
