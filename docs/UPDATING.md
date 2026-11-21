@@ -190,8 +190,11 @@ For a final the order is:
    and blockmaps even if the bucket holds some, while x64 files of every completed snapshot
    stay reachable. Add arm64 to both, in a reviewed change, only after it passes native
    acceptance, then deploy the Worker; do not rely on ring assignment to scope architecture.
-4. Dispatch **Desktop feed (publish signed)** (`feed-publish.yml`) from main with the version
-   and the id of **that same** signing run. Before dispatching, confirm the run's x64
+4. **Desktop feed (automatic)** (`feed-auto.yml`) then dispatches **Desktop feed (publish
+   signed)** (`feed-publish.yml`) from main on its own, as soon as the release is published and
+   the signing run of its tagged commit has succeeded, whichever comes last. To feed by hand
+   (or a version published before `feed-auto.yml` existed), dispatch `feed-publish.yml` from
+   main with the version and the id of **that same** signing run. Before dispatching, confirm the run's x64
    installer SHA-256 equals the accepted installer's; the job also refuses any served
    installer whose SHA-256 differs from the published release's asset digest.
 
@@ -226,10 +229,11 @@ One-time setup (Casey):
 3. Mint a token per person with `node tools/deploy/feed-token.js RING`. Give each person their
    token; merge the printed entries into one JSON object and store it with
    `npx wrangler secret put FEED_TOKENS`. Revoke a person by removing their entry.
-4. Create the `desktop-feed` environment (Settings → Environments) and protect it: add
-   yourself (and Cal) as required reviewers, and under deployment branches allow only `main`.
-   Store `ORCA_FEED_ACCESS_KEY_ID` and `ORCA_FEED_SECRET_ACCESS_KEY` from the R2 token as
-   **environment** secrets there, not repository secrets, so only a reviewed run from main can
+4. Create the `desktop-feed` environment (Settings → Environments) and under deployment
+   branches allow only `main`. No required reviewers: feeding is automatic, and every run
+   re-checks the release, the signing run, signatures, metadata and installer digests before
+   writing. Store `ORCA_FEED_ACCESS_KEY_ID` and `ORCA_FEED_SECRET_ACCESS_KEY` from the R2 token
+   as **environment** secrets there, not repository secrets, so only a run from main can
    write the bucket. Both feed workflows also refuse to run from any other ref.
 5. Set repository variables `ORCA_FEED_ACCOUNT_ID` (the Cloudflare account id),
    `ORCA_FEED_BUCKET` and `ORCA_FEED_PUBLISHER_CN` (the exact signing certificate CN, as in

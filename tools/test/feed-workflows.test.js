@@ -49,3 +49,29 @@ describe("desktop feed workflows", () => {
     expect(arches.split(" ")).toEqual(SERVED_ARCHES);
   });
 });
+
+describe("automatic feed dispatch", () => {
+  const auto = read("feed-auto.yml");
+
+  it("runs on a published release or a completed signed run, only while the feed is on", () => {
+    expect(auto).toContain("types: [published]");
+    expect(auto).toContain('workflows: ["Windows signed (spike)"]');
+    expect(auto).toContain("vars.ORCA_FEED_BUCKET != ''");
+    expect(auto).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(auto).toContain("github.event.workflow_run.head_branch == 'main'");
+  });
+
+  it("holds no feed credentials and runs main's script", () => {
+    expect(auto).not.toMatch(/secrets\.|environment:/);
+    expect(auto).toMatch(/ref: main\n/);
+    expect(auto).toContain("run: bash tools/deploy/feed-auto.sh");
+    expect(auto).toMatch(/permissions:\n {2}contents: read\n {2}actions: write\n/);
+  });
+
+  it("dispatches feed-publish.yml from main, which re-checks everything", () => {
+    const script = readFileSync("tools/deploy/feed-auto.sh", "utf8");
+    expect(script).toContain('gh workflow run feed-publish.yml --repo "$REPO" --ref main');
+    expect(script).toContain("windows-signed-$sha");
+    expect(script).toContain(".draft == false");
+  });
+});

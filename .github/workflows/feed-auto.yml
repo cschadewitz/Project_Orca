@@ -1,0 +1,57 @@
+# Feeds each published version automatically, so nobody has to dispatch feed-publish.yml.
+#
+# A version can be fed once both exist: its published (non-draft) GitHub release and a
+# successful `Windows signed (spike)` run from main for the release's tagged commit. Whichever
+# happens last triggers this workflow:
+#   - release published       -> look for the signed run of the tag's commit
+#   - signed run completed    -> look for a published release tagged at the commit it signed
+# When both are there it dispatches feed-publish.yml from main with the version and run id;
+# feed-publish.yml then does every check (published release, signed run on main, signatures,
+# metadata, installer SHA-256 equal to the release asset) before writing anything, and a
+# repeat of an already fed version is a no-op. When one half is missing it stops with a note.
+#
+# This job holds no feed credentials: it only reads and dispatches. Nothing runs while the
+# feed is off (ORCA_FEED_BUCKET unset).
+name: Desktop feed (automatic)
+
+on:
+  release:
+    types: [published]
+  workflow_run:
+    workflows: ["Windows signed (spike)"]
+    types: [completed]
+
+concurrency:
+  group: feed-auto
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    name: feed the published, signed version
+    if: >-
+      vars.ORCA_FEED_BUCKET != '' &&
+      (github.event_name == 'release' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.event == 'workflow_dispatch'))
+    runs-on: ubuntu-24.04
+    steps:
+      # Scripts and tags come from main, whatever commit triggered the event.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Find the release and its signed run, then dispatch the feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          SIGNED_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: bash tools/deploy/feed-auto.sh
