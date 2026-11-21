@@ -86,8 +86,10 @@ def check_metadata(root, text, version, arch):
     for key in ("size", "blockMapSize"):
         if key in entry and not entry[key].isdigit():
             raise RuntimeError(f"Invalid {key} in update metadata for {arch}")
-    if "isAdminRightsRequired" in entry and entry["isAdminRightsRequired"] not in ("true", "false"):
-        raise RuntimeError(f"Invalid isAdminRightsRequired in update metadata for {arch}")
+    # ORCA's NSIS installer is per-user. The updater uses this flag to run its elevation
+    # helper, so anything but absent/false means the metadata does not describe our build.
+    if entry.get("isAdminRightsRequired", "false") != "false":
+        raise RuntimeError(f"Per-user installer metadata for {arch} must not require admin rights")
     asset = root / name
     if not asset.is_file():
         raise RuntimeError(f"Missing installer: {name}")

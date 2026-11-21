@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -69,10 +70,41 @@ describe("release-assets.py update metadata", () => {
     ["an unknown top-level key", (f) => (f.extraTop = "stagingPercentage: 10\n")],
     ["a duplicated top-level key", (f) => (f.extraTop = `sha512: ${f.sha}\n`)],
     ["a mismatched version", (f) => (f.version = "0.7.1-rc.2")],
+    ["an installer that requires admin rights", (f) => (f.extraEntries = "    isAdminRightsRequired: true\n")],
+    ["a non-boolean admin flag", (f) => (f.extraEntries = "    isAdminRightsRequired: maybe\n")],
   ])("refuses %s", (_label, change) => {
     const result = verify(fixture((arch, f) => arch === "x64" && change(f)));
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/RuntimeError/);
+  });
+
+  it("accepts an explicit per-user admin flag of false", () => {
+    const result = verify(fixture((_arch, f) => (f.extraEntries = "    isAdminRightsRequired: false\n")));
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  // The builder's own serializer, so the parser is checked against the exact YAML shape it
+  // writes rather than only against hand-written fixtures.
+  it("accepts a channel file serialized by the pinned electron-builder", async () => {
+    const appRequire = createRequire(new URL("../../packages/app/package.json", import.meta.url));
+    const libRequire = createRequire(createRequire(appRequire.resolve("electron-builder")).resolve("app-builder-lib"));
+    const { serializeToYaml } = libRequire("builder-util");
+    const root = fixture();
+    for (const arch of ["x64", "arm64"]) {
+      const name = `ORCA-${VERSION}-win-${arch}.exe`;
+      const body = Buffer.from(`signed installer ${arch}`);
+      const files = [{ url: name, sha512: sha512(body), size: body.length }];
+      const info = {
+        version: VERSION,
+        files,
+        path: name,
+        sha512: sha512(body),
+        releaseDate: new Date(0).toISOString(),
+      };
+      writeFileSync(join(root, arch, `prerelease-${arch}.yml`), serializeToYaml(info, false, true));
+    }
+    const result = verify(root);
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it("refuses metadata with no files[] at all, and a missing blockmap", () => {
