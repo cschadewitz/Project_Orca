@@ -48,7 +48,7 @@ Keep the throwaway folders for this test in your home directory. Don't use a syn
    The first field must equal the card's SHA-256 for that file name. If it differs,
    **don't install, open or unpack the file**. Delete that download and report "stopped
    at P2: checksum mismatch". Linux builds carry no signature, so the checksum is the
-   identity check ([RELEASING.md](../../RELEASING.md#signing-and-notarisation-are-not-done)).
+   identity check ([RELEASING.md](../../RELEASING.md#signing-and-notarisation)).
 
 ## P3–P4: review APT's plan, then install
 
