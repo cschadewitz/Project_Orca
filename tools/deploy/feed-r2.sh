@@ -6,10 +6,7 @@
 #                                          ("x64" or "x64 arm64") from DIR, then offer it
 #                                          in the internal ring
 #   feed-r2.sh promote RING VERSION PERCENT
-#                                          offer VERSION to PERCENT of RING (0 halts a rollout
-#                                          and marks VERSION halted for the schedule)
-#   feed-r2.sh schedule                    apply the promotions feed-schedule.js says are due
-#                                          for the version internal offers
+#                                          offer VERSION to PERCENT of RING (0 halts a rollout)
 #
 # Environment: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (an R2 API token limited to the
 # bucket), FEED_ACCOUNT_ID (Cloudflare account id), FEED_BUCKET.
@@ -111,36 +108,8 @@ case "${1:-}" in
     check_version "$3"
     exists "$3/complete.json" || fail "no complete feed snapshot for $3"
     update_rings promote "$2" "$3" "$4"
-    # A halt also stops the automatic schedule for this version, for good.
-    if [[ "$4" == 0 ]]; then
-      printf '{"format":1,"version":"%s"}\n' "$3" >"$work/halted.json"
-      put_once "$3/halted.json" "$work/halted.json" application/json
-    fi
-    ;;
-  schedule)
-    [[ $# -eq 1 ]] || fail "usage: feed-r2.sh schedule"
-    if ! s3 get-object --bucket "$FEED_BUCKET" --key rings.json "$work/rings.json" >/dev/null 2>"$work/error"; then
-      grep -q NoSuchKey "$work/error" || { cat "$work/error" >&2; fail "could not read rings.json"; }
-      echo "No rings yet; nothing to schedule."
-      exit 0
-    fi
-    version=$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); console.log(r.rings?.internal?.version ?? "")' "$work/rings.json")
-    [[ -n "$version" ]] || { echo "internal offers nothing; nothing to schedule."; exit 0; }
-    check_version "$version"
-    exists "$version/complete.json" || fail "internal offers $version without a complete snapshot"
-    completed=$(s3 head-object --bucket "$FEED_BUCKET" --key "$version/complete.json" --query LastModified --output text)
-    age=$(( ( ${FEED_NOW:-$(date -u +%s)} - $(date -u -d "$completed" +%s) ) / 3600 ))
-    halted=0
-    if exists "$version/halted.json"; then halted=1; fi
-    node "$here/feed-schedule.js" "$work/rings.json" "$version" "$age" "$halted" >"$work/due"
-    if [[ ! -s "$work/due" ]]; then
-      echo "$version (${age}h, halted=$halted): nothing due" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
-    fi
-    while read -r ring due_version percent; do
-      update_rings promote "$ring" "$due_version" "$percent"
-    done <"$work/due"
     ;;
   *)
-    fail "usage: feed-r2.sh snapshot DIR VERSION ARCHES | promote RING VERSION PERCENT | schedule"
+    fail "usage: feed-r2.sh snapshot DIR VERSION ARCHES | promote RING VERSION PERCENT"
     ;;
 esac

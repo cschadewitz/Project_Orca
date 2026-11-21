@@ -154,15 +154,6 @@ its full version or its active rollout; the same rollout version can be widened 
 Like publication, it only runs when dispatched from main, in the protected `desktop-feed`
 environment (see the setup below).
 
-**Promotion is automatic.** **Desktop feed (scheduled promotion)** (`feed-schedule.yml`,
-every 6 hours) moves the version `internal` offers on by the age of its snapshot: all of
-`preview` at 24 hours, 20% of `stable` at 48 hours and all of `stable` at 96 hours
-(`tools/deploy/feed-schedule.js`); a release candidate stops at `preview`. It only applies
-steps a ring is behind on, with the same rules as a manual promotion, so promoting by hand
-earlier or wider is fine and the schedule continues from there. Halting a version's rollout
-(percent 0) also writes `VERSION/halted.json`, which stops that version's schedule for good,
-and `ORCA_FEED_PAUSE=true` stops all scheduled promotion while it is set.
-
 Rings never move backwards, and halting is not a rollback. The client disallows downgrades,
 so anyone who already took a bad build keeps it until a newer fixed version ships; halting
 only stops more people from getting it. Keep early rollouts small for that reason.

@@ -1,6 +1,6 @@
 /** feed-r2.sh against a fake `aws` CLI: upload order, immutability, conditional ring writes. */
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -25,11 +25,7 @@ if (op === "put-object" && process.env.FAKE_PUT_LIMIT) {
 const file = path.join(store, encodeURIComponent(opt("--key")));
 const etag = () => '"' + crypto.createHash("md5").update(fs.readFileSync(file)).digest("hex") + '"';
 const fail = (code) => { process.stderr.write("An error occurred (" + code + ")\n"); process.exit(254); };
-if (op === "head-object") {
-  if (!fs.existsSync(file)) fail("404");
-  if (opt("--query") === "LastModified") console.log(fs.statSync(file).mtime.toISOString().replace(/\.\d+Z$/, "+00:00"));
-  process.exit(0);
-}
+if (op === "head-object") { if (!fs.existsSync(file)) fail("404"); process.exit(0); }
 if (op === "get-object") {
   if (!fs.existsSync(file)) fail("NoSuchKey");
   fs.copyFileSync(file, args[args.length - 1]);
@@ -222,47 +218,6 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
       encoding: "utf8",
     });
     expect(bad.stderr).toContain("FEED_ACCOUNT_ID");
-  });
-
-  it("schedules the promotions that are due for internal's version, once", () => {
-    const f = setup();
-    f.release("0.7.0", "latest");
-    expect(f.run("snapshot", f.artifacts, "0.7.0", "x64").status).toBe(0);
-    const completed = Math.floor(statSync(f.object("0.7.0/complete.json")).mtimeMs / 1000);
-    const at = (hours) => f.runWith({ FEED_NOW: String(completed + hours * 3600 + 60) }, "schedule");
-    const rings = () => JSON.parse(readFileSync(f.object("rings.json"), "utf8")).rings;
-
-    expect(at(1).status).toBe(0);
-    expect(rings().preview).toBeUndefined();
-    expect(at(49).status).toBe(0);
-    expect(rings().preview).toEqual({ version: "0.7.0" });
-    expect(rings().stable).toEqual({ rollout: { version: "0.7.0", percent: 20 } });
-    const again = at(49);
-    expect(again.status, again.stderr).toBe(0);
-    expect(again.stdout).toContain("nothing due");
-    expect(at(97).status).toBe(0);
-    expect(rings().stable).toEqual({ version: "0.7.0" });
-  });
-
-  it("stops the schedule for good once a rollout of the version is halted", () => {
-    const f = setup();
-    f.release("0.7.0", "latest");
-    expect(f.run("snapshot", f.artifacts, "0.7.0", "x64").status).toBe(0);
-    expect(f.run("promote", "stable", "0.7.0", "20").status).toBe(0);
-    const halt = f.run("promote", "stable", "0.7.0", "0");
-    expect(halt.status, halt.stderr).toBe(0);
-    expect(existsSync(f.object("0.7.0/halted.json"))).toBe(true);
-    const later = f.runWith({ FEED_NOW: String(Math.floor(Date.now() / 1000) + 500 * 3600) }, "schedule");
-    expect(later.status, later.stderr).toBe(0);
-    expect(later.stdout).toContain("halted=1");
-    expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8")).rings.stable).toEqual({});
-  });
-
-  it("schedules nothing before anything is fed", () => {
-    const f = setup();
-    const result = f.run("schedule");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("No rings yet");
   });
 
   it("parses as bash", () => {
