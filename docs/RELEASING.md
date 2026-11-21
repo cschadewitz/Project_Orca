@@ -267,6 +267,17 @@ Release: v0.3.0-rc.1
 That overrides the labels. A version with a prerelease suffix is published with
 `--prerelease`, so it never becomes the repository's "latest".
 
+### A final is its last candidate
+
+A final release (`0.7.0`) should ship the code of its newest release candidate
+(`v0.7.0-rc.N`) plus fixes someone chose on purpose, not whatever merged to `main` after the
+candidate was tested. Land those fixes as cherry-picks or say why each one belongs. To make
+drift visible, the release pull request for a final compares `packages/` with the newest
+`v<version>-rc.*` tag and either says nothing changed or shows a warning with the
+`git diff --stat` and a comparison link. This only works when candidates are released
+through this workflow, so they carry tags. Learned from T3 Code, whose stable release
+builds the exact commit its last nightly shipped (#863).
+
 ### What counts as breaking
 
 Not the TypeScript API — nothing outside this repository imports it. ORCA's compatibility

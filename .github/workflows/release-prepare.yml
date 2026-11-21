@@ -126,6 +126,19 @@ jobs:
           # tools/release-pr-body.js keeps it under GitHub's 65,536-character limit by linking
           # to CHANGELOG.md on the branch when the notes are too long to inline.
           node tools/release.js notes "$VERSION" > /tmp/release-notes.md
+
+          # A final (no prerelease suffix) is compared with its newest release candidate tag,
+          # so code that merged after the candidate shows in the body before anyone merges
+          # (#863). The bump commit above only touches manifests and the changelog.
+          DRIFT_SINCE=""
+          base="${VERSION%%-*}"
+          if [ "$VERSION" = "$base" ]; then
+            DRIFT_SINCE=$(git tag -l "v$base-rc.*" --sort=-v:refname | head -n 1)
+          fi
+          if [ -n "$DRIFT_SINCE" ]; then
+            git diff --stat=200,150 "$DRIFT_SINCE" HEAD -- packages/ ':(exclude)packages/*/package.json' > /tmp/drift.txt
+          fi
+          export DRIFT_SINCE DRIFT_FILE=/tmp/drift.txt
           node tools/release-pr-body.js /tmp/release-notes.md > /tmp/pr-body.md
 
           git switch -c "release/v$VERSION"

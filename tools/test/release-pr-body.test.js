@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-import { BODY_LIMIT, UNLABELLED_LIMIT, prBody } from "../release-pr-body.js";
+import { BODY_LIMIT, DRIFT_LIMIT, UNLABELLED_LIMIT, prBody } from "../release-pr-body.js";
 
 // Borrowed from the CLI, which already installs it, as release-workflow.test.js does.
 const { parse } = createRequire(new URL("../../packages/cli/package.json", import.meta.url))("yaml");
@@ -66,5 +66,48 @@ describe("release pull request body", () => {
       .find((s) => s.name === "Open the release pull request");
     expect(step.run.indexOf("release-pr-body.js")).toBeGreaterThan(-1);
     expect(step.run.indexOf("release-pr-body.js")).toBeLessThan(step.run.indexOf("git push"));
+  });
+});
+
+describe("drift since the last candidate (#863)", () => {
+  const final = { ...base, version: "0.7.0", pin: "v0.7.0", unlabelled: "", notes: "n\n" };
+
+  it("says nothing for a candidate, or a final with no candidate tag", () => {
+    expect(prBody({ ...base, unlabelled: "", notes: "n\n" })).not.toContain("candidate");
+    expect(prBody({ ...final, drift: { since: "", stat: "" } })).not.toContain("candidate");
+  });
+
+  it("says the final is the candidate's code when nothing under packages/ changed", () => {
+    const body = prBody({ ...final, drift: { since: "v0.7.0-rc.2", stat: "" } });
+    expect(body).toContain("No code under `packages/` changed since `v0.7.0-rc.2`");
+    expect(body).not.toContain("[!WARNING]");
+  });
+
+  it("warns and lists the files that changed, with a comparison link", () => {
+    const stat = " packages/app/src/a.ts | 3 ++-\n 1 file changed, 2 insertions(+), 1 deletion(-)\n";
+    const body = prBody({ ...final, drift: { since: "v0.7.0-rc.2", stat } });
+    expect(body).toContain("> [!WARNING]");
+    expect(body).toContain("packages/app/src/a.ts | 3 ++-");
+    expect(body).toContain("1 file changed");
+    expect(body).toContain("https://github.com/o/r/compare/v0.7.0-rc.2...release/v0.7.0");
+  });
+
+  it("caps a long list and keeps the summary line", () => {
+    const files = Array.from({ length: DRIFT_LIMIT + 10 }, (_, i) => ` packages/f${i}.ts | 1 +`);
+    const stat = [...files, ` ${files.length} files changed`].join("\n");
+    const body = prBody({ ...final, drift: { since: "v0.7.0-rc.2", stat } });
+    expect(body).toContain("…and 11 more files");
+    expect(body).toContain(`${files.length} files changed`);
+    expect(body).not.toContain(`packages/f${DRIFT_LIMIT + 5}.ts`);
+  });
+
+  it("is computed against the newest rc tag, for finals only", () => {
+    const wf = parse(readFileSync(new URL("../../.github/workflows/release-prepare.yml", import.meta.url), "utf8"));
+    const step = Object.values(wf.jobs)
+      .flatMap((job) => job.steps)
+      .find((s) => s.name === "Open the release pull request");
+    expect(step.run).toContain('if [ "$VERSION" = "$base" ]; then');
+    expect(step.run).toContain('git tag -l "v$base-rc.*" --sort=-v:refname | head -n 1');
+    expect(step.run.indexOf("DRIFT_SINCE=")).toBeLessThan(step.run.lastIndexOf("node tools/release-pr-body.js"));
   });
 });
