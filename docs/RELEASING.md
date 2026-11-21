@@ -308,8 +308,12 @@ Documentation under `docs/` describes `main`, not the last release. Link docs at
 
 ## Rehearsing a release (dry run)
 
-Run **Release (publish)** from the Actions tab with **dry_run** ticked and any branch or
-commit as **ref**. It runs every job a real release runs (the full check path, the desktop
+Run **Release (publish)** from the Actions tab with **dry_run** ticked and a branch or
+commit as **ref**. The ref must contain `efdaf863` (#862) or be newer: the App smoke
+workflow's `linux-native` job is required for a rehearsal as for a release, and it installs
+the ref's `.deb` and runs `pnpm run app:linux-native`, which older refs (including rc.2,
+`c2e617af`) do not have, so a rehearsal of one fails there. The upgrade launch check is the
+one step an older ref may lack; it reports not applicable. It runs every job a real release runs (the full check path, the desktop
 artifacts, the smoke and type proof) and then uploads the artifacts to a **draft
 prerelease** called `vX.Y.Z-dryrun.<run number>`, where `X.Y.Z` is the ref's
 `package.json` version without its prerelease suffix. Nothing is tagged, nothing is
