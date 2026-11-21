@@ -117,8 +117,12 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
   const base = url.endsWith("/") ? url : `${url}/`;
   const problems = [];
   const report = [];
-  const feed = (name, token) =>
-    fetch(new URL(name, base), { headers: token ? { Authorization: `Bearer ${token}` } : {}, redirect: "manual" });
+  const feed = (name, token, method = "GET") =>
+    fetch(new URL(name, base), {
+      method,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      redirect: "manual",
+    });
   const github = async (path) => {
     const response = await fetch(`https://api.github.com/repos/${repo}/${path}`, {
       headers: {
@@ -181,7 +185,17 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
         continue;
       }
 
-      if (!installers.has(entry.url)) {
+      if (installers.has(entry.url)) {
+        // Already downloaded for another ring: one full download per installer, but this
+        // ring's token must still reach the same bytes.
+        const head = await feed(entry.url, tokens[ring], "HEAD");
+        if (head.status !== 200 || head.headers.get("content-length") !== entry.size) {
+          problems.push(
+            `${ring} ${arch}: HEAD ${entry.url} got ${head.status}, length ${head.headers.get("content-length")}`,
+          );
+          continue;
+        }
+      } else {
         const download = await feed(entry.url, tokens[ring]);
         if (download.status !== 200) installers.set(entry.url, { status: download.status });
         else {

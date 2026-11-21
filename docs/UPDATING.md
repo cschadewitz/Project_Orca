@@ -251,14 +251,19 @@ For a final the order is:
 2. Attach that run's signed x64 installer to the draft, run native acceptance on the exact
    draft assets, and only then publish the draft (which creates the tag). RELEASING.md has
    the steps and checks.
-3. **Architecture gate.** `feed-publish.yml` publishes x64 and arm64 together and offers
-   both to `internal` at once; rings select versions, not architectures. Windows arm64 has
-   no native acceptance yet. Until it does, or serving is explicitly constrained to x64,
-   leave the production feed off (do not set `ORCA_FEED_BUCKET`, do not dispatch the next
-   step for a production bucket) and do not rely on ring assignment to scope architecture.
+3. **Architecture gate.** Rings select versions, not architectures, so the feed itself must
+   leave out any architecture without native acceptance. Windows arm64 has none yet, so
+   `feed-publish.yml` serves x64 only (`FEED_ARCHES: x64`): the signed run's arm64 installer
+   is never uploaded, the snapshot has no `latest-arm64.yml`, and an arm64 client is offered
+   nothing new by it. The Worker enforces the same list (`SERVED_ARCHES` in
+   `tools/deploy/feed-worker/worker.js`): it answers 404 for arm64 channel files, installers
+   and blockmaps even if the bucket holds some, while x64 files of every completed snapshot
+   stay reachable. Add arm64 to both, in a reviewed change, only after it passes native
+   acceptance, then deploy the Worker; do not rely on ring assignment to scope architecture.
 4. Dispatch **Desktop feed (publish signed)** (`feed-publish.yml`) from main with the version
    and the id of **that same** signing run. Before dispatching, confirm the run's x64
-   installer SHA-256 equals the accepted installer's and the one on the published release.
+   installer SHA-256 equals the accepted installer's; the job also refuses any served
+   installer whose SHA-256 differs from the published release's asset digest.
 
 `tools/deploy/feed-source.js` refuses a version without a published, non-draft GitHub
 release for its tag (a tag alone is not enough) and accepts only a successful
@@ -286,6 +291,8 @@ One-time setup (Casey):
    with Object Read & Write on that bucket only.
 2. Copy `tools/deploy/feed-worker/wrangler.toml.example` to `wrangler.toml` (ignored by Git),
    set the bucket and your custom domain, and run `npx wrangler deploy` in that directory.
+   Deploy the Worker from current main before the first feed run, and again whenever
+   `worker.js` changes: an older deployment may serve architectures the feed does not.
 3. Mint a token per person with `node tools/deploy/feed-token.js RING`. Give each person their
    token; merge the printed entries into one JSON object and store it with
    `npx wrangler secret put FEED_TOKENS`. Revoke a person by removing their entry.

@@ -32,7 +32,7 @@ function world({ offers = { internal: "0.7.1-rc.1", stable: "0.7.0" }, bodies = 
   const calls = [];
   const fetch = async (url, init = {}) => {
     const href = String(url);
-    calls.push({ href, auth: init.headers?.Authorization });
+    calls.push({ href, auth: init.headers?.Authorization, method: init.method ?? "GET" });
     const reply = (status, body = "") => new Response(status === 200 ? body : null, { status });
     if (href.startsWith("https://api.github.com/")) {
       const version = /releases\/tags\/v(.+)$/.exec(href)?.[1];
@@ -48,7 +48,10 @@ function world({ offers = { internal: "0.7.1-rc.1", stable: "0.7.0" }, bodies = 
       const version = offers[ring];
       return reply(200, yml(version, "x64", files[`ORCA-${version}-win-x64.exe`] ?? ""));
     }
-    return files[name] === undefined ? reply(404) : reply(200, files[name]);
+    if (files[name] === undefined) return reply(404);
+    if (init.method === "HEAD")
+      return new Response(null, { status: 200, headers: { "Content-Length": String(files[name].length) } });
+    return reply(200, files[name]);
   };
   return { fetch, calls };
 }
@@ -69,9 +72,20 @@ describe("feed watchdog", () => {
   it("downloads each installer once, and sends tokens only to the feed", async () => {
     const w = world({ offers: { internal: "0.7.0", stable: "0.7.0" } });
     expect((await run(w)).problems).toEqual([]);
-    expect(w.calls.filter((c) => c.href.endsWith("ORCA-0.7.0-win-x64.exe"))).toHaveLength(1);
+    const installer = w.calls.filter((c) => c.href.endsWith("ORCA-0.7.0-win-x64.exe"));
+    // One full download, and a HEAD with the other ring's own token.
+    expect(installer.map((c) => c.method)).toEqual(["GET", "HEAD"]);
+    expect(new Set(installer.map((c) => c.auth)).size).toBe(2);
     for (const call of w.calls.filter((c) => c.href.startsWith("https://api.github.com/")))
       expect(call.auth ?? "").not.toMatch(/i{43}|s{43}/);
+  });
+
+  it("fails when a second ring cannot reach an installer another ring downloaded", async () => {
+    const w = world({ offers: { internal: "0.7.0", stable: "0.7.0" } });
+    const fetch = async (url, init) =>
+      init?.method === "HEAD" ? new Response(null, { status: 404 }) : w.fetch(url, init);
+    const { problems } = await run({ fetch });
+    expect(problems).toContain("stable x64: HEAD ORCA-0.7.0-win-x64.exe got 404, length null");
   });
 
   it("fails when the feed answers without a token", async () => {

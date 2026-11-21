@@ -18,8 +18,9 @@ describe("desktop feed workflows", () => {
     const order = [
       "tools/deploy/feed-source.js",
       "Get-AuthenticodeSignature",
-      "tools/deploy/release-assets.py signed",
-      "tools/deploy/feed-r2.sh snapshot signed",
+      'tools/deploy/release-assets.py signed "$VERSION" "$FEED_ARCHES"',
+      "Match the published release's installers",
+      'tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$FEED_ARCHES"',
     ].map((needle) => feed.indexOf(needle));
     expect(order.every((i) => i > 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -45,5 +46,19 @@ describe("desktop feed workflows", () => {
     expect(promote).toContain('if [ "$PAUSE" = "true" ] && [ "$PERCENT" != "0" ]; then');
     for (const name of ["feed-publish.yml", "feed-promote.yml"])
       expect(read(name)).toContain("PAUSE: ${{ vars.ORCA_FEED_PAUSE }}");
+  });
+
+  it("serves only the natively accepted x64 installer, matching the published release", () => {
+    const feed = read("feed-publish.yml");
+    expect(feed).toMatch(/^env:\n {2}FEED_ARCHES: x64\n/m);
+    expect(feed).not.toMatch(/FEED_ARCHES: .*arm64/);
+    expect(feed).toContain('[[ "$actual" == "$published" ]]');
+    expect(feed).toContain(".digest");
+  });
+
+  it("uploads exactly the architectures the Worker serves", async () => {
+    const { SERVED_ARCHES } = await import("../deploy/feed-worker/worker.js");
+    const arches = /^ {2}FEED_ARCHES: (.+)$/m.exec(read("feed-publish.yml"))[1];
+    expect(arches.split(" ")).toEqual(SERVED_ARCHES);
   });
 });
