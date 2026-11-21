@@ -59,8 +59,11 @@ export function directoryBucket(root) {
   };
 }
 
-/** A Node server that turns each request into a fetch Request for the Worker. */
-export function feedServer({ root, tokens, cert, key }) {
+/**
+ * A Node server that turns each request into a fetch Request for the Worker. `log`, when
+ * given, gets one line per request: method, path, Range and status, never the token.
+ */
+export function feedServer({ root, tokens, cert, key, log }) {
   const env = { FEED: directoryBucket(root), FEED_TOKENS: tokens };
   const listener = async (req, res) => {
     try {
@@ -75,9 +78,11 @@ export function feedServer({ root, tokens, cert, key }) {
       );
       res.writeHead(response.status, Object.fromEntries(response.headers));
       res.end(req.method === "HEAD" || !response.body ? undefined : Buffer.from(await response.arrayBuffer()));
+      log?.(`${req.method} ${req.url} range=${req.headers.range ?? "-"} ${response.status}`);
     } catch {
       res.writeHead(500, { "Cache-Control": "no-store" });
       res.end();
+      log?.(`${req.method} ${req.url} range=${req.headers.range ?? "-"} 500`);
     }
   };
   return cert ? createHttps({ cert, key }, listener) : createHttp(listener);
@@ -101,7 +106,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     if (command === "serve" && rest.length === 4) {
       const [port, cert, key, tokens] = rest;
-      const server = feedServer({ root, tokens, cert: readFileSync(cert), key: readFileSync(key) });
+      const server = feedServer({
+        root,
+        tokens,
+        cert: readFileSync(cert),
+        key: readFileSync(key),
+        log: (line) => console.log(line),
+      });
       server.listen(Number(port), "127.0.0.1", () => console.log(`feed on https://127.0.0.1:${port}/`));
     } else if (command === "snapshot" && rest.length >= 2) snapshot(root, rest[0], rest.slice(1));
     else if (command === "rings" && rest.length === 1) writeRings(root, JSON.parse(rest[0]));

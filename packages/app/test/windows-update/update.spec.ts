@@ -116,20 +116,38 @@ test("a preview token, whose ring holds the installed version, is not offered th
 });
 
 test("an internal token is offered the next version, downloads it and installs it", async () => {
-  test.setTimeout(600_000);
+  // Each step has its own bound, so a hang names the step; the feed's request log is in the
+  // workflow output.
+  test.setTimeout(900_000);
   const { app, page } = await launch("internal");
   let closed = false;
   app.on("close", () => (closed = true));
   try {
-    expect(await act(page, "check")).toMatchObject({ phase: "available", current: FROM, version: TO });
-    expect(await act(page, "download")).toMatchObject({ phase: "ready" });
-    // Restart hands over to the installer and quits; the bridge call may not return.
-    void page.evaluate(() => (window as unknown as UpdatesWindow).orca.updates.act("restart")).catch(() => undefined);
-    await expect.poll(() => closed, { timeout: 120_000, message: "the app quits into the installer" }).toBe(true);
+    await test.step(
+      "check",
+      async () => {
+        expect(await act(page, "check")).toMatchObject({ phase: "available", current: FROM, version: TO });
+      },
+      { timeout: 120_000 },
+    );
+    await test.step(
+      "download",
+      async () => {
+        expect(await act(page, "download")).toMatchObject({ phase: "ready" });
+      },
+      { timeout: 360_000 },
+    );
+    await test.step("restart into the installer", async () => {
+      // Restart hands over to the installer and quits; the bridge call may not return.
+      void page.evaluate(() => (window as unknown as UpdatesWindow).orca.updates.act("restart")).catch(() => undefined);
+      await expect.poll(() => closed, { timeout: 120_000, message: "the app quits into the installer" }).toBe(true);
+    });
   } finally {
-    if (!closed) await app.close().catch(() => undefined);
+    if (!closed) await Promise.race([app.close().catch(() => undefined), new Promise((r) => setTimeout(r, 15_000))]);
   }
-  await expect
-    .poll(installedVersion, { timeout: 300_000, intervals: [2_000], message: `Windows reports ${TO} installed` })
-    .toBe(TO);
+  await test.step("installed version", async () => {
+    await expect
+      .poll(installedVersion, { timeout: 300_000, intervals: [2_000], message: `Windows reports ${TO} installed` })
+      .toBe(TO);
+  });
 });
