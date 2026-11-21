@@ -125,6 +125,12 @@ test("an internal token is offered the next version, downloads it and installs i
   const { app, page } = await launch("internal");
   let closed = false;
   app.on("close", () => (closed = true));
+  // Node prints this once the main process has run out of work, which is how an app that has
+  // quit looks while Playwright's inspector session still holds the process open.
+  let quit = false;
+  app.process().stderr?.on("data", (chunk: Buffer) => {
+    if (chunk.toString().includes("Waiting for the debugger to disconnect")) quit = true;
+  });
   try {
     await test.step(
       "check",
@@ -148,8 +154,11 @@ test("an internal token is offered the next version, downloads it and installs i
         .evaluate(() => (window as unknown as UpdatesWindow).orca.updates.act("restart"))
         .then((reply) => (answer = reply))
         .catch(() => undefined);
-      await expect.poll(() => closed || answer !== undefined, { timeout: 120_000 }).toBe(true);
-      expect(closed, `the app quits into the installer; restart answered ${JSON.stringify(answer)}`).toBe(true);
+      await expect.poll(() => closed || quit || answer !== undefined, { timeout: 120_000 }).toBe(true);
+      expect(closed || quit, `the app quits into the installer; restart answered ${JSON.stringify(answer)}`).toBe(true);
+      // Only the inspector keeps it alive now, and the installer waits for it to exit: let it.
+      if (!closed) app.process().kill();
+      await expect.poll(() => closed, { timeout: 30_000, message: "the quit app exits" }).toBe(true);
     });
   } finally {
     if (!closed) await Promise.race([app.close().catch(() => undefined), new Promise((r) => setTimeout(r, 15_000))]);
