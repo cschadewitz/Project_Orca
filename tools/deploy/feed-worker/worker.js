@@ -16,7 +16,13 @@
 import { RINGS, validateRings, versionFor } from "./rings.js";
 
 const CHANNEL = /^latest-(x64|arm64)\.yml$/;
-const PAYLOAD = /^ORCA-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-win-(?:x64|arm64)\.exe(?:\.blockmap)?$/;
+const PAYLOAD = /^ORCA-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-win-(x64|arm64)\.exe(?:\.blockmap)?$/;
+/**
+ * Architectures the feed serves, matching `FEED_ARCHES` in feed-publish.yml. Only x64 has
+ * native acceptance, so arm64 channel files and payloads answer 404 even if the bucket holds
+ * them. Adding arm64 is a reviewed change here and there, then a Worker deploy.
+ */
+export const SERVED_ARCHES = Object.freeze(["x64"]);
 const TOKEN = /^Bearer ([A-Za-z0-9_-]{32,256})$/;
 
 function respond(status, extra = {}, body = null) {
@@ -126,6 +132,7 @@ export async function handle(request, env) {
 
   const channel = CHANNEL.exec(name);
   if (channel) {
+    if (!SERVED_ARCHES.includes(channel[1])) return respond(404);
     let rings;
     try {
       rings = await readRings(env.FEED);
@@ -145,6 +152,7 @@ export async function handle(request, env) {
   // the blockmap of the version the client is upgrading from.
   const payload = PAYLOAD.exec(name);
   if (payload) {
+    if (!SERVED_ARCHES.includes(payload[2])) return respond(404);
     if (!(await complete(env.FEED, payload[1]))) return respond(404);
     return serve(env.FEED, `${payload[1]}/${name}`, name, request);
   }

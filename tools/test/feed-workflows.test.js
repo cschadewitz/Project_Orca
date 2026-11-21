@@ -42,4 +42,10 @@ describe("desktop feed workflows", () => {
     expect(feed).toContain('[[ "$actual" == "$published" ]]');
     expect(feed).toContain(".digest");
   });
+
+  it("uploads exactly the architectures the Worker serves", async () => {
+    const { SERVED_ARCHES } = await import("../deploy/feed-worker/worker.js");
+    const arches = /^ {2}FEED_ARCHES: (.+)$/m.exec(read("feed-publish.yml"))[1];
+    expect(arches.split(" ")).toEqual(SERVED_ARCHES);
+  });
 });

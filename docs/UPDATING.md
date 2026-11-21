@@ -185,8 +185,11 @@ For a final the order is:
    leave out any architecture without native acceptance. Windows arm64 has none yet, so
    `feed-publish.yml` serves x64 only (`FEED_ARCHES: x64`): the signed run's arm64 installer
    is never uploaded, the snapshot has no `latest-arm64.yml`, and an arm64 client is offered
-   nothing new by it. Add arm64 to `FEED_ARCHES` in a reviewed change only after it passes
-   native acceptance; do not rely on ring assignment to scope architecture.
+   nothing new by it. The Worker enforces the same list (`SERVED_ARCHES` in
+   `tools/deploy/feed-worker/worker.js`): it answers 404 for arm64 channel files, installers
+   and blockmaps even if the bucket holds some, while x64 files of every completed snapshot
+   stay reachable. Add arm64 to both, in a reviewed change, only after it passes native
+   acceptance, then deploy the Worker; do not rely on ring assignment to scope architecture.
 4. Dispatch **Desktop feed (publish signed)** (`feed-publish.yml`) from main with the version
    and the id of **that same** signing run. Before dispatching, confirm the run's x64
    installer SHA-256 equals the accepted installer's; the job also refuses any served
@@ -218,6 +221,8 @@ One-time setup (Casey):
    with Object Read & Write on that bucket only.
 2. Copy `tools/deploy/feed-worker/wrangler.toml.example` to `wrangler.toml` (ignored by Git),
    set the bucket and your custom domain, and run `npx wrangler deploy` in that directory.
+   Deploy the Worker from current main before the first feed run, and again whenever
+   `worker.js` changes: an older deployment may serve architectures the feed does not.
 3. Mint a token per person with `node tools/deploy/feed-token.js RING`. Give each person their
    token; merge the printed entries into one JSON object and store it with
    `npx wrangler secret put FEED_TOKENS`. Revoke a person by removing their entry.
