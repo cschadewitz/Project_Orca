@@ -119,6 +119,21 @@ The client always asks for `latest-ARCH.yml`; which version that resolves to dep
 | `preview` | Testers | What `Desktop feed (promote)` moves there, prereleases included |
 | `stable` | Everyone else | What `Desktop feed (promote)` moves there, never a prerelease |
 
+**Release candidates need a client opt-in.** The Windows client ignores any version with a
+prerelease suffix (`0.7.1-rc.1`) unless `ORCA_UPDATE_PRERELEASE` is exactly `1` in its
+environment. Set it, with the token, for internal and preview testers only:
+
+```powershell
+[Environment]::SetEnvironmentVariable('ORCA_UPDATE_PRERELEASE', '1', 'User')
+```
+
+So a preview tester is offered the rc their ring names; a stable install is never offered an
+rc (the stable ring cannot hold one, and the client would ignore it); and no install is ever
+offered an older version than it runs, in either direction (`0.7.1` ignores `0.7.1-rc.1`, an
+rc install ignores the older stable). A preview-ring install without the opt-in waits until a
+stable version reaches its ring. An rc tester who leaves the program removes the variable and
+moves to a stable token; they get the next stable version newer than their rc.
+
 `rings.json` in the bucket names each ring's version and, optionally, a **rollout**: a newer
 version offered to a percentage of that ring's tokens. A token's place in a rollout comes
 from a hash of the token and the rollout version, so it is stable between checks and raising
@@ -198,6 +213,12 @@ One-time setup (Casey):
    does anything.
 6. Before the first real version, exercise `feed-r2.sh` against a throwaway bucket: R2's
    handling of conditional writes (`If-None-Match`, `If-Match`) has not been verified from CI.
+7. Before giving testers tokens, run the packaged acceptance on real Windows with signed
+   builds from the feed: an opted-in preview install on stable `N` is offered and installs
+   rc `N+1-rc.x`; a stable install on `N` is not offered it; neither is offered an older
+   version afterwards. `tools/test/feed-client.test.js` checks the same policy with the real
+   updater library against the Worker, but substitutes Electron's network stack and
+   installation, so it is not that acceptance.
 
 A feed failure leaves the GitHub release in place and the rings unchanged. Rerun **Desktop
 feed (publish signed)** with the same inputs (or a fresh signed run of the same commit if the
