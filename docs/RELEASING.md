@@ -38,7 +38,8 @@ Closing it proposes the release.
    builds the desktop and daemon artifacts from that same commit (`desktop.yml`, below),
    then tags `vX.Y.Z` and publishes the release with the changelog section as its body,
    the artifacts attached, and GitHub's generated list of merged pull requests appended
-   underneath.
+   underneath. A **final** (`0.7.0`, no prerelease suffix) stops short of that: see
+   [Publishing a final](#publishing-a-final).
 
 Closing a milestone stops at a pull request on purpose. A milestone can be closed by
 accident and reopened; a published tag cannot be unpublished cleanly. One merge click is
@@ -62,6 +63,58 @@ carries. Giving `release-prepare.yml` a personal
 access token instead of `GITHUB_TOKEN` would move the checks back onto the PR, at the cost
 of a token to store and rotate; that trade is only worth making if `main` ever gains
 required status checks.
+
+### Publishing a final
+
+A final becomes the repository's "latest", so its page must offer only signed or validated
+downloads. The Windows installers `release-publish.yml` builds are unsigned, and only the
+Ubuntu 24.04 amd64 `.deb` has native install acceptance. So for a final, `publish` creates
+a **draft** through the API, targeting the merge commit, with the Ubuntu amd64 `.deb`
+attached and nothing else: no tag exists yet, nothing is latest, and no feed step runs. It
+takes the release id from the creation response, uploads by that id, and reads the draft
+back (still a draft, the intended commit, exactly the `.deb` with this run's digest) before
+the job summary reports the id. The run's other builds stay in its workflow artifacts.
+
+Work on the draft **by id, never by tag**: a draft has no tag yet, and the API can report
+its `tag_name` as a temporary `untagged-…` value. With `R=cschadewitz/Project_Orca`, `ID`
+the release id from the job summary, `SHA` the commit and `V` the version:
+
+1. Dispatch **Windows signed (spike)** from `main` with `source_sha` set to `SHA`, while
+   `main` still matches it outside notes, docs and workflows (later product drift on `main`
+   makes the source check refuse it). Its environment reviewer approves the run.
+2. Verify the signing run's output: Authenticode status `Valid`, a timestamp, the expected
+   publisher, and the run's `latest-x64.yml` `files[0]` (`url`, `size`, base64 **SHA-512**)
+   describing exactly `ORCA-$V-win-x64.exe` (`release-assets.py` checks this). Record the
+   installer's **SHA-256** separately: that is what the release page and the notes'
+   verification step show.
+3. Check the draft:
+   `gh api repos/$R/releases/$ID --jq '{draft, name, tag_name, target_commitish, assets: [.assets[] | {name, digest}]}'`
+   must show `draft: true`, `name: "v$V"`, `target_commitish` equal to `SHA`, and only the
+   `.deb`, whose `digest` matches the run's artifact. `tag_name` may read `v$V` or
+   `untagged-…`; step 5 sets it.
+4. Attach the signed installer by id:
+   `gh api -X POST -H 'Content-Type: application/octet-stream' "https://uploads.github.com/repos/$R/releases/$ID/assets?name=ORCA-$V-win-x64.exe" --input <file>`,
+   then repeat step 3: exactly the `.exe` and the `.deb`, the `.exe`'s `digest` equal to
+   `sha256:` and the SHA-256 recorded in step 2.
+5. Run native acceptance on the exact staged bytes before anything is public: the signed
+   x64 `.exe` and the Ubuntu amd64 `.deb`, each with a digest equal to what step 4's check
+   shows on the draft (signature, install, first launch, a built-in sample, reopen). The
+   signing run's checks in step 2 are not that acceptance. If either fails, stop: the draft
+   stays a draft and nothing is public.
+6. Publish with the tag and target stated explicitly:
+   `gh api -X PATCH repos/$R/releases/$ID -f tag_name=v$V -f target_commitish=$SHA -F draft=false -f make_latest=true`.
+   Then `git ls-remote origin refs/tags/v$V` must print `SHA`,
+   `gh api repos/$R/releases/latest --jq .id` must print `ID`, and both public downloads
+   (from the published page's URLs) must hash to the digests accepted in step 5.
+7. Only then, where the desktop feed is enabled, feed that signing run to **Desktop feed
+   (publish signed)** ([UPDATING.md](UPDATING.md)).
+
+If `publish` fails or is re-run for a final, it refuses to make a second draft while any
+draft named or tagged `v$V` exists, and prints their ids. Reuse such a draft when step 3's
+checks pass for the commit you mean to release (upload the `.deb` by id if it is missing).
+Delete a draft only when its target or assets are wrong, then dispatch **Release
+(publish)** again. More than one draft for the version is always a stop: delete the extras
+after checking which one, if any, is valid.
 
 ## The artifacts
 

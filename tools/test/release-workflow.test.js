@@ -73,6 +73,47 @@ it("rehearses a release on dry_run without tagging, publishing or feeding anythi
   expect(upload.run).not.toContain("${{");
 });
 
+it("drafts a final with the Ubuntu .deb only, leaving tag and publication to a maintainer", () => {
+  const publish = named(workflow("release-publish.yml").jobs.publish.steps, "Tag and release").run;
+  // Only a version without a prerelease suffix is a final.
+  expect(publish).toContain('case "$version" in *-*) final=false ;; esac');
+  const start = publish.indexOf('if [ "$final" = true ]; then');
+  const stop = publish.indexOf("exit 0", start);
+  expect(start).toBeGreaterThan(-1);
+  expect(stop).toBeGreaterThan(start);
+  const final = publish.slice(start, stop);
+  // Exactly one asset: the Ubuntu amd64 .deb.
+  expect(final).toContain('debs=(artifacts/*-"$version"-linux-amd64.deb)');
+  expect(final).toContain("if [ ${#debs[@]} -ne 1 ]; then");
+  // No second draft: earlier drafts are found by title too, since a draft's tag can read
+  // back as `untagged-…`.
+  const duplicate = final.indexOf('select(.draft and (.name == \\"v$version\\" or .tag_name == \\"v$version\\"))');
+  const create = final.indexOf('gh api -X POST "repos/$GITHUB_REPOSITORY/releases" --input - --jq .id');
+  expect(duplicate).toBeGreaterThan(-1);
+  expect(create).toBeGreaterThan(duplicate);
+  // A draft, never latest, and the id from creation is required and used from then on.
+  expect(final).toContain("draft: true");
+  expect(final).toContain('make_latest: "false"');
+  expect(final).toContain('if ! [[ "$id" =~ ^[0-9]+$ ]]; then');
+  expect(final).toContain("releases/$id/assets?name=");
+  // Read back by id before reporting success: draft, target and the .deb digest.
+  expect(final).toContain('gh api "repos/$GITHUB_REPOSITORY/releases/$id"');
+  expect(final).toContain('if [ "$check" != "true true true" ]; then');
+  expect(final).not.toContain("--draft=false");
+  expect(final).not.toContain("gh release create");
+  // The publishing edit comes after the final has stopped; a prerelease still attaches
+  // everything and is never latest.
+  expect(publish.indexOf('gh release edit "v$version" --draft=false')).toBeGreaterThan(stop);
+  expect(publish.slice(stop)).toContain("--prerelease");
+});
+
+it("runs nothing after a final's draft that could ship its unsigned build output", () => {
+  const steps = workflow("release-publish.yml").jobs.publish.steps;
+  const after = steps.slice(steps.findIndex((step) => step.name === "Tag and release") + 1);
+  // Any later step (today the legacy feed) must be gated to prereleases.
+  for (const step of after) expect(step.if ?? "", step.name).toContain("contains(needs.check.outputs.version, '-')");
+});
+
 it("never hands a write token to the ref under test (#863)", () => {
   const file = workflow("release-publish.yml");
   expect(file.permissions).toEqual({ contents: "read" });
