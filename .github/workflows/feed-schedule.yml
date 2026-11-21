@@ -1,0 +1,53 @@
+# Move the newest fed version through the rings on a fixed schedule, so promotions need no
+# dispatch: preview 24 h after its snapshot completed, 20% of stable at 48 h, all of stable at
+# 96 h (tools/deploy/feed-schedule.js; a release candidate stops at preview). Each step uses
+# the ordinary promotion rules, so rings only move forward.
+#
+# Halting a version's rollout with Desktop feed (promote) at 0% stops its schedule for good;
+# ORCA_FEED_PAUSE=true stops all scheduled promotions while it is set. Manual promotions
+# (feed-promote.yml) still work at any time and the schedule continues from wherever they leave
+# the rings.
+name: Desktop feed (scheduled promotion)
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: apply due promotions
+    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
+    runs-on: ubuntu-24.04
+    environment: desktop-feed
+    steps:
+      - name: Skip while the feed is paused
+        id: pause
+        if: vars.ORCA_FEED_PAUSE == 'true'
+        run: echo "The feed is paused (ORCA_FEED_PAUSE=true); no scheduled promotion." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.pause.outcome == 'skipped'
+        with:
+          ref: main
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.pause.outcome == 'skipped'
+        with:
+          node-version: 24
+
+      - name: Promote what is due
+        if: steps.pause.outcome == 'skipped'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
+          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+        run: bash tools/deploy/feed-r2.sh schedule

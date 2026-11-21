@@ -80,3 +80,17 @@ describe("automatic feed dispatch", () => {
     expect(script).toContain(".draft == false");
   });
 });
+
+describe("scheduled promotion", () => {
+  const schedule = read("feed-schedule.yml");
+
+  it("runs from main in the feed environment, only while the feed is on, and honours the pause", () => {
+    expect(schedule).toMatch(/cron: "17 \*\/6 \* \* \*"/);
+    expect(schedule).toContain("if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''");
+    expect(schedule).toContain("environment: desktop-feed");
+    expect(schedule).toContain("group: release-publication");
+    expect(schedule).toContain("if: vars.ORCA_FEED_PAUSE == 'true'");
+    expect(schedule.match(/if: steps\.pause\.outcome == 'skipped'/g)).toHaveLength(3);
+    expect(schedule).toContain("run: bash tools/deploy/feed-r2.sh schedule");
+  });
+});
