@@ -181,14 +181,16 @@ For a final the order is:
 2. Attach that run's signed x64 installer to the draft, run native acceptance on the exact
    draft assets, and only then publish the draft (which creates the tag). RELEASING.md has
    the steps and checks.
-3. **Architecture gate.** `feed-publish.yml` publishes x64 and arm64 together and offers
-   both to `internal` at once; rings select versions, not architectures. Windows arm64 has
-   no native acceptance yet. Until it does, or serving is explicitly constrained to x64,
-   leave the production feed off (do not set `ORCA_FEED_BUCKET`, do not dispatch the next
-   step for a production bucket) and do not rely on ring assignment to scope architecture.
+3. **Architecture gate.** Rings select versions, not architectures, so the feed itself must
+   leave out any architecture without native acceptance. Windows arm64 has none yet, so
+   `feed-publish.yml` serves x64 only (`FEED_ARCHES: x64`): the signed run's arm64 installer
+   is never uploaded, the snapshot has no `latest-arm64.yml`, and an arm64 client is offered
+   nothing new by it. Add arm64 to `FEED_ARCHES` in a reviewed change only after it passes
+   native acceptance; do not rely on ring assignment to scope architecture.
 4. Dispatch **Desktop feed (publish signed)** (`feed-publish.yml`) from main with the version
    and the id of **that same** signing run. Before dispatching, confirm the run's x64
-   installer SHA-256 equals the accepted installer's and the one on the published release.
+   installer SHA-256 equals the accepted installer's; the job also refuses any served
+   installer whose SHA-256 differs from the published release's asset digest.
 
 `tools/deploy/feed-source.js` refuses a version without a published, non-draft GitHub
 release for its tag (a tag alone is not enough) and accepts only a successful

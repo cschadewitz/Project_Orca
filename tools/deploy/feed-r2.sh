@@ -2,8 +2,9 @@
 # Write the private desktop feed in Cloudflare R2 through its S3 API. Run by
 # release-publish.yml and feed-promote.yml; tools/deploy/feed-worker serves what this writes.
 #
-#   feed-r2.sh snapshot DIR VERSION        upload VERSION's Windows feed files from DIR, then
-#                                          offer it in the internal ring
+#   feed-r2.sh snapshot DIR VERSION ARCHES upload VERSION's Windows feed files for ARCHES
+#                                          ("x64" or "x64 arm64") from DIR, then offer it
+#                                          in the internal ring
 #   feed-r2.sh promote RING VERSION PERCENT
 #                                          offer VERSION to PERCENT of RING (0 halts a rollout)
 #
@@ -68,25 +69,32 @@ update_rings() {
 
 case "${1:-}" in
   snapshot)
-    [[ $# -eq 3 ]] || fail "usage: feed-r2.sh snapshot DIR VERSION"
+    [[ $# -eq 4 ]] || fail "usage: feed-r2.sh snapshot DIR VERSION ARCHES"
     dir=$2 version=$3
     check_version "$version"
+    # Only architectures that were accepted natively are served; an architecture left out has
+    # no channel file in this snapshot, so its clients are offered nothing new.
+    case "$4" in
+      x64) arches=(x64) ;;
+      "x64 arm64") arches=(x64 arm64) ;;
+      *) fail "ARCHES must be \"x64\" or \"x64 arm64\"" ;;
+    esac
     channel=$(channel_of "$version")
     # Payload first, then metadata, then the completion record, each written once. Rerunning
     # after an interruption at any point resumes: identical objects are skipped, different
     # ones refused.
-    for arch in x64 arm64; do
+    for arch in "${arches[@]}"; do
       for name in "ORCA-$version-win-$arch.exe" "ORCA-$version-win-$arch.exe.blockmap"; do
         [[ -f "$dir/$name" ]] || fail "missing $name"
       done
       [[ -f "$dir/$channel-$arch.yml" ]] || fail "missing $channel-$arch.yml"
     done
-    for arch in x64 arm64; do
+    for arch in "${arches[@]}"; do
       for name in "ORCA-$version-win-$arch.exe" "ORCA-$version-win-$arch.exe.blockmap"; do
         put_once "$version/$name" "$dir/$name" application/octet-stream
       done
     done
-    for arch in x64 arm64; do
+    for arch in "${arches[@]}"; do
       put_once "$version/$channel-$arch.yml" "$dir/$channel-$arch.yml" "text/yaml; charset=utf-8"
     done
     # The completion record, written only once every object above is in place. The Worker
@@ -102,6 +110,6 @@ case "${1:-}" in
     update_rings promote "$2" "$3" "$4"
     ;;
   *)
-    fail "usage: feed-r2.sh snapshot DIR VERSION | promote RING VERSION PERCENT"
+    fail "usage: feed-r2.sh snapshot DIR VERSION ARCHES | promote RING VERSION PERCENT"
     ;;
 esac

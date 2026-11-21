@@ -116,4 +116,36 @@ describe("release-assets.py update metadata", () => {
     rmSync(join(noMap, "arm64", `ORCA-${VERSION}-win-arm64.exe.blockmap`));
     expect(verify(noMap).stderr).toMatch(/Incomplete or corrupt/);
   });
+
+  it("checks only the requested architectures, and still every one of them", () => {
+    const brokenArm = fixture((arch, f) => {
+      if (arch === "arm64") f.entrySha = sha512("other");
+    });
+    const x64 = spawnSync("python3", ["-B", "tools/deploy/release-assets.py", brokenArm, VERSION, "x64"], {
+      encoding: "utf8",
+    });
+    expect(x64.status, x64.stderr).toBe(0);
+    const both = spawnSync(
+      "python3",
+      [
+        "-B",
+        "tools/deploy/release-assets.py",
+        fixture((arch, f) => {
+          if (arch === "x64") f.entrySha = sha512("other");
+        }),
+        VERSION,
+        "x64",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(both.status).not.toBe(0);
+  });
+
+  it.each(["", "x86", "x64 x64", "arm"])("refuses the architecture list %j", (arches) => {
+    const result = spawnSync("python3", ["-B", "tools/deploy/release-assets.py", fixture(), VERSION, arches], {
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Invalid architectures");
+  });
 });

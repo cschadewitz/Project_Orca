@@ -85,7 +85,7 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
   it("uploads payload before metadata, then offers the version to internal", () => {
     const f = setup();
     f.release("0.7.1-rc.1", "prerelease");
-    const result = f.run("snapshot", f.artifacts, "0.7.1-rc.1");
+    const result = f.run("snapshot", f.artifacts, "0.7.1-rc.1", "x64 arm64");
     expect(result.status, result.stderr).toBe(0);
     const puts = f.log().filter((a) => a[3] === "put-object");
     const keys = puts.map((a) => a[a.indexOf("--key") + 1]);
@@ -102,10 +102,39 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
     expect(readFileSync(join(f.root, "summary"), "utf8")).toContain("internal now offers 0.7.1-rc.1");
   });
 
+  it("serves only x64 when asked, leaving the arm64 installer and channel file out", () => {
+    const f = setup();
+    f.release("0.7.0", "latest");
+    const result = f.run("snapshot", f.artifacts, "0.7.0", "x64");
+    expect(result.status, result.stderr).toBe(0);
+    const keys = f
+      .log()
+      .filter((a) => a[3] === "put-object")
+      .map((a) => a[a.indexOf("--key") + 1]);
+    expect(keys).toEqual([
+      "0.7.0/ORCA-0.7.0-win-x64.exe",
+      "0.7.0/ORCA-0.7.0-win-x64.exe.blockmap",
+      "0.7.0/latest-x64.yml",
+      "0.7.0/complete.json",
+      "rings.json",
+    ]);
+    expect(keys.some((k) => k.includes("arm64"))).toBe(false);
+  });
+
+  it("refuses a snapshot without an explicit, known architecture list", () => {
+    const f = setup();
+    f.release("0.7.0", "latest");
+    expect(f.run("snapshot", f.artifacts, "0.7.0").stderr).toContain("usage");
+    for (const arches of ["arm64", "arm64 x64", "x64 x64", "", "x86"]) {
+      expect(f.run("snapshot", f.artifacts, "0.7.0", arches).stderr).toContain("ARCHES must be");
+    }
+    expect(existsSync(f.object("rings.json"))).toBe(false);
+  });
+
   it("writes every object conditionally", () => {
     const f = setup();
     f.release("0.7.0", "latest");
-    expect(f.run("snapshot", f.artifacts, "0.7.0").status).toBe(0);
+    expect(f.run("snapshot", f.artifacts, "0.7.0", "x64 arm64").status).toBe(0);
     const puts = f.log().filter((a) => a[3] === "put-object");
     expect(puts).toHaveLength(8);
     expect(puts.every((a) => a.includes("--if-none-match") || a.includes("--if-match"))).toBe(true);
@@ -114,14 +143,14 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
   it("treats a rerun of identical bytes as a no-op and refuses different bytes", () => {
     const f = setup();
     f.release("0.7.0", "latest");
-    expect(f.run("snapshot", f.artifacts, "0.7.0").status).toBe(0);
+    expect(f.run("snapshot", f.artifacts, "0.7.0", "x64 arm64").status).toBe(0);
     const rings = readFileSync(f.object("rings.json"), "utf8");
-    const again = f.run("snapshot", f.artifacts, "0.7.0");
+    const again = f.run("snapshot", f.artifacts, "0.7.0", "x64 arm64");
     expect(again.status, again.stderr).toBe(0);
     expect(again.stdout).toContain("identical bytes");
     expect(readFileSync(f.object("rings.json"), "utf8")).toBe(rings);
     writeFileSync(join(f.artifacts, "ORCA-0.7.0-win-x64.exe"), "tampered");
-    const changed = f.run("snapshot", f.artifacts, "0.7.0");
+    const changed = f.run("snapshot", f.artifacts, "0.7.0", "x64 arm64");
     expect(changed.status).not.toBe(0);
     expect(changed.stderr).toContain("already exists with different bytes");
     expect(readFileSync(f.object("0.7.0/ORCA-0.7.0-win-x64.exe"), "utf8")).toBe("exe 0.7.0 x64");
@@ -131,10 +160,10 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
   it.each([0, 1, 2, 3, 4, 5, 6, 7])("resumes after an interruption once %i objects were written", (written) => {
     const f = setup();
     f.release("0.7.1-rc.1", "prerelease");
-    const cut = f.runWith({ FAKE_PUT_LIMIT: String(written) }, "snapshot", f.artifacts, "0.7.1-rc.1");
+    const cut = f.runWith({ FAKE_PUT_LIMIT: String(written) }, "snapshot", f.artifacts, "0.7.1-rc.1", "x64 arm64");
     expect(cut.status).not.toBe(0);
     expect(existsSync(f.object("rings.json"))).toBe(false);
-    const resumed = f.run("snapshot", f.artifacts, "0.7.1-rc.1");
+    const resumed = f.run("snapshot", f.artifacts, "0.7.1-rc.1", "x64 arm64");
     expect(resumed.status, resumed.stderr).toBe(0);
     for (const arch of ["x64", "arm64"]) {
       expect(readFileSync(f.object(`0.7.1-rc.1/ORCA-0.7.1-rc.1-win-${arch}.exe`), "utf8")).toBe(
@@ -157,7 +186,7 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
     const head = f.runWith({ FAKE_FAIL_OP: "head-object" }, "promote", "stable", "0.7.0", "100");
     expect(head.status).not.toBe(0);
     expect(head.stderr).toContain("could not look up");
-    const put = f.runWith({ FAKE_FAIL_OP: "put-object" }, "snapshot", f.artifacts, "0.7.0");
+    const put = f.runWith({ FAKE_FAIL_OP: "put-object" }, "snapshot", f.artifacts, "0.7.0", "x64 arm64");
     expect(put.status).not.toBe(0);
     expect(put.stderr).toContain("could not write");
     const get = f.runWith({ FAKE_FAIL_OP: "get-object" }, "promote", "stable", "0.7.0", "100");
@@ -168,7 +197,7 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
     const f = setup();
     expect(f.run("promote", "stable", "0.7.0", "100").stderr).toContain("no complete feed snapshot");
     f.release("0.7.0", "latest");
-    expect(f.run("snapshot", f.artifacts, "0.7.0").status).toBe(0);
+    expect(f.run("snapshot", f.artifacts, "0.7.0", "x64 arm64").status).toBe(0);
     const promoted = f.run("promote", "stable", "0.7.0", "100");
     expect(promoted.status, promoted.stderr).toBe(0);
     const last = f.log().at(-1);
@@ -181,8 +210,8 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
 
   it("refuses missing files, bad versions and bad configuration before writing anything", () => {
     const f = setup();
-    expect(f.run("snapshot", f.artifacts, "0.7.0").stderr).toContain("missing ORCA-0.7.0-win-x64.exe");
-    expect(f.run("snapshot", f.artifacts, "v0.7.0").stderr).toContain("invalid version");
+    expect(f.run("snapshot", f.artifacts, "0.7.0", "x64 arm64").stderr).toContain("missing ORCA-0.7.0-win-x64.exe");
+    expect(f.run("snapshot", f.artifacts, "v0.7.0", "x64 arm64").stderr).toContain("invalid version");
     expect(existsSync(f.object("rings.json"))).toBe(false);
     const bad = spawnSync("bash", ["tools/deploy/feed-r2.sh", "promote", "stable", "0.7.0", "100"], {
       env: { ...process.env, FEED_ACCOUNT_ID: "nope", FEED_BUCKET: "orca-feed" },

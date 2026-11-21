@@ -1,12 +1,26 @@
 #!/usr/bin/env python3
-"""Flatten downloaded assets without collisions and prove both Windows feeds are complete."""
+"""Flatten downloaded assets without collisions and prove the Windows feeds are complete.
+
+Usage: release-assets.py DIR VERSION [ARCHES]. ARCHES is a space-separated subset of
+"x64 arm64" (the default, both); the desktop feed passes only the architectures it serves.
+"""
 import base64
 import hashlib
 from pathlib import Path
 import sys
 
 
-def verify(root, version):
+ARCHES = ("x64", "arm64")
+
+
+def parse_arches(text):
+    arches = text.split()
+    if not arches or len(set(arches)) != len(arches) or any(a not in ARCHES for a in arches):
+        raise RuntimeError(f"Invalid architectures: {text!r}")
+    return tuple(a for a in ARCHES if a in arches)
+
+
+def verify(root, version, arches=ARCHES):
     for directory in list(root.iterdir()):
         if directory.is_dir():
             for source in directory.rglob("*"):
@@ -18,7 +32,7 @@ def verify(root, version):
             import shutil
             shutil.rmtree(directory)
     channel = "prerelease" if "-" in version else "latest"
-    for arch in ("x64", "arm64"):
+    for arch in arches:
         check_metadata(root, (root / f"{channel}-{arch}.yml").read_text(), version, arch)
 
 
@@ -101,4 +115,6 @@ def check_metadata(root, text, version, arch):
         raise RuntimeError(f"Incomplete or corrupt installer: {name}")
 
 if __name__ == "__main__":
-    verify(Path(sys.argv[1]), sys.argv[2])
+    if len(sys.argv) not in (3, 4):
+        raise SystemExit("usage: release-assets.py DIR VERSION [ARCHES]")
+    verify(Path(sys.argv[1]), sys.argv[2], parse_arches(sys.argv[3]) if len(sys.argv) == 4 else ARCHES)
