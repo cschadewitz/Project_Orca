@@ -181,7 +181,12 @@ For a final the order is:
 2. Attach that run's signed x64 installer to the draft, run native acceptance on the exact
    draft assets, and only then publish the draft (which creates the tag). RELEASING.md has
    the steps and checks.
-3. Dispatch **Desktop feed (publish signed)** (`feed-publish.yml`) from main with the version
+3. **Architecture gate.** `feed-publish.yml` publishes x64 and arm64 together and offers
+   both to `internal` at once; rings select versions, not architectures. Windows arm64 has
+   no native acceptance yet. Until it does, or serving is explicitly constrained to x64,
+   leave the production feed off (do not set `ORCA_FEED_BUCKET`, do not dispatch the next
+   step for a production bucket) and do not rely on ring assignment to scope architecture.
+4. Dispatch **Desktop feed (publish signed)** (`feed-publish.yml`) from main with the version
    and the id of **that same** signing run. Before dispatching, confirm the run's x64
    installer SHA-256 equals the accepted installer's and the one on the published release.
 
