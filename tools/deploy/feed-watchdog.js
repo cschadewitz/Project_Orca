@@ -11,11 +11,15 @@
  * - a request without a token gets 401, and an architecture the Worker does not serve gets 404;
  * - the channel file names a version the ring may hold: a published, non-draft GitHub release,
  *   never a prerelease in `stable`, and only `-rc.N` prereleases anywhere;
- * - the installer the feed serves hashes to the channel file's sha512, and its SHA-256 equals
+ * - the channel file is one this feed publishes: exactly one `files[]` entry (what the
+ *   installed updater reads) naming that architecture's installer, with the legacy `path` and
+ *   `sha512` agreeing with it;
+ * - the installer the feed serves has that entry's size and sha512, and its SHA-256 equals
  *   the published GitHub release asset's digest, so the feed serves the released bytes.
  *
  * It cannot read rings.json (that needs the bucket credential, which stays in the protected
  * desktop-feed environment), so it checks what a ring is offered, not what it should be offered.
+ * The canary tokens live in the `feed-canary` environment, which only main can deploy to.
  * Tokens are only ever sent as Authorization headers; nothing here prints them.
  */
 import { createHash } from "node:crypto";
@@ -27,13 +31,58 @@ import * as worker from "./feed-worker/worker.js";
 const ARCHES = ["x64", "arm64"];
 const VERSION = /^\d+\.\d+\.\d+(?:-rc\.\d+)?$/;
 
-/** The top-level `version`, `path` and `sha512` of an electron-builder channel file. */
-export function parseChannel(text) {
-  const field = (key) => new RegExp(`^${key}: *['"]?([^'"\\n]+?)['"]? *$`, "m").exec(text)?.[1];
-  return { version: field("version"), path: field("path"), sha512: field("sha512") };
+const TOP_KEYS = new Set(["version", "files", "path", "sha512", "releaseDate"]);
+const ENTRY_KEYS = new Set(["url", "sha512", "size", "blockMapSize", "isAdminRightsRequired"]);
+
+function scalar(value) {
+  let v = value.trim();
+  if (v.length >= 2 && ((v[0] === "'" && v.at(-1) === "'") || (v[0] === '"' && v.at(-1) === '"'))) v = v.slice(1, -1);
+  if (!v || /[\n#{}[\]&*!|>]/.test(v) || v.startsWith("- ")) throw new Error("unexpected value");
+  return v;
 }
 
-/** Problems with one ring's channel file, as messages; empty when it is acceptable. */
+function field(line, allowed, target) {
+  const at = line.indexOf(": ");
+  const key = at < 0 ? line : line.slice(0, at);
+  if (at < 0 || !allowed.has(key) || Object.hasOwn(target, key)) throw new Error(`unexpected key ${key}`);
+  target[key] = scalar(line.slice(at + 2));
+}
+
+/**
+ * An electron-builder channel file, parsed as strictly as release-assets.py parses it before
+ * publication: top-level fields plus the `files[]` entries electron-updater actually reads.
+ * Throws on any other layout.
+ */
+export function parseChannel(text) {
+  const top = {};
+  let entry;
+  let inFiles = false;
+  for (const raw of text.split(/\r?\n/)) {
+    if (!raw.trim()) continue;
+    if (raw.startsWith("  - ") && inFiles) {
+      entry = {};
+      top.files.push(entry);
+      field(raw.slice(4), ENTRY_KEYS, entry);
+    } else if (raw.startsWith("    ") && !raw.startsWith("     ") && entry) {
+      field(raw.slice(4), ENTRY_KEYS, entry);
+    } else if (!raw.startsWith(" ")) {
+      entry = undefined;
+      inFiles = false;
+      if (raw === "files:") {
+        if (top.files) throw new Error("unexpected key files");
+        top.files = [];
+        inFiles = true;
+      } else field(raw, new Set([...TOP_KEYS].filter((k) => k !== "files")), top);
+    } else throw new Error("unexpected layout");
+  }
+  return top;
+}
+
+/**
+ * Problems with one ring's channel file, as messages; empty when it is acceptable. The
+ * installer the updater fetches is `files[0]`; the legacy top-level `path` and `sha512` must
+ * agree with it, as release-assets.py requires before anything is published.
+ */
 export function channelProblems(ring, arch, channel) {
   const where = `${ring} latest-${arch}.yml`;
   const problems = [];
@@ -41,9 +90,21 @@ export function channelProblems(ring, arch, channel) {
     problems.push(`${where}: unexpected version ${channel.version}`);
   else if (ring === "stable" && channel.version.includes("-"))
     problems.push(`${where}: stable offers the prerelease ${channel.version}`);
-  if (channel.path !== `ORCA-${channel.version}-win-${arch}.exe`)
-    problems.push(`${where}: path ${channel.path} is not ${arch}'s installer for ${channel.version}`);
-  if (!/^[A-Za-z0-9+/]{86}==$/.test(channel.sha512 ?? "")) problems.push(`${where}: missing or malformed sha512`);
+  const name = `ORCA-${channel.version}-win-${arch}.exe`;
+  const files = channel.files ?? [];
+  if (files.length !== 1) {
+    problems.push(`${where}: names ${files.length} installers in files[], not exactly one`);
+    return problems;
+  }
+  const [entry] = files;
+  if (entry.url !== name)
+    problems.push(`${where}: files[0] ${entry.url} is not ${arch}'s installer for ${channel.version}`);
+  if (!/^[A-Za-z0-9+/]{86}==$/.test(entry.sha512 ?? "")) problems.push(`${where}: files[0] has no valid sha512`);
+  if (!/^\d+$/.test(entry.size ?? "")) problems.push(`${where}: files[0] has no valid size`);
+  if ((entry.isAdminRightsRequired ?? "false") !== "false")
+    problems.push(`${where}: files[0] requires admin rights; ORCA's installer is per-user`);
+  if (channel.path !== entry.url || channel.sha512 !== entry.sha512)
+    problems.push(`${where}: legacy path/sha512 disagree with files[0]`);
   return problems;
 }
 
@@ -94,7 +155,13 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
         problems.push(`${ring} latest-${arch}.yml: got ${response.status}`);
         continue;
       }
-      const channel = parseChannel(await response.text());
+      let channel;
+      try {
+        channel = parseChannel(await response.text());
+      } catch (error) {
+        problems.push(`${ring} latest-${arch}.yml: not a channel file this feed publishes (${error.message})`);
+        continue;
+      }
       const found = channelProblems(ring, arch, channel);
       problems.push(...found);
       if (found.length) continue;
@@ -106,29 +173,32 @@ export async function watch({ url, tokens, repo, githubToken, fetch = globalThis
         problems.push(`${ring} ${arch}: ${channel.version} has no published GitHub release`);
         continue;
       }
-      const asset = release.assets?.find((a) => a.name === channel.path);
+      // What the installed updater downloads and verifies: files[0], not the legacy fields.
+      const [entry] = channel.files;
+      const asset = release.assets?.find((a) => a.name === entry.url);
       if (!/^sha256:[0-9a-f]{64}$/.test(asset?.digest ?? "")) {
-        problems.push(`${ring} ${arch}: release v${channel.version} has no ${channel.path} digest`);
+        problems.push(`${ring} ${arch}: release v${channel.version} has no ${entry.url} digest`);
         continue;
       }
 
-      if (!installers.has(channel.path)) {
-        const download = await feed(channel.path, tokens[ring]);
-        if (download.status !== 200) installers.set(channel.path, { status: download.status });
+      if (!installers.has(entry.url)) {
+        const download = await feed(entry.url, tokens[ring]);
+        if (download.status !== 200) installers.set(entry.url, { status: download.status });
         else {
           const bytes = Buffer.from(await download.arrayBuffer());
-          installers.set(channel.path, {
+          installers.set(entry.url, {
+            size: bytes.length,
             sha512: createHash("sha512").update(bytes).digest("base64"),
             sha256: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
           });
         }
       }
-      const installer = installers.get(channel.path);
-      if (installer.status) problems.push(`${ring} ${arch}: ${channel.path} got ${installer.status}`);
-      else if (installer.sha512 !== channel.sha512)
-        problems.push(`${ring} ${arch}: ${channel.path} does not match the channel file's sha512`);
+      const installer = installers.get(entry.url);
+      if (installer.status) problems.push(`${ring} ${arch}: ${entry.url} got ${installer.status}`);
+      else if (installer.size !== Number(entry.size) || installer.sha512 !== entry.sha512)
+        problems.push(`${ring} ${arch}: ${entry.url} does not match the channel file's files[0] size and sha512`);
       else if (installer.sha256 !== asset.digest)
-        problems.push(`${ring} ${arch}: ${channel.path} differs from the published release asset`);
+        problems.push(`${ring} ${arch}: ${entry.url} differs from the published release asset`);
       else report.push(`${ring} ${arch}: ${channel.version}, served bytes match the published release`);
     }
   }

@@ -113,7 +113,9 @@ describe("feed watchdog", () => {
       return w.fetch(url, init);
     };
     const { problems } = await run({ fetch });
-    expect(problems).toContain("stable x64: ORCA-0.7.0-win-x64.exe does not match the channel file's sha512");
+    expect(problems).toContain(
+      "stable x64: ORCA-0.7.0-win-x64.exe does not match the channel file's files[0] size and sha512",
+    );
   });
 
   it("reports a ring that is offered nothing yet without failing", async () => {
@@ -133,24 +135,76 @@ describe("feed watchdog", () => {
 });
 
 describe("channel files", () => {
-  it("reads the fields the client uses", () => {
-    expect(parseChannel(yml("0.7.0", "x64", "abc"))).toEqual({
+  const good = () => parseChannel(yml("0.7.0", "x64", "abc"));
+
+  it("reads files[] as the updater does, and the legacy fields", () => {
+    expect(good()).toEqual({
       version: "0.7.0",
+      files: [{ url: "ORCA-0.7.0-win-x64.exe", sha512: sha512("abc"), size: "3" }],
       path: "ORCA-0.7.0-win-x64.exe",
       sha512: sha512("abc"),
+      releaseDate: "2026-11-21T00:00:00.000Z",
     });
+    expect(channelProblems("stable", "x64", good())).toEqual([]);
+  });
+
+  it.each([
+    ["files[0] names another installer", (c) => (c.files[0].url = "ORCA-0.6.0-win-x64.exe"), /files\[0\] ORCA-0\.6\.0/],
+    ["files[0] has another digest", (c) => (c.files[0].sha512 = sha512("other")), /legacy path\/sha512 disagree/],
+    ["the legacy path points elsewhere", (c) => (c.path = "ORCA-0.6.0-win-x64.exe"), /legacy path\/sha512 disagree/],
+    ["files[0] has no size", (c) => delete c.files[0].size, /no valid size/],
+    ["files[0] requires admin", (c) => (c.files[0].isAdminRightsRequired = "true"), /requires admin rights/],
+    ["two installers", (c) => c.files.push({ ...c.files[0] }), /names 2 installers/],
+    ["no files[]", (c) => delete c.files, /names 0 installers/],
+  ])("refuses a channel file where %s", (_label, change, message) => {
+    const channel = good();
+    change(channel);
+    expect(channelProblems("stable", "x64", channel).join("\n")).toMatch(message);
+  });
+
+  it.each([
+    ["an unknown key", "version: 0.7.0\nchannel: beta\n"],
+    ["a nested list", "version: 0.7.0\nfiles:\n  - url: a\n      deep: x\n"],
+    ["a flow value", "version: [0.7.0]\n"],
+  ])("does not parse %s", (_label, text) => {
+    expect(() => parseChannel(text)).toThrow();
+  });
+
+  it("fails the run when the served bytes disagree with files[0], even if the legacy fields agree", async () => {
+    const w = world({ offers: { stable: "0.7.0" } });
+    const fetch = async (url, init) => {
+      const response = await w.fetch(url, init);
+      if (!String(url).endsWith("latest-x64.yml") || response.status !== 200) return response;
+      const text = (await response.text()).replace(/^( {4}sha512: ).*$/m, `$1${sha512("other")}`);
+      return new Response(text, { status: 200 });
+    };
+    const { problems } = await run({ fetch });
+    expect(problems).toContain("stable latest-x64.yml: legacy path/sha512 disagree with files[0]");
+  });
+
+  it("fails the run when the served installer has another size than files[0]", async () => {
+    const w = world({ offers: { stable: "0.7.0" } });
+    const fetch = async (url, init) => {
+      const response = await w.fetch(url, init);
+      if (!String(url).endsWith("latest-x64.yml") || response.status !== 200) return response;
+      return new Response((await response.text()).replace(/size: \d+/, "size: 999"), { status: 200 });
+    };
+    const { problems } = await run({ fetch });
+    expect(problems).toContain(
+      "stable x64: ORCA-0.7.0-win-x64.exe does not match the channel file's files[0] size and sha512",
+    );
   });
 
   it.each([
     ["0.7.1-dryrun.3", "unexpected version"],
     ["0.7.1-beta.1", "unexpected version"],
   ])("refuses the version %s", (version, message) => {
-    const channel = { version, path: `ORCA-${version}-win-x64.exe`, sha512: sha512("x") };
+    const channel = parseChannel(yml(version, "x64", "x"));
     expect(channelProblems("internal", "x64", channel).join()).toContain(message);
   });
 
-  it("refuses a path for another architecture", () => {
-    const channel = { version: "0.7.0", path: "ORCA-0.7.0-win-arm64.exe", sha512: sha512("x") };
+  it("refuses an installer for another architecture", () => {
+    const channel = parseChannel(yml("0.7.0", "arm64", "x"));
     expect(channelProblems("stable", "x64", channel).join()).toContain("is not x64's installer");
   });
 });
@@ -161,8 +215,11 @@ describe("feed-watchdog.yml", () => {
   it("is read-only, scheduled, and skipped until the feed is configured", () => {
     expect(text).toMatch(/^permissions:\n {2}contents: read\n/m);
     expect(text).toContain("schedule:");
-    expect(text).toContain("if: vars.ORCA_FEED_URL != ''");
-    expect(text).not.toMatch(/environment: desktop-feed|ORCA_FEED_ACCESS_KEY|ORCA_FEED_SECRET/);
+    // Canary tokens are read only by reviewed main, from their own environment, which holds
+    // no write credential.
+    expect(text).toContain("if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != ''");
+    expect(text).toContain("environment: feed-canary");
+    expect(text).not.toMatch(/desktop-feed|ORCA_FEED_ACCESS_KEY|ORCA_FEED_SECRET/);
     expect(text).toContain("FEED_CANARY_TOKENS: ${{ secrets.ORCA_FEED_CANARY_TOKENS }}");
     expect(text).toContain("run: node tools/deploy/feed-watchdog.js");
   });
