@@ -485,8 +485,7 @@ mandatory. This does not enable a production guard or provider callback recovery
   glyphs are bundled: `☰` run and `⬡` work item (the Runs and Plan rail glyphs), `❝`
   request, `◫` step, `⊓` gate and `✦` event. The step's is a split square because at id size
   a plain rectangle reads as a dash.
-- The desktop app runs on Electron 44.9.1 (from 44.4.3), a patch update within
-  the existing 44 line.
+- The desktop app runs on Electron 44.10.0 (from 44.4.3), within the existing 44 line.
 - Windows installs that set `ORCA_UPDATE_PRERELEASE=1` (internal and preview testers)
   are offered release candidates from the feed; all others still ignore them, and downgrades
   stay refused.
