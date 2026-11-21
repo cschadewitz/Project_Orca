@@ -45,3 +45,85 @@ it("bounds workers and runs the no-skip retry acceptance exactly as ci.yml does"
   }
   expect(release.indexOf(named(release, "Bound test workers"))).toBeLessThan(position(release, "pnpm test"));
 });
+
+it("rehearses a release on dry_run without tagging, publishing or feeding anything (#863)", () => {
+  const file = workflow("release-publish.yml");
+  const input = file.on.workflow_dispatch.inputs.dry_run;
+  expect(input).toMatchObject({ type: "boolean", default: false, required: false });
+
+  const version = named(release, "The version being released");
+  expect(version.env).toEqual({ DRY_RUN: "${{ inputs.dry_run }}" });
+  // The ref's version is validated as data before it names anything.
+  expect(version.run.indexOf("=~ ^[0-9]+")).toBeLessThan(version.run.indexOf('"$DRY_RUN"'));
+  // The rehearsal gets its own version, decided before the tag refusal could apply.
+  expect(version.run).toMatch(
+    /if \[ "\$DRY_RUN" = "true" \]; then\s+# [^\n]*\n\s+version="\$\{version%%-\*\}-dryrun\.\$GITHUB_RUN_NUMBER"/,
+  );
+
+  // A real release and a rehearsal are separate jobs; neither runs on the other's dispatch.
+  expect(file.jobs.publish.if).toBe("${{ !inputs.dry_run }}");
+  const rehearsal = file.jobs.rehearsal;
+  expect(rehearsal.if).toBe("${{ inputs.dry_run }}");
+  expect(rehearsal.needs).toEqual(["check", "desktop", "app-verification"]);
+  const upload = named(rehearsal.steps, "Upload the rehearsal to a draft prerelease");
+  expect(upload.run).toContain("--draft --prerelease --latest=false");
+  expect(upload.run).toContain("-dryrun\\.[0-9]+$");
+  expect(upload.run).not.toContain("--draft=false");
+  expect(upload.run).not.toMatch(/git (tag|push)/);
+  expect(upload.run).not.toContain("${{");
+});
+
+it("never hands a write token to the ref under test (#863)", () => {
+  const file = workflow("release-publish.yml");
+  expect(file.permissions).toEqual({ contents: "read" });
+
+  // A rehearsal may name any ref, so its writer trusts only a default-branch workflow.
+  const guard = release[0];
+  expect(guard.name).toBe("A dry run is dispatched from the default branch");
+  expect(guard.if).toBe("${{ inputs.dry_run }}");
+  expect(guard.env.DEFAULT).toBe("refs/heads/${{ github.event.repository.default_branch }}");
+
+  // A real release runs the released commit's tooling with write, so that commit must be
+  // on the default branch (any commit on it, so a fix-forward release still works).
+  const sha = release.findIndex((s) => s.id === "sha");
+  const reviewed = release[sha + 1];
+  expect(reviewed.name).toBe("A real release builds a reviewed commit from the default branch");
+  expect(reviewed.if).toBe("${{ !inputs.dry_run }}");
+  expect(reviewed.run).toContain('git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"');
+  expect(reviewed.run).toContain('if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]');
+  expect(release.findIndex((s) => s.run === "pnpm install --frozen-lockfile")).toBeGreaterThan(sha + 1);
+
+  // Only the two writers get write, and every checkout drops its credentials.
+  for (const [name, job] of Object.entries(file.jobs)) {
+    if (job.uses) continue;
+    expect(job.permissions ?? null, name).toEqual(
+      ["publish", "rehearsal"].includes(name) ? { contents: "write" } : null,
+    );
+    for (const step of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@")))
+      expect(step.with["persist-credentials"], name).toBe(false);
+  }
+  // The rehearsal writer runs this workflow's revision, not the rehearsed ref.
+  expect(file.jobs.rehearsal.steps[0].with.ref).toBe("${{ github.sha }}");
+
+  // The rehearsed ref is built on hosted runners, without the runner health endpoint.
+  for (const call of ["desktop", "app-verification"]) {
+    expect(file.jobs[call].with.hosted_only, call).toBe("${{ inputs.dry_run == true }}");
+    expect(file.jobs[call].secrets, call).toEqual({
+      CI_RUNNER_HEALTH_URL: "${{ !inputs.dry_run && secrets.CI_RUNNER_HEALTH_URL || '' }}",
+    });
+  }
+  // Required for a release; a rehearsal of a ref that predates it reports not applicable.
+  expect(file.jobs["app-verification"].with.upgrade_launch_required).toBe("${{ !inputs.dry_run }}");
+
+  // Desktop picks runners and its matrix with the workflow revision's tooling, not the ref's.
+  const desktop = workflow("desktop.yml");
+  expect(desktop.on.workflow_call.inputs.hosted_only).toMatchObject({ type: "boolean", default: false });
+  const targets = desktop.jobs.targets.steps;
+  expect(targets[0].with).toEqual({ "sparse-checkout": "tools", "persist-credentials": false });
+  expect(targets.find((s) => s.id === "pick").env.FORCE_HOSTED).toMatch(/^(true|\$\{\{ inputs\.hosted_only && .+)$/);
+
+  // Its version reaches desktop as data.
+  const stamp = workflow("desktop.yml").jobs.package.steps.find((s) => s.name === "The version to stamp");
+  expect(stamp.env).toEqual({ VERSION: "${{ inputs.version }}" });
+  expect(stamp.run).not.toContain("${{");
+});

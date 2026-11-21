@@ -267,6 +267,21 @@ Release: v0.3.0-rc.1
 That overrides the labels. A version with a prerelease suffix is published with
 `--prerelease`, so it never becomes the repository's "latest".
 
+### A final is its last candidate
+
+A final release (`0.7.0`) should ship the code of its newest release candidate
+(`v0.7.0-rc.N`) plus fixes someone chose on purpose, not whatever merged to `main` after the
+candidate was tested. Land those fixes as cherry-picks or say why each one belongs. To make
+drift visible, the release pull request for a final compares what the release is built
+from (`packages/` with its manifests, `workflows/`, `templates/`, the lockfile and the root
+build config and `.github/workflows/desktop.yml`, listed as `DRIFT_PATHS` in
+`tools/release-pr-body.js`) with the newest
+`v<version>-rc.*` tag and either says nothing changed or shows a warning with the
+`git diff --stat` and a comparison link. If the comparison output is missing, the
+workflow stops before pushing anything rather than reporting that nothing changed. This only works when candidates are released
+through this workflow, so they carry tags. Learned from T3 Code, whose stable release
+builds the exact commit its last nightly shipped (#863).
+
 ### What counts as breaking
 
 Not the TypeScript API — nothing outside this repository imports it. ORCA's compatibility
@@ -290,6 +305,38 @@ claim the release makes on your behalf: write the fragment when it would be fals
 
 Documentation under `docs/` describes `main`, not the last release. Link docs at the tag
 (`/blob/vX.Y.Z/docs/...`) when a release note needs to point at them.
+
+## Rehearsing a release (dry run)
+
+Run **Release (publish)** from the Actions tab with **dry_run** ticked and a branch or
+commit as **ref**. The ref must contain `efdaf863` (#862) or be newer: the App smoke
+workflow's `linux-native` job is required for a rehearsal as for a release, and it installs
+the ref's `.deb` and runs `pnpm run app:linux-native`, which older refs (including rc.2,
+`c2e617af`) do not have, so a rehearsal of one fails there. The upgrade launch check is the
+one step an older ref may lack; it reports not applicable. It runs every job a real release runs (the full check path, the desktop
+artifacts, the smoke and type proof) and then uploads the artifacts to a **draft
+prerelease** called `vX.Y.Z-dryrun.<run number>`, where `X.Y.Z` is the ref's
+`package.json` version without its prerelease suffix. Nothing is tagged, nothing is
+published or marked latest, and no feed step runs. The draft's notes start with a
+dry-run warning.
+
+Dispatch it with the workflow from `main` (the "Use workflow from" box); the run refuses
+any other. The rehearsed ref is untrusted: its code only ever runs in jobs with a read-only
+token and no saved git credentials, and the smoke runs on GitHub-hosted runners, never the
+self-hosted ones, without the runner health endpoint; the desktop and smoke jobs pick their
+runners with `main`'s tooling, not the ref's. The draft is uploaded by a separate job that
+checks out `main`'s workflow revision, validates the version and commit, and treats the
+artifacts as data. A ref from before the upgrade launch check reports it as not applicable.
+
+A real (non-dry-run) release refuses any commit that is not on `main`, and a manual one must
+also be dispatched with `main`'s workflow: its publish job runs the released commit's own
+tooling with a write token, so that commit has to be reviewed. Any commit on `main`
+qualifies, so fixing forward after a failed publish still works.
+
+Use it before merging a release pull request, or to try a risky change through the
+release graph before it lands. A failure costs nothing, unlike a failed `release-publish`
+after merge, which leaves a bump on `main` with no tag. Delete the draft when you are done
+(`gh release delete vX.Y.Z-dryrun.N`). Learned from T3 Code's preview release train (#863).
 
 ## Doing it by hand
 

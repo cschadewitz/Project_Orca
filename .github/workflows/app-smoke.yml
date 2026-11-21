@@ -28,6 +28,17 @@ on:
       ref:
         required: true
         type: string
+      # Release dry runs rehearse an arbitrary ref, so they never route it to self-hosted runners.
+      hosted_only:
+        required: false
+        type: boolean
+        default: false
+      # Release verification always runs the upgrade launch check. A manual run on a ref from
+      # before the check existed reports it as not applicable instead of failing.
+      upgrade_launch_required:
+        required: false
+        type: boolean
+        default: true
     secrets:
       CI_RUNNER_HEALTH_URL:
         description: The runner health endpoint; without it, Linux jobs use GitHub-hosted runners.
@@ -50,7 +61,7 @@ jobs:
     steps:
       # The workflow's own commit, not inputs.ref: the code that picks a runner is never the
       # code under test.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: tools
           persist-credentials: false
@@ -59,7 +70,7 @@ jobs:
       # Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners.
       - id: pick
         env:
-          FORCE_HOSTED: ${{ vars.CI_FORCE_HOSTED }}
+          FORCE_HOSTED: ${{ inputs.hosted_only && 'true' || vars.CI_FORCE_HOSTED }}
           HEALTH_URL: ${{ secrets.CI_RUNNER_HEALTH_URL }}
         run: node tools/linux-runner.js
 
@@ -69,12 +80,13 @@ jobs:
     outputs:
       type_proof: ${{ steps.classify.outputs.type_proof }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Pull requests need the merge base for BASE...HEAD.
           # Release verification checks out the exact merge commit.
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Classify
         id: classify
@@ -113,15 +125,16 @@ jobs:
     needs: runner
     runs-on: ${{ fromJSON(needs.runner.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
       # resolve the store path. Version comes from package.json packageManager.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # One version: this is about the app running at all, not about Node support.
           # `mise.toml` pins 24, so that is what a developer reproduces locally.
@@ -213,11 +226,28 @@ jobs:
       - name: Smoke test
         run: xvfb-run -a pnpm run app:smoke
 
+      # The same old-store upgrade check ci.yml runs on pull requests (#863), so a release
+      # proves it against the exact merge commit too.
+      - name: Upgrade launch check
+        env:
+          REQUIRED: ${{ inputs.upgrade_launch_required && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          if ! node -e 'process.exit(require("./package.json").scripts?.["app:upgrade-launch"] ? 0 : 1)'; then
+            if [ "$REQUIRED" = "true" ]; then
+              echo "::error::this ref has no app:upgrade-launch script, and release verification requires it"
+              exit 1
+            fi
+            echo "::notice title=Upgrade launch check::not applicable: this ref predates the check (#863)"
+            exit 0
+          fi
+          xvfb-run -a pnpm run app:upgrade-launch
+
       # Screenshots of both themes, the greyscale pictures, the axe results per surface and
       # a trace for anything that failed. None of these is a baseline — see the spec header.
       - name: Upload the smoke test's output
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: app-smoke
           path: |
@@ -255,9 +285,10 @@ jobs:
           - os: windows-latest
             runner: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
       - name: Record workflow and checked-out revision
         shell: bash
@@ -270,9 +301,9 @@ jobs:
           echo "requested test ref: $TEST_REF"
           echo "checked-out test SHA: $(git rev-parse HEAD)"
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -353,7 +384,7 @@ jobs:
       # `docs/DEVELOPMENT.md`, "Screenshot baselines", is the procedure.
       - name: Upload the type proof's screenshots
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: type-proof-${{ matrix.os }}
           path: |
@@ -381,7 +412,7 @@ jobs:
 
       - name: Upload native admission-intent acceptance evidence
         if: ${{ !cancelled() && runner.os != 'Linux' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: admission-intents-${{ matrix.os }}
           path: |
@@ -401,7 +432,7 @@ jobs:
 
       - name: Upload native revision workflow acceptance evidence
         if: ${{ !cancelled() && runner.os != 'Linux' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: revision-workflow-${{ matrix.os }}
           path: |
@@ -425,14 +456,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -554,7 +585,7 @@ jobs:
       # profile and workspace live in a temp dir the specs delete.
       - name: Upload native Linux acceptance evidence
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-native
           path: |

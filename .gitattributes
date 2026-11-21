@@ -28,3 +28,6 @@ packages/app/native/diagnostics/** text eol=lf
 
 # The app icon, rendered from packages/design/brand/orca-icon-light*.svg (docs/design/README.md).
 packages/app/build/icon.* binary
+
+# An old release's store for the upgrade launch check (#863): exact bytes, collapsed in diffs.
+packages/app/test/fixtures/store-v*/store/** text eol=lf linguist-generated=true
