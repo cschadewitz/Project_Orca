@@ -16,6 +16,7 @@
     "test:coverage": "vitest run --coverage",
     "test:coverage:renderer": "vitest run --config vitest.renderer.config.ts",
     "app:smoke": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=smoke",
+    "app:upgrade-launch": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=upgrade-launch",
     "app:type-proof": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=type-proof",
     "app:admission-intents": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=admission-intents",
     "app:revision-workflow": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=revision-workflow",

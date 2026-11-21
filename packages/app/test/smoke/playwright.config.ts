@@ -14,6 +14,10 @@
  * - **`smoke`** (`pnpm run app:smoke`) launches the *built* app against a real daemon and
  *   audits every surface. It runs on Linux only: what it is about is the app coming up at
  *   all, and three runners would be paying three times for one answer.
+ * - **`upgrade-launch`** (`pnpm run app:upgrade-launch`) opens the built app on a store that
+ *   ORCA 0.6.0 wrote, served by this commit's daemon (#863). Unlike the projects here it
+ *   runs in `ci.yml` on pull requests, because it is small and an upgrade break is the kind
+ *   nothing else catches before a release.
  * - **`type-proof`** (`pnpm run app:type-proof`) launches the renderer's dev server at
  *   `#type` and diffs committed per-platform screenshots. It runs on all three runners,
  *   because "do the bundled faces render the same on Linux, macOS and Windows" is a
@@ -98,6 +102,7 @@ export default defineConfig({
   use: { trace: "retain-on-failure" },
   projects: [
     { name: "smoke", testMatch: "app-shell.spec.ts" },
+    { name: "upgrade-launch", testMatch: "upgrade-launch.spec.ts" },
     {
       name: "type-proof",
       testMatch: "type-proof.spec.ts",

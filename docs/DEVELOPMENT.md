@@ -32,6 +32,7 @@ pnpm --filter @orca/app dev  # the app against that daemon, renderer hot-reloadi
 pnpm run build && pnpm --filter @orca/app start   # the same app from the built output
 pnpm run app:smoke           # Playwright drives the built app against a demo daemon
                               # (needs the Electron binary; xvfb-run it on a headless box)
+pnpm run app:upgrade-launch  # the built app and daemon on a store ORCA 0.6.0 wrote (CI runs this)
 pnpm run design:build        # regenerate packages/design css/tokens.css + src/tokens.ts from tokens.json
 pnpm run design:check        # fail if those generated files are behind (CI runs this)
 pnpm run design:fonts        # re-subset packages/design/fonts from the upstream releases (by hand)
@@ -802,12 +803,24 @@ is still a deliberate update with that written down — never a loosened thresho
 It runs from `.github/workflows/app-smoke.yml`, not `ci.yml`. Pull requests do not start
 this workflow automatically. Manually dispatch **App smoke** with a commit SHA in `ref`
 to run the functional smoke test and all three type-proof platforms without publishing a
-release. `ci.yml` keeps `ELECTRON_SKIP_BINARY_DOWNLOAD=1` and so has no Electron to launch;
-the smoke workflow installs without it. No browser binaries are involved — the driver uses
+release. `ci.yml` installs with `ELECTRON_SKIP_BINARY_DOWNLOAD=1` and fetches the binary
+only for the upgrade launch check below; the smoke workflow installs without it. No browser binaries are involved — the driver uses
 the workspace's own `electron`, so `playwright install` is never needed. The reusable
 workflow still runs from release publication against the exact merge commit, including
 all three type-proof platforms. A failed proof blocks tagging; baseline review uses the same
 deliberate procedure above.
+
+### Upgrade launch check
+
+`pnpm run app:upgrade-launch` copies a store that ORCA **0.6.0** wrote
+(`packages/app/test/fixtures/store-v0.6.0`) into a temporary workspace, serves it with this
+checkout's built daemon and opens the built app on it. It asserts that every run the old
+release recorded is still served, that the app handshakes, and that Runs and Plan render the
+old data. It takes a few seconds, so unlike the other projects here `ci.yml` runs it on pull
+requests that touch what ships (and always on `main`), fetching the Electron binary for that
+step alone; release verification runs it too, in the App smoke workflow's `smoke` job. The
+fixture is old on purpose: never regenerate it with current code. Its README says how it
+was made and when to add a newer one beside it (#863).
 
 ### Native Linux acceptance
 

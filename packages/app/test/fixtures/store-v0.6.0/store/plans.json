@@ -1,0 +1,31 @@
+[
+  {
+    "id": "plan_01M7Y4N2F8SXV6CPP5X7GXWN58",
+    "key": "demo",
+    "name": "Demo plan",
+    "description": "",
+    "status": "active",
+    "requestIds": [
+      "req_01M7Y4N25J0PVEY5G2710H23DS"
+    ],
+    "riskMatrix": {
+      "scale": 5,
+      "thresholds": {
+        "medium": 5,
+        "high": 10,
+        "critical": 16
+      }
+    },
+    "policy": {
+      "strategy": "critical-path",
+      "concurrency": 2,
+      "riskAppetite": "high",
+      "holdAboveAppetite": true,
+      "mitigateFirst": true,
+      "orderSoftDependencies": true
+    },
+    "meta": {},
+    "createdAt": "2026-11-21T04:08:25.832Z",
+    "updatedAt": "2026-11-21T04:08:25.835Z"
+  }
+]

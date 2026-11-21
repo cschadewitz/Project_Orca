@@ -309,6 +309,93 @@ jobs:
         if: needs.changes.outputs.code != 'false'
         run: node packages/cli/dist/main.js demo
 
+      # The upgrade launch check (#863): this commit's built daemon and app, opened on a store
+      # ORCA 0.6.0 wrote (packages/app/test/fixtures/store-v0.6.0). Every other launch of the
+      # app is in app-smoke.yml, which runs only for releases, so without this an app that no
+      # longer starts, or no longer reads an upgrading person's store, is found at release.
+      # Pull requests run it when they touch what ships or the fixture; main always does.
+      - name: Decide whether to run the upgrade launch check
+        id: launch
+        if: needs.changes.outputs.code != 'false'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          paths=$(git diff --name-only "$BASE...$HEAD" | awk '/^packages\// || /^workflows\// || /^templates\// ||
+            /^pnpm-lock\.yaml$/ || /^package\.json$/ || /^release-compatibility\.json$/ ||
+            /^\.github\/workflows\/ci\.yml$/')
+          if [ -n "$paths" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "nothing the app or daemon ships changed; skipping the upgrade launch check"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Install skipped the ~100 MB binary (above); this check is the one step that needs it.
+      # Resolved from packages/app, the package that depends on electron (pnpm is strict).
+      - name: Put the Electron binary on disk for the upgrade launch check
+        id: electron
+        if: steps.launch.outputs.run == 'true'
+        shell: bash
+        working-directory: packages/app
+        run: |
+          electron_path=$(node -e "console.log(require('electron'))" | tail -n 1)
+          echo "$electron_path" >&2
+          printf 'path=%s\n' "$electron_path" >> "$GITHUB_OUTPUT"
+
+      # Same prerequisites and the same scoped AppArmor exception as app-smoke.yml's smoke
+      # job, for the same reasons; see the comments there.
+      - name: Check the Linux display and sandbox prerequisites
+        if: steps.launch.outputs.run == 'true' && runner.environment != 'github-hosted'
+        run: |
+          command -v xvfb-run
+          if ! unshare --user --map-root-user true; then
+            echo "::error::The self-hosted runner must support unprivileged user namespaces for Chromium's sandbox."
+            exit 1
+          fi
+
+      - name: Prepare a GitHub-hosted Linux runner
+        if: steps.launch.outputs.run == 'true' && runner.environment == 'github-hosted'
+        env:
+          ELECTRON_EXE: ${{ steps.electron.outputs.path }}
+        run: |
+          set -euo pipefail
+          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
+          exe=$(readlink -f "$ELECTRON_EXE")
+          test -x "$exe"
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=1
+          printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+            "profile orca-electron-userns \"$exe\" flags=(unconfined) {" '  userns,' '}' \
+            | sudo tee /etc/apparmor.d/orca-electron-userns > /dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/orca-electron-userns
+          sudo grep -q '^orca-electron-userns ' /sys/kernel/security/apparmor/profiles
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          if unshare --user --map-root-user true 2> /dev/null; then
+            echo "::error::an unrelated executable can still create user namespaces"; exit 1
+          fi
+          echo "user namespaces: allowed only for $exe (profile orca-electron-userns)"
+
+      - name: Upgrade launch check
+        if: steps.launch.outputs.run == 'true'
+        timeout-minutes: 5
+        run: xvfb-run -a pnpm run app:upgrade-launch
+
+      - name: Upload the upgrade launch check's output
+        if: ${{ failure() && steps.launch.outputs.run == 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: upgrade-launch
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
       # Retain actual full/selected suite evidence; job steps authenticate execution mode.
       # Always retain sanitized failure/missing-result evidence. Failure here cannot
       # mask or override any existing step, job, coverage or required-check outcome.

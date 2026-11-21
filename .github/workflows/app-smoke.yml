@@ -213,6 +213,11 @@ jobs:
       - name: Smoke test
         run: xvfb-run -a pnpm run app:smoke
 
+      # The same old-store upgrade check ci.yml runs on pull requests (#863), so a release
+      # proves it against the exact merge commit too.
+      - name: Upgrade launch check
+        run: xvfb-run -a pnpm run app:upgrade-launch
+
       # Screenshots of both themes, the greyscale pictures, the axe results per surface and
       # a trace for anything that failed. None of these is a baseline — see the spec header.
       - name: Upload the smoke test's output

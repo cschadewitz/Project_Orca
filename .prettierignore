@@ -23,3 +23,7 @@ templates/
 
 # Pinned M10 release candidate: producer formatting is part of its digest.
 examples/m10-plugin/candidate/
+
+# An old release's store, kept byte for byte: what it proves is that today's code reads
+# yesterday's bytes (packages/app/test/fixtures/store-v0.6.0/README.md).
+packages/app/test/fixtures/store-v*/
