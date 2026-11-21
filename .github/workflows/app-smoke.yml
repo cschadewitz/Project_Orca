@@ -447,25 +447,65 @@ jobs:
           sudo apt-get install -y -q --no-install-recommends \
             xvfb dbus dbus-bin gnome-keyring gcr libsecret-tools xdotool weston git
 
-      - name: Build the x64 .deb
+      # A regression package built from this ref, stamped like Desktop's (the root
+      # package.json version, docs/RELEASING.md) so the app reports the version under test.
+      # It is not the published artifact: exact-package acceptance stays with desktop.yml's
+      # .deb step and the tester pass on the release candidate's own package.
+      - name: Build a ref-built regression .deb (x64)
         run: |
           set -euo pipefail
+          version=$(node -p 'require("./package.json").version')
+          echo "packaging $version from ${{ inputs.ref || github.sha }} (regression build, not the release artifact)"
           pnpm run build
           pnpm --filter @orca/app run build:daemon
-          pnpm --filter @orca/app exec electron-builder --linux deb --x64 --publish never
+          pnpm --filter @orca/app exec electron-builder --linux deb --x64 --publish never \
+            -c.extraMetadata.version="$version"
 
-      - name: Install the .deb
+      # The same refusals as desktop.yml's .deb step, before anything runs with sudo: one
+      # package, named orca-desktop, claiming nothing of the screen reader's, and a payload
+      # that is root-owned with no setuid/setgid/sticky bit and nothing group- or
+      # other-writable but symlinks. Then the privileged install, with the userns
+      # restriction on, and the package's own AppArmor profile loaded.
+      - name: Check and install the regression .deb
         run: |
           set -euo pipefail
           shopt -s nullglob
           debs=(packages/app/dist/release/ORCA-*-linux-amd64.deb)
           test "${#debs[@]}" = 1
-          sha256sum "${debs[0]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          deb=$(readlink -f "${debs[0]}")
+          echo "regression package (ref-built): $(sha256sum "$deb")" | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$(dpkg-deb -f "$deb" Package)" = orca-desktop
+          # electron-builder writes a prerelease 0.7.0-rc.2 as Debian's 0.7.0~rc.2.
+          version=$(node -p 'require("./package.json").version')
+          test "$(dpkg-deb -f "$deb" Version)" = "${version/-/\~}"
+          for field in Conflicts Breaks Replaces Provides Pre-Depends; do
+            test -z "$(dpkg-deb -f "$deb" "$field")"
+          done
+          if dpkg-deb -c "$deb" | awk '{ print $NF }' | grep -E '^\./usr/bin/orca$|/orca\.desktop$|apparmor\.d/orca$|^\./usr/share/mime/'; then
+            echo "::error::the .deb ships a path the screen reader or the MIME database owns"; exit 1
+          fi
+          dpkg-deb --fsys-tarfile "$deb" | python3 -c '
+          import sys, tarfile
+          bad = []
+          with tarfile.open(fileobj=sys.stdin.buffer, mode="r|") as tar:
+              for m in tar:
+                  if m.uid or m.gid or m.mode & 0o7000 or (not m.issym() and m.mode & 0o022):
+                      bad.append(f"{m.mode:04o} {m.uid}:{m.gid} {m.name}")
+          if bad:
+              print("\n".join(bad)); sys.exit("::error::the .deb carries owned, special-bit or writable entries")
+          '
           sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=1
-          sudo apt-get install -y -q "$(readlink -f "${debs[0]}")"
-          test -x /opt/ORCA/orca-desktop
+          sudo apt-get install -y -q "$deb"
+          test "$(stat -c '%a %u:%g' /opt/ORCA/chrome-sandbox)" = '755 0:0'
+          test "$(stat -c '%a %u:%g' /opt/ORCA/orca-desktop)" = '755 0:0'
           sudo grep -q '^orca-desktop ' /sys/kernel/security/apparmor/profiles
-          # The specs launch as this job's own unprivileged account, never root.
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          if unshare --user --map-root-user true 2> /dev/null; then
+            echo "::error::an unrelated executable can still create user namespaces"; exit 1
+          fi
+          # The specs launch as this job's own unprivileged account, never root, with
+          # Chromium's sandbox on; each launch fails unless every renderer is in its own
+          # user namespace (packages/app/test/native-linux/app.ts, requireSandbox).
           test "$(id -u)" != 0
 
       - name: Native Linux acceptance

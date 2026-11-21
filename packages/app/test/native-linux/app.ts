@@ -49,12 +49,15 @@ export async function launchInstalled(
     args.push("--ozone-platform=wayland");
   }
   const started = Date.now();
-  const app = await electron.launch({ executablePath: EXECUTABLE, args, env, timeout: 30_000 });
+  // On Linux Playwright adds `--no-sandbox` unless `chromiumSandbox` is set, which would
+  // quietly test a less protected app than the one a person runs.
+  const app = await electron.launch({ executablePath: EXECUTABLE, args, env, chromiumSandbox: true, timeout: 30_000 });
   try {
     const page = await app.firstWindow({ timeout: 30_000 });
     // firstWindow resolves when the BrowserWindow exists, which is not when anyone can see
     // it: #858's window existed and was never shown. Ask the main process instead.
     const msToVisible = await windowVisible(app, started);
+    await requireSandbox(app.process().pid!);
     return { app, page, msToVisible };
   } catch (error) {
     await app.close().catch(() => undefined);
@@ -73,6 +76,34 @@ export async function windowVisible(app: ElectronApplication, started: number): 
     if (Date.now() > deadline)
       throw new Error(`No ORCA window became visible within ${VISIBLE_BUDGET_MS} ms of launch (#858)`);
     await sleep(100);
+  }
+}
+
+/**
+ * The Chromium sandbox is really on: the browser process was not given `--no-sandbox`, and
+ * every renderer runs in a user namespace of its own (the namespace sandbox the package's
+ * AppArmor profile permits). Same test as the .deb step in desktop.yml.
+ */
+export async function requireSandbox(main: number): Promise<void> {
+  const mainArgs = await commandLine(main);
+  if (mainArgs.includes("--no-sandbox")) throw new Error("ORCA was launched with --no-sandbox");
+  const mainNamespace = await readlink(`/proc/${main}/ns/user`);
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const renderers: number[] = [];
+    for (const pid of await installedProcesses())
+      if ((await commandLine(pid)).includes("--type=renderer")) renderers.push(pid);
+    if (renderers.length > 0) {
+      for (const pid of renderers) {
+        const args = await commandLine(pid);
+        if (args.includes("--no-sandbox")) throw new Error(`Renderer ${pid} runs with --no-sandbox`);
+        if ((await readlink(`/proc/${pid}/ns/user`)) === mainNamespace)
+          throw new Error(`Renderer ${pid} shares the browser's user namespace: no namespace sandbox`);
+      }
+      return;
+    }
+    if (Date.now() > deadline) throw new Error("No ORCA renderer process found to check the sandbox");
+    await sleep(200);
   }
 }
 

@@ -25,6 +25,11 @@ environment, so nothing from the desktop you run them on (your keyring above all
 `ORCA_NATIVE_EXECUTABLE` points them at another build, such as
 `packages/app/dist/release/linux-unpacked/orca-desktop`; the default is `/opt/ORCA/orca-desktop`.
 
+The package these specs install is a **regression build of the ref under test**, stamped with
+the root `package.json` version and checked like Desktop's before the privileged install. It
+is not the published release artifact. Exact-package acceptance stays with `desktop.yml`'s
+`.deb` step and the tester pass on the release candidate's own package.
+
 In CI this is the `linux-native` job of `.github/workflows/app-smoke.yml`, on a GitHub-hosted
 `ubuntu-24.04` runner (it needs sudo for apt and `/opt`), by manual dispatch and from release
 publishing.
@@ -39,7 +44,10 @@ publishing.
   different path. A watcher answers every "Unlock Login Keyring" window with xdotool: Escape
   to cancel, or the password and Return to unlock. Input goes through XTEST to the focused
   window; `xdotool --window` sends synthetic events, which GTK and Chromium ignore.
-- **`app.ts`** launches the installed binary with Playwright's `_electron.launch({ executablePath })`.
+- **`app.ts`** launches the installed binary with Playwright's `_electron.launch({ executablePath })`
+  and `chromiumSandbox: true`. Without that option Playwright adds `--no-sandbox` on Linux.
+  Every launch then fails unless the browser has no `--no-sandbox` and each renderer is in a
+  user namespace of its own (`requireSandbox`).
   This needs Electron's `EnableNodeCliInspectArguments` fuse left on, which the package does
   today. If a hardening pass turns it off, these specs fail at launch and need an otherwise
   identical unfused build. Quit is a real Ctrl+Q on X11. Headless Weston has no input
