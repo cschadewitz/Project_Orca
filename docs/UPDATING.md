@@ -76,13 +76,14 @@ packaged Windows/NSIS update success. No installer activation is part of this ch
 
 ### Private feed and authentication
 
-Use a dedicated private HTTPS static feed, served independently of the private GitHub
-repository. Provision a random **read-only feed bearer token** on each Windows account in
-an ACL-protected text file. Give the account, Administrators and SYSTEM access only. Do
-not use a GitHub token as this credential. Configure the environment inherited by ORCA:
+The feed is private and served independently of the GitHub repository: a Cloudflare R2
+bucket behind a small Worker ([`tools/deploy/feed-worker`](../tools/deploy/feed-worker/worker.js)).
+Each tester gets their own random **read-only feed bearer token**, stored on their Windows
+account in an ACL-protected text file. Give the account, Administrators and SYSTEM access only.
+Do not use a GitHub token as this credential. Configure the environment inherited by ORCA:
 
 ```powershell
-[Environment]::SetEnvironmentVariable('ORCA_UPDATE_URL', 'https://updates.example.net/stable/', 'User')
+[Environment]::SetEnvironmentVariable('ORCA_UPDATE_URL', 'https://updates.example.net/', 'User')
 [Environment]::SetEnvironmentVariable('ORCA_UPDATE_TOKEN_FILE', 'C:\Users\YOU\AppData\Local\ORCA\feed-token.txt', 'User')
 ```
 
@@ -94,41 +95,75 @@ sanitized state. Nothing writes the token into installers, metadata, repository 
 renderer storage. The placeholder `updates.invalid` in packaging is deliberately unusable.
 No credential prompt or hidden fallback to a public feed is provided.
 
-An nginx example for the feed host (TLS configuration and token provisioning are local):
+What the Worker guarantees:
 
-```nginx
-# In http {}; /etc/nginx/orca-feed-tokens.conf is root-readable, never in Git.
-map $http_authorization $orca_feed_allowed {
-    default 0;
-    include /etc/nginx/orca-feed-tokens.conf;
-}
-# Token file contains: "Bearer YOUR_RANDOM_FEED_TOKEN" 1;
-server {
-    listen 443 ssl;
-    server_name updates.example.net;
-    # ssl_certificate /...; ssl_certificate_key /...;
-    root /srv/orca-feed;
-    location / {
-        if ($orca_feed_allowed = 0) { return 401; }
-        add_header Cache-Control "no-store" always;
-        try_files $uri =404;
-    }
-}
+- **Every** request, including `.yml`, `.exe`, `.blockmap`, HEAD and Range requests, needs a
+  known token, or gets 401. Only GET and HEAD are served.
+- The `FEED_TOKENS` Worker secret holds each token's SHA-256 and its ring, never the token.
+  Authorization is not logged (keep Workers observability off), responses carry
+  `Cache-Control: no-store`, and nothing redirects to another origin.
+- Single byte ranges are answered with 206. A multi-range request gets 416, and
+  electron-updater then falls back from a differential to a full verified download.
+
+This is a trusted distribution host: whoever can write the bucket can deliver code. The R2
+token used by CI writes only the feed bucket and is never given to clients.
+
+### Rings and controlled rollouts
+
+The client always asks for `latest-ARCH.yml`; which version that resolves to depends on the
+**ring** its token belongs to:
+
+| Ring | Meant for | Offered |
+| --- | --- | --- |
+| `internal` | Maintainers | Each version `feed-publish.yml` uploads |
+| `preview` | Testers | What `Desktop feed (promote)` moves there, prereleases included |
+| `stable` | Everyone else | What `Desktop feed (promote)` moves there, never a prerelease |
+
+**Release candidates need a client opt-in.** The Windows client ignores any version with a
+prerelease suffix (`0.7.1-rc.1`) unless `ORCA_UPDATE_PRERELEASE` is exactly `1` in its
+environment. Set it, with the token, for internal and preview testers only:
+
+```powershell
+[Environment]::SetEnvironmentVariable('ORCA_UPDATE_PRERELEASE', '1', 'User')
 ```
 
-Authenticate **all** files, including `.yml`, `.exe`, `.blockmap`, HEAD and Range requests.
-Keep authorization out of access logs. This is a trusted distribution host: it can deliver
-code. Protect its write account separately from client read tokens. Do not add redirects
-to another origin. Retain immutable version snapshots and atomically switch the `stable`
-symlink only after the entire snapshot is present. Missing old differential blockmaps can
-fall back to a full verified installer download.
+So a preview tester is offered the rc their ring names; a stable install is never offered an
+rc (the stable ring cannot hold one, and the client would ignore it); and no install is ever
+offered an older version than it runs, in either direction (`0.7.1` ignores `0.7.1-rc.1`, an
+rc install ignores the older stable). A preview-ring install without the opt-in waits until a
+stable version reaches its ring. An rc tester who leaves the program removes the variable and
+moves to a stable token; they get the next stable version newer than their rc.
+
+`rings.json` in the bucket names each ring's version and, optionally, a **rollout**: a newer
+version offered to a percentage of that ring's tokens. A token's place in a rollout comes
+from a hash of the token and the rollout version, so it is stable between checks and raising
+the percentage only adds people. Named subsets are rings: mint the people you want first with
+an `internal` or `preview` token.
+
+Rings are **targeting, not access control.** They decide which version a token is offered.
+Any valid token can still download any installer or blockmap the bucket holds by its file name;
+that keeps old blockmaps reachable for differential downloads, and the same versions are
+already public on GitHub releases. If a build must not reach some testers at all, do not put
+it in the feed; separate buckets and Workers per audience would be the way to enforce that.
+
+Promote with the **Desktop feed (promote)** workflow (`feed-promote.yml`): pick a ring, a
+version the feed holds and a percentage. 100 offers it to the whole ring, 1–99 starts or changes
+a rollout, and 0 halts the rollout of that version. A ring cannot be given a version older than
+its full version or its active rollout; the same rollout version can be widened or completed.
+Like publication, it only runs when dispatched from main, in the protected `desktop-feed`
+environment (see the setup below).
+
+Rings never move backwards, and halting is not a rollback. The client disallows downgrades,
+so anyone who already took a bad build keeps it until a newer fixed version ships; halting
+only stops more people from getting it. Keep early rollouts small for that reason.
 
 ### Release/feed provisioning
 
 `desktop.yml` builds Windows architectures separately, with distinct installer names and
-`latest-x64.yml` / `latest-arm64.yml`. Prereleases instead carry `prerelease-*.yml`; production
-clients request only `latest-ARCH.yml`, disallow prereleases and disallow downgrades. Linux
-and macOS build targets are preserved; their automatic updating is outside this iteration.
+`latest-x64.yml` / `latest-arm64.yml`. Prereleases instead carry `prerelease-*.yml`; the
+Worker serves either under the `latest-ARCH.yml` name the client requests. Clients disallow
+downgrades. Linux and macOS build targets are preserved; their automatic updating is outside
+this iteration.
 
 All packaging uses `--publish never`. The final publication job waits for the existing
 checks, smoke/type proof and platform builds. It flattens assets with collision checks,
@@ -137,16 +172,62 @@ release, then makes the complete release visible. A failed upload leaves a draft
 inspection rather than a partial discoverable feed. Delete that failed draft/tag only after
 confirming it was never published, before retrying the existing release process.
 
-For automatic feed deployment configure repository variables `ORCA_FEED_HOST`
-(`feed-writer@host`) and `ORCA_FEED_ROOT` (`/srv/orca-feed`), and secrets
-`ORCA_FEED_SSH_KEY` and `ORCA_FEED_KNOWN_HOSTS`. The dedicated SSH account needs write access
-only to the feed root and its temporary upload; configure Python 3 on that host. Pin the
-host key, provision HTTPS and client authentication first. The publication job uploads a
-complete snapshot and atomically selects `stable` or `prerelease`. Without these variables,
-GitHub release publication still works, but desktop feed distribution is unconfigured.
-A feed failure leaves the previous feed selected; repair it by copying the **already
-verified published release assets** and invoking `publish-feed.py ROOT VERSION ARCHIVE`
-on the host. Do not rerun release creation for an already published tag.
+The feed never takes these release assets: they are the unsigned Desktop builds. After a
+release is published, dispatch **Windows signed (spike)** from main with `source_sha` set to the
+tag's commit, then **Desktop feed (publish signed)** (`feed-publish.yml`) from main with the
+version and that run's id. `tools/deploy/feed-source.js` refuses a version without a
+published, non-draft GitHub release for its tag (a tag alone is not enough) and accepts only
+a successful `windows-signed.yml` run from main. The job then downloads only
+the artifact named for the tagged commit, re-checks each installer's Authenticode signature,
+timestamp and publisher (`ORCA_FEED_PUBLISHER_CN`), checks that each channel file names
+exactly one installer whose `files[]` entry (what the updater reads) and legacy `path` /
+`sha512` both match that installer's name, size and SHA-512, with its blockmap present
+(`release-assets.py`, which parses the builder's metadata strictly and refuses anything
+else), and runs `tools/deploy/feed-r2.sh snapshot`. Signed artifacts are kept 7 days, so feed within
+a week of signing. The feed therefore carries signed installers even where the GitHub release
+assets are unsigned.
+
+`feed-r2.sh snapshot` uploads installers and blockmaps to `VERSION/`, then the two metadata
+files, then `VERSION/complete.json`, each written only if absent. An object that already exists must hold identical bytes,
+so a rerun after an interruption at any stage resumes and nothing published is ever replaced.
+A lookup or write error other than "absent" stops the run. It then offers the version to
+`internal`. A version older than anything `internal` already offers, its rollout included (a
+hotfix behind an rc), is stored but not offered; promote it explicitly. The Worker serves
+nothing of a version, metadata or payload, until its `complete.json` exists, so a partial
+snapshot is never visible; completed older snapshots stay readable for differential downloads.
+
+One-time setup (Casey):
+
+1. In Cloudflare, create a private R2 bucket (no public `r2.dev` access) and an R2 API token
+   with Object Read & Write on that bucket only.
+2. Copy `tools/deploy/feed-worker/wrangler.toml.example` to `wrangler.toml` (ignored by Git),
+   set the bucket and your custom domain, and run `npx wrangler deploy` in that directory.
+3. Mint a token per person with `node tools/deploy/feed-token.js RING`. Give each person their
+   token; merge the printed entries into one JSON object and store it with
+   `npx wrangler secret put FEED_TOKENS`. Revoke a person by removing their entry.
+4. Create the `desktop-feed` environment (Settings → Environments) and protect it: add
+   yourself (and Cal) as required reviewers, and under deployment branches allow only `main`.
+   Store `ORCA_FEED_ACCESS_KEY_ID` and `ORCA_FEED_SECRET_ACCESS_KEY` from the R2 token as
+   **environment** secrets there, not repository secrets, so only a reviewed run from main can
+   write the bucket. Both feed workflows also refuse to run from any other ref.
+5. Set repository variables `ORCA_FEED_ACCOUNT_ID` (the Cloudflare account id),
+   `ORCA_FEED_BUCKET` and `ORCA_FEED_PUBLISHER_CN` (the exact signing certificate CN, as in
+   `WINDOWS_SIGNING_PUBLISHER_CN`). Until `ORCA_FEED_BUCKET` is set, neither feed workflow
+   does anything.
+6. Before the first real version, exercise `feed-r2.sh` against a throwaway bucket: R2's
+   handling of conditional writes (`If-None-Match`, `If-Match`) has not been verified from CI.
+7. Before giving testers tokens, run the packaged acceptance on real Windows with signed
+   builds from the feed: an opted-in preview install on stable `N` is offered and installs
+   rc `N+1-rc.x`; a stable install on `N` is not offered it; neither is offered an older
+   version afterwards. `tools/test/feed-client.test.js` checks the same policy with the real
+   updater library against the Worker, but substitutes Electron's network stack and
+   installation, so it is not that acceptance.
+
+A feed failure leaves the GitHub release in place and the rings unchanged. Rerun **Desktop
+feed (publish signed)** with the same inputs (or a fresh signed run of the same commit if the
+artifact expired; its bytes differ, so it is refused if any object of the first attempt was
+already written, and those objects must be removed from the bucket first). Do not rerun release
+creation for an already published tag.
 
 Windows signing is **not proven or provisioned by this change**. Current builds remain
 unsigned. Bootstrap requires trusting the installer through Windows' unsigned-app warning;

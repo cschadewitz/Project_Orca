@@ -105,7 +105,7 @@ it cannot recall a copy already downloaded.
 Promotion is atomic: upload a complete version/build directory, verify it, then switch
 the invited catalog pointer. Missing files, failed tests or failed upload keep the prior
 candidate selected. The Mac lane must not change the Windows stable/prerelease feed or
-require Windows metadata to validate a Mac-only snapshot. `publish-feed.py` currently
+require Windows metadata to validate a Mac-only snapshot. `feed-r2.sh` currently
 does require that metadata, so reuse its immutable/atomic pattern through a coordinated
 extension or separate Mac publisher, not an unmodified invocation.
 

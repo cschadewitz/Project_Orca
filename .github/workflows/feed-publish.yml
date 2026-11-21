@@ -1,0 +1,120 @@
+# Put a released version's *signed* Windows build into the private desktop feed, offered to
+# the internal ring only. release-publish.yml never feeds it: its Desktop output is unsigned.
+#
+# Inputs are a version with a published (non-draft) GitHub release and the id of a successful
+# `Windows signed (spike)` run, dispatched from main with `source_sha` set to that tag's
+# commit. tools/deploy/feed-source.js accepts the run only if it is that workflow on main and
+# it succeeded, and the release only if it is published for that tag. The job then takes
+# only the artifact named for the tagged commit, re-checks every installer's Authenticode
+# signature, timestamp and publisher on this Windows runner, re-checks the update metadata
+# against the installers (release-assets.py), and then uploads with tools/deploy/feed-r2.sh.
+# Signed artifacts are kept for 7 days, so run this within a week of signing.
+#
+# Dispatch from main only, and keep the R2 write credential in the protected `desktop-feed`
+# environment (required reviewers, deployments from main only); see docs/UPDATING.md.
+#
+# Rerunning after an interruption resumes: identical objects are skipped and different ones
+# refused. feed-promote.yml moves the version on from internal.
+name: Desktop feed (publish signed)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published version, e.g. 0.7.1 (tag v0.7.1 must exist)"
+        required: true
+        type: string
+      signed_run_id:
+        description: "Run id of a successful Windows signed (spike) run for that tag's commit"
+        required: true
+        type: string
+
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  publish:
+    name: publish ${{ inputs.version }} to the internal ring
+    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
+    runs-on: windows-latest
+    environment: desktop-feed
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Check the release and the signed run
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          RUN_ID: ${{ inputs.signed_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::invalid version"; exit 1; }
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::invalid run id"; exit 1; }
+          sha=$(git rev-parse --verify -q "refs/tags/v$VERSION^{commit}" || true)
+          gh api "repos/$REPO/actions/runs/$RUN_ID" > run.json || rm -f run.json
+          gh api "repos/$REPO/releases/tags/v$VERSION" > release.json || rm -f release.json
+          artifact=$(node tools/deploy/feed-source.js "$VERSION" "$sha" run.json release.json)
+          rm -f run.json release.json
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "Feeding published v$VERSION ($sha) from signed run $RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+
+      # Only the artifact named for the tagged commit: a run that signed anything else has none.
+      - name: Download the signed build of the tagged commit
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ steps.source.outputs.artifact }}
+          run-id: ${{ inputs.signed_run_id }}
+          github-token: ${{ github.token }}
+          path: signed
+
+      - name: Verify signatures, timestamps and publisher
+        shell: pwsh
+        env:
+          EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:EXPECTED) { throw 'ORCA_FEED_PUBLISHER_CN is not set' }
+          $exes = Get-ChildItem -Path signed -Recurse -File -Filter *.exe
+          if ($exes.Count -ne 2) { throw "expected 2 installers, found $($exes.Count)" }
+          foreach ($file in $exes) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+            "{0,-8} stamped={1} cn='{2}' {3}" -f $sig.Status, [bool]$sig.TimeStamperCertificate, $cn, $file.Name
+            if ($sig.Status -ne 'Valid' -or $cn -ne $env:EXPECTED -or -not $sig.TimeStamperCertificate) {
+              throw "$($file.Name) is not validly signed and timestamped by '$($env:EXPECTED)'"
+            }
+          }
+
+      # Flattens the per-architecture directories and checks each metadata file's version,
+      # SHA-512 and blockmap against the signed installer it names.
+      - name: Verify the update metadata
+        env:
+          VERSION: ${{ inputs.version }}
+        run: python tools/deploy/release-assets.py signed "$VERSION"
+
+      - name: Upload to the feed and offer to internal
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
+          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+          VERSION: ${{ inputs.version }}
+        run: bash tools/deploy/feed-r2.sh snapshot signed "$VERSION"
