@@ -96,15 +96,18 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    `gh api -X POST -H 'Content-Type: application/octet-stream' "https://uploads.github.com/repos/$R/releases/$ID/assets?name=ORCA-$V-win-x64.exe" --input <file>`,
    then repeat step 3: exactly the `.exe` and the `.deb`, the `.exe`'s `digest` equal to
    `sha256:` and the SHA-256 recorded in step 2.
-5. Publish with the tag and target stated explicitly:
+5. Run native acceptance on the exact staged bytes before anything is public: the signed
+   x64 `.exe` and the Ubuntu amd64 `.deb`, each with a digest equal to what step 4's check
+   shows on the draft (signature, install, first launch, a built-in sample, reopen). The
+   signing run's checks in step 2 are not that acceptance. If either fails, stop: the draft
+   stays a draft and nothing is public.
+6. Publish with the tag and target stated explicitly:
    `gh api -X PATCH repos/$R/releases/$ID -f tag_name=v$V -f target_commitish=$SHA -F draft=false -f make_latest=true`.
-   Then `git ls-remote origin refs/tags/v$V` must print `SHA`, and
-   `gh api repos/$R/releases/latest --jq .id` must print `ID`.
-6. Download both assets from the published page and repeat the native acceptance on the
-   exact published files (signature, digests, install, first launch). The signing run's
-   checks in step 2 are not that acceptance.
-7. Where the desktop feed is enabled, feed that signing run to **Desktop feed (publish
-   signed)** ([UPDATING.md](UPDATING.md)).
+   Then `git ls-remote origin refs/tags/v$V` must print `SHA`,
+   `gh api repos/$R/releases/latest --jq .id` must print `ID`, and both public downloads
+   (from the published page's URLs) must hash to the digests accepted in step 5.
+7. Only then, where the desktop feed is enabled, feed that signing run to **Desktop feed
+   (publish signed)** ([UPDATING.md](UPDATING.md)).
 
 If `publish` fails or is re-run for a final, it refuses to make a second draft while any
 draft named or tagged `v$V` exists, and prints their ids. Reuse such a draft when step 3's
