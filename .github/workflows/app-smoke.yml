@@ -452,19 +452,21 @@ jobs:
       # It is not the published artifact: exact-package acceptance stays with desktop.yml's
       # .deb step and the tester pass on the release candidate's own package.
       - name: Build a ref-built regression .deb (x64)
+        env:
+          REF: ${{ inputs.ref || github.sha }}
         run: |
           set -euo pipefail
           version=$(node -p 'require("./package.json").version')
-          echo "packaging $version from ${{ inputs.ref || github.sha }} (regression build, not the release artifact)"
+          printf 'packaging %s from %s (regression build, not the release artifact)\n' "$version" "$REF"
           pnpm run build
           pnpm --filter @orca/app run build:daemon
           pnpm --filter @orca/app exec electron-builder --linux deb --x64 --publish never \
             -c.extraMetadata.version="$version"
 
       # The same refusals as desktop.yml's .deb step, before anything runs with sudo: one
-      # package, named orca-desktop, claiming nothing of the screen reader's, and a payload
-      # that is root-owned with no setuid/setgid/sticky bit and nothing group- or
-      # other-writable but symlinks. Then the privileged install, with the userns
+      # package, named orca-desktop, claiming nothing of the screen reader's, a payload that
+      # is root-owned with no setuid/setgid/sticky bit and nothing group- or other-writable
+      # but symlinks, and the maintainer scripts APT will execute. Then the privileged install, with the userns
       # restriction on, and the package's own AppArmor profile loaded.
       - name: Check and install the regression .deb
         run: |
@@ -494,6 +496,40 @@ jobs:
           if bad:
               print("\n".join(bad)); sys.exit("::error::the .deb carries owned, special-bit or writable entries")
           '
+          # Desktop's own checks of the generated maintainer scripts, which APT runs as root.
+          # The maintainer scripts as generated. postinst is the repository's
+          # (build/linux/after-install.tpl): helper always 0755, never setuid; no cache
+          # refreshes (dpkg triggers do that); the scoped profile, and a refusal if the
+          # restriction is on and the profile could not load. postrm is electron-builder's.
+          scripts=$(mktemp -d "$RUNNER_TEMP/orca-deb-control.XXXXXX")
+          dpkg-deb -e "$deb" "$scripts"
+          ls -ln "$scripts"
+          test "$(stat -c %a "$scripts/postinst")" = 755
+          test "$(stat -c %a "$scripts/postrm")" = 755
+          # One command per check: under `set -e` a failure before the last command of an
+          # && list does not stop the step.
+          for unexpected in preinst prerm triggers config templates; do
+            if [ -e "$scripts/$unexpected" ]; then echo "::error::the .deb carries an unexpected $unexpected"; exit 1; fi
+          done
+          for script in postinst postrm; do
+            if ! bash -n "$scripts/$script"; then echo "::error::$script is not valid bash"; exit 1; fi
+          done
+          grep -qx "EXECUTABLE='/opt/ORCA/orca-desktop'" "$scripts/postinst"
+          grep -qx "HELPER='/opt/ORCA/chrome-sandbox'" "$scripts/postinst"
+          grep -qx 'chmod 0755 "$HELPER"' "$scripts/postinst"
+          grep -q "update-alternatives --install '/usr/bin/orca-desktop' 'orca-desktop' \"\$EXECUTABLE\" 100" "$scripts/postinst"
+          grep -qx "PROFILE_TARGET='/etc/apparmor.d/orca-desktop'" "$scripts/postinst"
+          grep -q "update-alternatives --remove 'orca-desktop' '/opt/ORCA/orca-desktop'" "$scripts/postrm"
+          grep -q "APPARMOR_PROFILE_DEST='/etc/apparmor.d/orca-desktop'" "$scripts/postrm"
+          # Code only: the template's comments name what it deliberately does not do.
+          if grep -hvE '^[[:space:]]*#' "$scripts/postinst" "$scripts/postrm" \
+            | grep -nE '4755|[0-7]?[4-7][0-7]{3}[^0-9]|chmod [ug]?\+s|u\+s|update-mime-database|update-desktop-database|no-sandbox|apparmor_restrict_unprivileged_userns=0'; then
+            echo "::error::a maintainer script can make the helper setuid, weaken the sandbox or refresh caches"; exit 1
+          fi
+          if grep -nE "/usr/bin/orca'|alternatives/orca'|apparmor\.d/orca'|'orca'" "$scripts/postinst" "$scripts/postrm"; then
+            echo "::error::a maintainer script touches the screen reader's names"; exit 1
+          fi
+          rm -rf "$scripts"
           sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=1
           sudo apt-get install -y -q "$deb"
           test "$(stat -c '%a %u:%g' /opt/ORCA/chrome-sandbox)" = '755 0:0'
