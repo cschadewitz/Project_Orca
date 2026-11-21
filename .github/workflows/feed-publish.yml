@@ -10,8 +10,9 @@
 # against the installers (release-assets.py), and then uploads with tools/deploy/feed-r2.sh.
 # Signed artifacts are kept for 7 days, so run this within a week of signing.
 #
-# Dispatch from main only, and keep the R2 write credential in the protected `desktop-feed`
-# environment (required reviewers, deployments from main only); see docs/UPDATING.md.
+# feed-auto.yml dispatches this from main once a release and its signed run both exist; it
+# can also be dispatched by hand. Keep the R2 write credential in the `desktop-feed`
+# environment (deployments from main only); see docs/UPDATING.md.
 #
 # Architectures: only Windows x64 has native acceptance, so FEED_ARCHES below serves x64
 # alone; the signed artifact's arm64 installer is never uploaded. An architecture with no
@@ -34,8 +35,11 @@ on:
         required: true
         type: string
 
+# One queue per version, so a pending feed of one version never replaces another's. Bucket
+# writes stay safe across versions and with promotions: objects are written once, and
+# rings.json only conditionally, re-read and retried on a conflict (feed-r2.sh).
 concurrency:
-  group: release-publication
+  group: feed-publish-${{ inputs.version }}
   cancel-in-progress: false
 
 permissions:
@@ -149,4 +153,7 @@ jobs:
           FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
           FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
           VERSION: ${{ inputs.version }}
-        run: bash tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$FEED_ARCHES"
+        # Prove R2 still honours conditional writes before relying on them.
+        run: |
+          bash tools/deploy/feed-r2.sh probe
+          bash tools/deploy/feed-r2.sh snapshot signed "$VERSION" "$FEED_ARCHES"

@@ -26,13 +26,13 @@ describe("desktop feed workflows", () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
-  it("gates both feed workflows on the bucket variable and one concurrency group", () => {
+  it("gates both feed workflows on the bucket variable, main and the feed environment", () => {
     for (const name of ["feed-publish.yml", "feed-promote.yml"]) {
       const text = read(name);
       expect(text).toContain("if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''");
-      expect(text).toContain("group: release-publication");
       expect(text).toContain("environment: desktop-feed");
     }
+    expect(read("feed-promote.yml")).toContain("group: release-publication");
   });
 
   it("serves only the natively accepted x64 installer, matching the published release", () => {
@@ -47,5 +47,33 @@ describe("desktop feed workflows", () => {
     const { SERVED_ARCHES } = await import("../deploy/feed-worker/worker.js");
     const arches = /^ {2}FEED_ARCHES: (.+)$/m.exec(read("feed-publish.yml"))[1];
     expect(arches.split(" ")).toEqual(SERVED_ARCHES);
+  });
+});
+
+describe("automatic feed dispatch", () => {
+  const auto = read("feed-auto.yml");
+
+  it("runs on a published release and a daily reconcile, only when switched on", () => {
+    expect(auto).toContain("types: [published]");
+    expect(auto).toMatch(/cron: "41 7 \* \* \*"/);
+    expect(auto).not.toContain("workflow_run");
+    expect(auto).toContain("if: vars.ORCA_FEED_AUTO == 'true' && vars.ORCA_FEED_BUCKET != ''");
+    expect(auto).not.toMatch(/^concurrency:/m);
+  });
+
+  it("dispatches nothing while the feed is paused", () => {
+    expect(auto).toContain("if: vars.ORCA_FEED_PAUSE == 'true'");
+    expect(auto.match(/if: steps\.pause\.outcome == 'skipped'/g)).toHaveLength(2);
+  });
+
+  it("holds no feed credentials and runs main's script", () => {
+    expect(auto).not.toMatch(/secrets\.|environment:/);
+    expect(auto).toMatch(/ref: main\n/);
+    expect(auto).toContain("run: bash tools/deploy/feed-auto.sh");
+    expect(auto).toMatch(/permissions:\n {2}contents: read\n {2}actions: write\n/);
+  });
+
+  it("queues feed-publish per version so no version's dispatch replaces another's", () => {
+    expect(read("feed-publish.yml")).toContain("group: feed-publish-${{ inputs.version }}");
   });
 });

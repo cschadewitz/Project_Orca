@@ -366,8 +366,9 @@ jobs:
             fi
             {
               echo "Drafted v$version as release id \`$id\` at \`$SHA\` with $(basename "$deb") (\`$want\`) only. Not tagged or published."
-              echo "Next: dispatch Windows signed (spike) from main with source_sha \`$SHA\`, verify and"
-              echo "attach the signed installer to release $id, then publish it (docs/RELEASING.md, \"Publishing a final\")."
+              echo "Next: Windows signed (spike) for \`$SHA\` (dispatched by the sign job when ORCA_RELEASE_AUTO_SIGN is on,"
+              echo "otherwise from main by hand), its x64 installer attached to release $id, native acceptance and"
+              echo "publication (docs/RELEASING.md, \"Publishing a final\")."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -399,6 +400,29 @@ jobs:
 
       # The private desktop feed is deliberately not fed from here: these are the ordinary,
       # unsigned Desktop builds. feed-publish.yml takes signed bytes for the tagged commit.
+
+  # A final is staged unsigned; sign the same commit right away. release-attach-signed.yml
+  # attaches the signed x64 installer to the draft when that run succeeds. This job checks
+  # nothing out and can only dispatch.
+  sign:
+    name: dispatch Windows signing for the final
+    needs: [check, publish]
+    # Off unless ORCA_RELEASE_AUTO_SIGN is `true`. Dispatching does not bypass the signing
+    # environment's own protection rules: those apply to the signed run either way.
+    if: ${{ !inputs.dry_run && !contains(needs.check.outputs.version, '-') && vars.ORCA_RELEASE_AUTO_SIGN == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch Windows signed (spike) for the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.check.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::invalid release commit"; exit 1; }
+          gh workflow run windows-signed.yml --repo "$GITHUB_REPOSITORY" --ref main -f source_sha="$SHA"
+          echo "Dispatched Windows signed (spike) for \`$SHA\`." >> "$GITHUB_STEP_SUMMARY"
 
   # The rehearsal's writer. It runs none of the rehearsed ref's code: it checks out this
   # workflow's own revision (the default branch, checked in `check`), takes the artifacts

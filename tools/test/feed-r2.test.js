@@ -1,6 +1,15 @@
 /** feed-r2.sh against a fake `aws` CLI: upload order, immutability, conditional ring writes. */
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -25,6 +34,7 @@ if (op === "put-object" && process.env.FAKE_PUT_LIMIT) {
 const file = path.join(store, encodeURIComponent(opt("--key")));
 const etag = () => '"' + crypto.createHash("md5").update(fs.readFileSync(file)).digest("hex") + '"';
 const fail = (code) => { process.stderr.write("An error occurred (" + code + ")\n"); process.exit(254); };
+if (op === "delete-object") { if (fs.existsSync(file)) fs.rmSync(file); process.exit(0); }
 if (op === "head-object") { if (!fs.existsSync(file)) fail("404"); process.exit(0); }
 if (op === "get-object") {
   if (!fs.existsSync(file)) fail("NoSuchKey");
@@ -33,9 +43,17 @@ if (op === "get-object") {
   process.exit(0);
 }
 if (op === "put-object") {
-  if (opt("--if-none-match") === "*" && fs.existsSync(file)) fail("PreconditionFailed");
-  const match = opt("--if-match");
-  if (match && (!fs.existsSync(file) || etag() !== match)) fail("PreconditionFailed");
+  // FAKE_RACE names a file holding a rings.json another writer stores just before this put.
+  if (opt("--key") === "rings.json" && process.env.FAKE_RACE && fs.existsSync(process.env.FAKE_RACE)) {
+    fs.copyFileSync(process.env.FAKE_RACE, file);
+    fs.rmSync(process.env.FAKE_RACE);
+  }
+  // FAKE_IGNORE_CONDITIONS stands for a store that silently ignores conditional headers.
+  if (!process.env.FAKE_IGNORE_CONDITIONS) {
+    if (opt("--if-none-match") === "*" && fs.existsSync(file)) fail("PreconditionFailed");
+    const match = opt("--if-match");
+    if (match && (!fs.existsSync(file) || etag() !== match)) fail("PreconditionFailed");
+  }
   fs.copyFileSync(opt("--body"), file);
   process.exit(0);
 }
@@ -218,6 +236,37 @@ describe.skipIf(process.platform === "win32")("feed-r2.sh", () => {
       encoding: "utf8",
     });
     expect(bad.stderr).toContain("FEED_ACCOUNT_ID");
+  });
+
+  it("re-reads and reapplies a ring change when another writer got there first", () => {
+    const f = setup();
+    f.release("0.7.0", "latest");
+    expect(f.run("snapshot", f.artifacts, "0.7.0", "x64").status).toBe(0);
+    const race = join(f.root, "race.json");
+    writeFileSync(
+      race,
+      JSON.stringify({ format: 1, rings: { internal: { version: "0.7.0" }, preview: { version: "0.7.0" } } }),
+    );
+    const result = f.runWith({ FAKE_RACE: race }, "promote", "stable", "0.7.0", "100");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("retrying");
+    expect(JSON.parse(readFileSync(f.object("rings.json"), "utf8")).rings).toEqual({
+      internal: { version: "0.7.0" },
+      preview: { version: "0.7.0" },
+      stable: { version: "0.7.0" },
+    });
+  });
+
+  it("proves conditional writes on a throwaway key, and stops when they are ignored", () => {
+    const f = setup();
+    const ok = f.run("probe");
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(ok.stdout).toContain("R2 honours If-None-Match and If-Match.");
+    expect(readdirSync(join(f.root, "store"))).toEqual([]);
+    const ignored = f.runWith({ FAKE_IGNORE_CONDITIONS: "1" }, "probe");
+    expect(ignored.status).not.toBe(0);
+    expect(ignored.stderr).toContain("R2 accepted a write whose condition");
+    expect(readdirSync(join(f.root, "store"))).toEqual([]);
   });
 
   it("parses as bash", () => {

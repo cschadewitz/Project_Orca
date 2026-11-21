@@ -1,0 +1,56 @@
+# Feeds each published final automatically, so nobody has to dispatch feed-publish.yml.
+#
+# release-attach-signed.yml records, in the draft's notes, the signing run whose x64 installer
+# it attached. When the release is published, this dispatches feed-publish.yml from main with
+# exactly that run, provided the published installer's digest still equals the recorded one
+# (tools/deploy/feed-auto.sh). feed-publish.yml then does every check again before writing,
+# and feeding a version twice is a no-op.
+#
+# A daily run (and a manual dispatch) reconciles every release published in the last 7 days,
+# the signed artifacts' lifetime, so a dispatch that was dropped or failed is retried. A failed
+# feed-publish run shows red in Actions; rerun it, or let the next reconcile dispatch it again.
+#
+# Off unless ORCA_FEED_AUTO is `true` (and the feed itself is on, ORCA_FEED_BUCKET). This job
+# holds no feed credentials: it only reads and dispatches. ORCA_FEED_PAUSE=true skips it.
+name: Desktop feed (automatic)
+
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: "41 7 * * *"
+  workflow_dispatch:
+
+# No concurrency group: each run only dispatches, and feed-publish.yml queues per version.
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    name: feed published, signed versions
+    if: vars.ORCA_FEED_AUTO == 'true' && vars.ORCA_FEED_BUCKET != ''
+    runs-on: ubuntu-24.04
+    steps:
+      # ORCA_FEED_PAUSE=true means nothing new is offered (docs/UPDATING.md, "Pulling a bad
+      # build"); this then dispatches nothing, and says so.
+      - name: Skip while the feed is paused
+        id: pause
+        if: vars.ORCA_FEED_PAUSE == 'true'
+        run: echo "The feed is paused (ORCA_FEED_PAUSE=true); nothing dispatched." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The script comes from main, whatever commit triggered the event.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.pause.outcome == 'skipped'
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Dispatch the feed for published, signed releases
+        if: steps.pause.outcome == 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: bash tools/deploy/feed-auto.sh

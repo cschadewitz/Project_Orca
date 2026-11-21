@@ -1,0 +1,143 @@
+# Attach a final's signed Windows x64 installer to its staged draft, so nobody downloads and
+# uploads it by hand.
+#
+# release-publish.yml stages a final as a draft with only the Ubuntu .deb and (with
+# ORCA_RELEASE_AUTO_SIGN on) dispatches `Windows signed (spike)` for the same commit. When that
+# signed run succeeds, this finds the single draft (not a prerelease) whose target is the
+# commit it signed, re-checks the x64 installer's Authenticode signature, timestamp and
+# publisher (ORCA_FEED_PUBLISHER_CN), and uploads it to the draft by id. Before every write
+# tools/deploy/release-attach.sh re-reads that exact draft (still a draft, same target and
+# name, only the expected assets, no other record) and stops if it changed, so a draft
+# published in the meantime is never written to. It records the run id and digest in the
+# draft's notes as an HTML comment, which feed-auto.yml uses to feed exactly these bytes once
+# published. It never publishes, tags or touches the feed.
+#
+# The signing run is checked first (a successful windows-signed.yml run of this repository,
+# dispatched from main, with exactly one unexpired signed artifact). The record is written
+# before the upload. A reconcile every 6 hours (and a manual dispatch without a run id)
+# re-dispatches the attach for any final draft still missing its installer or record, with
+# the recorded run when there is one, so an interrupted or displaced run recovers by itself.
+# The automatic paths are off unless ORCA_RELEASE_AUTO_SIGN is `true`; a dispatch with a run id
+# always works.
+name: Release (attach signed installer)
+
+on:
+  workflow_run:
+    workflows: ["Windows signed (spike)"]
+    types: [completed]
+  schedule:
+    - cron: "29 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      signed_run_id:
+        description: Successful `Windows signed (spike)` run to attach (empty = reconcile all drafts)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  attach:
+    name: attach the signed x64 installer to the draft
+    # Shared with Release (publish final): an attachment and a publication never interleave.
+    # A pending run displaced here loses nothing: the draft keeps its record (written before
+    # the upload) and the reconcile below dispatches the attach again.
+    concurrency:
+      group: release-draft-writes
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.signed_run_id != '' &&
+       github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && vars.ORCA_RELEASE_AUTO_SIGN == 'true' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'workflow_dispatch')
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_ID: ${{ inputs.signed_run_id || github.event.workflow_run.id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Find the signed commit and its draft
+        id: find
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::invalid signed run id"; exit 1; }
+          # stdout carries only the output assignments; notes go to stderr.
+          bash tools/deploy/release-attach.sh select "$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download the signed build
+        if: steps.find.outputs.id != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ steps.find.outputs.artifact }}
+          run-id: ${{ env.RUN_ID }}
+          github-token: ${{ github.token }}
+          path: signed
+
+      - name: Verify the x64 installer's signature, timestamp and publisher
+        if: steps.find.outputs.id != ''
+        shell: pwsh
+        env:
+          EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+          VERSION: ${{ steps.find.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:EXPECTED) { throw 'ORCA_FEED_PUBLISHER_CN is not set' }
+          $files = @(Get-ChildItem -Path signed -Recurse -File -Filter "ORCA-$($env:VERSION)-win-x64.exe")
+          if ($files.Count -ne 1) { throw "expected one ORCA-$($env:VERSION)-win-x64.exe, found $($files.Count)" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $files[0].FullName
+          $cn = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+          "{0} stamped={1} cn='{2}'" -f $sig.Status, [bool]$sig.TimeStamperCertificate, $cn
+          if ($sig.Status -ne 'Valid' -or $cn -ne $env:EXPECTED -or -not $sig.TimeStamperCertificate) {
+            throw "the installer is not validly signed and timestamped by '$($env:EXPECTED)'"
+          }
+
+      - name: Attach it to the draft by id, re-validating the draft before each write
+        if: steps.find.outputs.id != ''
+        env:
+          ID: ${{ steps.find.outputs.id }}
+          SHA: ${{ steps.find.outputs.sha }}
+          VERSION: ${{ steps.find.outputs.version }}
+        run: |
+          set -euo pipefail
+          file=$(find signed -type f -name "ORCA-$VERSION-win-x64.exe")
+          bash tools/deploy/release-attach.sh attach "$ID" "$SHA" "$VERSION" "$RUN_ID" "$file"
+          echo "Next: native acceptance on the draft's exact assets, then publish (docs/RELEASING.md)." >> "$GITHUB_STEP_SUMMARY"
+
+  reconcile:
+    name: re-dispatch attachments still missing
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'schedule' && vars.ORCA_RELEASE_AUTO_SIGN == 'true') ||
+       (github.event_name == 'workflow_dispatch' && inputs.signed_run_id == ''))
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: release-attach-reconcile
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Dispatch the attach for drafts missing their installer or record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: bash tools/deploy/release-attach.sh reconcile

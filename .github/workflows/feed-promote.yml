@@ -61,4 +61,7 @@ jobs:
           RING: ${{ inputs.ring }}
           VERSION: ${{ inputs.version }}
           PERCENT: ${{ inputs.percent }}
-        run: bash tools/deploy/feed-r2.sh promote "$RING" "$VERSION" "$PERCENT"
+        # Prove R2 still honours conditional writes before relying on them.
+        run: |
+          bash tools/deploy/feed-r2.sh probe
+          bash tools/deploy/feed-r2.sh promote "$RING" "$VERSION" "$PERCENT"
