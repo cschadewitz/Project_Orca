@@ -43,6 +43,17 @@ describe("desktop feed workflows", () => {
     expect(feed).toContain(".digest");
   });
 
+  it("starts the feed by itself only through feed-publish.yml on main, holding no feed credential", () => {
+    const auto = read("feed-auto.yml");
+    expect(auto).toContain("types: [published]");
+    expect(auto).toContain('workflows: ["Windows signed (spike)"]');
+    expect(auto).toContain("node tools/deploy/feed-auto.js");
+    expect(auto).toContain('gh workflow run feed-publish.yml --repo "$REPO" --ref main');
+    expect(auto).toContain("if: vars.ORCA_FEED_BUCKET != ''");
+    expect(auto).not.toMatch(/ORCA_FEED_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)|feed-r2\.sh|environment:/);
+    expect(auto).toMatch(/^permissions:\n {2}contents: read\n {2}actions: write\n/m);
+  });
+
   it("uploads exactly the architectures the Worker serves", async () => {
     const { SERVED_ARCHES } = await import("../deploy/feed-worker/worker.js");
     const arches = /^ {2}FEED_ARCHES: (.+)$/m.exec(read("feed-publish.yml"))[1];

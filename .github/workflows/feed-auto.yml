@@ -1,0 +1,78 @@
+# Start Desktop feed (publish signed) by itself once both halves exist: a published release
+# and a successful signing run of its tagged commit. Whichever finishes last triggers it, so
+# no one has to look up a run id or dispatch the feed by hand after publishing a version.
+#
+# This job holds no feed credential and changes nothing itself: tools/deploy/feed-auto.js
+# only chooses the inputs, and the job dispatches feed-publish.yml on main with them. That
+# run keeps every check (feed-source.js, Authenticode, update metadata, and each served
+# installer equal to the published release's asset) and the `desktop-feed` environment, and
+# it only ever offers a version to the internal ring. Moving past internal stays a deliberate
+# dispatch of feed-promote.yml.
+#
+# Release events fire for releases published with a person's token (a final's manual
+# publish). A release published by this repository's own GITHUB_TOKEN does not start
+# workflows; such a version is fed when its signing run completes, or by a manual dispatch.
+# Feeding the same version twice is harmless: the upload skips identical objects.
+name: Desktop feed (auto)
+
+on:
+  release:
+    types: [published]
+  workflow_run:
+    workflows: ["Windows signed (spike)"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: feed-auto
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    name: start the feed for a signed, published version
+    if: vars.ORCA_FEED_BUCKET != ''
+    runs-on: ubuntu-24.04
+    steps:
+      # main's tooling, whatever ref the event names; tags are needed to map commits to versions.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Choose the version and signing run
+        id: choose
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          decision=$(node tools/deploy/feed-auto.js "$EVENT_NAME" "$GITHUB_EVENT_PATH")
+          echo "$decision" | tee -a "$GITHUB_STEP_SUMMARY"
+          read -r action version run_id _ <<<"$decision"
+          if [[ "$action" == dispatch ]]; then
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch Desktop feed (publish signed) on main
+        if: steps.choose.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.choose.outputs.version }}
+          RUN_ID: ${{ steps.choose.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh workflow run feed-publish.yml --repo "$REPO" --ref main -f version="$VERSION" -f signed_run_id="$RUN_ID"
+          echo "Dispatched feed-publish.yml for v$VERSION with signed run $RUN_ID" >> "$GITHUB_STEP_SUMMARY"

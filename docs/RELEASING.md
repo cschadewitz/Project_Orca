@@ -106,8 +106,10 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    Then `git ls-remote origin refs/tags/v$V` must print `SHA`,
    `gh api repos/$R/releases/latest --jq .id` must print `ID`, and both public downloads
    (from the published page's URLs) must hash to the digests accepted in step 5.
-7. Only then, where the desktop feed is enabled, feed that signing run to **Desktop feed
-   (publish signed)** ([UPDATING.md](UPDATING.md)).
+7. Where the desktop feed is enabled, publishing starts it: **Desktop feed (auto)** dispatches
+   **Desktop feed (publish signed)** with that signing run, which offers the version to the
+   internal ring only ([UPDATING.md](UPDATING.md)). Check that run; if it reports several
+   signing runs of the commit, dispatch `feed-publish.yml` by hand with the accepted one.
 
 If `publish` fails or is re-run for a final, it refuses to make a second draft while any
 draft named or tagged `v$V` exists, and prints their ids. Reuse such a draft when step 3's

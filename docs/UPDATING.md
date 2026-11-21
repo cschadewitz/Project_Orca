@@ -151,8 +151,9 @@ Promote with the **Desktop feed (promote)** workflow (`feed-promote.yml`): pick 
 version the feed holds and a percentage. 100 offers it to the whole ring, 1–99 starts or changes
 a rollout, and 0 halts the rollout of that version. A ring cannot be given a version older than
 its full version or its active rollout; the same rollout version can be widened or completed.
-Like publication, it only runs when dispatched from main, in the protected `desktop-feed`
-environment (see the setup below).
+It only runs when dispatched from main, in the `desktop-feed` environment (see the setup
+below), and is never started automatically: moving a version past `internal` stays a
+deliberate dispatch.
 
 Rings never move backwards, and halting is not a rollback. The client disallows downgrades,
 so anyone who already took a bad build keeps it until a newer fixed version ships; halting
@@ -190,10 +191,13 @@ For a final the order is:
    and blockmaps even if the bucket holds some, while x64 files of every completed snapshot
    stay reachable. Add arm64 to both, in a reviewed change, only after it passes native
    acceptance, then deploy the Worker; do not rely on ring assignment to scope architecture.
-4. Dispatch **Desktop feed (publish signed)** (`feed-publish.yml`) from main with the version
-   and the id of **that same** signing run. Before dispatching, confirm the run's x64
-   installer SHA-256 equals the accepted installer's; the job also refuses any served
-   installer whose SHA-256 differs from the published release's asset digest.
+4. **Desktop feed (publish signed)** (`feed-publish.yml`) then runs by itself: **Desktop feed
+   (auto)** (`feed-auto.yml`) dispatches it on main with the version and the one successful
+   signing run that holds the tagged commit's artifact, as soon as both the published release
+   and that run exist (whichever comes last). It refuses to guess when several signing runs
+   of the commit hold an artifact; then dispatch `feed-publish.yml` by hand with **the**
+   accepted run. Either way the job refuses any served installer whose SHA-256 differs from
+   the published release's asset digest, so only the accepted bytes reach the feed.
 
 `tools/deploy/feed-source.js` refuses a version without a published, non-draft GitHub
 release for its tag (a tag alone is not enough) and accepts only a successful
@@ -226,11 +230,14 @@ One-time setup (Casey):
 3. Mint a token per person with `node tools/deploy/feed-token.js RING`. Give each person their
    token; merge the printed entries into one JSON object and store it with
    `npx wrangler secret put FEED_TOKENS`. Revoke a person by removing their entry.
-4. Create the `desktop-feed` environment (Settings → Environments) and protect it: add
-   yourself (and Cal) as required reviewers, and under deployment branches allow only `main`.
-   Store `ORCA_FEED_ACCESS_KEY_ID` and `ORCA_FEED_SECRET_ACCESS_KEY` from the R2 token as
-   **environment** secrets there, not repository secrets, so only a reviewed run from main can
-   write the bucket. Both feed workflows also refuse to run from any other ref.
+4. Create the `desktop-feed` environment (Settings → Environments) and under deployment
+   branches allow only `main`. Required reviewers are optional: without them a published,
+   signed version reaches the internal ring with no approval click (the owner's choice), and
+   the job's own checks (published release, signing run from main, Authenticode, metadata,
+   byte-equal to the published asset) are the gate. Store `ORCA_FEED_ACCESS_KEY_ID` and
+   `ORCA_FEED_SECRET_ACCESS_KEY` from the R2 token as **environment** secrets there, not
+   repository secrets, so only a run from main can write the bucket. Both feed workflows also
+   refuse to run from any other ref, and `feed-auto.yml` holds no feed credential.
 5. Set repository variables `ORCA_FEED_ACCOUNT_ID` (the Cloudflare account id),
    `ORCA_FEED_BUCKET` and `ORCA_FEED_PUBLISHER_CN` (the exact signing certificate CN, as in
    `WINDOWS_SIGNING_PUBLISHER_CN`). Until `ORCA_FEED_BUCKET` is set, neither feed workflow

@@ -7,8 +7,8 @@
 # `stable` never takes a prerelease, and percent 0 halts a rollout without touching the
 # ring's full version. A halted rollout is not a rollback: ship a newer fixed version.
 #
-# Dispatch from main only. The job runs in the protected `desktop-feed` environment, which
-# holds the R2 write credential, requires a reviewer and only deploys from main.
+# Dispatch from main only; nothing starts it automatically. The job runs in the `desktop-feed`
+# environment, which holds the R2 write credential and only deploys from main.
 name: Desktop feed (promote)
 
 on:
