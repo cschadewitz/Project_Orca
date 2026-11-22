@@ -246,9 +246,9 @@ none of it and a `--read-only` daemon shows the assessment without buttons.
   reserved receipt once there is one, and the attempt the daemon accepted) is kept by the app's
   main process in an encrypted journal (`recovery-intents.enc`, OS keychain, never plain text),
   not in the window. An SSH profile's connection is identified by the profile, its effective SSH
-  endpoint (server and jump chain), the daemon's remote port and the verified host key, not
+  endpoint (server and jump chain), the daemon's remote port and the host-key pins its tunnel sealed, not
   its tunnel's local port, so reconnecting to the same verified endpoint finds the same intent
-  while a changed endpoint or host key does not. A tunnel whose host key is not yet verified
+  while a changed endpoint or a replaced pin does not. A tunnel that has not sealed its pins
   cannot start a recovery. Leaving the run, selecting a step, reloading or restarting the app finds the
   same intent above the checkpoints, and no other checkpoint of that run can be started
   meanwhile:

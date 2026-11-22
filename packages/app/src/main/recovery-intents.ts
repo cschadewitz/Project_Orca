@@ -33,16 +33,20 @@ export interface RecoveryEndpoint {
   /** The SSH server and jump chain the profile's pins vouch for (`serverKey`). */
   server: string;
   remotePort: number;
-  /** The host key this tunnel authenticated. */
-  hostKey: string;
+  /**
+   * The pins the lease's tunnel sealed (`ProfileLease.pinnedKeys`): fixed while the lease
+   * lives, changed only by a real pin replacement. Never the last-observed host key, which
+   * any stream's ssh output can update.
+   */
+  pins: string;
 }
 
 /**
  * The stable half of an intent's scope: which daemon this is, independent of this connection.
  * An SSH profile's tunnel listens on a new loopback port each time, so a profile is named by
  * its verified server instead: the profile, the SSH server and jump chain its pins vouch for,
- * the daemon's remote port and the host key the tunnel authenticated. Pointing the profile
- * elsewhere, or a different host key, is a different target, whose intents stay hidden and
+ * the daemon's remote port and the sealed pins its tunnel verifies every stream against.
+ * Pointing the profile elsewhere, or replacing its pins, is a different target, whose intents stay hidden and
  * block the same run until the original is reached again. Workspace and principal come from
  * verified discovery beside it, and the connection epoch stays a separate in-flight guard
  * (`assertCurrent`).
@@ -55,7 +59,7 @@ export function recoveryTarget(
   if (target.profile) {
     if (!endpoint || endpoint.id !== target.profile.id)
       throw new Error("The SSH connection has not verified its server yet. Refresh before recovering.");
-    return `ssh:${JSON.stringify([endpoint.id, endpoint.server, endpoint.remotePort, endpoint.hostKey])}`;
+    return `ssh:${JSON.stringify([endpoint.id, endpoint.server, endpoint.remotePort, endpoint.pins])}`;
   }
   return target.source === "bundled" ? `bundled:${bundledPath}` : daemonEndpoint(target.url);
 }

@@ -235,7 +235,7 @@ it("finds an SSH profile's intent after a tunnel reconnect, and not on another v
   const f = fixture();
   const profile = { id: "prof-1", name: "lab", destination: "orca@build-host" };
   const server = JSON.stringify(["orca@build-host", 22, null, null]);
-  const endpoint = { id: "prof-1", server, remotePort: 6722, hostKey: "SHA256:aaaa" };
+  const endpoint = { id: "prof-1", server, remotePort: 6722, pins: "pins-v1" };
   const via = (port: number, over: Partial<typeof endpoint> = {}) => ({
     ...f.scope,
     target: recoveryTarget({ source: "saved", url: `http://127.0.0.1:${port}`, profile }, "/unused", {
@@ -255,12 +255,12 @@ it("finds an SSH profile's intent after a tunnel reconnect, and not on another v
   const [first, second] = f.recover.mock.calls.map(([params]) => params.idempotencyKey);
   expect(second).toBe(first);
 
-  // Another effective endpoint (SSH port, jump host, daemon port) or another host key is not it.
+  // Another effective endpoint (SSH port, jump host, daemon port) or replaced pins is not it.
   for (const changed of [
     { server: JSON.stringify(["orca@build-host", 2222, null, null]) },
     { server: JSON.stringify(["orca@build-host", 22, "jump@bastion", 22]) },
     { remotePort: 6723 },
-    { hostKey: "SHA256:bbbb" },
+    { pins: "pins-v2" },
   ]) {
     f.useConnection(async () => f.connection({ scope: via(40517, changed) }));
     expect(await f.controller().list("run-src")).toEqual([]);

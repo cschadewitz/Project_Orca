@@ -591,14 +591,15 @@ export class Workspace {
   /**
    * The verified server a profile connection reaches (#357), stable across tunnel reconnects:
    * the profile, the SSH server and jump chain its pins vouch for (`serverKey`), the daemon's
-   * remote port and the host key this tunnel authenticated. Absent for a direct connection, and
-   * absent until the tunnel has authenticated a key.
+   * remote port and the pins the lease's tunnel sealed (never the last-observed host key, which
+   * another stream's ssh output can update). Absent for a direct connection, and while the
+   * lease has no sealed pins that still hold.
    */
-  get profileEndpoint(): { id: string; server: string; remotePort: number; hostKey: string } | undefined {
+  get profileEndpoint(): { id: string; server: string; remotePort: number; pins: string } | undefined {
     const lease = this.lease;
-    const hostKey = lease?.hostKey();
-    if (!lease || !hostKey) return undefined;
-    return { id: lease.profile.id, server: serverKey(lease.profile), remotePort: lease.profile.remotePort, hostKey };
+    const pins = lease?.pinnedKeys();
+    if (!lease || !pins) return undefined;
+    return { id: lease.profile.id, server: serverKey(lease.profile), remotePort: lease.profile.remotePort, pins };
   }
 
   /**
