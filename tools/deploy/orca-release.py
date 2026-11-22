@@ -6,19 +6,28 @@ its shared flock lives for the entire CLI/ACP child lifetime. The managed daemon
 uses the wire admission barrier instead, so an idle service does not block updates.
 An independent typed lifetime lock includes ALL three launch kinds. It is never
 replaced by the admission barrier, process scans, PID checks or lock age.
+
+`stage vX.Y.Z` builds a release from source (gh, git, mise, pnpm). `stage --bundle vX.Y.Z`
+(or a directory) stages the signed prebuilt server bundle instead, with Python 3 alone: the
+manifest's keyless signature is verified against BUNDLE_SIGNER with a pinned cosign, then the
+archive's digest, before anything is unpacked (#876, docs/UPDATING.md).
 """
 import argparse
 import contextlib
 import fcntl
 import functools
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import platform
+import shutil
 import socket
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -26,6 +35,28 @@ import urllib.parse
 import urllib.request
 import uuid
 
+
+# The prebuilt server bundle (#876). Its manifest is signed keylessly (Sigstore/cosign over
+# GitHub OIDC) by exactly this workflow, dispatched on main of exactly this repository; a
+# signature from anything else, or a manifest or archive that does not match, is refused
+# before a single byte of the archive is read. Changing the signer is a reviewed change here.
+BUNDLE_REPOSITORY = "cschadewitz/Project_Orca"
+BUNDLE_SIGNER = f"https://github.com/{BUNDLE_REPOSITORY}/.github/workflows/release-server-bundle.yml@refs/heads/main"
+BUNDLE_ISSUER = "https://token.actions.githubusercontent.com"
+BUNDLE_TRIGGER = "workflow_dispatch"
+BUNDLE_SCHEMA = "orca-server-bundle/1"
+BUNDLE_PLATFORM = "linux-x64"
+BUNDLE_MAX_BYTES = 512 << 20          # compressed archive
+BUNDLE_MAX_UNPACKED = 1536 << 20      # everything it unpacks to
+# cosign is fetched once into the deployment root and checked against this digest every time
+# it is used, so nothing on PATH or in the cache is trusted by name. The same version
+# release-server-bundle.yml signs with (sigstore/cosign-installer's pinned bootstrap).
+COSIGN_VERSION = "v3.1.4"
+COSIGN_SHA256 = {
+    "x86_64": ("cosign-linux-amd64", "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa"),
+    "aarch64": ("cosign-linux-arm64", "ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2"),
+}
+SOURCE_ENTRY = "packages/cli/dist/main.js"
 
 def run(args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
@@ -188,7 +219,18 @@ def rpc(url, method, params, token_file=None, use_environment=True):
 
 
 def metadata(release):
+    """The staged release's record. A source stage records an absolute Node outside the
+    release; a bundle stage records the runtime and entry inside it, relative, so the record
+    stays true after the staging directory is renamed into place."""
     result = json.loads((release / ".orca-release.json").read_text())
+    for key in ("node", "entry"):
+        value = result.get(key, SOURCE_ENTRY if key == "entry" else None)
+        path = Path(value)
+        if not path.is_absolute():
+            if ".." in path.parts:
+                raise RuntimeError(f"Release record {key} escapes the release")
+            path = Path(release) / path
+        result[key] = str(path)
     if not Path(result["node"]).is_file():
         raise RuntimeError("Pinned Node executable is missing; restage the release")
     return result
@@ -221,6 +263,92 @@ def select(root, release):
     os.replace(temporary, root / "current")
     sync_dir(root)
 
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def bundle_names(version):
+    stem = f"orca-server-{version}-{BUNDLE_PLATFORM}"
+    return stem, stem + ".tar.xz", stem + ".manifest.json", stem + ".manifest.json.sigstore.json"
+
+
+def download(url, target, limit, accept=None):
+    """HTTPS only, every redirect included, bounded, written exclusively."""
+    class HttpsOnly(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, request, response, code, message, headers, new_url):
+            if urllib.parse.urlsplit(new_url).scheme != "https":
+                raise RuntimeError("Download redirected away from HTTPS")
+            return super().redirect_request(request, response, code, message, headers, new_url)
+    if urllib.parse.urlsplit(url).scheme != "https":
+        raise RuntimeError("Downloads must use HTTPS")
+    headers = {"user-agent": "orca-release"}
+    if accept:
+        headers["accept"] = accept
+    opener = urllib.request.build_opener(HttpsOnly())
+    with opener.open(urllib.request.Request(url, headers=headers), timeout=60) as response, \
+            open(target, "xb") as stream:
+        total = 0
+        for block in iter(lambda: response.read(1 << 20), b""):
+            total += len(block)
+            if total > limit:
+                raise RuntimeError(f"Download exceeds {limit} bytes: {url}")
+            stream.write(block)
+
+
+def unpack_bundle(archive, root_name, destination):
+    """Regular files and directories only, all under the single expected root, no links,
+    devices, absolute paths or `..`, and bounded in size. Extracted by hand rather than
+    trusting any tarfile extraction filter."""
+    unpacked = 0
+    with tarfile.open(archive, "r:xz") as tar:
+        members = tar.getmembers()
+        for member in members:
+            parts = Path(member.name).parts
+            if (not parts or parts[0] != root_name or member.name.startswith("/") or ".." in parts
+                    or "\\" in member.name or not (member.isfile() or member.isdir())):
+                raise RuntimeError(f"Bundle entry refused: {member.name!r}")
+            unpacked += member.size
+            if unpacked > BUNDLE_MAX_UNPACKED:
+                raise RuntimeError("Bundle unpacks beyond the size limit")
+        for member in members:
+            relative = Path(*Path(member.name).parts[1:]) if len(Path(member.name).parts) > 1 else None
+            if relative is None:
+                continue
+            target = destination / relative
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            source = tar.extractfile(member)
+            with source, open(target, "xb") as stream:
+                shutil.copyfileobj(source, stream)
+            os.chmod(target, 0o755 if member.mode & 0o100 else 0o644)
+
+
+VERSION_RE = r"\d+\.\d+\.\d+(?:-(?:rc|beta|alpha)\.\d+)?"
+
+
+def bundle_version(text):
+    """A release version, X.Y.Z or a release candidate X.Y.Z-rc.N. Never a dry run."""
+    match = re.fullmatch(r"v?(" + VERSION_RE + r")", text)
+    if not match:
+        raise RuntimeError("Use an explicit vX.Y.Z (or vX.Y.Z-rc.N) release version")
+    return match.group(1)
+
+
+def version_key(version):
+    """Semver order for X.Y.Z[-label.N]: a prerelease sorts before its release."""
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)\.(\d+))?", version)
+    if not match:
+        raise RuntimeError(f"Unrecognised release version {version!r}")
+    major, minor, patch, label, number = match.groups()
+    pre = (0, label, int(number)) if label else (1, "", 0)
+    return (int(major), int(minor), int(patch), *pre)
 
 class Deployment:
     def __init__(self, manifest, *, typed_inspector=None):
@@ -349,13 +477,20 @@ class Deployment:
         for args in (["install", "--frozen-lockfile"], ["run", "typecheck"], ["run", "build"]):
             self.typed_process(run, ["mise", "exec", "--", "pnpm", *args], cwd=stage, env=env)
         node = self.typed_process(capture, ["mise", "which", "node"], cwd=stage)
-        cli = stage / "packages/cli/dist/main.js"
-        if self.typed_process(capture, [node, str(cli), "--version"], cwd=stage) != tag[1:]:
+        record = {"version": tag[1:], "sha": sha, "node": node, "compatibility": contract}
+        return self.validate_stage(stage, release, record, env, demo_env=env)
+
+    def validate_stage(self, stage, release, record, env, demo_env):
+        """Shared by source and bundle stages: compiled version, scripted demo, the three
+        operator configs, a temporary daemon's exact hello; then the rename into place."""
+        self.typed_dispatch(write_json, stage / ".orca-release.json", record)
+        meta = metadata(stage)
+        node, cli = meta["node"], Path(meta["entry"])
+        if self.typed_process(capture, [node, str(cli), "--version"], cwd=stage, env=env) != record["version"]:
             raise RuntimeError("Built CLI version mismatch")
         # Exercises shipped workflows/templates and the compiled CLI against temporary stores.
         with tempfile.TemporaryDirectory(prefix="orca-validate-") as scratch:
-            self.typed_process(run, [node, str(cli), "demo", "--dir", scratch], cwd=stage, env=env)
-        self.typed_dispatch(write_json, stage / ".orca-release.json", {"version": tag[1:], "sha": sha, "node": node, "compatibility": contract})
+            self.typed_process(run, [node, str(cli), "demo", "--dir", scratch], cwd=stage, env=demo_env)
         for config_key in ("cliConfig", "acpConfig", "daemonConfig"):
             self.typed_process(run, [node, str(cli), "--config", self.config[config_key], "validate"],
                 cwd=self.config["cwd"], env={**env, "ORCA_RELEASE": str(stage)})
@@ -381,6 +516,143 @@ class Deployment:
         self.typed_dispatch(sync_dir, release.parent)
         return release.resolve()
 
+    def cosign(self):
+        """The pinned cosign, fetched once and re-hashed before every use."""
+        machine = platform.machine()
+        if machine not in COSIGN_SHA256:
+            raise RuntimeError(f"No pinned cosign for {machine}")
+        name, digest = COSIGN_SHA256[machine]
+        tools = self.root / "tools"
+        tools.mkdir(mode=0o700, exist_ok=True)
+        path = tools / f"cosign-{COSIGN_VERSION}-{machine}"
+        if not path.exists():
+            partial = Path(self.typed_dispatch(tempfile.mkdtemp, prefix="cosign-", dir=tools)) / name
+            try:
+                self.typed_dispatch(download, f"https://github.com/sigstore/cosign/releases/download/{COSIGN_VERSION}/{name}",
+                                    partial, 256 << 20)
+                if file_sha256(partial) != digest:
+                    raise RuntimeError("Downloaded cosign does not match its pinned digest")
+                os.chmod(partial, 0o700)
+                os.replace(partial, path)
+            finally:
+                shutil.rmtree(partial.parent, ignore_errors=True)
+        if path.is_symlink() or not path.is_file() or file_sha256(path) != digest:
+            raise RuntimeError(f"{path} does not match the pinned cosign digest; remove it to fetch it again")
+        return path
+
+    def fetch_bundle(self, version, directory):
+        """The three published assets of release vVERSION, by its API record."""
+        _, *files = bundle_names(version)
+        url = f"https://api.github.com/repos/{BUNDLE_REPOSITORY}/releases/tags/v{version}"
+        record_file = directory / "release.json"
+        self.typed_dispatch(download, url, record_file, 4 << 20, accept="application/vnd.github+json")
+        published = json.loads(record_file.read_text())
+        record_file.unlink()
+        if (published.get("draft") or published.get("prerelease") is not ("-" in version)
+                or published.get("tag_name") != f"v{version}"):
+            raise RuntimeError("Target is not a published release of that version")
+        assets = {asset.get("name"): asset.get("browser_download_url") for asset in published.get("assets", [])}
+        for name in files:
+            if not assets.get(name):
+                raise RuntimeError(f"Release v{version} has no {name}")
+            limit = BUNDLE_MAX_BYTES if name.endswith(".tar.xz") else 4 << 20
+            self.typed_dispatch(download, assets[name], directory / name, limit)
+
+    def verify_bundle(self, directory, version):
+        """Signature first (pinned signer), then the manifest, then the archive's digest."""
+        _, archive, manifest_name, signature = bundle_names(version)
+        manifest_path, archive_path = directory / manifest_name, directory / archive
+        for path in (manifest_path, archive_path, directory / signature):
+            if path.is_symlink() or not path.is_file():
+                raise RuntimeError(f"Bundle file missing: {path.name}")
+        if manifest_path.stat().st_size > 4 << 20 or archive_path.stat().st_size > BUNDLE_MAX_BYTES:
+            raise RuntimeError("Bundle file exceeds its size limit")
+        cosign = self.cosign()
+        tuf = self.root / "tools" / "sigstore"
+        tuf.mkdir(mode=0o700, parents=True, exist_ok=True)
+        result = self.typed_process(subprocess.run, [
+            str(cosign), "verify-blob", str(manifest_path),
+            "--bundle", str(directory / signature),
+            "--certificate-identity", BUNDLE_SIGNER,
+            "--certificate-oidc-issuer", BUNDLE_ISSUER,
+            "--certificate-github-workflow-repository", BUNDLE_REPOSITORY,
+            "--certificate-github-workflow-ref", "refs/heads/main",
+            "--certificate-github-workflow-trigger", BUNDLE_TRIGGER,
+        ], env={**os.environ, "TUF_ROOT": str(tuf), "HOME": str(tuf)}, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if result.returncode != 0:
+            detail = result.stdout.strip().splitlines()[-1:] or ["no output"]
+            raise RuntimeError(f"Bundle signature refused: {detail[0]}")
+        manifest = json.loads(manifest_path.read_text())
+        stem = bundle_names(version)[0]
+        expected = {"schema": BUNDLE_SCHEMA, "name": "orca-server", "version": version,
+                    "platform": BUNDLE_PLATFORM, "root": stem}
+        for key, value in expected.items():
+            if manifest.get(key) != value:
+                raise RuntimeError(f"Bundle manifest {key} is {manifest.get(key)!r}, expected {value!r}")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("sourceSha"))):
+            raise RuntimeError("Bundle manifest has no source commit")
+        listed = manifest.get("archive") or {}
+        if listed.get("name") != archive or not re.fullmatch(r"[0-9a-f]{64}", str(listed.get("sha256"))):
+            raise RuntimeError("Bundle manifest does not describe the archive")
+        if listed.get("size") != archive_path.stat().st_size or file_sha256(archive_path) != listed["sha256"]:
+            raise RuntimeError("Bundle archive does not match its signed manifest digest")
+        return manifest
+
+    @typed_operation("update")
+    def stage_bundle(self, source):
+        """Stage a prebuilt signed server bundle: a published version (X.Y.Z, or X.Y.Z-rc.N
+        for a release candidate) to download from its release page, or a directory holding the
+        three release files. Needs Python 3 and
+        util-linux only (no gh, git, mise or pnpm); cosign is fetched pinned."""
+        assertion = self.typed_guard("update")
+        self.retain_typed_inspection(assertion)
+        if platform.system() != "Linux" or platform.machine() != "x86_64":
+            raise RuntimeError("The server bundle is linux-x64 only")
+        local = Path(source) if os.sep in source or source.startswith(".") else None
+        if local is not None:
+            if local.is_file():
+                local = local.parent
+            found = [re.fullmatch(r"orca-server-(" + VERSION_RE + r")-linux-x64\.manifest\.json", p.name)
+                     for p in local.iterdir()]
+            versions = {match.group(1) for match in found if match}
+            if len(versions) != 1:
+                raise RuntimeError(f"Expected one server bundle in {local}")
+            version = versions.pop()
+        else:
+            version = bundle_version(source)
+        tag = "v" + version
+        release = self.root / "releases" / tag
+        if release.exists():
+            raise RuntimeError(f"Release directory already exists: {release}; inspect it rather than overwrite")
+        # Incomplete stages have unique names and are never candidates for activation.
+        stage = Path(self.typed_dispatch(tempfile.mkdtemp, prefix=tag + ".staging-", dir=self.root / "releases"))
+        downloads = Path(self.typed_dispatch(tempfile.mkdtemp, prefix=tag + ".bundle-", dir=self.root / "releases"))
+        try:
+            if local is None:
+                self.fetch_bundle(version, downloads)
+            else:
+                for name in bundle_names(version)[1:]:
+                    if (local / name).is_symlink() or not (local / name).is_file():
+                        raise RuntimeError(f"Bundle file missing: {name}")
+                    shutil.copyfile(local / name, downloads / name)
+            manifest = self.verify_bundle(downloads, version)
+            self.typed_dispatch(unpack_bundle, downloads / manifest["archive"]["name"], manifest["root"], stage)
+        finally:
+            shutil.rmtree(downloads, ignore_errors=True)
+        inside = json.loads((stage / "orca-server.json").read_text())
+        contract = json.loads((stage / "release-compatibility.json").read_text())
+        if (inside.get("version") != version or inside.get("sourceSha") != manifest["sourceSha"]
+                or inside.get("entry") != manifest["entry"] or inside.get("node") != manifest["node"]["path"]
+                or contract != manifest["compatibility"]):
+            raise RuntimeError("Unpacked bundle disagrees with its signed manifest")
+        record = {"version": version, "sha": manifest["sourceSha"], "node": manifest["node"]["path"],
+                  "entry": manifest["entry"], "source": "bundle", "compatibility": contract,
+                  "bundle": {"archiveSha256": manifest["archive"]["sha256"]}}
+        # The release's own shipped workflows and templates, also for the demo.
+        env = {key: value for key, value in os.environ.items() if key != "ORCA_RELEASE"}
+        return self.validate_stage(stage, release, record, env, demo_env={**env, "ORCA_RELEASE": str(stage)})
+
     def inspect_processes(self):
         """Reject unregistered old launchers too; permission failures are never idle."""
         service_pid = int(self.systemctl("show", self.config["service"], "--property=MainPID", "--value"))
@@ -401,7 +673,7 @@ class Deployment:
                 raise RuntimeError(f"Unmanaged ORCA process blocks activation: pid {directory.name}")
         process_dir = Path("/proc") / str(service_pid)
         args = (process_dir / "cmdline").read_bytes().split(b"\0")
-        expected = str((self.root / "current").resolve() / "packages/cli/dist/main.js").encode()
+        expected = metadata((self.root / "current").resolve())["entry"].encode()
         if process_dir.stat().st_uid != os.getuid() or expected not in args or b"serve" not in args:
             raise RuntimeError("Service PID is not the expected managed daemon; inspect the actual launch method")
         environment = (process_dir / "environ").read_bytes().split(b"\0")
@@ -419,8 +691,8 @@ class Deployment:
                 raise RuntimeError("Interrupted activation exists. Run recover before another update.")
             previous = (self.root / "current").resolve(strict=True)
             compatible(previous, candidate)
-            old_version = tuple(map(int, metadata(previous)["version"].split(".")))
-            new_version = tuple(map(int, metadata(candidate)["version"].split(".")))
+            old_version = version_key(metadata(previous)["version"])
+            new_version = version_key(metadata(candidate)["version"])
             if new_version <= old_version:
                 raise RuntimeError("Updates must move forward; use recovery for interrupted activation")
             self.inspect_processes()
@@ -506,7 +778,7 @@ class Deployment:
         if kind == "daemon":
             env["ORCA_ADMISSION_FILE"] = str(self.pending)
         config = self.config[{"cli": "cliConfig", "acp": "acpConfig", "daemon": "daemonConfig"}[kind]]
-        command = [meta["node"], str(release / "packages/cli/dist/main.js"), "--config", config]
+        command = [meta["node"], meta["entry"], "--config", config]
         if kind == "daemon":
             command += ["--cwd", self.config["cwd"], "serve", "--host", "127.0.0.1", "--port", self.config["url"].rsplit(":", 1)[1]]
         elif kind == "acp":
@@ -537,16 +809,22 @@ def main():
             with lock(deploy.root / "admission.lock"):
                 deploy.restore(json.loads(deploy.pending.read_text()))
         else:
-            if len(options.args) != 1:
-                raise RuntimeError("Supply one published release tag")
+            args = options.args
+            bundle = args[:1] == ["--bundle"]
+            if bundle:
+                args = args[1:]
+            if len(args) != 1:
+                raise RuntimeError("Supply one published release tag" + (" or bundle directory" if bundle else ""))
             if deploy.pending.exists():
                 raise RuntimeError("Recovery pending; run recover first")
-            existing = deploy.root / "releases" / options.args[0]
-            if options.action == "update" and re.fullmatch(r"v\d+\.\d+\.\d+", options.args[0]) and existing.exists():
+            existing = deploy.root / "releases" / args[0]
+            if options.action == "update" and re.fullmatch(r"v" + VERSION_RE, args[0]) and existing.exists():
                 metadata(existing)
                 candidate = existing.resolve()
+            elif bundle:
+                candidate = deploy.stage_bundle(args[0])
             else:
-                candidate = deploy.stage(options.args[0])
+                candidate = deploy.stage(args[0])
             if options.action == "update":
                 deploy.activate(candidate)
             print(candidate)

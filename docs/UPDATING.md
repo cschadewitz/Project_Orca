@@ -382,8 +382,10 @@ selected Node checkout cannot start. It also owns Debian's kernel `flock` launch
 This is the `orca-release` equivalent of `orca update`, rather than a CLI command that would
 itself hold the admission lock it needs to acquire exclusively.
 
-Prerequisites: Linux, Python 3.8+, util-linux/procfs, Git, authenticated GitHub CLI, mise,
-and the **actual operator's** service account. GitHub authentication stays in `gh`'s local
+Prerequisites for a **source** stage: Linux, Python 3.8+, util-linux/procfs, Git,
+authenticated GitHub CLI, mise, and the **actual operator's** service account. A **bundle**
+stage ([Prebuilt server bundle](#prebuilt-server-bundle)) needs only Linux x64, Python 3.8+,
+util-linux/procfs and HTTPS to github.com and Sigstore. GitHub authentication stays in `gh`'s local
 credential store/environment. Do not put tokens in clone URLs or deployment JSON. Mise
 installs the release's toolchain; pnpm uses the frozen lockfile. Ensure that account can
 reach the registry and has sufficient staging disk space.
@@ -487,6 +489,48 @@ No work is cancelled and no unbounded wait for activity is introduced. The daemo
 `current` is atomically replaced, and the new daemon starts **with admission closed**.
 Only the expected version, exact protocol and required capabilities passing hello allows
 admission to reopen. All runtime parts and shipped assets move together.
+
+### Prebuilt server bundle
+
+From the first release that carries it, every release also publishes a signed prebuilt
+server, `orca-server-X.Y.Z-linux-x64.tar.xz`, beside its manifest and signature
+([RELEASING.md](RELEASING.md#the-server-bundle)). Staging from it needs no toolchain, clone or
+GitHub CLI:
+
+```sh
+python3 /srv/dev/orca-live/orca-release.py --deployment /srv/dev/orca-live/deployment.json stage --bundle v0.8.0
+python3 /srv/dev/orca-live/orca-release.py --deployment /srv/dev/orca-live/deployment.json update --bundle v0.8.0
+```
+
+`update --bundle` stages (or reuses an already validated `releases/v0.8.0`) and then activates
+through exactly the path above. `--bundle` also takes a directory holding the three files, for a
+server without direct access to github.com. A release candidate (`v0.8.0-rc.1`) is accepted by
+its full version and sorts before its release; dry runs are never signed and never accepted.
+
+Before reading a byte of the archive, staging:
+
+1. fetches cosign `v3.1.4` once into `tools/` under the deployment root and checks it against
+   the SHA-256 pinned in the adapter, on every use (nothing on `PATH` is trusted);
+2. runs `cosign verify-blob` on the manifest, requiring a certificate for
+   `release-server-bundle.yml` on `refs/heads/main` of `cschadewitz/Project_Orca`, issuer
+   `https://token.actions.githubusercontent.com`, trigger `workflow_dispatch`, and a
+   transparency-log entry (Sigstore's trust root is cached in `tools/sigstore`);
+3. checks the manifest's schema, name, version, platform, and the archive's exact size and
+   SHA-256.
+
+A tampered archive, another signer, or a manifest for another version stops here, with an
+empty `.staging-*` directory left for inspection. Only then is the archive unpacked, by hand:
+regular files and directories under the one expected root, nothing else, bounded in size. The
+release records its own `runtime/bin/node` and `orca-daemon.mjs` relative to itself
+(`.orca-release.json` `"source": "bundle"`), and the same compiled-version, demo, config
+validation and temporary-daemon hello checks as a source stage run before the rename into
+`releases/vX.Y.Z`. Source-built and bundle-built releases activate and roll back into each
+other; the store-epoch rule is unchanged.
+
+A bundle release's daemon command line is `runtime/bin/node …/orca-daemon.mjs`, so the
+activation check that the service runs the selected release follows the recorded entry rather
+than `packages/cli/dist/main.js`. Install the updated adapter (step 2 of the bootstrap) before
+the first bundle update.
 
 ### Recovery and store compatibility
 

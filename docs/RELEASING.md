@@ -104,7 +104,13 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    no-op; different bytes under the same name stop it. Its summary gives the installer's **SHA-256**. To check by hand:
    `gh api repos/$R/releases/$ID --jq '{draft, name, tag_name, target_commitish, assets: [.assets[] | {name, digest}]}'`
    must show `draft: true`, `name: "v$V"`, `target_commitish` equal to `SHA`, and exactly the
-   `.deb` and the `.exe`. `tag_name` may read `v$V` or `untagged-…`; step 6 sets it.
+   `.deb` and the `.exe` (plus the three server bundle files of step 3a). `tag_name` may read
+   `v$V` or `untagged-…`; step 6 sets it.
+3a. **Automatic, always on:** the same Release (publish) run's `server-bundle` job dispatches
+   **Release (server bundle)** (`release-server-bundle.yml`) for `SHA`, which builds, signs,
+   checks and attaches the headless server bundle ([The server bundle](#the-server-bundle))
+   and records it in the draft's notes. A reconcile every 6 hours re-dispatches it for any
+   release newer than Latest without that record. Step 6 refuses a final without it.
 4. If either automatic step did not run (the switch is off, or the signing run was refused),
    dispatch **Windows signed (spike)** for `SHA` by hand, then **Release (attach signed
    installer)** with that run's id (`signed_run_id`); with the switch on the attach follows
@@ -120,8 +126,9 @@ the release id from the job summary, `SHA` the commit and `V` the version:
    `main` with `release_id=$ID`, `version=$V`, and what step 5 accepted: `source_sha=$SHA`,
    `deb_sha256` and `exe_sha256` (the digests of the exact files that passed). Immediately
    before publishing it compares all of them with the draft: still a draft, named `v$V`,
-   targeting `SHA`, exactly those two assets with those digests, and the installer's digest
-   equal to the signing record. It refuses a version that is not newer than the current
+   targeting `SHA`, exactly those two assets with those digests plus the three server bundle
+   files with the digests its record names, and the installer's digest equal to the signing
+   record. It refuses a version that is not newer than the current
    Latest and an existing tag at another commit, publishes with the tag and target stated
    explicitly, and reads back the published digests, the tag and Latest. It shares one queue
    with the attach, so the two never interleave; publish only through it, not by editing the
@@ -136,6 +143,37 @@ checks pass for the commit you mean to release (upload the `.deb` by id if it is
 Delete a draft only when its target or assets are wrong, then dispatch **Release
 (publish)** again. More than one draft for the version is always a stop: delete the extras
 after checking which one, if any, is valid.
+
+### The server bundle
+
+Every real release, final or rc, also carries a prebuilt headless server (#876), for servers
+that should install and update without a toolchain, `gh` or a clone:
+
+| File | What it is |
+|---|---|
+| `orca-server-X.Y.Z-linux-x64.tar.xz` | One directory: `orca-daemon.mjs` (the CLI, daemon and ACP facade, bundled by `build-daemon.js --server`), the two programs it starts beside itself (`native-io-worker.js`, `scripted-agent/main.js`), `runtime/bin/node` (the Node 24 the release workflow built with, and its licence), the shipped `workflows/` and `templates/`, `release-compatibility.json` and `orca-server.json`. |
+| `orca-server-X.Y.Z-linux-x64.manifest.json` | Version, source commit, the archive's name, size and **SHA-256**, the entry, the Node version and the compatibility contract. This is the file that is signed. |
+| `orca-server-X.Y.Z-linux-x64.manifest.json.sigstore.json` | The manifest's Sigstore bundle: a keyless cosign signature with its short-lived certificate and transparency-log entry. |
+
+**Release (server bundle)** (`release-server-bundle.yml`) produces them, unattended, from
+`main`: it confirms the release `vX.Y.Z` targets the commit and the commit is on `main`, builds
+that commit, assembles the archive (`tools/deploy/server-bundle.py`, deterministic for its
+inputs), signs the manifest with `cosign sign-blob` using the job's GitHub OIDC identity (no
+key exists anywhere to store, rotate or leak), stages the signed files with
+`orca-release.py stage --bundle` inside a `python:3.12-slim` container that has no `gh`, `git`,
+`mise`, `pnpm` or Node, and only then attaches them by release id and records their digests in
+the release notes (`<!-- orca-server-run: RUN archive manifest signature -->`).
+
+The expected signer is recorded in `tools/deploy/orca-release.py` (`BUNDLE_SIGNER` and its
+neighbours): the certificate must name
+`https://github.com/cschadewitz/Project_Orca/.github/workflows/release-server-bundle.yml@refs/heads/main`,
+issuer `https://token.actions.githubusercontent.com`, trigger `workflow_dispatch`. A pull
+request's runs carry a `refs/pull/…` identity and can never match. Moving or renaming the
+workflow is therefore a change to that constant in the same pull request, and servers
+verify with the adapter they have installed, so update the adapter on servers first.
+
+Dry runs build no server bundle: a rehearsed ref is untrusted and is never signed.
+linux-arm64 is deferred; the bundle is linux-x64 only.
 
 ## The artifacts
 

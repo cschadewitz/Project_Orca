@@ -37,9 +37,15 @@ let m;
 if (method === "POST" && (m = path.match(/^releases\/(\d+)\/assets\?name=(.+)$/))) {
   const r = byId(m[1]);
   const digest = "sha256:" + crypto.createHash("sha256").update(input()).digest("hex");
-  r.assets.push({ name: m[2], digest });
+  r.assets.push({ id: 1000 + (state.nextAsset = (state.nextAsset || 0) + 1), name: m[2], digest });
   log(["upload", m[1], m[2]]);
   out = {};
+} else if (method === "DELETE" && (m = path.match(/^releases\/assets\/(\d+)$/))) {
+  for (const r of state.releases) r.assets = r.assets.filter((a) => String(a.id) !== m[1]);
+  log(["delete", m[1]]);
+  out = {};
+} else if ((m = path.match(/^compare\/([0-9a-f]+)\.\.\.main$/))) {
+  out = { status: (state.onMain || []).includes(m[1]) ? "ahead" : "diverged" };
 } else if ((m = path.match(/^releases\/(\d+)$/))) {
   const r = byId(m[1]);
   if (!r) { process.stderr.write("HTTP 404\n"); process.exit(1); }
@@ -92,6 +98,11 @@ afterEach(() => dirs.splice(0).forEach((d) => rmSync(d, { recursive: true, force
 const SHA = "c".repeat(40);
 const OTHER = "e".repeat(40);
 const DEB = { name: "ORCA-0.8.0-linux-amd64.deb", digest: "sha256:" + "d".repeat(64) };
+// A final draft already carries its signed server bundle (#876) and that bundle's record.
+const serverNames = (version = "0.8.0") =>
+  ["tar.xz", "manifest.json", "manifest.json.sigstore.json"].map((ext) => `orca-server-${version}-linux-x64.${ext}`);
+const SERVER = serverNames().map((name, i) => ({ id: 901 + i, name, digest: "sha256:" + String(i + 1).repeat(64) }));
+const SERVER_RECORD = `<!-- orca-server-run: 55 ${SERVER.map((a) => a.digest).join(" ")} -->`;
 const draft = (over = {}) => ({
   id: 7,
   tag_name: "v0.8.0",
@@ -100,8 +111,8 @@ const draft = (over = {}) => ({
   prerelease: false,
   published_at: null,
   target_commitish: SHA,
-  body: "Notes.",
-  assets: [DEB],
+  body: `Notes.\n\n${SERVER_RECORD}`,
+  assets: [DEB, ...SERVER],
   ...over,
 });
 const artifact = (sha = SHA, expired = false) => ({ name: `windows-signed-${sha}`, expired });
@@ -219,8 +230,8 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     const first = f.attach();
     expect(first.status, first.stderr).toBe(0);
     const r = f.state().releases[0];
-    expect(r.assets.map((a) => a.digest)).toEqual([DEB.digest, f.digest]);
-    expect(r.body).toBe(`Notes.\n\n${f.marker()}`);
+    expect(r.assets.map((a) => a.digest)).toEqual([DEB.digest, ...SERVER.map((a) => a.digest), f.digest]);
+    expect(r.body).toBe(`Notes.\n\n${SERVER_RECORD}\n\n${f.marker()}`);
     expect(f.writes()).toEqual([RECORD, UPLOAD]);
     expect(f.attach().status).toBe(0);
     expect(f.writes()).toHaveLength(2);
@@ -241,7 +252,7 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("no longer a draft");
     expect(f.writes()).toEqual([RECORD]);
-    expect(f.state().releases[0].assets).toEqual([DEB]);
+    expect(f.state().releases[0].assets).toEqual([DEB, ...SERVER]);
   });
 
   it.each([
@@ -273,7 +284,7 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
       artifacts: { 300: [artifact(OTHER)], 200: [artifact()], 100: [artifact()] },
       signedRuns: [300, 200, 100],
     });
-    f.edit((st) => (st.releases[0].body = `Notes.\n\n${f.marker(100)}`));
+    f.edit((st) => (st.releases[0].body = `Notes.\n\n${SERVER_RECORD}\n\n${f.marker(100)}`));
 
     // Run 200's own attach (its workflow_run) is refused: the draft names 100.
     const newer = f.attach({}, "200");
@@ -438,5 +449,155 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(f.state().latest).toBe(7);
     expect(f.state().tags["v0.8.0"]).toBe(SHA);
+  });
+  describe("the signed server bundle (#876)", () => {
+    const RC = "0.8.0-rc.1";
+    const bundleDir = (f, version = "0.8.0", tag = "bundle") => {
+      const dir = mkdtempSync(join(tmpdir(), "orca-server-files-"));
+      dirs.push(dir);
+      const digests = serverNames(version).map((name) => {
+        writeFileSync(join(dir, name), `${tag} ${name}`);
+        return "sha256:" + createHash("sha256").update(`${tag} ${name}`).digest("hex");
+      });
+      return { dir, digests, record: (run) => `<!-- orca-server-run: ${run} ${digests.join(" ")} -->` };
+    };
+    const bare = (over = {}) => draft({ body: "Notes.", assets: [DEB], ...over });
+    const prerelease = (over = {}) =>
+      draft({
+        id: 9,
+        name: `v${RC}`,
+        tag_name: `v${RC}`,
+        draft: false,
+        prerelease: true,
+        body: "Notes.",
+        assets: [],
+        ...over,
+      });
+    const onMain = (st) => (st.onMain = [SHA]);
+
+    it("targets the one final draft or published prerelease at a commit on main", () => {
+      const f = setup({ releases: [bare(), prerelease()] });
+      f.edit((st) => {
+        onMain(st);
+        st.tags[`v${RC}`] = SHA;
+      });
+      const final = f.run(ATTACH, ["server-target", "0.8.0", SHA]);
+      expect(final.status, final.stderr).toBe(0);
+      expect(final.stdout).toBe("id=7\nkind=final\n");
+      const rc = f.run(ATTACH, ["server-target", RC, SHA]);
+      expect(rc.status, rc.stderr).toBe(0);
+      expect(rc.stdout).toBe("id=9\nkind=prerelease\n");
+    });
+
+    it.each([
+      ["a commit not on main", () => {}, "is not on main"],
+      ["no release of that name", (st) => (st.releases = []), "0 releases are named"],
+      ["a release at another commit", (st) => (st.releases[0].target_commitish = OTHER), "no longer targets"],
+      ["a published final", (st) => (st.releases[0].draft = false), "no longer a final draft"],
+    ])("refuses to build for %s", (_label, change, message) => {
+      const f = setup({ releases: [bare()] });
+      f.edit((st) => {
+        if (!message.includes("on main")) onMain(st);
+        change(st);
+      });
+      const result = f.run(ATTACH, ["server-target", "0.8.0", SHA]);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(message);
+      expect(result.stdout).toBe("");
+    });
+
+    it("uploads the three files, then records them; a rerun writes nothing", () => {
+      const f = setup({ releases: [bare()] });
+      const b = bundleDir(f);
+      const first = f.run(ATTACH, ["server-attach", "7", SHA, "0.8.0", "321", b.dir]);
+      expect(first.status, first.stderr).toBe(0);
+      const r = f.state().releases[0];
+      expect(r.assets.map((a) => a.digest)).toEqual([DEB.digest, ...b.digests]);
+      expect(r.body).toBe(`Notes.\n\n${b.record(321)}`);
+      expect(f.writes()).toEqual([...serverNames().map((n) => ["upload", "7", n]), RECORD]);
+      expect(f.run(ATTACH, ["server-attach", "7", SHA, "0.8.0", "321", b.dir]).status).toBe(0);
+      expect(f.writes()).toHaveLength(4);
+    });
+
+    it("attaches to a published prerelease whose tag is at the commit", () => {
+      const f = setup({ releases: [prerelease()] });
+      f.edit((st) => (st.tags[`v${RC}`] = SHA));
+      const b = bundleDir(f, RC);
+      const result = f.run(ATTACH, ["server-attach", "9", SHA, RC, "322", b.dir]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(f.state().releases[0].assets.map((a) => a.digest)).toEqual(b.digests);
+    });
+
+    it("replaces an unrecorded partial set, but never a recorded bundle", () => {
+      const partial = { id: 950, name: serverNames()[0], digest: "sha256:" + "9".repeat(64) };
+      const f = setup({ releases: [bare({ assets: [DEB, partial] })] });
+      const b = bundleDir(f);
+      const result = f.run(ATTACH, ["server-attach", "7", SHA, "0.8.0", "323", b.dir]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(f.writes()[0]).toEqual(["delete", "950"]);
+      expect(f.state().releases[0].assets.map((a) => a.digest)).toEqual([DEB.digest, ...b.digests]);
+
+      const other = bundleDir(f, "0.8.0", "other bytes");
+      const again = f.run(ATTACH, ["server-attach", "7", SHA, "0.8.0", "324", other.dir]);
+      expect(again.status).not.toBe(0);
+      expect(again.stderr).toContain("already records another server bundle");
+      expect(f.state().releases[0].assets.map((a) => a.digest)).toEqual([DEB.digest, ...b.digests]);
+    });
+
+    it("writes nothing to a release published between selection and the first write", () => {
+      const f = setup({ releases: [bare()] });
+      const b = bundleDir(f);
+      const result = f.run(ATTACH, ["server-attach", "7", SHA, "0.8.0", "325", b.dir], { FAKE_PUBLISH_AT_READ: "1" });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("no longer a final draft");
+      expect(f.writes()).toEqual([]);
+    });
+
+    it("refuses to publish a final without its recorded server bundle", () => {
+      const f = setup({ releases: [bare()] });
+      expect(f.attach().status).toBe(0);
+      const result = f.run(ATTACH, accepted(f));
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("and the server bundle");
+      expect(f.state().releases[0].draft).toBe(true);
+    });
+
+    it("refuses to publish when a server file differs from its record", () => {
+      const f = setup();
+      f.edit((st) => (st.releases[0].assets[1].digest = "sha256:" + "8".repeat(64)));
+      expect(f.attach().status).toBe(0);
+      const result = f.run(ATTACH, accepted(f));
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("do not match their record");
+    });
+
+    it("reconciles only unrecorded releases on a version line newer than Latest", () => {
+      const f = setup({
+        releases: [
+          bare(),
+          prerelease(),
+          prerelease({ id: 10, name: "v0.7.0-rc.2", tag_name: "v0.7.0-rc.2" }),
+          draft({ id: 11, name: "v0.9.0", tag_name: "v0.9.0", target_commitish: OTHER }),
+          draft({ id: 5, name: "v0.7.0", tag_name: "v0.7.0", draft: false, body: "Notes.", assets: [] }),
+        ],
+      });
+      f.edit((st) => (st.latest = 5));
+      const result = f.run(ATTACH, ["server-reconcile"]);
+      expect(result.status, result.stderr).toBe(0);
+      const dispatch = (version, sha) => [
+        "workflow",
+        "run",
+        "release-server-bundle.yml",
+        "--repo",
+        "o/r",
+        "--ref",
+        "main",
+        "-f",
+        `version=${version}`,
+        "-f",
+        `source_sha=${sha}`,
+      ];
+      expect(f.writes()).toEqual([dispatch("0.8.0", SHA), dispatch(RC, SHA)]);
+    });
   });
 });
