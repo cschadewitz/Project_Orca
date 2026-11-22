@@ -153,20 +153,23 @@ export function readRemoteCredential(remote: RemoteDaemonSpec, file: string): st
 }
 
 /**
- * What a session's receipts are bound to: the enrolled scope, the enrollment itself (a
- * re-enrollment is another binding), and the delegation's configuration, i.e. the remote
- * target and the agent's workflow and prompt variable. An edit to anything else in the config
- * leaves it alone; a retarget does not.
+ * What a session's receipts are bound to: the enrolled scope and credential, the enrollment
+ * itself (a re-enrollment is another binding), the workflow, the parent run's configuration
+ * generation, and the remote endpoint and prompt variable.
  */
 export function delegationBinding(
   enrollment: Enrollment,
   profile: ConnectionProfile,
   agent: Pick<AgentSpec, "workflow" | "promptVar">,
+  configGeneration: string,
 ): DelegationBinding {
   const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
   return {
     workspaceId: enrollment.workspaceId,
     principalId: enrollment.principalId,
+    credentialId: enrollment.credentialId,
+    workflowId: agent.workflow!,
+    configGeneration,
     enrollment: digest(enrollment),
     target: digest({
       destination: profile.destination,
@@ -175,7 +178,6 @@ export function delegationBinding(
       remotePort: profile.remotePort ?? null,
       serverCommand: profile.serverCommand ?? null,
       serverConfig: profile.serverConfig ?? null,
-      workflow: agent.workflow ?? null,
       promptVar: agent.promptVar ?? "prompt",
     }),
   };
@@ -235,7 +237,13 @@ export interface DelegationOptions {
   pollMs?: number;
 }
 
-export type SessionFactoryLike = (options: OpenSessionOptions) => Promise<AgentSession>;
+/** What the engine says a session is opened for (`SessionOrigin` in `@orca/engine`). */
+export interface DelegationOrigin {
+  runId: string;
+  generationId?: string;
+  remotes?: readonly RemoteDaemonSpec[];
+}
+export type SessionFactoryLike = (options: OpenSessionOptions & { origin?: DelegationOrigin }) => Promise<AgentSession>;
 
 /**
  * Wrap a session factory so `type: orca-daemon` agents open a session on their remote daemon
@@ -246,7 +254,8 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
   return async (open) => {
     if (open.agent.type !== "orca-daemon") return base(open);
     const id = open.agent.profile!;
-    const remote = options.remotes().find((r) => r.id === id);
+    // The remotes of the generation the parent run is bound to, not of whichever is current.
+    const remote = (open.origin?.remotes ?? options.remotes()).find((r) => r.id === id);
     if (!remote) throw delegationRefusal(id, "profile-invalid", `no remotes[] entry has id ${id}`);
     const profile = remoteProfile(remote);
     const files = remoteFiles(options.configDir, remote);
@@ -289,7 +298,7 @@ export function delegatingSessionFactory(base: SessionFactoryLike, options: Dele
       remoteName: profile.name,
       transport: tunnelTransport(tunnel),
       token,
-      binding: delegationBinding(enrollment, profile, open.agent),
+      binding: delegationBinding(enrollment, profile, open.agent, open.origin?.generationId ?? "unversioned"),
       receipts,
       ...(open.askPermission ? { askPermission: (req, invocation) => open.askPermission!(req, invocation) } : {}),
       ...(open.logger ? { logger: open.logger } : {}),

@@ -969,12 +969,19 @@ export function methodsFor(ctx: MethodContext): MethodTable {
     };
     table["admissions.find"] = {
       params: AdmissionsFindParamsSchema,
-      handle: async (params, invocation) => model.find(params.idempotencyKey, await authorities(invocation)),
+      handle: async (params, invocation) => {
+        const authority = await authorities(invocation);
+        await checkAdmissionScope(params.expectedScope, authority);
+        return model.find(params.idempotencyKey, authority);
+      },
     };
     table["admissions.fence"] = {
       params: AdmissionsFenceParamsSchema,
-      handle: async (params, invocation) =>
-        model.fence(params.idempotencyKey, params.workflowId, await authorities(invocation)),
+      handle: async (params, invocation) => {
+        const authority = await authorities(invocation);
+        await checkAdmissionScope(params.expectedScope, authority);
+        return model.fence(params.idempotencyKey, params.workflowId, authority);
+      },
     };
     table["admissions.reconcile"] = {
       params: AdmissionsReconcileParamsSchema,

@@ -426,6 +426,9 @@ describe("delegation through a proxy the test controls (#883)", () => {
     binding = {
       principalId: discovery.result.principalId,
       workspaceId: discovery.result.target.workspaceId,
+      credentialId: token.split(".")[1]!,
+      workflowId: "remote-task",
+      configGeneration: "generation-1",
       enrollment: "enrollment-1",
       target: "target-1",
     };
@@ -579,18 +582,20 @@ describe("delegation through a proxy the test controls (#883)", () => {
     receipts: DelegationReceipts,
     extra: Partial<OpenDaemonSessionOptions> = {},
   ) {
+    const agent = extra.agent ?? agentFor("remote-task");
     return openDaemonSession({
-      agent: agentFor("remote-task"),
       host,
       cwd: work,
       profile: "direct",
       remoteName: "direct",
       transport,
       token,
-      binding,
       receipts,
       pollMs: 100,
       ...extra,
+      agent,
+      // The binding names the agent's own workflow, as the factory computes it.
+      binding: { ...(extra.binding ?? binding), workflowId: agent.workflow! },
     });
   }
 
@@ -823,6 +828,27 @@ describe("delegation through a proxy the test controls (#883)", () => {
     expect(() => receipts.write({ ...first, state: "cancel-pending", remoteRunId: "run_x" })).toThrow(ReceiptConflict);
     expect(receipts.read("run_cas", "run_cas_step1")).toMatchObject({ revision: newer.revision, state: "settled" });
   });
+
+  it("fences only in the workspace and principal the caller names", async () => {
+    const key = `orca-delegate-scope-${randomUUID()}`;
+    const other = await remote.call(
+      "admissions.fence",
+      {
+        idempotencyKey: key,
+        workflowId: "remote-task",
+        expectedScope: { workspaceId: randomUUID(), principalId: binding.principalId },
+      },
+      token,
+    );
+    expect(other).toMatchObject({ ok: false, error: { code: "AUTH_FORBIDDEN" } });
+    const unscoped = await remote.call("admissions.fence", { idempotencyKey: key, workflowId: "remote-task" }, token);
+    expect(unscoped.ok).toBe(false);
+    // Neither claimed the key.
+    expect(await remote.call("admissions.find", { idempotencyKey: key }, token)).toMatchObject({
+      ok: true,
+      result: { state: "absent" },
+    });
+  }, 60_000);
 
   it("keys each generation of a delegation to its own remote admission", () => {
     expect(delegationKey("r", "d", 0)).not.toBe(delegationKey("r", "d", 1));

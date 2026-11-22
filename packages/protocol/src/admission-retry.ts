@@ -26,7 +26,10 @@ export const AdmissionsReconcileParamsSchema = AdmissionsGetParamsSchema;
  * claiming the key. Listed in `hello.methods`, not as a capability. `absent` holds only for
  * the moment it was read: a submission still in flight may claim the key afterwards.
  */
-export const AdmissionsFindParamsSchema = z.strictObject({ idempotencyKey: RetryKeySchema });
+export const AdmissionsFindParamsSchema = z.strictObject({
+  idempotencyKey: RetryKeySchema,
+  expectedScope: AdmissionExpectedScopeSchema.optional(),
+});
 export const ADMISSIONS_FIND_METHOD = "admissions.find";
 /**
  * `admissions.fence` (#883): claim a direct admission's idempotency key so no later
@@ -36,6 +39,8 @@ export const ADMISSIONS_FIND_METHOD = "admissions.find";
 export const AdmissionsFenceParamsSchema = z.strictObject({
   idempotencyKey: RetryKeySchema,
   workflowId: z.string().min(1),
+  /** Required: a fence lands only in the workspace and principal the caller enrolled. */
+  expectedScope: AdmissionExpectedScopeSchema,
 });
 export const ADMISSIONS_FENCE_METHOD = "admissions.fence";
 export const RUNS_ADMIT_METHOD = "runs.admit";

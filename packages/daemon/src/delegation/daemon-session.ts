@@ -618,7 +618,7 @@ class DaemonSession implements AgentSession {
   private async settleCancel(receipt: DelegationReceipt, deadline: number, signal?: AbortSignal): Promise<boolean> {
     let runId = receipt.remoteRunId;
     if (runId === undefined) {
-      const fenced = await this.fence(receipt.key, deadline, signal);
+      const fenced = await this.fence(receipt, deadline, signal);
       if (fenced === "pending") return false;
       if (fenced === "fenced") {
         this.store({ ...receipt, state: "settled", outcome: "never-admitted" });
@@ -634,11 +634,13 @@ class DaemonSession implements AgentSession {
   }
 
   /**
-   * Claim the key so no admission under it can admit a run: `fenced`, the run an admission
-   * under it already made, or `pending` (an admission still being prepared, or no answer).
+   * Claim the receipt's key so no admission under it can admit a run, in the receipt's own
+   * workspace and principal and for its own workflow: `fenced`, the run an admission under it
+   * was verified to have made, or `pending` (an admission still being prepared or reconciled,
+   * or no answer). A reserved run id is never taken for a run until its operation resolves.
    */
   private async fence(
-    key: string,
+    receipt: DelegationReceipt,
     deadline: number,
     signal?: AbortSignal,
   ): Promise<{ runId: string } | "fenced" | "pending"> {
@@ -646,7 +648,11 @@ class DaemonSession implements AgentSession {
     try {
       answer = await this.client.call(
         "admissions.fence",
-        { idempotencyKey: key, workflowId: this.options.agent.workflow! },
+        {
+          idempotencyKey: receipt.key,
+          workflowId: receipt.binding.workflowId,
+          expectedScope: { workspaceId: receipt.binding.workspaceId, principalId: receipt.binding.principalId },
+        },
         this.bounded(deadline, signal),
       );
     } catch (error) {
@@ -657,10 +663,25 @@ class DaemonSession implements AgentSession {
     const found = AdmissionsFindResultSchema.parse(answer);
     if (found.state !== "resolved") return "pending";
     // The retained result, without the wire receipt's operation id.
-    const result = (found.result ?? {}) as { state?: unknown; runId?: unknown };
+    let result = (found.result ?? {}) as { state?: unknown; runId?: unknown };
     if (result.state === "fenced") return "fenced";
-    if ((result.state === "accepted" || result.state === "recoverable-failure") && typeof result.runId === "string")
-      return { runId: result.runId };
+    if (result.state === "recoverable-failure") {
+      // Resolve the operation first: its reserved run id names a run only once it is accepted.
+      try {
+        const reconciled = (await this.client.call(
+          "admissions.reconcile",
+          { operationId: found.operationId },
+          this.bounded(deadline, signal),
+        )) as { state?: string; result?: { state?: unknown; runId?: unknown } };
+        if (reconciled.state !== "resolved" || !reconciled.result) return "pending";
+        result = reconciled.result;
+      } catch (error) {
+        if (error instanceof RemoteFault || this.options.transport.failed())
+          throw classify(this.options.profile, this.options.transport, error);
+        return "pending";
+      }
+    }
+    if (result.state === "accepted" && typeof result.runId === "string") return { runId: result.runId };
     return "pending";
   }
 
@@ -697,10 +718,10 @@ class DaemonSession implements AgentSession {
     signal?: AbortSignal,
   ): Promise<DelegationReceipt> {
     const params = {
-      workflowId: this.options.agent.workflow!,
+      workflowId: receipt.binding.workflowId,
       vars: { [this.options.agent.promptVar ?? "prompt"]: task },
       idempotencyKey: receipt.key,
-      expectedScope: this.scope,
+      expectedScope: { workspaceId: receipt.binding.workspaceId, principalId: receipt.binding.principalId },
     };
     const admitted = (runId: string) => this.store({ ...receipt, state: "admitted", remoteRunId: runId });
     for (let attempt = 0; ; attempt++) {
@@ -709,9 +730,9 @@ class DaemonSession implements AgentSession {
         let answer = RunsAdmitResultSchema.parse(
           await this.client.call("runs.admit", params, this.bounded(deadline, signal)),
         );
-        // A prepared or recoverable admission settles through its receipt, never a new submit.
+        // A prepared or recoverable admission settles through its receipt, never a new submit;
+        // a recoverable failure's reserved run id is followed only once reconcile accepts it.
         while (answer.state !== "accepted") {
-          if (answer.state === "recoverable-failure" && answer.runId) return admitted(answer.runId);
           await sleep(this.pollMs, signal);
           if (signal?.aborted) return this.abandon(receipt, deadline);
           if (this.clock.now() > deadline)

@@ -23,8 +23,9 @@
  *   the step start a new generation.
  *
  * Every receipt is bound to the scope it was made in (`binding`): the enrolled workspace,
- * principal and enrollment, and the delegation's own configuration (remote target, workflow,
- * prompt variable). A session under any other binding never acts on it.
+ * principal, credential and enrollment (pinned keys), the remote endpoint, the workflow, and
+ * the parent run's configuration generation. A session under any other binding never acts on
+ * it, and every remote mutation it makes for the receipt is scoped by it.
  *
  * One JSON file per delegation under `<store>/delegations/`, replaced atomically. Every
  * transition is a compare-and-swap on `revision` under a per-receipt lock file, so two
@@ -52,9 +53,15 @@ export const DelegationBindingSchema = z
   .object({
     workspaceId: z.string().min(1),
     principalId: z.string().min(1),
-    /** Digest of the enrollment record: a re-enrollment is another binding. */
+    /** The enrolled credential's id; never its secret. */
+    credentialId: z.string().min(1),
+    /** The remote workflow every admission and fence of this delegation names. */
+    workflowId: z.string().min(1),
+    /** The parent run's configuration generation: where the remote and agent were resolved. */
+    configGeneration: z.string().min(1),
+    /** Digest of the enrollment record (pinned keys included): a re-enrollment is another binding. */
     enrollment: z.string().min(1),
-    /** Digest of the remote target and the agent's delegation fields. */
+    /** Digest of the remote endpoint (destination, ports, jump, server) and the prompt variable. */
     target: z.string().min(1),
   })
   .strict();
@@ -212,6 +219,9 @@ export function sameBinding(a: DelegationBinding, b: DelegationBinding): boolean
   return (
     a.workspaceId === b.workspaceId &&
     a.principalId === b.principalId &&
+    a.credentialId === b.credentialId &&
+    a.workflowId === b.workflowId &&
+    a.configGeneration === b.configGeneration &&
     a.enrollment === b.enrollment &&
     a.target === b.target
   );
