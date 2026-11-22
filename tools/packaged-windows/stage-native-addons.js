@@ -29,7 +29,7 @@ export function stageNativeAddons(config, headers, run = execFileSync, verify = 
     run(
       process.execPath,
       ["packages/app/scripts/diagnostics-native-package.js", "--arch", arch, "--headers", resolve(headers)],
-      { cwd: root, stdio: ["ignore", "pipe", "pipe"], timeout: 150_000, maxBuffer: 16 * 1024, windowsHide: true },
+      { cwd: root, stdio: ["ignore", "pipe", "pipe"], timeout: 360_000, maxBuffer: 16 * 1024, windowsHide: true },
     );
     verify(
       resolve(root, "packages/app/dist/diagnostics-native", `win32-${arch}`),

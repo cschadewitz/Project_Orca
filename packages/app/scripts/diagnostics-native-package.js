@@ -153,7 +153,9 @@ export function buildNativePackage({ arch, headers, root = appRoot }) {
         {
           cwd: join(root, "native/diagnostics"),
           stdio: ["ignore", "pipe", "pipe"],
-          timeout: 60_000,
+          // node-gyp's Visual Studio discovery alone takes over a minute on GitHub's Windows
+          // arm64 runners (#889); the build itself is seconds.
+          timeout: 300_000,
           maxBuffer: 64 * 1024,
           windowsHide: true,
         },
