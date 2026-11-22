@@ -11,7 +11,8 @@ import {
 } from "./update-bootstrap.js";
 import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
 import { admissionRetryFaults } from "@orca/core";
-import { FileRetryClaimStore } from "@orca/store";
+import { FileRetryClaimStore, STORE_FORMAT_BACKUP_DIR, enterStoreFormat } from "@orca/store";
+import { readOrcaVersion } from "./version.js";
 import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
 
 import { createHash, randomUUID } from "node:crypto";
@@ -274,7 +275,8 @@ export interface OrcaFileLayout {
  * `.orca/program/…` from the workspace, which is the store when the workspace is the config
  * directory). Not even readable: `auth/`, where `orca serve` keeps the local owner token, and
  * the store's two private directories, which hold its encryption keys and the payloads they
- * protect (`private-execution` and `private-workflows` in `@orca/store`).
+ * protect (`private-execution` and `private-workflows` in `@orca/store`), and the whole-store
+ * format backups, which copy them (`format-backups`).
  */
 export function orcaProtectedPaths(layout: OrcaFileLayout): ProtectedPaths {
   const configDir = resolve(layout.configDir);
@@ -286,7 +288,13 @@ export function orcaProtectedPaths(layout: OrcaFileLayout): ProtectedPaths {
       permissionPolicyPath(configDir),
       storeDir,
     ],
-    noAccess: [join(configDir, "auth"), join(storeDir, "private-execution"), join(storeDir, "private-workflows")],
+    noAccess: [
+      join(configDir, "auth"),
+      join(storeDir, "private-execution"),
+      join(storeDir, "private-workflows"),
+      // Whole-store copies (#566), private directories included.
+      join(storeDir, STORE_FORMAT_BACKUP_DIR),
+    ],
     agentAreas: [join(storeDir, "work"), join(storeDir, "program")],
   };
 }
@@ -299,6 +307,15 @@ export function makeHumanInput(config: OrcaConfig): HumanInputPort {
       return cliHumanInput();
     case "pause":
       return new PausingHumanInput();
+  }
+}
+
+/** The version recorded in the store marker; a bundle without the root manifest records "unknown". */
+function storeWriterVersion(): string {
+  try {
+    return readOrcaVersion();
+  } catch {
+    return "unknown";
   }
 }
 
@@ -317,6 +334,14 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       closedUpdateOwnsConfiguredRoots(configDir, resolve(configDir, config.storeDir)),
     );
   else await enterFirstRunWriter(resolve(configDir), resolve(configDir, config.storeDir), firstRunLaunch);
+  // Before any store reader or writer (#566): refuse a store this build cannot open, including
+  // an older format, which only `orca store carry-forward` converts. Closed update validation
+  // only checks; an ephemeral bootstrap never opens the store at all.
+  if (!opts.ephemeral)
+    await enterStoreFormat(resolve(configDir, config.storeDir), {
+      appVersion: storeWriterVersion(),
+      mode: isClosedUpdateBootstrap() ? "read" : "write",
+    });
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config);
   const assets = await releaseAssets(config);

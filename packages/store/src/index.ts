@@ -13,6 +13,7 @@ export * from "./execution-store.js";
 export * from "./protected-event-store.js";
 
 export { workspaceIdentity, renewWorkspaceIdentity } from "./workspace-identity.js";
+export * from "./store-format.js";
 
 export * from "./admission-retry-store.js";
 export * from "./continuation-admission-store.js";

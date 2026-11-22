@@ -69,6 +69,7 @@ describe("orcaProtectedPaths", () => {
       join(dir, "auth"),
       join(dir, ".orca", "private-execution"),
       join(dir, ".orca", "private-workflows"),
+      join(dir, ".orca", "format-backups"),
     ]);
     // Where the shipped workflows have agents write deliverables, which the store holds when
     // the workspace is the config directory: `.orca/work/…` (ai-sdlc), `.orca/program/…` (program).
@@ -229,6 +230,25 @@ describe("makeHumanInput", () => {
 });
 
 describe("bootstrap", () => {
+  it("stamps the store format and refuses a store from a newer format (#566)", async () => {
+    const dir = await temp();
+    await writeFile(join(dir, "tiny.yaml"), WORKFLOW, "utf8");
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: [tiny.yaml]\ntemplates: []\n", "utf8");
+    await bootstrap({ cwd: dir, logger: silentLogger });
+    const marker = JSON.parse(await readFile(join(dir, ".orca", "store-format.json"), "utf8")) as { epoch: string };
+    const manifest = JSON.parse(
+      await readFile(fileURLToPath(new URL("../../../release-compatibility.json", import.meta.url)), "utf8"),
+    ) as { storeEpoch: string };
+    expect(marker.epoch).toBe(manifest.storeEpoch);
+    const newer = JSON.stringify({ ...marker, epoch: "future-format-v9", writtenBy: "9.0.0" });
+    await writeFile(join(dir, ".orca", "store-format.json"), newer, "utf8");
+    await expect(bootstrap({ cwd: dir, logger: silentLogger })).rejects.toMatchObject({
+      code: "STORE_FORMAT",
+      details: { reason: "NEWER" },
+    });
+    expect(await readFile(join(dir, ".orca", "store-format.json"), "utf8")).toBe(newer);
+  });
+
   it("wires an app from a config file on disk", async () => {
     const dir = await temp();
     await writeFile(join(dir, "tiny.yaml"), WORKFLOW, "utf8");

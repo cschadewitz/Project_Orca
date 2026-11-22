@@ -499,9 +499,11 @@ remain conditional on installed providers and caller authority, not new globally
 release capabilities.
 
 The epoch check belongs to the **managed release updater**, which refuses activation and
-recovery across different epochs. Direct CLI and daemon startup do **not** enforce
-`release-compatibility.json`; successfully starting an old binary is not proof it can read
-or safely write an upgraded store. Old full-schema event readers throw on a valid but
+recovery across different epochs. Direct CLI and daemon startup do **not** read
+`release-compatibility.json`; from 0.7.1 they enforce the store's own format marker instead
+(see [Store format carryover](#store-format-carryover) below). Builds before 0.7.1 ignore that
+marker, so successfully starting an old binary is still not proof it can read or safely write
+an upgraded store. Old full-schema event readers throw on a valid but
 unknown event such as `revision.recorded`; filtered readers may bypass that event and
 appear to work. Neither outcome is a supported downgrade or a compatibility guarantee.
 
@@ -523,6 +525,68 @@ stores**, plan journals, artifacts, permission sidecars and configs, and explici
 and restore validation. Never copy a live event store as a purported consistent backup.
 Reverting binaries cannot undo incompatible writes. Restore the complete matching backup
 before starting the old release; account for work performed since that backup separately.
+
+### Store format carryover
+
+From 0.7.1 every store records the format (store epoch) and the ORCA version that last wrote
+it in `store-format.json` at the top of the store. Every command that opens the store, the
+desktop app's bundled daemon included, checks it first (#566). Ordinary startup never
+converts a store:
+
+| The store was written in | What ordinary startup does |
+| --- | --- |
+| Its own format | Opens it in place. Updates that keep the format, such as 0.7.0 to 0.7.1, need nothing else. |
+| `operator-journals-v4`, before the marker existed, with intact evidence a released 0.7 build wrote it: `.workspace-identified` holding `1`, a valid `workspace-identity/id` and a 32-byte `private-execution/.execution-key`, none of them linked or foreign-owned. The 0.7 desktop app's daemon and `submit` write all three; 0.6 and earlier wrote none | Stamps the marker and opens it in place. No conversion, no backup, no other byte changed. |
+| The previous release's format, or any other unmarked store (incomplete or missing evidence included) | Refuses (`CARRYOVER_REQUIRED`) and changes nothing. Run `orca store carry-forward` once, below. |
+| An older format than that | Refuses, naming the release line to open it with first. |
+| A format it does not know (a newer ORCA) | Refuses for reads and writes alike and changes nothing. The message names the version that wrote it and, when there is one, the backup that version made. |
+| A damaged marker | Refuses until the marker is restored or repaired with ORCA stopped. |
+
+`orca store format` prints the recorded format and what startup would do.
+
+**`orca store carry-forward`** is the explicit, offline conversion. Stop every ORCA app,
+daemon and command using the workspace first. Writers from before 0.7.1 take no lock the
+command can see, so it also checks for itself, and refuses with the prior format still in
+charge if any step fails:
+
+1. No run lease in the store is live, and the leases can be read. Otherwise it refuses (`BUSY`).
+   A store that holds links is refused (`UNREADABLE`): the backup must be self-contained and
+   the read check isolated.
+2. The whole store is copied into a private staging folder under `format-backups/`, and every
+   copied file is compared byte for byte with the original.
+3. The store's complete file listing (path, type, size, modification time, inode) must be
+   unchanged from before the copy to after it. Otherwise another process wrote meanwhile:
+   the copy is discarded and the command refuses (`BUSY`).
+4. A second, throwaway copy is opened with this build's own readers: every run log, the
+   request, work-item, artifact, lease and plan collections and every plan journal. If any of
+   them fails to read, nothing changes (`UNREADABLE`). The staged backup must be unchanged
+   afterwards, so the readers' own writes stay in the throwaway copy.
+5. Just before the marker is written, the listing is checked once more. Then the staged copy
+   is published as `format-backups/<time>-from-<format>/` with a `format-backup.json`
+   manifest, and only then is the marker stamped.
+
+Retention removes only backups the command made (named as above, with a valid manifest),
+keeping the newest two and always the one the marker names, plus the scratch folders of an
+interrupted run. Anything else in `format-backups/` is left alone. The folder must be a
+private directory owned by the user running ORCA (`BACKUPS_UNSAFE` otherwise).
+
+`carry-forward` is not available on Windows yet (`BACKUPS_UNSAFE`): the copies hold the
+execution key and private records, and ORCA cannot yet verify that a destination's ACL keeps
+them at least as private as the originals. That, with automatic desktop carryover, is #897.
+Marker adoption of 0.7 stores, which copies nothing, works on Windows as everywhere else.
+
+The supported window is this release's format and the one before it, so a store carries
+forward across one format change at a time. Closed update validation (`serve --read-only
+--no-resume` under an update fence) only checks; it never writes the marker. `validate` does
+not open the store and is unaffected. Automatic carryover on the desktop update path, with
+proof that the updater owns the store and holds its write fence, is tracked separately and
+must land before the next store format change.
+
+The backup covers the store directory only: not the config file, the permission sidecar or
+`auth/` beside the config. Agents cannot read `format-backups/`, which holds copies of the
+store's private directories. To go back to the older release after a carryover, stop ORCA,
+move the store aside, copy the backup back in its place, and start the older release. Work
+done after the backup is not in it.
 
 During compatible activation, `activation.json` is fsynced before any service/pointer change.
 Failed startup/hello restores the previous pointer, restarts it closed, validates its hello,

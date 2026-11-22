@@ -7,7 +7,8 @@
  * other half: it is small, it runs in `ci.yml` on every pull request that can affect startup,
  * and its store is an old release's on purpose (see the fixture's README). A daemon that
  * cannot open the store, or an app that cannot render what it serves, fails here before a
- * release does.
+ * release does. Since #566 the fixture daemon first checks that ordinary startup refuses the
+ * pre-0.7 store, then converts it with `orca store carry-forward`, the supported upgrade path.
  *
  * Prerequisite: `pnpm run build`. The app under test is `dist/`, the daemon is
  * `packages/cli/dist/main.js`.
