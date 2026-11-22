@@ -16,6 +16,7 @@ import {
   HumanInputLiveIdentitySchema,
   RunOutcomeSchema,
   RunCheckpointSchema,
+  RunOriginSchema,
   RunOverridesSchema,
   RunStatusSchema,
   StepResultSchema,
@@ -147,6 +148,8 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       executionInputsStored: z.literal(true).optional(),
       /** A checkpoint attempt (#357): the source, and the steps, artifacts and vars it reuses. */
       checkpoint: RunCheckpointSchema.optional(),
+      /** A delegated run's parent workspace, run and step (#883, `runs.admit` `origin`). */
+      origin: RunOriginSchema.optional(),
     }),
   ),
   base("run.started", z.object({})),

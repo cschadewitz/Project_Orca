@@ -119,6 +119,8 @@ export const RunSummaryViewSchema = z.object({
   operations: RunOperationsViewSchema.optional(),
   /** A checkpoint attempt (#357, protocol 2.5): the failed run and the completed step it started after. */
   checkpoint: z.object({ runId: z.string(), stepRunId: z.string() }).optional(),
+  /** A delegated run (#883, protocol 2.6): the parent workspace, run and step it was started for. */
+  origin: z.object({ workspaceId: z.string(), runId: z.string(), stepRunId: z.string().optional() }).optional(),
 });
 export type RunSummaryView = z.infer<typeof RunSummaryViewSchema>;
 

@@ -52,6 +52,7 @@ import {
   type ArtifactRef,
   type RunOverrides,
   type RunCheckpoint,
+  type RunOrigin,
   type ArtifactSpec,
   type Clock,
   type Edge,
@@ -250,6 +251,8 @@ export interface StartRunOptions {
   workItemId?: string;
   parentRunId?: string;
   parentStepRunId?: string;
+  /** A delegated run's parent workspace, run and step (#883); recorded on `run.created`. */
+  origin?: RunOrigin;
   /**
    * Per-run selection (#186): role -> agent, model, item workflow, template pack. Validated
    * before `run.created` is appended and recorded in it, so a replay resolves the same agents.
@@ -702,6 +705,7 @@ export class Orchestrator {
         ...(opts.overrides ? { overrides: opts.overrides } : {}),
         ...(workflowStored ? { workflowStored: true as const } : {}),
         ...(opts.checkpoint ? { checkpoint: opts.checkpoint.seed } : {}),
+        ...(opts.origin ? { origin: { ...opts.origin } } : {}),
       },
     };
     await this.stores.events.append(
