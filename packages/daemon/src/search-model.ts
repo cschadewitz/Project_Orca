@@ -11,20 +11,30 @@
  *   the deadline passes the test throws a private sentinel, which `readRange` lets out after
  *   closing its file. The hits gathered so far are kept and the result says why it stopped.
  * - **Only what the reads show.** The caller's `scope` decides which runs are read at all
- *   and whether artifacts are, before anything is opened - the same answer `runs.events` and
- *   `artifacts.get` give that caller. Artifact text is redacted the way `artifacts.get`
- *   redacts it before it is matched, so a search cannot find what a read would hide.
+ *   and whether artifacts are, before anything is opened. A caller restricted to some runs
+ *   searches only the one run it names, which the guard has already authorized: walking the
+ *   store and asking run by run would spend the caller's deadline on hidden runs and let them
+ *   change which visible hits are found and whether the result says it was cut short.
+ *   Artifact text is redacted the way `artifacts.get` redacts it before it is matched, so a
+ *   search cannot find what a read would hide.
+ * - **The deadline is cooperative.** It is checked before each run, each event and each
+ *   artifact. A storage read already in flight is not interrupted, so a slow read can carry a
+ *   search past the deadline by that one read.
  */
 import { isTextMediaType, SEARCH_ARTIFACT_MAX_BYTES, SEARCH_DEADLINE_MS } from "@orca/protocol";
 import type { SearchHit, SearchParams, SearchResult } from "@orca/protocol";
-import type { Artifact, OrcaEvent } from "@orca/core";
+import { OrcaError, type Artifact, type OrcaEvent } from "@orca/core";
 import type { Orchestrator } from "@orca/engine";
 import { redactExecutionValue } from "@orca/store";
 import { artifactEvent } from "./auth/artifact-projection.js";
 
-/** Who is asking: which runs they may see, and whether they may read artifacts. */
+/**
+ * Who is asking. `runs: "named"` is a caller limited to some runs: it may search only the
+ * `runId` it names, which the guard authorized before the scan, and a search without one is
+ * refused here as well as there. `"all"` walks the whole store.
+ */
 export interface SearchScope {
-  allowsRun(runId: string): Promise<boolean>;
+  runs: "all" | "named";
   artifacts: boolean;
 }
 
@@ -38,7 +48,7 @@ export interface SearchDeps {
   deadlineMs?: number;
 }
 
-const EVERYTHING: SearchScope = { allowsRun: async () => true, artifacts: true };
+const EVERYTHING: SearchScope = { runs: "all", artifacts: true };
 const EXCERPT_RADIUS = 80;
 
 class Stop extends Error {
@@ -66,12 +76,13 @@ export async function searchStore(
     if (now() > deadline) throw new Stop("deadline");
   };
 
+  if (scope.runs === "named" && params.runId === undefined)
+    throw new OrcaError("RUN_STATE", "A caller limited to some runs searches one named run");
   // `listRuns` is oldest first and ids are time-ordered; the newest run is the likeliest answer.
   const runs = params.runId !== undefined ? [params.runId] : [...(await deps.orc.listRuns())].reverse();
   try {
     for (const runId of runs) {
       check();
-      if (!(await scope.allowsRun(runId))) continue;
       if ((await deps.orc.lastSeq(runId)) === undefined) continue;
       scannedRuns++;
       if (kinds.has("event")) await searchEvents(deps, runId, needle, hits, check, scope.artifacts);

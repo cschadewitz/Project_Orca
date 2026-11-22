@@ -22,12 +22,16 @@
  *   a promise about a corpus nobody has measured.
  * - **Bounding**: `limit` hits and a deadline. When either cuts the scan short the result
  *   says which (`truncated`), so a client can say "more may exist" rather than imply none.
+ *   The deadline is cooperative: it is checked between storage reads, and a read already in
+ *   flight finishes, so a slow disk can carry an answer past it by one read.
  * - **Cost**: there is no index. Each call reads logs from disk, newest run first, until the
  *   limit or the deadline; durable indexing belongs to #339/#341.
  *
  * It sits under `runs.read` (it is listed in `READ_METHODS`), so a `--read-only` daemon
  * answers it, and it shows a caller only what `runs.events` and `artifacts.get` would: runs
- * the caller can see, and artifact hits only with `artifacts.read`.
+ * the caller can see, and artifact hits only with `artifacts.read`. A caller whose scope is
+ * limited to some runs must name one in `runId`; a search across the whole store is refused
+ * with `AUTH_FORBIDDEN` for it until there is an authorization-scoped run catalog.
  */
 import { z } from "zod";
 

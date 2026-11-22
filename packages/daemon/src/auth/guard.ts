@@ -320,8 +320,8 @@ export class Authorizer {
             {
               ...ctx,
               readScope: {
-                allowsRun: (runId: string) =>
-                  isUnrestricted(principal.scope) ? Promise.resolve(true) : this.runs.allows(principal, runId),
+                // Restricted: only the named run, which `case "search"` authorizes first.
+                runs: isUnrestricted(principal.scope) ? "all" : "named",
                 artifacts: holds(principal, "artifacts.read"),
               },
               mutationActor: {
@@ -412,18 +412,26 @@ export class Authorizer {
         return original(params);
 
       case "search": {
-        const empty = (): SearchResult => ({ hits: [], scannedRuns: 0, asOf: this.now().toISOString() });
-        // A run the caller cannot see answers as one with no matches, never as a refusal.
-        if (restricted && params.runId !== undefined && !(await this.runs.allows(principal, params.runId as string)))
-          return empty();
+        const named = params.runId as string | undefined;
+        if (restricted) {
+          /* A caller limited to some runs searches one named run. Walking the store and asking
+             run by run would read facts of hidden runs and spend this caller's deadline on
+             them, so hidden work could change which visible hits are found and whether the
+             answer says it was cut short. Workspace-wide search for a restricted caller waits
+             for an authorization-scoped run catalog. */
+          if (named === undefined) throw new Denied(authForbidden(), "search-needs-named-run");
+          // A run the caller cannot see answers as one with no matches, never as a refusal.
+          if (!(await this.runs.allows(principal, named)))
+            return { hits: [], scannedRuns: 0, asOf: this.now().toISOString() };
+        }
         const result = (await original(params)) as SearchResult;
         const artifacts = holds(principal, "artifacts.read");
-        const hits: SearchHit[] = [];
-        for (const hit of result.hits) {
-          if (!artifacts && (hit.kind === "artifact" || artifactEvent(hit.type))) continue;
-          if (restricted && !(await this.runs.allows(principal, hit.runId))) continue;
-          hits.push(hit);
-        }
+        // A second line behind the scan's own scope; it never calls the resolver.
+        const hits: SearchHit[] = result.hits.filter(
+          (hit) =>
+            (artifacts || (hit.kind !== "artifact" && !artifactEvent(hit.type))) &&
+            (!restricted || hit.runId === named),
+        );
         return { ...result, hits };
       }
 

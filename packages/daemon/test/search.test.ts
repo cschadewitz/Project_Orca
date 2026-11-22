@@ -12,6 +12,7 @@ import {
   MemoryAuditSink,
   OwnershipStore,
   bindPrincipal,
+  orchestratorResolver,
   type Principal,
   type ResourceResolver,
 } from "../src/auth/index.js";
@@ -145,16 +146,13 @@ describe("search over the store", () => {
   });
 
   it("reads only what the caller's scope allows", async () => {
-    const seen: string[] = [];
-    const r = await reads.search(params("connection"), {
-      allowsRun: async (runId) => (seen.push(runId), runId === "run-art"),
-      artifacts: false,
-    });
+    const r = await reads.search(params("connection", { runId: "run-art" }), { runs: "named", artifacts: false });
     expect(new Set(r.hits.map((h) => h.runId))).toEqual(new Set(["run-art"]));
     expect(r.hits.every((h) => h.kind === "event")).toBe(true);
-    expect(seen).toEqual(["run-new", "run-art"]);
+    // A caller limited to some runs never walks the store, even if a guard forgot to stop it.
+    await expect(reads.search(params("connection"), { runs: "named", artifacts: true })).rejects.toThrow(/named run/);
     // Without artifacts.read, an artifact's body is never read for a match.
-    expect((await reads.search(params("spec v2"), { allowsRun: async () => true, artifacts: false })).hits).toEqual([]);
+    expect((await reads.search(params("spec v2"), { runs: "all", artifacts: false })).hits).toEqual([]);
   });
 
   it("cuts a long excerpt around the match on one line", () => {
@@ -212,15 +210,30 @@ describe("search through the guard", () => {
       bindPrincipal({ orcaVersion: "t", capabilities: ["runs.read"], reads }, p, meta),
     ) as Promise<SearchResult>;
 
-  it("never opens a run the caller cannot see, and reads no artifact without artifacts.read", async () => {
+  it("refuses a restricted caller's search across the store without reading any run", async () => {
     const opened = vi.spyOn(f.orchestrator, "eventsRange");
+    const facts = vi.spyOn(resolver, "run");
+    await expect(ask(who(["runs.read"], ["gated"]), { query: "connection" })).rejects.toMatchObject({
+      code: "AUTH_FORBIDDEN",
+    });
+    expect(opened).not.toHaveBeenCalled();
+    expect(facts).not.toHaveBeenCalled();
+    opened.mockRestore();
+    facts.mockRestore();
+  });
+
+  it("searches a restricted caller's named run alone, and reads no artifact without artifacts.read", async () => {
+    const opened = vi.spyOn(f.orchestrator, "eventsRange");
+    const facts = vi.spyOn(resolver, "run");
     const listed = vi.spyOn(f.stores.artifacts, "list");
-    const r = await ask(who(["runs.read"], ["gated"]), { query: "connection" });
+    const r = await ask(who(["runs.read"], ["gated"]), { query: "connection", runId: "run-art" });
     expect(opened.mock.calls.map((c) => c[0])).toEqual(["run-art"]);
+    expect(facts.mock.calls.map((c) => c[0])).toEqual(["run-art"]);
     expect(listed).not.toHaveBeenCalled();
     expect(r.hits.length).toBeGreaterThan(0);
     expect(r.hits.every((h) => h.runId === "run-art" && h.kind === "event")).toBe(true);
     opened.mockRestore();
+    facts.mockRestore();
     listed.mockRestore();
   });
 
@@ -239,5 +252,59 @@ describe("search through the guard", () => {
     await expect(ask(who(["artifacts.read"], "*"), { query: "connection" })).rejects.toMatchObject({
       code: "AUTH_FORBIDDEN",
     });
+  });
+});
+
+// Last, because it adds a run to the shared store.
+describe("search through the guard with the production resolver", () => {
+  const meta = { transport: "http" as const };
+  const restricted: Principal = {
+    id: "p",
+    kind: "credential",
+    credentialId: "cred-p",
+    permissions: new Set(["runs.read", "artifacts.read"]) as never,
+    scope: { workflows: ["sdlc"], runs: "all" },
+  };
+  const ask = (query: Record<string, unknown>, principal: Principal = restricted) =>
+    new Authorizer({
+      resolver: orchestratorResolver(f.orchestrator),
+      ownership: new OwnershipStore(),
+      audit: new MemoryAuditSink(),
+    })
+      .guard({ [SEARCH_METHOD]: methods[SEARCH_METHOD]! })
+      [SEARCH_METHOD]!.handle(
+        { limit: 20, ...query },
+        bindPrincipal({ orcaVersion: "t", capabilities: ["runs.read"], reads }, principal, meta),
+      ) as Promise<SearchResult>;
+  const stable = ({ asOf: _asOf, ...rest }: SearchResult) => rest;
+
+  it("gives a restricted caller the same answer and progress whatever hidden runs hold", async () => {
+    const before = await ask({ query: "connection", runId: "run-art" });
+    expect(before.hits.length).toBeGreaterThan(0);
+
+    // Unrelated hidden work, full of matches, newer than everything the caller can see.
+    await f.stores.events.append({
+      type: "run.created",
+      runId: "run-hidden",
+      payload: { workflowId: "ops", workflowVersion: "1", workspace: { hostId: "local", cwd: "/h" }, vars: {} },
+    });
+    for (let i = 0; i < 50; i++)
+      await f.stores.events.append({
+        type: "run.failed",
+        runId: "run-hidden",
+        payload: { error: { code: "X", message: `hidden connection ${i}` } },
+      });
+
+    const opened = vi.spyOn(f.orchestrator, "eventsRange");
+    const after = await ask({ query: "connection", runId: "run-art" });
+    expect(opened.mock.calls.map((c) => c[0])).not.toContain("run-hidden");
+    opened.mockRestore();
+    expect(stable(after)).toEqual(stable(before));
+
+    // Named, the hidden run answers as one with no matches.
+    expect(await ask({ query: "connection", runId: "run-hidden" })).toMatchObject({ hits: [], scannedRuns: 0 });
+    // An unrestricted caller still searches the whole store, newest first.
+    const everyone = await ask({ query: "connection" }, { ...restricted, scope: { workflows: "*", runs: "all" } });
+    expect(everyone.hits[0]?.runId).toBe("run-hidden");
   });
 });

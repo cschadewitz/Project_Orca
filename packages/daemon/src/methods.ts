@@ -214,8 +214,9 @@ import { workflowDraftMethods } from "./workflow-draft-methods.js";
 export interface MethodContext {
   /**
    * What an authenticated caller may read, installed by the guard on every invocation:
-   * whether a run is visible to it and whether it holds `artifacts.read`. Methods that scan
-   * across runs (`search`) narrow their scan with it rather than filtering afterwards.
+   * whether it may walk every run or only one it named and the guard authorized, and whether
+   * it holds `artifacts.read`. Methods that scan across runs (`search`) narrow their scan
+   * with it rather than filtering afterwards.
    */
   readScope?: SearchScope;
   /**
