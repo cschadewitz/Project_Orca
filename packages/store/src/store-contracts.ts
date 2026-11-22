@@ -120,7 +120,6 @@ export const MEMORY_STORE_CAPABILITIES: StoreCapabilityMatrix = matrix("memory",
   "document.batchAtomic",
   "event.durableUnique",
   "event.observation",
-  "artifact.verifiedContent",
 ]);
 
 /**

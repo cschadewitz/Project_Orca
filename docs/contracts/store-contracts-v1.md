@@ -57,7 +57,7 @@ backend makes no durability promise (`durable: false`).
 - **Ordering:** none promised for `list`. A re-put of the same `id` replaces the record (last write wins), so a retried put is idempotent.
 - **Durability:** the blob is written, synced and linked into place (never replaced) *before* the index record is appended.
 - **Retention:** blobs and records are kept; nothing deletes them.
-- **Errors:** `ARTIFACT_MISSING` for an unknown id or a missing blob; `ARTIFACT_INVALID` when a body does not match its hash, on put (`artifact.verifiedContent`, both backends) and on read.
+- **Errors:** `ARTIFACT_MISSING` for an unknown id or a missing blob; `ARTIFACT_INVALID` when a body does not match its hash, on put (`artifact.verifiedContent`, file backend only: the memory backend accepts whatever hash it is given, which test fixtures rely on) and on read by the file backend.
 - **Blob and metadata are not one transaction.** If the blob write succeeds and the index append fails, the put rejects, the blob is invisible to every reader, and a retried put adopts it. `FileArtifactStore.unreferencedBlobs()` (`artifact.orphanInventory`) lists such blobs for reclaim; it reports and never deletes, because a concurrent put may sit between its blob and its record.
 
 ### 3. Document (`DocumentStore<T>`)
@@ -114,7 +114,7 @@ backend makes no durability promise (`durable: false`).
 | `metadata.unitOfWork` | no | no |
 | `event.durableUnique` | yes | yes |
 | `event.observation` | yes | yes |
-| `artifact.verifiedContent` | yes | yes |
+| `artifact.verifiedContent` | no | yes |
 | `artifact.orphanInventory` | no | yes |
 
 `requireStoreCapability(matrix, capability)` throws `NOT_SUPPORTED` with

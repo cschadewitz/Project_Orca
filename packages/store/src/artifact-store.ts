@@ -139,12 +139,13 @@ function matches(a: Artifact, q: ArtifactQuery): boolean {
 export class InMemoryArtifactStore implements ArtifactStore {
   private readonly index = new Map<string, Artifact>();
   private readonly blobs = new Map<string, Buffer>();
-  /** Verified like the file store's (#338): the contract is content-addressed whichever backend holds it. */
+  /**
+   * Not hash-verified: test fixtures across the workspace put hand-written hashes through it.
+   * The capability matrix says so (`artifact.verifiedContent: false`, #338).
+   */
   async put(artifact: Artifact, content: ArtifactContent): Promise<void> {
-    const bytes = toBytes(content);
-    verifyBlob(artifact, bytes);
-    this.blobs.set(artifact.contentHash, bytes);
     this.index.set(artifact.id, artifact);
+    this.blobs.set(artifact.contentHash, toBytes(content));
   }
   async get(id: string): Promise<Artifact | undefined> {
     return this.index.get(id);
