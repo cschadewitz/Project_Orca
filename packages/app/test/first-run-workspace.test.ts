@@ -31,6 +31,9 @@ const hello = (path = selectedPath): HelloResult => ({
   processId: 123,
   storeDir: join(path, ".orca"),
 });
+/** The reservation the fake first-run ownership reports for every attempt. */
+const STOPPED = { reservationId: "11111111-1111-4111-8111-111111111111", claimHash: "a".repeat(64) };
+
 function rig(options: Partial<WorkspaceDeps> = {}) {
   let exited = false;
   const stop = vi.fn(async () => {
@@ -59,6 +62,8 @@ function rig(options: Partial<WorkspaceDeps> = {}) {
     defaultUrl: "http://127.0.0.1:6722",
     // Existing unit cases model an in-memory process; durable filesystem behavior has its own tests.
     reserveFirstRunOwnership: () => ({
+      reservationId: STOPPED.reservationId,
+      claimHash: STOPPED.claimHash,
       check: () => {},
       attach: () => {},
       verify: () => {},
@@ -378,6 +383,8 @@ it("captures saved-config binding only over the exact surviving first-run owner 
   const rebindConfig = vi.fn();
   const f = rig({
     reserveFirstRunOwnership: () => ({
+      reservationId: STOPPED.reservationId,
+      claimHash: STOPPED.claimHash,
       check: () => {},
       attach: () => {},
       verify: () => {},
@@ -405,6 +412,8 @@ it("refuses saved-config capture without the durable rebind interface and after 
   const rebindConfig = vi.fn();
   const f = rig({
     reserveFirstRunOwnership: () => ({
+      reservationId: STOPPED.reservationId,
+      claimHash: STOPPED.claimHash,
       check: () => {},
       attach: () => {},
       verify: () => {},
@@ -572,7 +581,8 @@ it("hands the stopped daemon's store off only after the exact stop, once, and ne
   await f.workspace.stopForUpdate("owner");
   await expect(f.workspace.handOffForUpdate("other", "0.8.0", "0.9.0")).rejects.toThrow("not prepared");
   await f.workspace.handOffForUpdate("owner", "0.8.0", "0.9.0");
-  expect(handOffStore).toHaveBeenCalledExactlyOnceWith(selectedPath, "0.8.0", "0.9.0");
+  // With the exact reservation this attempt stopped, never the journal's latest by then.
+  expect(handOffStore).toHaveBeenCalledExactlyOnceWith(selectedPath, STOPPED, "0.8.0", "0.9.0");
   await expect(f.workspace.handOffForUpdate("owner", "0.8.0", "0.9.0")).rejects.toThrow("not available");
   // The installer never ran: recovery proceeds, and the record is left for the recovered
   // daemon to spend under its own fence (packages/app/test/store-carryover).

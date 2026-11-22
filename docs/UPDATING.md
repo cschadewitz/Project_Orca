@@ -1021,7 +1021,9 @@ store while it does (#897):
    it reports no active work, stops it and observes that exact process exit, as for every
    update. It then publishes `update-handoff.json.<claim>` into the store: the exact store and
    workspace directories, the first-run journal claim of the daemon it stopped, and the version
-   being installed. The file is named by that claim and created exclusively, so the updater never
+   being installed. That claim is the one the update's own ownership handle captured for the
+   daemon it drained and stopped; the journal's latest attempt must be exactly that one (same
+   reservation, same claim, settled by that observed exit), or nothing is published. The file is named by that claim and created exclusively, so the updater never
    replaces a record: a stale updater can only publish for the daemon it stopped itself, never
    over a newer handoff, which names another claim. Readers look only at the record for the claim
    they directly follow. The updater never deletes the record, which holds nothing open by itself: if the
