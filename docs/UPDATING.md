@@ -535,15 +535,42 @@ desktop app's bundled daemon included, checks it first (#566):
 | The store was written in | What this build does |
 | --- | --- |
 | Its own format | Opens it in place. Updates that keep the format, such as 0.7.0 to 0.7.1, need nothing else. |
-| The previous release's format, or before the marker existed | Copies the whole store to `format-backups/<time>-from-<format>/` inside the store, then stamps the current format and opens it in place. The newest two backups are kept. |
+| The previous release's format, or before the marker existed | Carries it forward, checking first: see below. |
 | An older format than that | Refuses, naming the release line to open it with first. |
 | A format it does not know (a newer ORCA) | Refuses for reads and writes alike and changes nothing. The message names the version that wrote it and, when there is one, the backup that version made. |
 | A damaged marker | Refuses until the marker is restored or repaired with ORCA stopped. |
+
+Carrying a store forward never assumes the store is quiet. Writers from before 0.7.1 take no
+lock this check can see, so it verifies instead, and refuses startup with the prior format
+still in charge if any step fails:
+
+1. No run lease in the store is live. Otherwise it refuses (`BUSY`) until the run finishes.
+2. The whole store is copied into a private staging folder under `format-backups/`, and every
+   copied file is compared byte for byte with the original.
+3. The store's complete file listing (path, type, size, modification time, inode) must be
+   unchanged from before the copy to after it. Otherwise another process wrote meanwhile:
+   the copy is discarded and startup is refused (`BUSY`).
+4. A second, throwaway copy is opened with this build's own readers: every run log, the
+   request, work-item, artifact, lease and plan collections and every plan journal. If any of
+   them fails to read, nothing changes and startup is refused (`UNREADABLE`).
+5. Just before the marker is written, the listing is checked once more. Then the staged copy
+   is published as `format-backups/<time>-from-<format>/` with a `format-backup.json`
+   manifest, and only then is the marker stamped.
+
+Retention removes only backups this check made (named as above, with a valid manifest),
+keeping the newest two and always the one the marker names, plus the scratch folders of an
+interrupted carryover. Anything else in `format-backups/` is left alone. The folder must be
+a private directory owned by the user running ORCA (`BACKUPS_UNSAFE` otherwise).
 
 The supported window is this release's format and the one before it, so a store carries
 forward across one format change at a time. Closed update validation (`serve --read-only
 --no-resume` under an update fence) only checks; it never writes the marker or a backup.
 `validate` does not open the store and is unaffected.
+
+A pre-0.7.1 process that stays idle through the copy and writes afterwards is not something
+this check can see. The desktop updater stops the bundled daemon before installing, so the
+in-app update path has no such writer. Elsewhere, stop older ORCA processes before the first
+start of a release that changes the store format.
 
 The automatic backup covers the store directory only: not the config file, the permission
 sidecar or `auth/` beside the config. Agents cannot read `format-backups/`, which holds copies

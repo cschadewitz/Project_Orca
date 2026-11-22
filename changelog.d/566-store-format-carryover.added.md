@@ -1,2 +1,3 @@
-- **store:** every store open checks the store format marker, backs up an older-format store
-  automatically before carrying it forward, and refuses a store from a newer ORCA (#566).
+- **store:** every store open checks the store format marker, carries an older-format store
+  forward only after a verified backup and read check, and refuses a store from a newer
+  ORCA (#566).

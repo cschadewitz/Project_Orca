@@ -6,8 +6,10 @@
  *
  * - Same format: open in place. An app update that keeps the format needs nothing else.
  * - The previous supported format, or an unmarked store written before the marker existed:
- *   open in place, but copy the whole store into `format-backups/` before the first write.
- *   Only the newest {@link STORE_FORMAT_BACKUP_RETENTION} complete backups are kept.
+ *   carry it forward (store-format-carryover.ts): back the whole store up into
+ *   `format-backups/`, verify the copy and that nothing else wrote meanwhile, read the store
+ *   under the current format, and only then stamp the marker. Any failure refuses startup and
+ *   leaves the prior format authoritative.
  * - An older format this build no longer reads: refuse, naming the release to open it with first.
  * - A format this build does not know (in practice, one written by a newer ORCA): refuse for
  *   reads and writes alike. The store is never rewritten.
@@ -16,11 +18,23 @@
  * them together. Changing the epoch means appending to {@link STORE_FORMAT_HISTORY}.
  */
 import { randomUUID } from "node:crypto";
-import { cp, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { z } from "zod";
 import { OrcaError } from "@orca/core";
 import { withFileLock } from "./file-lock.js";
+import {
+  CarryoverRefused,
+  pruneFormatBackups,
+  stageCarryover,
+  STORE_FORMAT_BACKUP_DIR,
+} from "./store-format-carryover.js";
+
+export {
+  STORE_FORMAT_BACKUP_DIR,
+  STORE_FORMAT_BACKUP_MANIFEST,
+  STORE_FORMAT_BACKUP_RETENTION,
+} from "./store-format-carryover.js";
 
 /** Oldest first. `release` is the first release line that wrote the format. */
 export const STORE_FORMAT_HISTORY: readonly { epoch: string; release: string }[] = [
@@ -31,12 +45,7 @@ export const STORE_FORMAT_EPOCH = STORE_FORMAT_HISTORY.at(-1)!.epoch;
 /** This format and the one before it are read in place. */
 export const SUPPORTED_STORE_FORMATS: readonly string[] = STORE_FORMAT_HISTORY.slice(-2).map((f) => f.epoch);
 export const STORE_FORMAT_FILE = "store-format.json";
-export const STORE_FORMAT_BACKUP_DIR = "format-backups";
-export const STORE_FORMAT_BACKUP_RETENTION = 2;
 const LOCK = ".store-format.lock";
-/** Never copied into a backup: the backups themselves, locks and update-window guards. */
-const NOT_BACKED_UP = (name: string) =>
-  name === STORE_FORMAT_BACKUP_DIR || name.endsWith(".lock") || name.startsWith(".orca-update-window");
 
 const MarkerSchema = z.object({
   format: z.literal(1),
@@ -47,7 +56,8 @@ const MarkerSchema = z.object({
 });
 export type StoreFormatMarker = z.infer<typeof MarkerSchema>;
 
-export type StoreFormatReason = "NEWER" | "TOO_OLD" | "DAMAGED";
+/** NEWER, TOO_OLD and DAMAGED describe the marker; the rest are carryover refusals. */
+export type StoreFormatReason = "NEWER" | "TOO_OLD" | "DAMAGED" | "BUSY" | "UNREADABLE" | "BACKUPS_UNSAFE";
 export class StoreFormatError extends OrcaError {
   override readonly name = "StoreFormatError";
   constructor(
@@ -71,6 +81,8 @@ export interface StoreFormatOptions {
   mode: "write" | "read";
   /** Injected for tests. */
   now?: () => Date;
+  /** Test seam: runs after the backup copy, before the store is re-checked. */
+  afterCopy?: () => Promise<void>;
 }
 
 /** Read the marker without checking it; `undefined` when the store has none. */
@@ -173,54 +185,18 @@ export async function enterStoreFormat(storeDir: string, options: StoreFormatOpt
       return { status: "fresh", epoch: current };
     }
     const from = marker?.epoch ?? "unmarked";
-    const backup = await backupStore(storeDir, from, now);
+    let backup: string;
+    try {
+      const staged = await stageCarryover(storeDir, from, current, now, {
+        ...(options.afterCopy ? { afterCopy: options.afterCopy } : {}),
+      });
+      backup = await staged.commit();
+    } catch (error) {
+      if (error instanceof CarryoverRefused) throw new StoreFormatError(error.failure, error.message, storeDir);
+      throw error;
+    }
     await stamp(backup);
-    await pruneBackups(storeDir);
+    await pruneFormatBackups(storeDir, backup);
     return { status: "carried", epoch: current, from, backup };
   });
-}
-
-/** Copy everything but the backups into a new complete backup; published by rename only. */
-async function backupStore(storeDir: string, from: string, now: Date): Promise<string> {
-  const root = join(storeDir, STORE_FORMAT_BACKUP_DIR);
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  const name = `${now.toISOString().replace(/[:.]/g, "-")}-from-${from}`;
-  const partial = join(root, `.partial-${randomUUID()}`);
-  await mkdir(partial, { mode: 0o700 });
-  for (const entry of await readdir(storeDir)) {
-    if (NOT_BACKED_UP(entry) || entry.startsWith(`${STORE_FORMAT_FILE}.`)) continue;
-    await cp(join(storeDir, entry), join(partial, entry), {
-      recursive: true,
-      preserveTimestamps: true,
-      verbatimSymlinks: true,
-      errorOnExist: true,
-      force: false,
-      filter: (source) => !basename(source).endsWith(".lock"),
-    });
-  }
-  let target = join(root, name);
-  for (let n = 1; await exists(target); n++) target = join(root, `${name}-${n}`);
-  await rename(partial, target);
-  return target;
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-}
-
-/** Keep the newest complete backups; drop leftovers of interrupted copies too. */
-async function pruneBackups(storeDir: string): Promise<void> {
-  const root = join(storeDir, STORE_FORMAT_BACKUP_DIR);
-  const names = await readdir(root);
-  for (const name of names.filter((n) => n.startsWith(".partial-")))
-    await rm(join(root, name), { recursive: true, force: true });
-  const complete = names.filter((n) => !n.startsWith(".")).sort();
-  for (const name of complete.slice(0, Math.max(0, complete.length - STORE_FORMAT_BACKUP_RETENTION)))
-    await rm(join(root, name), { recursive: true, force: true });
 }
