@@ -392,8 +392,11 @@ which first checks, with `main`'s copy of `release-lane.js`:
 - on a line, also: the newest release line check recorded for this pull request into this
   line, on that exact head, passed, posted by GitHub Actions from `main`'s
   `release-line-guard.yml` on a `pull_request_target` event. GitHub leaves `pull_requests` empty on
-  those runs, so a result is tied to its pull request and line by the run title the guard sets
-  from the event (`release line check: #N into release/X.Y`). An older pass does not outlive a
+  those runs, and a run's title is the pull request's own, so a result is tied to its pull
+  request by the receipt the guard writes on its own check run before judging (a
+  `release line receipt v1` notice naming the pull request, line and head). A run without one,
+  such as any from before the receipt, never counts. `node tools/release-lane.js guard-evidence
+  <pr> <base> <head>` runs the same lookup without publishing anything. An older pass does not outlive a
   later failure, and a check run with the right name from anywhere else does not count.
 
 A final then goes through the same draft, signing, acceptance, upgrade check and publish-final

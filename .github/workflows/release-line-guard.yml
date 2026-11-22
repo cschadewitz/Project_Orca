@@ -10,10 +10,6 @@
 # It checks out nothing from the pull request and runs none of its code, and its token is
 # read-only.
 name: Release line guard
-# The run's title names the pull request and the line it was checked for. GitHub leaves
-# `pull_requests` empty on pull_request_target runs, so this title, set by main's copy of this
-# file from the event itself, is what tools/release-lane.js (guardTitle) binds a result to.
-run-name: "release line check: #${{ github.event.pull_request.number }} into ${{ github.event.pull_request.base.ref }}"
 
 on:
   pull_request_target:
