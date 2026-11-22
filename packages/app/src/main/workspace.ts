@@ -569,6 +569,21 @@ export class Workspace {
     return { profile: lease.profile.id, command: lease.exec(command, onLine) };
   }
 
+  /**
+   * The current connection, as a server update is bound to it (#879): the epoch, and for an
+   * SSH profile its id and the host key its tunnel authenticated, and the daemon's workspace.
+   */
+  get serverConnection(): { epoch: number; profile?: string; hostKey?: string; workspaceId?: string } {
+    const lease = this.lease;
+    const hostKey = lease?.hostKey();
+    return {
+      epoch: this.epoch,
+      ...(lease ? { profile: lease.profile.id } : {}),
+      ...(hostKey ? { hostKey } : {}),
+      ...(this.identity ? { workspaceId: this.identity.workspaceId } : {}),
+    };
+  }
+
   /** Make `next` the current profile lease and let go of the previous one. */
   private adoptLease(next: ProfileLease | undefined): void {
     const previous = this.lease;

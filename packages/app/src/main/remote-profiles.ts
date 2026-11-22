@@ -13,6 +13,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { ServerPathSchema } from "@orca/protocol";
 import {
   ConnectionProfileSchema,
   CredentialSlots,
@@ -33,6 +34,16 @@ import type { RemoteProfileView } from "../daemon-connection.js";
 import { ConnectionRefusal } from "./connection-target.js";
 
 const ProfilesFileSchema = z.object({ version: z.literal(1), profiles: z.array(ConnectionProfileSchema) }).strict();
+
+/**
+ * The server updater a person approved for a profile (#879): where it is on that server. The
+ * app runs only an approved updater; a daemon's `hello.deployment` is a hint that must match.
+ */
+export const ServerUpdaterApprovalSchema = z.object({ adapter: ServerPathSchema, manifest: ServerPathSchema }).strict();
+export type ServerUpdaterApproval = z.infer<typeof ServerUpdaterApprovalSchema>;
+const ApprovalsFileSchema = z
+  .object({ version: z.literal(1), approvals: z.record(z.string(), ServerUpdaterApprovalSchema) })
+  .strict();
 
 /** What the connect dialog sends to create or edit a profile. `id` absent creates. */
 export const RemoteProfileInputSchema = ConnectionProfileSchema.omit({ id: true })
@@ -57,6 +68,8 @@ export interface ProfileLease {
    * or the profile changed.
    */
   exec(command: readonly string[], onLine: (stream: "stdout" | "stderr", line: string) => void): RemoteCommand;
+  /** The server's host key as this tunnel authenticated it (`SHA256:…`), once it has. */
+  hostKey(): string | undefined;
   release(): Promise<void>;
 }
 
@@ -101,6 +114,44 @@ export class RemoteProfiles {
   private get file(): string {
     return join(this.deps.dir, "profiles.json");
   }
+  private get approvalsFile(): string {
+    return join(this.deps.dir, "server-updaters.json");
+  }
+  private approvals(): Record<string, ServerUpdaterApproval> {
+    try {
+      const parsed = ApprovalsFileSchema.safeParse(JSON.parse(readFileSync(this.approvalsFile, "utf8")));
+      if (parsed.success) return parsed.data.approvals;
+    } catch {
+      // Missing or unreadable: nothing is approved, which only means the app asks again.
+    }
+    return {};
+  }
+  private writeApprovals(approvals: Record<string, ServerUpdaterApproval>): void {
+    mkdirSync(this.deps.dir, { recursive: true });
+    const tmp = `${this.approvalsFile}.${process.pid}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify({ version: 1, approvals }, null, 2)}\n`);
+    renameSync(tmp, this.approvalsFile);
+  }
+
+  /** The server updater approved for this profile, if any (#879). */
+  serverUpdater(id: string): ServerUpdaterApproval | undefined {
+    return this.get(id) ? this.approvals()[id] : undefined;
+  }
+
+  /** Record what the person approved. It lasts until the profile points elsewhere or its key is reset. */
+  approveServerUpdater(id: string, approval: ServerUpdaterApproval): void {
+    if (!this.get(id)) throw new ConnectionRefusal("That profile no longer exists.");
+    const parsed = ServerUpdaterApprovalSchema.parse(approval);
+    this.writeApprovals({ ...this.approvals(), [id]: parsed });
+  }
+
+  private forgetServerUpdater(id: string): void {
+    const approvals = this.approvals();
+    if (!(id in approvals)) return;
+    delete approvals[id];
+    this.writeApprovals(approvals);
+  }
+
   private pins(id: string): string {
     return join(this.deps.dir, "known_hosts", id);
   }
@@ -205,6 +256,7 @@ export class RemoteProfiles {
       // Another server, or another daemon on it: the old key and credential belong to that one.
       this.forgetPins(id);
       this.slots.remove(id);
+      this.forgetServerUpdater(id);
     }
     if (existing) this.bump(id);
     this.write(existing ? profiles.map((p) => (p.id === id ? profile : p)) : [...profiles, profile]);
@@ -219,6 +271,7 @@ export class RemoteProfiles {
     this.bump(id);
     this.slots.remove(id);
     this.forgetPins(id);
+    this.forgetServerUpdater(id);
     this.write(profiles.filter((p) => p.id !== id));
   }
 
@@ -261,6 +314,8 @@ export class RemoteProfiles {
       throw new ConnectionRefusal("Connect to another daemon before forgetting this profile's host key.");
     this.bump(id);
     this.forgetPins(id);
+    // Another key may be another server: what was approved on the old one is not carried over.
+    this.forgetServerUpdater(id);
   }
 
   private forgetPins(id: string): void {
@@ -335,6 +390,7 @@ export class RemoteProfiles {
         if (!usable()) throw new TunnelRefusal("closed");
         return current.tunnel.exec(command, onLine);
       },
+      hostKey: () => current.tunnel.hostKeyFingerprint,
       release: async () => {
         if (released) return;
         released = true;

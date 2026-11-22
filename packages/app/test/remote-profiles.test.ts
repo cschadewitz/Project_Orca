@@ -37,6 +37,12 @@ const cipher: SecretCipher = {
 
 class FakeTunnel {
   closed = 0;
+  hostKeyFingerprint = "SHA256:fakeHostKey";
+  readonly ran: (readonly string[])[] = [];
+  exec(command: readonly string[]): { exit: Promise<{ kind: "exited"; code: number }>; kill(): void } {
+    this.ran.push(command);
+    return { exit: Promise.resolve({ kind: "exited", code: 0 }), kill: () => undefined };
+  }
   refused = false;
   connects = 0;
   onStream?: (stream: Socket) => void;
@@ -136,6 +142,33 @@ describe("RemoteProfiles", () => {
     });
   });
 
+  it("keeps an approved server updater per profile until it points elsewhere, its key is reset or it is removed (#879)", () => {
+    const { dir, profiles } = store();
+    const updater = { adapter: "/opt/orca/orca-release.py", manifest: "/etc/orca/deployment.json" };
+    expect(() => profiles.approveServerUpdater("lab", updater)).toThrow("no longer exists");
+    profiles.save({ name: "Lab", destination: "lab" });
+    expect(profiles.serverUpdater("lab")).toBeUndefined();
+    expect(() => profiles.approveServerUpdater("lab", { ...updater, adapter: "relative.py" })).toThrow();
+    profiles.approveServerUpdater("lab", updater);
+    expect(profiles.serverUpdater("lab")).toEqual(updater);
+    // Not part of the profile the renderer sees or edits.
+    expect(JSON.stringify(profiles.list())).not.toContain("orca-release");
+    profiles.save({ id: "lab", name: "Lab 2", destination: "lab" });
+    expect(profiles.serverUpdater("lab")).toEqual(updater);
+    profiles.forgetHostKey("lab");
+    expect(profiles.serverUpdater("lab")).toBeUndefined();
+    profiles.approveServerUpdater("lab", updater);
+    profiles.save({ id: "lab", name: "Lab 2", destination: "other" });
+    expect(profiles.serverUpdater("lab")).toBeUndefined();
+    profiles.approveServerUpdater("lab", updater);
+    profiles.remove("lab");
+    profiles.save({ name: "Lab", destination: "lab" });
+    expect(profiles.serverUpdater("lab")).toBeUndefined();
+    // An unreadable approvals file approves nothing.
+    writeFileSync(join(dir, "server-updaters.json"), "{not json");
+    expect(profiles.serverUpdater("lab")).toBeUndefined();
+  });
+
   it("shares one tunnel per profile, closes it with its last user, and refuses edits while in use", async () => {
     const { profiles, tunnels } = store();
     profiles.save({ name: "Lab", destination: "lab" });
@@ -147,10 +180,15 @@ describe("RemoteProfiles", () => {
     expect(tunnels[0]!.options.knownHostsFile).toMatch(/known_hosts[\\/]lab$/);
     expect(a.url).toBe("http://127.0.0.1:41000");
     expect(a.auth.read()).toBe(TOKEN);
+    expect(a.hostKey()).toBe("SHA256:fakeHostKey");
+    a.exec(["true"], () => {});
+    expect(tunnels[0]!.ran).toEqual([["true"]]);
     expect(() => profiles.remove("lab")).toThrow("Connect to another daemon");
     expect(() => profiles.save({ id: "lab", name: "Lab", destination: "x" })).toThrow("Connect to another daemon");
     await a.release();
     await a.release();
+    // A released lease runs nothing, even while the shared tunnel stays open for `b`.
+    expect(() => a.exec(["true"], () => {})).toThrow(expect.objectContaining({ code: "closed" }));
     expect(tunnels[0]!.closed).toBe(0);
     await b.release();
     expect(tunnels[0]!.closed).toBe(1);
@@ -402,6 +440,7 @@ function lease(id: string, url: string, released: string[], refused = false): Pr
     exec: () => {
       throw new Error("workspace tests run nothing on the server");
     },
+    hostKey: () => undefined,
     transport: streamTransport(() => {
       throw new Error("workspace tests use their own fetch");
     }),

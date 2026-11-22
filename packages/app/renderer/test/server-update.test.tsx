@@ -1,9 +1,14 @@
 // @vitest-environment happy-dom
-/** The connected server in the connection dialog, and "Update now" (#879). */
+/** The connected server in the connection dialog: approving its updater, and "Update now" (#879). */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ConnectionSnapshot, OrcaBridge } from "../../src/bridge.js";
-import type { ServerUpdateBridge, ServerUpdateOutcome, ServerUpdateProgress } from "../../src/server-update.js";
+import type {
+  ServerUpdateBridge,
+  ServerUpdateOutcome,
+  ServerUpdateProgress,
+  ServerUpdaterState,
+} from "../../src/server-update.js";
 import type { DaemonConnectionBridge } from "../../src/daemon-connection.js";
 import { ConnectionDialog } from "../src/daemon-connection/dialog.js";
 import {
@@ -33,20 +38,37 @@ const live = (
   return snapshot as unknown as ConnectionSnapshot;
 };
 
-function bridge() {
+const PATHS = { adapter: "/opt/orca/orca-release.py", manifest: "/etc/orca/deployment.json" };
+const TARGET = {
+  profile: "lab",
+  epoch: 3,
+  hostKey: "SHA256:abc",
+  workspaceId: "9b2b3c5e-3c0e-4f6a-9a59-6c1b8e6f0a11",
+};
+
+function bridge(initial: Partial<ServerUpdaterState> = { declared: PATHS, approved: PATHS }) {
+  let state: ServerUpdaterState | undefined = { ...TARGET, ...initial };
   let finish: (outcome: ServerUpdateOutcome) => void = () => {};
   let listener: ((progress: ServerUpdateProgress) => void) | undefined;
-  const fake: ServerUpdateBridge = {
+  let approval: { ok: true } | { ok: false; message: string } = { ok: true };
+  const fake = {
+    read: vi.fn(async () => state),
+    approve: vi.fn(async () => {
+      if (approval.ok && state) state = { ...state, approved: state.declared! };
+      return approval;
+    }),
     update: vi.fn(() => new Promise<ServerUpdateOutcome>((resolve) => (finish = resolve))),
-    onProgress: (fn) => {
+    onProgress: (fn: (progress: ServerUpdateProgress) => void) => {
       listener = fn;
       return () => {
         listener = undefined;
       };
     },
-  };
+  } satisfies ServerUpdateBridge;
   return {
     fake,
+    set: (next: ServerUpdaterState | undefined) => (state = next),
+    refuse: (message: string) => (approval = { ok: false, message }),
     finish: async (outcome: ServerUpdateOutcome) => {
       await act(async () => {
         finish(outcome);
@@ -59,15 +81,16 @@ function bridge() {
 }
 
 describe("the connected server", () => {
-  it("shows version, protocol and ring, offers the update when behind, and streams it", async () => {
+  it("shows version, protocol, ring and host key, and updates exactly the connection it shows", async () => {
     const b = bridge();
     render(<ServerUpdatePanel bridge={b.fake} connection={live()} appVersion="0.8.0" />);
     expect(screen.getByText("0.7.1")).toBeTruthy();
     expect(screen.getByText("2.2")).toBeTruthy();
     expect(screen.getByText("preview")).toBeTruthy();
     expect(screen.getByText("Older than this app (0.8.0).")).toBeTruthy();
-    fireEvent.click(screen.getByText("Update now to 0.8.0"));
-    expect(b.fake.update).toHaveBeenCalledOnce();
+    fireEvent.click(await screen.findByText("Update now to 0.8.0"));
+    expect(b.fake.update).toHaveBeenCalledExactlyOnceWith({ ...TARGET, version: "0.8.0" });
+    expect(screen.getByText("SHA256:abc")).toBeTruthy();
     expect(screen.getByText("Updating…")).toBeTruthy();
     b.say("/opt/orca/releases/0.8.0");
     expect(screen.getByRole("region", { name: "Server updater output" }).textContent).toBe("/opt/orca/releases/0.8.0");
@@ -75,22 +98,56 @@ describe("the connected server", () => {
     expect(screen.getByRole("status").textContent).toContain("now runs 0.8.0");
   });
 
+  it("asks for approval first, showing the exact command, and only then offers the update", async () => {
+    const b = bridge({ declared: PATHS });
+    render(<ServerUpdatePanel bridge={b.fake} connection={live()} appVersion="0.8.0" />);
+    expect((await screen.findByRole("region", { name: "Command the app will run on the server" })).textContent).toBe(
+      "python3 /opt/orca/orca-release.py --deployment /etc/orca/deployment.json update --bundle v0.8.0",
+    );
+    expect(screen.queryByText(/Update now/)).toBeNull();
+    fireEvent.click(screen.getByText("Approve this updater"));
+    expect(b.fake.approve).toHaveBeenCalledExactlyOnceWith({ ...TARGET, ...PATHS });
+    expect(await screen.findByText("Update now to 0.8.0")).toBeTruthy();
+  });
+
+  it("refuses to offer the update when the server points elsewhere than approved", async () => {
+    const b = bridge({ declared: { ...PATHS, adapter: "/tmp/orca-release.py" }, approved: PATHS });
+    b.refuse("The connection changed since you confirmed.");
+    render(<ServerUpdatePanel bridge={b.fake} connection={live()} appVersion="0.8.0-dev" />);
+    expect((await screen.findByRole("alert")).textContent).toContain("somewhere other than you approved");
+    expect(screen.getByRole("region", { name: "Command the app will run on the server" }).textContent).toContain(
+      "/tmp/orca-release.py --deployment /etc/orca/deployment.json update --bundle …",
+    );
+    expect(screen.queryByText(/Update now/)).toBeNull();
+    fireEvent.click(screen.getByText("Approve the new location"));
+    expect(await screen.findByText("The connection changed since you confirmed.")).toBeTruthy();
+  });
+
+  it("offers nothing without a verified connection to bind to", async () => {
+    const b = bridge();
+    b.set({ profile: "lab", epoch: 3, declared: PATHS, approved: PATHS });
+    render(<ServerUpdatePanel bridge={b.fake} connection={live()} appVersion="0.8.0" />);
+    await waitFor(() => expect(b.fake.read).toHaveBeenCalled());
+    expect(screen.queryByText(/Update now|Approve/)).toBeNull();
+  });
+
   it("quotes the server when it refuses, as an alert", async () => {
     const b = bridge();
     render(<ServerUpdatePanel bridge={b.fake} connection={live()} appVersion="0.8.0" />);
-    fireEvent.click(screen.getByText("Update now to 0.8.0"));
+    fireEvent.click(await screen.findByText("Update now to 0.8.0"));
     await b.finish({ status: "work-running", detail: "Daemon busy: 1 run active" });
     expect(screen.getByRole("alert").textContent).toContain("nothing was cancelled");
     expect(screen.getByRole("alert").textContent).toContain("Daemon busy: 1 run active");
     expect(screen.getByText("Update now to 0.8.0")).toBeTruthy();
   });
 
-  it("offers no update for an unmanaged, current or newer server, and nothing before hello", () => {
+  it("offers no update for an unmanaged, current or newer server, and nothing before hello", async () => {
     const b = bridge();
     const { rerender } = render(
       <ServerUpdatePanel bridge={b.fake} connection={live({ managedServer: undefined })} appVersion="0.8.0" />,
     );
     expect(screen.getByText(/outside the managed server updater/)).toBeTruthy();
+    await waitFor(() => expect(b.fake.read).toHaveBeenCalled());
     expect(screen.queryByText(/Update now/)).toBeNull();
     rerender(<ServerUpdatePanel bridge={b.fake} connection={live({ orcaVersion: "0.8.0" })} appVersion="0.8.0" />);
     expect(screen.getByText("The same release as this app.")).toBeTruthy();
@@ -101,16 +158,22 @@ describe("the connected server", () => {
     expect(screen.queryByText("Connected server")).toBeNull();
   });
 
-  it("stops listening when the dialog closes, and ignores an outcome that lands after", async () => {
+  it("stops listening when the dialog closes, and ignores answers that land after", async () => {
     const b = bridge();
     const { unmount } = render(<ServerUpdatePanel bridge={b.fake} connection={live()} appVersion="0.8.0" />);
-    fireEvent.click(screen.getByText("Update now to 0.8.0"));
+    fireEvent.click(await screen.findByText("Update now to 0.8.0"));
     unmount();
     expect(b.listening()).toBe(false);
     await b.finish({ status: "updated", version: "0.8.0" });
+
+    const late = bridge({ declared: PATHS });
+    const second = render(<ServerUpdatePanel bridge={late.fake} connection={live()} appVersion="0.8.0" />);
+    fireEvent.click(await screen.findByText("Approve this updater"));
+    second.unmount();
+    await act(async () => Promise.resolve());
   });
 
-  it("follows the live connection and this app's version through the bridge", () => {
+  it("follows the live connection and this app's version through the bridge", async () => {
     const b = bridge();
     let push: ((snapshot: ConnectionSnapshot) => void) | undefined;
     (window as { orca?: Partial<OrcaBridge> }).orca = {
@@ -124,7 +187,7 @@ describe("the connected server", () => {
       updates: { read: () => ({ status: "idle", current: "0.8.0" }) } as unknown as OrcaBridge["updates"],
     };
     render(<ConnectedServer bridge={b.fake} />);
-    expect(screen.getByText("Update now to 0.8.0")).toBeTruthy();
+    expect(await screen.findByText("Update now to 0.8.0")).toBeTruthy();
     act(() => push?.(live({ orcaVersion: "0.8.0" })));
     expect(screen.queryByText(/Update now/)).toBeNull();
   });
@@ -167,7 +230,15 @@ describe("outcome sentences", () => {
     [{ status: "another-update", detail: "Busy: update.lock" }, "Another update is running"],
     [{ status: "failed", detail: "x", restored: true }, "back on its previous release"],
     [{ status: "failed", detail: "bad signer", restored: false }, "The update failed. The server said: bad signer"],
-    [{ status: "unreachable", refusal: "auth-failed", message: "Key refused." }, "nothing changed there. Key refused."],
+    [
+      { status: "unreachable", refusal: "auth-failed", message: "Key refused." },
+      "nothing ran on the server. Key refused.",
+    ],
+    [{ status: "unknown", reason: "connection-lost" }, "whether the server updated is not known"],
+    [
+      { status: "unknown", reason: "not-confirmed", serverVersion: "0.7.1" },
+      "has not confirmed the new version. The server last said it runs 0.7.1.",
+    ],
     [{ status: "unavailable", reason: "Not a release build." }, "Not a release build."],
   ])("%j", (outcome, text) => {
     expect(describeOutcome(outcome)).toContain(text);

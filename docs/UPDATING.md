@@ -566,9 +566,24 @@ manifest's ring (`ORCA_DEPLOYMENT_ADAPTER`, `ORCA_DEPLOYMENT_MANIFEST`, `ORCA_DE
 set for the daemon only), and the daemon reports them in `hello.deployment` to a caller holding
 `config.read`. A daemon started any other way reports nothing and the app offers no update.
 
-The connection dialog shows the server's version, protocol and ring and whether it is older than
-the app. **Update now** runs, over the profile's own ssh (the pinned host key, the profile's key,
-no forwards, no ssh config):
+What the daemon reports is a hint, never what the app runs:
+
+- **Approve once per profile.** The first time, the connection dialog shows the two paths and
+  the exact command, and runs nothing until you approve that updater for the SSH profile. The
+  approval is kept beside the profile (`server-updaters.json`) and is forgotten when the
+  profile is pointed at another server or daemon port, its host key is forgotten, or it is
+  removed.
+- **A mismatch is refused.** The app runs only the approved paths, and only while the daemon
+  still reports exactly those. If it reports another location, the dialog says so and asks
+  again; nothing runs.
+- **Each request is bound to what you saw.** The dialog sends the profile, the connection,
+  the host key the tunnel authenticated, the daemon's workspace identity and the version.
+  The app checks all of them against the connection as it is at that moment, and the version
+  must be the app's own.
+
+The connection dialog shows the server's version, protocol, ring and host key, and whether it
+is older than the app. **Update now** runs, over the profile's own ssh (the pinned host key, the
+profile's key, no forwards, no ssh config):
 
 ```sh
 python3 <adapter> --deployment <manifest> update --bundle v<app version>
@@ -578,15 +593,19 @@ That is the command above, so the server's rules decide: the bundle's signer and
 forward-only versions, the update lock and the admission barrier. Nothing installs through the
 daemon's RPC. The app streams what the updater prints and then says how it ended:
 
-- **Updated**: the server now runs the app's version; the app reconnects on its own.
+- **Updated**: the updater succeeded *and* a fresh authenticated hello from the same server
+  (same profile, host key and workspace) reports the new version.
+- **Unknown**: the SSH session was lost after the updater could have started, or it reported
+  success and the server has not confirmed the new version within about a minute. The app
+  says what the server last reported, if anything; check the server before trying again.
 - **Work is running**: the barrier refused (`Daemon busy`, `Busy: admission.lock`, or an
   unmanaged ORCA process); nothing was cancelled and the old release keeps serving.
 - **Another update is running**: `Busy: update.lock`, held by the scheduled updater or another
   operator; this one did not start.
 - **Failed**: the updater's own `orca-release:` message, and whether the previous release was
   restored and healthy.
-- **Could not reach the server**: ssh could not run the updater; the app's own message, never
-  ssh's output.
+- **SSH refused before it started**: a missing ssh client, a changed or missing host key, or a
+  refused key, so nothing ran; the app's own message, never ssh's output.
 
 A development build of the app (a version that is not a release tag) offers no update.
 

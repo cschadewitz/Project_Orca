@@ -33,7 +33,7 @@ import type { DiagnosticsResult } from "../diagnostics-contract.js";
 import { AdmissionIntents, AdmissionIntentController, protectedStorageBridgeError } from "./admission-intents.js";
 import { GuidedLaunchAdapter } from "./guided-launch-adapter.js";
 import type { LaunchReview, PreflightParams } from "../configuration-launch-contract.js";
-import { RunsAdmitResultSchema } from "@orca/protocol";
+import { RunsAdmitResultSchema, ServerPathSchema } from "@orca/protocol";
 import { ConnectionTarget, ConnectionRefusal, connectionFailure, callInConnection } from "./connection-target.js";
 import { RemoteProfiles } from "./remote-profiles.js";
 import { ServerUpdater } from "./server-update.js";
@@ -1070,11 +1070,44 @@ function profileInUse(id: string): boolean {
    daemon only said where the updater is; nothing installs through it. */
 const serverUpdater = new ServerUpdater({
   version: app.getVersion(),
-  deployment: () => connection.managedDeployment(),
+  connection: () => workspace.serverConnection,
+  declared: () => connection.managedDeployment(),
+  approved: (profile) => remoteProfiles.serverUpdater(profile),
+  approve: (profile, paths) => remoteProfiles.approveServerUpdater(profile, paths),
   run: (command, onLine) => workspace.runOnServer(command, onLine),
+  hello: async () => {
+    const hello = await workspace.client.hello(`orca-app/${app.getVersion()}`);
+    return { orcaVersion: hello.orcaVersion, ...(hello.identity ? { workspaceId: hello.identity.workspaceId } : {}) };
+  },
   onProgress: (progress) => send("orca:server.update.progress", progress),
 });
-ipcMain.handle("orca:server.update", () => serverUpdater.update());
+/* What the renderer sends is what the person confirmed; ServerUpdater checks it against the
+   connection as it is now. Anything malformed is refused before it gets there. */
+const ServerTargetShape = {
+  profile: ProfileIdSchema,
+  epoch: z.number().int().nonnegative(),
+  hostKey: z.string().regex(/^SHA256:[A-Za-z0-9+/=]+$/),
+  workspaceId: z.uuid(),
+};
+const ServerUpdateRequestSchema = z.object({ ...ServerTargetShape, version: z.string().max(64) }).strict();
+const ServerUpdaterApprovalSchema = z
+  .object({ ...ServerTargetShape, adapter: ServerPathSchema, manifest: ServerPathSchema })
+  .strict();
+ipcMain.handle("orca:server.read", () => serverUpdater.read());
+ipcMain.handle("orca:server.approve", (_event, approval: unknown) => {
+  const parsed = ServerUpdaterApprovalSchema.safeParse(approval);
+  if (!parsed.success) return { ok: false, message: "Invalid approval" };
+  try {
+    return serverUpdater.approve(parsed.data);
+  } catch (error) {
+    return { ok: false, message: connectionFailure(error) };
+  }
+});
+ipcMain.handle("orca:server.update", (_event, request: unknown) => {
+  const parsed = ServerUpdateRequestSchema.safeParse(request);
+  if (!parsed.success) return { status: "unavailable", reason: "Invalid update request" };
+  return serverUpdater.update(parsed.data);
+});
 ipcMain.handle("orca:profiles.list", () => remoteProfiles.list());
 ipcMain.handle("orca:profiles.save", (_event, input: unknown) => profileResult(() => remoteProfiles.save(input)));
 ipcMain.handle("orca:profiles.remove", (_event, id: unknown) =>
