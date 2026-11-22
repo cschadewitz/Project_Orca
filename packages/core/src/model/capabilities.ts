@@ -22,6 +22,7 @@
  * agent's permission policy like any other tool call.
  */
 import { z } from "zod";
+import { EnvSchema, type Env } from "./secrets.js";
 
 /** A catalog key: what selections, provenance and errors name an entry by. */
 export const CapabilityIdSchema = z
@@ -69,7 +70,7 @@ export const McpServerDefinitionSchema = z
   .object({
     command: z.string().min(1),
     args: z.array(z.string()).default([]),
-    env: z.record(z.string(), z.string()).default({}),
+    env: EnvSchema.default({}),
   })
   .strict();
 export type McpServerDefinition = z.infer<typeof McpServerDefinitionSchema>;
@@ -117,7 +118,8 @@ export interface ResolvedMcpServerConfig {
   name: string;
   command: string;
   args: string[];
-  env: Record<string, string>;
+  /** Secret references stay references here; they are read at session open (#336). */
+  env: Env;
 }
 
 export interface ResolvedMcpServer {

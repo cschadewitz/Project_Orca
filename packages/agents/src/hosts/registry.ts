@@ -10,6 +10,7 @@ import {
   type Clock,
   type HostSpec,
   type RunOverrides,
+  type SecretsConfig,
 } from "@orca/core";
 import type { AgentHost } from "../host.js";
 import { LocalHost } from "./local-host.js";
@@ -224,6 +225,8 @@ export class AgentRegistry {
   private catalog: CapabilitiesConfig = EMPTY_CAPABILITIES;
   /** Where relative skill paths resolve: the config file's directory. */
   private catalogBaseDir: string | undefined;
+  /** Where each secret reference is read, and on which host (#336). */
+  private secretsCatalog: SecretsConfig = {};
 
   constructor(clock: Clock = systemClock) {
     this.health = new AgentHealthTracker(clock);
@@ -249,6 +252,15 @@ export class AgentRegistry {
     this.catalog = catalog ?? EMPTY_CAPABILITIES;
     this.catalogBaseDir = baseDir;
     return this;
+  }
+  /** Install the secret reference catalog (#336). Metadata only: never a value. */
+  setSecrets(secrets: SecretsConfig | undefined): this {
+    this.writable("set secrets");
+    this.secretsCatalog = secrets ?? {};
+    return this;
+  }
+  secrets(): SecretsConfig {
+    return this.secretsCatalog;
   }
   capabilities(): { catalog: CapabilitiesConfig; baseDir: string | undefined } {
     return { catalog: this.catalog, baseDir: this.catalogBaseDir };
@@ -276,6 +288,7 @@ export class AgentRegistry {
       health: this.health,
       catalog: this.catalog,
       catalogBaseDir: this.catalogBaseDir,
+      secretsCatalog: this.secretsCatalog,
       roleOverrides: new Map([...this.roleOverrides, ...Object.entries(roles)]),
       readOnly: true,
     });
@@ -301,11 +314,13 @@ export class AgentRegistry {
       agents: AgentSpec[];
       roles: Record<string, string>;
       capabilities?: CapabilitiesConfig | undefined;
+      secrets?: SecretsConfig | undefined;
     },
     opts: { clock?: Clock; configDir?: string | undefined } = {},
   ): AgentRegistry {
     const r = new AgentRegistry(opts.clock);
     r.setCapabilities(cfg.capabilities, opts.configDir);
+    r.setSecrets(cfg.secrets);
     for (const h of cfg.hosts) r.addHost(createHost(h));
     for (const a of cfg.agents) r.addAgent(a);
     for (const [role, id] of Object.entries(cfg.roles)) r.mapRole(role, id);

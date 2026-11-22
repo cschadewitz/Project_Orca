@@ -222,6 +222,14 @@ export interface LoopbackSshd {
 }
 
 const SSHD = "/usr/sbin/sshd";
+
+export interface LoopbackSshdOptions {
+  /**
+   * Let the client key run remote commands, as an SSH execution host needs (#336). Off by
+   * default: the daemon fixtures only forward ports, and their key can do nothing else.
+   */
+  commands?: boolean;
+}
 /** How long one ssh probe, one forward or one process's shutdown may take. */
 const SSH_STEP_MS = 5_000;
 
@@ -236,7 +244,7 @@ const SSH_STEP_MS = 5_000;
  * command, gets no pty, agent, X11 or remote forwarding - and the client side trusts only the
  * generated host key and reads no ambient SSH configuration.
  */
-export async function loopbackSshd(): Promise<LoopbackSshd | undefined> {
+export async function loopbackSshd(options: LoopbackSshdOptions = {}): Promise<LoopbackSshd | undefined> {
   if (!existsSync(SSHD) || process.platform === "win32") {
     if (process.env[REQUIRE_SSHD_ENV] === "1") throw new Error(`${REQUIRE_SSHD_ENV}=1 but ${SSHD} is not installed`);
     return undefined;
@@ -255,9 +263,10 @@ export async function loopbackSshd(): Promise<LoopbackSshd | undefined> {
     await run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "orca-fixture-client", "-f", identity]);
     const authorized = join(root, "authorized_keys");
     const clientKey = (await readFile(`${identity}.pub`, "utf8")).trim();
-    await writeFile(authorized, `restrict,port-forwarding,permitopen="127.0.0.1:*",command="true" ${clientKey}\n`, {
-      mode: 0o600,
-    });
+    const restrictions = options.commands
+      ? "restrict"
+      : `restrict,port-forwarding,permitopen="127.0.0.1:*",command="true"`;
+    await writeFile(authorized, `${restrictions} ${clientKey}\n`, { mode: 0o600 });
     const port = await freePort();
     const config = join(root, "sshd_config");
     await writeFile(

@@ -430,6 +430,7 @@ export const commands: Record<string, Command> = {
           (ctx.flags.cwd as string | undefined) ??
           host.spec.workspaceRoot ??
           (host.spec.type === "local" ? ctx.cwd : "/tmp"),
+        secrets: app.agents.secrets(),
         logger: app.logger,
       });
       ctx.out(`OK ${agent.id} on ${host.id}: ACP session ${session.acpSessionId} in ${Date.now() - started}ms`);
