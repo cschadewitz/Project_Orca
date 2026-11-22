@@ -2,7 +2,7 @@
   "storeEpoch": "operator-journals-v4",
   "protocol": {
     "major": 2,
-    "minor": 2
+    "minor": 3
   },
   "capabilities": [
     "runs.read",
