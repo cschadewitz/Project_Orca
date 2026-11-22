@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { RunFollower, type DaemonNotification, type RunSnapshot, type RunSummaryView } from "../src/index.js";
+import {
+  FollowRefusedError,
+  RunFollower,
+  type DaemonNotification,
+  type RunSnapshot,
+  type RunSummaryView,
+} from "../src/index.js";
 
 /** Timers a test advances by hand. */
 class ManualTimers {
@@ -330,9 +336,37 @@ describe("RunFollower", () => {
     follower.notify(appended(2));
     follower.connectionRestored();
     expect(follower.get("run-a")?.phase).toBe("loading");
-    expect(calls).toHaveLength(3);
+    // A finished run is read again too: the connection back may be another caller's.
+    expect(calls.map((c) => c.runId)).toEqual(["run-a", "run-done", "run-a", "run-done"]);
     calls[2]!.resolve({ run: row("running"), lastSeq: 7 });
+    calls[3]!.resolve({ run: row("succeeded", { id: "run-done", outcome: "success" }), lastSeq: 9 });
     await flush();
+    expect(follower.get("run-done")?.phase).toBe("terminal");
     expect(follower.get("run-a")).toMatchObject({ phase: "live", cursor: 7 });
+  });
+
+  it("forgets a run the daemon refuses on a reconnect, finished or not, and reads it no more", async () => {
+    const { follower, calls, timers } = setup();
+    follower.follow("run-a");
+    follower.follow("run-done");
+    calls[0]!.resolve({ run: row("running"), lastSeq: 3 });
+    calls[1]!.resolve({ run: row("succeeded", { id: "run-done", outcome: "success" }), lastSeq: 9 });
+    await flush();
+    follower.connectionLost();
+    follower.connectionRestored();
+    calls[2]!.reject(new FollowRefusedError("AUTH_FORBIDDEN: not permitted"));
+    calls[3]!.reject(new FollowRefusedError("RUN_NOT_FOUND: run run-done not found"));
+    await flush();
+    for (const runId of ["run-a", "run-done"]) {
+      const view = follower.get(runId)!;
+      expect(view).toMatchObject({ phase: "gone", cursor: -1 });
+      expect(view.run).toBeUndefined();
+      expect(view.snapshotSeq).toBeUndefined();
+    }
+    follower.notify(appended(4));
+    follower.notify(changed(5, "running"));
+    await timers.advance(60_000);
+    expect(calls).toHaveLength(4);
+    expect(follower.get("run-a")?.run).toBeUndefined();
   });
 });

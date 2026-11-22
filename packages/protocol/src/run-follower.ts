@@ -32,9 +32,22 @@ import type { DaemonNotification } from "./subscriptions.js";
  * Where a followed run's data stands. `live`: current as of the stream. `terminal`: finished,
  * and the snapshot includes the end. `loading` and `resyncing`: a snapshot is on its way.
  * `reconnecting`: the stream dropped, so nothing is current. `stale`: resyncing gave up; the
- * data shown is the last good snapshot and may be behind.
+ * data shown is the last good snapshot and may be behind. `gone`: the daemon definitively
+ * refused the run (not found, or not this caller's to read); nothing about it is kept.
  */
-export type FollowPhase = "loading" | "live" | "resyncing" | "reconnecting" | "stale" | "terminal";
+export type FollowPhase = "loading" | "live" | "resyncing" | "reconnecting" | "stale" | "terminal" | "gone";
+
+/**
+ * Thrown by `fetch` for a definitive refusal - the run does not exist, or this caller may not
+ * read it. Unlike any other failure it is not retried and it does not leave the last snapshot
+ * showing: a run a caller lost access to must stop showing what it can no longer read.
+ */
+export class FollowRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FollowRefusedError";
+  }
+}
 
 /** What `runs.get` answers that a follower needs: the row and the sequence it is current as of. */
 export interface RunSnapshot {
@@ -179,7 +192,7 @@ export class RunFollower {
     const params = n.params as { runId?: unknown; seq?: unknown; at?: unknown };
     if (typeof params.runId !== "string" || typeof params.seq !== "number") return;
     const entry = this.entries.get(params.runId);
-    if (!entry || !this.connected) return;
+    if (!entry || !this.connected || entry.view.phase === "gone") return;
     const seq = params.seq;
     const at = typeof params.at === "string" ? params.at : undefined;
 
@@ -239,9 +252,12 @@ export class RunFollower {
 
   /** The stream is back (a new subscription): re-read every run that is not finished. */
   connectionRestored(): void {
+    // Already connected: nothing was lost, so there is nothing to re-read.
+    if (this.connected) return;
     this.connected = true;
+    // Every run, finished and refused ones too: the connection that came back may be another
+    // caller's authority, and a finished run it can no longer read must not keep showing.
     for (const entry of this.entries.values()) {
-      if (entry.view.phase === "terminal") continue;
       entry.view.resyncs = 0;
       delete entry.view.error;
       entry.view.phase = entry.view.snapshotSeq === undefined ? "loading" : "resyncing";
@@ -253,7 +269,7 @@ export class RunFollower {
   /** Try a `stale` run again on request. */
   retry(runId: string): void {
     const entry = this.entries.get(runId);
-    if (!entry || entry.view.phase !== "stale" || !this.connected) return;
+    if (!entry || (entry.view.phase !== "stale" && entry.view.phase !== "gone") || !this.connected) return;
     entry.view.resyncs = 0;
     entry.unmet = undefined;
     delete entry.view.error;
@@ -390,6 +406,17 @@ export class RunFollower {
     entry.timer = undefined;
   }
 
+  /** A definitive refusal: drop everything known about the run, and read it no more. */
+  private forget(entry: Entry, error: string): void {
+    this.cancel(entry);
+    entry.held.clear();
+    entry.unmet = undefined;
+    entry.again = false;
+    delete entry.change;
+    entry.view = { runId: entry.view.runId, phase: "gone", cursor: -1, resyncs: 0, error };
+    this.changed(entry);
+  }
+
   private giveUp(entry: Entry, error: string): void {
     this.cancel(entry);
     entry.view.phase = "stale";
@@ -413,6 +440,10 @@ export class RunFollower {
     } catch (e) {
       if (generation !== entry.generation) return;
       entry.inFlight = false;
+      if (e instanceof FollowRefusedError) {
+        this.forget(entry, e.message);
+        return;
+      }
       entry.view.resyncs++;
       if (entry.view.resyncs > this.maxResyncs) this.giveUp(entry, e instanceof Error ? e.message : String(e));
       else this.schedule(entry, this.backoffMs(entry.view.resyncs));

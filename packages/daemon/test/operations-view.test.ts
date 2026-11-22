@@ -179,6 +179,39 @@ describe("runs.list for the operations view", () => {
     expect(late.run.operations!.lastSeq).toBe(late.lastSeq);
   });
 
+  it("keeps the plain row that matched when the run leaves the filter between reads", async () => {
+    const clock = new FakeClock(START);
+    const stores = memoryStores(clock);
+    await stores.events.append({
+      type: "run.created",
+      runId: "r",
+      payload: { workflowId: "wf", workflowVersion: "1", workspace, vars: {} },
+    });
+    await stores.events.append({ type: "run.started", runId: "r", payload: {} });
+    await stores.leases.acquire({ resource: runLeaseResource("r"), holder: "h", ttlMs: 60_000 });
+    // The run finishes just after the listing pass has read it as running.
+    const events = stores.events;
+    const readTypes = events.readTypes.bind(events);
+    let armed = true;
+    events.readTypes = async (runId, types) => {
+      const answer = await readTypes(runId, types);
+      if (armed) {
+        armed = false;
+        await events.append({ type: "run.completed", runId: "r", payload: { outcome: "success" } });
+      }
+      return answer;
+    };
+    const reads = new ReadModel({ orchestrator: orchestrator(stores, clock), clock });
+    const page = await reads.runsList({ status: ["running"], operations: true, limit: 10, offset: 0 });
+    expect(armed).toBe(false);
+    expect(page.runs).toHaveLength(1);
+    // Frozen: the row the filter matched, not a succeeded row under a `running` filter.
+    expect(page.runs[0]).toMatchObject({ id: "r", status: "running" });
+    expect(page.runs[0]!.operations).toBeUndefined();
+    // Asked again, the filter itself no longer matches it.
+    expect((await reads.runsList({ status: ["running"], operations: true, limit: 10, offset: 0 })).runs).toEqual([]);
+  });
+
   it("pages deterministically: pages concatenate to the full list, ties broken by id", async () => {
     const clock = new FakeClock(START);
     const stores = memoryStores(clock);

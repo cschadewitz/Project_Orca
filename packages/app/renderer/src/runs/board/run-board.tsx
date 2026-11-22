@@ -14,15 +14,13 @@ import { PHASE_WORDS, ownerText, progressText, waitText } from "./board-model.js
 
 export interface RunBoardProps {
   runs: readonly FollowedRun[];
-  /** The list's rows, for a card whose snapshot has not landed yet. */
-  rows: ReadonlyMap<string, RunSummaryView>;
   live: boolean;
   filtered: boolean;
   onOpen: (runId: string) => void;
   onRetry: (runId: string) => void;
 }
 
-export function RunBoard({ runs, rows, live, filtered, onOpen, onRetry }: RunBoardProps): JSX.Element {
+export function RunBoard({ runs, live, filtered, onOpen, onRetry }: RunBoardProps): JSX.Element {
   if (runs.length === 0)
     return (
       <StateView
@@ -38,7 +36,9 @@ export function RunBoard({ runs, rows, live, filtered, onOpen, onRetry }: RunBoa
   return (
     <ul className="orca-board" aria-label="Followed runs">
       {runs.map((followed) => {
-        const run = followed.run ?? rows.get(followed.runId);
+        /* Only what this board's own follower read, in its own scope: never a list row or a
+           snapshot from before a workspace or authority change (use-run-board.ts). */
+        const run = followed.run;
         return (
           <li key={followed.runId} className="orca-board__item">
             <BoardCard followed={followed} run={run} live={live} onOpen={onOpen} onRetry={onRetry} />
@@ -81,8 +81,8 @@ function BoardCard({ followed, run, live, onOpen, onRetry }: BoardCardProps): JS
       </div>
       <Text style="caption" as="p" className="orca-board__phase" role="status">
         {PHASE_WORDS[phase]}
-        {phase === "stale" && followed.error ? ` — ${followed.error}` : ""}
-        {phase === "stale" && (
+        {(phase === "stale" || phase === "gone") && followed.error ? ` — ${followed.error}` : ""}
+        {(phase === "stale" || phase === "gone") && (
           <>
             {" "}
             <Button size="sm" tone="ghost" onClick={() => onRetry(followed.runId)}>
@@ -91,17 +91,19 @@ function BoardCard({ followed, run, live, onOpen, onRetry }: BoardCardProps): JS
           </>
         )}
       </Text>
-      <dl className="orca-board__facts">
-        <Fact term="Progress">{progress ?? "—"}</Fact>
-        {wait && <Fact term="Waiting">{wait}</Fact>}
-        <Fact term="Last activity">
-          {activity ? <Time at={new Date(activity)} show={live ? "relative" : "absolute"} /> : "—"}
-        </Fact>
-        {owner && <Fact term="Owner">{owner}</Fact>}
-        {/* Not measured per run: said, never drawn as zero (rule 12). */}
-        <Fact term="Host load">unavailable</Fact>
-        <Fact term="Usage">unavailable</Fact>
-      </dl>
+      {phase !== "gone" && (
+        <dl className="orca-board__facts">
+          <Fact term="Progress">{progress ?? "—"}</Fact>
+          {wait && <Fact term="Waiting">{wait}</Fact>}
+          <Fact term="Last activity">
+            {activity ? <Time at={new Date(activity)} show={live ? "relative" : "absolute"} /> : "—"}
+          </Fact>
+          {owner && <Fact term="Owner">{owner}</Fact>}
+          {/* Not measured per run: said, never drawn as zero (rule 12). */}
+          <Fact term="Host load">unavailable</Fact>
+          <Fact term="Usage">unavailable</Fact>
+        </dl>
+      )}
     </article>
   );
 }

@@ -6,7 +6,7 @@
  * wait named by what it waits on, and the per-run host load and usage the daemon does not
  * measure said to be unavailable rather than drawn as zero (rule 12).
  */
-import type { DisplayStatus, FollowPhase, FollowedRun, RunSummaryView } from "@orca/protocol";
+import type { DisplayStatus, FollowPhase, RunSummaryView } from "@orca/protocol";
 
 /** Statuses that are still going somewhere: the ones the board follows by default. */
 export const ACTIVE_STATUSES: ReadonlySet<DisplayStatus> = new Set(["running", "waiting", "blocked", "held", "stale"]);
@@ -22,6 +22,7 @@ export const PHASE_WORDS: Record<FollowPhase, string> = {
   reconnecting: "Reconnecting",
   stale: "Not current",
   terminal: "Finished",
+  gone: "Not available",
 };
 
 /** "4 steps · 2 done · 1 running · 1 failed", zero buckets left out. */
@@ -72,12 +73,4 @@ export function boardRuns(visible: readonly RunSummaryView[], following: readonl
   const ids = active.map((run) => run.id);
   const kept = following.filter((id) => shown.has(id) && !ids.includes(id));
   return [...ids, ...kept].slice(0, BOARD_LIMIT);
-}
-
-/** The run a card draws: the followed view when there is one, else the list's row. */
-export function cardRun(
-  row: RunSummaryView | undefined,
-  followed: FollowedRun | undefined,
-): RunSummaryView | undefined {
-  return followed?.run ?? row;
 }

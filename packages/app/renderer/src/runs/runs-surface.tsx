@@ -301,7 +301,6 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
     if (boardIds.join("\n") !== following.join("\n")) setFollowing(boardIds);
   }, [boardIds, following]);
   const board = useRunBoard(view === "board" ? boardIds : NO_IDS, connection);
-  const rowsById = useMemo(() => new Map(visible.map((run) => [run.id, run])), [visible]);
   const openInTree = useCallback(
     (runId: string) => {
       pendingOpen.current = undefined;
@@ -435,14 +434,7 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
             }}
             board={
               view === "board" ? (
-                <RunBoard
-                  runs={board.runs}
-                  rows={rowsById}
-                  live={live}
-                  filtered={filtered}
-                  onOpen={openInTree}
-                  onRetry={board.retry}
-                />
+                <RunBoard runs={board.runs} live={live} filtered={filtered} onOpen={openInTree} onRetry={board.retry} />
               ) : undefined
             }
           />

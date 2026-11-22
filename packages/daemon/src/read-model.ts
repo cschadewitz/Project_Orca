@@ -162,6 +162,13 @@ function progressOf(buckets: Iterable<ProgressBucket>): RunProgressView {
   return progress;
 }
 
+/** Whether a row read later still passes the filters that can change after a run starts. */
+function stillMatches(view: RunSummaryView, params: RunsListParams): boolean {
+  if (params.status?.length && !params.status.includes(view.status)) return false;
+  if (params.outcome?.length && !(view.outcome && params.outcome.includes(view.outcome))) return false;
+  return true;
+}
+
 /** Host load and usage are not measured per run: said, never zeroed (#340). */
 const UNAVAILABLE_FACETS: RunOperationsView["facets"] = {
   host: { state: "unavailable", reason: "not-collected" },
@@ -446,8 +453,8 @@ class Pass {
    * first, then the listing's events bounded by it. A commit landing between the two reads is
    * past the watermark, so it is in neither - the row's status and step counts are exactly what
    * `operations.lastSeq` says they are current as of. Only asked for the rows a page returns.
-   * The page's filter was applied by the listing pass just before; a run that moved since is
-   * shown as it is at the watermark, which is the newer truth, not re-filtered out of the page.
+   * The page's filter was applied by the listing pass just before; `runsList` checks the row
+   * against it again and keeps the plain row when the run has moved out of it since.
    */
   async operationsRow(runId: string): Promise<RunSummaryView | undefined> {
     const [last] = await this.orc.stores.events.readRange(runId, { before: Number.MAX_SAFE_INTEGER, limit: 1 });
@@ -589,7 +596,13 @@ export class ReadModel {
     rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
     const page = rows.slice(params.offset, params.offset + params.limit);
     const runs: RunSummaryView[] = [];
-    for (const view of page) runs.push((params.operations && (await pass.operationsRow(view.id))) || view);
+    for (const view of page) {
+      const detailed = params.operations ? await pass.operationsRow(view.id) : undefined;
+      // The page was filtered on the listing pass. A run that has since moved out of the filter
+      // (its status or outcome changed) keeps the plain row that matched, frozen without
+      // operations, rather than a newer projection the filter would not have returned.
+      runs.push(detailed && stillMatches(detailed, params) ? detailed : view);
+    }
     return { runs, total: rows.length, asOf: pass.asOf };
   }
 

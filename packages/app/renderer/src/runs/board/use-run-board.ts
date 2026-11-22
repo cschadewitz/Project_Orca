@@ -4,51 +4,88 @@
  *
  * The follower (`@orca/protocol`) owns the hard part - cursors, duplicates, gaps, snapshots
  * that must not go backwards - so this hook only wires it to the app: which runs, which
- * frames, and what the connection is doing. A dropped connection marks every card
- * `reconnecting`; a re-attached subscription (a new generation) or a connection coming back
- * live re-reads every run that has not finished.
+ * frames, what the connection is doing, and *whose* runs they are.
+ *
+ * That last one is an access boundary, not a cache detail. A run id names a run in one store
+ * as read by one caller; the same id in another workspace, or through a connection with other
+ * authority, is another thing entirely. So a follower belongs to one **scope** - the
+ * workspace, the subscription generation, and the capabilities and methods the daemon granted
+ * - and a change of scope ends it: nothing it held is drawn again, from the very render that
+ * sees the change, and a fresh follower reads every run from nothing. A definitive refusal
+ * from `runs.get` (not found, not authorized) is `FollowRefusedError`, which drops the run's
+ * data instead of leaving its last snapshot on screen as an ordinary stale read would.
  */
-import { useEffect, useRef, useState } from "react";
-import { RunFollower, type FollowedRun } from "@orca/protocol";
+import { useEffect, useState } from "react";
+import { FollowRefusedError, RunFollower, type FollowedRun } from "@orca/protocol";
 import type { ConnectionState } from "@orca/design";
-import { useSubscriptionGeneration } from "../../chrome/use-connection.js";
+import { useConnection, useSubscriptionGeneration } from "../../chrome/use-connection.js";
+import { useWorkspace } from "../../chrome/use-workspace.js";
 import { useNotifications } from "../../notifications-context.js";
+
+/** Codes that are an answer about the run or the caller, not a failure to get one. */
+const REFUSALS = new Set(["RUN_NOT_FOUND", "AUTH_REQUIRED", "AUTH_INVALID", "AUTH_FORBIDDEN"]);
 
 export interface RunBoard {
   /** One entry per followed run, in `runIds` order. */
   runs: readonly FollowedRun[];
-  /** Try a `stale` run's snapshot again. */
+  /** Try a `stale` or refused run again. */
   retry: (runId: string) => void;
+}
+
+interface Scoped {
+  scope: string;
+  follower: RunFollower;
+  views: ReadonlyMap<string, FollowedRun>;
 }
 
 export function useRunBoard(runIds: readonly string[], connection: ConnectionState): RunBoard {
   const stream = useNotifications();
   const generation = useSubscriptionGeneration();
-  const [views, setViews] = useState<ReadonlyMap<string, FollowedRun>>(new Map());
-  const [follower, setFollower] = useState<RunFollower | undefined>(undefined);
+  const workspace = useWorkspace();
+  const authority = useConnection();
+  const scope = JSON.stringify([
+    workspace.path,
+    workspace.source,
+    workspace.readOnly,
+    generation,
+    authority.capabilities,
+    authority.methods,
+  ]);
+  const [current, setCurrent] = useState<Scoped | undefined>(undefined);
 
-  // One follower for the life of the board; its frames come from every run in the stream.
+  // One follower per scope; its frames come from every run in the stream.
   useEffect(() => {
     let live = true;
     const follower = new RunFollower({
       fetch: async (runId) => {
         const result = await window.orca.runs.get({ runId, operations: true });
-        if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
+        if (!result.ok) {
+          const message = `${result.error.code}: ${result.error.message}`;
+          throw REFUSALS.has(result.error.code) ? new FollowRefusedError(message) : new Error(message);
+        }
         return { run: result.result.run, lastSeq: result.result.lastSeq };
       },
       onChange: (view) => {
         if (!live) return;
-        setViews((previous) => new Map(previous).set(view.runId, view));
+        setCurrent((previous) =>
+          previous?.follower === follower
+            ? { ...previous, views: new Map(previous.views).set(view.runId, view) }
+            : previous,
+        );
       },
     });
-    setFollower(follower);
+    setCurrent({ scope, follower, views: new Map() });
     const off = stream.onAny((notification) => follower.notify(notification));
     return () => {
       live = false;
       off();
       follower.dispose();
     };
-  }, [stream]);
+  }, [stream, scope]);
+
+  // Only a follower of this very scope is used; until the effect above has made one, nothing.
+  const active = current?.scope === scope ? current : undefined;
+  const follower = active?.follower;
 
   // Follow exactly `runIds`.
   const key = runIds.join("\n");
@@ -57,45 +94,21 @@ export function useRunBoard(runIds: readonly string[], connection: ConnectionSta
     const wanted = new Set(key ? key.split("\n") : []);
     for (const run of follower.list()) if (!wanted.has(run.runId)) follower.unfollow(run.runId);
     for (const runId of wanted) follower.follow(runId);
-    setViews((previous) => {
-      const next = new Map<string, FollowedRun>();
-      for (const runId of wanted) {
-        const view = follower.get(runId) ?? previous.get(runId);
-        if (view) next.set(runId, view);
-      }
-      return next;
-    });
   }, [follower, key]);
 
-  // The stream: lost while the connection is not live, re-read when it is back or re-attached.
+  // A new scope (a new generation among it) already re-reads everything; within one, the
+  // stream dropping and coming back is what the follower is told.
   const live = connection === "live";
-  const seen = useRef<{ follower: RunFollower | undefined; live: boolean; generation: number }>({
-    follower: undefined,
-    live,
-    generation,
-  });
   useEffect(() => {
     if (!follower) return;
-    const before = seen.current;
-    seen.current = { follower, live, generation };
-    // A new follower starts connected; tell it otherwise if the board mounted offline.
-    if (before.follower !== follower) {
-      if (!live) follower.connectionLost();
-      return;
-    }
-    if (!live) {
-      if (before.live) follower.connectionLost();
-      return;
-    }
-    if (!before.live || before.generation !== generation) {
-      if (before.live) follower.connectionLost();
-      follower.connectionRestored();
-    }
-  }, [follower, live, generation]);
+    // Both are idempotent: a follower already connected re-reads nothing on `connectionRestored`.
+    if (!live) follower.connectionLost();
+    else follower.connectionRestored();
+  }, [follower, live]);
 
-  const runs = runIds.flatMap((id) => {
-    const view = views.get(id);
-    return view ? [view] : [];
-  });
+  // A run with no view yet in this scope is loading: never a view from another scope.
+  const runs = runIds.map(
+    (runId): FollowedRun => active?.views.get(runId) ?? { runId, phase: "loading", cursor: -1, resyncs: 0 },
+  );
   return { runs, retry: (runId) => follower?.retry(runId) };
 }

@@ -86,13 +86,15 @@ describe("the run board", () => {
   it("follows the active top-level runs and says what each is doing", async () => {
     renderRuns();
     await openBoard();
-    const names = within(board())
-      .getAllByRole("article")
-      .map((a) => a.getAttribute("aria-label")!.split(",")[0]);
-    // Running, waiting and stale roots; not the finished root, not the child.
-    expect(names).toEqual(["sdlc", "Document the rollout", "Add the SSO callback"]);
-
-    await waitFor(() => expect(card("Document the rollout").getAttribute("aria-label")).toContain("Live"));
+    const labels = () =>
+      within(board())
+        .getAllByRole("article")
+        .map((a) => a.getAttribute("aria-label"));
+    // Running, waiting and stale roots; not the finished root, not the child. The stale one has
+    // no projection, so the daemon's not-found is a refusal: it is said, and nothing is shown.
+    await waitFor(() =>
+      expect(labels()).toEqual(["run-lost, Not available", "Document the rollout, Live", "Add the SSO callback, Live"]),
+    );
     const gate = card("Document the rollout");
     expect(gate.textContent).toContain("3 steps · 2 done · 1 waiting");
     expect(gate.textContent).toContain("Waiting for a person: hi-1");
@@ -136,6 +138,54 @@ describe("the run board", () => {
     rerender("live");
     await waitFor(() => expect(card("Document the rollout").getAttribute("aria-label")).toContain("Live"));
     expect(fake.calls.filter((c) => c.method === "runs.get").length).toBeGreaterThan(before);
+  });
+
+  it("drops every card on a workspace change, and never shows the old store's run under the same id", async () => {
+    renderRuns();
+    await openBoard();
+    await waitFor(() => expect(card("Document the rollout").textContent).toContain("Held on build-box"));
+    // Another store, whose run-gate is a different run that the daemon is slow to describe.
+    let answer: ((r: { ok: true; result: RunsGetResult }) => void) | undefined;
+    fake.script({
+      "runs.get": ({ runId }) =>
+        new Promise((resolve) => {
+          if (runId === "run-gate") answer = resolve;
+          else resolve({ ok: false, error: { code: "RUN_NOT_FOUND", message: `no run ${runId}` } });
+        }),
+    });
+    await act(async () => {
+      await window.orca.workspace.open({ path: "/elsewhere" });
+    });
+    // From the render that sees the switch: no card says anything the old store said.
+    expect(board().textContent).not.toContain("build-box");
+    expect(board().textContent).not.toContain("Document the rollout");
+    const other = withOperations("run-gate")!;
+    act(() =>
+      answer!({
+        ok: true,
+        result: {
+          ...other,
+          run: { ...other.run, name: "A different run", operations: { ...other.run.operations!, owner: undefined } },
+        },
+      }),
+    );
+    await waitFor(() => expect(card("A different run").getAttribute("aria-label")).toContain("Live"));
+    expect(card("A different run").textContent).toContain("No process holds it");
+  });
+
+  it("clears a card the daemon refuses after a reconnect, finished or not", async () => {
+    const rerender = renderRuns();
+    await openBoard();
+    await waitFor(() => expect(card("Document the rollout").getAttribute("aria-label")).toContain("Live"));
+    fake.script({
+      "runs.get": () => Promise.resolve({ ok: false, error: { code: "AUTH_FORBIDDEN", message: "not permitted" } }),
+    });
+    rerender("reconnecting");
+    act(() => fake.connect({ ...fake.connection, generation: (fake.connection.generation ?? 0) + 1 }));
+    rerender("live");
+    await waitFor(() => expect(within(board()).getByRole("article", { name: "run-gate, Not available" })).toBeTruthy());
+    expect(board().textContent).not.toContain("Waiting for a person");
+    expect(board().textContent).toContain("AUTH_FORBIDDEN");
   });
 
   it("opens a card's run in the tree", async () => {
