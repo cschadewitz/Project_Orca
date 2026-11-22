@@ -41,6 +41,7 @@ import {
 } from "@orca/protocol/server-setup";
 import { readOrcaVersion } from "../version.js";
 import type { CommandContext } from "./index.js";
+import { remoteEnrollCommand } from "./remote-enroll.js";
 
 const ORCA_VERSION = readOrcaVersion();
 
@@ -81,11 +82,13 @@ export async function remoteCommand(
     version?: string;
   } = {},
 ): Promise<number> {
+  // `orca remote enroll <id>` (#883): delegation's one-time trust step for a configured remote.
+  if (ctx.positionals[0] === "enroll") return remoteEnrollCommand(ctx);
   const [sub, destination, ...extra] = ctx.positionals;
   if (sub !== "add" || !destination || extra.length)
     throw new OrcaError(
       "CONFIG_INVALID",
-      "usage: orca remote add [user@]host [--ssh-port N] [--identity FILE] [--port N] [--confirm CODE]",
+      "usage: orca remote add [user@]host [--ssh-port N] [--identity FILE] [--port N] [--confirm CODE], or orca remote enroll <id> [--host-key SHA256:...]",
     );
   const scripts = deps.scripts ?? setupScripts();
   if (!scripts)

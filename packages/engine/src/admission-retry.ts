@@ -210,6 +210,25 @@ export class RegisteredRetryClaims implements RetryClaims {
     return record.kind;
   }
 
+  /**
+   * The receipt an idempotency key already has for this principal, or `absent`, without
+   * claiming anything (#883). `absent` is a fact about this moment only: a submission still in
+   * flight may claim the key after it.
+   */
+  async find(
+    kind: RetryOperationKind,
+    key: string,
+    authority: RetryAuthority<unknown>,
+  ): Promise<{ state: "absent" } | RetryResult<unknown>> {
+    if (!this.operations.has(kind) || !this.store.find) throw unavailable();
+    const record = await this.store.find(
+      { workspaceId: authority.workspaceId, principalId: authority.principalId, kind },
+      key,
+    );
+    if (!record) return { state: "absent" };
+    return this.inspect(record.operationId, authority);
+  }
+
   /** Trusted dispatcher chooses authority by the sealed kind; IDs never select callbacks. */
   async inspect(operationId: string, authority: RetryAuthority<unknown>): Promise<RetryResult<unknown>> {
     const record = await this.owned(operationId, authority);

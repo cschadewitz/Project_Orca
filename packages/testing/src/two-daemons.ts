@@ -20,6 +20,7 @@
  * ambient ORCA endpoints, tokens, `NODE_OPTIONS` or agent credentials reach a daemon.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { connect, createServer } from "node:net";
@@ -214,6 +215,8 @@ export interface LoopbackSshd {
   readonly sshArgs: readonly string[];
   /** The generated host key as `<type> <base64>`, for a client that keeps its own pin. */
   readonly hostKey: string;
+  /** The host key's fingerprint as `ssh-keygen -l` prints it (`SHA256:…`), for enrollment. */
+  readonly hostKeyFingerprint: string;
   /**
    * Forward a free local port through sshd to `127.0.0.1:remotePort` - another daemon, as a
    * remote machine's port would be reached - and answer the local port.
@@ -370,6 +373,10 @@ export async function loopbackSshd(options: LoopbackSshdOptions = {}): Promise<L
       user,
       sshArgs,
       hostKey: hostPub,
+      hostKeyFingerprint: `SHA256:${createHash("sha256")
+        .update(Buffer.from(hostPub.split(" ")[1]!, "base64"))
+        .digest("base64")
+        .replace(/=+$/, "")}`,
       async forward(remotePort) {
         const local = await freePort();
         const tunnel = spawn(

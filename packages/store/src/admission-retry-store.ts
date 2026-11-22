@@ -198,6 +198,19 @@ export class FileRetryClaimStore implements RetryClaimStore {
       throw error;
     }
   }
+  async find(scope: RetryScope, key: string): Promise<RetryRecord | undefined> {
+    // No salt yet means no key was ever claimed; never create one here.
+    let salt: string;
+    try {
+      salt = await this.salt(false);
+    } catch {
+      return undefined;
+    }
+    const lookup = createHmac("sha256", salt)
+      .update(JSON.stringify([scope.workspaceId, scope.principalId, scope.kind, key]))
+      .digest("hex");
+    return this.lookup(scope, lookup);
+  }
   private async lookup(scope: RetryScope, lookup: string): Promise<RetryRecord | undefined> {
     const pointer = await this.options.execution.getGeneration(`admission-retry-key-${lookup}`);
     if (pointer === undefined) return undefined;

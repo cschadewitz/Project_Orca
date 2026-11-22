@@ -392,6 +392,103 @@ agents:
 - `hello` reports the daemon-wide cap, sessions open and queue depth; `agents.list` adds the
   per-agent and per-host caps and use (optional fields; older clients ignore them).
 
+## Delegating steps to another daemon
+
+An agent of `type: orca-daemon` does not start a process: it hands each of its steps to
+another ORCA daemon, which runs a named workflow there as one of its own runs (#883). The
+remote is reached over SSH with the same tunnel the desktop app's SSH profiles use (#874):
+typed fields only, no ssh config file read. A remote takes delegated steps only once it is
+enrolled, and only over the host keys and with the credential enrollment recorded.
+
+```yaml
+remotes:
+  - id: build-box
+    name: Build box
+    destination: ci@build-box.example     # user@host
+    identityFile: /home/me/.ssh/id_ed25519
+    # sshPort, jump: {destination, sshPort, identityFile}, remotePort (default 6722)
+agents:
+  - id: remote-builder
+    type: orca-daemon
+    profile: build-box                    # a remotes[].id
+    workflow: build                       # the workflow the remote daemon runs per step
+    # promptVar: prompt                   # the remote workflow variable the task arrives in
+    roles: [builder]
+```
+
+One-time setup on the remote: issue this daemon a credential and save it beside this
+daemon's config, readable only by its user:
+
+```sh
+# on build-box, in the remote daemon's workspace
+orca auth issue parent-daemon --preset client --json > build-box.token
+# on this machine
+install -m 600 build-box.token auth/remotes/build-box.token   # or set remotes[].credentialFile
+# on build-box: its host key's fingerprint
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+# on this machine
+orca remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for a jump host
+```
+
+`orca remote enroll` trusts a host key only when it is already pinned in
+`auth/remotes/<id>.known_hosts` (`.jump` for the jump host) or matches a fingerprint you give.
+A host that presents any other key is refused before anything, the credential included, is
+sent to it. Enrollment then pins the keys, checks the credential, and records in
+`auth/remotes/<id>.json` the workspace and principal the remote daemon names and the
+credential's id (never the secret). From then on a delegated step:
+
+- opens SSH trusting only the enrolled keys; a changed or missing key refuses the step before
+  any byte reaches the remote;
+- sends the bearer only if the credential file still holds the enrolled credential;
+- refuses before admitting anything unless the remote daemon names the enrolled workspace and
+  principal, and binds the admission to them.
+
+Enroll again after replacing the credential, or after the remote's workspace or host keys
+change on purpose (remove the old `known_hosts` file first for new host keys).
+
+- **The step's task becomes a remote run, once.** The step's rendered prompt (without ORCA's
+  deliverable instructions) is passed as the remote workflow's `prompt` variable, and the run
+  is admitted with `runs.admit` under a key derived from this run and the step's first
+  attempt. Before anything is sent, a receipt is written under the store's `delegations/`,
+  bound to the enrollment and to the remote target and workflow: after a re-enrollment or a
+  retarget, an earlier delegation's receipt is never acted on (its step is refused instead).
+  A retried step, or this daemon after a restart, reads the receipt: it sends the same key
+  again while the answer is unknown (the remote replays it), follows a run that was admitted
+  (and brings back the artifacts of one that already succeeded: a succeeded run stays the
+  step's result across its retries), and starts new remote work only once the earlier run is
+  known to have ended without success, or known never to have been admitted.
+- **The work is the remote daemon's.** It appears in that daemon's run list, owned by the
+  credential's principal, and its audit log names that principal on the admission.
+- **Progress shows on the step.** Remote step milestones and the remote agents' updates
+  appear as the step's agent output.
+- **Remote gates are asked here.** A question the remote run (or a child run the remote's
+  records tie to it) opens is forwarded as a question on this step; the answer is sent back
+  to the remote. Free-text remote questions
+  are left to be answered on the remote daemon.
+- **Cancelling cancels the remote run, and never starts one.** So does the step's turn
+  timeout (`turnTimeoutMs`, 30 minutes by default; raise it for long remote work). Cancelled
+  while an admission's answer is unknown, this daemon fences the key (`admissions.fence`:
+  from then on no admission under it can start a run, however late it arrives) or, if a run
+  was already admitted, cancels it. A cancel counts as done only once the remote run is seen
+  ended; until then every later session to that remote takes it up again.
+- **A dropped connection reattaches.** The session keeps the remote run id and its place in
+  the run's log and keeps trying until the turn's deadline. Once the log shows the run ended,
+  the session reads the run's result until it gets it.
+- **Artifacts come back.** When the remote run succeeds, each of the step's `produces`
+  entries is matched to an artifact of the remote run's own succeeded steps with the same
+  `name` (or, without a name, the same `kind`). Its text is checked against the remote's
+  record (size and sha256) and written where the step collects it.
+- **Failures are typed.** `DELEGATION_REFUSED` (not retried) means the remote or the way to
+  it refused for a reason a retry cannot fix: a refused credential, an incompatible
+  protocol, a daemon that admits no runs (read-only, or an older ORCA), an unknown workflow,
+  a remote that is not enrolled, a credential other than the enrolled one, a remote that
+  names another workspace or principal, a changed or missing host key, failed SSH sign-in. `AGENT_TRANSPORT` means the remote could
+  not be reached. `DELEGATED_RUN_FAILED` means the remote run ended without success; its
+  error is in the step's error details.
+
+Not yet: recording the parent run as the remote run's origin, fetching a named git ref on
+the remote side, issuing the credential automatically over SSH, and binary artifacts.
+
 ## MCP servers and skills for agent steps
 
 ORCA can pass an agent session **outbound** MCP servers (servers the *agent* talks to, given

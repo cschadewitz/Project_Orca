@@ -208,6 +208,7 @@ function artifactView(a: Artifact): ArtifactView {
     createdAt: a.createdAt,
     ...(a.path ? { path: a.path } : {}),
     ...(a.producedBy.stepRunId ? { producedByStepRunId: a.producedBy.stepRunId } : {}),
+    contentHash: a.contentHash,
   };
 }
 

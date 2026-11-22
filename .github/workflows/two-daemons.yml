@@ -12,6 +12,7 @@ on:
     paths:
       - packages/testing/src/two-daemons.ts
       - packages/testing/test/two-daemons.test.ts
+      - packages/cli/test/delegation-883.test.ts
       - packages/app/test/server-update-ssh.test.ts
       - packages/app/src/server-update.ts
       - packages/app/src/main/server-update.ts
@@ -58,3 +59,8 @@ jobs:
         # Also: secret references (#336) delivered over a real sshd, with every argv scanned, and
         # a server update (#879) run over a profile's ssh.
         run: pnpm exec vitest run packages/testing/test/two-daemons.test.ts packages/agents/test/secrets-ssh-native-336.test.ts packages/app/test/server-update-ssh.test.ts
+      # A parent daemon delegating steps to the other over the same sshd (#883).
+      - name: Delegation over loopback ssh
+        env:
+          ORCA_REQUIRE_SSHD: "1"
+        run: pnpm exec vitest run packages/cli/test/delegation-883.test.ts

@@ -112,6 +112,44 @@ export class AdmissionRetryModel {
       release?.();
     }
   }
+  /** A direct admission's receipt by its idempotency key, or `absent`; never claims (#883). */
+  async find(
+    idempotencyKey: string,
+    authorities: AdmissionAuthorities,
+  ): Promise<{ state: "absent" } | RetryResult<unknown>> {
+    await authorities.check();
+    const authority = await authorities.direct();
+    return this.options.direct.withRetryAuthority(authority, () =>
+      this.options.claims.find("run.admit", idempotencyKey, {
+        principalId: authority.actor.principalId,
+        workspaceId: authority.workspaceId,
+        authorize: (command: unknown) => authority.authorize(command as DirectAdmissionCommand),
+      }),
+    );
+  }
+  /**
+   * Fence a direct admission's idempotency key (#883): afterwards no `runs.admit` under it can
+   * admit a run. Answers the admission already under the key when there is one (so the caller
+   * can cancel its run), else the fence's own `fenced` receipt.
+   */
+  async fence(
+    idempotencyKey: string,
+    workflowId: string,
+    authorities: AdmissionAuthorities,
+  ): Promise<{ state: "absent" } | RetryResult<unknown>> {
+    const existing = await this.find(idempotencyKey, authorities);
+    if (existing.state !== "absent") return existing;
+    const authority = await authorities.direct();
+    try {
+      return await this.options.direct.fence(workflowId, { idempotencyKey }, authority);
+    } catch (error) {
+      // An admission claimed the key between the lookup and the fence: answer it instead.
+      if ((error as { code?: string }).code !== "RETRY_CONFLICT") throw error;
+      const raced = await this.find(idempotencyKey, authorities);
+      if (raced.state === "absent") throw error;
+      return raced;
+    }
+  }
   inspect(operationId: string, authorities: AdmissionAuthorities): Promise<RetryResult<unknown>> {
     return this.receipt(operationId, authorities, false);
   }

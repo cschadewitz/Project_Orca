@@ -67,6 +67,7 @@ import {
   type PluginRestorationIdentityVerifier,
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
+import { delegatingSessionFactory, validateRemotes } from "@orca/daemon";
 import { fileStores, memoryStores, type Stores } from "@orca/store";
 import { bindLocalAdmissionExecution } from "./admission-execution-authority.js";
 import { cliHumanInput } from "./human-input-cli.js";
@@ -480,7 +481,22 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       { problems },
     );
 
-  const openSession = makeSessionFactory({ configDir, storeDir: config.storeDir, configFile });
+  for (const problem of validateRemotes(config)) problems.push(problem);
+  if (problems.length)
+    throw new OrcaError("CONFIG_INVALID", `remote validation failed:\n${problems.map((p) => "  - " + p).join("\n")}`, {
+      problems,
+    });
+  // `type: orca-daemon` agents open a session on their remote daemon (#883); every other agent
+  // goes to the ACP factory unchanged. The remotes are read at each open, so an applied config
+  // edit reaches the next session.
+  let currentRemotes = () => config.remotes;
+  const delegating = (base: SessionFactory): SessionFactory =>
+    delegatingSessionFactory(base, {
+      remotes: () => currentRemotes(),
+      configDir,
+      receiptsDir: resolve(configDir, config.storeDir, "delegations"),
+    });
+  const openSession = delegating(makeSessionFactory({ configDir, storeDir: config.storeDir, configFile }));
   const orchestrator = new Orchestrator({
     stores,
     ...(opts.revisionRuntime ? { revisionRuntime: opts.revisionRuntime(stores) } : {}),
@@ -496,7 +512,10 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     // (`orca agent ping`), and standing grants a workspace recorded for its real runs are
     // durable workspace state of exactly the kind `ephemeral` means to leave alone.
     ...(opts.ephemeral
-      ? {}
+      ? // The bare ACP factory, no sidecar; delegating only when there is a remote to go to.
+        config.remotes.length
+        ? { sessionFactory: delegating(openAcpSession) }
+        : {}
       : {
           sessionFactory: (options: OpenSessionOptions) => {
             const current = agents.resolve(options.agent.id).agent;
@@ -542,6 +561,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     ...(bootstrapBound ? { runtimeBootstrapBound: true } : {}),
   });
   orchestrator.generations = generations;
+  currentRemotes = () => generations.current.snapshot.config.remotes;
   // Session caps are read from the current generation (#873): an applied edit that raises
   // one lets the steps queued for it go now rather than at the next release.
   generations.onChange(() => orchestrator.sessionSlots.pump());

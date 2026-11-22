@@ -60,6 +60,7 @@ import {
   type NodeDef,
   type OrcaEvent,
   type OrcaEventInput,
+  type RemoteDaemonSpec,
   type RunState,
   type RunSummary,
   type StepResult,
@@ -120,7 +121,17 @@ import {
 import { SessionSlots, type ConfiguredSessionLimits, type SessionSlot, type SessionSlotCaps } from "./session-slots.js";
 
 /** Opens an agent session; defaults to ACP over stdio (local or ssh). Integrations can substitute other transports. */
-export type SessionFactory = (options: OpenSessionOptions) => Promise<AgentSession>;
+/**
+ * Where a session is opened for (#883): the run, and the configuration generation the run is
+ * bound to, with the remotes that generation configures. A delegating session resolves its
+ * remote from these, never from whatever generation is current when it opens.
+ */
+export interface SessionOrigin {
+  runId: string;
+  generationId?: string;
+  remotes?: readonly RemoteDaemonSpec[];
+}
+export type SessionFactory = (options: OpenSessionOptions & { origin?: SessionOrigin }) => Promise<AgentSession>;
 
 export interface OrchestratorOptions {
   /** Trusted current authority for bounded first attachment of admitted roots. */
@@ -1876,7 +1887,11 @@ export class Orchestrator {
         kind: "failed",
         error: err,
         retryable:
-          err.code !== "WORKFLOW_INVALID" && err.code !== "NOT_SUPPORTED" && err.code !== "AGENT_MODEL_NOT_FOUND",
+          err.code !== "WORKFLOW_INVALID" &&
+          err.code !== "NOT_SUPPORTED" &&
+          err.code !== "AGENT_MODEL_NOT_FOUND" &&
+          // A delegated step the remote refuses for good (#883): a retry meets the same refusal.
+          err.code !== "DELEGATION_REFUSED",
       };
     }
   }
@@ -2033,6 +2048,13 @@ export class Orchestrator {
    * attempt 1, so it never picks up children from an earlier visit. Children already attached
    * to the current attempt are skipped so one prior child is claimed at most once.
    */
+  private sessionOrigin(rc: RunContext): SessionOrigin {
+    const generation = this.contextGenerations.get(rc);
+    return generation
+      ? { runId: rc.id, generationId: generation.snapshot.id, remotes: generation.snapshot.config.remotes }
+      : { runId: rc.id };
+  }
+
   private interruptedChild(rc: RunContext, step: StepRun, branch: string | undefined): string | undefined {
     if (step.attempt <= 1) return undefined;
     const claimed = new Set(step.childRunIds);
@@ -2259,6 +2281,7 @@ export class Orchestrator {
         host,
         // Only the step's resolved MCP servers reach `session/new` (#335).
         agent: { ...agent, mcpServers: capabilities.mcpServers },
+        origin: this.sessionOrigin(rc),
         cwd: rc.workspace.cwd,
         logger: rc.logger,
         clock: this.clock,

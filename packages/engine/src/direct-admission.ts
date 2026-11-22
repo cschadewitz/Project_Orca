@@ -31,6 +31,7 @@ export const DirectAdmissionCommandSchema = z.strictObject({
   expectedConfigGeneration: z.string().min(1).optional(),
   requestId: z.string().min(1).optional(),
   workItemId: z.string().min(1).optional(),
+  fence: z.literal(true).optional(),
 });
 /** Reserved orchestrator/generation integration supplies this explicit capability. */
 export interface DirectCapturedLaunch extends CapturedLaunch {
@@ -50,6 +51,12 @@ const MaterialSchema = z.object({
   workflow: z.object({ id: z.string(), version: z.string(), revision: z.string() }),
 });
 const unavailable = () => new OrcaError("RUN_STATE", "Direct admission is unavailable");
+/** A fence's receipt, bound like any admission: stable for its operation, so a replay answers the same. */
+async function fenced(context: RetryContext): Promise<DirectAdmissionResult> {
+  const admissionId = `fence_${context.operationId}`;
+  if (!(await context.readBinding())) await context.bind({ admissionId, fence: true });
+  return { state: "fenced", admissionId };
+}
 const failure = {
   code: "RUN_STATE",
   message: "Direct admission is incomplete; reconcile the original admission",
@@ -84,10 +91,12 @@ export class DirectAdmissionService {
           ) as JsonValue;
         },
         validateFresh: async (command) => {
+          // A fence launches nothing, so there is no launch to validate.
+          if (command.fence) return;
           await this.validateLaunch(command);
         },
-        prepare: (command, context) => this.prepare(command, context),
-        recover: (command, context) => this.recover(command, context),
+        prepare: (command, context) => (command.fence ? fenced(context) : this.prepare(command, context)),
+        recover: (command, context) => (command.fence ? fenced(context) : this.recover(command, context)),
       },
       undefined,
       (command, binding, receipt, operationId) => this.verifyAccepted(command, binding, receipt, operationId),
@@ -113,6 +122,18 @@ export class DirectAdmissionService {
         authorize: (value) => authority.authorize(value),
       }),
     );
+  }
+  /**
+   * Fence an idempotency key (#883): claim it for `workflowId` with a command no admission ever
+   * sends, so a later `runs.admit` under the key conflicts instead of admitting a run. A key
+   * already claimed by an admission answers that admission's receipt, or conflicts.
+   */
+  fence(
+    workflowId: string,
+    retry: RetryOptions,
+    authority: DirectAdmissionAuthority,
+  ): Promise<RetryResult<DirectAdmissionResult>> {
+    return this.admitRun({ workflowId, fence: true }, retry, authority);
   }
   /** Read-only preflight, repeated during preparation after the retry claim is published. */
   private async validateLaunch(command: DirectAdmissionCommand): Promise<DirectCapturedLaunch> {

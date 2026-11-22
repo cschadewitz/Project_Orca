@@ -133,6 +133,13 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "continuations.get": { permission: "runs.read", resource: "none" },
   "continuations.reconcile": { permission: "runs.control", resource: "none", audit: "mutation" },
   "admissions.get": { permission: "runs.start", resource: "none" },
+  "admissions.find": { permission: "runs.start", resource: "none" },
+  "admissions.fence": {
+    permission: "runs.start",
+    resource: "workflow",
+    param: "workflowId",
+    audit: "mutation",
+  },
   "admissions.reconcile": { permission: "runs.start", resource: "none", audit: "mutation" },
   "runs.start": { permission: "runs.start", resource: "workflow", param: "workflowId", audit: "mutation" },
   "runs.resume": { permission: "runs.control", resource: "run", audit: "mutation" },

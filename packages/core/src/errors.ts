@@ -73,6 +73,19 @@ export type OrcaErrorCode =
    * is left unchanged.
    */
   | "STORE_FORMAT"
+  /**
+   * A delegated step (#883) that the remote daemon, or the way to it, refuses for a reason a
+   * retry cannot fix: a refused credential, an incompatible protocol, a daemon that admits no
+   * runs, a workflow it does not have or will not run for this parent, a changed host key.
+   * `details.reason` names which and `details.profile` the remote. Not retried.
+   */
+  | "DELEGATION_REFUSED"
+  /**
+   * The remote run a delegated step started finished without success. `details` carries the
+   * remote `runId`, its `outcome` and its error, when it reported one. Retried like any step
+   * failure: a retry is a new step attempt and so a new remote run.
+   */
+  | "DELEGATED_RUN_FAILED"
   | "INTERNAL";
 
 export class OrcaError extends Error {

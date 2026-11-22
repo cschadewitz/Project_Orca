@@ -272,9 +272,9 @@ export const commands: Record<string, Command> = {
     run: authCommand,
   },
   remote: {
-    help: "remote add [user@]host  Make a Linux machine a managed ORCA server over SSH, in one step (#881).",
+    help: "remote add [user@]host | remote enroll <id>  Make a Linux machine a managed ORCA server over SSH, in one step (#881); or enroll a configured remote daemon for delegated steps (#883).",
     usage:
-      "--ssh-port N and --identity FILE choose how to reach it; --port N is the daemon's port there (default 6722).\nThe server's host key is pinned on first use under ~/.config/orca/known_hosts. Re-running verifies and repairs.\nIt refuses a machine with an ORCA installation it did not make. --json prints the typed result.\n",
+      "add: --ssh-port N and --identity FILE choose how to reach it; --port N is the daemon's port there (default 6722).\nThe server's host key is pinned on first use under ~/.config/orca/known_hosts. Re-running verifies and repairs.\nIt refuses a machine with an ORCA installation it did not make. --json prints the typed result.\nenroll: trusts a host key only if it is already pinned in auth/remotes/<id>.known_hosts (.jump for the jump host) or matches a fingerprint you give: --host-key SHA256:... (and --jump-host-key), as ssh-keygen -l prints it on that machine. It refuses an unverified host before sending anything.\nIt then pins the keys, checks the credential in auth/remotes/<id>.token, and records the route, workspace and principal in auth/remotes/<id>.json. Delegated steps go only to an enrolled remote, over that route and those keys, with that credential. Enroll again after replacing the credential or changing the remote's route.\n--json prints the enrollment record.\n",
     run: (ctx) => remoteCommand(ctx),
   },
 
@@ -889,6 +889,7 @@ export const commands: Record<string, Command> = {
             promptLog: join(dir, ".orca-demo", "prompts.jsonl"),
           }),
         ],
+        remotes: [],
         roles: {},
         workflows: [join(repoRoot, "workflows", "*.yaml").replaceAll("\\", "/")],
         templates: [join(repoRoot, "templates", "**", "*.md").replaceAll("\\", "/")],

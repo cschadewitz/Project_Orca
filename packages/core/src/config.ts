@@ -11,6 +11,7 @@ import {
   CapabilitiesConfigSchema,
   HostSpecSchema,
   LOCAL_HOST_ID,
+  RemoteDaemonSpecSchema,
   SecretsConfigSchema,
   validateCapabilitiesConfig,
   validateSecretReferences,
@@ -99,6 +100,8 @@ export const OrcaConfigSchema = z
     secrets: SecretsConfigSchema.optional(),
     hosts: z.array(HostSpecSchema).default([{ id: LOCAL_HOST_ID, type: "local" }]),
     agents: z.array(AgentSpecSchema).default([]),
+    /** Other ORCA daemons that `type: orca-daemon` agents delegate steps to (#883). */
+    remotes: z.array(RemoteDaemonSpecSchema).default([]),
     /** Explicit role -> agent id mapping. Falls back to the first agent listing the role. */
     roles: z.record(z.string(), z.string()).default({}),
     /** Glob patterns (relative to the config file) for workflow YAML files. */
@@ -134,6 +137,20 @@ export const OrcaConfigSchema = z
     // rather than the first run that reaches the agent (#335).
     for (const issue of [...validateCapabilitiesConfig(config).errors, ...validateSecretReferences(config)])
       ctx.addIssue({ code: "custom", path: issue.path.split("."), message: issue.message });
+    const remotes = new Set<string>();
+    config.remotes.forEach((remote, i) => {
+      if (remotes.has(remote.id))
+        ctx.addIssue({ code: "custom", path: ["remotes", i, "id"], message: `duplicate remote id ${remote.id}` });
+      remotes.add(remote.id);
+    });
+    config.agents.forEach((agent, i) => {
+      if (agent.type === "orca-daemon" && agent.profile !== undefined && !remotes.has(agent.profile))
+        ctx.addIssue({
+          code: "custom",
+          path: ["agents", i, "profile"],
+          message: `no remotes[] entry has id ${agent.profile}`,
+        });
+    });
   });
 export type OrcaConfig = z.infer<typeof OrcaConfigSchema>;
 

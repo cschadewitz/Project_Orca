@@ -50,6 +50,11 @@ export interface DirectAdmissionCommand {
   expectedConfigGeneration?: string | undefined;
   requestId?: string | undefined;
   workItemId?: string | undefined;
+  /**
+   * A fence (#883, `admissions.fence`): claims the key so that no later admission under it can
+   * admit a run. Never set by `runs.admit`.
+   */
+  fence?: true | undefined;
 }
 export type DirectAdmissionResult =
   | { state: "prepared"; admissionId: string }
@@ -59,7 +64,9 @@ export type DirectAdmissionResult =
       admissionId: string;
       runId?: string;
       failure: { code: OrcaErrorCode; message: string; recovery: "reconcile" };
-    };
+    }
+  /** The key was claimed by a fence: no run was, or ever will be, admitted under it (#883). */
+  | { state: "fenced"; admissionId: string };
 export interface DirectAdmissionAuthority {
   readonly workspaceId: string;
   readonly actor: MutationActor;
@@ -118,4 +125,10 @@ export interface RetryClaimStore {
   write(record: RetryRecord): Promise<void>;
   /** Fixed-size discovery; cursor is persisted by the store, no whole-ledger scan. */
   batch(): Promise<string[]>;
+  /**
+   * The claim an idempotency key already made in this scope, or undefined. Never claims,
+   * creates a lookup salt or charges a quota: a caller that must not create work (a cancel
+   * whose admission answer was lost, #883) asks this instead of repeating the admission.
+   */
+  find?(scope: RetryScope, key: string): Promise<RetryRecord | undefined>;
 }
