@@ -14,8 +14,9 @@
  *
  * - the previous release installs and its app opens the workspace;
  * - the candidate installs over it, and its app opens the same store in place: the store is
- *   stamped with the format and the candidate's version, no format backup is made, and every
- *   run is still there;
+ *   stamped with the format and the candidate's version (an unmarked store from a release
+ *   before #896 acquires the marker; a marked one keeps its format), no format backup is made,
+ *   and every run is still there;
  * - the previous release's daemon still reads the stamped store (a rollback after an update);
  * - the candidate refuses a store stamped by a newer format, and changes nothing in it.
  *
@@ -199,6 +200,7 @@ interface Marker {
   format: number;
   epoch: string;
   writtenBy: string;
+  updatedAt?: string;
 }
 const readMarker = async (store: string) =>
   JSON.parse(await readFile(join(store, "store-format.json"), "utf8")) as Marker;
@@ -207,6 +209,8 @@ test.describe.configure({ mode: "serial" });
 
 let fromRuns: string[] = [];
 let fromBundle = "";
+/** The marker the previous release left, if it is a release that writes one (0.7.1 and later). */
+let fromMarker: Marker | undefined;
 
 test(`the previous release (${FROM}) installs and opens the workspace it wrote`, async () => {
   test.setTimeout(300_000);
@@ -217,7 +221,10 @@ test(`the previous release (${FROM}) installs and opens the workspace it wrote`,
   expect(fromRuns.length, "the demo recorded runs").toBeGreaterThan(0);
   const app = await launch(exe, FROM);
   await stop(app);
-  expect(await exists(join(STORE, "store-format.json")), `${FROM} writes no format marker`).toBe(false);
+  // Two baselines: a release before #896 (0.7.0) leaves the store unmarked; a later one stamps
+  // its own format and version. Either way nothing else about the store differs.
+  fromMarker = (await exists(join(STORE, "store-format.json"))) ? await readMarker(STORE) : undefined;
+  if (fromMarker) expect(fromMarker).toMatchObject({ format: 1, epoch: FROM_EPOCH, writtenBy: FROM });
   // Kept for the rollback check: installing the candidate replaces it.
   fromBundle = join(await mkdtemp(join(tmpdir(), "orca-upgrade-from-")), "orca-daemon.mjs");
   await copyFile(bundleOf(exe), fromBundle);
@@ -238,12 +245,28 @@ test(`the candidate (${TO}) installs over it and opens the same store in place`,
 
   const app = await launch(exe, TO);
   await stop(app);
-  expect(await readMarker(STORE)).toMatchObject({ format: 1, epoch: FROM_EPOCH, writtenBy: TO });
+  // An unmarked store acquires the marker; a marked one keeps its format (and any backup it
+  // names) and records the candidate as its last writer. Neither is converted or copied.
+  const marker = await readMarker(STORE);
+  expect(marker).toMatchObject({ format: 1, epoch: FROM_EPOCH, writtenBy: TO });
+  if (fromMarker) expect(marker).toEqual({ ...fromMarker, writtenBy: TO, updatedAt: marker.updatedAt });
   expect(await exists(join(STORE, "format-backups")), "opening in place makes no format backup").toBe(false);
   expect(await runIds(exe, bundleOf(exe))).toEqual(fromRuns);
   const again = await cli(exe, bundleOf(exe), WORKSPACE, ["store", "format"]);
   expect(again.code).toBe(0);
   expect(again.stdout).toMatch(/^on startup\s+opens in place/m);
+});
+
+test("a marked store of the same format opens in place again, unchanged", async () => {
+  // What every upgrade after the first meets: a store already stamped by this format.
+  test.setTimeout(300_000);
+  const { exe } = await installed();
+  const before = await readFile(join(STORE, "store-format.json"), "utf8");
+  const app = await launch(exe, `${TO}-again`);
+  await stop(app);
+  expect(await readFile(join(STORE, "store-format.json"), "utf8")).toBe(before);
+  expect(await exists(join(STORE, "format-backups"))).toBe(false);
+  expect(await runIds(exe, bundleOf(exe))).toEqual(fromRuns);
 });
 
 test(`the previous release's daemon still reads the stamped store`, async () => {
