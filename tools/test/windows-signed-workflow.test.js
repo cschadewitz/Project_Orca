@@ -210,7 +210,13 @@ describe("the source commit the run builds", () => {
     { type: "deletion" },
     {
       type: "required_status_checks",
-      parameters: { required_status_checks: [{ context: "check (node 24)" }, { context: "release line check" }] },
+      parameters: {
+        strict_required_status_checks_policy: true,
+        required_status_checks: [
+          { context: "check (node 24)", integration_id: 15368 },
+          { context: "release line check", integration_id: 15368 },
+        ],
+      },
     },
   ]);
   const resolveWith = (requested, githubSha, rules = protectedRules) => {

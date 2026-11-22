@@ -10,7 +10,15 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkLinePullRequest, inLine, lineOf, referencedIssues } from "../release-line-guard.js";
-import { LINE_CHECKS, laneOf, protectionProblems, releaseDiffProblems } from "../release-lane.js";
+import {
+  ACTIONS_APP_ID,
+  GUARD_WORKFLOW,
+  LINE_CHECKS,
+  guardRunProblems,
+  laneOf,
+  protectionProblems,
+  releaseDiffProblems,
+} from "../release-lane.js";
 
 const RELEASE = fileURLToPath(new URL("../release.js", import.meta.url));
 // Borrowed from the CLI, which already installs it, rather than added to the root manifest.
@@ -229,7 +237,10 @@ describe("the lane policy", () => {
     { type: "deletion" },
     {
       type: "required_status_checks",
-      parameters: { required_status_checks: LINE_CHECKS.map((context) => ({ context })) },
+      parameters: {
+        strict_required_status_checks_policy: true,
+        required_status_checks: LINE_CHECKS.map((context) => ({ context, integration_id: ACTIONS_APP_ID })),
+      },
     },
   ];
 
@@ -261,12 +272,52 @@ describe("the lane policy", () => {
       "the guard not required",
       protectedRules.map((r) =>
         r.type === "required_status_checks"
-          ? { ...r, parameters: { required_status_checks: [{ context: "check (node 24)" }] } }
+          ? { ...r, parameters: { ...r.parameters, required_status_checks: [{ context: "check (node 24)" }] } }
+          : r,
+      ),
+    ],
+    [
+      "checks any app may satisfy",
+      protectedRules.map((r) =>
+        r.type === "required_status_checks"
+          ? {
+              ...r,
+              parameters: { ...r.parameters, required_status_checks: LINE_CHECKS.map((context) => ({ context })) },
+            }
+          : r,
+      ),
+    ],
+    [
+      "branches allowed to be behind",
+      protectedRules.map((r) =>
+        r.type === "required_status_checks"
+          ? { ...r, parameters: { ...r.parameters, strict_required_status_checks_policy: false } }
           : r,
       ),
     ],
   ])("refuses a line with %s", (_, rules) => {
     expect(protectionProblems(rules).length).toBeGreaterThan(0);
+  });
+
+  describe("whose release line check counts", () => {
+    const head = "a".repeat(40);
+    const checkRun = { conclusion: "success", head_sha: head, app: { slug: "github-actions" } };
+    const workflowRun = { path: GUARD_WORKFLOW, event: "pull_request_target", head_sha: head };
+
+    it("is main's guard workflow, run by Actions on the exact head", () => {
+      expect(guardRunProblems(checkRun, workflowRun, head)).toEqual([]);
+    });
+
+    it.each([
+      ["a failure", { ...checkRun, conclusion: "failure" }, workflowRun, /did not succeed/],
+      ["another head", { ...checkRun, head_sha: "b".repeat(40) }, workflowRun, /ran on b+/],
+      ["another app", { ...checkRun, app: { slug: "someone" } }, workflowRun, /posted by someone/],
+      ["another workflow", checkRun, { ...workflowRun, path: ".github/workflows/ci.yml" }, /came from/],
+      ["the pull request's own code", checkRun, { ...workflowRun, event: "pull_request" }, /pull_request event/],
+      ["no workflow run", checkRun, undefined, /no workflow/],
+    ])("is not %s", (_, run, workflow, message) => {
+      expect(guardRunProblems(run, workflow, head).join("; ")).toMatch(message);
+    });
   });
 
   it("knows a release preparation from anything else", () => {
@@ -308,7 +359,10 @@ describe("a real release's reviewed-commit check", () => {
     { type: "deletion" },
     {
       type: "required_status_checks",
-      parameters: { required_status_checks: LINE_CHECKS.map((context) => ({ context })) },
+      parameters: {
+        strict_required_status_checks_policy: true,
+        required_status_checks: LINE_CHECKS.map((context) => ({ context, integration_id: ACTIONS_APP_ID })),
+      },
     },
   ]);
   let clone;
@@ -329,6 +383,9 @@ describe("a real release's reviewed-commit check", () => {
     git(origin, "reset", "-q", "--hard", commits.line);
     git(origin, "checkout", "-qb", "release/0.8", fork);
     commits.otherLine = commit(origin, "package.json", manifest("0.7.2"));
+    // The same version as the line's release commit, with more in its tree.
+    commit(origin, "package.json", manifest("0.7.1"));
+    commits.reworked = commit(origin, "packages/app/extra.ts", "// not reviewed\n");
     git(origin, "checkout", "-q", "main");
     git(origin, "reset", "-q", "--hard", commits.main);
     clone = join(work, "clone");
@@ -336,12 +393,12 @@ describe("a real release's reviewed-commit check", () => {
     // The minor commit is reachable from nowhere on origin but exists in the clone's objects.
     git(clone, "fetch", "-q", origin, commits.minorOnLine);
     git(clone, "fetch", "-q", origin, commits.patchOnMain);
-    // gh answers the rules API from RULES and the check-runs API from CHECKS.
+    // gh answers the rules API from RULES, check runs from CHECKS and workflow runs from RUNS.
     bin = join(work, "bin");
     mkdirSync(bin);
     writeFileSync(
       join(bin, "gh"),
-      '#!/bin/sh\ncase "$*" in *rules/branches*) printf "%s" "$RULES";; *check-runs*) printf "%s" "$CHECKS";; *) exit 1;; esac\n',
+      '#!/bin/sh\ncase "$*" in *rules/branches*) printf "%s" "$RULES";; *check-runs*) printf "%s" "$CHECKS";; *actions/runs*) printf "%s" "$RUNS";; *) exit 1;; esac\n',
       { mode: 0o755 },
     );
   });
@@ -352,6 +409,7 @@ describe("a real release's reviewed-commit check", () => {
     ref = "refs/heads/main",
     rules = protectedRules,
     checks,
+    runs,
     eventFile,
   }) =>
     execFileSync("bash", ["-c", step.run], {
@@ -364,7 +422,8 @@ describe("a real release's reviewed-commit check", () => {
         DEFAULT_BRANCH: "main",
         SHA: sha,
         RULES: rules,
-        CHECKS: checks ?? JSON.stringify({ check_runs: [{ conclusion: "success" }] }),
+        CHECKS: checks ?? guardChecks(),
+        RUNS: runs ?? guardRuns(),
         GITHUB_EVENT_PATH: eventFile ?? "/dev/null",
         GITHUB_REPOSITORY: "o/r",
         RUNNER_TEMP: work,
@@ -372,6 +431,24 @@ describe("a real release's reviewed-commit check", () => {
       },
       encoding: "utf8",
       stdio: "pipe",
+    });
+  // The release line check as main's guard posts it on the reviewed head.
+  const guardChecks = (over = {}) =>
+    JSON.stringify({
+      check_runs: [
+        {
+          id: 1,
+          conclusion: "success",
+          head_sha: commits.line,
+          app: { slug: "github-actions" },
+          check_suite: { id: 2 },
+          ...over,
+        },
+      ],
+    });
+  const guardRuns = (over = {}) =>
+    JSON.stringify({
+      workflow_runs: [{ path: GUARD_WORKFLOW, event: "pull_request_target", head_sha: commits.line, ...over }],
     });
   const refused = (fn) => {
     try {
@@ -439,20 +516,54 @@ describe("a real release's reviewed-commit check", () => {
       undefined,
       /not a release pull request head/,
     ],
+    ["whose guard did not pass", {}, () => guardChecks({ conclusion: "failure" }), /did not pass on the reviewed head/],
     [
-      "whose guard did not pass",
+      "whose guard check another app posted",
       {},
-      JSON.stringify({ check_runs: [{ conclusion: "failure" }] }),
-      /did not pass on the reviewed head/,
+      () => guardChecks({ app: { slug: "impostor" } }),
+      /posted by impostor/,
+    ],
+    [
+      "whose version is not the one package.json holds",
+      { head: { ref: "release/v0.7.2", sha: null, repo: { full_name: "o/r" } } },
+      undefined,
+      /says 0\.7\.1, not 0\.7\.2/,
     ],
   ])("refuses a merged release pull request %s", (_, over, checks, message) => {
-    expect(refused(() => run({ sha: commits.line, event: "pull_request", eventFile: merged(over), checks }))).toMatch(
-      message,
-    );
+    if (over.head?.sha === null) over.head.sha = commits.line;
+    expect(
+      refused(() => run({ sha: commits.line, event: "pull_request", eventFile: merged(over), checks: checks?.() })),
+    ).toMatch(message);
+  });
+
+  it("refuses a release line check that main's guard did not run", () => {
+    expect(
+      refused(() =>
+        run({
+          sha: commits.line,
+          event: "pull_request",
+          eventFile: merged(),
+          runs: guardRuns({ event: "pull_request", path: ".github/workflows/other.yml" }),
+        }),
+      ),
+    ).toMatch(/as main runs it, did not pass/);
+  });
+
+  it("binds a minor's release pull request on main to its version and reviewed tree too", () => {
+    const head = { ref: "release/v0.7.0", sha: commits.main, repo: { full_name: "o/r" } };
+    expect(
+      run({ sha: commits.main, event: "pull_request", eventFile: merged({ head, base: { ref: "main" } }) }),
+    ).toMatch(/v0\.7\.0\) from main/);
+    const stale = { ...head, ref: "release/v0.8.0" };
+    expect(
+      refused(() =>
+        run({ sha: commits.main, event: "pull_request", eventFile: merged({ head: stale, base: { ref: "main" } }) }),
+      ),
+    ).toMatch(/says 0\.7\.0, not 0\.8\.0/);
   });
 
   it("refuses a merge commit whose tree is not the reviewed head's", () => {
-    const head = { ref: "release/v0.7.1", sha: commits.otherLine, repo: { full_name: "o/r" } };
+    const head = { ref: "release/v0.7.1", sha: commits.reworked, repo: { full_name: "o/r" } };
     expect(refused(() => run({ sha: commits.line, event: "pull_request", eventFile: merged({ head }) }))).toMatch(
       /is not the reviewed head/,
     );

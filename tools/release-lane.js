@@ -39,10 +39,13 @@ export function laneOf(version) {
   return `release/${major}.${minor}`;
 }
 
+// GitHub Actions' app id: a required check pinned to it can only be satisfied by a workflow.
+export const ACTIONS_APP_ID = 15368;
+
 /**
  * What a line's active rules (GET /repos/R/rules/branches/B) lack, empty when it is protected
  * enough to be a release source: a pull request for every change, no force push, no deletion,
- * and LINE_CHECKS required.
+ * and LINE_CHECKS required from GitHub Actions with branches kept up to date.
  */
 export function protectionProblems(rules) {
   const types = new Set((rules ?? []).map((r) => r.type));
@@ -50,13 +53,16 @@ export function protectionProblems(rules) {
   if (!types.has("pull_request")) problems.push("changes must require a pull request");
   if (!types.has("non_fast_forward")) problems.push("force pushes must be blocked");
   if (!types.has("deletion")) problems.push("deletion must be restricted");
-  const required = new Set(
-    (rules ?? [])
-      .filter((r) => r.type === "required_status_checks")
-      .flatMap((r) => r.parameters?.required_status_checks ?? [])
-      .map((c) => c.context),
-  );
-  for (const check of LINE_CHECKS) if (!required.has(check)) problems.push(`"${check}" must be a required check`);
+  const statusRules = (rules ?? []).filter((r) => r.type === "required_status_checks");
+  const required = statusRules.flatMap((r) => r.parameters?.required_status_checks ?? []);
+  for (const check of LINE_CHECKS) {
+    const entries = required.filter((c) => c.context === check);
+    if (!entries.length) problems.push(`"${check}" must be a required check`);
+    else if (!entries.some((c) => c.integration_id === ACTIONS_APP_ID))
+      problems.push(`"${check}" must be required from GitHub Actions, not any source`);
+  }
+  if (!statusRules.some((r) => r.parameters?.strict_required_status_checks_policy === true))
+    problems.push("branches must be up to date before merging");
   return problems;
 }
 
@@ -126,14 +132,44 @@ function verify(sha, version) {
   console.log(`${lane} ${head}`);
 }
 
+export const GUARD_WORKFLOW = ".github/workflows/release-line-guard.yml";
+
+/**
+ * Whether a check run is the release line guard as main runs it: by GitHub Actions, from
+ * main's release-line-guard.yml on a pull_request_target event, on exactly `headSha`. A check
+ * name alone is not provenance: anything with checks: write could post one.
+ */
+export function guardRunProblems(checkRun, workflowRun, headSha) {
+  const problems = [];
+  if (checkRun?.conclusion !== "success") problems.push("it did not succeed");
+  if (checkRun?.head_sha !== headSha) problems.push(`it ran on ${checkRun?.head_sha}, not ${headSha}`);
+  if (checkRun?.app?.slug !== "github-actions")
+    problems.push(`it was posted by ${checkRun?.app?.slug ?? "an unknown app"}`);
+  if (workflowRun?.path !== GUARD_WORKFLOW) problems.push(`it came from ${workflowRun?.path ?? "no workflow"}`);
+  if (workflowRun?.event !== "pull_request_target") problems.push(`it ran on ${workflowRun?.event ?? "no"} event`);
+  if (workflowRun?.head_sha !== headSha) problems.push(`its workflow ran for ${workflowRun?.head_sha}`);
+  return problems;
+}
+
+const versionAt = (sha) => {
+  try {
+    return JSON.parse(git("show", `${sha}:package.json`)).version;
+  } catch {
+    return undefined;
+  }
+};
+
 /**
  * A merged release pull request may start publication only if it is the release preparation
- * the guard passed: from this repository, `release/vV` into V's lane, the guard green on the
- * exact head that was reviewed, and the merge commit's tree equal to that head's tree.
+ * that was reviewed: from this repository, `release/vV` into V's lane, package.json saying V
+ * at both the reviewed head and the merge commit, and the merge commit's tree equal to that
+ * head's tree (on either lane). On a line, the release line guard as main runs it must also
+ * have passed on that exact head.
  */
 function releasePr(eventPath, sha) {
   const pr = JSON.parse(readFileSync(eventPath, "utf8")).pull_request;
   if (!pr?.merged) die("the pull request did not merge");
+  if (!/^[0-9a-f]{40}$/.test(sha ?? "")) die(`not a full commit sha: ${sha}`);
   const version = /^release\/v(.+)$/.exec(pr.head.ref)?.[1];
   if (!version) die(`${pr.head.ref} is not a release pull request head (release/vX.Y.Z)`);
   let lane;
@@ -144,15 +180,40 @@ function releasePr(eventPath, sha) {
   }
   if (pr.head.repo?.full_name !== repo()) die("a release pull request must come from this repository");
   if (pr.base.ref !== lane) die(`v${version} is cut from ${lane}, but the pull request merged into ${pr.base.ref}`);
+  if (!/^[0-9a-f]{40}$/.test(pr.head.sha ?? "")) die(`not a full commit sha: ${pr.head.sha}`);
+  try {
+    git("fetch", "-q", "origin", pr.head.sha);
+  } catch {
+    die(`the reviewed head ${pr.head.sha} could not be fetched`);
+  }
+  for (const [what, at] of [
+    ["the reviewed head", pr.head.sha],
+    ["the merge commit", sha],
+  ]) {
+    const found = versionAt(at);
+    if (found !== version) die(`package.json at ${what} ${at} says ${found}, not ${version}`);
+  }
+  if (git("rev-parse", `${sha}^{tree}`) !== git("rev-parse", `${pr.head.sha}^{tree}`))
+    die(`the merge commit ${sha} is not the reviewed head ${pr.head.sha}; update the branch and review again`);
   if (lane !== "main") {
     const runs = ghJson(
-      `repos/${repo()}/commits/${pr.head.sha}/check-runs?check_name=${encodeURIComponent("release line check")}`,
+      `repos/${repo()}/commits/${pr.head.sha}/check-runs?check_name=${encodeURIComponent("release line check")}&filter=all`,
     ).check_runs;
-    if (!runs.some((r) => r.conclusion === "success"))
-      die(`the release line check did not pass on the reviewed head ${pr.head.sha}`);
-    git("fetch", "-q", "origin", pr.head.sha);
-    if (git("rev-parse", `${sha}^{tree}`) !== git("rev-parse", `${pr.head.sha}^{tree}`))
-      die(`the merge commit ${sha} is not the reviewed head ${pr.head.sha}; update the branch and review again`);
+    const seen = [];
+    let trusted = false;
+    for (const run of runs ?? []) {
+      const workflow = run.check_suite?.id
+        ? ghJson(`repos/${repo()}/actions/runs?check_suite_id=${run.check_suite.id}`).workflow_runs?.[0]
+        : undefined;
+      const problems = guardRunProblems(run, workflow, pr.head.sha);
+      if (!problems.length) trusted = true;
+      else seen.push(`check run ${run.id}: ${problems.join(", ")}`);
+    }
+    if (!trusted)
+      die(
+        `the release line check, as main runs it, did not pass on the reviewed head ${pr.head.sha}` +
+          (seen.length ? ` (${seen.join("; ")})` : ""),
+      );
   }
   console.log(`release pull request #${pr.number}: v${version} into ${lane}`);
 }
