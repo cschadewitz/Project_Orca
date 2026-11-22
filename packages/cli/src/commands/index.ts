@@ -1157,6 +1157,8 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
   if (revisionServices && app.retryClaims) revisionServices.register(app.retryClaims);
   const daemon = await startDaemon({
     runtimeIdle: liveRuntime,
+    // Secret reference metadata from the current configuration generation (#336).
+    secretsSource: () => app.orchestrator.generations?.current.agents ?? app.agents,
     admissionExecutionSource: async (runId) => {
       const status = await readAdmissionExecutionStatus(app.orchestrator.stores, runId);
       switch (status.state) {

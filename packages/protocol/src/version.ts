@@ -176,6 +176,11 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * daemon that takes the field says so in `hello.admitFields` (also new), and a caller sends
  * it only to a daemon that lists it there, never on the strength of the minor alone.
  */
+/**
+ * 2.6 also adds secret reference metadata (#336): `secrets.list` and `secrets.check`, two reads
+ * under the new `secrets.read` permission that never return a value. New method names in
+ * `hello.methods`: a 2.5 client never calls them.
+ */
 export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 6 };
 
 /**

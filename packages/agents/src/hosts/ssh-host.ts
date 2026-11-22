@@ -23,6 +23,7 @@ import { posix } from "node:path";
 import { OrcaError, literalEnv, type AgentSpec, type SshHost as SshHostSpec } from "@orca/core";
 import { secretText, sourceMissing } from "../secrets.js";
 import {
+  childExitStatus,
   collectChildProcess,
   killIfRunning,
   StderrTail,
@@ -279,6 +280,12 @@ export class SshHost implements AgentHost {
   exec(command: string, options: { cwd?: string; stdin?: string; timeoutMs?: number } = {}): Promise<ExecResult> {
     const script = options.cwd ? `cd ${shellQuote(options.cwd)} && ${command}` : command;
     return collectChildProcess(this.spawnSsh(script), options);
+  }
+
+  /** `script` for its exit status alone: no stdin, and stdout and stderr go nowhere (#336). */
+  execStatus(script: string, options: { timeoutMs: number }): Promise<number | null> {
+    const args = [...this.baseArgs(), "--", ...this.remoteCommand(script)];
+    return childExitStatus(spawn(this.spec.sshBinary, args, { stdio: "ignore" }), options.timeoutMs);
   }
 
   /** Run `script` through the remote login shell; stdin/stdout carry the payload. */
