@@ -103,6 +103,8 @@ export const StepRunSchema = z.object({
   attempt: z.number().int().positive(),
   status: StepStatusSchema,
   waitingOn: z.string().optional(),
+  /** `step.waiting.detail` of that wait, when the engine recorded one (an agent slot's limit and use, #873). */
+  waitingDetail: z.string().optional(),
   iteration: z.number().int().nonnegative().optional(),
   agentSessionId: z.string().optional(),
   inputArtifactIds: z.array(z.string()).default([]),

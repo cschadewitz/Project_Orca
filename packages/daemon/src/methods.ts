@@ -379,6 +379,7 @@ export const hello: Method<{ client: string; protocol: { major: number; minor: n
       ...(ctx.processId === undefined ? {} : { processId: ctx.processId }),
       ...(ctx.identity ? { identity: ctx.identity } : {}),
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
+      ...(ctx.agents ? { sessionSlots: ctx.agents.sessionSlotsSummary() } : {}),
       capabilities: [
         ...(Object.keys(createOperatorMutationMethods(ctx)) as DaemonCapability[]),
         ...(ctx.hostResourceRead ? ["operator.hostResources" as const] : []),

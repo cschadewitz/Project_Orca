@@ -113,7 +113,15 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * Upgrade clients and daemons together. Optional feature methods still depend on
  * installed providers and caller authority; the major bump does not require them.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 0 };
+/**
+ * 2.1 adds agent session slots (#873): optional `sessionSlots` on `hello` (daemon-wide cap,
+ * open sessions, queue depth) and on `agents.list` (per-agent and per-host caps and use), and
+ * the `agent-slot` value of `step.waiting.on`. Optional fields joining existing results, and a
+ * new value in a field that was always a plain string, so a 2.0 client reads a 2.1 daemon as
+ * before. No capability is minted: a 2.0 client parses `hello.capabilities` with a closed
+ * enum, and the fields' presence already says whether the daemon has them.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 1 };
 
 export function formatProtocolVersion(v: ProtocolVersion): string {
   return `${v.major}.${v.minor}`;

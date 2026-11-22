@@ -503,6 +503,20 @@ describe("hello", () => {
 });
 
 describe("agents.list and agents.ping", () => {
+  it("reports session slots (#873): no caps by default, real counts, and the daemon-wide part in hello", async () => {
+    const h = harness();
+    const list = AgentsListResultSchema.parse((await call(h.ctx, "agents.list")).result);
+    expect(list.sessionSlots).toEqual({
+      limits: { agents: {}, hosts: {} },
+      inUse: { total: 0, agents: {}, hosts: {} },
+      queued: 0,
+    });
+    const hello = HelloResultSchema.parse(
+      (await call(h.ctx, "hello", { client: "t", protocol: PROTOCOL_VERSION })).result,
+    );
+    expect(hello.sessionSlots).toEqual({ inUse: 0, queued: 0 });
+  });
+
   it("reports a configured agent nothing has contacted as unknown, not as a default", async () => {
     const h = harness();
     const list = AgentsListResultSchema.parse((await call(h.ctx, "agents.list")).result);

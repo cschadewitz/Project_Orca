@@ -7,7 +7,7 @@
 import { z } from "zod";
 import { OPERATOR_METHODS } from "./operator-reads.js";
 import { ProtocolVersionSchema } from "./version.js";
-import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD } from "./agents.js";
+import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD, SessionSlotsSummarySchema } from "./agents.js";
 import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
 import { CLAIMS_LIST_METHOD, CLAIMS_RELEASE_METHOD } from "./claims.js";
 import { CONFIG_GET_METHOD, CONFIG_SET_METHOD, CONFIG_APPLY_METHOD } from "./config.js";
@@ -189,5 +189,11 @@ export const HelloResultSchema = z.object({
   capabilities: z.array(DaemonCapabilitySchema),
   /** Every method this daemon answers, `hello` included. Added in protocol 1.1; absent from an older daemon. */
   methods: z.array(z.string()).optional(),
+  /**
+   * Agent session slots at the moment of the handshake (#873): the daemon-wide cap when one is
+   * configured, sessions open and steps queued. Present when the daemon serves the agent
+   * surface; `agents.list` carries the per-agent and per-host detail. Protocol 2.1.
+   */
+  sessionSlots: SessionSlotsSummarySchema.optional(),
 });
 export type HelloResult = z.infer<typeof HelloResultSchema>;

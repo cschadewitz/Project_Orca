@@ -334,6 +334,44 @@ the agent is told `cancelled` and the *tool call* fails while the run carries on
   When it elapses ORCA sends `session/cancel`; an agent that does not end the turn within
   its `cancelGraceMs` (default 10s) is killed and the step fails with `AGENT_TRANSPORT`.
 
+## Agent session caps
+
+Nothing limits how many agent sessions a daemon opens unless you say so: `parallel`
+concurrency and plan dispatch concurrency shape one run or one plan, and two runs can each
+fan out. Three optional caps in `orca.config.yaml` bound the whole daemon (#873):
+
+```yaml
+limits:
+  maxAgentSessions: 6        # every agent session this daemon holds open, across all runs
+hosts:
+  - { id: box-b, type: ssh, host: box-b.example, maxSessions: 3 }   # sessions on that host
+agents:
+  - { id: claude, command: claude-code-acp, maxSessions: 2 }        # one provider/account
+```
+
+- **The default is unlimited.** A cap applies only when it is written; none is derived
+  from the machine's cores or memory. Each must be a positive integer.
+- A step takes one slot from every cap that applies to it when it opens an agent session,
+  and gives it back when the session closes - at the end of the step, when the run ends for
+  a `per-run` session (which holds its slot for the whole run), when the open fails, or when
+  the agent process dies.
+- Runs are still admitted at once. A step that cannot have a slot waits *before* it spawns
+  anything: `step.waiting` with `on: agent-slot` and a detail such as
+  `waiting for an agent slot: 3 of 3 in use on host box-b`. The run shows as blocked, the
+  timeline shows the reason, and `orca plan explain <slug>` lists it for a dispatched item.
+  Cancelling the run takes the step out of the queue; restarting the daemon loses nothing,
+  because a waiting step never opened a session.
+- Waiters for the same cap go in order: steps in a plan by plan priority, other steps by
+  age, and the two sides by age. A step bound for another host or agent is not held up by a
+  full one.
+- Caps are read from the current configuration each time, so applying an edit that raises
+  one lets waiting steps go at once.
+- A `per-run` agent keeps its slot between steps. A daemon cap smaller than the `per-run`
+  sessions a run holds plus the sessions its child runs need will wait forever; size the cap
+  for that, or use `per-step` for agents that fan out.
+- `hello` reports the daemon-wide cap, sessions open and queue depth; `agents.list` adds the
+  per-agent and per-host caps and use (protocol 2.1).
+
 ## Templates
 
 Markdown files with front matter (`id`, `name`, `description`, `version`, `requires`,

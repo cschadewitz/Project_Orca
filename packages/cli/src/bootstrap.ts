@@ -540,6 +540,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     ...(bootstrapBound ? { runtimeBootstrapBound: true } : {}),
   });
   orchestrator.generations = generations;
+  // Session caps are read from the current generation (#873): an applied edit that raises
+  // one lets the steps queued for it go now rather than at the next release.
+  generations.onChange(() => orchestrator.sessionSlots.pump());
   // Explicit embedder/plugin ports and later facade replacements stay live. Only the
   // configured gate policy is restored; permission requests still use the live port.
   orchestrator.generationHumanInput = (generation) =>

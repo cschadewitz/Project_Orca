@@ -199,8 +199,9 @@ when versioning. In a plan, context from the items a work item depends on is
 
 ## Config (`config.ts`)
 
-`orca.config.yaml`: `storeDir`, `hosts[]` (`local` | `ssh`), `agents[]` (command, args, env,
-hostId, roles, permissions, mcpServers, sessionMode, turnTimeoutMs, cancelGraceMs, and the
+`orca.config.yaml`: `storeDir`, `limits{maxAgentSessions}`, `hosts[]` (`local` | `ssh`, each
+with an optional `maxSessions`), `agents[]` (command, args, env,
+hostId, roles, permissions, mcpServers, sessionMode, turnTimeoutMs, cancelGraceMs, maxSessions, and the
 declared `models[]` — `{ id, name, description? }` — with `defaultModel`, which a run's
 `overrides.model` is checked against), `roles{}`,
 `workflows[]`/`templates[]` globs, `program{workflow,itemWorkflow}`,

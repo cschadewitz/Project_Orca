@@ -77,6 +77,45 @@ export const AgentViewSchema = z.object({
 });
 export type AgentView = z.infer<typeof AgentViewSchema>;
 
+/**
+ * Agent session slots (#873): the optional caps this daemon is configured with, how many
+ * sessions are open against them, and how many steps are queued for one. A cap that is not
+ * configured is absent - unlimited is the default - so an empty `agents`/`hosts` record and no
+ * `maxAgentSessions` mean "no caps", and the counts are still real. Protocol 2.1; optional, so
+ * an older client ignores it and an older daemon simply never sends it.
+ */
+export const SessionSlotsViewSchema = z.object({
+  limits: z.object({
+    maxAgentSessions: z.number().int().positive().optional(),
+    /** Agent id -> `agents[].maxSessions`, for agents that set one. */
+    agents: z.record(z.string(), z.number().int().positive()),
+    /** Host id -> `hosts[].maxSessions`, for hosts that set one. */
+    hosts: z.record(z.string(), z.number().int().positive()),
+  }),
+  inUse: z.object({
+    total: z.number().int().nonnegative(),
+    /** Agent id -> open sessions; agents with none are left out. */
+    agents: z.record(z.string(), z.number().int().nonnegative()),
+    /** Host id -> open sessions; hosts with none are left out. */
+    hosts: z.record(z.string(), z.number().int().nonnegative()),
+  }),
+  /** Steps waiting for a slot right now (`step.waiting` on `agent-slot`). */
+  queued: z.number().int().nonnegative(),
+});
+export type SessionSlotsView = z.infer<typeof SessionSlotsViewSchema>;
+
+/**
+ * The daemon-wide part of `SessionSlotsView`, for `hello`: the one cap, the open total and the
+ * queue depth. Per-agent and per-host detail names configured agents and hosts, so it stays on
+ * `agents.list`, behind the same read authority as the rest of that surface.
+ */
+export const SessionSlotsSummarySchema = z.object({
+  maxAgentSessions: z.number().int().positive().optional(),
+  inUse: z.number().int().nonnegative(),
+  queued: z.number().int().nonnegative(),
+});
+export type SessionSlotsSummary = z.infer<typeof SessionSlotsSummarySchema>;
+
 export const AgentsListParamsSchema = z.object({});
 export type AgentsListParams = z.infer<typeof AgentsListParamsSchema>;
 
@@ -89,6 +128,8 @@ export const AgentsListResultSchema = z.object({
    * what is it on" - and a claim is the only record of that which outlives a step.
    */
   claims: z.array(ClaimViewSchema),
+  /** Session caps, use and queue depth (#873). Protocol 2.1; absent from an older daemon. */
+  sessionSlots: SessionSlotsViewSchema.optional(),
   asOf: z.string(),
 });
 export type AgentsListResult = z.infer<typeof AgentsListResultSchema>;
