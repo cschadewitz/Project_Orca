@@ -98,6 +98,7 @@ import { parseVars, workflowGuards } from "./launch-options.js";
 import { authCommand } from "./auth.js";
 import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
+import { recoveryCommand } from "./recovery.js";
 import { storeCommand } from "./store.js";
 import { planCommand } from "./plan.js";
 import { requireTemplatePack, selectionOverrides } from "./selection.js";
@@ -576,6 +577,11 @@ export const commands: Record<string, Command> = {
   leases: {
     help: "leases [list | break <runId> [--force] [--keep]]  Show who is interpreting which run; free a run whose interpreter is gone.",
     run: leasesCommand,
+  },
+
+  recovery: {
+    help: "recovery <runId> [--checkpoint <nodeId>] [--json]  Preview how a run could be recovered (resume, new run, checkpoint attempt) without changing anything.",
+    run: recoveryCommand,
   },
 
   store: {

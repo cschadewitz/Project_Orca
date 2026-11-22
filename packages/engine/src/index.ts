@@ -33,6 +33,7 @@ export * from "./revision-input.js";
 
 export * from "./revision-delivery.js";
 export * from "./continuation-admission.js";
+export * from "./recovery-preview.js";
 export * from "./revision-runtime.js";
 
 export {
