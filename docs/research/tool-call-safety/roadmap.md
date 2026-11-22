@@ -72,8 +72,8 @@ the broader [#449](https://github.com/cschadewitz/Project_Orca/issues/449) and
 Filesystem/network/credential/process enforcement, feedback/workflow binding and
 race-safe expected-head publication with durable effect reconciliation remain open.
 
-Related [#486](https://github.com/cschadewitz/Project_Orca/pull/486) remains open:
-its offline dependency-bootstrap helper is inactive preparation, with no subprocess
+Related [#486](https://github.com/cschadewitz/Project_Orca/pull/486) was closed
+unmerged on 22 November 2026 (parked, never activated). Its offline dependency-bootstrap helper is inactive preparation, with no subprocess
 runner, ACP wiring, actual dependency installation or live activation. Locked
 dependency/executable closure, externally enforced offline/cache-miss behavior,
 crash/concurrency reconciliation, tool readiness and trusted-controller state
