@@ -24,6 +24,14 @@
  * blocked on one of those same caps - a later step never overtakes an earlier one for the
  * same slot. Waiters on unrelated caps do not block each other (a full host does not hold
  * up a step bound for another host).
+ *
+ * Impossible waits fail instead of hanging. A `per-run` session holds its slot until its run
+ * ends, and a run cannot end while one of its own steps - or a step of a run below it - waits
+ * for a slot. So when the slots that fill a cap are all held by per-run sessions of the
+ * waiting step's own run or its ancestors, no release can ever come, and the step fails with
+ * `CONFIG_INVALID` naming the cap and the sessions that hold it, rather than exceeding the
+ * cap or waiting for ever. This needs no deadline: a queue that will drain is never cut off,
+ * however long the turns ahead of it take.
  */
 import { OrcaError } from "@orca/core";
 
@@ -56,6 +64,13 @@ export interface SessionSlotRequest {
    * operator raised or lowered while the step waits takes effect for it too.
    */
   caps: () => SessionSlotCaps;
+  /**
+   * The run this step belongs to, then its parent, grandparent and so on. Slots pinned by any
+   * of them cannot come back while this step waits (see "Impossible waits" above).
+   */
+  runs?: readonly string[] | undefined;
+  /** This open becomes a `per-run` session of that run, holding its slot until the run ends. */
+  pinnedTo?: string | undefined;
   /** Plan priority score (higher goes first); absent for a step outside any plan. */
   priority?: number | undefined;
   signal?: AbortSignal | undefined;
@@ -71,6 +86,14 @@ export interface SessionSlot {
   /** Return the slot. Safe to call any number of times; only the first counts. */
   release(): void;
 }
+
+interface Held {
+  agentId: string;
+  hostId: string;
+  pinnedTo?: string | undefined;
+}
+
+type Blocker = { key: Key; reason: string; impossible?: string };
 
 type Key = string;
 const DAEMON: Key = "daemon";
@@ -91,6 +114,7 @@ export class SessionSlots {
   private total = 0;
   private readonly byAgent = new Map<string, number>();
   private readonly byHost = new Map<string, number>();
+  private readonly held = new Set<Held>();
   private waiters: Waiter[] = [];
   private seq = 0;
 
@@ -144,6 +168,14 @@ export class SessionSlots {
     const blocked = new Map<Key, string>();
     for (const waiter of this.ordered()) {
       const reasons = this.blockers(waiter.request, blocked);
+      const impossible = reasons.find((r) => r.impossible !== undefined)?.impossible;
+      if (impossible !== undefined) {
+        this.waiters = this.waiters.filter((w) => w !== waiter);
+        waiter.reject(new OrcaError("CONFIG_INVALID", impossible));
+        // Its leaving can unblock waiters queued behind it; go round again.
+        queueMicrotask(() => this.pump());
+        continue;
+      }
       if (reasons.length === 0) {
         this.waiters = this.waiters.filter((w) => w !== waiter);
         waiter.resolve(this.take(waiter.request));
@@ -179,12 +211,28 @@ export class SessionSlots {
   // ------------------------------------------------------------------ internals
 
   /** Every full cap this request is subject to, plus any cap an earlier waiter is blocked on. */
-  private blockers(request: SessionSlotRequest, queued: ReadonlyMap<Key, string>): { key: Key; reason: string }[] {
-    const out: { key: Key; reason: string }[] = [];
+  private blockers(request: SessionSlotRequest, queued: ReadonlyMap<Key, string>): Blocker[] {
+    const out: Blocker[] = [];
+    const runs = new Set(request.runs ?? []);
     const check = (key: Key, cap: number | undefined, used: number, where: string) => {
       if (cap === undefined) return;
-      if (used >= cap) out.push({ key, reason: `waiting for an agent slot: ${used} of ${cap} in use ${where}` });
-      else {
+      if (used >= cap) {
+        const reason = `waiting for an agent slot: ${used} of ${cap} in use ${where}`;
+        const stuck = [...this.held].filter((h) => h.pinnedTo !== undefined && runs.has(h.pinnedTo) && sameKey(key, h));
+        out.push(
+          stuck.length >= cap
+            ? {
+                key,
+                reason,
+                impossible:
+                  `an agent slot can never be free for agent ${request.agentId}: ${used} of ${cap} in use ${where}, ` +
+                  `and ${stuck.length} of them are per-run sessions of this run or a run above it ` +
+                  `(${[...new Set(stuck.map((h) => h.agentId))].join(", ")}), which hold their slots until the run ends; ` +
+                  `raise the cap, or give those agents sessionMode: per-step`,
+              }
+            : { key, reason },
+        );
+      } else {
         const ahead = queued.get(key);
         if (ahead !== undefined) out.push({ key, reason: ahead });
       }
@@ -230,6 +278,8 @@ export class SessionSlots {
 
   private take(request: SessionSlotRequest): SessionSlot {
     const { agentId, hostId } = request;
+    const record: Held = { agentId, hostId, ...(request.pinnedTo ? { pinnedTo: request.pinnedTo } : {}) };
+    this.held.add(record);
     this.total++;
     this.byAgent.set(agentId, (this.byAgent.get(agentId) ?? 0) + 1);
     this.byHost.set(hostId, (this.byHost.get(hostId) ?? 0) + 1);
@@ -238,6 +288,7 @@ export class SessionSlots {
       release: () => {
         if (!held) return;
         held = false;
+        this.held.delete(record);
         this.total--;
         this.byAgent.set(agentId, (this.byAgent.get(agentId) ?? 1) - 1);
         this.byHost.set(hostId, (this.byHost.get(hostId) ?? 1) - 1);
@@ -245,4 +296,8 @@ export class SessionSlots {
       },
     };
   }
+}
+
+function sameKey(key: Key, held: Held): boolean {
+  return key === DAEMON || key === agentKey(held.agentId) || key === hostKey(held.hostId);
 }

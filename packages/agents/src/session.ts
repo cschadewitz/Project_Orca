@@ -32,6 +32,14 @@ export interface AgentSession {
   readonly cwd: string;
   readonly acpSessionId: string;
   readonly closed: Promise<void>;
+  /**
+   * Settles once the agent process this session owns is confirmed gone, which can be later
+   * than `closed` (the connection) and later than a `close()` whose cleanup could not observe
+   * the exit. Session caps (#873) return a slot on this, so a queued open never starts beside
+   * a process that is still alive. Optional: a transport without an owned process omits it,
+   * and then `close()` settling stands in for it.
+   */
+  readonly terminated?: Promise<void>;
   prompt(input: string | acp.ContentBlock[], options?: PromptOptions): Promise<TurnResult>;
   onUpdate(listener: (e: SessionUpdateEvent) => void): () => void;
   /**

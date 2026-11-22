@@ -180,6 +180,14 @@ function fake(opts: {
   /** Held open until this resolves; defaults to a short timer so sessions overlap. */
   turn?: (agentId: string) => Promise<void>;
   openFails?: (n: number) => boolean;
+  /**
+   * How the fake's agent process ends. `cleanupMs`: the process outlives the connection by
+   * this long after close (the real session reports `closed` before owned-process cleanup
+   * finishes). `closeFails`: close() rejects as a cleanup that did not observe the exit, and
+   * the process still exits `cleanupMs` later. `crash`: the connection drops mid-turn by
+   * itself and the turn fails, with the process still alive until it is closed.
+   */
+  process?: { cleanupMs?: number; closeFails?: boolean; crash?: (n: number) => boolean };
 }): Fake {
   const registry = new AgentRegistry();
   for (const h of opts.hosts ?? [{ id: "local" }]) registry.addHost(new LocalHost({ type: "local", ...h }));
@@ -212,9 +220,14 @@ function fake(opts: {
       if (opts.openFails?.(n)) throw new OrcaError("AGENT_TRANSPORT", "spawn refused");
       bump(o.agent.id, o.host.id, 1);
       opened.push(o.agent.id);
-      let close!: () => void;
-      const closed = new Promise<void>((r) => (close = r));
-      let open = true;
+      let dropConnection!: () => void;
+      const closed = new Promise<void>((r) => (dropConnection = r));
+      let exit!: () => void;
+      const terminated = new Promise<void>((r) => (exit = r));
+      void terminated.then(() => bump(o.agent.id, o.host.id, -1));
+      const cleanupMs = opts.process?.cleanupMs ?? 0;
+      const crashes = opts.process?.crash?.(n) ?? false;
+      let stopping = false;
       const session: AgentSession = {
         id: `sess_${n}`,
         agentId: o.agent.id,
@@ -222,19 +235,27 @@ function fake(opts: {
         cwd: o.cwd,
         acpSessionId: "acp",
         closed,
+        terminated,
         configOptions: [],
         setConfigOption: async () => [],
         prompt: async () => {
+          if (crashes) {
+            dropConnection();
+            throw new OrcaError("AGENT_TRANSPORT", "agent connection closed");
+          }
           await (opts.turn ? opts.turn(o.agent.id) : new Promise((r) => setTimeout(r, 15)));
           return { stopReason: "end_turn" as const, durationMs: 1 };
         },
         onUpdate: () => () => {},
         cancel: async () => {},
         close: async () => {
-          if (!open) return;
-          open = false;
-          bump(o.agent.id, o.host.id, -1);
-          close();
+          dropConnection();
+          if (!stopping) {
+            stopping = true;
+            setTimeout(exit, cleanupMs);
+          }
+          if (opts.process?.closeFails) throw new OrcaError("AGENT_TRANSPORT", "agent cleanup incomplete");
+          if (cleanupMs === 0) await terminated;
         },
       };
       return session;
@@ -346,6 +367,89 @@ edges: [{ from: work, to: next }, { from: next, to: done }]
     expect(run.run.status).toBe("completed");
     expect(opened).toEqual(["a"]); // the second step reused the pooled session and its slot
     expect(orchestrator.sessionSlots.view().inUse.total).toBe(0);
+  });
+
+  it.each([
+    ["a close whose cleanup outlives the connection", { cleanupMs: 40 }],
+    ["a close that fails before the process exits", { cleanupMs: 40, closeFails: true }],
+    ["an agent whose connection drops mid-turn", { cleanupMs: 40, crash: (n: number) => n === 1 }],
+  ])("holds the slot until the process is gone: %s", async (_name, process) => {
+    const { orchestrator, peak, opened } = fake({ agents: [{ id: "a" }], maxAgentSessions: 1, process });
+    const first = orchestrator.startAndRun({ workflowId: "one-a" });
+    const second = orchestrator.startAndRun({ workflowId: "one-a" });
+    await Promise.all([first, second]);
+    expect(opened).toEqual(["a", "a"]);
+    // `peak` counts live processes, which end only when `terminated` settles: a queued open
+    // that started on `closed` alone would have overlapped the first one's cleanup.
+    expect(peak.total).toBe(1);
+    await expect.poll(() => orchestrator.sessionSlots.view().inUse.total).toBe(0);
+  });
+
+  it("fails a wait no release can end: one run, two per-run agents, a daemon cap of one", async () => {
+    const { orchestrator, opened } = fake({
+      agents: [
+        { id: "a", sessionMode: "per-run" },
+        { id: "b", sessionMode: "per-run" },
+      ],
+      maxAgentSessions: 1,
+      workflow: `
+id: both
+name: both
+start: first
+nodes:
+  first: { type: agent, agent: a, prompt: "go" }
+  second: { type: agent, agent: b, prompt: "go" }
+  done: { type: end }
+edges: [{ from: first, to: second }, { from: second, to: done }]
+`,
+    });
+    const run = await orchestrator.startAndRun({ workflowId: "both" });
+    expect(run.run.status).toBe("failed");
+    expect(run.run.error).toMatchObject({ code: "CONFIG_INVALID" });
+    expect(run.run.error?.message).toContain("1 of 1 in use on this daemon");
+    expect(run.run.error?.message).toContain("per-run sessions of this run or a run above it (a)");
+    expect(opened).toEqual(["a"]);
+    await expect.poll(() => orchestrator.sessionSlots.view()).toMatchObject({ inUse: { total: 0 }, queued: 0 });
+  });
+
+  it("fails a child run's wait on a slot its parent's per-run session holds", async () => {
+    const { orchestrator } = fake({
+      agents: [{ id: "a", sessionMode: "per-run" }, { id: "b" }],
+      maxAgentSessions: 1,
+      workflow: `
+id: nested
+name: nested
+start: first
+nodes:
+  first: { type: agent, agent: a, prompt: "go" }
+  child: { type: subworkflow, workflow: one-b }
+  done: { type: end }
+edges: [{ from: first, to: child }, { from: child, to: done }]
+`,
+    });
+    const run = await orchestrator.startAndRun({ workflowId: "nested" });
+    expect(run.run.status).toBe("failed");
+    const childId = Object.values(run.steps).flatMap((s) => s.childRunIds)[0]!;
+    const child = await orchestrator.getState(childId);
+    expect(child.run.error).toMatchObject({ code: "CONFIG_INVALID" });
+    await expect.poll(() => orchestrator.sessionSlots.view()).toMatchObject({ inUse: { total: 0 }, queued: 0 });
+  });
+
+  it("still queues when the per-run sessions in the way belong to other runs", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((r) => (finish = r));
+    const { orchestrator } = fake({
+      agents: [{ id: "a", sessionMode: "per-run" }, { id: "b" }],
+      maxAgentSessions: 1,
+      turn: (agent) => (agent === "a" ? gate : Promise.resolve()),
+    });
+    const holder = orchestrator.startAndRun({ workflowId: "one-a" });
+    await expect.poll(() => orchestrator.sessionSlots.view().inUse.total).toBe(1);
+    const waiter = orchestrator.startAndRun({ workflowId: "one-b" });
+    await expect.poll(() => orchestrator.sessionSlots.view().queued).toBe(1);
+    finish();
+    expect((await holder).run.status).toBe("completed");
+    expect((await waiter).run.status).toBe("completed");
   });
 
   it("a crashed session returns its slot", async () => {

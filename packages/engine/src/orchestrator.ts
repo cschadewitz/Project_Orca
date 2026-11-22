@@ -319,7 +319,12 @@ export class Orchestrator {
   /** Per-run pooled sessions. `current.step` is the step using the session right now, so events from a long-lived session are attributed correctly. */
   private readonly sessions = new Map<
     string,
-    { session: AgentSession; current: { step: StepRun }; slot: SessionSlot }
+    {
+      session: AgentSession;
+      current: { step: StepRun };
+      close: () => Promise<void>;
+      returnSlot: () => Promise<void>;
+    }
   >();
   private readonly maxAgentSessions: number | undefined;
   /**
@@ -1927,8 +1932,8 @@ export class Orchestrator {
         if (e instanceof OrcaError && e.code === "AGENT_MODEL_NOT_FOUND") throw e;
         rc.logger.warn("pooled session refused the model; reopening it", { agent: agent.id, model });
         this.sessions.delete(key);
-        await pooled.session.close().catch(() => undefined);
-        pooled.slot.release();
+        await pooled.close().catch(() => undefined);
+        void pooled.returnSlot();
         await rc
           .emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: pooled.session.id } })
           .catch(() => undefined);
@@ -2046,16 +2051,25 @@ export class Orchestrator {
       });
     } catch (e) {
       handshake.failed(e);
+      // `openAcpSession` has already run its bounded process cleanup before it throws.
       slot.release();
       throw e;
     }
-    // However the session ends - closed by its step, by the run, or by the agent crashing -
-    // its slot goes back. Release is idempotent, so the explicit releases below are only
-    // there so that the slot is free by the time `close()` returns.
-    void session.closed.then(
-      () => slot.release(),
-      () => slot.release(),
-    );
+    // The cap bounds live agent processes, not connections. However the session ends -
+    // closed by its step, by the run, or by the agent's connection dropping - it is closed
+    // (once: the owned-process cleanup), and its slot goes back only once that process is
+    // confirmed gone (`terminated`). A close whose cleanup could not observe the exit keeps the
+    // slot until the process does exit, rather than letting a queued open start beside it.
+    let closing: Promise<void> | undefined;
+    const closeOnce = () => (closing ??= session.close());
+    let returning: Promise<void> | undefined;
+    const returnSlot = () =>
+      (returning ??= (async () => {
+        await closeOnce().catch(() => undefined);
+        await session.terminated?.catch(() => undefined);
+        slot.release();
+      })());
+    void session.closed.then(returnSlot, returnSlot);
     // Until the release function or pool takes ownership, every startup failure
     // must close the newly created session, including a failed opened-event append.
     try {
@@ -2083,13 +2097,17 @@ export class Orchestrator {
         }
       }
       const close = async () => {
-        await session.close().finally(() => slot.release());
+        try {
+          await closeOnce();
+        } finally {
+          void returnSlot();
+        }
         await rc
           .emit({ type: "agent.session.closed", payload: { stepRunId: current.step.id, sessionId: session.id } })
           .catch(() => undefined);
       };
       if (agent.sessionMode === "per-run") {
-        const pooled = { session, current, slot };
+        const pooled = { session, current, close: closeOnce, returnSlot };
         this.sessions.set(key, pooled);
         // A pooled session whose connection went away (wedged agent killed after a cancel, or a
         // crash) must not be handed to the next step; let that step open a fresh one instead.
@@ -2100,13 +2118,13 @@ export class Orchestrator {
       }
       return { session, release: close };
     } catch (error) {
-      await session.close().catch((cleanupError: unknown) =>
+      await closeOnce().catch((cleanupError: unknown) =>
         rc.logger.warn("agent session startup cleanup failed", {
           sessionId: session.id,
           error: describeError(cleanupError),
         }),
       );
-      slot.release();
+      void returnSlot();
       throw error;
     }
   }
@@ -2120,7 +2138,7 @@ export class Orchestrator {
   private async takeSessionSlot(
     rc: RunContext,
     step: StepRun,
-    agent: { id: string; maxSessions?: number | undefined },
+    agent: { id: string; maxSessions?: number | undefined; sessionMode: "per-step" | "per-run" },
     host: AgentHost,
   ): Promise<SessionSlot> {
     const request = {
@@ -2128,6 +2146,8 @@ export class Orchestrator {
       hostId: host.id,
       caps: () => this.sessionSlotCaps(agent, host),
       signal: rc.abort.signal,
+      runs: this.runAncestry(rc),
+      ...(agent.sessionMode === "per-run" ? { pinnedTo: rc.id } : {}),
     };
     const immediate = this.sessionSlots.tryAcquire(request);
     if (immediate) return immediate;
@@ -2186,6 +2206,19 @@ export class Orchestrator {
     return { ...(daemon === undefined ? {} : { maxAgentSessions: daemon }), agents, hosts };
   }
 
+  /** This run and every run above it that this process is driving, nearest first. */
+  private runAncestry(rc: RunContext): string[] {
+    const runs = [rc.id];
+    let run = rc.state.run;
+    for (let depth = 0; run.parentRunId && depth < 32; depth++) {
+      runs.push(run.parentRunId);
+      const parent = this.live.get(run.parentRunId)?.state.run;
+      if (!parent) break;
+      run = parent;
+    }
+    return runs;
+  }
+
   /**
    * The plan priority of the work item this run (or the nearest ancestor run with one)
    * belongs to: its `computeSchedule()` score. Undefined outside a plan. Asked only when a
@@ -2208,8 +2241,8 @@ export class Orchestrator {
     for (const [key, s] of this.sessions) {
       if (key.startsWith(`${runId}:`)) {
         this.sessions.delete(key);
-        await s.session.close().catch(() => undefined);
-        s.slot.release();
+        await s.close().catch(() => undefined);
+        void s.returnSlot();
       }
     }
   }

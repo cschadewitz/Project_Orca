@@ -351,10 +351,12 @@ agents:
 
 - **The default is unlimited.** A cap applies only when it is written; none is derived
   from the machine's cores or memory. Each must be a positive integer.
-- A step takes one slot from every cap that applies to it when it opens an agent session,
-  and gives it back when the session closes - at the end of the step, when the run ends for
-  a `per-run` session (which holds its slot for the whole run), when the open fails, or when
-  the agent process dies.
+- A step takes one slot from every cap that applies to it when it opens an agent session.
+  The cap bounds live agent processes, so the slot comes back only once the session's
+  process is confirmed gone - after the step, at the end of the run for a `per-run` session
+  (which holds its slot for the whole run), after a failed open, or after the agent's
+  connection drops and ORCA has cleaned the process up. A queued open never starts beside a
+  process that is still shutting down.
 - Runs are still admitted at once. A step that cannot have a slot waits *before* it spawns
   anything: `step.waiting` with `on: agent-slot` and a detail such as
   `waiting for an agent slot: 3 of 3 in use on host box-b`. The run shows as blocked, the
@@ -366,9 +368,13 @@ agents:
   full one.
 - Caps are read from the current configuration each time, so applying an edit that raises
   one lets waiting steps go at once.
-- A `per-run` agent keeps its slot between steps. A daemon cap smaller than the `per-run`
-  sessions a run holds plus the sessions its child runs need will wait forever; size the cap
-  for that, or use `per-step` for agents that fan out.
+- A `per-run` agent keeps its slot until its run ends, and a run cannot end while one of its
+  own steps, or a step of a child run, is waiting. So when a cap is full only of `per-run`
+  sessions held by the waiting step's own run or the runs above it - two `per-run` agents
+  in one run under a daemon cap of one, or a parent's `per-run` session and a child that
+  needs the only slot - no slot can ever come back. That step fails at once with
+  `CONFIG_INVALID`, naming the cap and the agents holding it, instead of waiting forever or
+  going over the cap. Raise the cap or make those agents `per-step`.
 - `hello` reports the daemon-wide cap, sessions open and queue depth; `agents.list` adds the
   per-agent and per-host caps and use (optional fields; older clients ignore them).
 

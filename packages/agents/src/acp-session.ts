@@ -473,6 +473,10 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     cwd: opts.cwd,
     acpSessionId,
     closed,
+    terminated: proc.exited.then(
+      () => undefined,
+      () => undefined,
+    ),
 
     async prompt(input, options: PromptOptions = {}): Promise<TurnResult> {
       if (activeTurn) throw new OrcaError("RUN_STATE", "a prompt turn is already active on this session");
