@@ -5,8 +5,10 @@ import {
   type RunOverrides,
   type WorkflowDefinition,
   type PromptTemplate,
+  redactCapabilityManifest,
 } from "@orca/core";
 import { workflowRevision } from "./orchestrator.js";
+import { nodeCapabilityScope, resolveNodeCapabilities } from "./capabilities.js";
 import type { GenerationMaterial } from "./configuration-generation.js";
 
 export function launchProvenance(
@@ -44,6 +46,17 @@ export function launchProvenance(
       }
     };
     if (template) capture(template);
+    // The same resolution the launch preflight checked and the session open will repeat (#335).
+    const capabilities = redactCapabilityManifest(
+      resolveNodeCapabilities({
+        registry: agents,
+        agent,
+        workflow: definition.capabilities,
+        nodeId,
+        node: nodeCapabilityScope(node).scope,
+        digests: true,
+      }).manifest,
+    );
     return [
       {
         nodeId,
@@ -75,6 +88,8 @@ export function launchProvenance(
               },
             }
           : {}),
+        // Always present on new records, even empty: absent means a record from before #335.
+        capabilities,
       },
     ];
   });
@@ -150,8 +165,9 @@ export function configuredGenerationSecrets(material: GenerationMaterial): strin
       // Most command arguments are not URLs.
     }
   };
+  const catalogServers = Object.values(material.agents.capabilities().catalog.mcpServers);
   for (const agent of material.agents.listAgents()) {
-    for (const spec of [agent, ...agent.mcpServers]) {
+    for (const spec of [agent, ...agent.mcpServers, ...catalogServers]) {
       for (const [key, value] of Object.entries(spec.env)) {
         if (credentialKey(key)) add(value);
         inspect(value);

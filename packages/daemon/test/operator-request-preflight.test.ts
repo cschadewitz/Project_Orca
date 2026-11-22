@@ -10,6 +10,7 @@ import {
   type RunOverrides,
 } from "@orca/core";
 import {
+  capabilityRefusal,
   ConfigurationGenerations,
   Orchestrator,
   type GenerationAssets,
@@ -180,6 +181,8 @@ it("validates the same Request defaults and overrides admission receives, return
         revision: expect.any(String),
         source: "run.overrides.templatePack",
       },
+      // No MCP servers or skills configured (#335): present and empty, so a reader can tell.
+      capabilities: { mcpServers: [], skills: [] },
     },
   ]);
   expect(result.itemWorkflow).toEqual({ value: "item", source: "run.overrides.itemWorkflow" });
@@ -393,6 +396,31 @@ it("withholds detailed choice provenance without config-read and detects config-
   await expect(f.model.preflight({ target, purpose: "request", request: draft })).rejects.toMatchObject({
     code: "AUTH_FORBIDDEN",
   });
+});
+
+it("reports a step whose MCP servers or skills do not resolve under their own fields (#335)", async () => {
+  const f = await fixture();
+  f.validateStartRun.mockImplementationOnce(async () => {
+    throw capabilityRefusal("decompose", [
+      {
+        path: "workflow.nodes.decompose.capabilities.mcpServers.enable[0]",
+        message: "this node cannot turn on MCP server 'db': agent 'a' is not permitted to use it",
+      },
+    ]);
+  });
+  const result = await f.model.preflight({ target, purpose: "request", request: draft });
+  expect(result.validation).toEqual({
+    ok: false,
+    errors: [
+      {
+        path: "workflow.nodes.decompose.capabilities.mcpServers.enable[0]",
+        message: "this node cannot turn on MCP server 'db': agent 'a' is not permitted to use it",
+      },
+    ],
+    warnings: [],
+  });
+  expect(result.selections).toBeUndefined();
+  expect(await f.stores.events.listRuns()).toEqual([]);
 });
 
 it("refuses Request overrides for a direct workflow launch whose admission contract cannot carry them", async () => {

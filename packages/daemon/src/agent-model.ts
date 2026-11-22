@@ -17,7 +17,7 @@
  * They are projected by `ReadModel` so there is one `ClaimView` in the daemon and not two.
  */
 import type { AgentRegistry, AgentHealth } from "@orca/agents";
-import { describeError, type Clock } from "@orca/core";
+import { describeError, resolveCapabilities, type Clock } from "@orca/core";
 import type { Orchestrator } from "@orca/engine";
 import type {
   AgentsListResult,
@@ -109,9 +109,11 @@ export class AgentModel {
     const cwd = params.cwd ?? host.spec.workspaceRoot ?? (host.spec.type === "local" ? process.cwd() : "/tmp");
     const handshake = registry.health.begin(agent.id);
     try {
+      // The agent's own scope (#335): what a step with no workflow or node selection would get.
+      const scoped = resolveCapabilities({ catalog: registry.capabilities().catalog, agent });
       const session = await this.orc.sessionFactory({
         host,
-        agent,
+        agent: { ...agent, mcpServers: scoped.manifest.mcpServers.map((m) => m.server) },
         cwd,
         logger: this.orc.logger,
         clock: this.clock,

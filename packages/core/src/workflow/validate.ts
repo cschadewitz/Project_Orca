@@ -4,6 +4,7 @@
  */
 import { validateRevisionCapability } from "../model/revision-input.js";
 import { checkExpression } from "../expr/index.js";
+import type { AgentSelector, CapabilityScope } from "../model/agent.js";
 import type { NodeDef, WorkflowDefinition, WorkflowGraph } from "../model/workflow.js";
 import { checkTemplate } from "../template/render.js";
 import { outgoing, reachable } from "./graph.js";
@@ -49,19 +50,51 @@ export interface ValidationContext {
    * run reaches the node. Return `undefined` when nothing has an opinion about this type.
    */
   validateCustomNode?: (node: NodeDef) => NodeValidation | undefined;
+  /**
+   * Resolve one agent step's scoped capabilities (#335) with the same resolver a launch and a
+   * session open use. `workflowPath` and `nodePath` prefix the issues it returns. Absent (no
+   * config at hand, as in a bare `orca validate` of one file) skips the check.
+   */
+  checkCapabilities?: (input: CapabilityCheck) => { errors: ValidationIssue[]; warnings: ValidationIssue[] };
+}
+
+export interface CapabilityCheck {
+  agent: AgentSelector;
+  workflow: CapabilityScope | undefined;
+  workflowPath: string;
+  nodeId: string;
+  node: CapabilityScope | undefined;
+  nodePath: string;
+}
+
+/** The workflow scope travels with the context into nested graphs. */
+interface GraphContext extends ValidationContext {
+  workflowCapabilities?: { scope: CapabilityScope | undefined; path: string };
 }
 
 export function validateWorkflow(def: WorkflowDefinition, ctx: ValidationContext = {}): ValidationResult {
   const errors: ValidationIssue[] = [];
   const warnings: ValidationIssue[] = [];
-  validateGraph(def, `workflow(${def.id})`, ctx, errors, warnings);
-  return { ok: errors.length === 0, errors, warnings };
+  const path = `workflow(${def.id})`;
+  validateGraph(def, path, { ...ctx, workflowCapabilities: { scope: def.capabilities, path } }, errors, warnings);
+  // A workflow-scope problem is found again at every agent step; report it once.
+  const unique = (issues: ValidationIssue[]) => {
+    const seen = new Set<string>();
+    return issues.filter((i) => {
+      const key = `${i.path}\0${i.message}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  const all = unique(errors);
+  return { ok: all.length === 0, errors: all, warnings: unique(warnings) };
 }
 
 function validateGraph(
   graph: WorkflowGraph,
   path: string,
-  ctx: ValidationContext,
+  ctx: GraphContext,
   errors: ValidationIssue[],
   warnings: ValidationIssue[],
 ): void {
@@ -133,7 +166,7 @@ function validateNode(
   id: string,
   p: string,
   graph: WorkflowGraph,
-  ctx: ValidationContext,
+  ctx: GraphContext,
   errors: ValidationIssue[],
   warnings: ValidationIssue[],
 ): void {
@@ -150,6 +183,7 @@ function validateNode(
       template?: string | undefined;
       prompt?: string | undefined;
       agent: string | { id: string } | { role: string };
+      capabilities?: CapabilityScope | undefined;
     },
     sub: string,
   ) => {
@@ -163,6 +197,18 @@ function validateNode(
     }
     if (ctx.hasAgent && !ctx.hasAgent(o.agent))
       err(`agent selector ${JSON.stringify(o.agent)} cannot be resolved`, `${sub}.agent`);
+    else if (ctx.checkCapabilities) {
+      const checked = ctx.checkCapabilities({
+        agent: o.agent,
+        workflow: ctx.workflowCapabilities?.scope,
+        workflowPath: ctx.workflowCapabilities?.path ?? "workflow",
+        nodeId: id,
+        node: o.capabilities,
+        nodePath: p + sub,
+      });
+      errors.push(...checked.errors);
+      warnings.push(...checked.warnings);
+    }
   };
   /** Every vars-bearing node (set, agent, subworkflow) evaluates "="-prefixed values as expressions. */
   const checkVars = (vars: Record<string, unknown>) => {

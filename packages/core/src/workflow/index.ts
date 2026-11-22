@@ -6,6 +6,7 @@ export {
   type ValidationContext,
   type NodeIssue,
   type NodeValidation,
+  type CapabilityCheck,
 } from "./validate.js";
 export { parseWorkflow, loadWorkflowFile, loadWorkflows, WorkflowRegistry } from "./load.js";
 export { evaluateVars, varExpression } from "./vars.js";

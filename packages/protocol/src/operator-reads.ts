@@ -134,6 +134,26 @@ export const OperatorLaunchSelectionSchema = z.object({
   agent: OperatorLaunchChoiceSchema,
   model: OperatorLaunchChoiceSchema.optional(),
   template: OperatorLaunchChoiceSchema.extend({ revision: OperatorIdSchema.optional() }).optional(),
+  /**
+   * The step's resolved MCP servers and skills (#335): ids, the scope each came from, and a
+   * skill's version and content digest. Never a definition, argument or environment value.
+   * Optional within protocol 2: a daemon from before #335 sends none.
+   */
+  capabilities: z
+    .object({
+      mcpServers: z.array(z.object({ id: OperatorIdSchema, source: z.string().min(1).max(512) })).max(200),
+      skills: z
+        .array(
+          z.object({
+            id: OperatorIdSchema,
+            source: z.string().min(1).max(512),
+            version: OperatorIdSchema.optional(),
+            digest: OperatorIdSchema.optional(),
+          }),
+        )
+        .max(200),
+    })
+    .optional(),
 });
 export type OperatorLaunchSelection = z.infer<typeof OperatorLaunchSelectionSchema>;
 export const OperatorPreflightResultSchema = z.object({

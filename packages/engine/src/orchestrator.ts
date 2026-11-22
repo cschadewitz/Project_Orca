@@ -38,7 +38,11 @@ import {
   TemplateRegistry,
   validateWorkflowInputs,
   WorkflowRegistry,
+  capabilityManifestKey,
+  redactCapabilityManifest,
   type AgentSelector,
+  type AgentSpec,
+  type CapabilityScope,
   type Artifact,
   type ArtifactRef,
   type RunOverrides,
@@ -100,6 +104,13 @@ import { RunContext } from "./run-context.js";
 import type { LiveHumanInput, ExecutionResumeAuthority, ExecutionActivity } from "./live-input.js";
 import { protectExecutionInputs } from "./execution-inputs.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
+import {
+  capabilityRefusal,
+  deliveryIssues,
+  nodeCapabilityScope,
+  preflightCapabilities,
+  resolveNodeCapabilities,
+} from "./capabilities.js";
 import { SessionSlots, type ConfiguredSessionLimits, type SessionSlot, type SessionSlotCaps } from "./session-slots.js";
 
 /** Opens an agent session; defaults to ACP over stdio (local or ssh). Integrations can substitute other transports. */
@@ -327,6 +338,8 @@ export class Orchestrator {
       current: { step: StepRun };
       close: () => Promise<void>;
       returnSlot: () => Promise<void>;
+      /** `capabilityManifestKey` of what the session was opened with (#335). */
+      capabilities: string;
     }
   >();
   private readonly maxAgentSessions: number | undefined;
@@ -396,6 +409,9 @@ export class Orchestrator {
       );
     if (opts.overrides)
       this.validateOverrides(def, opts.overrides, generation?.agents, generation?.workflows, generation?.templates);
+    // Every agent step's MCP servers and skills resolve and can be delivered, under this run's
+    // role overrides, before anything is written (#335).
+    preflightCapabilities((generation?.agents ?? this.agents).withOverrides(opts.overrides), def);
     const inputs = validateWorkflowInputs(def, opts.vars ?? {});
     if (!inputs.validation.ok) {
       const { errors, warnings } = inputs.validation;
@@ -1267,7 +1283,8 @@ export class Orchestrator {
           `inline workflow ${workflowId}: node '${path[i]}' has no nested graph`,
         );
     }
-    return this.inlineDefinition(workflowId, graph, root.version);
+    // A nested graph is part of its root's file, so it runs under the root's workflow scope (#335).
+    return this.inlineDefinition(workflowId, graph, root.version, root.capabilities);
   }
 
   /**
@@ -1294,8 +1311,23 @@ export class Orchestrator {
     }
   }
 
-  private inlineDefinition(id: string, graph: WorkflowGraph, version: string): WorkflowDefinition {
-    return { id, name: id, version, vars: {}, inputs: {}, start: graph.start, nodes: graph.nodes, edges: graph.edges };
+  private inlineDefinition(
+    id: string,
+    graph: WorkflowGraph,
+    version: string,
+    capabilities?: CapabilityScope,
+  ): WorkflowDefinition {
+    return {
+      id,
+      name: id,
+      version,
+      vars: {},
+      inputs: {},
+      start: graph.start,
+      nodes: graph.nodes,
+      edges: graph.edges,
+      ...(capabilities ? { capabilities } : {}),
+    };
   }
 
   // -------------------------------------------------------------- interpreter
@@ -1898,6 +1930,42 @@ export class Orchestrator {
 
   // ----------------------------------------------------------------- sessions
 
+  /**
+   * The step's MCP servers and skills (#335), resolved the way the launch preflight and the
+   * launch record did. A step that no longer resolves, or whose skills no longer hash to what
+   * the launch recorded, is refused before any process starts: a run is pinned to its config
+   * generation, so only skill files on disk can change under it.
+   */
+  private stepCapabilities(
+    rc: RunContext,
+    step: StepRun,
+    agent: AgentSpec,
+  ): { mcpServers: AgentSpec["mcpServers"]; key: string } {
+    const registry = this.contextGenerations.get(rc)?.agents ?? this.agents;
+    const node = rc.definition.nodes[step.nodeId];
+    const resolved = resolveNodeCapabilities({
+      registry,
+      agent,
+      workflow: rc.definition.capabilities,
+      nodeId: step.nodeId,
+      node: nodeCapabilityScope(node).scope,
+      digests: true,
+    });
+    const issues = [...resolved.errors, ...deliveryIssues(resolved, `workflow.nodes.${step.nodeId}`)];
+    if (issues.length) throw capabilityRefusal(step.nodeId, issues);
+    const redacted = redactCapabilityManifest(resolved.manifest);
+    const key = capabilityManifestKey(redacted);
+    const recorded = rc.state.run.provenance?.selections.find((s) => s.nodeId === step.nodeId);
+    // Records from before #335 carry no manifest, and nothing to compare.
+    if (recorded?.capabilities && capabilityManifestKey(recorded.capabilities) !== key)
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `capabilities for step '${step.nodeId}' changed since the run was launched; a skill's files were edited. Start a new run to use the edited skill`,
+        { nodeId: step.nodeId, launched: recorded.capabilities, now: redacted },
+      );
+    return { mcpServers: resolved.manifest.mcpServers.map((m) => m.server), key };
+  }
+
   private async openSession(
     rc: RunContext,
     step: StepRun,
@@ -1913,7 +1981,20 @@ export class Orchestrator {
       throw new OrcaError("RUN_STATE", "Owned root workspace requires its matching supported local execution host");
     const key = `${rc.id}:${agent.id}`;
     const model = selectedModel(rc.state.run.overrides, agent);
-    const pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
+    const capabilities = this.stepCapabilities(rc, step, agent);
+    let pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
+    if (pooled && pooled.capabilities !== capabilities.key) {
+      // A per-run session carries the MCP servers it was opened with. A step whose scope
+      // differs gets its own session rather than a broader or narrower one (#335).
+      rc.logger.info("pooled session has other capabilities; reopening it", { agent: agent.id });
+      this.sessions.delete(key);
+      await pooled.close().catch(() => undefined);
+      void pooled.returnSlot();
+      await rc
+        .emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: pooled.session.id } })
+        .catch(() => undefined);
+      pooled = undefined;
+    }
     if (pooled) {
       pooled.current.step = step;
       const now = currentModel(pooled.session);
@@ -1957,7 +2038,8 @@ export class Orchestrator {
     try {
       session = await this.sessionFactory({
         host,
-        agent,
+        // Only the step's resolved MCP servers reach `session/new` (#335).
+        agent: { ...agent, mcpServers: capabilities.mcpServers },
         cwd: rc.workspace.cwd,
         logger: rc.logger,
         clock: this.clock,
@@ -2131,7 +2213,7 @@ export class Orchestrator {
           .catch(() => undefined);
       };
       if (agent.sessionMode === "per-run") {
-        const pooled = { session, current, close: closeOnce, returnSlot };
+        const pooled = { session, current, close: closeOnce, returnSlot, capabilities: capabilities.key };
         this.sessions.set(key, pooled);
         // A pooled session whose connection went away (wedged agent killed after a cancel, or a
         // crash) must not be handed to the next step; let that step open a fresh one instead.
