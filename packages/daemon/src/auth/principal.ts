@@ -168,8 +168,10 @@ export type CapabilityGrant = z.infer<typeof CapabilityGrantSchema>;
 
 /**
  * Whether `grant` covers one use: that server, defined that way, on that host. A narrow grant
- * covers only a server whose command is an absolute path, so the definition it pins names the
- * executable itself rather than whatever a `PATH` search or a working directory turns up.
+ * covers only a server whose command was checked on that host to be a trusted executable
+ * (`TRUSTED_EXECUTABLE_POLICY` in `@orca/agents`: an absolute, canonical, administrator-owned
+ * path), so the definition it pins names the program itself rather than whatever a `PATH`
+ * search, a working directory, a symbolic link or a writable directory turns up.
  */
 export function capabilityGrantCovers(
   grant: CapabilityGrant | undefined,
@@ -179,13 +181,13 @@ export function capabilityGrantCovers(
     hostId: string;
     hostBinding: string;
     definition: string;
-    absoluteCommand: boolean;
+    trustedExecutable: boolean;
   },
 ): boolean {
   if (grant === undefined) return false;
   return (
     grant === "*" ||
-    (use.absoluteCommand &&
+    (use.trustedExecutable &&
       grant.some(
         (g) =>
           g.kind === use.kind &&

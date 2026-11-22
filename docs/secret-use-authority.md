@@ -159,8 +159,22 @@ returns a value, and neither falls back to another host.
 
 The same decision, made the same way, gives a session a catalog MCP server.
 `Orchestrator.capabilityUse({ runId, uses })` is asked at every session open whose step
-selects one, pooled `per-run` sessions included, before anything starts. Each use is
-`{ kind: "mcpServer", id, hostId, hostBinding, definition, absoluteCommand }`, where `definition` is
+selects one, pooled `per-run` sessions included, before anything starts, and again at each
+point where the servers are delivered or used:
+
+1. before the host is probed, with an absolute command taken at its word, so a run with no
+   grant probes nothing (this one is a precondition, not the decision that counts);
+2. after the probe, with what it found (below);
+3. after any wait for a session slot, before the agent is spawned;
+4. immediately before `session/new` (or `session/load`) hands the initialized agent its
+   servers (`OpenSessionOptions.authorizeCapabilityDelivery`); a refusal there stops the
+   process and is not recorded against the agent's health;
+5. before every prompt of the step, on the session it opened or took from the pool. A
+   pooled session refused there is closed and removed from the pool, never given to
+   another step.
+
+Each use is
+`{ kind: "mcpServer", id, hostId, hostBinding, definition, trustedExecutable }`, where `definition` is
 `mcpServerDefinitionDigest` (`m1:` plus 32 hex digits of a sha256 over the server's
 command, arguments and environment, with secret references as references).
 
@@ -174,10 +188,27 @@ command, arguments and environment, with secret references as references).
   endpoint, with one difference: **one** current credential must cover the whole selected
   set together, not each server on its own. A session is given its servers as a set, so
   two credentials granting one server each do not combine into both.
-- A named grant covers a server only when its `command` is an absolute path
-  (`absoluteCommand`), so the definition pins the executable. A command found by `PATH`
-  search or relative to the working directory is covered only by `"*"`, and `orca auth
-  issue --mcp-server` refuses to write a named grant for one. A refusal is `CONFIG_INVALID`, `details { kind, id, hostId, reason:
+- A named grant covers a server only when its command is a trusted executable on the
+  agent's host (`trustedExecutable`, `TRUSTED_EXECUTABLE_POLICY` in
+  `packages/agents/src/capability-use.ts`), checked there at every delivery by one POSIX
+  shell script, locally and over SSH alike:
+  - the configured command is an absolute path and the file is exactly that path: no
+    `PATH` search, working directory or appended extension (Windows `PATHEXT`) decides it;
+  - the path is canonical: not a symbolic link, and its directory is its own `pwd -P`, so
+    no link, `.` or `..` lies anywhere on it;
+  - it is an executable regular file;
+  - it and every directory above it up to `/` are owned by root or by the account the agent
+    runs as on that host (`id -u` there), not group- or world-writable, with no ACL (`+` in
+    `ls -ldn`).
+
+  The definition digest pins the command text; this policy is what makes that text name
+  one program: only that host's administrator, or the agent's own account, which already
+  runs whatever it likes, can replace it. A Windows machine is never trusted this way, as
+  its permissions are not modes this check can read. A command found by `PATH` search or
+  relative to the working directory, or one that fails the policy, is covered only by
+  `"*"`. `orca auth issue --mcp-server` refuses to write a named grant for a command that
+  is not absolute, or for a server on a local Windows host; a refusal for an untrusted
+  executable says what a named grant requires. A refusal is `CONFIG_INVALID`, `details { kind, id, hostId, reason:
   "unauthorized" }`, audited as `capability.use`.
 - Loopback and standalone OS-user mode get `"*"` exactly as they do for secrets.
 - After the decision, the server's command is resolved on the agent's host to an

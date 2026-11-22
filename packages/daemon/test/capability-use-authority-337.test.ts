@@ -4,12 +4,13 @@
  * naming that server, as defined now, on the agent's host and endpoint.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { existsSync, lstatSync } from "node:fs";
+import { chmod, chown, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  LocalHost,
   resolveMcpServerCommand,
   mcpServerDefinitionDigest,
   secretHostBinding,
@@ -42,7 +43,7 @@ const use = (over: Partial<CapabilityUse> = {}): CapabilityUse => ({
   hostId: "local",
   hostBinding: LOCAL_BINDING,
   definition: DEFINITION,
-  absoluteCommand: true,
+  trustedExecutable: true,
   ...over,
 });
 
@@ -153,7 +154,7 @@ describe("capability use authority", () => {
     await f.check({ runId: "root", uses: [use(), db] });
   });
 
-  it("covers a command found by PATH or working directory only with '*', never with a narrow grant", async () => {
+  it("covers a command found by PATH or working directory, or an untrusted executable, only with '*'", async () => {
     const f = fixture();
     f.ownership.record("root", "ci-bot");
     const bare = mcpServerDefinitionDigest({ ...GITHUB, command: "gh-mcp" });
@@ -164,12 +165,23 @@ describe("capability use authority", () => {
       capabilities: [{ kind: "mcpServer", id: "github", host: "local", binding: LOCAL_BINDING, definition: bare }],
     });
     await expect(
-      f.check({ runId: "root", uses: [use({ definition: bare, absoluteCommand: false })] }),
-    ).rejects.toMatchObject(unauthorized);
+      f.check({ runId: "root", uses: [use({ definition: bare, trustedExecutable: false })] }),
+    ).rejects.toMatchObject({ ...unauthorized, message: expect.stringMatching(/only root or the agent's account/) });
+    // A grant naming an absolute command covers it only while its executable is trusted there.
+    await f.credentials.issue({
+      principal: "ci-bot",
+      permissions: client,
+      scope: PRESETS.client.scope,
+      capabilities: grant,
+    });
+    await f.check({ runId: "root", uses: [use()] });
+    await expect(f.check({ runId: "root", uses: [use({ trustedExecutable: false })] })).rejects.toMatchObject(
+      unauthorized,
+    );
     const g = fixture();
     g.ownership.record("root", "owner");
     await g.credentials.issue({ principal: "owner", preset: "owner" });
-    await g.check({ runId: "root", uses: [use({ definition: bare, absoluteCommand: false })] });
+    await g.check({ runId: "root", uses: [use({ definition: bare, trustedExecutable: false })] });
   });
 
   it("stops at the next decision once the credential is revoked, and refuses unowned runs", async () => {
@@ -196,8 +208,23 @@ describe("capability use authority", () => {
   });
 });
 
+/** Whether `path` meets the trusted-executable policy on this machine, checked independently. */
+function trustedHere(path: string): boolean {
+  const chain: string[] = [];
+  for (let at = path; ; at = dirname(at)) {
+    chain.push(at);
+    if (at === dirname(at)) break;
+  }
+  const uid = process.getuid?.();
+  return chain.every((at) => {
+    const info = lstatSync(at);
+    return !info.isSymbolicLink() && (info.uid === 0 || info.uid === uid) && (info.mode & 0o022) === 0;
+  });
+}
+
 describe("resolveMcpServerCommand", () => {
-  const found = (path: string) => ({ path });
+  // Nothing under the shared temp directory is a trusted executable: /tmp is world-writable.
+  const found = (path: string, trusted = false) => ({ path, trusted });
   const missing = { reason: "missing" };
 
   it("resolves a command to the executable file the agent is handed, or refuses it", async () => {
@@ -226,6 +253,70 @@ describe("resolveMcpServerCommand", () => {
       ),
     ).toEqual(found(tool));
     expect(await resolveMcpServerCommand(local, { command: "orca-no-such-tool", env: {} }, ctx)).toEqual(missing);
+  });
+
+  it("trusts only an exact, canonical, administrator-owned absolute command on the daemon's machine", async () => {
+    if (process.platform === "win32") return;
+    const local = new LocalHost({ id: "local", type: "local" });
+    const ctx = { cwd: tmpdir(), agentEnv: {} };
+    if (existsSync("/usr/bin/env")) {
+      expect(await resolveMcpServerCommand(local, { command: "/usr/bin/env", env: {} }, ctx)).toEqual(
+        found("/usr/bin/env", trustedHere("/usr/bin/env")),
+      );
+      // Not its own canonical spelling.
+      expect(await resolveMcpServerCommand(local, { command: "/usr/bin/../bin/env", env: {} }, ctx)).toEqual(
+        found("/usr/bin/../bin/env"),
+      );
+      // Found by search: handed over, never trusted.
+      expect(await resolveMcpServerCommand(local, { command: "env", env: { PATH: "/usr/bin" } }, ctx)).toEqual(
+        found("/usr/bin/env"),
+      );
+    }
+    // A file under a world-writable directory.
+    const dir = await mkdtemp(join(tmpdir(), "orca-mcp-trust-"));
+    dirs.push(dir);
+    await writeFile(join(dir, "tool"), "#!/bin/sh\n");
+    await chmod(join(dir, "tool"), 0o755);
+    expect(await resolveMcpServerCommand(local, { command: join(dir, "tool"), env: {} }, ctx)).toEqual(
+      found(join(dir, "tool")),
+    );
+  });
+
+  it("refuses trust for a symbolic link, a writable directory or another owner (as root)", async (context) => {
+    if (process.platform === "win32" || process.getuid?.() !== 0) return context.skip();
+    // A directory this test owns, in a chain only root can change.
+    const base = await mkdtemp(join(homedir(), ".orca-mcp-trust-"));
+    dirs.push(base);
+    await chmod(base, 0o755);
+    if (!trustedHere(base)) return context.skip();
+    const local = new LocalHost({ id: "local", type: "local" });
+    const ctx = { cwd: base, agentEnv: {} };
+    const tool = join(base, "tool");
+    await writeFile(tool, "#!/bin/sh\n");
+    await chmod(tool, 0o755);
+    const trusted = async (command: string) => {
+      const r = await resolveMcpServerCommand(local, { command, env: {} }, ctx);
+      return "path" in r && r.trusted;
+    };
+    expect(await trusted(tool)).toBe(true);
+    await symlink(tool, join(base, "link"));
+    expect(await trusted(join(base, "link"))).toBe(false);
+    await mkdir(join(base, "real"));
+    await chmod(join(base, "real"), 0o755);
+    await writeFile(join(base, "real", "tool"), "#!/bin/sh\n");
+    await chmod(join(base, "real", "tool"), 0o755);
+    await symlink(join(base, "real"), join(base, "alias"));
+    expect(await trusted(join(base, "real", "tool"))).toBe(true);
+    // A symbolic link in a directory above the file.
+    expect(await trusted(join(base, "alias", "tool"))).toBe(false);
+    await chmod(join(base, "real"), 0o775);
+    expect(await trusted(join(base, "real", "tool"))).toBe(false);
+    await chmod(join(base, "real"), 0o755);
+    await chmod(tool, 0o757);
+    expect(await trusted(tool)).toBe(false);
+    await chmod(tool, 0o755);
+    await chown(tool, 65534, 65534);
+    expect(await trusted(tool)).toBe(false);
   });
 
   it.each(["sh", "bash", "dash"].filter((sh) => spawnSync(sh, ["-c", "true"]).status === 0))(
@@ -263,7 +354,21 @@ describe("resolveMcpServerCommand", () => {
       expect(
         await resolveMcpServerCommand(box, { command: "tool", env: {} }, { cwd: "/no/such/dir", agentEnv: {} }),
       ).toEqual(missing);
-      expect(scripts.every((s) => s.startsWith("{ set +xv && exec 2>/dev/null; } || exit 4; "))).toBe(true);
+      // An administrator-owned absolute command is a trusted executable; a spelling that is
+      // not its own canonical path, or a symbolic link, is not (#337).
+      if (existsSync("/usr/bin/env")) {
+        expect(await resolveMcpServerCommand(box, { command: "/usr/bin/env", env: {} }, ctx)).toEqual(
+          found("/usr/bin/env", trustedHere("/usr/bin/env")),
+        );
+        expect(await resolveMcpServerCommand(box, { command: "/usr/bin/../bin/env", env: {} }, ctx)).toEqual(
+          found("/usr/bin/../bin/env"),
+        );
+      }
+      await symlink(tool, join(dir, "link"));
+      expect(await resolveMcpServerCommand(box, { command: join(dir, "link"), env: {} }, ctx)).toEqual(
+        found(join(dir, "link")),
+      );
+      expect(scripts.every((s) => s.startsWith("{ set +xv && exec 2>/dev/null; } || exit 4\n"))).toBe(true);
       // Tracing went off before anything ran, so the shell traced nothing of the lookup.
       expect(trace).not.toContain("command -v");
       const answer = (stdout: string, code = 0) =>
@@ -273,10 +378,13 @@ describe("resolveMcpServerCommand", () => {
           ctx,
         );
       // Only a marked absolute path on the last line is an answer.
-      expect(await answer("noise\n__orca_path__=/usr/bin/tool\n")).toEqual(found("/usr/bin/tool"));
+      expect(await answer("noise\n__orca_path__=0:/usr/bin/tool\n")).toEqual(found("/usr/bin/tool"));
+      // A name found by search is never trusted, whatever the host says.
+      expect(await answer("__orca_path__=1:/usr/bin/tool\n")).toEqual(found("/usr/bin/tool"));
+      expect(await answer("__orca_path__=/usr/bin/tool\n")).toEqual({ reason: "unreachable" });
       expect(await answer("/usr/bin/tool\n")).toEqual({ reason: "unreachable" });
-      expect(await answer("__orca_path__=tool\n")).toEqual({ reason: "unreachable" });
-      expect(await answer("__orca_path__=/usr/bin/tool\n", 255)).toEqual({ reason: "unreachable" });
+      expect(await answer("__orca_path__=0:tool\n")).toEqual({ reason: "unreachable" });
+      expect(await answer("__orca_path__=0:/usr/bin/tool\n", 255)).toEqual({ reason: "unreachable" });
       const thrown = { ...box, exec: async () => Promise.reject(new Error("ssh")) } as unknown as AgentHost;
       expect(await resolveMcpServerCommand(thrown, { command: "tool", env: {} }, ctx)).toEqual({
         reason: "unreachable",

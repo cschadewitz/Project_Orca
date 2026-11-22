@@ -13,6 +13,7 @@ import {
   type OpenSessionOptions,
 } from "@orca/agents";
 import {
+  OrcaError,
   parseOrcaConfig,
   parseWorkflow,
   silentLogger,
@@ -460,9 +461,12 @@ describe("delivering catalog MCP servers (#337)", () => {
       : { command: bin, env: { GITHUB_TOKEN: "ghp_secretsecretsecretsecret" } };
     const asked: CapabilityUse[][] = [];
     let allow = true;
+    /** Called at each decision before it is made, so a test can revoke at that moment. */
+    let onAsk: (n: number) => void = () => {};
     const capabilityUse: CapabilityUseCheck = async ({ uses }) => {
       asked.push(uses);
-      if (!allow) throw new Error("not granted");
+      onAsk(asked.length);
+      if (!allow) throw new OrcaError("CONFIG_INVALID", "not granted", { reason: "unauthorized" });
     };
     const made = setup(
       { capabilities: { ...catalog, mcpServers: { ...catalog.mcpServers, github } } },
@@ -486,6 +490,12 @@ describe("delivering catalog MCP servers (#337)", () => {
       revoke: () => {
         allow = false;
       },
+      /** Revoke just before decision `n` (counting from 1). */
+      revokeAt: (n: number) => {
+        onAsk = (at) => {
+          if (at === n) allow = false;
+        };
+      },
     };
   }
 
@@ -498,19 +508,21 @@ describe("delivering catalog MCP servers (#337)", () => {
       ["notes", "files", "shell", "github"],
     ]);
     // Secret-bearing env stays in the session's hands; nothing of the value reaches the decision.
-    expect(made.asked).toEqual([
-      [
-        {
-          kind: "mcpServer",
-          id: "github",
-          hostId: "local",
-          hostBinding: secretHostBinding({ id: "local", type: "local" }),
-          definition: mcpServerDefinitionDigest({ args: [], ...made.github }),
-          absoluteCommand: true,
-        },
-      ],
-      expect.any(Array),
-    ]);
+    const asked = (trustedExecutable: boolean) => [
+      {
+        kind: "mcpServer",
+        id: "github",
+        hostId: "local",
+        hostBinding: secretHostBinding({ id: "local", type: "local" }),
+        definition: mcpServerDefinitionDigest({ args: [], ...made.github }),
+        trustedExecutable,
+      },
+    ];
+    // Per step: before probing (an absolute command taken at its word), then with what the
+    // probe found (a temp file is not a trusted executable), after the slot wait, at
+    // `session/new` (this factory has none), and before the prompt.
+    const step = [asked(true), asked(false), asked(false), asked(false)];
+    expect(made.asked).toEqual([...step, ...step]);
     expect(JSON.stringify(made.asked)).not.toContain("ghp_");
   });
 
@@ -520,7 +532,7 @@ describe("delivering catalog MCP servers (#337)", () => {
     expect(run.status).toBe("completed");
     expect(made.opened[0]!.commands).toEqual(["notes-mcp", "files-mcp", "shell-mcp", made.bin]);
     // A name found on PATH is not an absolute command: only a "*" grant covers it.
-    expect(made.asked[0]![0]).toMatchObject({ id: "github", absoluteCommand: false });
+    expect(made.asked[0]![0]).toMatchObject({ id: "github", trustedExecutable: false });
   });
 
   it("refuses a step whose server is not granted, before anything starts", async () => {
@@ -557,8 +569,62 @@ describe("delivering catalog MCP servers (#337)", () => {
     const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
     expect(run.status).toBe("failed");
     expect(made.opened).toHaveLength(1);
-    expect(made.asked).toHaveLength(2);
+    // Four decisions for the first step; the second step's first one refuses it.
+    expect(made.asked).toHaveLength(5);
     expect(steps).toBe(1);
+  });
+
+  it("asks again after the slot wait: authority revoked while waiting starts nothing", async () => {
+    const made = await deliverable();
+    // Decisions 1 and 2 come before the slot; 3 is right after it.
+    made.revokeAt(3);
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(made.opened).toEqual([]);
+    expect(made.asked).toHaveLength(3);
+  });
+
+  it("asks again immediately before session/new, and a denial there is not the agent's health", async () => {
+    const made = await deliverable();
+    const factory = made.orchestrator.sessionFactory;
+    let delivered = 0;
+    made.orchestrator.sessionFactory = async (o) => {
+      // The process is up and initialized: revoked now, the servers are not handed over.
+      made.revoke();
+      await o.authorizeCapabilityDelivery!();
+      delivered++;
+      return factory(o);
+    };
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(delivered).toBe(0);
+    expect(made.opened).toEqual([]);
+    expect(made.orchestrator.agents.health.get("claude").state).not.toBe("down");
+  });
+
+  it("asks again before a pooled session's next prompt, and retires it when refused", async () => {
+    const made = await deliverable({ sessionMode: "per-run" });
+    const closed: string[] = [];
+    const factory = made.orchestrator.sessionFactory;
+    made.orchestrator.sessionFactory = async (o) => {
+      const session = await factory(o);
+      const close = session.close.bind(session);
+      session.close = async () => {
+        closed.push(session.id);
+        return close();
+      };
+      return session;
+    };
+    // The second step takes the pooled session (decisions 5 and 6), then is revoked before its
+    // prompt (decision 7): it waited after taking the session, and must not use it.
+    made.revokeAt(7);
+    const { run } = await made.orchestrator.startAndRun({ workflowId: "flow" });
+    expect(run.status).toBe("failed");
+    expect(made.opened).toHaveLength(1);
+    expect(made.asked).toHaveLength(7);
+    expect(closed).toHaveLength(1);
+    const events = await made.orchestrator.events(run.id);
+    expect(events.filter((e) => e.type === "agent.session.closed")).toHaveLength(1);
   });
 });
 

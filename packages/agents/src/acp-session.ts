@@ -62,6 +62,12 @@ export interface OpenSessionOptions {
    * anything is read. Without one, a session whose agent uses a reference is refused.
    */
   authorizeSecretUse?: AuthorizeSecretUse | undefined;
+  /**
+   * The use decision for this session's catalog MCP servers (#337), asked again immediately
+   * before `session/new` (or `session/load`) hands the agent its servers, after the process
+   * is up and initialized. A denial fails the open, and startup cleanup stops the process.
+   */
+  authorizeCapabilityDelivery?: (() => Promise<void>) | undefined;
   /** Handed every resolved secret value, before anything else happens, so the caller can redact it. */
   onSecretValues?: (values: readonly string[]) => void;
   host: AgentHost;
@@ -428,6 +434,8 @@ async function openPlanned(
       })),
     };
     if (opts.additionalDirectories) newSession.additionalDirectories = opts.additionalDirectories;
+    // Nothing waits between this and the request that delivers the servers.
+    await opts.authorizeCapabilityDelivery?.();
     let loaded = false;
     let continuity: SessionContinuity = { mode: "fresh", reason: "new" };
     if (opts.resumeSessionId) {

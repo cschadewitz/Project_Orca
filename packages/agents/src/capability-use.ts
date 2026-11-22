@@ -22,11 +22,13 @@ export interface CapabilityUse {
   /** `mcpServerDefinitionDigest` of the definition as resolved now. */
   definition: string;
   /**
-   * The configured command is an absolute path on that host, so what the grant pins is the
-   * executable itself: no `PATH` search and no working-directory resolution decide it. Only
-   * a `"*"` grant covers a server whose command is not.
+   * The configured command was checked on that host to be a trusted executable (see
+   * `TRUSTED_EXECUTABLE_POLICY`): exactly that absolute, canonical path, no symbolic link
+   * anywhere on it, and the file and every directory above it owned by root or the account
+   * the agent runs as and writable by no one else. Only then does a grant naming the server
+   * pin what is executed; a `"*"` grant covers a server that is not.
    */
-  absoluteCommand: boolean;
+  trustedExecutable: boolean;
 }
 
 /** Whether `command` is an absolute path on a host of that type (POSIX for SSH hosts). */
@@ -78,12 +80,14 @@ async function executable(path: string): Promise<boolean> {
 }
 
 async function findLocal(command: string, cwd: string, path: string | undefined): Promise<string | undefined> {
+  // An absolute command is exactly that file: no extension is ever appended to it.
+  if (isAbsolute(command)) return (await executable(command)) ? command : undefined;
   const extensions =
     process.platform === "win32"
       ? ["", ...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)]
       : [""];
   const candidates = (base: string) => extensions.map((ext) => base + ext);
-  if (isAbsolute(command) || command.includes("/") || (process.platform === "win32" && command.includes("\\"))) {
+  if (command.includes("/") || (process.platform === "win32" && command.includes("\\"))) {
     for (const candidate of candidates(resolve(cwd, command))) if (await executable(candidate)) return candidate;
     return undefined;
   }
@@ -98,48 +102,114 @@ const MAX_PATH_LENGTH = 4096;
 const PATH_MARKER = "__orca_path__=";
 
 /**
+ * What a grant naming one MCP server requires of its executable before it covers it (#337):
+ *
+ * - the configured command is an absolute path, and the file found is exactly that path:
+ *   no `PATH` search, no working directory and no appended extension decide it;
+ * - the path is canonical: not a symbolic link, with no symbolic link, `.` or `..` in any
+ *   directory above it (the path is its own `pwd -P` resolution);
+ * - the file is an executable regular file;
+ * - the file and every directory above it, up to `/`, is owned by root or by the account the
+ *   agent runs as on that host, and is writable by neither its group nor others, with no
+ *   ACL (`+`) on any of them.
+ *
+ * So no one but an administrator of that host, or the agent's own account, can put another
+ * program at the granted path. It is checked on the agent's host every time the server is
+ * delivered, the same way locally and over SSH, by one POSIX shell script. A Windows host is
+ * never trusted this way: its file permissions are not modes this check can read, so only a
+ * `"*"` grant covers a catalog server there. A path that fails the check still runs under
+ * `"*"`; it is only a narrow grant that does not cover it.
+ */
+export const TRUSTED_EXECUTABLE_POLICY = "absolute-canonical-admin-owned";
+
+/**
+ * The POSIX shell lines that exit 0 when `$p` meets `TRUSTED_EXECUTABLE_POLICY` and non-zero
+ * otherwise. Run in a subshell: they set options and exit.
+ */
+const TRUST_CHECK = [
+  "set -f",
+  "case $p in /*) ;; *) exit 5 ;; esac",
+  '[ -f "$p" ] && [ ! -L "$p" ] && [ -x "$p" ] || exit 5',
+  'd=$(cd -P -- "${p%/*}/" && pwd -P) || exit 5',
+  '[ "${d%/}/${p##*/}" = "$p" ] || exit 5',
+  "u=$(id -u) || exit 5",
+  "x=$p",
+  "while :; do",
+  '  l=$(ls -ldn -- "$x") || exit 5',
+  "  set -- $l",
+  '  [ "$3" = 0 ] || [ "$3" = "$u" ] || exit 5',
+  "  case $1 in ?????w* | ????????w* | ??????????+*) exit 5 ;; esac",
+  '  [ "$x" = / ] && break',
+  '  x=${x%/*}; [ -n "$x" ] || x=/',
+  "done",
+].join("\n");
+
+/** A script that prints `1` when `command` names a trusted executable and `0` when not. */
+export function trustedExecutableScript(command: string): string {
+  return `p=${shellQuote(command)}\nif ( ${TRUST_CHECK}\n) >/dev/null 2>&1; then echo 1; else echo 0; fi`;
+}
+
+/** Whether `command` meets `TRUSTED_EXECUTABLE_POLICY` on the daemon's own machine. */
+async function trustedLocal(host: Pick<AgentHost, "exec">, command: string): Promise<boolean> {
+  if (process.platform === "win32" || !isAbsolute(command)) return false;
+  try {
+    const { code, stdout } = await host.exec(trustedExecutableScript(command), { timeoutMs: AVAILABILITY_TIMEOUT_MS });
+    return code === 0 && stdout.trim() === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The executable a catalog MCP server's command names on the host the agent runs on, found
  * the way ORCA defines it, so the agent can be handed exactly that and not search again:
  *
- * - an absolute command is that file, which must be an executable regular file;
+ * - an absolute command is exactly that file, which must be an executable regular file;
  * - a relative path (`./server`) is resolved against the session's working directory;
  * - a bare name is searched for on the server's literal `env.PATH`, else the agent's, else
  *   the host's own (on SSH, the remote login shell's).
  *
- * The answer is an absolute path, or `missing` (not found, not executable, or not a file)
- * or `unreachable` (the host did not answer). ORCA never installs or fetches one. Finding the
- * file is not proof the server works: the agent starts it, and a server that fails after
- * starting is the agent's to report.
+ * The answer is an absolute path, with whether it is a trusted executable (an absolute
+ * command meeting `TRUSTED_EXECUTABLE_POLICY`), or `missing` (not found, not executable, or
+ * not a file) or `unreachable` (the host did not answer). ORCA never installs or fetches one.
+ * Finding the file is not proof the server works: the agent starts it, and a server that
+ * fails after starting is the agent's to report.
  */
 export async function resolveMcpServerCommand(
   host: Pick<AgentHost, "spec" | "exec">,
   server: Pick<ResolvedMcpServerConfig, "command" | "env">,
   context: { cwd: string; agentEnv: Env },
-): Promise<{ path: string } | { reason: "missing" | "unreachable" }> {
+): Promise<{ path: string; trusted: boolean } | { reason: "missing" | "unreachable" }> {
   const path = configuredPath(server, context.agentEnv);
   if (host.spec.type === "local") {
     const found = await findLocal(server.command, context.cwd, path ?? process.env.PATH);
-    return found ? { path: found } : { reason: "missing" };
+    if (!found) return { reason: "missing" };
+    return { path: found, trusted: found === server.command && (await trustedLocal(host, server.command)) };
   }
   // One quiet command on that host. It prints only the absolute path it found, and only
-  // after checking it is an executable regular file.
+  // after checking it is an executable regular file, with whether an absolute command is a
+  // trusted executable there.
+  const absolute = server.command.startsWith("/");
   const script = [
     "{ set +xv && exec 2>/dev/null; } || exit 4",
     `cd ${shellQuote(context.cwd)} || exit 3`,
     ...(path === undefined ? [] : [`PATH=${shellQuote(path)}`, "export PATH"]),
-    `p=$(command -v -- ${shellQuote(server.command)}) || exit 3`,
+    absolute ? `p=${shellQuote(server.command)}` : `p=$(command -v -- ${shellQuote(server.command)}) || exit 3`,
     'case $p in /*) ;; */*) p="$PWD/$p" ;; *) exit 3 ;; esac',
     '[ -f "$p" ] && [ -x "$p" ] || exit 3',
-    "printf '__orca_path__=%s\\n' \"$p\"",
-  ].join("; ");
+    ...(absolute ? [`if ( ${TRUST_CHECK}\n) >/dev/null 2>&1; then t=1; else t=0; fi`] : ["t=0"]),
+    'printf \'__orca_path__=%s:%s\\n\' "$t" "$p"',
+  ].join("\n");
   try {
     const { code, stdout } = await host.exec(script, { timeoutMs: AVAILABILITY_TIMEOUT_MS });
     if (code === 3) return { reason: "missing" };
     // A login profile may print first; the answer is the one marked line at the end.
     const last = stdout.endsWith("\n") ? stdout.slice(stdout.lastIndexOf("\n", stdout.length - 2) + 1, -1) : "";
-    const found = last.startsWith(PATH_MARKER) ? last.slice(PATH_MARKER.length) : "";
+    const answer = last.startsWith(PATH_MARKER) ? last.slice(PATH_MARKER.length) : "";
+    const trusted = answer.startsWith("1:");
+    const found = /^[01]:/.test(answer) ? answer.slice(2) : "";
     if (code !== 0 || !found.startsWith("/") || found.length > MAX_PATH_LENGTH) return { reason: "unreachable" };
-    return { path: found };
+    return { path: found, trusted: trusted && absolute && found === server.command };
   } catch {
     return { reason: "unreachable" };
   }
