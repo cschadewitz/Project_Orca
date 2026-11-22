@@ -155,6 +155,15 @@ export class ConnectionMachine {
     this.shown = this.snapshot();
   }
 
+  /**
+   * Whether the daemon has accepted the app's credential on the current link: false from an
+   * authentication refusal until the link changes again (#882). Not part of the snapshot the
+   * renderer sees; the main process routes alert clicks by it.
+   */
+  get authorized(): boolean {
+    return this.link !== "auth-failed";
+  }
+
   /** What a window that has just opened should be handed. Never undefined, never stale. */
   get current(): ConnectionSnapshot {
     return this.shown;

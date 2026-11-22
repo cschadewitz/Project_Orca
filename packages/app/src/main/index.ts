@@ -668,6 +668,7 @@ function focusedMachine(): FocusedMachine | undefined {
     epoch: target.epoch,
     state: state.state,
     since: state.since,
+    authorized: connection.authorized,
   };
 }
 
@@ -1245,35 +1246,56 @@ ipcMain.handle("orca:fleet.watch", (_event, id: unknown, watched: unknown) =>
   }),
 );
 ipcMain.handle("orca:profiles.save", (_event, input: unknown) =>
-  profileResult(() => {
-    const saved = remoteProfiles.save(input);
-    // A renamed or re-pointed watched profile reconnects under its new name.
-    refreshFleet();
-    return saved;
+  profileResult(async () => {
+    const id = typeof input === "object" && input !== null && "id" in input ? input.id : undefined;
+    const save = () => {
+      const saved = remoteProfiles.save(input);
+      // A renamed or re-pointed watched profile reconnects under its new name.
+      refreshFleet();
+      return saved;
+    };
+    // A watched profile lets go of its tunnel while it is edited, then reconnects.
+    return typeof id === "string" ? await fleet.whileReleased(id, save) : save();
   }),
 );
 ipcMain.handle("orca:profiles.remove", (_event, id: unknown) =>
-  profileResult(() => {
+  profileResult(async () => {
     const valid = ProfileIdSchema.parse(id);
     if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before removing this profile.");
-    remoteProfiles.remove(valid);
+    // Revokes the credential on the server first, when it can be reached (#875).
+    const revoke = await fleet.whileReleased(valid, async () => {
+      const outcome = await remoteProfiles.remove(valid);
+      const watched = preferences.read().watchedProfiles ?? [];
+      if (watched.includes(valid)) preferences.saveWatchedProfiles(watched.filter((other) => other !== valid));
+      refreshFleet();
+      return outcome;
+    });
     if (preferences.read().daemonProfile === valid) preferences.saveDaemonProfile(null);
-    const watched = preferences.read().watchedProfiles ?? [];
-    if (watched.includes(valid)) preferences.saveWatchedProfiles(watched.filter((id) => id !== valid));
-    refreshFleet();
-    return null;
+    return { revoke };
   }),
 );
 ipcMain.handle("orca:profiles.forgetHostKey", (_event, id: unknown) =>
   profileResult(() => {
     const valid = ProfileIdSchema.parse(id);
     if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before forgetting this key.");
-    if (fleet.usesProfile(valid)) throw new ConnectionRefusal("Stop watching this machine before forgetting its key.");
-    remoteProfiles.forgetHostKey(valid);
-    refreshFleet();
-    const view = remoteProfiles.describe(valid);
-    if (!view) throw new ConnectionRefusal("That profile no longer exists.");
-    return view;
+    return fleet.whileReleased(valid, () => {
+      remoteProfiles.forgetHostKey(valid);
+      refreshFleet();
+      const view = remoteProfiles.describe(valid);
+      if (!view) throw new ConnectionRefusal("That profile no longer exists.");
+      return view;
+    });
+  }),
+);
+ipcMain.handle("orca:profiles.useAutomaticSignIn", (_event, id: unknown) =>
+  profileResult(() => {
+    const valid = ProfileIdSchema.parse(id);
+    if (profileInUse(valid)) throw new ConnectionRefusal("Connect to another daemon before changing its sign-in.");
+    return fleet.whileReleased(valid, () => {
+      const view = remoteProfiles.useAutomaticSignIn(valid);
+      refreshFleet();
+      return view;
+    });
   }),
 );
 /** Main reads the file the person picks; the token goes from disk to the keychain slot only. */
@@ -1299,9 +1321,11 @@ ipcMain.handle("orca:profiles.importCredential", (event, id: unknown) =>
     } catch {
       throw new ConnectionRefusal("That file could not be read as a daemon credential.");
     }
-    const view = remoteProfiles.importCredential(valid, token, ticket);
-    refreshFleet();
-    return view;
+    return fleet.whileReleased(valid, () => {
+      const view = remoteProfiles.importCredential(valid, token, ticket);
+      refreshFleet();
+      return view;
+    });
   }),
 );
 
@@ -1478,7 +1502,10 @@ function activate(item: AlertItem | undefined): void {
  * forward, but no card opens on a daemon the alert was never about.
  */
 function withFocus(item: AlertItem): AlertItem | undefined {
-  return fleetStarted ? fleet.routeAlert(item) : item;
+  if (!fleetStarted) return item;
+  // Read the focused connection's authority now, not as of its last state change.
+  syncFocus();
+  return fleet.routeAlert(item);
 }
 
 const alerts = createAlerts(

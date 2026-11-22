@@ -1,4 +1,4 @@
-/** `orca store format | carry-forward` and the startup refusal that points to it (#566). */
+/** `orca store format | carry-forward | sqlite` and the startup refusal that points to it (#566, #339). */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,5 +54,31 @@ describe("orca store", () => {
     const again = ctx(dir, ["carry-forward"]);
     expect(await storeCommand(again)).toBe(0);
     expect(again.lines[0]).toContain("nothing to do");
+  });
+
+  it("sqlite import, verify, backup and restore round-trip a store's metadata", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-store-sqlite-command-"));
+    dirs.push(dir);
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
+    await mkdir(join(dir, ".orca", "runs"), { recursive: true });
+    await writeFile(join(dir, ".orca", "runs", "run_old.jsonl"), LOG);
+
+    const imported = ctx(dir, ["sqlite", "import"]);
+    expect(await storeCommand(imported)).toBe(0);
+    expect(imported.lines.join("\n")).toContain("runs       1 (1 new events)");
+    const verify = ctx(dir, ["sqlite", "verify"]);
+    expect(await storeCommand(verify)).toBe(0);
+    expect(verify.lines.at(-1)).toBe("ok");
+
+    const backup = join(dir, "metadata-backup.sqlite");
+    expect(await storeCommand(ctx(dir, ["sqlite", "backup", backup]))).toBe(0);
+    const fresh = await mkdtemp(join(tmpdir(), "orca-store-sqlite-restore-"));
+    dirs.push(fresh);
+    await writeFile(join(fresh, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
+    expect(await storeCommand(ctx(fresh, ["sqlite", "restore", backup]))).toBe(0);
+    const restored = ctx(fresh, ["sqlite", "verify"]);
+    expect(await storeCommand(restored)).toBe(0);
+    expect(restored.lines.find((l) => l.startsWith("counts"))).toContain("runs 1, events 1");
+    await expect(storeCommand(ctx(dir, ["sqlite", "nope"]))).rejects.toMatchObject({ code: "CONFIG_INVALID" });
   });
 });

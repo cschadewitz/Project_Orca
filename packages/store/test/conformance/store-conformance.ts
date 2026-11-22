@@ -10,8 +10,6 @@
  * document lost-update protection #196/#197); they are here so a new backend inherits them,
  * not because this suite introduced them.
  */
-import { mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
@@ -568,14 +566,15 @@ export function runStoreConformance(backend: ConformanceBackend): void {
 
       if (caps["artifact.orphanInventory"]) {
         it("a blob whose metadata write failed stays invisible, is inventoried, and a retry adopts it", async () => {
-          const b = await create();
-          const dir = b.dir!;
-          const store = new FileArtifactStore(dir);
-          // Make the index append fail after the blob is published: its file is a directory.
-          const index = join(dir, "artifacts", "index.jsonl");
-          await mkdir(index, { recursive: true });
-          await expect(store.put(artifact("art_lost", "orphan"), "orphan")).rejects.toThrow();
-          await rm(index, { recursive: true });
+          const store = (await create()).stores().artifacts as FileArtifactStore;
+          // Make the index write fail after the blob is published, once. Every backend with an
+          // orphan inventory commits a put through its `index` step, whatever the index is.
+          const write = store["index"].bind(store);
+          store["index"] = async () => {
+            store["index"] = write;
+            throw new Error("index write failed");
+          };
+          await expect(store.put(artifact("art_lost", "orphan"), "orphan")).rejects.toThrow("index write failed");
           await store.put(artifact("art_ok", "kept"), "kept");
           expect(await store.get("art_lost")).toBeUndefined();
           expect((await store.list()).map((a) => a.id)).toEqual(["art_ok"]);

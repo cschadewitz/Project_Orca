@@ -179,6 +179,23 @@ describe("authentication reconnect", () => {
     expect(machine.current.state).toBe("live");
     machine.close();
   });
+
+  it("says the link is unauthorized from a refusal until the link changes again (#882)", async () => {
+    const machine = new ConnectionMachine({
+      hello: async () => ({ protocol: PROTOCOL_VERSION, orcaVersion: "test", capabilities: [] }),
+      onChange: () => {},
+    });
+    machine.linkChanged("live");
+    await Promise.resolve();
+    expect(machine.authorized).toBe(true);
+    // Refused without any reconnect: the last handshake's identity is still remembered.
+    machine.authenticationFailed("AUTH_INVALID");
+    expect(machine.authorized).toBe(false);
+    machine.linkChanged("connecting");
+    machine.linkChanged("live");
+    expect(machine.authorized).toBe(true);
+    machine.close();
+  });
 });
 
 describe("real token-mode daemon", () => {

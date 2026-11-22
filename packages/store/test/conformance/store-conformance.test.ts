@@ -1,11 +1,12 @@
-/** The store conformance suite (#338) against the two backends ORCA ships. */
+/** The store conformance suite (#338) against every backend ORCA ships: memory, file and SQLite (#339). */
 import { describe, expect, it } from "vitest";
 import { asVersionedDocumentStore, queryDocuments, InMemoryDocumentStore } from "@orca/store";
-import { fileBackend, memoryBackend } from "./backend.js";
+import { fileBackend, memoryBackend, sqliteBackend } from "./backend.js";
 import { plainDocumentStore, runStoreConformance } from "./store-conformance.js";
 
 runStoreConformance(memoryBackend);
 runStoreConformance(fileBackend);
+runStoreConformance(sqliteBackend);
 
 describe("compatibility adapters for existing DocumentStore consumers", () => {
   type D = { id: string; kind: string };

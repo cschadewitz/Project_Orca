@@ -1,6 +1,7 @@
 # App-managed SSH tunnels to remote daemons (#874), against a real sshd on the runner's
 # loopback: the tunnel's refusals, host-key pinning and restart, and a profile connection
-# end to end through the app's Workspace to a loopback-only daemon. Linux uses the distro
+# end to end through the app's Workspace to a loopback-only daemon, and automatic sign-in
+# (#875) with this checkout's own CLI as the server's ORCA command. Linux uses the distro
 # OpenSSH; Windows uses the built-in OpenSSH client against the Windows OpenSSH server.
 # The unit halves of the same tests run in the main CI job without an sshd.
 name: SSH tunnel
@@ -12,6 +13,9 @@ on:
       - packages/protocol/src/remote-access.ts
       - packages/protocol/test/remote-access.test.ts
       - packages/app/src/main/remote-profiles.ts
+      - packages/app/src/main/remote-credentials.ts
+      - packages/cli/src/commands/auth.ts
+      - packages/daemon/src/auth/credentials.ts
       - packages/app/src/client/stream-transport.ts
       - packages/app/src/main/workspace.ts
       - packages/app/src/main/connection-target.ts
@@ -84,6 +88,9 @@ jobs:
           echo "orca-live ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" >> ~/.ssh/known_hosts
           echo "ORCA_SSH_TUNNEL_TEST={\"destination\":\"$USER@127.0.0.1\",\"sshPort\":2222,\"identity\":\"$b/client\"}" >> "$GITHUB_ENV"
 
+      # The sign-in test runs the CLI on the server side over ssh: it needs the built CLI.
+      - name: Build the CLI
+        run: pnpm exec tsc -b packages/cli
       - name: Tunnel and profile tests against the sshd
         run: pnpm exec vitest run packages/protocol/test/remote-access.test.ts packages/app/test/remote-profiles
 
@@ -159,5 +166,8 @@ jobs:
           $test = @{ destination = "$env:USERNAME@127.0.0.1"; sshPort = 2222; identity = "$b\client" } | ConvertTo-Json -Compress
           "ORCA_SSH_TUNNEL_TEST=$test" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      # The sign-in test runs the CLI on the server side over ssh: it needs the built CLI.
+      - name: Build the CLI
+        run: pnpm exec tsc -b packages/cli
       - name: Tunnel and profile tests against the sshd
         run: pnpm exec vitest run packages/protocol/test/remote-access.test.ts packages/app/test/remote-profiles

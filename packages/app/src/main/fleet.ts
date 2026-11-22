@@ -120,6 +120,12 @@ export interface FocusedMachine {
   /** The workspace's connection epoch; a focused read is dropped if it moves. */
   epoch: number;
   state: ConnectionState;
+  /**
+   * False once the focused daemon has refused the app's credential on this connection, and
+   * until a connection is authorized again. The workspace id above survives a refusal; the
+   * authority to act on that workspace does not.
+   */
+  authorized?: boolean | undefined;
   since: string;
 }
 
@@ -268,6 +274,8 @@ class Member {
 
 export class Fleet {
   private readonly members = new Map<string, Member>();
+  /** Profiles let go of while they are changed; see `whileReleased`. */
+  private readonly held = new Map<string, number>();
   private focused: FocusedMachine | undefined;
   private focusedWork: { epoch: number; work: FleetWork } | undefined;
   private focusedReadEpoch = 0;
@@ -294,8 +302,8 @@ export class Fleet {
 
   /**
    * Where a click on an alert may go now (#882). Its machine counts as focused only while
-   * the focused target is that machine *and* still verified on the store the alert came
-   * from; a watched machine likewise has to still be verified on it. Anything else (a
+   * the focused target is that machine, still authorized, *and* still verified on the store
+   * the alert came from; a watched machine likewise has to still be verified on it. Anything else (a
    * profile repointed at another daemon, a machine refused or no longer watched) is a stale
    * click and answers undefined, so it opens nothing rather than a route on the wrong store.
    * An alert with no machine predates the fleet and is passed through.
@@ -304,6 +312,7 @@ export class Fleet {
     const machine = item.machine;
     if (!machine) return item;
     const focused = this.focused?.key === machine.key;
+    if (focused && this.focused?.authorized === false) return undefined;
     const now = focused ? this.focused?.workspaceId : this.verifiedOn(machine.key);
     if (now !== machine.workspaceId || (!focused && now === undefined)) return undefined;
     return { ...item, machine: { ...machine, focused } };
@@ -312,6 +321,34 @@ export class Fleet {
   private verifiedOn(key: string): string | undefined {
     const member = this.members.get(key);
     return member && !member.suspended ? member.verified : undefined;
+  }
+
+  /**
+   * Let go of a watched profile's connection while `run` changes the profile, then watch it
+   * again. A profile is not edited, removed, reset or given a credential while any tunnel of
+   * it is open (#875), and a watched machine's lease is one; this lets the person change a
+   * profile they are watching without having to stop watching it first. A run that removes
+   * the profile or stops watching it leaves it closed.
+   */
+  async whileReleased<T>(profileId: string, run: () => T | Promise<T>): Promise<T> {
+    const key = `profile:${profileId}`;
+    this.held.set(key, (this.held.get(key) ?? 0) + 1);
+    const member = this.members.get(key);
+    try {
+      if (member) {
+        await this.closeMember(member);
+        this.publish();
+      }
+      return await run();
+    } finally {
+      const left = (this.held.get(key) ?? 1) - 1;
+      if (left > 0) this.held.set(key, left);
+      else {
+        this.held.delete(key);
+        const now = this.members.get(key);
+        if (now && !now.suspended && !now.connection) void this.openMember(now);
+      }
+    }
   }
 
   /** Whether a watched machine's connection currently uses this profile. */
@@ -494,7 +531,7 @@ export class Fleet {
   }
 
   private async openMember(member: Member): Promise<void> {
-    if (this.closed || member.suspended) return;
+    if (this.closed || member.suspended || this.held.has(member.key)) return;
     const generation = ++member.generation;
     member.link = "connecting";
     member.retries = { consecutive: 0, atCap: 0 };

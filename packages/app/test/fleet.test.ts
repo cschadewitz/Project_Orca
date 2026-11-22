@@ -755,10 +755,78 @@ describe("an alert changing hands (#882)", () => {
     expect(w.t.fleet.routeAlert(item)).toBeUndefined();
   });
 
+  it("routes nothing on the focused machine once it refuses the credential, though the workspace still matches", async () => {
+    const w = wired();
+    w.t.fleet.setTargets([profile("alpha", "Alpha")]);
+    await settle(0);
+    const daemon = w.t.daemons.get("alpha")!;
+    daemon.inputs = permission("Run rm?");
+    daemon.live(ID_A);
+    await settle(0);
+    const item = w.shown[0]!.item;
+    w.t.fleet.setFocused({ ...focusOn("profile:alpha", 2, ID_A.workspaceId), authorized: true });
+    expect(w.t.fleet.routeAlert(item)?.machine?.focused).toBe(true);
+    // The focused stream is refused; no reconnect, same cached workspace id.
+    w.t.fleet.setFocused({
+      ...focusOn("profile:alpha", 2, ID_A.workspaceId),
+      state: "disconnected",
+      authorized: false,
+    });
+    expect(w.t.fleet.routeAlert(item)).toBeUndefined();
+    // Authorized again on the same workspace: routed again.
+    w.t.fleet.setFocused({ ...focusOn("profile:alpha", 2, ID_A.workspaceId), authorized: true });
+    expect(w.t.fleet.routeAlert(item)?.machine?.focused).toBe(true);
+  });
+
   it("passes an alert with no machine straight through", () => {
     const t = setup();
     const item: AlertItem = { id: "x", tier: "gate", title: "t", body: "b", runId: "r", since: "s" };
     expect(t.fleet.routeAlert(item)).toBe(item);
+  });
+});
+
+describe("changing a watched profile (#882)", () => {
+  it("lets go of the tunnel while the change runs, then watches it again", async () => {
+    const t = setup();
+    t.fleet.setTargets([profile("alpha", "Alpha")]);
+    await settle(0);
+    const daemon = t.daemons.get("alpha")!;
+    daemon.live(ID_A);
+    await settle(0);
+    expect(t.fleet.usesProfile("alpha")).toBe(true);
+    const opens = t.opened.length;
+    let during: boolean | undefined;
+    const result = await t.fleet.whileReleased("alpha", async () => {
+      during = t.fleet.usesProfile("alpha");
+      expect(daemon.released).toBe(1);
+      // A reconnect that comes due meanwhile does not reopen it.
+      await settle(5_000);
+      expect(t.opened.length).toBe(opens);
+      return "saved";
+    });
+    expect(result).toBe("saved");
+    expect(during).toBe(false);
+    await settle(0);
+    expect(t.opened.length).toBe(opens + 1);
+    expect(t.fleet.usesProfile("alpha")).toBe(true);
+  });
+
+  it("stays closed when the change removed it, and reopens after a change that failed", async () => {
+    const t = setup();
+    t.fleet.setTargets([profile("alpha", "Alpha")]);
+    await settle(0);
+    const opens = t.opened.length;
+    await expect(
+      t.fleet.whileReleased("alpha", () => {
+        throw new Error("refused");
+      }),
+    ).rejects.toThrow("refused");
+    await settle(0);
+    expect(t.opened.length).toBe(opens + 1);
+    await t.fleet.whileReleased("alpha", () => t.fleet.setTargets([]));
+    await settle(0);
+    expect(t.opened.length).toBe(opens + 1);
+    expect(t.last().machines).toEqual([]);
   });
 });
 
